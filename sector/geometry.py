@@ -190,9 +190,10 @@ def clip_halfplane(
     of the section carrying concrete stress.
 
     Returns an ``(M, 2)`` array, or an empty ``(0, 2)`` array if the polygon
-    lies entirely outside the half-plane. ``eps`` shifts the cut line outward
-    by treating points with value ``>= -eps`` as inside; the default ``0.0``
-    keeps points exactly on the line.
+    lies entirely outside the half-plane. ``eps`` shifts the kept region's
+    boundary outward to the line ``a*x + b*y + c = -eps`` (points with value
+    ``>= -eps`` are inside, and crossing edges are cut on that same line so the
+    result is unbiased); the default ``0.0`` cuts exactly on the line.
     """
     arr = _as_array(verts)
     n = arr.shape[0]
@@ -214,10 +215,12 @@ def clip_halfplane(
         if cur_in:
             out.append(cur)
         if cur_in != nxt_in:
-            # Edge crosses the line: add the intersection point. The
-            # denominator cannot be zero here because the endpoints lie on
-            # opposite sides, so d_cur != d_nxt.
-            t = d_cur / (d_cur - d_nxt)
+            # Edge crosses the inside boundary a*x + b*y + c = -eps. Solve for
+            # the crossing on that SAME line the inside predicate uses, so the
+            # cut and the kept vertices stay consistent and the area/moments are
+            # unbiased when eps != 0. The denominator cannot be zero here
+            # because the endpoints lie on opposite sides, so d_cur != d_nxt.
+            t = (d_cur + eps) / (d_cur - d_nxt)
             out.append(cur + t * (nxt - cur))
 
     if not out:

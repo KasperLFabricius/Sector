@@ -227,3 +227,17 @@ def test_clip_preserves_orientation_sign():
 
 def test_clip_empty_input():
     assert clip_halfplane([], 1.0, 0.0, 0.0).shape == (0, 2)
+
+
+def test_clip_eps_shifts_cut_line_consistently():
+    # Square [-1, 1] x [0, 1], keep x >= 0 with a tolerance eps = 0.1. The kept
+    # region's boundary shifts outward to x = -0.1, and crossing edges must be
+    # cut on that same line (not at x = 0), so the area is unbiased.
+    sq = [(-1, 0), (1, 0), (1, 1), (-1, 1)]
+    clipped = clip_halfplane(sq, 1.0, 0.0, 0.0, eps=0.1)
+    m = area_moments(clipped)
+    # Retained region x in [-0.1, 1], y in [0, 1]: width 1.1, height 1.
+    assert m.area == pytest.approx(1.1)
+    assert m.sx / m.area == pytest.approx((-0.1 + 1.0) / 2.0)  # centroid x = 0.45
+    # The left edge is cut exactly at x = -0.1.
+    assert clipped[:, 0].min() == pytest.approx(-0.1)
