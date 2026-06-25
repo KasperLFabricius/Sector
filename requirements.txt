@@ -1,0 +1,9 @@
+# Runtime dependencies for Sector.
+# The computation core needs only numpy; the rest support the UI, report
+# generation and reading the verification fixtures.
+numpy>=1.24,<2.4
+streamlit>=1.52,<2
+plotly>=5.18,<7
+reportlab>=4.0,<5
+# Reads the legacy output PDFs used as verification fixtures.
+pypdf>=4.0,<6
