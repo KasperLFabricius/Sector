@@ -28,6 +28,7 @@ from .geometry import (
     signed_area,
 )
 from .materials import Concrete, MildSteel
+from .plastic import PlasticPoint, plastic_capacity_at_angle, solve_plastic
 from .section import Bar, Section
 
 __all__ = [
@@ -45,6 +46,9 @@ __all__ = [
     "CombinedElasticResult",
     "solve_elastic",
     "solve_elastic_combined",
+    "PlasticPoint",
+    "plastic_capacity_at_angle",
+    "solve_plastic",
 ]
 
 __version__ = "0.1.0"
