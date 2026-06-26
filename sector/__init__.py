@@ -13,7 +13,12 @@ grows.
 
 from __future__ import annotations
 
-from .elastic import ElasticResult, solve_elastic
+from .elastic import (
+    CombinedElasticResult,
+    ElasticResult,
+    solve_elastic,
+    solve_elastic_combined,
+)
 from .geometry import (
     AreaMoments,
     area_moments,
@@ -34,7 +39,9 @@ __all__ = [
     "Bar",
     "Section",
     "ElasticResult",
+    "CombinedElasticResult",
     "solve_elastic",
+    "solve_elastic_combined",
 ]
 
 __version__ = "0.1.0"
