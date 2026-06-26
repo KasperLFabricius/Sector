@@ -77,10 +77,22 @@ def concrete_panel(parent):
                            key="conc_preset")
     _prefill("conc", preset, presets)
     curve = presets[preset]["curve"]
-    vals = {f: _number(box, "conc", f, mp.CONCRETE_FIELD_META)
-            for f in mp.CONCRETE_FIELDS}
-    concrete = mp.build_concrete(curve=curve, **vals)
-    box.caption(f"curve {curve},  fcd = {concrete.fcd:.1f} MPa")
+    fck = _number(box, "conc", "fck", mp.CONCRETE_FIELD_META)
+    gamma_c = _number(box, "conc", "gamma_c", mp.CONCRETE_FIELD_META)
+    # For a strength-dependent edition (EN 2023), keep alpha_cc tracking fck --
+    # recompute it whenever fck changes, while still allowing a manual override
+    # in between. Constant-alpha_cc editions just keep the editable value.
+    auto = mp.strength_dependent_alpha_cc(preset, fck)
+    if auto is not None and st.session_state.get("conc_alpha_fck") != fck:
+        st.session_state["conc_alpha_cc"] = auto
+        st.session_state["conc_alpha_fck"] = fck
+    if auto is None:
+        st.session_state.pop("conc_alpha_fck", None)
+    alpha_cc = _number(box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META)
+    concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
+                                 alpha_cc=alpha_cc)
+    note = "  (alpha_cc tracks fck via eta_cc)" if auto is not None else ""
+    box.caption(f"curve {curve},  fcd = {concrete.fcd:.1f} MPa{note}")
     box.plotly_chart(viz.concrete_curve_figure(concrete), use_container_width=True)
     return concrete
 

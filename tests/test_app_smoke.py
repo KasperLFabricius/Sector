@@ -80,6 +80,18 @@ def test_material_preset_switch_calculates():
     assert "plastic" in at.session_state["results"]
 
 
+def test_2023_concrete_fck_edit_calculates():
+    # Editing fck under the strength-dependent 2023 preset (alpha_cc tracks fck).
+    at = _fresh()
+    at.run()
+    at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
+    at.number_input(key="conc_fck").set_value(50.0).run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
 def test_material_manual_override_calculates():
     at = _fresh()
     at.run()

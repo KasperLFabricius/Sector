@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from sector import codes, material_presets as mp
-from sector.materials import Concrete, MildSteel
+from sector.materials import Concrete, ES, MildSteel
 
 
 def test_concrete_presets_cover_legacy_and_eurocodes():
@@ -59,6 +59,31 @@ def test_every_preset_builds_a_valid_material():
     for p in mp.MILD_PRESETS.values():
         s = mp.build_mild(**p)
         assert s.stress(0.02, design=True) > 0
+
+
+def test_strength_dependent_alpha_cc_tracks_fck_for_2023():
+    label = "DS/EN 1992-1-1:2023"
+    assert mp.strength_dependent_alpha_cc(label, 40.0) == pytest.approx(1.0)
+    # C50/60: eta_cc = (40/50)^(1/3) ~ 0.928 (Codex review).
+    assert mp.strength_dependent_alpha_cc(label, 50.0) == pytest.approx(
+        round((40.0 / 50.0) ** (1.0 / 3.0), 4))
+    # Constant-alpha_cc editions and legacy curves are not strength-dependent.
+    assert mp.strength_dependent_alpha_cc("EN 1992-1-1:2005", 50.0) is None
+    assert mp.strength_dependent_alpha_cc("Curve 2 (parabola-rectangle)", 50.0) is None
+
+
+def test_curve3_preset_second_yield_is_continuous():
+    # The default Curve 3 preset must place the second yield beyond first yield,
+    # so compression follows the second-yield branch rather than jumping into
+    # hardening (Codex review).
+    p = mp.MILD_PRESETS["Curve 3 (two yield points)"]
+    s = mp.build_mild(**p)
+    f1 = p["k"] * p["fytk"]          # first yield stress (gamma = 1)
+    f2 = p["fytk"]                   # second yield stress
+    e1 = f1 / ES                     # first compression yield strain
+    assert p["ey0c"] > e1
+    sig = -s.stress(-(e1 + 1.0e-4), design=False)  # compression magnitude
+    assert f1 <= sig < f1 + 0.2 * (f2 - f1)
 
 
 def test_field_metadata_matches_fields():

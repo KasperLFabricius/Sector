@@ -63,6 +63,19 @@ def build_concrete(curve, fck, gamma_c, alpha_cc) -> Concrete:
                     alpha_cc=float(alpha_cc))
 
 
+def strength_dependent_alpha_cc(preset, fck):
+    """``alpha_cc`` for a preset whose design factor depends on ``fck``, else None.
+
+    EN 1992-1-1:2023 uses ``eta_cc = (40/fck)^(1/3) <= 1`` (times ``k_tc``), so its
+    ``alpha_cc`` must follow the chosen strength rather than stay at the prefilled
+    default. Constant-``alpha_cc`` editions return ``None``.
+    """
+    code = codes.CODES.get(preset)
+    if code is not None and code.eta_cc_ref is not None:
+        return round(code.concrete_factor(float(fck)), 4)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Mild reinforcement
 # ---------------------------------------------------------------------------
@@ -74,10 +87,13 @@ def _mild_presets():
              "gamma_y": 1.0, "gamma_u": 1.0, "gamma_E": 1.0},
         "Curve 2 (elastic-perfectly-plastic)":
             {"curve": 2, "fytk": 500.0, "fyck": 500.0, "eut": 0.05, "gamma_y": 1.0},
+        # ey0c (the second yield's total compression strain) must exceed the
+        # first compression yield strain k*fytk/ES (~0.00248 here); otherwise the
+        # second-yield branch is skipped and the compression curve jumps.
         "Curve 3 (two yield points)":
             {"curve": 3, "fytk": 550.0, "fyck": 550.0, "futk": 600.0, "eut": 0.05,
              "gamma_y": 1.0, "gamma_u": 1.0, "gamma_E": 1.0,
-             "k": 0.9, "ey0t": 0.002, "ey0c": 0.002},
+             "k": 0.9, "ey0t": 0.002, "ey0c": 0.005},
     }
     # Eurocode editions: curve 1 with an un-factored modulus (gamma_E = 1) and a
     # flat post-yield branch (futk = fyk, gamma_u = gamma_s) and no strain limit
