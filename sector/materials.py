@@ -107,6 +107,11 @@ class MildSteel:
     * **type 2** -- elastic-perfectly-plastic: elastic at slope ``ES/gamma_y``
       to the design yield, then flat.
 
+    Beyond the tensile rupture strain ``eut`` the bar is treated as fractured and
+    carries no force (the plastic solver additionally limits the section strain
+    profile so the governing failure -- concrete crushing or steel rupture --
+    keeps the ultimate state within these limits).
+
     Parameters
     ----------
     fytk, fyck:
@@ -148,19 +153,21 @@ class MildSteel:
         if self.curve == 2:
             slope = ES / gy
             if eps >= 0.0:
+                if eps > self.eut:
+                    return 0.0  # ruptured: no force beyond the rupture strain
                 return min(slope * eps, fyt)
             return max(slope * eps, -fyc)
 
         # type 1: hardening in tension, flat plateau in compression
         slope = ES / gE
         if eps >= 0.0:
+            if eps > self.eut:
+                return 0.0  # ruptured: no force beyond the rupture strain
             eps_y = fyt / slope
             if eps <= eps_y:
                 return slope * eps
-            if eps >= self.eut:
-                fu = self.futk / gu
-                return fu  # at/over rupture strain: capped at design rupture stress
             fu = self.futk / gu
+            # Hardening branch, reaching the design rupture stress at eut.
             return fyt + (fu - fyt) * (eps - eps_y) / (self.eut - eps_y)
         eps_yc = -fyc / slope
         if eps >= eps_yc:

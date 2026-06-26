@@ -90,6 +90,15 @@ def test_mild_type2_asymmetric_compression_yield():
     assert s.stress(-0.02) == pytest.approx(-300.0)
 
 
+def test_mild_type2_ruptures_beyond_eut():
+    s = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.0, curve=2)
+    assert s.stress(0.05) == pytest.approx(500.0)  # still intact at eut
+    assert s.stress(0.0500001) == 0.0              # fractured just beyond
+    assert s.stress(0.1) == 0.0
+    # Compression has no rupture limit (it is bounded by concrete crushing).
+    assert s.stress(-0.1) == pytest.approx(-500.0)
+
+
 # ---------------------------------------------------------------------------
 # Mild steel type 1 (bilinear with hardening)
 # ---------------------------------------------------------------------------
@@ -133,3 +142,13 @@ def test_mild_type1_compression_plateau_no_hardening():
                   gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, curve=1)
     # Deep compression stays at the (negative) yield, no hardening.
     assert s.stress(-0.04) == pytest.approx(-500.0)
+
+
+def test_mild_type1_ruptures_beyond_eut():
+    s = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, futk=540.0,
+                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, curve=1)
+    assert s.stress(0.05) == pytest.approx(540.0)  # rupture stress at eut
+    assert s.stress(0.0500001) == 0.0              # fractured just beyond eut
+    assert s.stress(0.2) == 0.0
+    # Compression is unaffected by the tensile rupture limit.
+    assert s.stress(-0.2) == pytest.approx(-500.0)
