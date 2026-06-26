@@ -155,6 +155,61 @@ def test_production_understotning_cracked(case):
         assert got == pytest.approx(exp, rel=0.03, abs=1800)
 
 
+def ecr_section() -> Section:
+    # "Test.ecr" run: the understotning section with coordinates rounded to .304.
+    return Section.from_polygon(
+        corners=[(-0.050, -0.304), (-0.050, 0.304), (0.050, 0.304), (0.050, -0.304)],
+        bars_xy_area_mm2=[(0.0, 0.246, 93.0), (0.0, 0.074, 93.0),
+                          (0.0, 0.024, 93.0), (0.0, -0.254, 93.0)],
+    )
+
+
+def test_production_test_ecr_combined():
+    # Combined case (nl=23.25, ns=5.81); reproduces the printout closely.
+    res = solve_elastic_combined(
+        ecr_section(), 408.98, -49.87, 0.0, 23.25, -2.23, -14.75, 0.0, 5.81
+    )
+    assert res.converged
+    total_exp = [27233, -83976, -116304, -296048]
+    rst1_exp = [25934, -12566, -23758, -85984]
+    for got, exp in zip(res.bar_stress_total, total_exp):
+        assert got == pytest.approx(exp, rel=0.01, abs=200)
+    for got, exp in zip(res.bar_stress_rst1, rst1_exp):
+        assert got == pytest.approx(exp, rel=0.01, abs=200)
+    assert res.max_concrete_compression == pytest.approx(16728.0, rel=0.01)
+    assert res.na_y_intercept == pytest.approx(0.13014, abs=0.01)
+
+
+def test_production_handcalc_long_single_load():
+    # Pure long-term load (single load, n=23.25): the simple single-column output.
+    res = solve_elastic(understotning_section(), 408.98, -49.87, 0.0, 23.25)
+    assert res.converged
+    bars_exp = [2002, -95424, -123746, -280647]
+    # Deepest bar and concrete compression are well conditioned; near-axis bars
+    # are noise-limited (this case has a bar essentially on the neutral axis).
+    assert res.bar_stress[3] == pytest.approx(bars_exp[3], rel=0.01)
+    assert res.max_concrete_compression == pytest.approx(13294.0, rel=0.01)
+    assert res.na_y_intercept == pytest.approx(0.24197, abs=0.01)
+    for got, exp in zip(res.bar_stress, bars_exp):
+        assert got == pytest.approx(exp, rel=0.03, abs=1800)
+
+
+def test_production_handcalc_short_zero_long_term():
+    # Long-term load is zero: TOTAL must equal RST1 and the LONG column must be
+    # zero. Exercises the zero-long-term path of the superposition.
+    res = solve_elastic_combined(
+        understotning_section(), 0.0, 0.0, 0.0, 23.25, -5.45, -36.12, 0.0, 5.81
+    )
+    assert res.converged
+    assert all(abs(v) < 1e-6 for v in res.bar_stress_long)
+    total_exp = [459930, 285147, 234338, -47144]
+    for got_t, got_r, exp in zip(res.bar_stress_total, res.bar_stress_rst1, total_exp):
+        assert got_t == pytest.approx(got_r, rel=1e-9, abs=1e-6)  # TOTAL == RST1
+        assert got_t == pytest.approx(exp, rel=0.01, abs=1800)
+    assert res.max_concrete_compression == pytest.approx(16997.0, rel=0.01)
+    assert res.na_y_intercept == pytest.approx(-0.20711, abs=0.01)
+
+
 def test_combined_reduces_to_long_term_when_no_short():
     # Zero short-term load with ns == nl must equal a single long-term solve.
     sec = rectangular_section()
