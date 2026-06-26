@@ -58,46 +58,69 @@ def _merge_labels(keys):
     return "/".join(seen)
 
 
-def _apply_markers(fig, points, eps_min, eps_max):
+def _spread(values, min_gap):
+    """Push label anchor positions apart to at least ``min_gap``, keeping order.
+
+    ``values`` are the true positions (sorted ascending); returns adjusted label
+    positions so adjacent labels do not collide. The guide line still marks the
+    true value, so a small label offset stays unambiguous.
+    """
+    out = list(values)
+    for i in range(1, len(out)):
+        if out[i] - out[i - 1] < min_gap:
+            out[i] = out[i - 1] + min_gap
+    shift = (values[-1] - out[-1]) / 2.0 if out else 0.0  # re-centre the stack
+    return [v + shift for v in out]
+
+
+def _grouped(pts, axis):
+    """Group points by axis position -> ordered list of (value, [keys])."""
+    groups = {}
+    for s, sig, ek, sk in pts:
+        value, key = (round(s * 1000.0, 2), ek) if axis == "x" else (round(sig, 1), sk)
+        if key is not None:
+            groups.setdefault(value, []).append(key)
+    return sorted(groups.items())
+
+
+def _apply_markers(fig, points, eps_min, eps_max, ymin, ymax):
     """Annotate a material's points of interest, journal-style.
 
     ``points`` are ``(strain, stress, eps_key, sigma_key)`` from
     ``material.diagram_markers``. Each in-view point gets a dot on the curve and
     thin projection guides to the axes; the strain symbols sit on the strain
     axis and the stress symbols on the stress axis, so labels never touch the
-    curve. Symbols sharing an axis position are merged (e.g. ``f_yd/f_ud``).
+    curve. Symbols sharing an axis position are merged (e.g. ``f_yd/f_ud``), and
+    near-coincident labels are nudged apart so they never overlap one another.
     """
     pts = [(s, sig, ek, sk) for (s, sig, ek, sk) in points
            if eps_min <= s <= eps_max]
     if not pts:
         return
 
-    # Dots on the curve at each point (a touch thicker than the line).
     fig.add_trace(go.Scatter(
         x=[s * 1000.0 for s, _, _, _ in pts], y=[sig for _, sig, _, _ in pts],
         mode="markers", marker=dict(size=8, color=DESIGN_LINE,
                                     line=dict(color="white", width=1.5)),
         hoverinfo="skip", showlegend=False))
 
-    # Strain symbols on the strain (x) axis; group values that coincide.
-    strain_keys = {}
-    for s, _, ek, _ in pts:
-        if ek is not None:
-            strain_keys.setdefault(round(s * 1000.0, 2), []).append(ek)
-    for x0, keys in strain_keys.items():
+    # Strain symbols on the strain (x) axis.
+    x_groups = _grouped(pts, "x")
+    x_span = (eps_max - eps_min) * 1000.0
+    x_lab = _spread([v for v, _ in x_groups], x_span * 0.11)
+    for (x0, keys), xl in zip(x_groups, x_lab):
         fig.add_vline(x=x0, line_width=0.8, line_dash="dot", line_color=GUIDE_LINE)
-        fig.add_annotation(x=x0, xref="x", y=0.0, yref="paper", yshift=-7,
+        fig.add_annotation(x=xl, xref="x", y=0.0, yref="paper", yshift=-7,
                            yanchor="top", showarrow=False, text=_merge_labels(keys),
                            font=dict(size=12, color=DESIGN_LINE))
 
-    # Stress symbols on the stress (y) axis; group values that coincide.
-    stress_keys = {}
-    for _, sig, _, sk in pts:
-        if sk is not None:
-            stress_keys.setdefault(round(sig, 1), []).append(sk)
-    for y0, keys in stress_keys.items():
+    # Stress symbols on the stress (y) axis.
+    y_groups = _grouped(pts, "y")
+    y_span = (ymax - ymin) or 1.0
+    y_lab = _spread([v for v, _ in y_groups], y_span * 0.08)
+    for (y0, keys), yl in zip(y_groups, y_lab):
         fig.add_hline(y=y0, line_width=0.8, line_dash="dot", line_color=GUIDE_LINE)
-        fig.add_annotation(x=1.0, xref="paper", xshift=6, y=y0, yref="y",
+        fig.add_annotation(x=1.0, xref="paper", xshift=6, y=yl, yref="y",
                            xanchor="left", showarrow=False, text=_merge_labels(keys),
                            font=dict(size=12, color=DESIGN_LINE))
 
@@ -120,7 +143,8 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
                              line=dict(color=CHAR_LINE, width=1.5, dash="dot")))
     fig.add_trace(go.Scatter(x=x, y=design, mode="lines", name="design",
                              line=dict(color=DESIGN_LINE, width=2.5)))
-    _apply_markers(fig, material.diagram_markers(design=True), eps_min, eps_max)
+    _apply_markers(fig, material.diagram_markers(design=True), eps_min, eps_max,
+                   min(design + char), max(design + char))
     fig.update_layout(
         title=dict(text=title, font=dict(size=13)),
         template="plotly_white", height=260,
