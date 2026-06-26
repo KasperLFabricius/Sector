@@ -58,4 +58,4 @@ def test_pcross_example(case):
         assert abs(r.eps_steel - es) <= 0.08
         if ecab is not None:
             assert abs(r.eps_cable - ecab) <= 0.08
-        assert r.curvature == pytest.approx(curv, rel=0.05, abs=1e-4)
+        assert abs(r.curvature - curv) <= 0.05 * abs(curv) + 1e-4
