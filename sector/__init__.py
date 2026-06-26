@@ -27,6 +27,7 @@ from .geometry import (
     orient,
     signed_area,
 )
+from .materials import Concrete, MildSteel
 from .section import Bar, Section
 
 __all__ = [
@@ -38,6 +39,8 @@ __all__ = [
     "signed_area",
     "Bar",
     "Section",
+    "Concrete",
+    "MildSteel",
     "ElasticResult",
     "CombinedElasticResult",
     "solve_elastic",
