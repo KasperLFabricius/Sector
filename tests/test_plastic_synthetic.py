@@ -76,3 +76,28 @@ def test_strain_limits_are_reported():
     assert r.eps_concrete == pytest.approx(0.35)
     assert r.eps_steel < 0.0
     assert r.curvature > 0.0
+
+
+def test_steel_rupture_governs_below_concrete_crushing():
+    # A lightly reinforced deep section with a low steel rupture strain: the
+    # tension steel reaches its rupture strain before the concrete crushes, so
+    # the governing curvature keeps the concrete strain below 0.35 %.
+    sec = Section.from_polygon(
+        corners=[(-.15, -.3), (-.15, .3), (.15, .3), (.15, -.3)],
+        bars_xy_area_mm2=[(0.0, -0.25, 200.0)],
+    )
+    conc = Concrete(fck=35.0, gamma_c=1.5, curve=2)
+    steel = MildSteel(fytk=500.0, fyck=500.0, eut=0.01, futk=540.0,
+                      gamma_y=1.15, gamma_u=1.15, gamma_E=1.0, curve=1)
+    r = plastic_capacity_at_angle(sec, conc, steel, 0.0, 90.0)
+    assert r.converged
+    assert r.eps_concrete < 0.35                      # concrete not crushed
+    assert r.eps_steel == pytest.approx(-1.0, abs=0.02)  # steel at its 1% rupture strain
+
+
+def test_tensile_axial_force_gives_negative_R():
+    # R is signed (Mx = P*R*sin U): a tensile axial force (P < 0) yields R < 0.
+    section, concrete, steel = column()
+    r = plastic_capacity_at_angle(section, concrete, steel, -400.0, 90.0)
+    assert r.converged
+    assert r.R < 0.0
