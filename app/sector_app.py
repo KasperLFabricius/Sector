@@ -19,7 +19,7 @@ import numpy as np  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import viz  # noqa: E402
-from sector import templates  # noqa: E402
+from sector import kernels, templates  # noqa: E402
 from sector.elastic import solve_elastic  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
@@ -29,6 +29,16 @@ APP_VERSION = "0.1.0"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
+
+
+@st.cache_resource(show_spinner="Preparing the solver...")
+def _warm_solver():
+    """Compile the solver kernels once per server, so the cost is paid at
+    startup rather than on the first Calculate."""
+    return kernels.warmup()
+
+
+_warm_solver()
 
 _logo = ROOT / "assets" / "logo.png"
 if _logo.exists():
