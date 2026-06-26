@@ -27,11 +27,16 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import kernels
 from .geometry import _clip_pts, _poly_moments
 from .materials import EPS_C_PEAK, EPS_CU, Concrete, MildSteel, Prestress
 from .section import Section
 
 _MN_TO_KN = 1000.0
+
+# Use the compiled concrete integrator when Numba is available; otherwise fall
+# back to the pure-Python band loop below (correct, just slower).
+_USE_KERNEL = kernels.HAS_NUMBA
 
 
 @dataclass
@@ -93,8 +98,20 @@ def _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons):
     return phi
 
 
+def _band_stresses(concrete, kappa, s_na, h, n_bands):
+    """Design concrete stresses at each ascending-band midpoint (MPa, comp +)."""
+    sig = np.empty(n_bands)
+    for i in range(n_bands):
+        sa = s_na + i * h
+        sb = sa + h
+        eps_m = kappa * (0.5 * (sa + sb) - s_na)
+        sig[i] = -concrete.stress(-eps_m, design=True)
+    return sig
+
+
 def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
-                rings, bars, tendons):
+                rings, bars, tendons, ring_xy=None, ring_starts=None,
+                buf_a=None, buf_b=None):
     """Force resultants for a trial compression depth ``c`` (s-units).
 
     Returns compression and tension force totals and their first moments, in kN
@@ -105,6 +122,10 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
     are ``(x, y, area)`` tuples -- all precomputed once for the whole sweep.
     Tendons (if any) carry tension only, and their stress is taken at the total
     strain ``IS + section strain``.
+
+    When ``ring_xy`` (the stacked ring vertices) is supplied the concrete
+    integration runs in the compiled kernel; otherwise it uses the pure-Python
+    band loop. Both produce the same resultants.
     """
     s_na = s_max - c
     kappa = phi
@@ -115,32 +136,44 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
     # -- concrete (always compression over the zone s > s_na) --
     fcd = concrete.fcd
     s_peak = s_na + EPS_C_PEAK / kappa  # strain reaches the 0.2% plateau here
-
-    # Plateau band [s_peak, s_max]: constant design strength.
-    if s_peak < s_max:
-        for ring in rings:
-            m = _poly_moments(_clip_pts(ring, dx, dy, -s_peak))  # d.r >= s_peak
-            comp_F += fcd * m.area * _MN_TO_KN
-            comp_Fx += fcd * m.sx * _MN_TO_KN
-            comp_Fy += fcd * m.sy * _MN_TO_KN
-
-    # Ascending band [s_na, min(s_peak, s_max)]: midpoint integration.
     s_top = min(s_peak, s_max)
-    if s_top > s_na and n_bands > 0:
-        h = (s_top - s_na) / n_bands
-        for i in range(n_bands):
-            sa = s_na + i * h
-            sb = sa + h
-            eps_m = kappa * (0.5 * (sa + sb) - s_na)
-            sig = -concrete.stress(-eps_m, design=True)  # compression +, MPa
-            if sig == 0.0:
-                continue
+
+    if ring_xy is not None:
+        # Compiled path: precompute the band stresses, integrate in the kernel.
+        if s_top > s_na and n_bands > 0:
+            sig = _band_stresses(concrete, kappa, s_na, (s_top - s_na) / n_bands, n_bands)
+        else:
+            sig = np.empty(0)
+        cF, cFx, cFy = kernels.concrete_resultants(
+            ring_xy, ring_starts, dx, dy, s_na, s_max, s_peak,
+            sig.shape[0], fcd, sig, buf_a, buf_b)
+        comp_F += cF
+        comp_Fx += cFx
+        comp_Fy += cFy
+    else:
+        # Pure-Python path. Plateau band [s_peak, s_max]: constant strength.
+        if s_peak < s_max:
             for ring in rings:
-                band = _clip_pts(_clip_pts(ring, dx, dy, -sa), -dx, -dy, sb)
-                m = _poly_moments(band)
-                comp_F += sig * m.area * _MN_TO_KN
-                comp_Fx += sig * m.sx * _MN_TO_KN
-                comp_Fy += sig * m.sy * _MN_TO_KN
+                m = _poly_moments(_clip_pts(ring, dx, dy, -s_peak))  # d.r >= s_peak
+                comp_F += fcd * m.area * _MN_TO_KN
+                comp_Fx += fcd * m.sx * _MN_TO_KN
+                comp_Fy += fcd * m.sy * _MN_TO_KN
+        # Ascending band [s_na, s_top]: midpoint integration.
+        if s_top > s_na and n_bands > 0:
+            h = (s_top - s_na) / n_bands
+            for i in range(n_bands):
+                sa = s_na + i * h
+                sb = sa + h
+                eps_m = kappa * (0.5 * (sa + sb) - s_na)
+                sig = -concrete.stress(-eps_m, design=True)  # compression +, MPa
+                if sig == 0.0:
+                    continue
+                for ring in rings:
+                    band = _clip_pts(_clip_pts(ring, dx, dy, -sa), -dx, -dy, sb)
+                    m = _poly_moments(band)
+                    comp_F += sig * m.area * _MN_TO_KN
+                    comp_Fx += sig * m.sx * _MN_TO_KN
+                    comp_Fy += sig * m.sy * _MN_TO_KN
 
     # -- reinforcement (point areas, both signs) --
     min_eps = 0.0
@@ -205,7 +238,8 @@ def plastic_capacity_at_angle(
     # Precompute the angle-independent geometry once: the oriented concrete rings
     # as plain point lists, and the bar/tendon (x, y, area) tuples. These were
     # being rebuilt on every bisection step, which dominated the run time.
-    rings = [r.tolist() for r in section.integration_rings()]
+    int_rings = section.integration_rings()
+    rings = [r.tolist() for r in int_rings]
     bx, by, ba = section.bar_arrays()
     bars = list(zip(bx.tolist(), by.tolist(), ba.tolist()))
     if prestress is not None:
@@ -213,6 +247,19 @@ def plastic_capacity_at_angle(
         tendons = list(zip(tx.tolist(), ty.tolist(), ta.tolist()))
     else:
         tendons = []
+
+    # For the compiled path, also stack the rings into flat arrays once and
+    # allocate clip scratch buffers sized for the largest ring.
+    if _USE_KERNEL:
+        ring_xy = np.ascontiguousarray(np.vstack(int_rings), dtype=np.float64)
+        ring_starts = np.zeros(len(int_rings) + 1, dtype=np.int64)
+        for k, r in enumerate(int_rings):
+            ring_starts[k + 1] = ring_starts[k] + len(r)
+        cap = 4 * max(len(r) for r in int_rings) + 16  # generous clip headroom
+        buf_a = np.empty((cap, 2))
+        buf_b = np.empty((cap, 2))
+    else:
+        ring_xy = ring_starts = buf_a = buf_b = None
 
     verts = section.concrete_vertices()
     s = verts[:, 0] * dx + verts[:, 1] * dy
@@ -223,7 +270,8 @@ def plastic_capacity_at_angle(
     def net_axial(c):
         phi = _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons)
         acc = _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi,
-                          n_bands, rings, bars, tendons)
+                          n_bands, rings, bars, tendons,
+                          ring_xy, ring_starts, buf_a, buf_b)
         return acc[0] + acc[3]  # comp_F + ten_F (kN)
 
     # The governing-curvature formulation never drives a material past its limit,
@@ -266,7 +314,7 @@ def plastic_capacity_at_angle(
     (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
      min_eps, min_eps_cable) = _accumulate(
         concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
-        rings, bars, tendons
+        rings, bars, tendons, ring_xy, ring_starts, buf_a, buf_b
     )
 
     Mx = comp_Fy + ten_Fy

@@ -37,6 +37,11 @@ Define the section (shape, dimensions, reinforcement), set the materials and
 loads, pick the analysis mode, and press **Calculate**. The section drawing
 updates live as you type; results update when you calculate.
 
+The solver's inner loops are compiled with Numba, which the app warms up once at
+startup (a few seconds, cached on disk thereafter) so every calculation after
+that is near-instant. If Numba is not installed the solver still runs, just more
+slowly.
+
 ## Project layout
 
 ```

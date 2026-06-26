@@ -2,6 +2,9 @@
 # The computation core needs only numpy; the rest support the UI, report
 # generation and reading the verification fixtures.
 numpy>=1.24,<2.4
+# Compiles the plastic-solver inner kernels (large speedup). Optional -- the
+# solver falls back to pure Python if it is absent -- but installed by default.
+numba>=0.62,<0.63
 streamlit>=1.52,<2
 plotly>=5.18,<7
 reportlab>=4.0,<5
