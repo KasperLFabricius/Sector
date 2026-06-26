@@ -59,17 +59,54 @@ class PlasticPoint:
     converged: bool
 
 
-def _accumulate(section, concrete, steel, prestress, dx, dy, s_max, c, n_bands):
+def _governing_curvature(section, steel, prestress, dx, dy, s_max, c):
+    """Curvature at ultimate for a trial compression depth ``c`` (s-units).
+
+    The strain profile is scaled until the first material limit is reached:
+    concrete crushing (extreme fibre at EPS_CU), mild-steel rupture (most
+    tensile bar at its ``eut``), or tendon rupture (most tensile cable's total
+    strain at its rupture strain). The governing curvature is the smallest of
+    these, so no material is ever driven past its limit.
+    """
+    s_na = s_max - c
+    phi = EPS_CU / c  # concrete-crushing limit
+
+    # When steel or a tendon governs it sits exactly at its rupture strain, where
+    # it is still intact (carrying its rupture force). Back the limiting curvature
+    # off by a negligible amount so floating-point rounding cannot tip the strain
+    # a hair past rupture (which the material law would read as fractured, zero
+    # force). The back-off is far larger than rounding yet physically negligible.
+    intact = 1.0 - 1.0e-9
+
+    bx, by, _ = section.bar_arrays()
+    if bx.size:
+        s_bar_min = float((bx * dx + by * dy).min())  # most tensile bar
+        if s_bar_min < s_na:
+            phi = min(phi, intact * steel.eut / (s_na - s_bar_min))
+
+    if prestress is not None:
+        tx, ty, _ = section.tendon_arrays()
+        if tx.size:
+            s_cab_min = float((tx * dx + ty * dy).min())  # most tensile cable
+            margin = prestress.rupture_strain - prestress.IS
+            if s_cab_min < s_na and margin > 0.0:
+                phi = min(phi, intact * margin / (s_na - s_cab_min))
+
+    return phi
+
+
+def _accumulate(section, concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands):
     """Force resultants for a trial compression depth ``c`` (s-units).
 
     Returns compression and tension force totals and their first moments, in kN
     and kNm, plus the most tensile mild-steel and tendon strains
-    (compression-positive %). The neutral axis is at ``s = s_max - c``; the
-    extreme fibre strain is EPS_CU. Tendons (if any) carry tension only, and
-    their stress is taken at the total strain ``IS + section strain``.
+    (compression-positive %). The neutral axis is at ``s = s_max - c`` and the
+    curvature is ``phi`` (the governing ultimate curvature). Tendons (if any)
+    carry tension only, and their stress is taken at the total strain
+    ``IS + section strain``.
     """
     s_na = s_max - c
-    kappa = EPS_CU / c
+    kappa = phi
 
     comp_F = comp_Fx = comp_Fy = 0.0
     ten_F = ten_Fx = ten_Fy = 0.0
@@ -160,7 +197,8 @@ def plastic_capacity_at_angle(
 ) -> PlasticPoint:
     """Ultimate capacity for axial force ``P`` (kN) at neutral-axis angle ``V``.
 
-    The extreme concrete fibre is pinned at the ultimate strain and the
+    The strain profile is taken to its ultimate (the first material limit --
+    concrete crushing or steel/tendon rupture -- governs the curvature) and the
     neutral-axis depth solved (by bisection) so the net axial force equals ``P``.
     Pass ``prestress`` (a :class:`~sector.materials.Prestress`) to include the
     section's tendons.
@@ -175,29 +213,14 @@ def plastic_capacity_at_angle(
     c_full = s_max - s_min
 
     def net_axial(c):
-        acc = _accumulate(section, concrete, steel, prestress, dx, dy, s_max, c, n_bands)
+        phi = _governing_curvature(section, steel, prestress, dx, dy, s_max, c)
+        acc = _accumulate(section, concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands)
         return acc[0] + acc[3]  # comp_F + ten_F (kN)
 
-    # Lower-bound the compression depth so the most tensile reinforcement does
-    # not exceed its rupture strain: below this, very high curvature ruptures the
-    # tension steel/tendon (a material-governed failure) and the axial-force
-    # function is no longer monotonic. Within [c_min, c_full] it increases with c.
-    c_min = 1.0e-6 * c_full
-    bx, by, _ = section.bar_arrays()
-    if bx.size:
-        s_bar_min = float((bx * dx + by * dy).min())
-        c_min = max(c_min, EPS_CU * (s_max - s_bar_min) / (steel.eut + EPS_CU))
-    if prestress is not None:
-        tx, ty, _ = section.tendon_arrays()
-        if tx.size:
-            s_t_min = float((tx * dx + ty * dy).min())
-            # tendon total tension = IS - section strain; keep it within the
-            # tendon's actual rupture strain (built-in curves use EPS_P_RES, not
-            # the eut field, so use the effective rupture strain here).
-            denom = prestress.rupture_strain - prestress.IS + EPS_CU
-            if denom > 0:
-                c_min = max(c_min, EPS_CU * (s_max - s_t_min) / denom)
-    lo = max(1.0e-6 * c_full, c_min * (1.0 + 1.0e-6))
+    # The governing-curvature formulation never drives a material past its limit,
+    # so the net axial force increases monotonically with the compression depth c
+    # and a plain bracket suffices.
+    lo = 1.0e-9 * c_full
     n_lo = net_axial(lo)
 
     # Grow the upper bound past c_full so axial-compression states are reachable:
@@ -230,19 +253,22 @@ def plastic_capacity_at_angle(
                 break
         c = 0.5 * (lo + hi)
 
+    phi = _governing_curvature(section, steel, prestress, dx, dy, s_max, c)
     (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
      min_eps, min_eps_cable) = _accumulate(
-        section, concrete, steel, prestress, dx, dy, s_max, c, n_bands
+        section, concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands
     )
 
     Mx = comp_Fy + ten_Fy
     My = comp_Fx + ten_Fx
-    kappa = EPS_CU / c
+    kappa = phi
     s_na = s_max - c
+    eps_concrete = phi * c  # extreme concrete strain (<= EPS_CU; less if steel governs)
 
-    # Resultant load position.
+    # Resultant load position. R is signed (Mx = P*R*sin U, My = P*R*cos U), so a
+    # tensile axial force (P < 0) gives a negative R.
     if abs(P) > 1.0e-9:
-        R = math.hypot(Mx, My) / abs(P)
+        R = math.hypot(Mx, My) / P
     else:
         R = 0.0
     U = math.degrees(math.atan2(Mx, My)) % 360.0
@@ -268,7 +294,7 @@ def plastic_capacity_at_angle(
         R=R,
         na_x_intercept=x_int,
         na_y_intercept=y_int,
-        eps_concrete=EPS_CU * 100.0,
+        eps_concrete=eps_concrete * 100.0,
         eps_steel=min_eps * 100.0,
         eps_cable=min_eps_cable * 100.0,
         curvature=kappa,
