@@ -104,17 +104,19 @@ def _apply_markers(fig, points, eps_min, eps_max, ymin, ymax):
                                     line=dict(color="white", width=1.5)),
         hoverinfo="skip", showlegend=False))
 
-    # Strain symbols on the strain (x) axis.
+    # Strain symbols above the plot (the numeric strain ticks stay on the bottom
+    # axis, so the symbols and the values do not collide).
     x_groups = _grouped(pts, "x")
     x_span = (eps_max - eps_min) * 1000.0
     x_lab = _spread([v for v, _ in x_groups], x_span * 0.11)
     for (x0, keys), xl in zip(x_groups, x_lab):
         fig.add_vline(x=x0, line_width=0.8, line_dash="dot", line_color=GUIDE_LINE)
-        fig.add_annotation(x=xl, xref="x", y=0.0, yref="paper", yshift=-7,
-                           yanchor="top", showarrow=False, text=_merge_labels(keys),
+        fig.add_annotation(x=xl, xref="x", y=1.0, yref="paper", yshift=6,
+                           yanchor="bottom", showarrow=False, text=_merge_labels(keys),
                            font=dict(size=12, color=DESIGN_LINE))
 
-    # Stress symbols on the stress (y) axis.
+    # Stress symbols on the right edge (the numeric stress ticks stay on the
+    # left axis), nudged apart so they never overlap one another.
     y_groups = _grouped(pts, "y")
     y_span = (ymax - ymin) or 1.0
     y_lab = _spread([v for v, _ in y_groups], y_span * 0.08)
@@ -123,6 +125,24 @@ def _apply_markers(fig, points, eps_min, eps_max, ymin, ymax):
         fig.add_annotation(x=1.0, xref="paper", xshift=6, y=yl, yref="y",
                            xanchor="left", showarrow=False, text=_merge_labels(keys),
                            font=dict(size=12, color=DESIGN_LINE))
+
+
+def _slope_label(fig, material):
+    """Label the elastic-branch slope with the design modulus (steel only)."""
+    if not hasattr(material, "elastic_slope"):
+        return
+    pos = [(s, sig) for s, sig, _, _ in material.diagram_markers(design=True)
+           if s > 0.0]
+    if not pos:
+        return
+    slope = material.elastic_slope(design=True)  # MPa per unit strain
+    e_yield = min(s for s, _ in pos)
+    e_mid = 0.45 * e_yield
+    fig.add_annotation(
+        x=e_mid * 1000.0, y=slope * e_mid, ax=-36, ay=-22, showarrow=True,
+        arrowhead=0, arrowwidth=0.8, arrowcolor=GUIDE_LINE,
+        text="E<sub>d</sub> = %.0f GPa" % (slope / 1000.0),
+        font=dict(size=11, color=DESIGN_LINE))
 
 
 def _curve_figure(material, eps_min, eps_max, title, n=240):
@@ -145,16 +165,17 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
                              line=dict(color=DESIGN_LINE, width=2.5)))
     _apply_markers(fig, material.diagram_markers(design=True), eps_min, eps_max,
                    min(design + char), max(design + char))
+    _slope_label(fig, material)
     fig.update_layout(
-        title=dict(text=title, font=dict(size=13)),
-        template="plotly_white", height=260,
-        margin=dict(l=58, r=58, t=30, b=46),
+        title=dict(text=title, font=dict(size=13), y=0.97),
+        template="plotly_white", height=320,
+        margin=dict(l=58, r=54, t=44, b=62),
         xaxis=dict(title="Strain " + _EPS + " [" + _PERMILLE + "]",
-                   zeroline=True, zerolinecolor="#c8ccd0"),
+                   zeroline=True, zerolinecolor="#c8ccd0", showgrid=True),
         yaxis=dict(title="Stress " + _SIGMA + " [MPa]",
-                   zeroline=True, zerolinecolor="#c8ccd0"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0.0,
-                    font=dict(size=10)),
+                   zeroline=True, zerolinecolor="#c8ccd0", showgrid=True),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, x=0.5,
+                    xanchor="center", font=dict(size=10)),
     )
     return fig
 

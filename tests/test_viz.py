@@ -56,3 +56,14 @@ def test_curve3_figure_builds_and_labels_all_points():
     texts = " ".join(a.text for a in fig.layout.annotations)
     for sym in ("f<sub>1</sub>", "f<sub>2</sub>", "f<sub>ud</sub>"):
         assert sym in texts
+
+
+def test_steel_figure_shows_modulus_slope_label():
+    fig = viz.steel_curve_figure(
+        MildSteel(fytk=500.0, fyck=500.0, gamma_y=1.15, curve=2))
+    assert any("E<sub>d</sub>" in a.text for a in fig.layout.annotations)
+
+
+def test_concrete_figure_has_no_modulus_label():
+    fig = viz.concrete_curve_figure(Concrete(fck=35.0, gamma_c=1.5, curve=2))
+    assert not any("E<sub>d</sub>" in a.text for a in fig.layout.annotations)
