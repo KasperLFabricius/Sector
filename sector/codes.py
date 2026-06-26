@@ -24,7 +24,9 @@ Concrete (ULS)
 Reinforcement (ULS)
     The design diagram with a horizontal top branch at ``fyd = fyk / gamma_s`` and
     no strain limit -- option (b) of the reinforcement design assumptions, which
-    the DK NA mandates -- i.e. an elastic-perfectly-plastic law.
+    the DK NA mandates -- i.e. an elastic-perfectly-plastic law. The elastic
+    modulus is left un-factored at ``Es`` (the code reduces the yield stress, not
+    the modulus), so bars below yield carry their correct ``Es * eps`` force.
 
 Partial factors are the recommended / national values for the persistent and
 transient design situation. The Danish factors are the normal control-class
@@ -107,11 +109,17 @@ class DesignCode:
     def steel(self, fyk: float) -> MildSteel:
         """Reinforcement law for characteristic yield ``fyk`` (MPa) under this code.
 
-        Elastic-perfectly-plastic (horizontal top branch at the design yield,
-        no strain limit).
+        EC2's design diagram: a horizontal top branch at the design yield
+        ``fyd = fyk / gamma_s`` with no strain limit (design option (b)). The
+        code reduces the yield stress but keeps the elastic modulus, so ``Es`` is
+        left un-factored. This is built with curve 1 -- ``gamma_E = 1`` (un-
+        factored modulus) and a flat post-yield branch (``futk = fyk``,
+        ``gamma_u = gamma_s``) -- i.e. elastic-perfectly-plastic with the full
+        modulus on the elastic branch.
         """
-        return MildSteel(fytk=fyk, fyck=fyk, eut=_NO_STRAIN_LIMIT,
-                         gamma_y=self.gamma_s, curve=2)
+        return MildSteel(fytk=fyk, fyck=fyk, futk=fyk, eut=_NO_STRAIN_LIMIT,
+                         gamma_y=self.gamma_s, gamma_u=self.gamma_s,
+                         gamma_E=1.0, curve=1)
 
 
 # EN 1992-1-1:2005, recommended values (alpha_cc = 1.0, gamma_c = 1.5,

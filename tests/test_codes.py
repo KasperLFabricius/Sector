@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from sector import codes
-from sector.materials import Concrete, EPS_C_PEAK, MildSteel
+from sector.materials import Concrete, EPS_C_PEAK, ES, MildSteel
 
 
 def test_registry_and_tables():
@@ -63,8 +63,23 @@ def test_all_codes_use_perfectly_plastic_steel_without_strain_limit():
     for code in codes.CODES.values():
         s = code.steel(500.0)
         assert isinstance(s, MildSteel)
-        assert s.curve == 2
         assert s.eut >= 1.0  # effectively unlimited
         fyd = 500.0 / code.gamma_s
         assert s.stress(0.02, design=True) == pytest.approx(fyd)
         assert s.stress(-0.02, design=True) == pytest.approx(-fyd)
+
+
+def test_ec2_steel_keeps_the_modulus_unfactored():
+    # EC2 reduces the yield stress to fyd but keeps Es on the elastic branch;
+    # the preset must not factor the modulus by gamma_s (Codex review).
+    code = codes.CODES["EN 1992-1-1:2005"]
+    s = code.steel(500.0)
+    fyd = 500.0 / 1.15
+    eps = 0.0005  # below the design yield strain fyd/Es, so still elastic
+    assert eps < fyd / ES
+    # Elastic stress uses the full modulus Es, not the factored Es/gamma_s.
+    assert s.stress(eps, design=True) == pytest.approx(ES * eps)
+    assert s.stress(eps, design=True) != pytest.approx(ES / 1.15 * eps)
+    # Tension and compression both still yield at fyd.
+    assert s.stress(0.02, design=True) == pytest.approx(fyd)
+    assert s.stress(-0.02, design=True) == pytest.approx(-fyd)
