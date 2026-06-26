@@ -191,8 +191,10 @@ def plastic_capacity_at_angle(
         tx, ty, _ = section.tendon_arrays()
         if tx.size:
             s_t_min = float((tx * dx + ty * dy).min())
-            # tendon total tension = IS - section strain; keep it <= eut.
-            denom = prestress.eut - prestress.IS + EPS_CU
+            # tendon total tension = IS - section strain; keep it within the
+            # tendon's actual rupture strain (built-in curves use EPS_P_RES, not
+            # the eut field, so use the effective rupture strain here).
+            denom = prestress.rupture_strain - prestress.IS + EPS_CU
             if denom > 0:
                 c_min = max(c_min, EPS_CU * (s_max - s_t_min) / denom)
     lo = max(1.0e-6 * c_full, c_min * (1.0 + 1.0e-6))
