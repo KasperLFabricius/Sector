@@ -124,6 +124,20 @@ class Concrete:
     def fcd(self) -> float:
         return self.alpha_cc * self.fck / self.gamma_c
 
+    def diagram_markers(self, *, design: bool = True):
+        """Points of interest for a stress-strain plot.
+
+        Returns ``(kind, value, key)`` tuples where ``kind`` is ``"strain"`` or
+        ``"stress"`` and ``key`` is an ASCII identifier the UI maps to a symbol.
+        Strains are fractions (compression negative); stresses are MPa.
+        """
+        peak = self.stress(-EPS_C_PEAK, design=design)  # compression (negative)
+        return [
+            ("stress", peak, "fcd" if design else "fck"),
+            ("strain", -EPS_C_PEAK, "eps_c2"),
+            ("strain", -EPS_CU, "eps_cu2"),
+        ]
+
 
 @dataclass(frozen=True)
 class MildSteel:
@@ -239,6 +253,35 @@ class MildSteel:
         if eps >= eps_yc:
             return slope * eps
         return -fyc
+
+    def diagram_markers(self, *, design: bool = True):
+        """Points of interest for a stress-strain plot.
+
+        Returns ``(kind, value, key)`` tuples (see
+        :meth:`Concrete.diagram_markers`): the yield stress and strain, the
+        rupture strain when in a sensible view, and -- for the two-yield-point
+        curve -- both yield stresses.
+        """
+        gy = self.gamma_y if design else 1.0
+        gE = self.gamma_E if design else 1.0
+        fyt = self.fytk / gy
+
+        if self.curve == 2:
+            slope = ES / gy
+            return [("strain", fyt / slope, "eps_yd"), ("stress", fyt, "fyd")]
+
+        if self.curve == 1:
+            slope = ES / gE
+            out = [("strain", fyt / slope, "eps_yd"), ("stress", fyt, "fyd")]
+            if self.eut <= 0.06:  # only annotate rupture if within view
+                out.append(("strain", self.eut, "eps_ud"))
+            return out
+
+        # curve 3: two yield points
+        slope = ES / gE
+        f1 = self.k * fyt
+        return [("strain", f1 / slope, "eps_y1"),
+                ("stress", f1, "f1"), ("stress", fyt, "f2")]
 
 
 # Rupture strain of the built-in prestressing curves (fraction): 3.5 %.

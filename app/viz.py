@@ -16,6 +16,27 @@ ENVELOPE = "#534ab7"
 LOAD_POINT = "#c0392b"
 DESIGN_LINE = "#534ab7"
 CHAR_LINE = "#9aa3ab"
+GUIDE_LINE = "#b8bdc4"
+
+# Greek glyphs are written as ASCII escapes so the source stays ASCII (these are
+# Basic-Multilingual-Plane code points, so they never form surrogate pairs).
+_EPS = chr(0x3B5)       # epsilon
+_SIGMA = chr(0x3C3)     # sigma
+_PERMILLE = chr(0x2030)  # per-mille sign
+
+# Map a material's ASCII marker key to its display symbol (subscripts via <sub>).
+_MARKER_LABELS = {
+    "fcd": "f<sub>cd</sub>",
+    "fck": "f<sub>ck</sub>",
+    "eps_c2": _EPS + "<sub>c2</sub>",
+    "eps_cu2": _EPS + "<sub>cu2</sub>",
+    "eps_yd": _EPS + "<sub>yd</sub>",
+    "fyd": "f<sub>yd</sub>",
+    "eps_ud": _EPS + "<sub>ud</sub>",
+    "eps_y1": _EPS + "<sub>y1</sub>",
+    "f1": "f<sub>1</sub>",
+    "f2": "f<sub>2</sub>",
+}
 
 
 def _linspace(a, b, n):
@@ -25,12 +46,33 @@ def _linspace(a, b, n):
     return [a + step * i for i in range(n)]
 
 
+def _apply_markers(fig, markers):
+    """Draw labelled guide lines at a material's points of interest.
+
+    ``markers`` are ``(kind, value, key)`` from ``material.diagram_markers``:
+    a ``"strain"`` marker is a vertical guide (its value scaled to per-mille),
+    a ``"stress"`` marker a horizontal one. Each carries its symbol as a label.
+    """
+    for kind, value, key in markers:
+        label = _MARKER_LABELS.get(key, key)
+        if kind == "strain":
+            fig.add_vline(x=value * 1000.0, line_width=1, line_dash="dot",
+                          line_color=GUIDE_LINE, annotation_text=label,
+                          annotation_position="top",
+                          annotation_font=dict(size=12, color=DESIGN_LINE))
+        else:
+            fig.add_hline(y=value, line_width=1, line_dash="dot",
+                          line_color=GUIDE_LINE, annotation_text=label,
+                          annotation_position="right",
+                          annotation_font=dict(size=12, color=DESIGN_LINE))
+
+
 def _curve_figure(material, eps_min, eps_max, title, n=240):
     """Stress-strain diagram of a material law over a strain range (tension +).
 
-    Plots the design curve and, lighter, the characteristic curve. The strain
-    axis is in per-mille so compression (negative) and tension (positive) are
-    both visible; stress is in MPa.
+    Plots the design curve and, lighter, the characteristic curve, with labelled
+    guide lines at the points of interest. The strain axis is in per-mille so
+    compression (negative) and tension (positive) are both visible; stress in MPa.
     """
     eps = _linspace(eps_min, eps_max, n)
     x = [e * 1000.0 for e in eps]  # per-mille
@@ -42,12 +84,15 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
                              line=dict(color=CHAR_LINE, width=1.5, dash="dot")))
     fig.add_trace(go.Scatter(x=x, y=design, mode="lines", name="design",
                              line=dict(color=DESIGN_LINE, width=2.5)))
+    _apply_markers(fig, material.diagram_markers(design=True))
     fig.update_layout(
         title=dict(text=title, font=dict(size=13)),
         template="plotly_white", height=240,
         margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(title="Strain [per mille]", zeroline=True, zerolinecolor="#c8ccd0"),
-        yaxis=dict(title="Stress [MPa]", zeroline=True, zerolinecolor="#c8ccd0"),
+        xaxis=dict(title="Strain " + _EPS + " [" + _PERMILLE + "]",
+                   zeroline=True, zerolinecolor="#c8ccd0"),
+        yaxis=dict(title="Stress " + _SIGMA + " [MPa]",
+                   zeroline=True, zerolinecolor="#c8ccd0"),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0.0,
                     font=dict(size=10)),
     )
