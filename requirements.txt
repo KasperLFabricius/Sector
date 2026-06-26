@@ -4,7 +4,11 @@
 numpy>=1.24,<2.4
 # Compiles the plastic-solver inner kernels (large speedup). Optional -- the
 # solver falls back to pure Python if it is absent -- but installed by default.
-numba>=0.62,<0.63
+# Numba 0.63 is the first release with CPython 3.14 wheels, so require it there;
+# elsewhere allow 0.62+. No upper cap, so the install never fails for lack of a
+# compatible wheel (and the runtime fallback covers any version that misbehaves).
+numba>=0.63; python_version >= "3.14"
+numba>=0.62; python_version < "3.14"
 streamlit>=1.52,<2
 plotly>=5.18,<7
 reportlab>=4.0,<5
