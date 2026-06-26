@@ -38,12 +38,14 @@ def slab_strip(h: float, width: float = 1.0):
 def t_section(bf: float, hf: float, bw: float, hw: float):
     """T-section: flange ``bf`` x ``hf`` on a web ``bw`` x ``hw``.
 
-    Symmetric about the Y axis; the flange is at the top. Vertices are clockwise
-    from the flange's top-left corner.
+    Symmetric about the Y axis, centred on the total depth ``H = hf + hw`` so the
+    outline spans ``-H/2`` to ``H/2`` (consistent with the other shapes). The
+    flange is at the top; vertices are clockwise from its top-left corner.
     """
-    top = hw / 2 + hf      # top of flange
-    bot = -hw / 2          # bottom of web
-    yj = hw / 2            # flange/web junction
+    height = hf + hw
+    top = height / 2          # top of flange
+    yj = height / 2 - hf      # flange/web junction
+    bot = -height / 2         # bottom of web
     return [
         (-bf / 2, top), (bf / 2, top), (bf / 2, yj),
         (bw / 2, yj), (bw / 2, bot), (-bw / 2, bot), (-bw / 2, yj), (-bf / 2, yj),
@@ -61,7 +63,15 @@ def box(b: float, h: float, wall: float):
     """Hollow box ``b`` x ``h`` with a uniform wall thickness ``wall``.
 
     Returns ``(outer, [hole])`` -- the outer outline and one rectangular void.
+    ``wall`` must leave a positive cavity: ``2 * wall`` strictly less than both
+    ``b`` and ``h``, otherwise the void would be empty or larger than the outline.
     """
+    if wall <= 0:
+        raise ValueError("wall thickness must be positive")
+    if 2 * wall >= b or 2 * wall >= h:
+        raise ValueError(
+            "wall thickness too large: 2*wall must be less than both b and h"
+        )
     return rectangle(b, h), [rectangle(b - 2 * wall, h - 2 * wall)]
 
 

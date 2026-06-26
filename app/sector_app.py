@@ -69,7 +69,10 @@ def build_inputs():
     elif shape == "Box girder":
         b = s.number_input("Width b (m)", 0.2, 12.0, 0.80, 0.05, key="b")
         h = s.number_input("Height h (m)", 0.2, 12.0, 1.00, 0.05, key="h")
-        wall = s.number_input("Wall thickness (m)", 0.05, 1.0, 0.20, 0.01, key="wall")
+        # Cap the wall so the cavity stays positive (2*wall < b and < h).
+        max_wall = round(min(b, h) / 2 - 0.01, 3)
+        wall = s.number_input("Wall thickness (m)", 0.02, max_wall,
+                              min(0.20, max_wall), 0.01, key="wall")
         outer, holes = templates.box(b, h, wall)
         width_b = b
     else:  # Circular

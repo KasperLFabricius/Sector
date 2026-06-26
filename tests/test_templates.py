@@ -33,6 +33,19 @@ def test_t_section_area():
     assert abs(signed_area(corners)) == pytest.approx(expected)
 
 
+def test_t_section_centred_on_total_depth():
+    # The outline must span -H/2 .. H/2 so the app's bottom rebar (placed at
+    # -(hf+hw)/2 + cover) lands inside the concrete, not below it.
+    bf, hf, bw, hw = 1.2, 0.2, 0.3, 0.6
+    corners = templates.t_section(bf, hf, bw, hw)
+    ys = [y for _, y in corners]
+    height = hf + hw
+    assert max(ys) == pytest.approx(height / 2)
+    assert min(ys) == pytest.approx(-height / 2)
+    # flange/web junction sits hf below the top
+    assert max(ys) - (height / 2 - hf) == pytest.approx(hf)
+
+
 def test_circular_area_approaches_circle():
     corners = templates.circular(0.6, segments=200)
     assert abs(signed_area(corners)) == pytest.approx(math.pi * 0.3 ** 2, rel=1e-3)
@@ -43,6 +56,16 @@ def test_box_outer_and_hole_net_area():
     assert len(holes) == 1
     net = abs(signed_area(outer)) - abs(signed_area(holes[0]))
     assert net == pytest.approx(0.8 * 1.0 - 0.4 * 0.6)
+
+
+def test_box_rejects_overthick_wall():
+    # A wall that fills (or exceeds) half the section leaves no valid cavity.
+    with pytest.raises(ValueError):
+        templates.box(0.4, 0.4, 0.2)   # 2*wall == b
+    with pytest.raises(ValueError):
+        templates.box(0.4, 0.4, 0.3)   # 2*wall > b
+    with pytest.raises(ValueError):
+        templates.box(0.4, 0.4, 0.0)   # non-positive wall
 
 
 def test_bar_row_count_spacing_and_area():
