@@ -14,9 +14,10 @@ Conventions
   in percent and those are converted on input where noted.
 * Stresses are in MPa.
 
-Currently implemented: concrete (types 1 and 2) and mild reinforcement (types 1
-and 2). Mild steel type 3, and the prestressing-steel laws, are added with the
-prestressing work.
+Currently implemented: concrete (types 1 and 2), mild reinforcement (types 1 and
+2), and prestressing steel (the built-in curves, types 1-5, plus the
+user-defined bilinear curve, type 6). Mild steel type 3 and prestress type 7
+(both two-yield-point laws) are added when an example needs them.
 """
 
 from __future__ import annotations
@@ -173,3 +174,122 @@ class MildSteel:
         if eps >= eps_yc:
             return slope * eps
         return -fyc
+
+
+# Rupture strain of the built-in prestressing curves (fraction): 3.5 %.
+EPS_P_RES = 0.035
+
+
+@dataclass(frozen=True)
+class Prestress:
+    """Prestressing steel; carries tension only.
+
+    Six curve types are supported:
+
+    * **types 1-5** -- the program's built-in characteristic curves, fixed
+      polynomials of the tendon strain (in percent) up to the 3.5 % rupture
+      strain. Only the initial strain and the partial factor are user input.
+    * **type 6** -- a user-defined bilinear curve with hardening: elastic at
+      slope ``ES/gamma_E`` to ``fytk/gamma_y``, then a hardening branch to
+      ``futk/gamma_u`` at the rupture strain ``eut``.
+
+    A tendon takes no compression: the stress is zero for any strain at or below
+    zero, and zero beyond the rupture strain (the tendon has fractured).
+
+    Note ``stress`` takes the *total* tendon strain (the effective prestrain
+    ``IS`` plus the strain at the tendon from the section's deformation); the
+    solver forms that total. ``IS`` is stored here (fraction) for the solver.
+
+    Parameters
+    ----------
+    curve:
+        1-6.
+    IS:
+        Initial (effective) prestrain, fraction (e.g. 0.0059 for 0.59 %).
+    gamma_y, gamma_u, gamma_E:
+        Partial safety factors.
+    fytk, eut, futk:
+        Yield stress (MPa), rupture strain (fraction) and rupture stress (MPa);
+        used by type 6.
+    """
+
+    curve: int = 1
+    IS: float = 0.0
+    gamma_y: float = 1.0
+    gamma_u: float = 1.0
+    gamma_E: float = 1.0
+    fytk: float = 0.0
+    eut: float = EPS_P_RES
+    futk: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.curve not in (1, 2, 3, 4, 5, 6):
+            raise ValueError("prestress curve must be 1-6")
+        if self.curve == 6 and (self.fytk <= 0 or self.futk <= 0):
+            raise ValueError("type 6 needs fytk and futk > 0")
+
+    @staticmethod
+    def _builtin_char(curve: int, e: float) -> float:
+        """Characteristic stress (MPa) of a built-in curve at strain ``e`` (%)."""
+        if curve == 1:
+            if e < 0.6:
+                return 2000.0 * e
+            if e < 1.0:
+                return -2500.0 * e ** 2 + 5000.0 * e - 900.0
+            if e < 1.75:
+                return 60.0 * e + 1540.0
+            return 1645.0
+        if curve == 2:
+            if e < 0.7:
+                return 1850.0 * e
+            if e < 1.0:
+                return 2743.0 * e ** 3 - 9932.0 * e ** 2 + 11724.0 * e - 2986.0
+            return 1462.0 + 86.0 * e
+        if curve == 3:
+            if e < 0.7:
+                return 1850.0 * e
+            if e < 1.0:
+                return 2037.0 * e ** 3 - 8137.0 * e ** 2 + 10247.0 * e - 2590.0
+            return 1473.0 + 85.0 * e
+        if curve == 4:
+            if e < 0.6:
+                return 1950.0 * e
+            if e < 1.0:
+                return 2286.0 * e ** 3 - 7783.0 * e ** 2 + 8825.0 * e - 1816.0
+            return 1403.0 + 105.0 * e
+        # curve == 5
+        if e < 0.6:
+            return 1950.0 * e
+        if e < 1.0:
+            return 2378.0 * e ** 3 - 8014.0 * e ** 2 + 8998.0 * e - 1857.0
+        return 1399.0 + 106.0 * e
+
+    def stress(self, eps: float, *, design: bool = True) -> float:
+        """Stress (MPa, tension positive) at *total* tendon strain ``eps``.
+
+        Zero in compression (``eps <= 0``) and beyond rupture.
+        """
+        if eps <= 0.0:
+            return 0.0
+
+        if self.curve == 6:
+            if eps > self.eut:
+                return 0.0  # fractured
+            gy = self.gamma_y if design else 1.0
+            gu = self.gamma_u if design else 1.0
+            gE = self.gamma_E if design else 1.0
+            slope = ES / gE
+            fyt = self.fytk / gy
+            eps_y = fyt / slope
+            if eps <= eps_y:
+                return slope * eps
+            fu = self.futk / gu
+            return fyt + (fu - fyt) * (eps - eps_y) / (self.eut - eps_y)
+
+        # built-in curves 1-5
+        if eps > EPS_P_RES:
+            return 0.0  # fractured beyond the rupture strain
+        f = self._builtin_char(self.curve, eps * 100.0)
+        if design:
+            f /= self.gamma_y
+        return f
