@@ -14,10 +14,8 @@ Conventions
   in percent and those are converted on input where noted.
 * Stresses are in MPa.
 
-Currently implemented: concrete (types 1 and 2), mild reinforcement (types 1 and
-2), and prestressing steel (the built-in curves, types 1-5, plus the
-user-defined bilinear curve, type 6). Mild steel type 3 and prestress type 7
-(both two-yield-point laws) are added when an example needs them.
+Implemented: concrete (types 1 and 2), mild reinforcement (types 1-3) and
+prestressing steel (types 1-7) -- the full set of laws from the manual.
 """
 
 from __future__ import annotations
@@ -26,6 +24,31 @@ from dataclasses import dataclass
 
 # Characteristic modulus of elasticity of reinforcement, MPa (Ek in the manual).
 ES = 2.0e5
+
+def _trilinear_tension(eps, slope, f1, f2, fu, ey0t, eut):
+    """Two-yield-point (trilinear) tensile stress at strain ``eps`` (>= 0).
+
+    Shared by the two-yield-point laws (mild steel type 3 and prestress type 7):
+
+    * elastic at ``slope`` to the first yield stress ``f1`` (at ``f1/slope``);
+    * a second branch to the second yield stress ``f2``, whose *plastic* strain
+      is ``ey0t`` -- i.e. the second yield point is at ``ey0t + f2/slope`` (its
+      elastic unloading line returns to ``ey0t``);
+    * a hardening branch to the rupture stress ``fu`` at the rupture strain
+      ``eut``; beyond ``eut`` the bar has fractured and carries nothing.
+    """
+    if eps > eut:
+        return 0.0
+    e1 = f1 / slope
+    if eps <= e1:
+        return slope * eps
+    e2 = ey0t + f2 / slope
+    if eps <= e2:
+        return f1 + (f2 - f1) * (eps - e1) / (e2 - e1)
+    if eut <= e2:
+        return f2  # degenerate: no room for a hardening branch
+    return f2 + (fu - f2) * (eps - e2) / (eut - e2)
+
 
 # Concrete strain limits (compression, magnitude): peak at 0.2 %, ultimate 0.35 %.
 EPS_C_PEAK = 0.002
@@ -107,6 +130,11 @@ class MildSteel:
       elastic to ``-fyck/gamma_y`` then a flat plateau (no hardening).
     * **type 2** -- elastic-perfectly-plastic: elastic at slope ``ES/gamma_y``
       to the design yield, then flat.
+    * **type 3** -- two yield points (trilinear): elastic to the first yield
+      ``k*fytk``, then to the second yield ``fytk`` (whose plastic strain is
+      ``ey0t``), then hardening to ``futk`` at ``eut``. Compression mirrors it,
+      with the second yield at the compression strain ``ey0c`` (type 3 uses
+      ``fytk`` for both senses, so ``fyck`` is ignored).
 
     Beyond the tensile rupture strain ``eut`` the bar is treated as fractured and
     carries no force (the plastic solver additionally limits the section strain
@@ -123,8 +151,14 @@ class MildSteel:
         Characteristic rupture stress in tension, MPa. Used by type 1.
     gamma_y, gamma_u, gamma_E:
         Partial safety factors for yield, rupture and modulus.
+    k:
+        Ratio of the first to the second yield stress (``f1/fytk``, ``<= 1``).
+        Type 3 only.
+    ey0t, ey0c:
+        The second yield point's plastic strain in tension and its total strain
+        in compression (fractions). Type 3 only.
     curve:
-        1 or 2.
+        1, 2 or 3.
     """
 
     fytk: float
@@ -135,12 +169,15 @@ class MildSteel:
     gamma_u: float = 1.0
     gamma_E: float = 1.0
     curve: int = 2
+    k: float = 1.0
+    ey0t: float = 0.0
+    ey0c: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.curve not in (1, 2):
-            raise ValueError("mild steel curve must be 1 or 2")
-        if self.curve == 1 and self.futk <= 0:
-            raise ValueError("type 1 needs a rupture stress futk > 0")
+        if self.curve not in (1, 2, 3):
+            raise ValueError("mild steel curve must be 1, 2 or 3")
+        if self.curve in (1, 3) and self.futk <= 0:
+            raise ValueError("types 1 and 3 need a rupture stress futk > 0")
 
     def stress(self, eps: float, *, design: bool = True) -> float:
         """Stress (MPa, tension positive) at tension-positive strain ``eps``."""
@@ -158,6 +195,27 @@ class MildSteel:
                     return 0.0  # ruptured: no force beyond the rupture strain
                 return min(slope * eps, fyt)
             return max(slope * eps, -fyc)
+
+        if self.curve == 3:
+            # Two yield points; type 3 uses fytk in both senses.
+            slope = ES / gE
+            f1 = self.k * fyt          # first yield stress
+            f2 = fyt                   # second yield stress
+            fu = self.futk / gu
+            if eps >= 0.0:
+                return _trilinear_tension(eps, slope, f1, f2, fu, self.ey0t, self.eut)
+            # Compression mirror, second yield at the total strain ey0c. Steel
+            # does not fracture in compression, so it holds -fu beyond eut.
+            a = -eps
+            e1 = f1 / slope
+            if a <= e1:
+                return -slope * a
+            if a <= self.ey0c:
+                span = self.ey0c - e1
+                return -(f1 + (f2 - f1) * (a - e1) / span) if span > 0 else -f2
+            if self.ey0c < a < self.eut and self.eut > self.ey0c:
+                return -(f2 + (fu - f2) * (a - self.ey0c) / (self.eut - self.ey0c))
+            return -fu
 
         # type 1: hardening in tension, flat plateau in compression
         slope = ES / gE
@@ -192,6 +250,9 @@ class Prestress:
     * **type 6** -- a user-defined bilinear curve with hardening: elastic at
       slope ``ES/gamma_E`` to ``fytk/gamma_y``, then a hardening branch to
       ``futk/gamma_u`` at the rupture strain ``eut``.
+    * **type 7** -- a user-defined two-yield-point curve: the same trilinear
+      tensile law as mild steel type 3 (first yield ``k*fytk``, second yield
+      ``fytk`` at plastic strain ``ey0t``, hardening to ``futk`` at ``eut``).
 
     A tendon takes no compression: the stress is zero for any strain at or below
     zero, and zero beyond the rupture strain (the tendon has fractured).
@@ -210,7 +271,10 @@ class Prestress:
         Partial safety factors.
     fytk, eut, futk:
         Yield stress (MPa), rupture strain (fraction) and rupture stress (MPa);
-        used by type 6.
+        used by types 6 and 7.
+    k, ey0t:
+        First-to-second yield-stress ratio and the second yield point's plastic
+        strain; type 7 only.
     """
 
     curve: int = 1
@@ -221,12 +285,14 @@ class Prestress:
     fytk: float = 0.0
     eut: float = EPS_P_RES
     futk: float = 0.0
+    k: float = 1.0
+    ey0t: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.curve not in (1, 2, 3, 4, 5, 6):
-            raise ValueError("prestress curve must be 1-6")
-        if self.curve == 6 and (self.fytk <= 0 or self.futk <= 0):
-            raise ValueError("type 6 needs fytk and futk > 0")
+        if self.curve not in (1, 2, 3, 4, 5, 6, 7):
+            raise ValueError("prestress curve must be 1-7")
+        if self.curve in (6, 7) and (self.fytk <= 0 or self.futk <= 0):
+            raise ValueError("types 6 and 7 need fytk and futk > 0")
 
     @staticmethod
     def _builtin_char(curve: int, e: float) -> float:
@@ -285,6 +351,15 @@ class Prestress:
                 return slope * eps
             fu = self.futk / gu
             return fyt + (fu - fyt) * (eps - eps_y) / (self.eut - eps_y)
+
+        if self.curve == 7:
+            gy = self.gamma_y if design else 1.0
+            gu = self.gamma_u if design else 1.0
+            gE = self.gamma_E if design else 1.0
+            slope = ES / gE
+            return _trilinear_tension(eps, slope, self.k * self.fytk / gy,
+                                      self.fytk / gy, self.futk / gu,
+                                      self.ey0t, self.eut)
 
         # built-in curves 1-5
         if eps > EPS_P_RES:

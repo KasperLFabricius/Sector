@@ -228,3 +228,71 @@ def test_prestress_invalid_curve_rejected():
         Prestress(curve=8)
     with pytest.raises(ValueError):
         Prestress(curve=6, fytk=0.0, futk=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Two-yield-point laws: mild steel type 3 and prestress type 7
+# ---------------------------------------------------------------------------
+
+
+def mild3():
+    return MildSteel(fytk=550.0, fyck=550.0, eut=0.05, futk=620.0, curve=3,
+                     k=0.9, ey0t=0.02, ey0c=0.025,
+                     gamma_y=1.0, gamma_u=1.0, gamma_E=1.0)
+
+
+def test_mild_type3_tension_breakpoints():
+    s = mild3()
+    e1 = 0.9 * 550.0 / ES          # first yield strain
+    e2 = 0.02 + 550.0 / ES         # second yield strain (plastic ey0t + elastic)
+    assert s.stress(0.5 * e1) == pytest.approx(ES * 0.5 * e1)   # elastic
+    assert s.stress(e1) == pytest.approx(0.9 * 550.0)           # 1st yield
+    assert s.stress(e2) == pytest.approx(550.0)                 # 2nd yield
+    assert s.stress(0.05) == pytest.approx(620.0)               # rupture stress
+    assert s.stress(0.051) == 0.0                               # fractured
+
+
+def test_mild_type3_tension_segments_continuous():
+    s = mild3()
+    for e in (0.9 * 550.0 / ES, 0.02 + 550.0 / ES):
+        assert s.stress(e - 1e-7) == pytest.approx(s.stress(e + 1e-7), abs=0.1)
+
+
+def test_mild_type3_compression_mirror():
+    s = mild3()
+    assert s.stress(-0.001) == pytest.approx(-ES * 0.001)  # elastic
+    assert s.stress(-0.025) == pytest.approx(-550.0)       # 2nd yield at ey0c
+
+
+def test_mild_type3_design_scaling():
+    s = MildSteel(fytk=550.0, fyck=550.0, eut=0.05, futk=620.0, curve=3,
+                  k=0.9, ey0t=0.02, ey0c=0.025,
+                  gamma_y=1.15, gamma_u=1.25, gamma_E=1.0)
+    e2 = 0.02 + (550.0 / 1.15) / ES
+    assert s.stress(e2) == pytest.approx(550.0 / 1.15)
+    assert s.stress(0.05) == pytest.approx(620.0 / 1.25)
+
+
+def test_mild_type3_requires_futk():
+    with pytest.raises(ValueError):
+        MildSteel(fytk=550.0, fyck=550.0, curve=3)
+
+
+def test_prestress_type7_trilinear_tension_only():
+    p = Prestress(curve=7, IS=0.006, fytk=1600.0, eut=0.035, futk=1860.0,
+                  k=0.9, ey0t=0.01, gamma_y=1.0, gamma_u=1.0, gamma_E=1.0)
+    e1 = 0.9 * 1600.0 / ES
+    e2 = 0.01 + 1600.0 / ES
+    assert p.stress(e1, design=False) == pytest.approx(0.9 * 1600.0)
+    assert p.stress(e2, design=False) == pytest.approx(1600.0)
+    assert p.stress(0.035, design=False) == pytest.approx(1860.0)
+    assert p.stress(0.04) == 0.0       # fractured
+    assert p.stress(-0.01) == 0.0      # no compression
+
+
+def test_prestress_type7_design_and_validation():
+    p = Prestress(curve=7, IS=0.0, fytk=1600.0, eut=0.035, futk=1860.0,
+                  k=0.9, ey0t=0.01, gamma_y=1.12, gamma_u=1.12)
+    assert p.stress(0.035, design=True) == pytest.approx(1860.0 / 1.12, abs=1.0)
+    with pytest.raises(ValueError):
+        Prestress(curve=7, fytk=0.0, futk=0.0)
