@@ -54,11 +54,16 @@ class Section:
         so output can refer to "point n"); orientation is normalised only when
         integrating.
     bars:
-        The reinforcement bars.
+        The mild reinforcement bars.
+    tendons:
+        The prestressing tendons (treated as point areas, like bars). Used by
+        the plastic analysis with a prestress material; ignored by the elastic
+        analysis (where a tendon is modelled as an ordinary bar).
     """
 
     concrete: list[np.ndarray]
     bars: list[Bar] = field(default_factory=list)
+    tendons: list[Bar] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.concrete = [np.asarray(r, dtype=float) for r in self.concrete]
@@ -76,17 +81,21 @@ class Section:
         corners: Sequence[Sequence[float]],
         bars_xy_area_mm2: Sequence[Sequence[float]] = (),
         holes: Sequence[Sequence[Sequence[float]]] = (),
+        tendons_xy_area_mm2: Sequence[Sequence[float]] = (),
     ) -> "Section":
         """Build a section from a single outer outline and optional holes.
 
         ``corners`` and ``holes`` are vertex lists in metres (any winding).
-        ``bars_xy_area_mm2`` is a sequence of ``(x, y, area_mm2)`` with the area
-        in mm^2 (the usual engineering unit), converted to m^2 on the way in.
+        ``bars_xy_area_mm2`` and ``tendons_xy_area_mm2`` are sequences of
+        ``(x, y, area_mm2)`` with the area in mm^2 (the usual engineering unit),
+        converted to m^2 on the way in.
         """
         rings = [np.asarray(corners, dtype=float)]
         rings += [np.asarray(h, dtype=float) for h in holes]
         bars = [Bar(float(x), float(y), float(a) * MM2_TO_M2) for x, y, a in bars_xy_area_mm2]
-        return cls(rings, bars)
+        tendons = [Bar(float(x), float(y), float(a) * MM2_TO_M2)
+                   for x, y, a in tendons_xy_area_mm2]
+        return cls(rings, bars, tendons)
 
     # -- derived geometry ----------------------------------------------------
 
@@ -108,14 +117,22 @@ class Section:
         """
         return np.vstack(self.concrete) if self.concrete else np.empty((0, 2))
 
-    def bar_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return bar ``x``, ``y`` and ``area`` as three parallel arrays."""
-        if not self.bars:
+    @staticmethod
+    def _xya(bars: list[Bar]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if not bars:
             return (np.empty(0), np.empty(0), np.empty(0))
-        x = np.array([b.x for b in self.bars], dtype=float)
-        y = np.array([b.y for b in self.bars], dtype=float)
-        a = np.array([b.area for b in self.bars], dtype=float)
+        x = np.array([b.x for b in bars], dtype=float)
+        y = np.array([b.y for b in bars], dtype=float)
+        a = np.array([b.area for b in bars], dtype=float)
         return x, y, a
+
+    def bar_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return mild-bar ``x``, ``y`` and ``area`` as three parallel arrays."""
+        return self._xya(self.bars)
+
+    def tendon_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return tendon ``x``, ``y`` and ``area`` as three parallel arrays."""
+        return self._xya(self.tendons)
 
     @property
     def gross_area(self) -> float:

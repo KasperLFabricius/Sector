@@ -174,6 +174,17 @@ def test_prestress_zero_in_compression_and_beyond_rupture():
     assert p.stress(EPS_P_RES + 1e-6) == 0.0  # fractured beyond 3.5 %
 
 
+def test_prestress_builtin_rupture_strain_ignores_eut_field():
+    # Built-in curves always rupture at EPS_P_RES regardless of any eut field,
+    # so the effective rupture strain (used by the solver bracket) matches.
+    p = Prestress(curve=1, IS=0.0, eut=0.10, gamma_y=1.0)
+    assert p.rupture_strain == EPS_P_RES
+    assert p.stress(EPS_P_RES + 1e-6) == 0.0   # ruptured despite eut=0.10
+    # A custom curve does use its eut.
+    q = Prestress(curve=6, IS=0.0, fytk=1550.0, futk=1770.0, eut=0.04, gamma_y=1.0)
+    assert q.rupture_strain == 0.04
+
+
 @pytest.mark.parametrize(
     "curve, e_pct, expected",
     [

@@ -294,6 +294,15 @@ class Prestress:
         if self.curve in (6, 7) and (self.fytk <= 0 or self.futk <= 0):
             raise ValueError("types 6 and 7 need fytk and futk > 0")
 
+    @property
+    def rupture_strain(self) -> float:
+        """Effective tensile rupture strain (fraction).
+
+        The built-in curves (1-5) rupture at the fixed ``EPS_P_RES`` regardless
+        of the ``eut`` field; only the user-defined curves (6, 7) use ``eut``.
+        """
+        return self.eut if self.curve in (6, 7) else EPS_P_RES
+
     @staticmethod
     def _builtin_char(curve: int, e: float) -> float:
         """Characteristic stress (MPa) of a built-in curve at strain ``e`` (%)."""
@@ -362,7 +371,7 @@ class Prestress:
                                       self.ey0t, self.eut)
 
         # built-in curves 1-5
-        if eps > EPS_P_RES:
+        if eps > EPS_P_RES:  # == self.rupture_strain for these curves
             return 0.0  # fractured beyond the rupture strain
         f = self._builtin_char(self.curve, eps * 100.0)
         if design:
