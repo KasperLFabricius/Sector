@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from sector.materials import ES, EPS_CU, EPS_C_PEAK, Concrete, MildSteel
+from sector.materials import (
+    ES,
+    EPS_CU,
+    EPS_C_PEAK,
+    EPS_P_RES,
+    Concrete,
+    MildSteel,
+    Prestress,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -152,3 +160,71 @@ def test_mild_type1_ruptures_beyond_eut():
     assert s.stress(0.2) == 0.0
     # Compression is unaffected by the tensile rupture limit.
     assert s.stress(-0.2) == pytest.approx(-500.0)
+
+
+# ---------------------------------------------------------------------------
+# Prestressing steel
+# ---------------------------------------------------------------------------
+
+
+def test_prestress_zero_in_compression_and_beyond_rupture():
+    p = Prestress(curve=1, IS=0.006, gamma_y=1.0)
+    assert p.stress(0.0) == 0.0
+    assert p.stress(-0.005) == 0.0          # tendon takes no compression
+    assert p.stress(EPS_P_RES + 1e-6) == 0.0  # fractured beyond 3.5 %
+
+
+@pytest.mark.parametrize(
+    "curve, e_pct, expected",
+    [
+        # Breakpoints read from the published built-in curves.
+        (1, 0.6, 1200.0), (1, 1.0, 1600.0), (1, 1.75, 1645.0), (1, 3.5, 1645.0),
+        # At e = 1.0 % the curve is on the plateau branch (the published labels);
+        # types 2 and 4 have a small step from the cubic branch there.
+        (2, 1.0, 1548.0), (2, 3.5, 1763.0),
+        (3, 1.0, 1558.0), (3, 3.5, 1770.5),
+        (4, 1.0, 1508.0), (4, 3.5, 1770.5),
+        (5, 1.0, 1505.0), (5, 3.5, 1770.0),
+    ],
+)
+def test_prestress_builtin_curve_breakpoints(curve, e_pct, expected):
+    p = Prestress(curve=curve, IS=0.0, gamma_y=1.0)
+    assert p.stress(e_pct / 100.0, design=False) == pytest.approx(expected, abs=1.0)
+
+
+def test_prestress_builtin_continuity_at_segment_joins():
+    # The polynomial segments must meet (curve 1 at 0.6 % and 1.0 %).
+    p = Prestress(curve=1, IS=0.0, gamma_y=1.0)
+    for e in (0.006, 0.010, 0.0175):
+        below = p.stress(e - 1e-7, design=False)
+        above = p.stress(e + 1e-7, design=False)
+        assert below == pytest.approx(above, abs=0.5)
+
+
+def test_prestress_builtin_design_scales_by_gamma_y():
+    p = Prestress(curve=1, IS=0.0, gamma_y=1.12)
+    assert p.stress(0.01, design=True) == pytest.approx(1600.0 / 1.12, abs=1.0)
+
+
+def test_prestress_type6_bilinear_with_hardening():
+    p = Prestress(curve=6, IS=0.0059, fytk=1550.0, eut=0.035, futk=1770.0,
+                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0)
+    eps_y = 1550.0 / ES
+    assert p.stress(0.5 * eps_y) == pytest.approx(ES * 0.5 * eps_y)  # elastic
+    assert p.stress(eps_y) == pytest.approx(1550.0)                  # yield
+    assert p.stress(0.035) == pytest.approx(1770.0)                  # rupture stress
+    assert p.stress(0.036) == 0.0                                    # fractured
+    assert p.stress(-0.01) == 0.0                                    # no compression
+
+
+def test_prestress_type6_design_factors():
+    p = Prestress(curve=6, IS=0.0, fytk=1550.0, eut=0.035, futk=1770.0,
+                  gamma_y=1.12, gamma_u=1.12, gamma_E=0.97)
+    assert p.stress(0.035, design=True) == pytest.approx(1770.0 / 1.12, abs=1.0)
+
+
+def test_prestress_invalid_curve_rejected():
+    with pytest.raises(ValueError):
+        Prestress(curve=8)
+    with pytest.raises(ValueError):
+        Prestress(curve=6, fytk=0.0, futk=0.0)
