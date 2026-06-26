@@ -1,4 +1,9 @@
-"""Tests for the design-code material presets."""
+"""Tests for the design-code material presets.
+
+The expected values are taken from the codes themselves: EN 1992-1-1:2005
+(Table 2.1N, 3.1.6, 3.1.7), the DK NA:2024 (Table 2.1Na, 3.2.7(2)) and
+EN 1992-1-1:2023 (Table 4.3, 5.1.6, 8.1.2).
+"""
 
 from __future__ import annotations
 
@@ -8,9 +13,12 @@ from sector import codes
 from sector.materials import Concrete, EPS_C_PEAK, MildSteel
 
 
-def test_registry_and_tables_are_sane():
-    assert "EN 1992-1-1:2005" in codes.CODES
-    # Classes map to their cylinder strength; grades to their yield strength.
+def test_registry_and_tables():
+    assert list(codes.CODES) == [
+        "EN 1992-1-1:2005",
+        "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "DS/EN 1992-1-1:2023",
+    ]
     assert codes.CONCRETE_CLASSES["C30/37"] == pytest.approx(30.0)
     assert codes.CONCRETE_CLASSES["C50/60"] == pytest.approx(50.0)
     assert codes.STEEL_GRADES["B500"] == pytest.approx(500.0)
@@ -18,29 +26,45 @@ def test_registry_and_tables_are_sane():
     assert max(codes.CONCRETE_CLASSES.values()) == pytest.approx(50.0)
 
 
-def test_ec2_2005_factors():
+def test_ec2_2005_factors_and_fcd():
     code = codes.CODES["EN 1992-1-1:2005"]
     assert (code.gamma_c, code.gamma_s, code.alpha_cc) == (1.5, 1.15, 1.0)
-
-
-def test_ec2_2005_concrete_matches_the_verified_law():
-    code = codes.CODES["EN 1992-1-1:2005"]
-    c = code.concrete(30.0)
-    # alpha_cc = 1.0, so the preset reproduces the manual concrete exactly.
-    assert isinstance(c, Concrete)
-    assert c.curve == 2
-    assert c.fcd == pytest.approx(30.0 / 1.5)
+    # fcd = alpha_cc * fck / gamma_c.
+    assert code.concrete(35.0).fcd == pytest.approx(35.0 / 1.5)
+    # The preset reproduces the verified concrete law exactly (alpha_cc = 1).
     ref = Concrete(fck=30.0, gamma_c=1.5, curve=2)
+    c = code.concrete(30.0)
     for e in (-EPS_C_PEAK, -0.001, -0.003):
         assert c.stress(e, design=True) == pytest.approx(ref.stress(e, design=True))
 
 
-def test_ec2_2005_steel_is_perfectly_plastic_with_strain_limit():
-    code = codes.CODES["EN 1992-1-1:2005"]
-    s = code.steel(500.0)
-    assert isinstance(s, MildSteel)
-    assert s.curve == 2
-    assert s.eut == pytest.approx(0.045)
-    # Design yield at fyk / gamma_s, both senses.
-    assert s.stress(0.02, design=True) == pytest.approx(500.0 / 1.15)
-    assert s.stress(-0.02, design=True) == pytest.approx(-500.0 / 1.15)
+def test_dk_na_2024_partial_factors():
+    code = codes.CODES["DS/EN 1992-1-1:2005 + DK NA:2024"]
+    # In-situ reinforced concrete, normal control class.
+    assert (code.gamma_c, code.gamma_s, code.alpha_cc) == (1.45, 1.20, 1.0)
+    assert code.concrete(35.0).fcd == pytest.approx(35.0 / 1.45)
+    assert code.steel(500.0).stress(0.02, design=True) == pytest.approx(500.0 / 1.20)
+
+
+def test_ec2_2023_eta_cc_is_strength_dependent():
+    code = codes.CODES["DS/EN 1992-1-1:2023"]
+    assert (code.gamma_c, code.gamma_s) == (1.5, 1.15)
+    # eta_cc = (40/fck)^(1/3), capped at 1.0; k_tc = 1.0.
+    assert code.concrete_factor(40.0) == pytest.approx(1.0)        # fck = ref
+    assert code.concrete_factor(20.0) == pytest.approx(1.0)        # capped at 1.0
+    assert code.concrete_factor(50.0) == pytest.approx((40.0 / 50.0) ** (1.0 / 3.0))
+    # The reduction flows through to fcd.
+    c = code.concrete(50.0)
+    assert c.fcd == pytest.approx((40.0 / 50.0) ** (1.0 / 3.0) * 50.0 / 1.5)
+
+
+def test_all_codes_use_perfectly_plastic_steel_without_strain_limit():
+    # Option (b): horizontal branch, no strain limit (DK NA mandates this).
+    for code in codes.CODES.values():
+        s = code.steel(500.0)
+        assert isinstance(s, MildSteel)
+        assert s.curve == 2
+        assert s.eut >= 1.0  # effectively unlimited
+        fyd = 500.0 / code.gamma_s
+        assert s.stress(0.02, design=True) == pytest.approx(fyd)
+        assert s.stress(-0.02, design=True) == pytest.approx(-fyd)

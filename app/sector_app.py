@@ -132,11 +132,13 @@ def build_inputs():
                              index=4, key="cclass")
         grade = s.selectbox("Reinforcement grade", list(codes.STEEL_GRADES),
                             key="grade")
-        concrete = code.concrete(codes.CONCRETE_CLASSES[cclass])
+        fck_sel = codes.CONCRETE_CLASSES[cclass]
+        concrete = code.concrete(fck_sel)
         steel = code.steel(codes.STEEL_GRADES[grade])
         s.caption(
             f"gamma_c = {code.gamma_c:g}, gamma_s = {code.gamma_s:g}, "
-            f"alpha_cc = {code.alpha_cc:g}, eps_ud = {code.eps_ud:.3f}"
+            f"concrete factor = {code.concrete_factor(fck_sel):.3f}  ->  "
+            f"fcd = {concrete.fcd:.1f} MPa, fyd = {steel.fytk / code.gamma_s:.0f} MPa"
         )
 
     s.header("Loads")
