@@ -449,3 +449,19 @@ class Prestress:
         if design:
             f /= self.gamma_y
         return f
+
+    def diagram_markers(self, *, design: bool = True):
+        """Points of interest for a stress-strain plot (tendons carry tension only).
+
+        Returns ``(strain, stress, eps_key, sigma_key)`` points (see
+        :meth:`Concrete.diagram_markers`): the rupture / ultimate point and, for
+        the user-defined curves, the proof-stress yield point.
+        """
+        rupt = self.rupture_strain
+        pts = [(rupt, self.stress(rupt, design=design), "eps_ud", "fpud")]
+        if self.curve in (6, 7):
+            gy = self.gamma_y if design else 1.0
+            gE = self.gamma_E if design else 1.0
+            fpd = self.fytk / gy
+            pts.insert(0, (fpd / (ES / gE), fpd, "eps_pd", "fpd"))
+        return pts
