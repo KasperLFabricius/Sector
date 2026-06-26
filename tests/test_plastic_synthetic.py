@@ -57,11 +57,16 @@ def test_compression_force_exceeds_axial_in_bending():
 
 def test_axial_compression_raises_bending_capacity_then_falls():
     # Classic N-M interaction: moderate compression increases the bending
-    # capacity above the pure-bending value; near squash it collapses.
+    # capacity above the pure-bending value; near squash it collapses. The
+    # high-compression point needs a neutral axis beyond the section (the whole
+    # section compressed, c > c_full) -- it must still converge and be traced.
     section, concrete, steel = column()
     m0 = plastic_capacity_at_angle(section, concrete, steel, 0.0, 90.0).Mx
     m_mid = plastic_capacity_at_angle(section, concrete, steel, 1500.0, 90.0).Mx
-    assert m_mid > m0  # compression boosts capacity below the balanced point
+    high = plastic_capacity_at_angle(section, concrete, steel, 5000.0, 90.0)
+    assert m_mid > m0          # compression boosts capacity below balanced
+    assert high.converged      # compression side is reachable (not clamped)
+    assert 0.0 < high.Mx < m_mid  # past balanced the capacity falls again
 
 
 def test_strain_limits_are_reported():

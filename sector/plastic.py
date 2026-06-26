@@ -160,8 +160,22 @@ def plastic_capacity_at_angle(
     else:
         c_min = 1.0e-6 * c_full
     lo = max(1.0e-6 * c_full, c_min * (1.0 + 1.0e-6))
+    n_lo = net_axial(lo)
+
+    # Grow the upper bound past c_full so axial-compression states are reachable:
+    # at c = c_full the neutral axis sits on the far fibre (section just fully
+    # compressed); larger c pushes it beyond the section (whole section in
+    # compression) up towards the squash load. Without this the compression side
+    # of the N-M envelope would be clamped to the full-depth neutral axis. Net
+    # axial increases monotonically with c throughout, so bisection still holds.
     hi = c_full
-    n_lo, n_hi = net_axial(lo), net_axial(hi)
+    n_hi = net_axial(hi)
+    grow = 0
+    while n_hi < P and grow < 80:
+        hi *= 2.0
+        n_hi = net_axial(hi)
+        grow += 1
+
     converged = n_lo <= P <= n_hi
     if P < n_lo:
         c = lo
