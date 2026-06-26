@@ -1,41 +1,63 @@
 # Sector
 
-Reinforced-concrete cross-section analysis for structural engineering.
+**Reinforced-concrete cross-section analysis for structural engineering.**
 
 Sector analyses a polygonal reinforced (and optionally prestressed) concrete
-cross-section and returns either:
+cross-section and reports, for the same section:
 
-* **Elastic analysis** -- the concrete and reinforcement stresses of the cracked
-  section under an eccentric axial force (combined axial load and biaxial
-  bending), including combined long- and short-term load effects.
-* **Plastic analysis** -- the ultimate bending capacity of the section under a
-  given axial force and biaxial bending, traced as the neutral axis is rotated
-  through the section.
+* **Elastic analysis** - the concrete and reinforcement stresses of the cracked
+  section under an eccentric axial force (axial load with biaxial bending),
+  including combined long- and short-term load effects. The service/fatigue
+  side of the work.
+* **Plastic analysis** - the ultimate bending capacity under a given axial force
+  and biaxial bending, traced as the neutral axis is rotated through the section
+  to give the full N-M interaction envelope. The ultimate-limit-state side.
 
-The user interacts with Sector through a live Streamlit interface that
-visualises the input and output and generates succinct reports.
+You choose elastic, plastic, or both from one section definition.
+
+## Goals
+
+A fast, modern tool with the rigour engineers expect: define a section by its
+shape and reinforcement (not by typing coordinates), choose the analysis, press
+**Calculate**, and review the stresses, the capacity envelope, and the governing
+results visually. Reports and an in-app manual round it out.
+
+The numerical core is exhaustively validated against established cross-section
+analysis results before any feature is built on it, so every number Sector
+reports can be trusted.
+
+## Running the app
+
+```
+pip install -r requirements.txt
+python run_app.py          # or: streamlit run app/sector_app.py
+```
+
+Define the section (shape, dimensions, reinforcement), set the materials and
+loads, pick the analysis mode, and press **Calculate**. The section drawing
+updates live as you type; results update when you calculate.
 
 ## Project layout
 
 ```
-sector/        Computation core (pure, headless, exhaustively unit-tested)
-  geometry.py    Exact polygon area-moment integrals and half-plane clipping
-tests/         Test suite (run with pytest)
-assets/        Static assets (logo)
+sector/        computation core (headless, exhaustively tested)
+  geometry     exact polygon area-moment integrals and clipping
+  materials    concrete / mild-steel / prestress stress-strain laws
+  section      the cross-section model
+  elastic      cracked-section elastic stresses
+  plastic      ultimate capacity (neutral-axis sweep, governing failure)
+  templates    parametric section + reinforcement builders
+app/           Streamlit interface (sector_app, viz)
+tools/         developer tooling (e.g. regression-fixture generation)
+tests/         unit tests + the verification regression
 ```
-
-## Approach
-
-The computation core is built and verified headless before the UI is layered on
-top. The elastic and plastic engines are validated against an extensive set of
-results from established cross-section analysis tools before any additional
-functionality is added, so every number Sector reports is trusted.
 
 ## Development
 
 ```
-python -m venv .venv
-.venv\Scripts\activate
 pip install -r requirements-dev.txt
 pytest
 ```
+
+The test suite includes a permanent verification regression; the whole tree is
+kept strictly ASCII (enforced by a test).
