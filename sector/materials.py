@@ -127,15 +127,16 @@ class Concrete:
     def diagram_markers(self, *, design: bool = True):
         """Points of interest for a stress-strain plot.
 
-        Returns ``(kind, value, key)`` tuples where ``kind`` is ``"strain"`` or
-        ``"stress"`` and ``key`` is an ASCII identifier the UI maps to a symbol.
-        Strains are fractions (compression negative); stresses are MPa.
+        Returns ``(strain, stress, eps_key, sigma_key)`` points to label. Strains
+        are fractions (compression negative); stresses MPa. ``eps_key`` /
+        ``sigma_key`` are ASCII identifiers the UI maps to symbols; either may be
+        ``None`` when that coordinate is not a distinct value to label here.
         """
         peak = self.stress(-EPS_C_PEAK, design=design)  # compression (negative)
+        fkey = "fcd" if design else "fck"
         return [
-            ("stress", peak, "fcd" if design else "fck"),
-            ("strain", -EPS_C_PEAK, "eps_c2"),
-            ("strain", -EPS_CU, "eps_cu2"),
+            (-EPS_C_PEAK, peak, "eps_c2", fkey),
+            (-EPS_CU, peak, "eps_cu2", None),  # same stress level as eps_c2
         ]
 
 
@@ -255,33 +256,36 @@ class MildSteel:
         return -fyc
 
     def diagram_markers(self, *, design: bool = True):
-        """Points of interest for a stress-strain plot.
+        """Points of interest for a stress-strain plot (tension side).
 
-        Returns ``(kind, value, key)`` tuples (see
-        :meth:`Concrete.diagram_markers`): the yield stress and strain, the
-        rupture strain when in a sensible view, and -- for the two-yield-point
-        curve -- both yield stresses.
+        Returns ``(strain, stress, eps_key, sigma_key)`` points (see
+        :meth:`Concrete.diagram_markers`): the yield point, the rupture/ultimate
+        point, and -- for the two-yield-point curve -- the second yield too.
         """
         gy = self.gamma_y if design else 1.0
         gE = self.gamma_E if design else 1.0
+        gu = self.gamma_u if design else 1.0
         fyt = self.fytk / gy
 
         if self.curve == 2:
             slope = ES / gy
-            return [("strain", fyt / slope, "eps_yd"), ("stress", fyt, "fyd")]
+            # Perfectly plastic: the ultimate stress equals the yield stress.
+            return [(fyt / slope, fyt, "eps_yd", "fyd"),
+                    (self.eut, fyt, "eps_ud", "fud")]
 
         if self.curve == 1:
             slope = ES / gE
-            out = [("strain", fyt / slope, "eps_yd"), ("stress", fyt, "fyd")]
-            if self.eut <= 0.06:  # only annotate rupture if within view
-                out.append(("strain", self.eut, "eps_ud"))
-            return out
+            fu = self.futk / gu
+            return [(fyt / slope, fyt, "eps_yd", "fyd"),
+                    (self.eut, fu, "eps_ud", "fud")]
 
         # curve 3: two yield points
         slope = ES / gE
         f1 = self.k * fyt
-        return [("strain", f1 / slope, "eps_y1"),
-                ("stress", f1, "f1"), ("stress", fyt, "f2")]
+        fu = self.futk / gu
+        return [(f1 / slope, f1, "eps_y1", "f1"),
+                (self.ey0t + fyt / slope, fyt, "eps_y2", "f2"),
+                (self.eut, fu, "eps_ud", "fud")]
 
 
 # Rupture strain of the built-in prestressing curves (fraction): 3.5 %.

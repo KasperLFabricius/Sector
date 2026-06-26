@@ -28,14 +28,16 @@ _PERMILLE = chr(0x2030)  # per-mille sign
 _MARKER_LABELS = {
     "fcd": "f<sub>cd</sub>",
     "fck": "f<sub>ck</sub>",
+    "fyd": "f<sub>yd</sub>",
+    "fud": "f<sub>ud</sub>",
+    "f1": "f<sub>1</sub>",
+    "f2": "f<sub>2</sub>",
     "eps_c2": _EPS + "<sub>c2</sub>",
     "eps_cu2": _EPS + "<sub>cu2</sub>",
     "eps_yd": _EPS + "<sub>yd</sub>",
-    "fyd": "f<sub>yd</sub>",
     "eps_ud": _EPS + "<sub>ud</sub>",
     "eps_y1": _EPS + "<sub>y1</sub>",
-    "f1": "f<sub>1</sub>",
-    "f2": "f<sub>2</sub>",
+    "eps_y2": _EPS + "<sub>y2</sub>",
 }
 
 
@@ -46,33 +48,67 @@ def _linspace(a, b, n):
     return [a + step * i for i in range(n)]
 
 
-def _apply_markers(fig, markers):
-    """Draw labelled guide lines at a material's points of interest.
+def _merge_labels(keys):
+    """Join the symbols for values that share an axis position (e.g. f_yd/f_ud)."""
+    seen = []
+    for k in keys:
+        sym = _MARKER_LABELS.get(k, k)
+        if sym not in seen:
+            seen.append(sym)
+    return "/".join(seen)
 
-    ``markers`` are ``(kind, value, key)`` from ``material.diagram_markers``:
-    a ``"strain"`` marker is a vertical guide (its value scaled to per-mille),
-    a ``"stress"`` marker a horizontal one. Each carries its symbol as a label.
+
+def _apply_markers(fig, points, eps_min, eps_max):
+    """Annotate a material's points of interest, journal-style.
+
+    ``points`` are ``(strain, stress, eps_key, sigma_key)`` from
+    ``material.diagram_markers``. Each in-view point gets a dot on the curve and
+    thin projection guides to the axes; the strain symbols sit on the strain
+    axis and the stress symbols on the stress axis, so labels never touch the
+    curve. Symbols sharing an axis position are merged (e.g. ``f_yd/f_ud``).
     """
-    for kind, value, key in markers:
-        label = _MARKER_LABELS.get(key, key)
-        if kind == "strain":
-            fig.add_vline(x=value * 1000.0, line_width=1, line_dash="dot",
-                          line_color=GUIDE_LINE, annotation_text=label,
-                          annotation_position="top",
-                          annotation_font=dict(size=12, color=DESIGN_LINE))
-        else:
-            fig.add_hline(y=value, line_width=1, line_dash="dot",
-                          line_color=GUIDE_LINE, annotation_text=label,
-                          annotation_position="right",
-                          annotation_font=dict(size=12, color=DESIGN_LINE))
+    pts = [(s, sig, ek, sk) for (s, sig, ek, sk) in points
+           if eps_min <= s <= eps_max]
+    if not pts:
+        return
+
+    # Dots on the curve at each point (a touch thicker than the line).
+    fig.add_trace(go.Scatter(
+        x=[s * 1000.0 for s, _, _, _ in pts], y=[sig for _, sig, _, _ in pts],
+        mode="markers", marker=dict(size=8, color=DESIGN_LINE,
+                                    line=dict(color="white", width=1.5)),
+        hoverinfo="skip", showlegend=False))
+
+    # Strain symbols on the strain (x) axis; group values that coincide.
+    strain_keys = {}
+    for s, _, ek, _ in pts:
+        if ek is not None:
+            strain_keys.setdefault(round(s * 1000.0, 2), []).append(ek)
+    for x0, keys in strain_keys.items():
+        fig.add_vline(x=x0, line_width=0.8, line_dash="dot", line_color=GUIDE_LINE)
+        fig.add_annotation(x=x0, xref="x", y=0.0, yref="paper", yshift=-7,
+                           yanchor="top", showarrow=False, text=_merge_labels(keys),
+                           font=dict(size=12, color=DESIGN_LINE))
+
+    # Stress symbols on the stress (y) axis; group values that coincide.
+    stress_keys = {}
+    for _, sig, _, sk in pts:
+        if sk is not None:
+            stress_keys.setdefault(round(sig, 1), []).append(sk)
+    for y0, keys in stress_keys.items():
+        fig.add_hline(y=y0, line_width=0.8, line_dash="dot", line_color=GUIDE_LINE)
+        fig.add_annotation(x=1.0, xref="paper", xshift=6, y=y0, yref="y",
+                           xanchor="left", showarrow=False, text=_merge_labels(keys),
+                           font=dict(size=12, color=DESIGN_LINE))
 
 
 def _curve_figure(material, eps_min, eps_max, title, n=240):
     """Stress-strain diagram of a material law over a strain range (tension +).
 
-    Plots the design curve and, lighter, the characteristic curve, with labelled
-    guide lines at the points of interest. The strain axis is in per-mille so
-    compression (negative) and tension (positive) are both visible; stress in MPa.
+    Plots the design curve and, lighter, the characteristic curve, with the
+    points of interest dotted and labelled at the axes. The strain axis is in
+    per-mille so compression (negative) and tension (positive) are both visible;
+    stress in MPa.
     """
     eps = _linspace(eps_min, eps_max, n)
     x = [e * 1000.0 for e in eps]  # per-mille
@@ -84,11 +120,11 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
                              line=dict(color=CHAR_LINE, width=1.5, dash="dot")))
     fig.add_trace(go.Scatter(x=x, y=design, mode="lines", name="design",
                              line=dict(color=DESIGN_LINE, width=2.5)))
-    _apply_markers(fig, material.diagram_markers(design=True))
+    _apply_markers(fig, material.diagram_markers(design=True), eps_min, eps_max)
     fig.update_layout(
         title=dict(text=title, font=dict(size=13)),
-        template="plotly_white", height=240,
-        margin=dict(l=10, r=10, t=30, b=10),
+        template="plotly_white", height=260,
+        margin=dict(l=58, r=58, t=30, b=46),
         xaxis=dict(title="Strain " + _EPS + " [" + _PERMILLE + "]",
                    zeroline=True, zerolinecolor="#c8ccd0"),
         yaxis=dict(title="Stress " + _SIGMA + " [MPa]",
@@ -106,8 +142,13 @@ def concrete_curve_figure(concrete, title="Concrete"):
 
 
 def steel_curve_figure(steel, title="Mild steel", eps_max=0.025):
-    """Stress-strain diagram for a reinforcement law (tension and compression)."""
-    top = min(eps_max, steel.eut) if steel.eut > 0 else eps_max
+    """Stress-strain diagram for a reinforcement law (tension and compression).
+
+    The tension side extends to the rupture strain when that is finite and not
+    far off (so the ultimate point shows); a no-strain-limit law just uses the
+    default window. Compression does not rupture, so it keeps the base range.
+    """
+    top = steel.eut if 0.0 < steel.eut <= 0.06 else eps_max
     top = max(top, 0.01)
     return _curve_figure(steel, -eps_max, top, title)
 
