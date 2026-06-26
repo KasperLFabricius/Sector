@@ -1,7 +1,7 @@
 """Exact polygon geometry kernels for cross-section integration.
 
 Everything Sector computes about a cross-section reduces to integrating a
-*linear* field (a strain plane, and hence — in the elastic range — a linear
+*linear* field (a strain plane, and hence -- in the elastic range -- a linear
 stress field) over a polygonal region. For a linear integrand the required
 area integrals are exact closed-form functions of the polygon vertices, via
 Green's theorem (the "shoelace" moment formulas). No meshing or numerical

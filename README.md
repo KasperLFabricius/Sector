@@ -5,10 +5,10 @@ Reinforced-concrete cross-section analysis for structural engineering.
 Sector analyses a polygonal reinforced (and optionally prestressed) concrete
 cross-section and returns either:
 
-* **Elastic analysis** — the concrete and reinforcement stresses of the cracked
+* **Elastic analysis** -- the concrete and reinforcement stresses of the cracked
   section under an eccentric axial force (combined axial load and biaxial
   bending), including combined long- and short-term load effects.
-* **Plastic analysis** — the ultimate bending capacity of the section under a
+* **Plastic analysis** -- the ultimate bending capacity of the section under a
   given axial force and biaxial bending, traced as the neutral axis is rotated
   through the section.
 
