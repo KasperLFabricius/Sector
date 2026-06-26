@@ -13,14 +13,20 @@ never echoed.
 """
 import glob
 import os
+import pathlib
 import re
 import sys
 
-from pypdf import PdfReader
+# Make the project importable when run as a script from a fresh checkout
+# (python tools/gen_pcross_fixtures.py puts tools/ -- not the repo root -- on
+# sys.path), so no PYTHONPATH or install step is needed.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from sector.materials import Concrete, MildSteel, Prestress
-from sector.plastic import plastic_capacity_at_angle
-from sector.section import Section
+from pypdf import PdfReader  # noqa: E402
+
+from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
+from sector.plastic import plastic_capacity_at_angle  # noqa: E402
+from sector.section import Section  # noqa: E402
 
 DEFAULT_DIR = (
     r"C:\Users\DK1J4Z\OneDrive - Sweco AB\Documents\Claude"
