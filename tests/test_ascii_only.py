@@ -20,7 +20,10 @@ def _source_files():
     seen = set()
     for pattern in ("sector/**/*.py", "tests/**/*.py", "*.py", "*.md"):
         for path in ROOT.glob(pattern):
-            if path.name.startswith("_") or path in seen:
+            # Skip scratch files (a single leading underscore, e.g. _audit.py)
+            # but keep dunder source files such as __init__.py.
+            is_scratch = path.name.startswith("_") and not path.name.startswith("__")
+            if is_scratch or path in seen:
                 continue
             seen.add(path)
             yield path
