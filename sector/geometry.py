@@ -113,6 +113,36 @@ def signed_area(verts: Vertices) -> float:
     return 0.5 * float(np.sum(x * y1 - x1 * y))
 
 
+_ZERO_MOMENTS = AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+
+def _poly_moments(pts) -> AreaMoments:
+    """Green's-theorem area moments of a polygon given as ``(x, y)`` pairs.
+
+    A plain scalar loop (no NumPy). The polygons integrated here have only a
+    handful of vertices, where NumPy's per-call overhead -- temporary arrays,
+    ``roll``, reduction dispatch -- dwarfs the arithmetic; iterating in Python
+    is several times faster. The formulas are identical to the vectorised form,
+    so results match to floating-point.
+    """
+    n = len(pts)
+    if n < 3:
+        return _ZERO_MOMENTS
+    a2 = sx6 = sy6 = sxx12 = syy12 = sxy24 = 0.0
+    xi, yi = pts[-1]
+    for xj, yj in pts:
+        cross = xi * yj - xj * yi
+        a2 += cross
+        sx6 += (xi + xj) * cross
+        sy6 += (yi + yj) * cross
+        sxx12 += (xi * xi + xi * xj + xj * xj) * cross
+        syy12 += (yi * yi + yi * yj + yj * yj) * cross
+        sxy24 += (xi * yj + 2.0 * xi * yi + 2.0 * xj * yj + xj * yi) * cross
+        xi, yi = xj, yj
+    return AreaMoments(0.5 * a2, sx6 / 6.0, sy6 / 6.0,
+                       sxx12 / 12.0, syy12 / 12.0, sxy24 / 24.0)
+
+
 def area_moments(verts: Vertices) -> AreaMoments:
     """Exact signed area integrals of 1, x, y, x^2, y^2, xy over a polygon.
 
@@ -125,24 +155,8 @@ def area_moments(verts: Vertices) -> AreaMoments:
     """
     arr = _as_array(verts)
     if arr.shape[0] < 3:
-        return AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-
-    x = arr[:, 0]
-    y = arr[:, 1]
-    x1 = np.roll(x, -1)
-    y1 = np.roll(y, -1)
-    cross = x * y1 - x1 * y
-
-    area = 0.5 * np.sum(cross)
-    sx = np.sum((x + x1) * cross) / 6.0
-    sy = np.sum((y + y1) * cross) / 6.0
-    sxx = np.sum((x * x + x * x1 + x1 * x1) * cross) / 12.0
-    syy = np.sum((y * y + y * y1 + y1 * y1) * cross) / 12.0
-    sxy = np.sum((x * y1 + 2.0 * x * y + 2.0 * x1 * y1 + x1 * y) * cross) / 24.0
-
-    return AreaMoments(
-        float(area), float(sx), float(sy), float(sxx), float(syy), float(sxy)
-    )
+        return _ZERO_MOMENTS
+    return _poly_moments(arr.tolist())
 
 
 def area_moments_rings(rings: Iterable[Vertices]) -> AreaMoments:
@@ -196,24 +210,36 @@ def clip_halfplane(
     result is unbiased); the default ``0.0`` cuts exactly on the line.
     """
     arr = _as_array(verts)
-    n = arr.shape[0]
-    if n == 0:
+    if arr.shape[0] == 0:
         return np.empty((0, 2), dtype=float)
+    out = _clip_pts(arr.tolist(), a, b, c, eps)
+    if not out:
+        return np.empty((0, 2), dtype=float)
+    return np.asarray(out, dtype=float)
 
-    def value(p: np.ndarray) -> float:
-        return a * p[0] + b * p[1] + c
 
-    out: list[np.ndarray] = []
+def _clip_pts(pts, a: float, b: float, c: float, eps: float = 0.0):
+    """Sutherland-Hodgman clip of a polygon (list of ``(x, y)``) to a half-plane.
+
+    Returns a list of ``(x, y)`` tuples on the side ``a*x + b*y + c >= -eps``;
+    crossing edges are cut on that same line. A plain scalar loop, for the same
+    reason as :func:`_poly_moments`: the polygons are tiny and NumPy's overhead
+    dominates. The edge signed distances are evaluated once each and reused.
+    """
+    n = len(pts)
+    if n == 0:
+        return []
+    vals = [a * x + b * y + c for x, y in pts]
+    out = []
     for i in range(n):
-        cur = arr[i]
-        nxt = arr[(i + 1) % n]
-        d_cur = value(cur)
-        d_nxt = value(nxt)
+        d_cur = vals[i]
+        j = i + 1 if i + 1 < n else 0
+        d_nxt = vals[j]
         cur_in = d_cur >= -eps
         nxt_in = d_nxt >= -eps
-
+        xi, yi = pts[i]
         if cur_in:
-            out.append(cur)
+            out.append((xi, yi))
         if cur_in != nxt_in:
             # Edge crosses the inside boundary a*x + b*y + c = -eps. Solve for
             # the crossing on that SAME line the inside predicate uses, so the
@@ -221,8 +247,6 @@ def clip_halfplane(
             # unbiased when eps != 0. The denominator cannot be zero here
             # because the endpoints lie on opposite sides, so d_cur != d_nxt.
             t = (d_cur + eps) / (d_cur - d_nxt)
-            out.append(cur + t * (nxt - cur))
-
-    if not out:
-        return np.empty((0, 2), dtype=float)
-    return np.asarray(out, dtype=float)
+            xj, yj = pts[j]
+            out.append((xi + t * (xj - xi), yi + t * (yj - yi)))
+    return out
