@@ -68,17 +68,24 @@ class Concrete:
     curve:
         Stress-strain curve type, 1 or 2 (see the manual). Type 2 is the
         parabola-rectangle; type 1 a cubic ascending branch.
+    alpha_cc:
+        Coefficient on the design compressive strength accounting for long-term
+        and unfavourable loading effects, so the design strength is
+        ``alpha_cc * fck / gamma_c``. Defaults to 1.0 (no reduction).
     """
 
     fck: float
     gamma_c: float = 1.0
     curve: int = 2
+    alpha_cc: float = 1.0
 
     def __post_init__(self) -> None:
         if self.curve not in (1, 2):
             raise ValueError("concrete curve must be 1 or 2")
         if self.fck <= 0:
             raise ValueError("fck must be positive")
+        if self.alpha_cc <= 0:
+            raise ValueError("alpha_cc must be positive")
 
     def _char_compressive(self, e_pct: float) -> float:
         """Characteristic compressive stress (MPa, >=0) at strain ``e_pct`` (%).
@@ -110,12 +117,12 @@ class Concrete:
             return 0.0
         f = self._char_compressive(-eps * 100.0)
         if design:
-            f /= self.gamma_c
+            f = f * self.alpha_cc / self.gamma_c
         return -f
 
     @property
     def fcd(self) -> float:
-        return self.fck / self.gamma_c
+        return self.alpha_cc * self.fck / self.gamma_c
 
 
 @dataclass(frozen=True)

@@ -65,6 +65,18 @@ def test_concrete_design_scales_by_gamma_c():
     assert c.stress(-EPS_C_PEAK, design=True) == pytest.approx(-20.0)
 
 
+def test_concrete_alpha_cc_scales_design_strength_only():
+    base = Concrete(fck=30.0, gamma_c=1.5)                  # alpha_cc defaults to 1.0
+    red = Concrete(fck=30.0, gamma_c=1.5, alpha_cc=0.85)
+    # alpha_cc reduces the design strength but not the characteristic curve.
+    assert red.fcd == pytest.approx(0.85 * 20.0)
+    assert red.stress(-EPS_C_PEAK, design=True) == pytest.approx(-0.85 * 20.0)
+    assert red.stress(-EPS_C_PEAK, design=False) == pytest.approx(-30.0)
+    # Default alpha_cc leaves the prior behaviour exactly unchanged.
+    assert base.fcd == pytest.approx(20.0)
+    assert Concrete(fck=30.0, gamma_c=1.5, alpha_cc=1.0).fcd == base.fcd
+
+
 def test_concrete_crushed_beyond_ultimate():
     c = Concrete(fck=30.0, curve=2)
     assert c.stress(-(EPS_CU + 0.001), design=False) == 0.0

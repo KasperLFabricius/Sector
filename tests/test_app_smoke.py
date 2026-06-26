@@ -66,3 +66,13 @@ def test_circular_shape_calculates():
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
+
+
+def test_code_basis_calculates():
+    at = _fresh()
+    at.run()
+    at.selectbox(key="basis").set_value("EN 1992-1-1:2005").run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
