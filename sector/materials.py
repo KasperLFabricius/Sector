@@ -124,6 +124,21 @@ class Concrete:
     def fcd(self) -> float:
         return self.alpha_cc * self.fck / self.gamma_c
 
+    def diagram_markers(self, *, design: bool = True):
+        """Points of interest for a stress-strain plot.
+
+        Returns ``(strain, stress, eps_key, sigma_key)`` points to label. Strains
+        are fractions (compression negative); stresses MPa. ``eps_key`` /
+        ``sigma_key`` are ASCII identifiers the UI maps to symbols; either may be
+        ``None`` when that coordinate is not a distinct value to label here.
+        """
+        peak = self.stress(-EPS_C_PEAK, design=design)  # compression (negative)
+        fkey = "fcd" if design else "fck"
+        return [
+            (-EPS_C_PEAK, peak, "eps_c2", fkey),
+            (-EPS_CU, peak, "eps_cu2", None),  # same stress level as eps_c2
+        ]
+
 
 @dataclass(frozen=True)
 class MildSteel:
@@ -239,6 +254,56 @@ class MildSteel:
         if eps >= eps_yc:
             return slope * eps
         return -fyc
+
+    def elastic_slope(self, *, design: bool = True) -> float:
+        """Slope of the elastic branch (MPa per unit strain).
+
+        The design modulus carries its own partial factor: ``ES / gamma_E`` for
+        the hardening / two-yield curves and ``ES / gamma_y`` for the elastic-
+        perfectly-plastic curve (which ties the modulus to the yield factor). So
+        the design slope differs from the characteristic one when a partial
+        factor on the modulus is applied.
+        """
+        g = self.gamma_y if self.curve == 2 else self.gamma_E
+        return ES / (g if design else 1.0)
+
+    def diagram_markers(self, *, design: bool = True):
+        """Points of interest for a stress-strain plot (tension and compression).
+
+        Returns ``(strain, stress, eps_key, sigma_key)`` points (see
+        :meth:`Concrete.diagram_markers`): the yield point(s), the rupture /
+        ultimate point, the second yield for the two-yield-point curve, and the
+        compression-side yield(s).
+        """
+        gy = self.gamma_y if design else 1.0
+        gE = self.gamma_E if design else 1.0
+        gu = self.gamma_u if design else 1.0
+        fyt = self.fytk / gy
+        fyc = self.fyck / gy
+
+        if self.curve == 2:
+            slope = ES / gy
+            # Perfectly plastic: the ultimate stress equals the yield stress.
+            return [(fyt / slope, fyt, "eps_yd", "fyd"),
+                    (self.eut, fyt, "eps_ud", "fud"),
+                    (-fyc / slope, -fyc, "eps_yd", "fyd")]
+
+        if self.curve == 1:
+            slope = ES / gE
+            fu = self.futk / gu
+            return [(fyt / slope, fyt, "eps_yd", "fyd"),
+                    (self.eut, fu, "eps_ud", "fud"),
+                    (-fyc / slope, -fyc, "eps_yd", "fyd")]
+
+        # curve 3: two yield points (the law uses fytk in both senses)
+        slope = ES / gE
+        f1 = self.k * fyt
+        fu = self.futk / gu
+        return [(f1 / slope, f1, "eps_y1", "f1"),
+                (self.ey0t + fyt / slope, fyt, "eps_y2", "f2"),
+                (self.eut, fu, "eps_ud", "fud"),
+                (-f1 / slope, -f1, "eps_y1", "f1"),
+                (-self.ey0c, -fyt, "eps_y2", "f2")]
 
 
 # Rupture strain of the built-in prestressing curves (fraction): 3.5 %.
