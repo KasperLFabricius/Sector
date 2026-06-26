@@ -19,9 +19,8 @@ import numpy as np  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import viz  # noqa: E402
-from sector import codes, kernels, templates  # noqa: E402
+from sector import kernels, material_presets as mp, templates  # noqa: E402
 from sector.elastic import solve_elastic  # noqa: E402
-from sector.materials import Concrete, MildSteel  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -46,6 +45,61 @@ if _logo.exists():
 
 st.title(f"Sector v{APP_VERSION}")
 st.caption("Reinforced-concrete cross-section analysis - elastic stresses and plastic capacity")
+
+
+# ---------------------------------------------------------------------------
+# Material Parameters panel: one section per material, each with a preset
+# dropdown (legacy curves + Eurocode editions), editable parameters and a live
+# stress-strain diagram. A preset only prefills values; all stay editable.
+# ---------------------------------------------------------------------------
+
+def _prefill(prefix, preset, presets):
+    """Load a preset's defaults into the field keys when the selection changes."""
+    prev = f"{prefix}_prev"
+    if st.session_state.get(prev) != preset:
+        for field, value in presets[preset].items():
+            st.session_state[f"{prefix}_{field}"] = value
+        st.session_state[prev] = preset
+
+
+def _number(box, prefix, field, meta):
+    label, lo, hi, step = meta[field]
+    return box.number_input(label, float(lo), float(hi), step=float(step),
+                            key=f"{prefix}_{field}")
+
+
+def concrete_panel(parent):
+    """Concrete section: preset, editable parameters and stress-strain diagram."""
+    box = parent.expander("Concrete", expanded=False)
+    presets = mp.CONCRETE_PRESETS
+    labels = list(presets)
+    preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
+                           key="conc_preset")
+    _prefill("conc", preset, presets)
+    curve = presets[preset]["curve"]
+    vals = {f: _number(box, "conc", f, mp.CONCRETE_FIELD_META)
+            for f in mp.CONCRETE_FIELDS}
+    concrete = mp.build_concrete(curve=curve, **vals)
+    box.caption(f"curve {curve},  fcd = {concrete.fcd:.1f} MPa")
+    box.plotly_chart(viz.concrete_curve_figure(concrete), use_container_width=True)
+    return concrete
+
+
+def mild_panel(parent):
+    """Mild-steel section: preset, editable parameters and stress-strain diagram."""
+    box = parent.expander("Mild steel", expanded=False)
+    presets = mp.MILD_PRESETS
+    labels = list(presets)
+    preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
+                           key="mild_preset")
+    _prefill("mild", preset, presets)
+    curve = presets[preset]["curve"]
+    vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META)
+            for f in mp.MILD_FIELDS_BY_CURVE[curve]}
+    steel = mp.build_mild(curve=curve, **vals)
+    box.caption(f"curve {curve},  fyd = {steel.fytk / vals['gamma_y']:.0f} MPa")
+    box.plotly_chart(viz.steel_curve_figure(steel), use_container_width=True)
+    return steel
 
 
 # ---------------------------------------------------------------------------
@@ -117,29 +171,9 @@ def build_inputs():
             templates.bar_row(h / 2 - cov, -width_b / 2 + cov, width_b / 2 - cov, int(nb_top), rd_top),
         )
 
-    s.header("Materials")
-    basis = s.selectbox("Design basis", ["Manual"] + list(codes.CODES), key="basis")
-    if basis == "Manual":
-        fck = s.number_input("Concrete fck (MPa)", 10.0, 100.0, 35.0, 1.0, key="fck")
-        gc = s.number_input("Concrete gamma_c", 1.0, 2.0, 1.5, 0.01, key="gc")
-        fyk = s.number_input("Steel fyk (MPa)", 200.0, 700.0, 500.0, 10.0, key="fyk")
-        gs = s.number_input("Steel gamma_s", 1.0, 1.5, 1.15, 0.01, key="gs")
-        concrete = Concrete(fck=fck, gamma_c=gc, curve=2)
-        steel = MildSteel(fytk=fyk, fyck=fyk, eut=0.05, gamma_y=gs, curve=2)
-    else:
-        code = codes.CODES[basis]
-        cclass = s.selectbox("Concrete class", list(codes.CONCRETE_CLASSES),
-                             index=4, key="cclass")
-        grade = s.selectbox("Reinforcement grade", list(codes.STEEL_GRADES),
-                            key="grade")
-        fck_sel = codes.CONCRETE_CLASSES[cclass]
-        concrete = code.concrete(fck_sel)
-        steel = code.steel(codes.STEEL_GRADES[grade])
-        s.caption(
-            f"gamma_c = {code.gamma_c:g}, gamma_s = {code.gamma_s:g}, "
-            f"concrete factor = {code.concrete_factor(fck_sel):.3f}  ->  "
-            f"fcd = {concrete.fcd:.1f} MPa, fyd = {steel.fytk / code.gamma_s:.0f} MPa"
-        )
+    s.header("Material Parameters")
+    concrete = concrete_panel(s)
+    steel = mild_panel(s)
 
     s.header("Loads")
     P = s.number_input("Axial force P (kN, + = compression)", -50000.0, 50000.0, 0.0, 50.0, key="P")
@@ -158,8 +192,10 @@ def build_inputs():
     sig = (st.session_state.get(k) for k in
            ("shape", "b", "h", "bf", "hf", "bw", "hw", "wall", "dia",
             "bot_n", "bot_d", "top_n", "top_d", "ring_n", "ring_d", "ring_c",
-            "cover", "basis", "cclass", "grade", "fck", "gc", "fyk", "gs",
-            "P", "Mx", "My", "ratio", "mode"))
+            "cover", "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
+            "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
+            "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
+            "mild_ey0t", "mild_ey0c", "P", "Mx", "My", "ratio", "mode"))
     return dict(section=section, concrete=concrete, steel=steel, ratio=ratio,
                 bars=bars, outer=outer, holes=holes, P=P, Mx=Mx, My=My, mode=mode,
                 extent=extent, signature=tuple(sig))

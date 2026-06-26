@@ -68,10 +68,24 @@ def test_circular_shape_calculates():
     assert "plastic" in at.session_state["results"]
 
 
-def test_code_basis_calculates():
+def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
-    at.selectbox(key="basis").set_value("EN 1992-1-1:2005").run()
+    at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
+    at.selectbox(key="mild_preset").set_value(
+        "Curve 2 (elastic-perfectly-plastic)").run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
+def test_material_manual_override_calculates():
+    at = _fresh()
+    at.run()
+    # A picked preset must remain editable.
+    at.number_input(key="conc_fck").set_value(45.0).run()
+    at.number_input(key="mild_gamma_y").set_value(1.3).run()
     assert not at.exception
     at.button(key="calculate").click().run()
     assert not at.exception

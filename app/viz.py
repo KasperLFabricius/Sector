@@ -14,6 +14,57 @@ BAR_NEUTRAL = "#534ab7"
 NA_LINE = "#e08a1e"
 ENVELOPE = "#534ab7"
 LOAD_POINT = "#c0392b"
+DESIGN_LINE = "#534ab7"
+CHAR_LINE = "#9aa3ab"
+
+
+def _linspace(a, b, n):
+    if n < 2:
+        return [a]
+    step = (b - a) / (n - 1)
+    return [a + step * i for i in range(n)]
+
+
+def _curve_figure(material, eps_min, eps_max, title, n=240):
+    """Stress-strain diagram of a material law over a strain range (tension +).
+
+    Plots the design curve and, lighter, the characteristic curve. The strain
+    axis is in per-mille so compression (negative) and tension (positive) are
+    both visible; stress is in MPa.
+    """
+    eps = _linspace(eps_min, eps_max, n)
+    x = [e * 1000.0 for e in eps]  # per-mille
+    design = [material.stress(e, design=True) for e in eps]
+    char = [material.stress(e, design=False) for e in eps]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=char, mode="lines", name="characteristic",
+                             line=dict(color=CHAR_LINE, width=1.5, dash="dot")))
+    fig.add_trace(go.Scatter(x=x, y=design, mode="lines", name="design",
+                             line=dict(color=DESIGN_LINE, width=2.5)))
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=13)),
+        template="plotly_white", height=240,
+        margin=dict(l=10, r=10, t=30, b=10),
+        xaxis=dict(title="Strain [per mille]", zeroline=True, zerolinecolor="#c8ccd0"),
+        yaxis=dict(title="Stress [MPa]", zeroline=True, zerolinecolor="#c8ccd0"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0.0,
+                    font=dict(size=10)),
+    )
+    return fig
+
+
+def concrete_curve_figure(concrete, title="Concrete"):
+    """Stress-strain diagram for a concrete law (compression is negative)."""
+    # Slightly past the ultimate strain on the compression side, a little tension.
+    return _curve_figure(concrete, -0.0042, 0.0006, title)
+
+
+def steel_curve_figure(steel, title="Mild steel", eps_max=0.025):
+    """Stress-strain diagram for a reinforcement law (tension and compression)."""
+    top = min(eps_max, steel.eut) if steel.eut > 0 else eps_max
+    top = max(top, 0.01)
+    return _curve_figure(steel, -eps_max, top, title)
 
 
 def _ring_xy(ring):
