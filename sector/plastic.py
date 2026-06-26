@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .geometry import area_moments, clip_halfplane
-from .materials import EPS_C_PEAK, EPS_CU, Concrete, MildSteel
+from .materials import EPS_C_PEAK, EPS_CU, Concrete, MildSteel, Prestress
 from .section import Section
 
 _MN_TO_KN = 1000.0
@@ -46,8 +46,12 @@ class PlasticPoint:
     na_x_intercept: float     # neutral axis intercept with X axis, m
     na_y_intercept: float     # neutral axis intercept with Y axis, m
     eps_concrete: float       # extreme concrete strain, % (compression +)
-    eps_steel: float          # extreme (most tensile) steel strain, %
+    eps_steel: float          # extreme (most tensile) mild-steel strain, %
+    eps_cable: float          # extreme (most tensile) tendon strain, % (incl. IS)
     curvature: float          # 1/m
+    # The compression force and lever arm are diagnostic. They match the legacy
+    # for mild-steel sections; with prestress the legacy splits the resultants
+    # differently for these, so they can differ (the capacity and strains do not).
     compression_force: float  # total compression resultant, kN
     lever_arm: float          # internal lever arm L, m
     dx: float                 # X component of the lever arm, m
@@ -55,12 +59,14 @@ class PlasticPoint:
     converged: bool
 
 
-def _accumulate(section, concrete, steel, dx, dy, s_max, c, n_bands):
+def _accumulate(section, concrete, steel, prestress, dx, dy, s_max, c, n_bands):
     """Force resultants for a trial compression depth ``c`` (s-units).
 
     Returns compression and tension force totals and their first moments, in kN
-    and kNm, plus the most tensile steel strain (compression-positive %). The
-    neutral axis is at ``s = s_max - c``; the extreme fibre strain is EPS_CU.
+    and kNm, plus the most tensile mild-steel and tendon strains
+    (compression-positive %). The neutral axis is at ``s = s_max - c``; the
+    extreme fibre strain is EPS_CU. Tendons (if any) carry tension only, and
+    their stress is taken at the total strain ``IS + section strain``.
     """
     s_na = s_max - c
     kappa = EPS_CU / c
@@ -118,7 +124,27 @@ def _accumulate(section, concrete, steel, dx, dy, s_max, c, n_bands):
             ten_Fx += f * x
             ten_Fy += f * y
 
-    return comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy, min_eps
+    # -- prestressing tendons (tension only; stress at IS + section strain) --
+    min_eps_cable = 0.0
+    if prestress is not None:
+        tx, ty, ta = section.tendon_arrays()
+        for x, y, a in zip(tx, ty, ta):
+            eps_c = kappa * (x * dx + y * dy - s_na)        # section, compression +
+            e_total_tension = prestress.IS - eps_c          # total tendon strain (tension +)
+            # Reported tendon strain (compression positive), including IS.
+            min_eps_cable = min(min_eps_cable, eps_c - prestress.IS)
+            sig_t = prestress.stress(e_total_tension, design=True)  # tension +, MPa, >= 0
+            f = -sig_t * a * _MN_TO_KN                       # tension -> negative (comp +)
+            if f >= 0.0:
+                comp_F += f
+                comp_Fx += f * x
+                comp_Fy += f * y
+            else:
+                ten_F += f
+                ten_Fx += f * x
+                ten_Fy += f * y
+
+    return comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy, min_eps, min_eps_cable
 
 
 def plastic_capacity_at_angle(
@@ -128,6 +154,7 @@ def plastic_capacity_at_angle(
     P: float,
     V_deg: float,
     *,
+    prestress: "Prestress | None" = None,
     n_bands: int = 80,
     max_iter: int = 100,
 ) -> PlasticPoint:
@@ -135,6 +162,8 @@ def plastic_capacity_at_angle(
 
     The extreme concrete fibre is pinned at the ultimate strain and the
     neutral-axis depth solved (by bisection) so the net axial force equals ``P``.
+    Pass ``prestress`` (a :class:`~sector.materials.Prestress`) to include the
+    section's tendons.
     """
     V = math.radians(V_deg)
     dx, dy = math.cos(V), math.sin(V)
@@ -146,19 +175,26 @@ def plastic_capacity_at_angle(
     c_full = s_max - s_min
 
     def net_axial(c):
-        acc = _accumulate(section, concrete, steel, dx, dy, s_max, c, n_bands)
+        acc = _accumulate(section, concrete, steel, prestress, dx, dy, s_max, c, n_bands)
         return acc[0] + acc[3]  # comp_F + ten_F (kN)
 
-    # Lower-bound the compression depth so the most tensile bar does not exceed
-    # its rupture strain: below this, very high curvature ruptures the tension
-    # steel (a steel-governed failure) and the axial-force function is no longer
-    # monotonic. Within [c_min, c_full] the net axial force increases with c.
+    # Lower-bound the compression depth so the most tensile reinforcement does
+    # not exceed its rupture strain: below this, very high curvature ruptures the
+    # tension steel/tendon (a material-governed failure) and the axial-force
+    # function is no longer monotonic. Within [c_min, c_full] it increases with c.
+    c_min = 1.0e-6 * c_full
     bx, by, _ = section.bar_arrays()
     if bx.size:
         s_bar_min = float((bx * dx + by * dy).min())
-        c_min = EPS_CU * (s_max - s_bar_min) / (steel.eut + EPS_CU)
-    else:
-        c_min = 1.0e-6 * c_full
+        c_min = max(c_min, EPS_CU * (s_max - s_bar_min) / (steel.eut + EPS_CU))
+    if prestress is not None:
+        tx, ty, _ = section.tendon_arrays()
+        if tx.size:
+            s_t_min = float((tx * dx + ty * dy).min())
+            # tendon total tension = IS - section strain; keep it <= eut.
+            denom = prestress.eut - prestress.IS + EPS_CU
+            if denom > 0:
+                c_min = max(c_min, EPS_CU * (s_max - s_t_min) / denom)
     lo = max(1.0e-6 * c_full, c_min * (1.0 + 1.0e-6))
     n_lo = net_axial(lo)
 
@@ -192,8 +228,9 @@ def plastic_capacity_at_angle(
                 break
         c = 0.5 * (lo + hi)
 
-    comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy, min_eps = _accumulate(
-        section, concrete, steel, dx, dy, s_max, c, n_bands
+    (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
+     min_eps, min_eps_cable) = _accumulate(
+        section, concrete, steel, prestress, dx, dy, s_max, c, n_bands
     )
 
     Mx = comp_Fy + ten_Fy
@@ -231,6 +268,7 @@ def plastic_capacity_at_angle(
         na_y_intercept=y_int,
         eps_concrete=EPS_CU * 100.0,
         eps_steel=min_eps * 100.0,
+        eps_cable=min_eps_cable * 100.0,
         curvature=kappa,
         compression_force=comp_F,
         lever_arm=lever,
@@ -249,6 +287,7 @@ def solve_plastic(
     v_max: float,
     v_inc: float,
     *,
+    prestress: "Prestress | None" = None,
     n_bands: int = 80,
 ) -> list[PlasticPoint]:
     """Sweep the neutral-axis angle from ``v_min`` to ``v_max`` (inclusive).
@@ -257,12 +296,12 @@ def solve_plastic(
     for the axial force ``P``.
     """
     points = []
-    v = v_min
     # Step count from the increment, guarding against floating-point drift.
     n = int(round((v_max - v_min) / v_inc)) if v_inc else 0
     for i in range(n + 1):
         v = v_min + i * v_inc
         points.append(
-            plastic_capacity_at_angle(section, concrete, steel, P, v, n_bands=n_bands)
+            plastic_capacity_at_angle(section, concrete, steel, P, v,
+                                      prestress=prestress, n_bands=n_bands)
         )
     return points
