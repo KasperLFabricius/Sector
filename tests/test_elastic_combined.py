@@ -104,6 +104,57 @@ def test_production_dx90703_within_tolerance():
     assert res.max_concrete_point == 1
 
 
+def understotning_section() -> Section:
+    # TD 3.31 "Understotning" web, 4 centreline bars. Two production runs use
+    # this same section with different modular ratios.
+    return Section.from_polygon(
+        corners=[(-0.050, -0.303), (-0.050, 0.303), (0.050, 0.303), (0.050, -0.303)],
+        bars_xy_area_mm2=[(0.0, 0.246, 93.0), (0.0, 0.073, 93.0),
+                          (0.0, 0.024, 93.0), (0.0, -0.254, 93.0)],
+    )
+
+
+# (label, long(P,Mx,My,nl), short(P,Mx,My,ns), max_comp, point, y_int, total[4])
+UNDERSTOTNING_CASES = [
+    ("und_lc1", (408.98, -49.87, 0.0, 19.76), (-2.23, -14.75, 0.0, 5.81),
+     17000.0, 0, 0.13094, [27296, -71288, -99946, -258711]),
+    ("und_lc2", (408.98, -49.87, 0.0, 19.76), (-0.61, -4.06, 0.0, 5.81),
+     14349.0, 0, 0.21048, [6935, -80448, -105850, -246577]),
+    ("und_lc3", (408.98, -49.87, 0.0, 19.76), (-5.45, -36.12, 0.0, 5.81),
+     24967.0, 0, 0.00024, [118376, -23247, -64416, -292495]),
+    ("exa_lc1", (408.98, -49.87, 0.0, 22.93), (-0.61, -4.06, 0.0, 5.733),
+     14139.0, 0, 0.21005, [7082, -92242, -121115, -281072]),
+    ("exa_lc2", (408.98, -49.87, 0.0, 22.93), (-5.45, -36.12, 0.0, 5.733),
+     24863.0, 0, -0.00293, [119290, -34448, -79140, -326730]),
+]
+
+
+@pytest.mark.parametrize("case", UNDERSTOTNING_CASES, ids=[c[0] for c in UNDERSTOTNING_CASES])
+def test_production_understotning_cracked(case):
+    # These cases are cracked (the neutral axis falls inside the section) and
+    # three of the four bars cluster near it. The legacy printout is itself only
+    # ~0.3% self-consistent here (its bar stresses are not perfectly collinear in
+    # y, which an exact single-plane solve must be), so it carries numerical
+    # noise that is amplified for bars sitting on the neutral axis. The
+    # engineering quantities -- maximum concrete compression, governing point and
+    # neutral-axis position -- still match tightly; the near-axis bar stresses
+    # match within that noise.
+    _, L, S, comp, pt, y_int, total = case
+    res = solve_elastic_combined(
+        understotning_section(), L[0], L[1], L[2], L[3], S[0], S[1], S[2], S[3]
+    )
+    assert res.converged
+    assert res.max_concrete_compression == pytest.approx(comp, rel=0.01)
+    assert res.max_concrete_point == pt
+    assert res.na_y_intercept == pytest.approx(y_int, abs=0.01)
+    assert math.isinf(res.na_x_intercept)
+    # Deepest (most stressed) bar is well-conditioned -> tight; the rest absorb
+    # the near-axis noise.
+    assert res.bar_stress_total[3] == pytest.approx(total[3], rel=0.01)
+    for got, exp in zip(res.bar_stress_total, total):
+        assert got == pytest.approx(exp, rel=0.03, abs=1800)
+
+
 def test_combined_reduces_to_long_term_when_no_short():
     # Zero short-term load with ns == nl must equal a single long-term solve.
     sec = rectangular_section()
