@@ -14,6 +14,8 @@ import pytest
 
 from sector.geometry import (
     AreaMoments,
+    _clip_pts,
+    _poly_moments,
     area_moments,
     area_moments_rings,
     clip_halfplane,
@@ -241,3 +243,36 @@ def test_clip_eps_shifts_cut_line_consistently():
     assert m.sx / m.area == pytest.approx((-0.1 + 1.0) / 2.0)  # centroid x = 0.45
     # The left edge is cut exactly at x = -0.1.
     assert clipped[:, 0].min() == pytest.approx(-0.1)
+
+
+# ---------------------------------------------------------------------------
+# internal scalar kernels (the fast path the plastic solver calls directly)
+# ---------------------------------------------------------------------------
+
+
+def test_internal_kernels_match_public_path():
+    # The list-based kernels back the public NumPy API and are called directly
+    # in the hot loop; they must agree with the public path to floating point.
+    sq = [(-1.0, -0.5), (2.0, -0.5), (2.0, 1.5), (-1.0, 1.5)]
+    a, b, c = 1.0, 0.3, -0.4  # an oblique cut through the polygon
+
+    pub = area_moments(clip_halfplane(sq, a, b, c))
+
+    pts = _clip_pts(sq, a, b, c)
+    assert isinstance(pts, list)
+    assert all(isinstance(p, tuple) and len(p) == 2 for p in pts)
+    intern = _poly_moments(pts)
+
+    assert intern.area == pytest.approx(pub.area)
+    assert intern.sx == pytest.approx(pub.sx)
+    assert intern.sy == pytest.approx(pub.sy)
+    assert intern.sxx == pytest.approx(pub.sxx)
+    assert intern.syy == pytest.approx(pub.syy)
+    assert intern.sxy == pytest.approx(pub.sxy)
+
+
+def test_internal_kernels_degenerate_cases():
+    # Fewer than three points enclose no area; an all-outside clip is empty.
+    assert _poly_moments([(0.0, 0.0), (1.0, 1.0)]) == AreaMoments(0, 0, 0, 0, 0, 0)
+    sq = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    assert _clip_pts(sq, 0.0, 1.0, -5.0) == []  # y >= 5 keeps nothing
