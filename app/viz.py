@@ -25,23 +25,30 @@ _EPS = chr(0x3B5)       # epsilon
 _SIGMA = chr(0x3C3)     # sigma
 _PERMILLE = chr(0x2030)  # per-mille sign
 
+_MID = chr(0x00B7)  # middle dot, for products like k*fytk (BMP, surrogate-safe)
+
 # Map a material's ASCII marker key to its display symbol (subscripts via <sub>).
+# The keys are the *input* parameters, so editing any of them moves a labelled
+# point on the diagram. Derived/design quantities (f1, f2, fyd, fud) are not shown.
 _MARKER_LABELS = {
     "fcd": "f<sub>cd</sub>",
     "fck": "f<sub>ck</sub>",
-    "fyd": "f<sub>yd</sub>",
-    "fud": "f<sub>ud</sub>",
-    "f1": "f<sub>1</sub>",
-    "f2": "f<sub>2</sub>",
     "eps_c2": _EPS + "<sub>c2</sub>",
     "eps_cu2": _EPS + "<sub>cu2</sub>",
-    "eps_yd": _EPS + "<sub>yd</sub>",
-    "eps_ud": _EPS + "<sub>ud</sub>",
-    "eps_y1": _EPS + "<sub>y1</sub>",
-    "eps_y2": _EPS + "<sub>y2</sub>",
-    "eps_pd": _EPS + "<sub>pd</sub>",
-    "fpd": "f<sub>pd</sub>",
-    "fpud": "f<sub>pud</sub>",
+    # mild steel inputs
+    "fytk": "f<sub>ytk</sub>",
+    "fyck": "f<sub>yck</sub>",
+    "futk": "f<sub>utk</sub>",
+    "k_fytk": "k" + _MID + "f<sub>ytk</sub>",
+    "k_fyck": "k" + _MID + "f<sub>yck</sub>",
+    "eut": _EPS + "<sub>ut</sub>",
+    "ey0t": _EPS + "<sub>0t</sub>",
+    "ey0c": _EPS + "<sub>0c</sub>",
+    # prestressing-steel inputs
+    "fp01k": "f<sub>p0.1k</sub>",
+    "fpk": "f<sub>pk</sub>",
+    "k_fp01k": "k" + _MID + "f<sub>p0.1k</sub>",
+    "IS": "I<sub>S</sub>",
 }
 
 
@@ -132,53 +139,100 @@ def _apply_markers(fig, points, eps_min, eps_max, ymin, ymax):
 
 
 def _slope_label(fig, material):
-    """Label the elastic-branch slope with the design modulus (steel only)."""
-    if not hasattr(material, "elastic_slope"):
+    """Label the elastic-branch slope with the input modulus (steel only).
+
+    Shows the characteristic modulus the user entered -- ``Es`` for mild steel,
+    ``Ep`` for prestressing steel -- not the partial-factored design slope.
+    """
+    es = getattr(material, "Es", None)
+    if not es:
         return
-    pos = [(s, sig) for s, sig, _, _ in material.diagram_markers(design=True)
+    pos = [(s, sig) for s, sig, _, _ in material.diagram_markers(design=False)
            if s > 0.0]
     if not pos:
         return
-    slope = material.elastic_slope(design=True)  # MPa per unit strain
     e_yield = min(s for s, _ in pos)
     e_mid = 0.45 * e_yield
+    sym = "E<sub>p</sub>" if type(material).__name__ == "Prestress" else "E<sub>s</sub>"
     fig.add_annotation(
-        x=e_mid * 1000.0, y=slope * e_mid, ax=-36, ay=-22, showarrow=True,
+        x=e_mid * 1000.0, y=es * e_mid, ax=-36, ay=-22, showarrow=True,
         arrowhead=0, arrowwidth=0.8, arrowcolor=GUIDE_LINE,
-        text="E<sub>d</sub> = %.0f GPa" % (slope / 1000.0),
+        text="%s = %.0f GPa" % (sym, es / 1000.0),
         font=dict(size=11, color=DESIGN_LINE))
+
+
+def _trace_xy(fn, grid, peak):
+    """Sample a material law, inserting a true vertical at each hard cutoff.
+
+    A failure (concrete crushing at ``eps_cu2``, steel/tendon rupture at
+    ``eut``) is an instantaneous drop to zero stress, but it falls between two
+    samples and would otherwise be drawn as a slanted line across the gap. Where
+    consecutive samples jump to/from zero, bisect to the exact cutoff strain and
+    emit two points at that strain so the drop renders vertical. ``peak`` guards
+    against treating the continuous pass through zero at the origin as a cutoff.
+    """
+    xs, ys = [], []
+    pe = ps = None
+    tol = 0.02 * peak
+    for e in grid:
+        s = fn(e)
+        if ps is not None:
+            z0, z1 = abs(ps) < 1e-9, abs(s) < 1e-9
+            live = s if z0 else ps
+            if z0 != z1 and abs(live) > tol:           # a real failure drop
+                lo, hi = pe, e
+                for _ in range(50):
+                    mid = 0.5 * (lo + hi)
+                    if (abs(fn(mid)) < 1e-9) == z0:
+                        lo = mid
+                    else:
+                        hi = mid
+                ec = 0.5 * (lo + hi) * 1000.0
+                xs += [ec, ec]
+                ys += [0.0, live] if z0 else [live, 0.0]
+        xs.append(e * 1000.0)
+        ys.append(s)
+        pe, ps = e, s
+    return xs, ys
 
 
 def _curve_figure(material, eps_min, eps_max, title, n=240):
     """Stress-strain diagram of a material law over a strain range (tension +).
 
-    Plots the design curve and, lighter, the characteristic curve, with the
-    points of interest dotted and labelled at the axes. The strain axis is in
-    per-mille so compression (negative) and tension (positive) are both visible;
-    stress in MPa.
+    The characteristic curve carries the input labels (the values the user
+    enters) and is drawn solid; the partial-factored design curve is shown
+    lighter for reference. Points of interest are dotted and labelled at the
+    axes. Hard cutoffs (crushing/rupture) render as true verticals. The strain
+    axis is in per-mille so compression (negative) and tension (positive) are
+    both visible; stress in MPa.
     """
     eps = _linspace(eps_min, eps_max, n)
-    x = [e * 1000.0 for e in eps]  # per-mille
     design = [material.stress(e, design=True) for e in eps]
     char = [material.stress(e, design=False) for e in eps]
+    peak = max((abs(v) for v in design + char), default=0.0) or 1.0
+    xd, yd = _trace_xy(lambda e: material.stress(e, design=True), eps, peak)
+    xc, yc = _trace_xy(lambda e: material.stress(e, design=False), eps, peak)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=char, mode="lines", name="characteristic",
+    fig.add_trace(go.Scatter(x=xd, y=yd, mode="lines", name="design",
                              line=dict(color=CHAR_LINE, width=1.5, dash="dot")))
-    fig.add_trace(go.Scatter(x=x, y=design, mode="lines", name="design",
+    fig.add_trace(go.Scatter(x=xc, y=yc, mode="lines", name="characteristic",
                              line=dict(color=DESIGN_LINE, width=2.5)))
-    _apply_markers(fig, material.diagram_markers(design=True), eps_min, eps_max,
+    # Markers sit on the characteristic curve and are labelled with the input
+    # parameters, so editing any input visibly moves a labelled point.
+    _apply_markers(fig, material.diagram_markers(design=False), eps_min, eps_max,
                    min(design + char), max(design + char))
     _slope_label(fig, material)
     fig.update_layout(
         title=dict(text=title, font=dict(size=13), y=0.97),
-        template="plotly_white", height=320,
-        margin=dict(l=58, r=54, t=44, b=62),
-        xaxis=dict(title="Strain " + _EPS + " [" + _PERMILLE + "]",
+        template="plotly_white", height=340,
+        margin=dict(l=58, r=54, t=44, b=96),
+        xaxis=dict(title=dict(text="Strain " + _EPS + " [" + _PERMILLE + "]",
+                              standoff=10),
                    zeroline=True, zerolinecolor="#c8ccd0", showgrid=True),
         yaxis=dict(title="Stress " + _SIGMA + " [MPa]",
                    zeroline=True, zerolinecolor="#c8ccd0", showgrid=True),
-        legend=dict(orientation="h", yanchor="top", y=-0.18, x=0.5,
+        legend=dict(orientation="h", yanchor="top", y=-0.34, x=0.5,
                     xanchor="center", font=dict(size=10)),
     )
     return fig

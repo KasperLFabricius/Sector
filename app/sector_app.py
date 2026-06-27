@@ -87,6 +87,22 @@ def _safe_build(box, builder, curve, vals):
         return builder(curve=curve, **v)
 
 
+def _clamp_eut(box, vals, fields):
+    """Keep the rupture strain at or above the (second) yield strain -- a
+    meaningful, not arbitrary, limit: a curve cannot rupture before it has
+    reached its yield/ultimate branch. For the two-yield laws the yield is the
+    second yield, reached at ``ey0t + fytk/Es``. Only applies when the active
+    curve uses ``fytk`` and ``eut``. Strain fields here are in per-mille."""
+    if "eut" in fields and "fytk" in fields and vals.get("Es", 0.0) > 0.0:
+        ey = vals["fytk"] / vals["Es"] * 1000.0   # yield strain in per-mille
+        if "ey0t" in fields:
+            ey += vals.get("ey0t", 0.0)           # second-yield (total) strain
+        if vals["eut"] < ey:
+            box.warning("eut must be at least the yield strain (ey0t + fytk/Es); "
+                        "using that value for the diagram and analysis.")
+            vals["eut"] = ey
+
+
 def concrete_panel(box):
     """Concrete material: preset and editable parameters (diagram is in the main view)."""
     box.markdown("**Concrete**")
@@ -118,9 +134,10 @@ def concrete_panel(box):
 def mild_panel(box):
     """Mild-steel material: preset and editable parameters (diagram is in the main view).
 
-    A flat form -- every parameter is always shown. The active curve uses the
-    ones it needs and ignores the rest, so the inputs never change with the
-    preset; the preset only prefills the values and the curve type.
+    A flat form on the general two-yield law: every parameter is always shown
+    and live, so the inputs never change with the preset. A preset only prefills
+    the values; the named shapes (bilinear, elastic-perfectly-plastic) are
+    special cases of the same law.
     """
     box.markdown("**Mild steel**")
     presets = mp.MILD_PRESETS
@@ -130,17 +147,19 @@ def mild_panel(box):
     _prefill("mild", preset, presets)
     curve = presets[preset]["curve"]
     vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META) for f in mp.MILD_FIELD_META}
+    _clamp_eut(box, vals, mp.MILD_FIELDS_BY_CURVE[curve])
     steel = _safe_build(box, mp.build_mild, curve, vals)
-    box.caption(f"curve {curve},  fyd = {steel.fytk / vals['gamma_y']:.0f} MPa")
+    box.caption(f"fyd = {steel.fytk / vals['gamma_y']:.0f} MPa,  "
+                f"Es = {vals['Es'] / 1000.0:.0f} GPa")
     return steel
 
 
 def prestress_panel(box):
     """Prestressing-steel material: preset and editable parameters (diagram is in the main view).
 
-    Like the mild-steel panel, this is a flat form: every parameter is always
-    shown and the active curve uses what it needs, so the inputs do not change
-    with the preset.
+    A flat form: the user-defined and Eurocode presets build the general
+    two-yield law, so every parameter is live. The built-in characteristic
+    curves are fixed shapes -- only the prestrain (and yield factor) apply.
     """
     box.markdown("**Prestressing steel**")
     presets = mp.PRESTRESS_PRESETS
@@ -150,11 +169,15 @@ def prestress_panel(box):
     _prefill("pre", preset, presets)
     curve = presets[preset]["curve"]
     vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META) for f in mp.PRESTRESS_FIELD_META}
+    _clamp_eut(box, vals, mp.PRESTRESS_FIELDS_BY_CURVE[curve])
     pre = _safe_build(box, mp.build_prestress, curve, vals)
-    cap = f"curve {curve},  IS = {vals['IS'] * 100.0:.2f}%"
-    if curve in (6, 7):
-        cap += f",  fpd = {vals['fytk'] / vals['gamma_y']:.0f} MPa"
-    box.caption(cap)
+    if curve in (1, 2, 3, 4, 5):
+        box.caption(f"built-in curve {curve} (fixed shape); only the prestrain "
+                    f"IS = {vals['IS']:.1f} permille applies")
+    else:
+        box.caption(f"IS = {vals['IS']:.1f} permille,  "
+                    f"fpd = {vals['fytk'] / vals['gamma_y']:.0f} MPa,  "
+                    f"Ep = {vals['Es'] / 1000.0:.0f} GPa")
     return pre
 
 
@@ -288,10 +311,10 @@ def build_inputs():
             "cover", "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
             "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
             "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
-            "mild_ey0t", "mild_ey0c", "use_pre", "tnd_n", "tnd_a", "tnd_c",
-            "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
+            "mild_ey0t", "mild_ey0c", "mild_Es", "use_pre", "tnd_n", "tnd_a",
+            "tnd_c", "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
             "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t",
-            "P", "Mx", "My", "ratio", "mode"))
+            "pre_Es", "P", "Mx", "My", "ratio", "mode"))
     return dict(section=section, concrete=concrete, steel=steel, ratio=ratio,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P=P, Mx=Mx, My=My, mode=mode,

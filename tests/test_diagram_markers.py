@@ -22,55 +22,56 @@ def test_concrete_markers_are_points():
     assert c.diagram_markers(design=False)[0][3] == "fck"
 
 
-def test_mild_curve2_has_yield_ultimate_and_compression():
+def test_mild_curve2_labels_inputs():
     s = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.15, curve=2)
     pts = s.diagram_markers(design=True)
     fyd = 500.0 / 1.15
-    assert pts[0] == (pytest.approx(500.0 / ES), pytest.approx(fyd), "eps_yd", "fyd")
-    assert pts[1] == (pytest.approx(0.05), pytest.approx(fyd), "eps_ud", "fud")
-    # Compression yield mirrors the tension yield (symmetric fyck = fytk).
-    assert pts[2] == (pytest.approx(-500.0 / ES), pytest.approx(-fyd),
-                      "eps_yd", "fyd")
+    assert pts[0] == (pytest.approx(500.0 / ES), pytest.approx(fyd), None, "fytk")
+    assert pts[1] == (pytest.approx(0.05), pytest.approx(fyd), "eut", "fytk")
+    assert pts[2] == (pytest.approx(-500.0 / ES), pytest.approx(-fyd), None, "fyck")
 
 
-def test_mild_curve1_ec_yield_and_compression():
+def test_mild_curve1_labels_inputs():
     s = MildSteel(fytk=500.0, fyck=500.0, futk=500.0, eut=1.0, gamma_y=1.15,
                   gamma_u=1.15, gamma_E=1.0, curve=1)
     yld, ult, comp = s.diagram_markers(design=True)
     fyd = 500.0 / 1.15
-    assert yld == (pytest.approx(fyd / ES), pytest.approx(fyd), "eps_yd", "fyd")
-    assert ult[1] == pytest.approx(fyd)            # futk = fytk -> f_ud == f_yd
-    assert comp[1] == pytest.approx(-fyd)          # compression yield
+    assert yld == (pytest.approx(fyd / ES), pytest.approx(fyd), None, "fytk")
+    assert ult[2:] == ("eut", "futk") and ult[1] == pytest.approx(fyd)
+    assert comp[2:] == (None, "fyck") and comp[1] == pytest.approx(-fyd)
 
 
-def test_mild_curve3_tension_and_compression_yields():
-    s = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, gamma_y=1.0,
+def test_mild_curve3_labels_inputs_and_independent_fyck():
+    s = MildSteel(fytk=550.0, fyck=400.0, futk=600.0, eut=0.05, gamma_y=1.0,
                   gamma_u=1.0, gamma_E=1.0, k=0.9, ey0t=0.002, ey0c=0.005, curve=3)
     pts = s.diagram_markers(design=True)
-    keys = [(ek, sk) for _, _, ek, sk in pts]
-    assert keys == [("eps_y1", "f1"), ("eps_y2", "f2"), ("eps_ud", "fud"),
-                    ("eps_y1", "f1"), ("eps_y2", "f2")]
-    # The two compression yields are at negative strain and stress.
-    assert pts[3][0] < 0 and pts[3][1] == pytest.approx(-0.9 * 550.0)
-    assert pts[4] == (pytest.approx(-0.005), pytest.approx(-550.0), "eps_y2", "f2")
+    skeys = {sk for *_, sk in pts}
+    ekeys = {ek for _, _, ek, _ in pts}
+    assert {"fytk", "futk", "fyck", "k_fytk", "k_fyck"} <= skeys
+    assert {"ey0t", "eut", "ey0c"} <= ekeys
+    # The compression yield uses fyck (= -400), independent of fytk.
+    comp = [sig for _, sig, _, sk in pts if sk == "fyck"]
+    assert any(sig == pytest.approx(-400.0) for sig in comp)
+    # No derived/design labels.
+    assert not ({"f1", "f2", "fud", "fyd"} & skeys)
 
 
 def test_prestress_proof_point_lies_on_the_curve():
-    # The fpd marker must sit on the actual law for both user-defined curves.
-    # Curve 6 (bilinear) reaches fpd at the end of the elastic branch...
+    # Curve 6 (bilinear) reaches fp0.1k at the end of the elastic branch...
     p6 = Prestress(curve=6, IS=0.0, fytk=1600.0, futk=1860.0, eut=0.035,
                    gamma_y=1.15, gamma_u=1.15, gamma_E=1.0)
-    eps_pd, fpd, ek, sk = p6.diagram_markers(design=True)[0]
-    assert (ek, sk) == ("eps_pd", "fpd")
-    assert eps_pd == pytest.approx(fpd / ES)
-    assert p6.stress(eps_pd, design=True) == pytest.approx(fpd)
+    proof = [(s, sig) for s, sig, ek, sk in p6.diagram_markers(design=True)
+             if sk == "fp01k"][0]
+    assert proof[0] == pytest.approx(proof[1] / ES)
+    assert p6.stress(proof[0], design=True) == pytest.approx(proof[1])
 
-    # ...curve 7 (two yield) only reaches fpd after the plastic strain ey0t.
+    # ...curve 7 reaches fp0.1k only after the plastic strain ey0t.
     p7 = Prestress(curve=7, IS=0.0, fytk=1600.0, futk=1860.0, eut=0.035,
                    k=0.9, ey0t=0.002, gamma_y=1.15, gamma_u=1.15, gamma_E=1.0)
-    eps_pd, fpd, _, _ = p7.diagram_markers(design=True)[0]
-    assert eps_pd == pytest.approx(0.002 + fpd / ES)
-    assert p7.stress(eps_pd, design=True) == pytest.approx(fpd)
+    proof7 = [(s, sig) for s, sig, ek, sk in p7.diagram_markers(design=True)
+              if sk == "fp01k"][0]
+    assert proof7[0] == pytest.approx(0.002 + proof7[1] / ES)
+    assert p7.stress(proof7[0], design=True) == pytest.approx(proof7[1])
 
 
 def test_elastic_slope_reflects_partial_factor():
