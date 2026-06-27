@@ -350,7 +350,8 @@ def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
 
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
-                   zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04):
+                   zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
+                   height=440):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     Reinforcement is drawn consistently across the views: bars are circles and
@@ -403,7 +404,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     if show_labels:
         _add_point_labels(fig, outer, holes, bars, tendons, label_scale, label_min_gap)
     fig.update_layout(
-        title=title, template="plotly_white", height=440,
+        title=title, template="plotly_white", height=height,
         margin=dict(l=10, r=10, t=40, b=10),
         xaxis=dict(title="x (m)", zeroline=True),
         yaxis=dict(title="y (m)", scaleanchor="x", scaleratio=1, zeroline=True),

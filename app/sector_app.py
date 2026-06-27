@@ -295,17 +295,23 @@ def build_inputs():
     s = st.sidebar
 
     with s.expander("About", expanded=False):
+        st.markdown("### Sector")
+        st.caption("Reinforced-concrete and prestressed cross-section analysis.")
         st.markdown(
-            "**Sector** analyses reinforced-concrete (and optionally "
-            "prestressed) cross-sections, returning the plastic bending "
-            "capacity and the cracked-section elastic stresses. The elastic "
-            "result also reports serviceability checks (cracking threshold, "
-            "section properties, and optional tension stiffening and crack "
-            "width) on the long-term load.")
+            "Sector analyses an arbitrary RC (and optionally prestressed) "
+            "cross-section and reports:\n"
+            "- **Plastic bending capacity** -- the biaxial M-M interaction "
+            "envelope and the load utilisation.\n"
+            "- **Cracked-section elastic stresses** -- concrete and "
+            "reinforcement stresses under the long- and short-term loads.\n"
+            "- **Serviceability checks** -- cracking threshold, section "
+            "properties, and optional tension stiffening and crack width.")
+        st.markdown("**Workflow**")
         st.caption("Define the section and materials, choose the analyses, then "
                    "press Calculate. The section drawing and the stress-strain "
-                   "diagrams update live; the results update on Calculate.")
-        st.caption(f"Version {APP_VERSION}")
+                   "diagrams update live; the result views update on Calculate.")
+        st.divider()
+        st.caption(f"Sector v{APP_VERSION}  -  internal engineering tool, Sweco.")
 
     aset = s.expander("Analysis & Result Settings", expanded=False)
     mode = aset.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode",
@@ -334,44 +340,44 @@ def build_inputs():
 
     holes = []
     if shape == "Rectangle":
-        b = sec.number_input("Width b (m)", 0.05, 10.0, 0.40, 0.05, key="b",
-                             help="Overall section width.")
-        h = sec.number_input("Height h (m)", 0.05, 10.0, 0.60, 0.05, key="h",
-                             help="Overall section height (depth).")
+        b = sec.number_input("Width b (mm)", 50.0, 10000.0, 400.0, 10.0, key="b_mm",
+                             help="Overall section width.") / 1000.0
+        h = sec.number_input("Height h (mm)", 50.0, 10000.0, 600.0, 10.0, key="h_mm",
+                             help="Overall section height (depth).") / 1000.0
         outer = templates.rectangle(b, h)
         width_b = b
     elif shape == "Slab strip":
-        h = sec.number_input("Thickness h (m)", 0.05, 3.0, 0.30, 0.01, key="h",
-                             help="Slab thickness; the strip is analysed per 1 m width.")
+        h = sec.number_input("Thickness h (mm)", 50.0, 3000.0, 300.0, 10.0, key="h_mm",
+                             help="Slab thickness; the strip is analysed per 1 m width.") / 1000.0
         b = 1.0
         outer = templates.slab_strip(h)
         width_b = b
     elif shape == "T-section":
-        bf = sec.number_input("Flange width bf (m)", 0.1, 12.0, 1.20, 0.05, key="bf",
-                              help="Width of the (top) flange.")
-        hf = sec.number_input("Flange thickness hf (m)", 0.05, 2.0, 0.20, 0.01, key="hf",
-                              help="Thickness of the flange.")
-        bw = sec.number_input("Web width bw (m)", 0.05, 4.0, 0.30, 0.05, key="bw",
-                              help="Width of the web.")
-        hw = sec.number_input("Web depth hw (m)", 0.1, 6.0, 0.60, 0.05, key="hw",
-                              help="Depth of the web below the flange.")
+        bf = sec.number_input("Flange width bf (mm)", 100.0, 12000.0, 1200.0, 10.0, key="bf_mm",
+                              help="Width of the (top) flange.") / 1000.0
+        hf = sec.number_input("Flange thickness hf (mm)", 50.0, 2000.0, 200.0, 10.0, key="hf_mm",
+                              help="Thickness of the flange.") / 1000.0
+        bw = sec.number_input("Web width bw (mm)", 50.0, 4000.0, 300.0, 10.0, key="bw_mm",
+                              help="Width of the web.") / 1000.0
+        hw = sec.number_input("Web depth hw (mm)", 100.0, 6000.0, 600.0, 10.0, key="hw_mm",
+                              help="Depth of the web below the flange.") / 1000.0
         outer = templates.t_section(bf, hf, bw, hw)
         b, h, width_b = bw, hf + hw, bf
     elif shape == "Box girder":
-        b = sec.number_input("Width b (m)", 0.2, 12.0, 0.80, 0.05, key="b",
-                             help="Overall outer width of the box.")
-        h = sec.number_input("Height h (m)", 0.2, 12.0, 1.00, 0.05, key="h",
-                             help="Overall outer height of the box.")
+        b = sec.number_input("Width b (mm)", 200.0, 12000.0, 800.0, 10.0, key="b_mm",
+                             help="Overall outer width of the box.") / 1000.0
+        h = sec.number_input("Height h (mm)", 200.0, 12000.0, 1000.0, 10.0, key="h_mm",
+                             help="Overall outer height of the box.") / 1000.0
         # Cap the wall so the cavity stays positive (2*wall < b and < h).
-        max_wall = round(min(b, h) / 2 - 0.01, 3)
-        wall = sec.number_input("Wall thickness (m)", 0.02, max_wall,
-                                min(0.20, max_wall), 0.01, key="wall",
-                                help="Thickness of the box walls (uniform).")
+        max_wall = round((min(b, h) / 2 - 0.01) * 1000.0, 0)
+        wall = sec.number_input("Wall thickness (mm)", 20.0, max_wall,
+                                min(200.0, max_wall), 10.0, key="wall_mm",
+                                help="Thickness of the box walls (uniform).") / 1000.0
         outer, holes = templates.box(b, h, wall)
         width_b = b
     else:  # Circular
-        dia = sec.number_input("Diameter (m)", 0.1, 6.0, 0.60, 0.05, key="dia",
-                               help="Outer diameter of the circular section.")
+        dia = sec.number_input("Diameter (mm)", 100.0, 6000.0, 600.0, 10.0, key="dia_mm",
+                               help="Outer diameter of the circular section.") / 1000.0
         outer = templates.circular(dia)
         b = h = dia
         width_b = dia
@@ -382,8 +388,8 @@ def build_inputs():
                               help="Number of bars evenly spaced around the perimeter.")
         rd = sec.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4,
                            key="ring_d", help="Diameter of each reinforcement bar.")
-        cov = sec.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="ring_c",
-                               help="Distance from the section face to the bar centres.")
+        cov = sec.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="ring_c_mm",
+                               help="Distance from the section face to the bar centres.") / 1000.0
         bars = templates.bar_ring(0.0, 0.0, dia / 2 - cov, int(nb), rd)
     else:
         c1, c2 = sec.columns(2)
@@ -399,8 +405,8 @@ def build_inputs():
                                      help="Number of bars in the top layer.")
             rd_top = st.selectbox("dia##top", templates.BAR_DIAMETERS, index=4, key="top_d",
                                   label_visibility="collapsed", help="Top bar diameter (mm).")
-        cov = sec.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="cover",
-                               help="Distance from the top/bottom face to the bar centres.")
+        cov = sec.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="cover_mm",
+                               help="Distance from the top/bottom face to the bar centres.") / 1000.0
         bw_eff = width_b if shape == "T-section" else b
         bars = templates.merge_bars(
             templates.bar_row(-h / 2 + cov, -(b if shape != "T-section" else bw_eff) / 2 + cov,
@@ -421,9 +427,9 @@ def build_inputs():
                               help="Number of tendons in the row.")
         a_t = sec.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a",
                                help="Cross-sectional area of a single tendon.")
-        cov_p = sec.number_input("Tendon cover (m)", 0.0, 2.0, 0.10, 0.01, key="tnd_c",
+        cov_p = sec.number_input("Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, key="tnd_c_mm",
                                  help="Distance from the bottom face (or the "
-                                      "circular ring) to the tendons.")
+                                      "circular ring) to the tendons.") / 1000.0
         if shape == "Circular":
             tendons = templates.point_ring(0.0, 0.0, max(dia / 2 - cov_p, 0.0),
                                            int(nt), a_t)
@@ -831,7 +837,7 @@ def section_view(inp):
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
                                        title="Section", tendons=tendon_xy,
                                        show_labels=True, label_scale=inp["label_scale"],
-                                       label_min_gap=inp["label_min_gap"]),
+                                       label_min_gap=inp["label_min_gap"], height=640),
                     use_container_width=True)
 
 
