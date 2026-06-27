@@ -81,8 +81,8 @@ def test_curve3_preset_second_yield_is_continuous():
     s = mp.build_mild(**p)
     f1 = p["k"] * p["fytk"]          # first yield stress (gamma = 1)
     f2 = p["fytk"]                   # second yield stress
-    e1 = f1 / ES                     # first compression yield strain
-    assert p["ey0c"] > e1
+    e1 = f1 / s.Es                   # first compression yield strain (fraction)
+    assert s.ey0c > e1               # built material's ey0c (converted to fraction)
     sig = -s.stress(-(e1 + 1.0e-4), design=False)  # compression magnitude
     assert f1 <= sig < f1 + 0.2 * (f2 - f1)
 

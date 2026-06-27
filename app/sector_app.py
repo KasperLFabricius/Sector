@@ -92,11 +92,11 @@ def _clamp_eut(box, vals, fields):
     meaningful, not arbitrary, limit: a curve cannot rupture before it has
     reached its yield/ultimate branch. For the two-yield laws the yield is the
     second yield, reached at ``ey0t + fytk/Es``. Only applies when the active
-    curve uses ``fytk`` and ``eut``."""
+    curve uses ``fytk`` and ``eut``. Strain fields here are in per-mille."""
     if "eut" in fields and "fytk" in fields and vals.get("Es", 0.0) > 0.0:
-        ey = vals["fytk"] / vals["Es"]
+        ey = vals["fytk"] / vals["Es"] * 1000.0   # yield strain in per-mille
         if "ey0t" in fields:
-            ey += vals.get("ey0t", 0.0)   # second-yield (total) strain
+            ey += vals.get("ey0t", 0.0)           # second-yield (total) strain
         if vals["eut"] < ey:
             box.warning("eut must be at least the yield strain (ey0t + fytk/Es); "
                         "using that value for the diagram and analysis.")
@@ -173,9 +173,9 @@ def prestress_panel(box):
     pre = _safe_build(box, mp.build_prestress, curve, vals)
     if curve in (1, 2, 3, 4, 5):
         box.caption(f"built-in curve {curve} (fixed shape); only the prestrain "
-                    f"IS = {vals['IS'] * 100.0:.2f}% applies")
+                    f"IS = {vals['IS']:.1f} permille applies")
     else:
-        box.caption(f"IS = {vals['IS'] * 100.0:.2f}%,  "
+        box.caption(f"IS = {vals['IS']:.1f} permille,  "
                     f"fpd = {vals['fytk'] / vals['gamma_y']:.0f} MPa,  "
                     f"Ep = {vals['Es'] / 1000.0:.0f} GPa")
     return pre

@@ -112,7 +112,7 @@ def test_eut_below_yield_strain_warns_and_calculates():
     # with a warning rather than accepted.
     at = _fresh()
     at.run()
-    at.number_input(key="mild_eut").set_value(0.0005).run()  # below ey ~ 0.0025
+    at.number_input(key="mild_eut").set_value(0.5).run()  # 0.5 permille, below ey ~ 2.5
     assert any("yield strain" in w.value for w in at.warning)
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -124,7 +124,7 @@ def test_two_yield_fields_live_under_default_preset():
     at = _fresh()
     at.run()
     at.number_input(key="mild_k").set_value(0.8).run()
-    at.number_input(key="mild_ey0t").set_value(0.003).run()
+    at.number_input(key="mild_ey0t").set_value(3.0).run()  # 3 permille
     assert not at.exception
     at.button(key="calculate").click().run()
     assert not at.exception
