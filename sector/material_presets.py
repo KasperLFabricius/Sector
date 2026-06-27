@@ -9,8 +9,10 @@ match the design-code material laws exactly.
 
 Each preset is a flat dict of the fields the material law needs (including its
 ``curve`` type). The ``*_FIELD_META`` tables give the editable numeric fields
-(label, min, max, step), and ``MILD_FIELDS_BY_CURVE`` lists which fields apply to
-each mild-steel curve so the UI shows the relevant ones.
+(label, min, max, step); the panel shows them all (a flat form), so the available
+inputs never change with the preset. ``*_FIELDS_BY_CURVE`` lists which fields each
+curve actually uses -- ``build_*`` keeps only those when constructing the law, so
+the parameters a curve ignores have no effect.
 """
 
 from __future__ import annotations
@@ -50,10 +52,14 @@ CONCRETE_PRESETS = _concrete_presets()
 
 CONCRETE_FIELDS = ["fck", "gamma_c", "alpha_cc"]
 
+# Bounds are deliberately permissive: a preset only prefills typical values, and
+# every field stays freely editable. The lower bounds are the smallest the engine
+# accepts (concrete needs fck, gamma_c and alpha_cc strictly positive); they are
+# not code limits.
 CONCRETE_FIELD_META = {
-    "fck": ("fck (MPa)", 8.0, 100.0, 1.0),
-    "gamma_c": ("gamma_c", 1.0, 2.0, 0.01),
-    "alpha_cc": ("alpha_cc", 0.5, 1.0, 0.01),
+    "fck": ("fck (MPa)", 1.0, 200.0, 1.0),
+    "gamma_c": ("gamma_c", 1.0, 3.0, 0.01),
+    "alpha_cc": ("alpha_cc", 0.1, 1.2, 0.01),
 }
 
 
@@ -109,17 +115,21 @@ def _mild_presets():
 
 MILD_PRESETS = _mild_presets()
 
+# Permissive bounds: stresses may be zero (e.g. a tendon-free compression yield
+# fyck = 0), partial factors run from 1 (characteristic) upward, and the modulus
+# factor may dip below 1 when Ep exceeds the 200 GPa reference. These are input
+# limits to keep the widgets sane, not Eurocode limits.
 MILD_FIELD_META = {
-    "fytk": ("fytk (MPa)", 100.0, 800.0, 10.0),
-    "fyck": ("fyck (MPa)", 100.0, 800.0, 10.0),
-    "futk": ("futk (MPa)", 100.0, 1000.0, 10.0),
-    "eut": ("eut (strain)", 0.001, 1.0, 0.005),
-    "gamma_y": ("gamma_y", 1.0, 1.5, 0.01),
-    "gamma_u": ("gamma_u", 1.0, 1.5, 0.01),
-    "gamma_E": ("gamma_E", 0.8, 1.5, 0.01),
-    "k": ("k (f1 / fytk)", 0.5, 1.0, 0.01),
-    "ey0t": ("ey0t (strain)", 0.0, 0.05, 0.001),
-    "ey0c": ("ey0c (strain)", 0.0, 0.05, 0.001),
+    "fytk": ("fytk (MPa)", 0.0, 5000.0, 10.0),
+    "fyck": ("fyck (MPa)", 0.0, 5000.0, 10.0),
+    "futk": ("futk (MPa)", 0.0, 5000.0, 10.0),
+    "eut": ("eut (strain)", 0.0001, 2.0, 0.005),
+    "gamma_y": ("gamma_y", 1.0, 2.0, 0.01),
+    "gamma_u": ("gamma_u", 1.0, 2.0, 0.01),
+    "gamma_E": ("gamma_E", 0.5, 2.0, 0.01),
+    "k": ("k (f1 / fytk)", 0.0, 1.0, 0.01),
+    "ey0t": ("ey0t (strain)", 0.0, 0.2, 0.001),
+    "ey0c": ("ey0c (strain)", 0.0, 0.2, 0.001),
 }
 
 MILD_FIELDS_BY_CURVE = {
@@ -169,15 +179,15 @@ def _prestress_presets():
 PRESTRESS_PRESETS = _prestress_presets()
 
 PRESTRESS_FIELD_META = {
-    "IS": ("Prestrain IS (strain)", 0.0, 0.02, 0.0005),
-    "fytk": ("fp0.1k (MPa)", 100.0, 2000.0, 10.0),
-    "futk": ("fpk (MPa)", 100.0, 2200.0, 10.0),
-    "eut": ("eut (strain)", 0.001, 0.1, 0.001),
-    "gamma_y": ("gamma_y", 1.0, 1.5, 0.01),
-    "gamma_u": ("gamma_u", 1.0, 1.5, 0.01),
-    "gamma_E": ("gamma_E", 0.8, 1.5, 0.01),
-    "k": ("k (f1 / fp0.1k)", 0.5, 1.0, 0.01),
-    "ey0t": ("ey0t (strain)", 0.0, 0.05, 0.001),
+    "IS": ("Prestrain IS (strain)", 0.0, 0.05, 0.0005),
+    "fytk": ("fp0.1k (MPa)", 0.0, 5000.0, 10.0),
+    "futk": ("fpk (MPa)", 0.0, 5000.0, 10.0),
+    "eut": ("eut (strain)", 0.0001, 2.0, 0.001),
+    "gamma_y": ("gamma_y", 1.0, 2.0, 0.01),
+    "gamma_u": ("gamma_u", 1.0, 2.0, 0.01),
+    "gamma_E": ("gamma_E", 0.5, 2.0, 0.01),
+    "k": ("k (f1 / fp0.1k)", 0.0, 1.0, 0.01),
+    "ey0t": ("ey0t (strain)", 0.0, 0.2, 0.001),
 }
 
 PRESTRESS_FIELDS_BY_CURVE = {
