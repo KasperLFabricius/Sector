@@ -370,10 +370,13 @@ def build_inputs():
                                50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help,
                                disabled=not active)
         Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, mx_default,
-                                10.0, key=f"{prefix}_Mx", help=m_help, disabled=not active)
+                                10.0, key=f"{prefix}_Mx", disabled=not active,
+                                help=f"{m_help} Bending moment about the x-axis "
+                                     "(its stress varies with y).")
         My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0,
                                 key=f"{prefix}_My", disabled=not active,
-                                help="Applied bending moment about the y-axis (biaxial bending).")
+                                help="Bending moment about the y-axis (its stress "
+                                     "varies with x); biaxial bending.")
         return P, Mx, My
 
     loads.markdown("**Plastic capacity**")

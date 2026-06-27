@@ -111,6 +111,22 @@ def test_concrete_figure_has_no_modulus_label():
                    for a in fig.layout.annotations)
 
 
+def test_interaction_figure_plots_mx_vertical_my_horizontal():
+    # Mx is bending *about* the x-axis, so it is the vertical plot axis and My
+    # the horizontal one -- a tall (strong-about-x) section gives a tall envelope.
+    mx = [100.0, 0.0, -100.0, 0.0]
+    my = [0.0, 30.0, 0.0, -30.0]
+    fig = viz.interaction_figure(mx, my, applied=(80.0, 20.0))
+    cap = fig.data[0]
+    assert list(cap.x) == my + my[:1]      # My on the horizontal axis
+    assert list(cap.y) == mx + mx[:1]      # Mx on the vertical axis
+    applied = fig.data[1]
+    assert list(applied.x) == [20.0]       # applied My
+    assert list(applied.y) == [80.0]       # applied Mx
+    assert "about the x-axis" in fig.layout.yaxis.title.text
+    assert "about the y-axis" in fig.layout.xaxis.title.text
+
+
 def test_prestress_figure_tension_only_labels_inputs():
     p = Prestress(curve=7, IS=0.006, fytk=1600.0, futk=1860.0, eut=0.035,
                   k=0.9, ey0t=0.002, gamma_y=1.15, gamma_u=1.15, gamma_E=1.0)

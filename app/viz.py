@@ -336,20 +336,30 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
 
 
 def interaction_figure(mx, my, applied=None, title="M-M interaction"):
-    """Biaxial Mx-My capacity envelope, with an optional applied-load point."""
+    """Biaxial moment capacity envelope, with an optional applied-load point.
+
+    Drawn to match the section's orientation: ``Mx`` is bending *about* the
+    x-axis (its stress varies with y), so it is the **vertical** axis here, and
+    ``My`` (about the y-axis) is the **horizontal** axis. A section that is strong
+    about x then gives a tall envelope, consistent with the section drawing,
+    rather than a wide one. ``applied`` is given as ``(Mx, My)`` and placed
+    accordingly.
+    """
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=mx + mx[:1], y=my + my[:1], mode="lines",
+    # My on the horizontal axis, Mx on the vertical -- see the note above.
+    fig.add_trace(go.Scatter(x=my + my[:1], y=mx + mx[:1], mode="lines",
                              line=dict(color=ENVELOPE, width=2), name="capacity"))
     if applied is not None:
-        ax, ay = applied
-        fig.add_trace(go.Scatter(x=[ax], y=[ay], mode="markers",
+        a_mx, a_my = applied
+        fig.add_trace(go.Scatter(x=[a_my], y=[a_mx], mode="markers",
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
                                  name="applied"))
     fig.update_layout(
         title=title, template="plotly_white", height=440,
         margin=dict(l=10, r=10, t=40, b=10),
-        xaxis=dict(title="Mx (kNm)", zeroline=True),
-        yaxis=dict(title="My (kNm)", scaleanchor="x", scaleratio=1, zeroline=True),
+        xaxis=dict(title="My - about the y-axis (kNm)", zeroline=True),
+        yaxis=dict(title="Mx - about the x-axis (kNm)", scaleanchor="x",
+                   scaleratio=1, zeroline=True),
         legend=dict(orientation="h", yanchor="bottom", y=1.0),
     )
     return fig
