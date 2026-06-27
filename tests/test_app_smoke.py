@@ -80,6 +80,21 @@ def test_plastic_and_elastic_use_independent_loads():
     assert res2["elastic"]["bar_stress"] != stress0         # elastic changed
 
 
+def test_load_sets_survive_a_mode_switch():
+    # Both sets stay mounted (inactive one disabled), so values are not lost when
+    # toggling modes hides them for a few reruns.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    at.number_input(key="pl_Mx").set_value(175.0).run()
+    at.number_input(key="el_Mx").set_value(60.0).run()
+    at.radio(key="mode").set_value("Elastic").run()   # plastic set disabled
+    at.run()                                            # extra rerun
+    at.radio(key="mode").set_value("Both").run()        # plastic set active again
+    assert at.number_input(key="pl_Mx").value == pytest.approx(175.0)
+    assert at.number_input(key="el_Mx").value == pytest.approx(60.0)
+
+
 def test_circular_shape_calculates():
     at = _fresh()
     at.run()

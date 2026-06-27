@@ -338,41 +338,33 @@ def build_inputs():
     # Loads: the plastic and elastic analyses take their own load sets, so a
     # capacity check (e.g. ULS) and a stress check (e.g. SLS) use different
     # actions without overwriting each other. The plastic axial force fixes the
-    # M-M envelope; its moments are the point checked against it.
+    # M-M envelope; its moments are the point checked against it. Both sets stay
+    # mounted (the inactive one is disabled) so their values survive a mode
+    # switch instead of being reset when Streamlit drops unrendered widgets.
     loads = s.expander("Loads", expanded=True)
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
 
-    def _load_set(prefix, n_help, m_help):
+    def _load_set(prefix, n_help, m_help, active):
         P = loads.number_input("Axial force N (kN, + = compression)", -50000.0,
-                               50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help)
+                               50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help,
+                               disabled=not active)
         Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0,
-                                key=f"{prefix}_Mx", help=m_help)
+                                key=f"{prefix}_Mx", help=m_help, disabled=not active)
         My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0,
-                                key=f"{prefix}_My",
+                                key=f"{prefix}_My", disabled=not active,
                                 help="Applied bending moment about the y-axis (biaxial bending).")
         return P, Mx, My
 
-    if plastic_on:
-        loads.markdown("**Plastic capacity**")
-        P_pl, Mx_pl, My_pl = _load_set(
-            "pl", "Axial force for which the plastic M-M capacity envelope is computed.",
-            "Applied moment checked against the plastic envelope (utilisation).")
-    else:
-        P_pl = st.session_state.get("pl_P", 0.0)
-        Mx_pl = st.session_state.get("pl_Mx", 200.0)
-        My_pl = st.session_state.get("pl_My", 0.0)
-    if elastic_on:
-        if plastic_on:
-            loads.divider()
-        loads.markdown("**Elastic stresses**")
-        P_el, Mx_el, My_el = _load_set(
-            "el", "Applied axial force for the cracked-section elastic stresses.",
-            "Applied moment for the cracked-section elastic stresses.")
-    else:
-        P_el = st.session_state.get("el_P", 0.0)
-        Mx_el = st.session_state.get("el_Mx", 200.0)
-        My_el = st.session_state.get("el_My", 0.0)
+    loads.markdown("**Plastic capacity**")
+    P_pl, Mx_pl, My_pl = _load_set(
+        "pl", "Axial force for which the plastic M-M capacity envelope is computed.",
+        "Applied moment checked against the plastic envelope (utilisation).", plastic_on)
+    loads.divider()
+    loads.markdown("**Elastic stresses**")
+    P_el, Mx_el, My_el = _load_set(
+        "el", "Applied axial force for the cracked-section elastic stresses.",
+        "Applied moment for the cracked-section elastic stresses.", elastic_on)
 
     section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                    tendons_xy_area_mm2=tendons, holes=holes)
