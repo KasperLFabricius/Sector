@@ -68,11 +68,11 @@ def _prefill(prefix, preset, presets):
         st.session_state[prev] = preset
 
 
-def _number(box, prefix, field, meta, help_map=None):
+def _number(box, prefix, field, meta, help_map=None, disabled=False):
     label, lo, hi, step = meta[field]
     return box.number_input(label, float(lo), float(hi), step=float(step),
                             key=f"{prefix}_{field}",
-                            help=(help_map or {}).get(field))
+                            help=(help_map or {}).get(field), disabled=disabled)
 
 
 def _safe_build(box, builder, curve, vals):
@@ -110,8 +110,14 @@ def _clamp_eut(box, vals, fields):
             vals["eut"] = ey
 
 
-def concrete_panel(box):
-    """Concrete material: preset and editable parameters (diagram is in the main view)."""
+def concrete_panel(box, locked=False):
+    """Concrete material: preset and editable parameters (diagram is in the main view).
+
+    ``locked`` (elastic-only mode) disables the parameters that do not affect the
+    elastic results: gamma_c and alpha_cc set the design strength fcd, which is a
+    plastic-only quantity. fck stays editable -- it feeds the serviceability fctm
+    (the Auto button) -- and so does the preset, which prefills fck.
+    """
     box.markdown("**Concrete**")
     presets = mp.CONCRETE_PRESETS
     labels = list(presets)
@@ -120,7 +126,8 @@ def concrete_panel(box):
     _prefill("conc", preset, presets)
     curve = presets[preset]["curve"]
     fck = _number(box, "conc", "fck", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
-    gamma_c = _number(box, "conc", "gamma_c", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
+    gamma_c = _number(box, "conc", "gamma_c", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
+                      disabled=locked)
     # For a strength-dependent edition (EN 2023), keep alpha_cc tracking fck --
     # recompute it whenever fck changes, while still allowing a manual override
     # in between. Constant-alpha_cc editions just keep the editable value.
@@ -130,7 +137,8 @@ def concrete_panel(box):
         st.session_state["conc_alpha_fck"] = fck
     if auto is None:
         st.session_state.pop("conc_alpha_fck", None)
-    alpha_cc = _number(box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
+    alpha_cc = _number(box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
+                       disabled=locked)
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc)
     note = "  (alpha_cc tracks fck via eta_cc)" if auto is not None else ""
@@ -138,13 +146,17 @@ def concrete_panel(box):
     return concrete
 
 
-def mild_panel(box):
+def mild_panel(box, locked=False):
     """Mild-steel material: preset and editable parameters (diagram is in the main view).
 
     A flat form on the general two-yield law: every parameter is always shown
     and live, so the inputs never change with the preset. A preset only prefills
     the values; the named shapes (bilinear, elastic-perfectly-plastic) are
     special cases of the same law.
+
+    ``locked`` (elastic-only mode) disables the stress-strain law parameters,
+    which do not affect the elastic results -- except ``Es``, which sets the
+    crack-width mean strain and so stays editable.
     """
     box.markdown("**Mild steel**")
     presets = mp.MILD_PRESETS
@@ -153,7 +165,8 @@ def mild_panel(box):
                            key="mild_preset", help=_PRESET_HELP)
     _prefill("mild", preset, presets)
     curve = presets[preset]["curve"]
-    vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META, mp.MILD_HELP)
+    vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META, mp.MILD_HELP,
+                       disabled=locked and f != "Es")
             for f in mp.MILD_FIELD_META}
     _clamp_eut(box, vals, mp.MILD_FIELDS_BY_CURVE[curve])
     steel = _safe_build(box, mp.build_mild, curve, vals)
@@ -162,12 +175,16 @@ def mild_panel(box):
     return steel
 
 
-def prestress_panel(box):
+def prestress_panel(box, locked=False):
     """Prestressing-steel material: preset and editable parameters (diagram is in the main view).
 
     A flat form: the user-defined and Eurocode presets build the general
     two-yield law, so every parameter is live. The built-in characteristic
     curves are fixed shapes -- only the prestrain (and yield factor) apply.
+
+    ``locked`` (elastic-only mode) disables every parameter: in the elastic
+    analysis tendons are carried as ordinary bars at the modular ratio, so the
+    prestress stress-strain law has no effect on the elastic results.
     """
     box.markdown("**Prestressing steel**")
     presets = mp.PRESTRESS_PRESETS
@@ -176,7 +193,8 @@ def prestress_panel(box):
                            key="pre_preset", help=_PRESET_HELP)
     _prefill("pre", preset, presets)
     curve = presets[preset]["curve"]
-    vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP)
+    vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP,
+                       disabled=locked)
             for f in mp.PRESTRESS_FIELD_META}
     _clamp_eut(box, vals, mp.PRESTRESS_FIELDS_BY_CURVE[curve])
     pre = _safe_build(box, mp.build_prestress, curve, vals)
@@ -349,13 +367,24 @@ def build_inputs():
             tendons = templates.point_row(-h / 2 + cov_p, -b / 2 + cov_p,
                                           b / 2 - cov_p, int(nt), a_t)
 
+    # In elastic-only mode the stress-strain laws do not enter the analysis (it is
+    # linear: steel via the modular ratio, concrete linear in compression with no
+    # tension), so lock the parameters that have no elastic effect. fck (it feeds
+    # the serviceability fctm) and the steel modulus Es (the crack-width mean
+    # strain) still matter, so they stay editable.
+    lock_mats = mode == "Elastic"
     mat = s.expander("Material Parameters", expanded=False)
-    concrete = concrete_panel(mat)
+    if lock_mats:
+        mat.caption("Elastic-only mode: the stress-strain laws do not affect the "
+                    "elastic results and are locked. Only fck (feeds fctm) and the "
+                    "steel modulus Es (crack width) stay editable; switch to "
+                    "Plastic or Both to edit the full laws.")
+    concrete = concrete_panel(mat, locked=lock_mats)
     mat.divider()
-    steel = mild_panel(mat)
+    steel = mild_panel(mat, locked=lock_mats)
     if use_pre:
         mat.divider()
-        prestress = prestress_panel(mat)
+        prestress = prestress_panel(mat, locked=lock_mats)
 
     # Loads: the plastic and elastic analyses take their own load sets, so a
     # capacity check (e.g. ULS) and a stress check (e.g. SLS) use different

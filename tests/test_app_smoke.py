@@ -260,6 +260,49 @@ def test_material_fields_are_flat_regardless_of_preset():
         assert f in keys, f
 
 
+def test_material_laws_locked_in_elastic_only_mode():
+    # In Elastic-only mode the stress-strain laws do not affect the result, so
+    # they are disabled -- except fck (feeds fctm) and Es (crack width).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    for locked in ("conc_gamma_c", "conc_alpha_cc", "mild_fytk", "mild_fyck",
+                   "mild_futk", "mild_eut", "mild_gamma_y", "mild_k", "mild_ey0t"):
+        assert at.number_input(key=locked).disabled is True, locked
+    for editable in ("conc_fck", "mild_Es"):
+        assert at.number_input(key=editable).disabled is False, editable
+
+
+def test_prestress_law_locked_in_elastic_only_mode():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="use_pre").set_value(True).run()
+    at.radio(key="mode").set_value("Elastic").run()
+    for locked in ("pre_IS", "pre_fytk", "pre_Es", "pre_eut"):
+        assert at.number_input(key=locked).disabled is True, locked
+
+
+def test_material_laws_editable_in_both_and_plastic_modes():
+    # Plastic needs the laws, so Both and Plastic keep them editable.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    assert at.number_input(key="mild_fytk").disabled is False
+    assert at.number_input(key="conc_gamma_c").disabled is False
+    at.radio(key="mode").set_value("Plastic").run()
+    assert at.number_input(key="mild_fytk").disabled is False
+
+
+def test_elastic_calculates_with_locked_materials():
+    # Locking the laws must not break the elastic run.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "elastic" in at.session_state["results"]
+
+
 def test_degenerate_rupture_stress_does_not_crash():
     # A zero rupture stress on a hardening curve is degenerate; the app must warn
     # and still render rather than raise.
