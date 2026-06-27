@@ -67,6 +67,12 @@ class ElasticResult:
     na_y_intercept: float
     converged: bool
     iterations: int
+    # Peak concrete *tensile* stress and its location. Zero on a fully cracked
+    # solve (concrete carries no tension there); the meaningful value comes from
+    # an uncracked (Stage I) solve, where it drives the cracking check.
+    max_concrete_tension: float = 0.0
+    max_concrete_tension_point: int = 0
+    max_concrete_tension_xy: tuple[float, float] = (0.0, 0.0)
 
     @property
     def strain_plane(self) -> tuple[float, float, float]:
@@ -230,6 +236,14 @@ def _result_from_plane(
     point = int(np.argmax(eps_v <= min_eps + tie))
     max_comp = -min_eps if min_eps < 0.0 else 0.0
 
+    # Maximum concrete tension: the most positive strain over the concrete
+    # vertices (with Ec = 1 the stress equals the strain). Meaningful on an
+    # uncracked solve; on a cracked solve the tension zone carries no stress.
+    max_eps = float(eps_v.max())
+    tie_t = 1.0e-9 * max(1.0, abs(max_eps))
+    t_point = int(np.argmax(eps_v >= max_eps - tie_t))
+    max_tens = max_eps if max_eps > 0.0 else 0.0
+
     # Neutral-axis intercepts; infinite when the gradient is parallel to an axis.
     grad = max(abs(kx), abs(ky))
     x_int = -eps0 / kx if abs(kx) > 1.0e-9 * grad else np.inf
@@ -247,6 +261,9 @@ def _result_from_plane(
         na_y_intercept=float(y_int),
         converged=converged,
         iterations=iterations,
+        max_concrete_tension=max_tens,
+        max_concrete_tension_point=t_point,
+        max_concrete_tension_xy=(float(verts[t_point, 0]), float(verts[t_point, 1])),
     )
 
 
@@ -296,6 +313,40 @@ def solve_elastic(
         rings, bx, by, ba, target, n, displace_concrete, max_iter, tol
     )
     return _result_from_plane(section, u, bx, by, n, converged, iterations)
+
+
+def solve_elastic_uncracked(
+    section: Section,
+    P: float,
+    Mx: float,
+    My: float,
+    n: float,
+) -> ElasticResult:
+    """Solve the *uncracked* (Stage I) elastic section.
+
+    Concrete is linear elastic in both tension and compression over the whole
+    section, so equilibrium is a single linear solve -- no neutral-axis
+    iteration. This is the state before cracking; the returned
+    ``max_concrete_tension`` is the peak concrete tensile stress that the
+    serviceability cracking check compares against ``f_ctm``.
+
+    The bars enter the uncracked transformed section at ``n*A`` (consistent with
+    the cracked solver); the ``(n - 1)`` displaced-concrete refinement is not
+    applied, a sub-percent effect on the cracking load.
+    """
+    rings = section.integration_rings()
+    bx, by, ba = section.bar_arrays()
+    target = np.array([-float(P), -float(Mx), -float(My)], dtype=float)
+    _, J = _resultants_and_jacobian(
+        rings, bx, by, ba, np.zeros(3), n, displace_concrete=False, cracked=False
+    )
+    try:
+        u = np.linalg.solve(J, target)
+        converged = True
+    except np.linalg.LinAlgError:
+        u = np.zeros(3)
+        converged = False
+    return _result_from_plane(section, u, bx, by, n, converged, iterations=0)
 
 
 @dataclass
