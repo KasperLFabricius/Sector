@@ -283,8 +283,36 @@ def test_mild_type3_tension_segments_continuous():
 
 def test_mild_type3_compression_mirror():
     s = mild3()
-    assert s.stress(-0.001) == pytest.approx(-ES * 0.001)  # elastic
-    assert s.stress(-0.025) == pytest.approx(-550.0)       # 2nd yield at ey0c
+    assert s.stress(-0.001) == pytest.approx(-ES * 0.001)   # elastic
+    e2c = 0.025 + 550.0 / ES        # 2nd yield: plastic offset ey0c + elastic strain
+    assert s.stress(-e2c) == pytest.approx(-550.0)          # 2nd compression yield
+    # Symmetric with tension, whose 2nd yield is at ey0t + fytk/Es.
+    assert e2c - 0.025 == pytest.approx((0.02 + 550.0 / ES) - 0.02)
+
+
+def test_mild_type3_ey0c_is_a_plastic_offset():
+    # ey0c mirrors ey0t: 0 collapses the second compression yield onto the elastic
+    # limit; a positive value shifts it out by that plastic strain.
+    common = dict(fytk=500.0, fyck=500.0, futk=600.0, eut=0.05, curve=3,
+                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, k=0.9)
+    s0 = MildSteel(ey0t=0.0, ey0c=0.0, **common)
+    s = MildSteel(ey0t=0.0, ey0c=0.01, **common)
+    # ey0c = 0 -> second yield at the elastic limit fyck/Es.
+    assert s0.stress(-(500.0 / ES)) == pytest.approx(-500.0, abs=1.0)
+    # ey0c = 0.01 -> second yield shifted out to 0.01 + fyck/Es; not yet reached
+    # at the elastic limit.
+    assert s.stress(-(0.01 + 500.0 / ES)) == pytest.approx(-500.0, abs=1.0)
+    assert -s.stress(-(500.0 / ES + 1.0e-4)) < 500.0
+
+
+def test_mild_type3_fyck_zero_has_no_compression():
+    # fyck = 0 means no compression capacity: compression stays zero rather than
+    # hardening toward fu (Codex review).
+    s = MildSteel(fytk=500.0, fyck=0.0, futk=600.0, eut=0.05, curve=3,
+                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, k=0.9, ey0t=0.0, ey0c=0.0)
+    assert s.stress(-0.001) == 0.0
+    assert s.stress(-0.02) == 0.0
+    assert s.stress(0.001) == pytest.approx(ES * 0.001)   # tension unaffected
 
 
 def test_mild_type3_design_scaling():

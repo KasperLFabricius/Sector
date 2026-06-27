@@ -112,8 +112,10 @@ def strength_dependent_alpha_cc(preset, fck):
 # field is live and shown on the diagram. The shapes are special cases:
 #   bilinear              -> k = 1, ey0t = 0 (first and second yield coincide)
 #   elastic-perfectly-plastic -> additionally futk = fytk (flat hardening branch)
-# A large ey0c keeps the compression side flat at -fyck (no compression
-# hardening) for those shapes, matching the named curve 1/2 behaviour.
+# ey0t and ey0c are the second yield's plastic offsets (0 collapses it onto the
+# first yield), symmetric in tension and compression. The flat-compression shapes
+# rely on futk = fytk (so the compression branch hardens to -fyck = flat), not on
+# a special ey0c value.
 _ES = 200000.0   # default steel strain modulus, MPa
 
 
@@ -122,18 +124,19 @@ def _mild_presets():
         "Curve 1 (bilinear hardening)":
             {"curve": 3, "fytk": 550.0, "fyck": 550.0, "futk": 600.0, "eut": 50.0,
              "gamma_y": 1.0, "gamma_u": 1.0, "gamma_E": 1.0,
-             "k": 1.0, "ey0t": 0.0, "ey0c": _NO_STRAIN_LIMIT, "Es": _ES},
+             "k": 1.0, "ey0t": 0.0, "ey0c": 0.0, "Es": _ES},
         "Curve 2 (elastic-perfectly-plastic)":
             {"curve": 3, "fytk": 500.0, "fyck": 500.0, "futk": 500.0, "eut": 50.0,
              "gamma_y": 1.0, "gamma_u": 1.0, "gamma_E": 1.0,
-             "k": 1.0, "ey0t": 0.0, "ey0c": _NO_STRAIN_LIMIT, "Es": _ES},
-        # ey0c (the second yield's total compression strain, per-mille) must
-        # exceed the first compression yield strain k*fyck/Es (~2.48 permille
-        # here); otherwise the second-yield branch is skipped and it jumps.
+             "k": 1.0, "ey0t": 0.0, "ey0c": 0.0, "Es": _ES},
+        # ey0c is the second compression yield's plastic offset (per-mille), the
+        # mirror of ey0t; both non-zero so the two-yield plateau shows on each side
+        # before hardening. 2.25 = the old total 5.0 minus the elastic part
+        # fyck/Es (550/200000 = 2.75 permille), so the curve is unchanged.
         "Curve 3 (two yield points)":
             {"curve": 3, "fytk": 550.0, "fyck": 550.0, "futk": 600.0, "eut": 50.0,
              "gamma_y": 1.0, "gamma_u": 1.0, "gamma_E": 1.0,
-             "k": 0.9, "ey0t": 2.0, "ey0c": 5.0, "Es": _ES},
+             "k": 0.9, "ey0t": 2.0, "ey0c": 2.25, "Es": _ES},
     }
     # Eurocode editions: the general law reduced to EC2's flat design diagram --
     # un-factored modulus (gamma_E = 1), flat post-yield branch (futk = fyk,
@@ -143,7 +146,7 @@ def _mild_presets():
             "curve": 3, "fytk": _DEFAULT_FYK, "fyck": _DEFAULT_FYK,
             "futk": _DEFAULT_FYK, "eut": _NO_STRAIN_LIMIT,
             "gamma_y": code.gamma_s, "gamma_u": code.gamma_s, "gamma_E": 1.0,
-            "k": 1.0, "ey0t": 0.0, "ey0c": _NO_STRAIN_LIMIT, "Es": _ES,
+            "k": 1.0, "ey0t": 0.0, "ey0c": 0.0, "Es": _ES,
         }
     return presets
 
@@ -183,8 +186,8 @@ MILD_HELP = {
          "for a single yield point (bilinear or elastic-perfectly-plastic).",
     "ey0t": "Plastic strain at the second tensile yield. Use 0 for a single "
             "yield point.",
-    "ey0c": "Total strain at the second compression yield. A large value keeps "
-            "the compression side flat at fyck (no second yield).",
+    "ey0c": "Plastic strain at the second compression yield (mirror of ey0t). "
+            "Use 0 for a single compression yield.",
     "Es": "Elastic (Young's) modulus of the reinforcement.",
 }
 
