@@ -8,6 +8,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
@@ -69,6 +71,23 @@ def test_steel_figure_shows_input_modulus_slope_label():
         MildSteel(fytk=500.0, fyck=500.0, gamma_y=1.15, curve=2, Es=205000.0))
     texts = " ".join(a.text for a in fig.layout.annotations)
     assert "E<sub>s</sub>" in texts and "205 GPa" in texts
+
+
+def test_hard_cutoff_renders_as_a_true_vertical():
+    # Concrete crushes at eps_cu2 = 3.5 permille: the drop to zero must be drawn
+    # vertical (two trace points at the same strain), not sloped across samples.
+    fig = viz.concrete_curve_figure(Concrete(fck=35.0, gamma_c=1.5, curve=2))
+    char = fig.data[1]  # the characteristic (solid) curve
+    verticals = [
+        (char.x[i], char.y[i], char.y[i + 1])
+        for i in range(len(char.x) - 1)
+        if abs(char.x[i] - char.x[i + 1]) < 1e-9            # same strain
+        and abs(char.y[i] - char.y[i + 1]) > 1.0            # non-trivial jump
+    ]
+    assert verticals, "expected a vertical drop at the crushing strain"
+    x_cut, y_a, y_b = verticals[0]
+    assert x_cut == pytest.approx(-3.5, abs=0.05)           # at -eps_cu2 (per-mille)
+    assert min(abs(y_a), abs(y_b)) < 1e-6                   # one end is zero stress
 
 
 def test_concrete_figure_has_no_modulus_label():

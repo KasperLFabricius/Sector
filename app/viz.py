@@ -161,24 +161,62 @@ def _slope_label(fig, material):
         font=dict(size=11, color=DESIGN_LINE))
 
 
+def _trace_xy(fn, grid, peak):
+    """Sample a material law, inserting a true vertical at each hard cutoff.
+
+    A failure (concrete crushing at ``eps_cu2``, steel/tendon rupture at
+    ``eut``) is an instantaneous drop to zero stress, but it falls between two
+    samples and would otherwise be drawn as a slanted line across the gap. Where
+    consecutive samples jump to/from zero, bisect to the exact cutoff strain and
+    emit two points at that strain so the drop renders vertical. ``peak`` guards
+    against treating the continuous pass through zero at the origin as a cutoff.
+    """
+    xs, ys = [], []
+    pe = ps = None
+    tol = 0.02 * peak
+    for e in grid:
+        s = fn(e)
+        if ps is not None:
+            z0, z1 = abs(ps) < 1e-9, abs(s) < 1e-9
+            live = s if z0 else ps
+            if z0 != z1 and abs(live) > tol:           # a real failure drop
+                lo, hi = pe, e
+                for _ in range(50):
+                    mid = 0.5 * (lo + hi)
+                    if (abs(fn(mid)) < 1e-9) == z0:
+                        lo = mid
+                    else:
+                        hi = mid
+                ec = 0.5 * (lo + hi) * 1000.0
+                xs += [ec, ec]
+                ys += [0.0, live] if z0 else [live, 0.0]
+        xs.append(e * 1000.0)
+        ys.append(s)
+        pe, ps = e, s
+    return xs, ys
+
+
 def _curve_figure(material, eps_min, eps_max, title, n=240):
     """Stress-strain diagram of a material law over a strain range (tension +).
 
     The characteristic curve carries the input labels (the values the user
     enters) and is drawn solid; the partial-factored design curve is shown
     lighter for reference. Points of interest are dotted and labelled at the
-    axes. The strain axis is in per-mille so compression (negative) and tension
-    (positive) are both visible; stress in MPa.
+    axes. Hard cutoffs (crushing/rupture) render as true verticals. The strain
+    axis is in per-mille so compression (negative) and tension (positive) are
+    both visible; stress in MPa.
     """
     eps = _linspace(eps_min, eps_max, n)
-    x = [e * 1000.0 for e in eps]  # per-mille
     design = [material.stress(e, design=True) for e in eps]
     char = [material.stress(e, design=False) for e in eps]
+    peak = max((abs(v) for v in design + char), default=0.0) or 1.0
+    xd, yd = _trace_xy(lambda e: material.stress(e, design=True), eps, peak)
+    xc, yc = _trace_xy(lambda e: material.stress(e, design=False), eps, peak)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=design, mode="lines", name="design",
+    fig.add_trace(go.Scatter(x=xd, y=yd, mode="lines", name="design",
                              line=dict(color=CHAR_LINE, width=1.5, dash="dot")))
-    fig.add_trace(go.Scatter(x=x, y=char, mode="lines", name="characteristic",
+    fig.add_trace(go.Scatter(x=xc, y=yc, mode="lines", name="characteristic",
                              line=dict(color=DESIGN_LINE, width=2.5)))
     # Markers sit on the characteristic curve and are labelled with the input
     # parameters, so editing any input visibly moves a labelled point.
