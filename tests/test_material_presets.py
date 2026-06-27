@@ -113,6 +113,15 @@ def test_eurocode_prestress_presets_set_Ep_directly():
         assert p["Es"] == pytest.approx(expected)
 
 
+def test_every_field_has_help_text():
+    # Every editable material field carries a hover tooltip.
+    for meta, help_map in ((mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP),
+                           (mp.MILD_FIELD_META, mp.MILD_HELP),
+                           (mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP)):
+        for f in meta:
+            assert help_map.get(f), f
+
+
 def test_field_metadata_matches_fields():
     for f in mp.CONCRETE_FIELDS:
         assert f in mp.CONCRETE_FIELD_META
