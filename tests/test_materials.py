@@ -305,6 +305,16 @@ def test_mild_type3_ey0c_is_a_plastic_offset():
     assert -s.stress(-(500.0 / ES + 1.0e-4)) < 500.0
 
 
+def test_mild_type3_fyck_zero_has_no_compression():
+    # fyck = 0 means no compression capacity: compression stays zero rather than
+    # hardening toward fu (Codex review).
+    s = MildSteel(fytk=500.0, fyck=0.0, futk=600.0, eut=0.05, curve=3,
+                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, k=0.9, ey0t=0.0, ey0c=0.0)
+    assert s.stress(-0.001) == 0.0
+    assert s.stress(-0.02) == 0.0
+    assert s.stress(0.001) == pytest.approx(ES * 0.001)   # tension unaffected
+
+
 def test_mild_type3_design_scaling():
     s = MildSteel(fytk=550.0, fyck=550.0, eut=0.05, futk=620.0, curve=3,
                   k=0.9, ey0t=0.02, ey0c=0.025,

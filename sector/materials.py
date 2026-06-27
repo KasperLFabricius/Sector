@@ -229,6 +229,8 @@ class MildSteel:
             fu = self.futk / gu
             if eps >= 0.0:
                 return _trilinear_tension(eps, slope, f1, f2, fu, self.ey0t, self.eut)
+            if fyc <= 0.0:
+                return 0.0       # fyck = 0: no compression capacity
             # Compression mirror of the tension law: the second yield fyck sits at
             # the *plastic* offset ey0c, i.e. at the total strain ey0c + fyck/slope
             # (symmetric with the tensile ey0t). Steel does not fracture in

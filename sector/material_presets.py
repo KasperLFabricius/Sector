@@ -130,12 +130,13 @@ def _mild_presets():
              "gamma_y": 1.0, "gamma_u": 1.0, "gamma_E": 1.0,
              "k": 1.0, "ey0t": 0.0, "ey0c": 0.0, "Es": _ES},
         # ey0c is the second compression yield's plastic offset (per-mille), the
-        # mirror of ey0t; here both are non-zero so the two-yield plateau shows on
-        # each side before hardening.
+        # mirror of ey0t; both non-zero so the two-yield plateau shows on each side
+        # before hardening. 2.25 = the old total 5.0 minus the elastic part
+        # fyck/Es (550/200000 = 2.75 permille), so the curve is unchanged.
         "Curve 3 (two yield points)":
             {"curve": 3, "fytk": 550.0, "fyck": 550.0, "futk": 600.0, "eut": 50.0,
              "gamma_y": 1.0, "gamma_u": 1.0, "gamma_E": 1.0,
-             "k": 0.9, "ey0t": 2.0, "ey0c": 3.0, "Es": _ES},
+             "k": 0.9, "ey0t": 2.0, "ey0c": 2.25, "Es": _ES},
     }
     # Eurocode editions: the general law reduced to EC2's flat design diagram --
     # un-factored modulus (gamma_E = 1), flat post-yield branch (futk = fyk,

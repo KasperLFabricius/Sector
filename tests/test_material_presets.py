@@ -84,6 +84,8 @@ def test_curve3_preset_second_yield_is_continuous():
     e1 = f1 / s.Es                   # first compression yield strain (fraction)
     e2c = s.ey0c + p["fyck"] / s.Es  # second compression yield (total strain)
     assert e2c > e1
+    # The offset preserves the previous total second-yield strain of 5.0 permille.
+    assert e2c == pytest.approx(0.005, abs=1.0e-5)
     sig = -s.stress(-(e1 + 1.0e-4), design=False)  # compression magnitude
     assert f1 <= sig < f1 + 0.2 * (f2 - f1)
 
