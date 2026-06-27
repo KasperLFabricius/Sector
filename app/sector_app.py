@@ -68,6 +68,25 @@ def _number(box, prefix, field, meta):
                             key=f"{prefix}_{field}")
 
 
+def _safe_build(box, builder, curve, vals):
+    """Build a material from the flat parameter set, surviving degenerate input.
+
+    A flat form lets the user enter values the active curve cannot accept (e.g. a
+    zero rupture stress on a hardening curve). Rather than break the whole app,
+    show a notice and retry with the offending stresses nudged just above zero so
+    the diagram and the analysis still render.
+    """
+    try:
+        return builder(curve=curve, **vals)
+    except ValueError as exc:
+        box.warning(f"Adjusted for this curve: {exc}")
+        v = dict(vals)
+        for f in ("fytk", "futk"):
+            if v.get(f, 1.0) <= 0.0:
+                v[f] = 1.0
+        return builder(curve=curve, **v)
+
+
 def concrete_panel(box):
     """Concrete material: preset and editable parameters (diagram is in the main view)."""
     box.markdown("**Concrete**")
@@ -97,7 +116,12 @@ def concrete_panel(box):
 
 
 def mild_panel(box):
-    """Mild-steel material: preset and editable parameters (diagram is in the main view)."""
+    """Mild-steel material: preset and editable parameters (diagram is in the main view).
+
+    A flat form -- every parameter is always shown. The active curve uses the
+    ones it needs and ignores the rest, so the inputs never change with the
+    preset; the preset only prefills the values and the curve type.
+    """
     box.markdown("**Mild steel**")
     presets = mp.MILD_PRESETS
     labels = list(presets)
@@ -105,15 +129,19 @@ def mild_panel(box):
                            key="mild_preset")
     _prefill("mild", preset, presets)
     curve = presets[preset]["curve"]
-    vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META)
-            for f in mp.MILD_FIELDS_BY_CURVE[curve]}
-    steel = mp.build_mild(curve=curve, **vals)
+    vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META) for f in mp.MILD_FIELD_META}
+    steel = _safe_build(box, mp.build_mild, curve, vals)
     box.caption(f"curve {curve},  fyd = {steel.fytk / vals['gamma_y']:.0f} MPa")
     return steel
 
 
 def prestress_panel(box):
-    """Prestressing-steel material: preset and editable parameters (diagram is in the main view)."""
+    """Prestressing-steel material: preset and editable parameters (diagram is in the main view).
+
+    Like the mild-steel panel, this is a flat form: every parameter is always
+    shown and the active curve uses what it needs, so the inputs do not change
+    with the preset.
+    """
     box.markdown("**Prestressing steel**")
     presets = mp.PRESTRESS_PRESETS
     labels = list(presets)
@@ -121,9 +149,8 @@ def prestress_panel(box):
                            key="pre_preset")
     _prefill("pre", preset, presets)
     curve = presets[preset]["curve"]
-    vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META)
-            for f in mp.PRESTRESS_FIELDS_BY_CURVE[curve]}
-    pre = mp.build_prestress(curve=curve, **vals)
+    vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META) for f in mp.PRESTRESS_FIELD_META}
+    pre = _safe_build(box, mp.build_prestress, curve, vals)
     cap = f"curve {curve},  IS = {vals['IS'] * 100.0:.2f}%"
     if curve in (6, 7):
         cap += f",  fpd = {vals['fytk'] / vals['gamma_y']:.0f} MPa"

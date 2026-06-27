@@ -92,6 +92,43 @@ def test_2023_concrete_fck_edit_calculates():
     assert "plastic" in at.session_state["results"]
 
 
+def test_mild_fyck_zero_is_allowed_and_calculates():
+    # The old 100 MPa floor on fyck is gone; zero compression yield must be a
+    # valid input and still compute.
+    at = _fresh()
+    at.run()
+    at.number_input(key="mild_fyck").set_value(0.0).run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
+def test_material_fields_are_flat_regardless_of_preset():
+    # Every mild-steel field is shown for any preset (flat form): the two-yield
+    # fields exist even under the elastic-perfectly-plastic (curve 2) preset.
+    at = _fresh()
+    at.run()
+    at.selectbox(key="mild_preset").set_value(
+        "Curve 2 (elastic-perfectly-plastic)").run()
+    keys = {ni.key for ni in at.number_input}
+    for f in ("mild_fytk", "mild_fyck", "mild_futk", "mild_eut", "mild_gamma_y",
+              "mild_gamma_u", "mild_gamma_E", "mild_k", "mild_ey0t", "mild_ey0c"):
+        assert f in keys, f
+
+
+def test_degenerate_rupture_stress_does_not_crash():
+    # A zero rupture stress on a hardening curve is degenerate; the app must warn
+    # and still render rather than raise.
+    at = _fresh()
+    at.run()
+    at.selectbox(key="mild_preset").set_value("Curve 1 (bilinear hardening)").run()
+    at.number_input(key="mild_futk").set_value(0.0).run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+
+
 def test_view_dropdown_switches_without_error():
     # Every view must render. The live views (Section, Stress-Strain) need no
     # Calculate; the result views show a prompt until one is run.
