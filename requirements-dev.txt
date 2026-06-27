@@ -1,5 +1,5 @@
 # Development & test dependencies (in addition to requirements.txt).
 -r requirements.txt
 pytest>=8.0,<9
-# Used only by tools/gen_pcross_fixtures.py to read the legacy example PDFs.
+# Used only by tools/gen_handcalc_fixtures.py to read the handcalc reference PDFs.
 pypdf>=4.0,<6

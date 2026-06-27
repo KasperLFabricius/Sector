@@ -1,6 +1,6 @@
 """Verification of the plastic (ultimate) capacity solver.
 
-The headline case is the "Fundamentsbjaelke" production PCROSS run (a rectangular
+The headline case is the "Fundamentsbjaelke" production handcalc run (a rectangular
 mild-steel section, P = 0, swept through four neutral-axis angles), reproduced
 here to the printout precision. A second check confirms the engine agrees with a
 Eurocode rectangular-stress-block hand calculation for a slab (the two methods
@@ -44,7 +44,7 @@ FUND_CASES = [
 
 
 @pytest.mark.parametrize("case", FUND_CASES, ids=[f"V{int(c[0])}" for c in FUND_CASES])
-def test_fundamentsbjaelke_matches_pcross(case):
+def test_fundamentsbjaelke_matches_handcalc(case):
     V, Mx, My, U, comp, curv, steel_pct, L, dxa, dya, x_int, y_int = case
     section, concrete, steel = fundamentsbjaelke()
     r = plastic_capacity_at_angle(section, concrete, steel, 0.0, V)
@@ -58,7 +58,7 @@ def test_fundamentsbjaelke_matches_pcross(case):
     assert r.eps_concrete == pytest.approx(0.35)
     assert r.eps_steel == pytest.approx(steel_pct, abs=0.02)
     assert r.lever_arm == pytest.approx(L, abs=0.003)
-    # Lever-arm component magnitudes match (the legacy component sign convention
+    # Lever-arm component magnitudes match (the handcalc component sign convention
     # is direction-dependent; L and the magnitudes are the meaningful values).
     assert abs(r.dx) == pytest.approx(dxa, abs=0.003)
     assert abs(r.dy) == pytest.approx(dya, abs=0.003)

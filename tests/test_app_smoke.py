@@ -46,7 +46,76 @@ def test_calculate_elastic_produces_bar_stresses():
     assert not at.exception
     res = at.session_state["results"]
     assert "elastic" in res
-    assert len(res["elastic"]["bar_stress"]) > 0
+    assert len(res["elastic"]["total"]) > 0
+
+
+def test_combined_elastic_reports_four_columns():
+    # The elastic analysis is the long+short-term creep model: four steel-stress
+    # columns (total / long / dif / rst1), all the same length.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    n = len(e["total"])
+    assert n > 0
+    assert len(e["long"]) == n and len(e["dif"]) == n and len(e["rst1"]) == n
+    # dif = total - long, element-wise.
+    for d, t, l in zip(e["dif"], e["total"], e["long"]):
+        assert d == pytest.approx(t - l, abs=1e-6)
+
+
+def test_short_term_load_and_ratio_change_the_combined_result():
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.button(key="calculate").click().run()
+    base = list(at.session_state["results"]["elastic"]["total"])
+    at.number_input(key="el_short_Mx").set_value(80.0).run()  # add a short-term moment
+    at.number_input(key="ns").set_value(6.0).run()            # short-term stiffer
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert at.session_state["results"]["elastic"]["total"] != base
+
+
+def test_plastic_sweep_increment_changes_point_count():
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    n_default = len(at.session_state["results"]["plastic"]["points"])
+    at.number_input(key="v_inc").set_value(5.0).run()  # finer sweep
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert len(at.session_state["results"]["plastic"]["points"]) > n_default
+
+
+def test_plastic_sweep_stays_within_requested_bounds():
+    # A V.inc that does not divide V.max - V.min must still land exactly on both
+    # ends, with no swept angle outside [V.min, V.max].
+    at = _fresh()
+    at.run()
+    at.number_input(key="v_min").set_value(0.0).run()
+    at.number_input(key="v_max").set_value(10.0).run()
+    at.number_input(key="v_inc").set_value(7.0).run()  # max increment, doesn't divide
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    p = at.session_state["results"]["plastic"]
+    vs = sorted(pt["V"] for pt in p["points"])
+    assert vs[0] == pytest.approx(0.0)
+    assert vs[-1] == pytest.approx(10.0)
+    assert all(-1e-6 <= v <= 10.0 + 1e-6 for v in vs)
+    # V.inc is a maximum increment: the actual step is never coarser.
+    assert max(vs[i + 1] - vs[i] for i in range(len(vs) - 1)) <= 7.0 + 1e-6
+    # A partial sweep is an open arc -> no utilisation reported.
+    assert p["util"] is None
+
+
+def test_full_sweep_reports_utilisation():
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()  # default 0-360 sweep
+    assert at.session_state["results"]["plastic"]["util"] is not None
 
 
 def test_both_mode_runs_elastic_and_plastic():
@@ -66,18 +135,18 @@ def test_plastic_and_elastic_use_independent_loads():
     at.run()
     at.radio(key="mode").set_value("Both").run()
     at.number_input(key="pl_Mx").set_value(150.0).run()
-    at.number_input(key="el_Mx").set_value(50.0).run()
+    at.number_input(key="el_long_Mx").set_value(50.0).run()
     at.button(key="calculate").click().run()
     assert not at.exception
     res = at.session_state["results"]
     util0 = res["plastic"]["util"]
-    stress0 = list(res["elastic"]["bar_stress"])
+    stress0 = list(res["elastic"]["total"])
 
-    at.number_input(key="el_Mx").set_value(120.0).run()  # change only the elastic load
+    at.number_input(key="el_long_Mx").set_value(120.0).run()  # change only the elastic load
     at.button(key="calculate").click().run()
     res2 = at.session_state["results"]
     assert res2["plastic"]["util"] == pytest.approx(util0)   # plastic unchanged
-    assert res2["elastic"]["bar_stress"] != stress0         # elastic changed
+    assert res2["elastic"]["total"] != stress0         # elastic changed
 
 
 def test_load_sets_survive_a_mode_switch():
@@ -87,12 +156,12 @@ def test_load_sets_survive_a_mode_switch():
     at.run()
     at.radio(key="mode").set_value("Both").run()
     at.number_input(key="pl_Mx").set_value(175.0).run()
-    at.number_input(key="el_Mx").set_value(60.0).run()
+    at.number_input(key="el_long_Mx").set_value(60.0).run()
     at.radio(key="mode").set_value("Elastic").run()   # plastic set disabled
     at.run()                                            # extra rerun
     at.radio(key="mode").set_value("Both").run()        # plastic set active again
     assert at.number_input(key="pl_Mx").value == pytest.approx(175.0)
-    assert at.number_input(key="el_Mx").value == pytest.approx(60.0)
+    assert at.number_input(key="el_long_Mx").value == pytest.approx(60.0)
 
 
 def test_circular_shape_calculates():
@@ -208,7 +277,7 @@ def test_inputs_carry_help_tooltips():
     at = _fresh()
     at.run()
     for key in ("shape", "b", "h", "cover", "conc_fck", "mild_fytk", "mild_eut",
-                "pl_P", "pl_Mx", "ratio", "view"):
+                "pl_P", "pl_Mx", "nl", "view"):
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
@@ -290,8 +359,8 @@ def test_elastic_fully_tensile_case_renders_without_phantom_zone():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_P").set_value(-5000.0).run()  # large tension
-    at.number_input(key="el_Mx").set_value(0.0).run()
+    at.number_input(key="el_long_P").set_value(-5000.0).run()  # large tension
+    at.number_input(key="el_long_Mx").set_value(0.0).run()
     at.button(key="calculate").click().run()
     at.selectbox(key="view").set_value("Elastic Results").run()
     assert not at.exception
@@ -338,7 +407,7 @@ def test_prestress_both_modes_run_with_tendons():
     res = at.session_state["results"]
     # Elastic models each tendon as an extra bar, so its stress list grows.
     assert "plastic" in res and "elastic" in res
-    assert len(res["elastic"]["bar_stress"]) > 0
+    assert len(res["elastic"]["total"]) > 0
 
 
 def test_prestress_preset_curve6_calculates():

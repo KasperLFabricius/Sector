@@ -1,6 +1,6 @@
 """Property / sanity checks of the elastic solver on varied synthetic sections.
 
-There are only a handful of legacy ECROSS examples, so these complement them by
+There are only a handful of handcalc examples, so these complement them by
 exercising the solver on a range of geometries (including voids) and loads and
 asserting that the results behave correctly. The central check is *equilibrium*:
 the resultant of the stresses Sector computes, re-derived independently from the

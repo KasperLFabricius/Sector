@@ -69,7 +69,7 @@ def test_worked_rectangular_combined_lc2():
 
 
 def test_production_td_3_31_matches_to_the_integer():
-    # 2024 production run (BDS-ECROSS v7.12); reproduces exactly.
+    # 2024 production run (the handcalc reference); reproduces exactly.
     res = solve_elastic_combined(
         td_3_31_section(), 794.380, 67.820, 0.0, 22.930, -0.050, -1.870, 0.0, 5.733
     )
@@ -83,6 +83,9 @@ def test_production_td_3_31_matches_to_the_integer():
         assert got == pytest.approx(exp, abs=2)
     for got, exp in zip(res.bar_stress_rst1, rst1_exp):
         assert got == pytest.approx(exp, abs=2)
+    # The DIF column is TOTAL - LONG (the reference output reports it explicitly).
+    for got, t, l in zip(res.bar_stress_dif, total_exp, long_exp):
+        assert got == pytest.approx(t - l, abs=2)
     assert res.max_concrete_compression == pytest.approx(9653.0, abs=2)
     assert res.max_concrete_point == 1
     assert math.isinf(res.na_x_intercept)
@@ -132,7 +135,7 @@ UNDERSTOTNING_CASES = [
 @pytest.mark.parametrize("case", UNDERSTOTNING_CASES, ids=[c[0] for c in UNDERSTOTNING_CASES])
 def test_production_understotning_cracked(case):
     # These cases are cracked (the neutral axis falls inside the section) and
-    # three of the four bars cluster near it. The legacy printout is itself only
+    # three of the four bars cluster near it. The handcalc printout is itself only
     # ~0.3% self-consistent here (its bar stresses are not perfectly collinear in
     # y, which an exact single-plane solve must be), so it carries numerical
     # noise that is amplified for bars sitting on the neutral axis. The

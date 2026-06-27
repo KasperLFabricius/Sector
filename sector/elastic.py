@@ -222,7 +222,7 @@ def _result_from_plane(
 
     # Maximum concrete compression: the most negative strain over the concrete
     # vertices (that extreme fibre is necessarily inside the compression zone).
-    # Ties resolve to the lowest-indexed point (the legacy "POINT n" convention).
+    # Ties resolve to the lowest-indexed point (the "POINT n" convention).
     verts = section.concrete_vertices()
     eps_v = eps0 + kx * verts[:, 0] + ky * verts[:, 1]
     min_eps = float(eps_v.min())
@@ -275,9 +275,9 @@ def solve_elastic(
         Modular ratio ``Es / Ec`` for this load.
     displace_concrete:
         Subtract the concrete displaced by bars in the compression zone
-        (the ``(n - 1)`` treatment). Default ``False`` -- the legacy fully
-        cracked transformed section uses ``n*A`` for every bar and counts the
-        gross concrete compression block, which is what Sector reproduces.
+        (the ``(n - 1)`` treatment). Default ``False`` -- the fully cracked
+        transformed section uses ``n*A`` for every bar and counts the gross
+        concrete compression block, which is what Sector reproduces.
 
     Returns
     -------
@@ -350,7 +350,7 @@ def solve_elastic_combined(
 
     Concrete's effective modulus under sustained load is lower (modular ratio
     ``nl``) than under instantaneous load (``ns``). The combined steel stress is
-    built in the legacy three-step way:
+    built in the three-step way:
 
     1. Solve the long-term load at ``nl`` -> the long-term steel stress ``s1``.
     2. Reduce it: ``s2 = s1*(1 - ns/nl)``; the resultant of these reduced steel

@@ -1,7 +1,7 @@
 """Named material parameter presets for the Material Parameters panel.
 
 Each material type (concrete, mild reinforcement) offers a set of presets: the
-legacy stress-strain curve types, which prefill that curve's parameters, and the
+built-in stress-strain curve types, which prefill that curve's parameters, and the
 Eurocode editions, which prefill the code-defined partial factors and design
 coefficients. A preset only *prefills* values -- every parameter stays editable,
 and the Eurocode presets are derived from :mod:`sector.codes` so the factors
@@ -113,7 +113,7 @@ def strength_dependent_alpha_cc(preset, fck):
 #   bilinear              -> k = 1, ey0t = 0 (first and second yield coincide)
 #   elastic-perfectly-plastic -> additionally futk = fytk (flat hardening branch)
 # A large ey0c keeps the compression side flat at -fyck (no compression
-# hardening) for those shapes, matching the legacy curve 1/2 behaviour.
+# hardening) for those shapes, matching the named curve 1/2 behaviour.
 _ES = 200000.0   # default steel strain modulus, MPa
 
 

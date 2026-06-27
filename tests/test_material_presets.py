@@ -8,7 +8,7 @@ from sector import codes, material_presets as mp
 from sector.materials import Concrete, ES, MildSteel
 
 
-def test_concrete_presets_cover_legacy_and_eurocodes():
+def test_concrete_presets_cover_named_and_eurocodes():
     labels = list(mp.CONCRETE_PRESETS)
     assert "Curve 1 (cubic)" in labels
     assert "Curve 2 (parabola-rectangle)" in labels
@@ -16,7 +16,7 @@ def test_concrete_presets_cover_legacy_and_eurocodes():
         assert code_label in labels
 
 
-def test_mild_presets_cover_legacy_and_eurocodes():
+def test_mild_presets_cover_named_and_eurocodes():
     labels = list(mp.MILD_PRESETS)
     assert "Curve 2 (elastic-perfectly-plastic)" in labels
     for code_label in codes.CODES:
@@ -68,7 +68,7 @@ def test_strength_dependent_alpha_cc_tracks_fck_for_2023():
     # C50/60: eta_cc = (40/50)^(1/3) ~ 0.928 (Codex review).
     assert mp.strength_dependent_alpha_cc(label, 50.0) == pytest.approx(
         round((40.0 / 50.0) ** (1.0 / 3.0), 4))
-    # Constant-alpha_cc editions and legacy curves are not strength-dependent.
+    # Constant-alpha_cc editions and named curves are not strength-dependent.
     assert mp.strength_dependent_alpha_cc("EN 1992-1-1:2005", 50.0) is None
     assert mp.strength_dependent_alpha_cc("Curve 2 (parabola-rectangle)", 50.0) is None
 

@@ -21,7 +21,7 @@ import streamlit as st  # noqa: E402
 
 import viz  # noqa: E402
 from sector import geometry, kernels, material_presets as mp, templates  # noqa: E402
-from sector.elastic import solve_elastic  # noqa: E402
+from sector.elastic import solve_elastic_combined  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -50,11 +50,11 @@ st.caption("Reinforced-concrete cross-section analysis - elastic stresses and pl
 
 # ---------------------------------------------------------------------------
 # Material Parameters panel: one section per material, each with a preset
-# dropdown (legacy curves + Eurocode editions), editable parameters and a live
+# dropdown (named curves + Eurocode editions), editable parameters and a live
 # stress-strain diagram. A preset only prefills values; all stay editable.
 # ---------------------------------------------------------------------------
 
-_PRESET_HELP = ("Prefills a named stress-strain law (a legacy curve shape or a "
+_PRESET_HELP = ("Prefills a named stress-strain law (a named curve shape or a "
                 "Eurocode edition). Every parameter stays editable afterwards.")
 
 
@@ -215,12 +215,20 @@ def build_inputs():
                       help="Plastic: ultimate bending capacity (M-M envelope). "
                            "Elastic: cracked-section concrete and bar stresses "
                            "for the applied loads. Both: run the two.")
-    ratio = aset.number_input("Modular ratio n = Es/Ec", 5.0, 30.0, 15.0, 0.5,
-                              key="ratio",
-                              disabled=mode not in ("Elastic", "Both"),
-                              help="Ratio of the steel to concrete elastic "
-                                   "modulus (Es/Ec) for the cracked elastic "
-                                   "analysis.")
+    plastic_on = mode in ("Plastic", "Both")
+    elastic_on = mode in ("Elastic", "Both")
+
+    aset.markdown("**Neutral-axis sweep (plastic)**")
+    v_min = aset.number_input("Start angle V.min (deg)", 0.0, 360.0, 0.0, 5.0,
+                              key="v_min", disabled=not plastic_on,
+                              help="First neutral-axis rotation angle of the plastic sweep.")
+    v_max = aset.number_input("End angle V.max (deg)", 0.0, 360.0, 360.0, 5.0,
+                              key="v_max", disabled=not plastic_on,
+                              help="Last neutral-axis rotation angle of the plastic sweep.")
+    v_inc = aset.number_input("Increment V.inc (deg)", 1.0, 90.0, 15.0, 1.0,
+                              key="v_inc", disabled=not plastic_on,
+                              help="Angular step between swept neutral-axis angles; "
+                                   "a finer step gives a smoother M-M envelope.")
 
     sec = s.expander("Section", expanded=True)
     shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
@@ -343,15 +351,13 @@ def build_inputs():
     # mounted (the inactive one is disabled) so their values survive a mode
     # switch instead of being reset when Streamlit drops unrendered widgets.
     loads = s.expander("Loads", expanded=True)
-    plastic_on = mode in ("Plastic", "Both")
-    elastic_on = mode in ("Elastic", "Both")
 
-    def _load_set(prefix, n_help, m_help, active):
+    def _load_set(prefix, n_help, m_help, active, mx_default=200.0):
         P = loads.number_input("Axial force N (kN, + = compression)", -50000.0,
                                50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help,
                                disabled=not active)
-        Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0,
-                                key=f"{prefix}_Mx", help=m_help, disabled=not active)
+        Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, mx_default,
+                                10.0, key=f"{prefix}_Mx", help=m_help, disabled=not active)
         My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0,
                                 key=f"{prefix}_My", disabled=not active,
                                 help="Applied bending moment about the y-axis (biaxial bending).")
@@ -361,11 +367,27 @@ def build_inputs():
     P_pl, Mx_pl, My_pl = _load_set(
         "pl", "Axial force for which the plastic M-M capacity envelope is computed.",
         "Applied moment checked against the plastic envelope (utilisation).", plastic_on)
+
     loads.divider()
-    loads.markdown("**Elastic stresses**")
-    P_el, Mx_el, My_el = _load_set(
-        "el", "Applied axial force for the cracked-section elastic stresses.",
-        "Applied moment for the cracked-section elastic stresses.", elastic_on)
+    loads.markdown("**Elastic stresses (long + short term)**")
+    loads.caption("Long-term and short-term load with their own modular ratios "
+                  "(the creep analysis). For a simple check leave the short-term "
+                  "load at zero and set both ratios equal.")
+    loads.markdown("_Long-term_")
+    P_el_l, Mx_el_l, My_el_l = _load_set(
+        "el_long", "Sustained axial force (long-term).",
+        "Sustained moment (long-term).", elastic_on)
+    nl = loads.number_input("Long-term modular ratio n_l = Es/Ec", 1.0, 50.0, 15.0, 0.5,
+                            key="nl", disabled=not elastic_on,
+                            help="Modular ratio for the sustained load (creep-reduced "
+                                 "concrete stiffness, so larger than the short-term ratio).")
+    loads.markdown("_Short-term_")
+    P_el_s, Mx_el_s, My_el_s = _load_set(
+        "el_short", "Instantaneous (variable) axial force.",
+        "Instantaneous (variable) moment.", elastic_on, mx_default=0.0)
+    ns = loads.number_input("Short-term modular ratio n_s = Es/Ec", 1.0, 50.0, 15.0, 0.5,
+                            key="ns", disabled=not elastic_on,
+                            help="Modular ratio for the instantaneous load.")
 
     section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                    tendons_xy_area_mm2=tendons, holes=holes)
@@ -379,30 +401,56 @@ def build_inputs():
             "mild_ey0t", "mild_ey0c", "mild_Es", "use_pre", "tnd_n", "tnd_a",
             "tnd_c", "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
             "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t",
-            "pre_Es", "pl_P", "pl_Mx", "pl_My", "el_P", "el_Mx", "el_My",
-            "ratio", "mode"))
-    return dict(section=section, concrete=concrete, steel=steel, ratio=ratio,
+            "pre_Es", "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx",
+            "el_long_My", "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
+            "v_min", "v_max", "v_inc", "mode"))
+    return dict(section=section, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
-                P_el=P_el, Mx_el=Mx_el, My_el=My_el, mode=mode,
-                extent=extent, signature=tuple(sig))
+                v_min=v_min, v_max=v_max, v_inc=v_inc,
+                P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
+                P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
+                mode=mode, extent=extent, signature=tuple(sig))
 
 
 # ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
 
+def _sweep(v_min, v_max, v_inc):
+    """Normalise a (min, max, increment) sweep so it lands exactly on both ends.
+
+    The solver steps ``v_min + i*inc`` for a step count, which could overshoot or
+    miss ``v_max`` when the increment does not divide the span. ``v_inc`` is a
+    *maximum* increment: a ceiling interval count keeps the step at or below the
+    requested resolution while landing exactly on ``v_max`` (no angle outside
+    [v_min, v_max]).
+    """
+    span = max(v_max, v_min) - v_min   # >= 0 (guards a reversed range)
+    if span < 1e-9 or v_inc <= 0.0:
+        return v_min, v_min, max(v_inc, 1.0)   # a single angle
+    n = max(1, math.ceil(span / v_inc))
+    return v_min, v_min + span, span / n
+
+
 def run_analysis(inp):
     out = {}
     if inp["mode"] in ("Plastic", "Both"):
+        vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            inp["P_pl"], 0.0, 360.0, 15.0, prestress=inp["prestress"])
+                            inp["P_pl"], vlo, vhi, vstep, prestress=inp["prestress"])
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
+        # Utilisation interpolates the capacity in the applied direction, which is
+        # only a closed envelope when the sweep spans the full 360 deg. A partial
+        # sweep is an open arc, so report no utilisation rather than a wrap-around
+        # interpolation between the arc endpoints.
+        closed = (vhi - vlo) >= 360.0 - 1e-6
+        util = _radial_util(mx, my, inp["Mx_pl"], inp["My_pl"]) if closed else None
         out["plastic"] = dict(
             mx=mx, my=my,
             max_mx=max(mx), max_my=max(my),
-            util=_radial_util(mx, my, inp["Mx_pl"], inp["My_pl"]),
+            util=util, closed=closed,
             converged=all(p.converged for p in pts),
             points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
                          na_y=p.na_y_intercept, eps_c=p.eps_concrete,
@@ -418,15 +466,20 @@ def run_analysis(inp):
             sec = Section.from_polygon(corners=inp["outer"],
                                        bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
                                        holes=inp["holes"])
-        r = solve_elastic(sec, inp["P_el"], inp["Mx_el"], inp["My_el"], inp["ratio"])
-        bs = [s / 1000.0 for s in r.bar_stress]  # kN/m2 -> MPa
+        r = solve_elastic_combined(sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"],
+                                   inp["nl"], inp["P_el_s"], inp["Mx_el_s"],
+                                   inp["My_el_s"], inp["ns"])
+        mpa = lambda arr: [s / 1000.0 for s in arr]  # kN/m2 -> MPa
+        total = mpa(r.bar_stress_total)
         out["elastic"] = dict(
-            bar_stress=bs,
+            total=total, long=mpa(r.bar_stress_long), dif=mpa(r.bar_stress_dif),
+            rst1=mpa(r.bar_stress_rst1),
             max_conc=r.max_concrete_compression / 1000.0,
-            max_conc_xy=tuple(r.max_concrete_xy), max_conc_point=int(r.max_concrete_point),
+            max_conc_xy=tuple(r.short_term.max_concrete_xy),
+            max_conc_point=int(r.max_concrete_point),
             na_x=r.na_x_intercept, na_y=r.na_y_intercept,
-            max_steel=max(bs) if bs else 0.0,
-            max_steel_bar=(int(np.argmax(bs)) + 1) if bs else 0,
+            max_steel=max(total) if total else 0.0,
+            max_steel_bar=(int(np.argmax(total)) + 1) if total else 0,
             converged=r.converged,
         )
     return out
@@ -536,7 +589,7 @@ def _fmt(v):
 
 
 def _plastic_table(pts, cable):
-    """Legacy Pcross-style results table, one row per neutral-axis angle."""
+    """Per-angle results table, one row per neutral-axis angle."""
     cols = {
         "V (deg)": [round(pt["V"], 1) for pt in pts],
         "Mx (kNm)": [round(pt["Mx"], 1) for pt in pts],
@@ -559,7 +612,7 @@ def _plastic_table(pts, cable):
 def plastic_view(inp, results):
     """Plastic capacity: metrics, the M-M envelope, an inspectable neutral-axis
     state (compression zone + section diagnostics), and the full per-angle table
-    matching the legacy Pcross output."""
+    matching the handcalc verification."""
     if not results or "plastic" not in results:
         st.info("Run a Plastic or Both analysis, then press Calculate.")
         return
@@ -568,13 +621,21 @@ def plastic_view(inp, results):
     m1, m2, m3 = st.columns(3)
     m1.metric("Max Mx", f"{p['max_mx']:.0f} kNm")
     m2.metric("Max My", f"{p['max_my']:.0f} kNm")
-    m3.metric("Utilisation", f"{p['util']:.2f}",
-              help="applied / capacity in the load direction")
+    if p["util"] is None:
+        m3.metric("Utilisation", "-",
+                  help="Only meaningful for a full 0-360 deg sweep; the current "
+                       "sweep is a partial arc.")
+    else:
+        m3.metric("Utilisation", f"{p['util']:.2f}",
+                  help="applied / capacity in the load direction")
     st.plotly_chart(
         viz.interaction_figure(p["mx"], p["my"], applied=(inp["Mx_pl"], inp["My_pl"])),
         use_container_width=True)
 
     default_i = max(range(len(pts)), key=lambda i: pts[i]["Mx"])
+    # The sweep length varies with V.min/V.max/V.inc; clamp a stale selection.
+    if st.session_state.get("pl_state", 0) >= len(pts):
+        st.session_state["pl_state"] = default_i
     sel = st.selectbox("Neutral-axis state", range(len(pts)), index=default_i,
                        format_func=lambda i: f"{i + 1}: V = {pts[i]['V']:.0f} deg",
                        key="pl_state",
@@ -612,7 +673,7 @@ def plastic_view(inp, results):
 
 def elastic_view(inp, results):
     """Cracked-section elastic stresses: peak concrete, neutral axis, the section
-    diagnostic and per-bar stresses, matching the legacy Ecross output."""
+    diagnostic and per-bar stresses, matching the handcalc verification."""
     if not results or "elastic" not in results:
         st.info("Run an Elastic or Both analysis, then press Calculate.")
         return
@@ -642,17 +703,24 @@ def elastic_view(inp, results):
         bar_xy = ([(b[0], b[1]) for b in inp["bars"]]
                   + [(t[0], t[1]) for t in inp["tendons"]])
         colors = [viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
-                  for s in e["bar_stress"]]
+                  for s in e["total"]]
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=colors,
                                na_line=na, zones=zones,
                                title="Elastic state (bars: green tension, red compression)"),
             use_container_width=True)
     with cR:
+        st.markdown("**Steel stresses (MPa, tension +)**")
         st.dataframe(
-            {"Bar": list(range(1, len(e["bar_stress"]) + 1)),
-             "Stress (MPa)": [round(s, 1) for s in e["bar_stress"]]},
+            {"Bar": list(range(1, len(e["total"]) + 1)),
+             "Total": [round(s, 1) for s in e["total"]],
+             "Long": [round(s, 1) for s in e["long"]],
+             "Dif": [round(s, 1) for s in e["dif"]],
+             "RST1": [round(s, 1) for s in e["rst1"]]},
             hide_index=True, use_container_width=True)
+        st.caption("Total = long+short; Long = long-term alone; Dif = total - "
+                   "long; RST1 = instantaneous response with the long-term "
+                   "concrete stresses neutralised.")
 
 
 # ---------------------------------------------------------------------------
