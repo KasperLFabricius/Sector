@@ -6,6 +6,7 @@ analysis, then press Calculate to review the stresses and the ultimate capacity.
 
 from __future__ import annotations
 
+import math
 import pathlib
 import sys
 
@@ -19,7 +20,7 @@ import numpy as np  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import viz  # noqa: E402
-from sector import kernels, material_presets as mp, templates  # noqa: E402
+from sector import geometry, kernels, material_presets as mp, templates  # noqa: E402
 from sector.elastic import solve_elastic  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
@@ -403,6 +404,11 @@ def run_analysis(inp):
             max_mx=max(mx), max_my=max(my),
             util=_radial_util(mx, my, inp["Mx_pl"], inp["My_pl"]),
             converged=all(p.converged for p in pts),
+            points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
+                         na_y=p.na_y_intercept, eps_c=p.eps_concrete,
+                         eps_s=p.eps_steel, eps_cable=p.eps_cable, kappa=p.curvature,
+                         comp_force=p.compression_force, lever=p.lever_arm,
+                         dx=p.dx, dy=p.dy) for p in pts],
         )
     if inp["mode"] in ("Elastic", "Both"):
         # The elastic analysis ignores the section's tendons, so model each tendon
@@ -413,13 +419,68 @@ def run_analysis(inp):
                                        bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
                                        holes=inp["holes"])
         r = solve_elastic(sec, inp["P_el"], inp["Mx_el"], inp["My_el"], inp["ratio"])
+        bs = [s / 1000.0 for s in r.bar_stress]  # kN/m2 -> MPa
         out["elastic"] = dict(
-            bar_stress=[s / 1000.0 for s in r.bar_stress],  # kN/m2 -> MPa
+            bar_stress=bs,
             max_conc=r.max_concrete_compression / 1000.0,
+            max_conc_xy=tuple(r.max_concrete_xy), max_conc_point=int(r.max_concrete_point),
             na_x=r.na_x_intercept, na_y=r.na_y_intercept,
+            max_steel=max(bs) if bs else 0.0,
+            max_steel_bar=(int(np.argmax(bs)) + 1) if bs else 0,
             converged=r.converged,
         )
     return out
+
+
+def _plastic_halfplane(V_deg, na_x, na_y):
+    """Compression half-plane (a*x + b*y + c >= 0) for a plastic NA angle.
+
+    The compression gradient is ``(cos V, sin V)``; the NA is ``a*x + b*y = s_na``
+    with ``s_na`` recovered from whichever axis intercept is finite.
+    """
+    v = math.radians(V_deg)
+    a, b = math.cos(v), math.sin(v)
+    if math.isfinite(na_x) and abs(a) > 1e-9:
+        s_na = na_x * a
+    elif math.isfinite(na_y) and abs(b) > 1e-9:
+        s_na = na_y * b
+    else:
+        s_na = 0.0
+    return a, b, -s_na
+
+
+def _elastic_halfplane(na_x, na_y, inside_xy):
+    """Compression half-plane from the NA axis intercepts, oriented so the point
+    of maximum concrete compression lies on the positive (compression) side."""
+    fx, fy = math.isfinite(na_x), math.isfinite(na_y)
+    if fx and fy:
+        a, b, c = na_y, na_x, -na_x * na_y      # line through (na_x,0) and (0,na_y)
+    elif fx:
+        a, b, c = 1.0, 0.0, -na_x               # vertical x = na_x
+    elif fy:
+        a, b, c = 0.0, 1.0, -na_y               # horizontal y = na_y
+    else:
+        return None
+    n = math.hypot(a, b) or 1.0
+    a, b, c = a / n, b / n, c / n
+    if a * inside_xy[0] + b * inside_xy[1] + c < 0.0:
+        a, b, c = -a, -b, -c
+    return a, b, c
+
+
+def _zones(outer, halfplane):
+    """Compression and tension zone polygons for a section split by a half-plane."""
+    if halfplane is None:
+        return None
+    a, b, c = halfplane
+    comp = geometry.clip_halfplane(outer, a, b, c)
+    tens = geometry.clip_halfplane(outer, -a, -b, -c)
+    zones = []
+    if len(comp) >= 3:
+        zones.append((comp.tolist(), viz.COMP_ZONE_FILL, "compression zone"))
+    if len(tens) >= 3:
+        zones.append((tens.tolist(), viz.TENS_ZONE_FILL, "tension side"))
+    return zones or None
 
 
 def _radial_util(mx, my, ax, ay):
@@ -446,27 +507,16 @@ def _radial_util(mx, my, ax, ay):
 VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results"]
 
 
-def section_view(inp, results, stale):
-    """The section drawing, with the elastic neutral axis when available.
+def section_view(inp):
+    """The input geometry: concrete outline, reinforcement and tendons.
 
-    The geometry redraws live, but the neutral axis comes from the last
-    calculation. When the inputs have changed since then (``stale``), the
-    cached axis would sit on a different section, so it is hidden and a notice
-    is shown instead of drawing a misleading line.
+    This view is only for verifying the section. Analysis results -- the neutral
+    axis, the compression zone, stresses -- are shown in the result views.
     """
     bar_xy = [(b[0], b[1]) for b in inp["bars"]]
     tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
-    has_elastic = bool(results and "elastic" in results)
-    na_line = None
-    if has_elastic and not stale:
-        na_line = viz.na_endpoints(results["elastic"]["na_x"],
-                                   results["elastic"]["na_y"], inp["extent"])
-    if has_elastic and stale:
-        st.warning("Inputs changed since the last calculation - the neutral "
-                   "axis is hidden; press Calculate to update.")
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
-                                       na_line=na_line, title="Section",
-                                       tendons=tendon_xy),
+                                       title="Section", tendons=tendon_xy),
                     use_container_width=True)
 
 
@@ -480,12 +530,41 @@ def materials_view(inp):
                         use_container_width=True)
 
 
+def _fmt(v):
+    """Format a coordinate, showing an infinite neutral-axis intercept as 'inf'."""
+    return "inf" if not math.isfinite(v) else f"{v:.3f}"
+
+
+def _plastic_table(pts, cable):
+    """Legacy Pcross-style results table, one row per neutral-axis angle."""
+    cols = {
+        "V (deg)": [round(pt["V"], 1) for pt in pts],
+        "Mx (kNm)": [round(pt["Mx"], 1) for pt in pts],
+        "My (kNm)": [round(pt["My"], 1) for pt in pts],
+        "NA x (m)": [_fmt(pt["na_x"]) for pt in pts],
+        "NA y (m)": [_fmt(pt["na_y"]) for pt in pts],
+        "eps_c (%)": [round(pt["eps_c"], 2) for pt in pts],
+        "eps_s (%)": [round(pt["eps_s"], 2) for pt in pts],
+        "kappa (1/m)": [round(pt["kappa"], 4) for pt in pts],
+        "Comp (kN)": [round(pt["comp_force"], 0) for pt in pts],
+        "L (m)": [round(pt["lever"], 3) for pt in pts],
+        "Dx (m)": [round(pt["dx"], 3) for pt in pts],
+        "Dy (m)": [round(pt["dy"], 3) for pt in pts],
+    }
+    if cable:
+        cols["eps_cable (%)"] = [round(pt["eps_cable"], 2) for pt in pts]
+    return cols
+
+
 def plastic_view(inp, results):
-    """Plastic capacity metrics and the biaxial interaction envelope."""
+    """Plastic capacity: metrics, the M-M envelope, an inspectable neutral-axis
+    state (compression zone + section diagnostics), and the full per-angle table
+    matching the legacy Pcross output."""
     if not results or "plastic" not in results:
         st.info("Run a Plastic or Both analysis, then press Calculate.")
         return
     p = results["plastic"]
+    pts = p["points"]
     m1, m2, m3 = st.columns(3)
     m1.metric("Max Mx", f"{p['max_mx']:.0f} kNm")
     m2.metric("Max My", f"{p['max_my']:.0f} kNm")
@@ -495,18 +574,85 @@ def plastic_view(inp, results):
         viz.interaction_figure(p["mx"], p["my"], applied=(inp["Mx_pl"], inp["My_pl"])),
         use_container_width=True)
 
+    default_i = max(range(len(pts)), key=lambda i: pts[i]["Mx"])
+    sel = st.selectbox("Neutral-axis state", range(len(pts)), index=default_i,
+                       format_func=lambda i: f"{i + 1}: V = {pts[i]['V']:.0f} deg",
+                       key="pl_state",
+                       help="Inspect the section state at one swept neutral-axis angle.")
+    pt = pts[sel]
+    hp = _plastic_halfplane(pt["V"], pt["na_x"], pt["na_y"])
+    na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"])
+    cL, cR = st.columns([3, 2])
+    with cL:
+        bar_xy = [(b[0], b[1]) for b in inp["bars"]]
+        tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
+        st.plotly_chart(
+            viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
+                               tendons=tendon_xy, zones=_zones(inp["outer"], hp),
+                               title=f"Section at V = {pt['V']:.0f} deg"),
+            use_container_width=True)
+    with cR:
+        lines = [
+            f"- **Mx / My**: {pt['Mx']:.0f} / {pt['My']:.0f} kNm",
+            f"- **Curvature kappa**: {pt['kappa']:.4g} 1/m",
+            f"- **Compression force**: {pt['comp_force']:.0f} kN",
+            f"- **Lever arm L**: {pt['lever']:.3f} m  (Dx {pt['dx']:.3f}, Dy {pt['dy']:.3f})",
+            f"- **Concrete strain**: {pt['eps_c']:.2f} %",
+            f"- **Steel strain**: {pt['eps_s']:.2f} %",
+            f"- **NA intercepts**: x {_fmt(pt['na_x'])}, y {_fmt(pt['na_y'])} m",
+        ]
+        if inp["tendons"]:
+            lines.insert(6, f"- **Tendon strain**: {pt['eps_cable']:.2f} %")
+        st.markdown("\n".join(lines))
+
+    with st.expander("Full results table (per neutral-axis angle)"):
+        st.dataframe(_plastic_table(pts, bool(inp["tendons"])),
+                     hide_index=True, use_container_width=True)
+
 
 def elastic_view(inp, results):
-    """Cracked-section elastic stresses: peak concrete and per-bar stresses."""
+    """Cracked-section elastic stresses: peak concrete, neutral axis, the section
+    diagnostic and per-bar stresses, matching the legacy Ecross output."""
     if not results or "elastic" not in results:
         st.info("Run an Elastic or Both analysis, then press Calculate.")
         return
     e = results["elastic"]
-    st.metric("Max concrete compression", f"{e['max_conc']:.1f} MPa")
-    st.dataframe(
-        {"Bar": list(range(1, len(e["bar_stress"]) + 1)),
-         "Stress (MPa)": [round(s, 1) for s in e["bar_stress"]]},
-        hide_index=True, use_container_width=True)
+    m1, m2 = st.columns(2)
+    m1.metric("Max concrete compression", f"{e['max_conc']:.1f} MPa",
+              help=f"at concrete corner {e['max_conc_point'] + 1}")
+    m2.metric("Max steel tension", f"{e['max_steel']:.1f} MPa",
+              help=f"in bar {e['max_steel_bar']}")
+
+    # The neutral axis and the compression/tension zones only make sense when the
+    # concrete actually carries compression; a fully tensile case has none.
+    has_comp = e["max_conc"] > 0.0
+    if has_comp:
+        st.caption(f"Neutral-axis intercepts (for concrete stress): "
+                   f"x {_fmt(e['na_x'])} m,  y {_fmt(e['na_y'])} m")
+    else:
+        st.caption("The concrete carries no compression (the section is fully "
+                   "cracked in tension); no neutral axis is shown.")
+
+    hp = _elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"]) if has_comp else None
+    na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"]) if hp else None
+    zones = _zones(inp["outer"], hp) if hp else None
+    cL, cR = st.columns([3, 2])
+    with cL:
+        # Tendons are modelled as ordinary bars in the elastic run, in bar order.
+        bar_xy = ([(b[0], b[1]) for b in inp["bars"]]
+                  + [(t[0], t[1]) for t in inp["tendons"]])
+        colors = [viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
+                  for s in e["bar_stress"]]
+        st.plotly_chart(
+            viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=colors,
+                               na_line=na, zones=zones,
+                               title="Elastic state (bars: green tension, red compression)"),
+            use_container_width=True)
+    with cR:
+        st.dataframe(
+            {"Bar": list(range(1, len(e["bar_stress"]) + 1)),
+             "Stress (MPa)": [round(s, 1) for s in e["bar_stress"]]},
+            hide_index=True, use_container_width=True)
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +682,7 @@ if stale and view in ("Plastic Results", "Elastic Results"):
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
 if view == "Section":
-    section_view(inp, results, stale)
+    section_view(inp)
 elif view == "Stress-Strain diagrams":
     materials_view(inp)
 elif view == "Plastic Results":
