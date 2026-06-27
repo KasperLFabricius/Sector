@@ -12,17 +12,16 @@ cross-section and reports, for the same section:
 * **Plastic analysis** - the ultimate bending capacity under a given axial force
   and biaxial bending, traced as the neutral axis is rotated through the section
   to give the full N-M interaction envelope. The ultimate-limit-state side.
-* **Extended elastic checks (SLS)** - two optional serviceability checks on top
-  of the elastic analysis (EN 1992-1-1). The **cracking threshold** decides
-  whether the section has cracked (comparing the uncracked concrete tension with
-  the tensile strength `fctm`) and reports the governing stage's stresses; the
-  **tension-stiffening** check adds the tension-stiffened mean state and the
-  crack width `wk`. The plain elastic analysis is unchanged - it stays the
-  cracked-section result with zero concrete tensile strength - so these only
-  refine it when you ask for them.
+* **Serviceability checks (SLS)** - reported alongside the elastic stresses, on
+  the long-term (quasi-permanent) load (EN 1992-1-1): the **cracking threshold**
+  (does the section crack, comparing the uncracked concrete tension with the
+  tensile strength `fctm`), the cracked / uncracked **transformed section
+  properties** (area, centroid, second moments), and - when enabled - **tension
+  stiffening** and the **crack width** `wk`. The cracked-section stresses
+  themselves are unchanged (zero concrete tensile strength).
 
-You choose elastic, plastic, the extended SLS checks, or any combination from one
-section definition.
+You choose elastic, plastic, or both from one section definition; the
+serviceability checks ride along with the elastic analysis.
 
 ## Goals
 
