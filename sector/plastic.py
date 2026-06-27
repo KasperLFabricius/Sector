@@ -54,9 +54,9 @@ class PlasticPoint:
     eps_steel: float          # extreme (most tensile) mild-steel strain, %
     eps_cable: float          # extreme (most tensile) tendon strain, % (incl. IS)
     curvature: float          # 1/m
-    # The compression force and lever arm are diagnostic. They match the legacy
-    # for mild-steel sections; with prestress the legacy splits the resultants
-    # differently for these, so they can differ (the capacity and strains do not).
+    # The compression force and lever arm are diagnostic. They match the handcalc
+    # verification for mild-steel sections; with prestress the resultants are
+    # split differently, so they can differ (the capacity and strains do not).
     compression_force: float  # total compression resultant, kN
     lever_arm: float          # internal lever arm L, m
     dx: float                 # X component of the lever arm, m

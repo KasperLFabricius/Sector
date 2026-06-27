@@ -1,4 +1,4 @@
-"""Generate tests/pcross_fixtures.py from the legacy PCROSS .pcr output PDFs.
+"""Generate tests/handcalc_fixtures.py from the handcalc .pcr output PDFs.
 
 Reads each example PDF, reconstructs every section it contains (some PDFs hold
 several analyses), samples a few expected result rows, runs the solver, and
@@ -6,9 +6,9 @@ writes the cleanly-matching cases as pure-ASCII Python literals so the committed
 regression test needs no PDFs.
 
 Usage:
-    python tools/gen_pcross_fixtures.py [PDF_DIR]
+    python tools/gen_handcalc_fixtures.py [PDF_DIR]
 
-PDF_DIR defaults to $PCROSS_DIR or the project's local examples folder. Requires
+PDF_DIR defaults to $HANDCALC_DIR or the project's local examples folder. Requires
 ``pypdf`` (a dev dependency). Only prints ASCII status lines; raw PDF text is
 never echoed.
 """
@@ -19,7 +19,7 @@ import re
 import sys
 
 # Make the project importable when run as a script from a fresh checkout
-# (python tools/gen_pcross_fixtures.py puts tools/ -- not the repo root -- on
+# (python tools/gen_handcalc_fixtures.py puts tools/ -- not the repo root -- on
 # sys.path), so no PYTHONPATH or install step is needed.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -31,7 +31,7 @@ from sector.section import Section  # noqa: E402
 
 DEFAULT_DIR = (
     r"C:\Users\DK1J4Z\OneDrive - Sweco AB\Documents\Claude"
-    r"\Secant\Pcross & Ecross\Pcross output examples"
+    r"\Secant\handcalc & handcalc\handcalc output examples"
 )
 
 
@@ -244,7 +244,7 @@ def clean_name(path):
 
 
 def main():
-    pdf_dir = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PCROSS_DIR", DEFAULT_DIR)
+    pdf_dir = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HANDCALC_DIR", DEFAULT_DIR)
     cases = []
     for f in sorted(glob.glob(os.path.join(pdf_dir, "*.pdf"))):
         base = clean_name(f)
@@ -259,12 +259,12 @@ def main():
             fx["name"] = base if len(blocks) == 1 else f"{base}_s{bi + 1}"
             cases.append(fx)
 
-    out = os.path.join("tests", "pcross_fixtures.py")
+    out = os.path.join("tests", "handcalc_fixtures.py")
     with open(out, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write('"""Auto-generated fixtures from the legacy PCROSS example outputs.\n\n')
+        fh.write('"""Auto-generated fixtures from the handcalc example outputs.\n\n')
         fh.write("Each case is a real section reconstructed from a .pcr output with sampled\n")
         fh.write("expected rows (P, V, Mx, My, eps_concrete, eps_steel, eps_cable, curvature).\n")
-        fh.write('Regenerate with tools/gen_pcross_fixtures.py; do not edit by hand.\n"""\n\n')
+        fh.write('Regenerate with tools/gen_handcalc_fixtures.py; do not edit by hand.\n"""\n\n')
         fh.write("CASES = [\n")
         for fx in cases:
             fh.write("    {\n")

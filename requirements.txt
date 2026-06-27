@@ -12,5 +12,5 @@ numba>=0.62; python_version < "3.14"
 streamlit>=1.52,<2
 plotly>=5.18,<7
 reportlab>=4.0,<5
-# Reads the legacy output PDFs used as verification fixtures.
+# Reads the handcalc reference PDFs used as verification fixtures.
 pypdf>=4.0,<6

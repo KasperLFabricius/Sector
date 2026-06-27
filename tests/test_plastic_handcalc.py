@@ -1,6 +1,6 @@
-"""Regression of the plastic solver against real PCROSS example outputs.
+"""Regression of the plastic solver against real handcalc example outputs.
 
-The fixtures in ``pcross_fixtures.py`` are reconstructed from the legacy ``.pcr``
+The fixtures in ``handcalc_fixtures.py`` are reconstructed from the handcalc ``.pcr``
 output PDFs (geometry, materials and sampled expected result rows). This test
 rebuilds each section and checks the solver reproduces the published ultimate
 moments and strains. The mild-steel sections (including the 74-corner circular
@@ -19,7 +19,7 @@ from sector.plastic import plastic_capacity_at_angle
 from sector.section import Section
 
 _spec = importlib.util.spec_from_file_location(
-    "pcross_fixtures", pathlib.Path(__file__).with_name("pcross_fixtures.py")
+    "handcalc_fixtures", pathlib.Path(__file__).with_name("handcalc_fixtures.py")
 )
 _fix = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_fix)
@@ -43,7 +43,7 @@ def test_fixtures_present():
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
-def test_pcross_example(case):
+def test_handcalc_example(case):
     section, concrete, mild, prestress = _build(case)
     for (P, V, Mx, My, ec, es, ecab, curv) in case["rows"]:
         r = plastic_capacity_at_angle(section, concrete, mild, P, V,

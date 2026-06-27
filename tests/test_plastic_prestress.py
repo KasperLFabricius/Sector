@@ -52,7 +52,7 @@ TBEAM_CASES = [
 
 
 @pytest.mark.parametrize("case", TBEAM_CASES, ids=[f"V{int(c[0])}" for c in TBEAM_CASES])
-def test_prestressed_tbeam_matches_pcross(case):
+def test_prestressed_tbeam_matches_handcalc(case):
     V, Mx, My, eps_s, eps_c, curv, na_y = case
     section, concrete, steel, prestress = t_beam()
     r = plastic_capacity_at_angle(section, concrete, steel, 1976.0, V, prestress=prestress)

@@ -36,7 +36,7 @@ def test_gross_area_subtracts_holes():
 
 
 def test_gross_area_independent_of_input_winding():
-    cw = [(0, 0), (0, 1), (1, 1), (1, 0)]  # clockwise (legacy convention)
+    cw = [(0, 0), (0, 1), (1, 1), (1, 0)]  # clockwise (required convention)
     sec = Section([np.array(cw, float)])
     assert sec.gross_area == pytest.approx(1.0)
 
