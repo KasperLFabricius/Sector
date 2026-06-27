@@ -283,6 +283,22 @@ def test_plastic_results_table_and_state_selector():
     assert not at.exception
 
 
+def test_elastic_fully_tensile_case_renders_without_phantom_zone():
+    # A tension-dominated case leaves no concrete compression (max_conc == 0)
+    # while the neutral axis intercepts stay finite; the view must not shade a
+    # phantom compression zone or raise.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_P").set_value(-5000.0).run()  # large tension
+    at.number_input(key="el_Mx").set_value(0.0).run()
+    at.button(key="calculate").click().run()
+    at.selectbox(key="view").set_value("Elastic Results").run()
+    assert not at.exception
+    assert at.session_state["results"]["elastic"]["max_conc"] == pytest.approx(0.0)
+    assert any("no compression" in c.value for c in at.caption)
+
+
 def test_elastic_results_show_neutral_axis_and_max_steel():
     at = _fresh()
     at.run()

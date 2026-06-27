@@ -622,11 +622,20 @@ def elastic_view(inp, results):
               help=f"at concrete corner {e['max_conc_point'] + 1}")
     m2.metric("Max steel tension", f"{e['max_steel']:.1f} MPa",
               help=f"in bar {e['max_steel_bar']}")
-    st.caption(f"Neutral-axis intercepts (for concrete stress): "
-               f"x {_fmt(e['na_x'])} m,  y {_fmt(e['na_y'])} m")
 
-    hp = _elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"])
+    # The neutral axis and the compression/tension zones only make sense when the
+    # concrete actually carries compression; a fully tensile case has none.
+    has_comp = e["max_conc"] > 0.0
+    if has_comp:
+        st.caption(f"Neutral-axis intercepts (for concrete stress): "
+                   f"x {_fmt(e['na_x'])} m,  y {_fmt(e['na_y'])} m")
+    else:
+        st.caption("The concrete carries no compression (the section is fully "
+                   "cracked in tension); no neutral axis is shown.")
+
+    hp = _elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"]) if has_comp else None
     na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"]) if hp else None
+    zones = _zones(inp["outer"], hp) if hp else None
     cL, cR = st.columns([3, 2])
     with cL:
         # Tendons are modelled as ordinary bars in the elastic run, in bar order.
@@ -636,7 +645,7 @@ def elastic_view(inp, results):
                   for s in e["bar_stress"]]
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=colors,
-                               na_line=na, zones=_zones(inp["outer"], hp),
+                               na_line=na, zones=zones,
                                title="Elastic state (bars: green tension, red compression)"),
             use_container_width=True)
     with cR:
