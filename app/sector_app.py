@@ -88,14 +88,18 @@ def _safe_build(box, builder, curve, vals):
 
 
 def _clamp_eut(box, vals, fields):
-    """Keep the rupture strain at or above the yield strain (a meaningful, not
-    arbitrary, limit): a curve cannot rupture before it yields. Only applies when
-    the active curve actually uses ``fytk`` and ``eut``."""
+    """Keep the rupture strain at or above the (second) yield strain -- a
+    meaningful, not arbitrary, limit: a curve cannot rupture before it has
+    reached its yield/ultimate branch. For the two-yield laws the yield is the
+    second yield, reached at ``ey0t + fytk/Es``. Only applies when the active
+    curve uses ``fytk`` and ``eut``."""
     if "eut" in fields and "fytk" in fields and vals.get("Es", 0.0) > 0.0:
         ey = vals["fytk"] / vals["Es"]
+        if "ey0t" in fields:
+            ey += vals.get("ey0t", 0.0)   # second-yield (total) strain
         if vals["eut"] < ey:
-            box.warning("eut must be at least the yield strain (fytk / Es); "
-                        "using eut = fytk / Es for the diagram and analysis.")
+            box.warning("eut must be at least the yield strain (ey0t + fytk/Es); "
+                        "using that value for the diagram and analysis.")
             vals["eut"] = ey
 
 
@@ -307,10 +311,10 @@ def build_inputs():
             "cover", "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
             "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
             "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
-            "mild_ey0t", "mild_ey0c", "use_pre", "tnd_n", "tnd_a", "tnd_c",
-            "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
+            "mild_ey0t", "mild_ey0c", "mild_Es", "use_pre", "tnd_n", "tnd_a",
+            "tnd_c", "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
             "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t",
-            "P", "Mx", "My", "ratio", "mode"))
+            "pre_Es", "P", "Mx", "My", "ratio", "mode"))
     return dict(section=section, concrete=concrete, steel=steel, ratio=ratio,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P=P, Mx=Mx, My=My, mode=mode,

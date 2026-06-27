@@ -30,15 +30,15 @@ def test_concrete_figure_greek_axes_dots_and_axis_labels():
     assert _SIGMA in fig.layout.yaxis.title.text
     assert _has_marker_trace(fig)  # dots on the curve
     texts = [a.text for a in fig.layout.annotations]
-    # fcd on the stress axis; eps_c2 and eps_cu2 on the strain axis.
-    assert any("f<sub>cd</sub>" in t for t in texts)
+    # fck (the input) on the stress axis; eps_c2 and eps_cu2 on the strain axis.
+    assert any("f<sub>ck</sub>" in t for t in texts)
     assert any(_EPS + "<sub>c2</sub>" in t for t in texts)
     assert any(_EPS + "<sub>cu2</sub>" in t for t in texts)
 
 
 def test_merge_labels_joins_coincident_symbols():
-    assert viz._merge_labels(["fyd", "fud"]) == "f<sub>yd</sub>/f<sub>ud</sub>"
-    assert viz._merge_labels(["fyd", "fyd"]) == "f<sub>yd</sub>"  # de-duplicated
+    assert viz._merge_labels(["fytk", "futk"]) == "f<sub>ytk</sub>/f<sub>utk</sub>"
+    assert viz._merge_labels(["fytk", "fytk"]) == "f<sub>ytk</sub>"  # de-duplicated
 
 
 def test_steel_with_equal_yield_and_ultimate_merges_stress_label():
@@ -49,34 +49,42 @@ def test_steel_with_equal_yield_and_ultimate_merges_stress_label():
     assert any("/" in a.text for a in fig.layout.annotations)
 
 
-def test_curve3_figure_builds_and_labels_all_points():
-    s = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, gamma_y=1.0,
+def test_curve3_figure_labels_input_parameters_not_derived():
+    s = MildSteel(fytk=550.0, fyck=400.0, futk=600.0, eut=0.05, gamma_y=1.0,
                   gamma_u=1.0, gamma_E=1.0, k=0.9, ey0t=0.002, ey0c=0.005, curve=3)
     fig = viz.steel_curve_figure(s)
     texts = " ".join(a.text for a in fig.layout.annotations)
-    for sym in ("f<sub>1</sub>", "f<sub>2</sub>", "f<sub>ud</sub>"):
-        assert sym in texts
+    # Inputs are labelled: yield, ultimate, compression yield, k*fytk, strains.
+    for sym in ("f<sub>ytk</sub>", "f<sub>utk</sub>", "f<sub>yck</sub>",
+                "k" + viz._MID + "f<sub>ytk</sub>", _EPS + "<sub>ut</sub>",
+                _EPS + "<sub>0t</sub>", _EPS + "<sub>0c</sub>"):
+        assert sym in texts, sym
+    # Derived/design quantities are not shown.
+    for sym in ("f<sub>1</sub>", "f<sub>2</sub>", "f<sub>ud</sub>", "f<sub>yd</sub>"):
+        assert sym not in texts, sym
 
 
-def test_steel_figure_shows_modulus_slope_label():
+def test_steel_figure_shows_input_modulus_slope_label():
     fig = viz.steel_curve_figure(
-        MildSteel(fytk=500.0, fyck=500.0, gamma_y=1.15, curve=2))
-    assert any("E<sub>d</sub>" in a.text for a in fig.layout.annotations)
+        MildSteel(fytk=500.0, fyck=500.0, gamma_y=1.15, curve=2, Es=205000.0))
+    texts = " ".join(a.text for a in fig.layout.annotations)
+    assert "E<sub>s</sub>" in texts and "205 GPa" in texts
 
 
 def test_concrete_figure_has_no_modulus_label():
     fig = viz.concrete_curve_figure(Concrete(fck=35.0, gamma_c=1.5, curve=2))
-    assert not any("E<sub>d</sub>" in a.text for a in fig.layout.annotations)
+    assert not any("E<sub>s</sub>" in a.text or "E<sub>p</sub>" in a.text
+                   for a in fig.layout.annotations)
 
 
-def test_prestress_figure_tension_only_with_proof_and_ultimate_labels():
-    p = Prestress(curve=6, IS=0.0, fytk=1600.0, futk=1860.0, eut=0.035,
-                  gamma_y=1.15, gamma_u=1.15, gamma_E=1.0)
+def test_prestress_figure_tension_only_labels_inputs():
+    p = Prestress(curve=7, IS=0.006, fytk=1600.0, futk=1860.0, eut=0.035,
+                  k=0.9, ey0t=0.002, gamma_y=1.15, gamma_u=1.15, gamma_E=1.0)
     fig = viz.prestress_curve_figure(p)
-    # Tension-only: the plotted strain never goes far into compression.
     xs = [x for tr in fig.data for x in (tr.x or [])]
-    assert min(xs) >= -1.5  # per-mille; just below zero, no compression branch
+    assert min(xs) >= -1.5  # per-mille; tension only
     assert _has_marker_trace(fig)
     texts = " ".join(a.text for a in fig.layout.annotations)
-    assert "f<sub>pd</sub>" in texts and "f<sub>pud</sub>" in texts
-    assert _EPS + "<sub>pd</sub>" in texts
+    for sym in ("f<sub>p0.1k</sub>", "f<sub>pk</sub>", "E<sub>p</sub>",
+                "I<sub>S</sub>", _EPS + "<sub>ut</sub>"):
+        assert sym in texts, sym

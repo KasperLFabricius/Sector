@@ -271,12 +271,14 @@ class MildSteel:
         return self.Es / (g if design else 1.0)
 
     def diagram_markers(self, *, design: bool = True):
-        """Points of interest for a stress-strain plot (tension and compression).
+        """Points of interest labelled with the *input* parameters.
 
         Returns ``(strain, stress, eps_key, sigma_key)`` points (see
-        :meth:`Concrete.diagram_markers`): the yield point(s), the rupture /
-        ultimate point, the second yield for the two-yield-point curve, and the
-        compression-side yield(s).
+        :meth:`Concrete.diagram_markers`) keyed by the inputs the user enters --
+        the yield (``fytk``) and rupture (``futk``) stresses, the compression
+        yield (``fyck``), the rupture and second-yield strains (``eut``,
+        ``ey0t``, ``ey0c``) and the first-yield level ``k*fytk`` -- so editing
+        any input visibly moves a labelled point. Partial factors are not shown.
         """
         gy = self.gamma_y if design else 1.0
         gE = self.gamma_E if design else 1.0
@@ -287,27 +289,28 @@ class MildSteel:
         if self.curve == 2:
             slope = self.Es / gy
             # Perfectly plastic: the ultimate stress equals the yield stress.
-            return [(fyt / slope, fyt, "eps_yd", "fyd"),
-                    (self.eut, fyt, "eps_ud", "fud"),
-                    (-fyc / slope, -fyc, "eps_yd", "fyd")]
+            return [(fyt / slope, fyt, None, "fytk"),
+                    (self.eut, fyt, "eut", "fytk"),
+                    (-fyc / slope, -fyc, None, "fyck")]
 
-        if self.curve == 1:
-            slope = self.Es / gE
-            fu = self.futk / gu
-            return [(fyt / slope, fyt, "eps_yd", "fyd"),
-                    (self.eut, fu, "eps_ud", "fud"),
-                    (-fyc / slope, -fyc, "eps_yd", "fyd")]
-
-        # curve 3: two yield points -- tension uses fytk, compression uses fyck.
         slope = self.Es / gE
-        f1 = self.k * fyt
-        f1c = self.k * fyc
         fu = self.futk / gu
-        return [(f1 / slope, f1, "eps_y1", "f1"),
-                (self.ey0t + fyt / slope, fyt, "eps_y2", "f2"),
-                (self.eut, fu, "eps_ud", "fud"),
-                (-f1c / slope, -f1c, "eps_y1", "f1"),
-                (-self.ey0c, -fyc, "eps_y2", "f2")]
+        if self.curve == 1:
+            return [(fyt / slope, fyt, None, "fytk"),
+                    (self.eut, fu, "eut", "futk"),
+                    (-fyc / slope, -fyc, None, "fyck")]
+
+        # curve 3: general two-yield law -- tension uses fytk, compression fyck.
+        pts = [(self.ey0t + fyt / slope, fyt,
+                "ey0t" if self.ey0t > 0.0 else None, "fytk"),
+               (self.eut, fu, "eut", "futk"),
+               (-self.ey0c, -fyc, "ey0c", "fyck")]
+        if self.k < 1.0:                      # distinct first yield -> reveals k
+            pts.append((self.k * fyt / slope, self.k * fyt, None, "k_fytk"))
+            pts.append((-self.k * fyc / slope, -self.k * fyc, None, "k_fyck"))
+        else:                                 # k = 1: mark fyck at the yield corner
+            pts.append((-fyc / slope, -fyc, None, "fyck"))
+        return pts
 
 
 # Rupture strain of the built-in prestressing curves (fraction): 3.5 %.
@@ -456,23 +459,29 @@ class Prestress:
         return f
 
     def diagram_markers(self, *, design: bool = True):
-        """Points of interest for a stress-strain plot (tendons carry tension only).
+        """Points of interest labelled with the *input* parameters (tension only).
 
-        Returns ``(strain, stress, eps_key, sigma_key)`` points (see
-        :meth:`Concrete.diagram_markers`): the rupture / ultimate point and, for
-        the user-defined curves, the proof-stress yield point.
+        For the user-defined laws this returns the proof and ultimate stresses
+        (``fp0.1k`` = ``fytk``, ``fpk`` = ``futk``), the rupture strain ``eut``,
+        the prestrain ``IS`` and -- when ``k < 1`` -- the first-yield level. The
+        built-in characteristic curves are fixed, so only ``IS`` is marked.
         """
-        rupt = self.rupture_strain
-        pts = [(rupt, self.stress(rupt, design=design), "eps_ud", "fpud")]
-        if self.curve in (6, 7):
-            gy = self.gamma_y if design else 1.0
-            gE = self.gamma_E if design else 1.0
-            fpd = self.fytk / gy
-            # Curve 6 (bilinear) reaches fpd at the end of its elastic branch;
-            # curve 7's trilinear law reaches its second yield (fpd) only after
-            # the plastic strain ey0t (see _trilinear_tension's e2).
-            eps_pd = fpd / (self.Es / gE)
-            if self.curve == 7:
-                eps_pd += self.ey0t
-            pts.insert(0, (eps_pd, fpd, "eps_pd", "fpd"))
-        return pts
+        is_marker = ([(self.IS, self.stress(self.IS, design=design), "IS", None)]
+                     if self.IS > 0.0 else [])
+        if self.curve not in (6, 7):
+            rupt = self.rupture_strain
+            return [(rupt, self.stress(rupt, design=design), "eut", None)] + is_marker
+
+        gy = self.gamma_y if design else 1.0
+        gE = self.gamma_E if design else 1.0
+        gu = self.gamma_u if design else 1.0
+        slope = self.Es / gE
+        fyt = self.fytk / gy          # fp0.1k (factored if design)
+        fu = self.futk / gu           # fpk
+        # The proof stress is reached after the plastic strain ey0t (curve 7).
+        pts = [(self.ey0t + fyt / slope, fyt,
+                "ey0t" if self.ey0t > 0.0 else None, "fp01k"),
+               (self.eut, fu, "eut", "fpk")]
+        if self.k < 1.0:              # distinct first yield -> reveals k
+            pts.insert(0, (self.k * fyt / slope, self.k * fyt, None, "k_fp01k"))
+        return pts + is_marker

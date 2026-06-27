@@ -39,4 +39,4 @@ def test_eurocode_presets_apply_a_partial_factor():
 def test_diagram_markers_label_the_ultimate_point():
     t = mp.build_prestress(**mp.PRESTRESS_PRESETS["Curve 6 (bilinear)"])
     keys = [sk for (_a, _b, _ek, sk) in t.diagram_markers(design=True)]
-    assert "fpud" in keys
+    assert "fpk" in keys      # ultimate stress fpk is labelled (an input)
