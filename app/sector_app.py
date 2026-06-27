@@ -800,8 +800,10 @@ def plastic_view(inp, results):
         st.markdown("\n".join(lines))
 
     with st.expander("Full results table (per neutral-axis angle)"):
+        # Size the table to all rows so the page scrolls, not the table itself.
         st.dataframe(_plastic_table(pts, bool(inp["tendons"])),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, use_container_width=True,
+                     height=35 * (len(pts) + 1) + 3)
 
 
 def elastic_view(inp, results):
@@ -830,30 +832,29 @@ def elastic_view(inp, results):
     hp = _elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"]) if has_comp else None
     na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"]) if hp else None
     zones = _zones(inp["outer"], hp) if hp else None
-    cL, cR = st.columns([3, 2])
-    with cL:
-        # Tendons are modelled as ordinary bars in the elastic run, in bar order.
-        bar_xy = ([(b[0], b[1]) for b in inp["bars"]]
-                  + [(t[0], t[1]) for t in inp["tendons"]])
-        colors = [viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
-                  for s in e["total"]]
-        st.plotly_chart(
-            viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=colors,
-                               na_line=na, zones=zones, show_labels=True,
-                               title="Elastic state (bars: green tension, red compression)"),
-            use_container_width=True)
-    with cR:
-        st.markdown("**Steel stresses (MPa, tension +)**")
-        st.dataframe(
-            {"Bar": list(range(1, len(e["total"]) + 1)),
-             "Total": [round(s, 1) for s in e["total"]],
-             "Long": [round(s, 1) for s in e["long"]],
-             "Dif": [round(s, 1) for s in e["dif"]],
-             "RST1": [round(s, 1) for s in e["rst1"]]},
-            hide_index=True, use_container_width=True)
-        st.caption("Total = long+short; Long = long-term alone; Dif = total - "
-                   "long; RST1 = instantaneous response with the long-term "
-                   "concrete stresses neutralised.")
+    # Tendons are modelled as ordinary bars in the elastic run, in bar order.
+    bar_xy = ([(b[0], b[1]) for b in inp["bars"]]
+              + [(t[0], t[1]) for t in inp["tendons"]])
+    colors = [viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION for s in e["total"]]
+    st.plotly_chart(
+        viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=colors,
+                           na_line=na, zones=zones, show_labels=True,
+                           title="Elastic state (bars: green tension, red compression)"),
+        use_container_width=True)
+
+    # The per-bar stress table sits below the figure, sized to all rows.
+    st.markdown("**Steel stresses (MPa, tension +)**")
+    n = len(e["total"])
+    st.dataframe(
+        {"Bar": list(range(1, n + 1)),
+         "Total": [round(s, 1) for s in e["total"]],
+         "Long": [round(s, 1) for s in e["long"]],
+         "Dif": [round(s, 1) for s in e["dif"]],
+         "RST1": [round(s, 1) for s in e["rst1"]]},
+        hide_index=True, use_container_width=True, height=35 * (n + 1) + 3)
+    st.caption("Total = long+short; Long = long-term alone; Dif = total - "
+               "long; RST1 = instantaneous response with the long-term "
+               "concrete stresses neutralised.")
 
     _elastic_sls_section(inp, e)
 
