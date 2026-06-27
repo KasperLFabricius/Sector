@@ -154,9 +154,10 @@ class MildSteel:
       to the design yield, then flat.
     * **type 3** -- two yield points (trilinear): elastic to the first yield
       ``k*fytk``, then to the second yield ``fytk`` (whose plastic strain is
-      ``ey0t``), then hardening to ``futk`` at ``eut``. Compression mirrors it,
-      with the second yield at the compression strain ``ey0c`` (type 3 uses
-      ``fytk`` for both senses, so ``fyck`` is ignored).
+      ``ey0t``), then hardening to ``futk`` at ``eut``. Compression mirrors it
+      symmetrically: the second yield ``fyck`` has plastic strain ``ey0c`` (its
+      total strain is ``ey0c + fyck/slope``), then it hardens to ``futk`` at
+      ``eut``. Both offsets are zero for a single yield point.
 
     Beyond the tensile rupture strain ``eut`` the bar is treated as fractured and
     carries no force (the plastic solver additionally limits the section strain
@@ -177,8 +178,8 @@ class MildSteel:
         Ratio of the first to the second yield stress (``f1/fytk``, ``<= 1``).
         Type 3 only.
     ey0t, ey0c:
-        The second yield point's plastic strain in tension and its total strain
-        in compression (fractions). Type 3 only.
+        The second yield point's plastic strain in tension and in compression
+        (fractions); 0 collapses it onto the first yield. Type 3 only.
     curve:
         1, 2 or 3.
     """
@@ -228,18 +229,21 @@ class MildSteel:
             fu = self.futk / gu
             if eps >= 0.0:
                 return _trilinear_tension(eps, slope, f1, f2, fu, self.ey0t, self.eut)
-            # Compression mirror, second yield fyck at the total strain ey0c.
-            # Steel does not fracture in compression, so it holds -fu beyond eut.
+            # Compression mirror of the tension law: the second yield fyck sits at
+            # the *plastic* offset ey0c, i.e. at the total strain ey0c + fyck/slope
+            # (symmetric with the tensile ey0t). Steel does not fracture in
+            # compression, so it holds -fu beyond eut.
             f1c = self.k * fyc         # first compressive yield stress
             a = -eps
             e1 = f1c / slope
+            e2c = self.ey0c + fyc / slope   # total strain of the second yield
             if a <= e1:
                 return -slope * a
-            if a <= self.ey0c:
-                span = self.ey0c - e1
+            if a <= e2c:
+                span = e2c - e1
                 return -(f1c + (fyc - f1c) * (a - e1) / span) if span > 0 else -fyc
-            if self.ey0c < a < self.eut and self.eut > self.ey0c:
-                return -(fyc + (fu - fyc) * (a - self.ey0c) / (self.eut - self.ey0c))
+            if e2c < a < self.eut and self.eut > e2c:
+                return -(fyc + (fu - fyc) * (a - e2c) / (self.eut - e2c))
             return -fu
 
         # type 1: hardening in tension, flat plateau in compression
@@ -304,7 +308,8 @@ class MildSteel:
         pts = [(self.ey0t + fyt / slope, fyt,
                 "ey0t" if self.ey0t > 0.0 else None, "fytk"),
                (self.eut, fu, "eut", "futk"),
-               (-self.ey0c, -fyc, "ey0c", "fyck")]
+               (-(self.ey0c + fyc / slope), -fyc,
+                "ey0c" if self.ey0c > 0.0 else None, "fyck")]
         if self.k < 1.0:                      # distinct first yield -> reveals k
             pts.append((self.k * fyt / slope, self.k * fyt, None, "k_fytk"))
             pts.append((-self.k * fyc / slope, -self.k * fyc, None, "k_fyck"))

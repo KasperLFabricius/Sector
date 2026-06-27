@@ -74,15 +74,16 @@ def test_strength_dependent_alpha_cc_tracks_fck_for_2023():
 
 
 def test_curve3_preset_second_yield_is_continuous():
-    # The default Curve 3 preset must place the second yield beyond first yield,
-    # so compression follows the second-yield branch rather than jumping into
-    # hardening (Codex review).
+    # ey0c is a plastic offset, so the second compression yield sits at
+    # ey0c + fyck/Es -- always beyond the first yield, so compression follows the
+    # second-yield branch continuously rather than jumping into hardening.
     p = mp.MILD_PRESETS["Curve 3 (two yield points)"]
     s = mp.build_mild(**p)
     f1 = p["k"] * p["fytk"]          # first yield stress (gamma = 1)
     f2 = p["fytk"]                   # second yield stress
     e1 = f1 / s.Es                   # first compression yield strain (fraction)
-    assert s.ey0c > e1               # built material's ey0c (converted to fraction)
+    e2c = s.ey0c + p["fyck"] / s.Es  # second compression yield (total strain)
+    assert e2c > e1
     sig = -s.stress(-(e1 + 1.0e-4), design=False)  # compression magnitude
     assert f1 <= sig < f1 + 0.2 * (f2 - f1)
 
