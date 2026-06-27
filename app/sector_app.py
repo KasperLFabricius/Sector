@@ -29,12 +29,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
 
-# Colour the input help "?" icons amber-yellow so they stand out as hover hints.
-st.markdown(
-    "<style>[data-testid='stTooltipIcon']{color:#e0a800;}"
-    "[data-testid='stTooltipIcon'] svg{stroke:#e0a800;}</style>",
-    unsafe_allow_html=True)
-
 
 @st.cache_resource(show_spinner="Preparing the solver...")
 def _warm_solver():
@@ -341,16 +335,36 @@ def build_inputs():
         mat.divider()
         prestress = prestress_panel(mat)
 
+    # Loads: the plastic and elastic analyses take their own load sets, so a
+    # capacity check (e.g. ULS) and a stress check (e.g. SLS) use different
+    # actions without overwriting each other. The plastic axial force fixes the
+    # M-M envelope; its moments are the point checked against it. Both sets stay
+    # mounted (the inactive one is disabled) so their values survive a mode
+    # switch instead of being reset when Streamlit drops unrendered widgets.
     loads = s.expander("Loads", expanded=True)
-    P = loads.number_input("Axial force P (kN, + = compression)", -50000.0, 50000.0, 0.0, 50.0,
-                           key="P", help="Axial force on the section; positive is "
-                                         "compression. Used by both analyses.")
-    Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0, key="Mx",
-                            help="Applied moment about the x-axis: the elastic "
-                                 "stresses are computed for it, and it sets the "
-                                 "plastic utilisation point on the M-M envelope.")
-    My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0, key="My",
-                            help="Applied moment about the y-axis (biaxial bending).")
+    plastic_on = mode in ("Plastic", "Both")
+    elastic_on = mode in ("Elastic", "Both")
+
+    def _load_set(prefix, n_help, m_help, active):
+        P = loads.number_input("Axial force N (kN, + = compression)", -50000.0,
+                               50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help,
+                               disabled=not active)
+        Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0,
+                                key=f"{prefix}_Mx", help=m_help, disabled=not active)
+        My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0,
+                                key=f"{prefix}_My", disabled=not active,
+                                help="Applied bending moment about the y-axis (biaxial bending).")
+        return P, Mx, My
+
+    loads.markdown("**Plastic capacity**")
+    P_pl, Mx_pl, My_pl = _load_set(
+        "pl", "Axial force for which the plastic M-M capacity envelope is computed.",
+        "Applied moment checked against the plastic envelope (utilisation).", plastic_on)
+    loads.divider()
+    loads.markdown("**Elastic stresses**")
+    P_el, Mx_el, My_el = _load_set(
+        "el", "Applied axial force for the cracked-section elastic stresses.",
+        "Applied moment for the cracked-section elastic stresses.", elastic_on)
 
     section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                    tendons_xy_area_mm2=tendons, holes=holes)
@@ -364,10 +378,12 @@ def build_inputs():
             "mild_ey0t", "mild_ey0c", "mild_Es", "use_pre", "tnd_n", "tnd_a",
             "tnd_c", "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
             "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t",
-            "pre_Es", "P", "Mx", "My", "ratio", "mode"))
+            "pre_Es", "pl_P", "pl_Mx", "pl_My", "el_P", "el_Mx", "el_My",
+            "ratio", "mode"))
     return dict(section=section, concrete=concrete, steel=steel, ratio=ratio,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
-                prestress=prestress, P=P, Mx=Mx, My=My, mode=mode,
+                prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
+                P_el=P_el, Mx_el=Mx_el, My_el=My_el, mode=mode,
                 extent=extent, signature=tuple(sig))
 
 
@@ -379,13 +395,13 @@ def run_analysis(inp):
     out = {}
     if inp["mode"] in ("Plastic", "Both"):
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            inp["P"], 0.0, 360.0, 15.0, prestress=inp["prestress"])
+                            inp["P_pl"], 0.0, 360.0, 15.0, prestress=inp["prestress"])
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
         out["plastic"] = dict(
             mx=mx, my=my,
             max_mx=max(mx), max_my=max(my),
-            util=_radial_util(mx, my, inp["Mx"], inp["My"]),
+            util=_radial_util(mx, my, inp["Mx_pl"], inp["My_pl"]),
             converged=all(p.converged for p in pts),
         )
     if inp["mode"] in ("Elastic", "Both"):
@@ -396,7 +412,7 @@ def run_analysis(inp):
             sec = Section.from_polygon(corners=inp["outer"],
                                        bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
                                        holes=inp["holes"])
-        r = solve_elastic(sec, inp["P"], inp["Mx"], inp["My"], inp["ratio"])
+        r = solve_elastic(sec, inp["P_el"], inp["Mx_el"], inp["My_el"], inp["ratio"])
         out["elastic"] = dict(
             bar_stress=[s / 1000.0 for s in r.bar_stress],  # kN/m2 -> MPa
             max_conc=r.max_concrete_compression / 1000.0,
@@ -476,7 +492,7 @@ def plastic_view(inp, results):
     m3.metric("Utilisation", f"{p['util']:.2f}",
               help="applied / capacity in the load direction")
     st.plotly_chart(
-        viz.interaction_figure(p["mx"], p["my"], applied=(inp["Mx"], inp["My"])),
+        viz.interaction_figure(p["mx"], p["my"], applied=(inp["Mx_pl"], inp["My_pl"])),
         use_container_width=True)
 
 
