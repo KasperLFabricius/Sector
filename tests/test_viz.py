@@ -93,13 +93,45 @@ def test_section_figure_numbers_rebar_and_corners():
     assert any(list(t.text) == ["1", "2", "3", "4"] for t in texts)
 
 
-def test_section_figure_omits_corner_labels_when_too_many():
+def test_corner_labels_thin_out_when_crowded():
     from sector import templates
     outer = [tuple(v) for v in templates.circular(0.6)]   # 48-vertex polygon
     fig = viz.section_figure(outer, bars=[(0.0, -0.2)], show_labels=True)
-    texts = [t for t in fig.data if getattr(t, "mode", None) == "text"]
-    assert any(list(t.text) == ["1"] for t in texts)      # the bar is still numbered
-    assert all(len(t.text) <= viz._MAX_CORNER_LABELS for t in texts)  # corners omitted
+    corner_trace = max((t for t in fig.data if getattr(t, "mode", None) == "text"),
+                       key=lambda t: len(t.text))
+    n_shown = len(corner_trace.text)
+    assert 0 < n_shown < 48                                # decimated, not all 48
+    # A bigger label size thins them further (spacing scales with the font).
+    fig_big = viz.section_figure(outer, bars=[(0.0, -0.2)], show_labels=True,
+                                 label_scale=2.0)
+    big = max((t for t in fig_big.data if getattr(t, "mode", None) == "text"),
+              key=lambda t: len(t.text))
+    assert len(big.text) < n_shown
+
+
+def test_sparse_corners_all_labelled():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(outer, show_labels=True)
+    assert any(list(t.text) == ["1", "2", "3", "4"]
+               for t in fig.data if getattr(t, "mode", None) == "text")
+
+
+def test_label_scale_sets_font_size():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(outer, bars=[(0.0, 0.0)], show_labels=True, label_scale=2.0)
+    sizes = [t.textfont.size for t in fig.data if getattr(t, "mode", None) == "text"]
+    assert sizes and all(sz == pytest.approx(18.0) for sz in sizes)   # 9 * 2.0
+
+
+def test_tendons_drawn_as_diamonds_with_given_colors():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(outer, bars=[(0.0, -0.2)], bar_colors=[viz.BAR_TENSION],
+                             tendons=[(0.0, 0.2)], tendon_colors=[viz.BAR_COMPRESSION])
+    tendon = next(t for t in fig.data if getattr(t, "name", None) == "tendon")
+    assert tendon.marker.symbol == "diamond"
+    assert list(tendon.marker.color) == [viz.BAR_COMPRESSION]
+    bar = next(t for t in fig.data if getattr(t, "name", None) == "reinforcing bar")
+    assert bar.marker.symbol == "circle"
 
 
 def test_section_figure_no_labels_by_default():

@@ -189,6 +189,37 @@ def test_points_are_source_of_truth_until_loaded():
     assert at.session_state["results"]["plastic"]["max_mx"] > base_mx  # deeper -> stronger
 
 
+def test_point_tables_have_plot_matching_ids():
+    # Each point table carries an ID column matching the plot numbering: corners
+    # and bars from 1, and tendons continuing after the bars.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="use_pre").set_value(True).run()
+    at.button(key="load_qs").click().run()
+    cb = at.session_state["corners_base"]
+    bb = at.session_state["bars_base"]
+    tb = at.session_state["tendons_base"]
+    assert cb["ID"].dropna().astype(int).tolist() == list(range(1, len(cb) + 1))
+    assert bb["ID"].dropna().astype(int).tolist() == list(range(1, len(bb) + 1))
+    assert tb["ID"].dropna().astype(int).tolist() == \
+        list(range(len(bb) + 1, len(bb) + 1 + len(tb)))
+
+
+def test_blank_point_row_gets_no_id():
+    # A blank row between valid points must not consume an ID: the valid rows stay
+    # numbered to match the plot, and the blank row's ID is empty (Codex review).
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    at.session_state["bars_base"] = pd.DataFrame(
+        {"ID": [1, 2, 3], "x (m)": [0.05, None, 0.15],
+         "y (m)": [0.05, 0.05, 0.05], "area (mm2)": [491.0, 491.0, 491.0]})
+    at.run()
+    assert not at.exception
+    ids = list(at.session_state["bars_base"]["ID"])
+    assert ids[0] == 1 and ids[2] == 2 and pd.isna(ids[1])
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()

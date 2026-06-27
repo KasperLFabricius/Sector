@@ -252,6 +252,42 @@ def _pts_from_df(df, cols):
     return out
 
 
+def _renumber(df, cols, start):
+    """Editor base from ``df`` with a leading ``ID`` column numbered from
+    ``start`` -- but only on complete rows. Blank/NaN rows (which the analysis and
+    the plot skip) get no ID, so the table IDs always match the plotted/result
+    numbering."""
+    rows = df[cols].reset_index(drop=True)
+    ids, n = [], start
+    for _, row in rows.iterrows():
+        if any(pd.isna(row[c]) for c in cols):
+            ids.append(pd.NA)
+        else:
+            ids.append(n)
+            n += 1
+    out = rows.copy()
+    out.insert(0, "ID", pd.array(ids, dtype="Int64"))
+    return out
+
+
+def _point_editor(box, base_key, ed_key, cols, id_start):
+    """Render an editable point table with a read-only, plot-matching ID column.
+
+    Edits are committed back to the base each run (and the widget state cleared),
+    so the IDs renumber when rows are added or removed and tendon IDs follow the
+    live bar count. Returns the valid points (NaN/blank rows skipped).
+    """
+    edited = box.data_editor(
+        st.session_state[base_key], key=ed_key, num_rows="dynamic",
+        use_container_width=True, hide_index=True,
+        column_config={"ID": st.column_config.NumberColumn(
+            "ID", disabled=True, help="Matches the number drawn on the plots.")})
+    pts = _pts_from_df(edited, cols)
+    st.session_state[base_key] = _renumber(edited, cols, id_start)
+    st.session_state.pop(ed_key, None)
+    return pts
+
+
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
     loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
@@ -290,6 +326,13 @@ def build_inputs():
                               key="v_inc", disabled=not plastic_on,
                               help="Angular step between swept neutral-axis angles; "
                                    "a finer step gives a smoother M-M envelope.")
+
+    aset.markdown("**Drawing**")
+    label_scale = aset.number_input("Point label size", 0.5, 3.0, 1.0, 0.1,
+                                    key="label_scale",
+                                    help="Scales the corner / bar / tendon number "
+                                         "labels on the section drawings. Crowded "
+                                         "labels thin out automatically.")
 
     sec = s.expander("Section", expanded=True)
     shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
@@ -411,9 +454,11 @@ def build_inputs():
                          help="Overwrite the editable point tables below with the "
                               "Quick Section above.")
     if "pts_init" not in st.session_state or load_qs:
-        st.session_state["corners_base"] = _corners_df(qs_outer)
-        st.session_state["bars_base"] = _rebar_df(qs_bars)
-        st.session_state["tendons_base"] = _rebar_df(qs_tendons)
+        st.session_state["corners_base"] = _renumber(_corners_df(qs_outer),
+                                                     _CORNER_COLS, 1)
+        st.session_state["bars_base"] = _renumber(_rebar_df(qs_bars), _REBAR_COLS, 1)
+        st.session_state["tendons_base"] = _renumber(_rebar_df(qs_tendons),
+                                                     _REBAR_COLS, len(qs_bars) + 1)
         st.session_state["holes_pts"] = qs_holes
         for k in ("ed_corners", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
@@ -421,16 +466,13 @@ def build_inputs():
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
     sec.caption("Concrete corners define the outline (3 or more, in order). Bars "
-                "and tendons are points with an area (mm2). Edit freely; use Load "
-                "Quick Section to refill from the template above.")
+                "and tendons are points with an area (mm2). The ID column matches "
+                "the numbers drawn on the plots. Edit freely; use Load Quick "
+                "Section to refill from the template above.")
     sec.markdown("_Concrete corners_")
-    corners_df = sec.data_editor(st.session_state["corners_base"], key="ed_corners",
-                                 num_rows="dynamic", use_container_width=True)
+    outer = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS, 1)
     sec.markdown("_Reinforcing bars_")
-    bars_df = sec.data_editor(st.session_state["bars_base"], key="ed_bars",
-                              num_rows="dynamic", use_container_width=True)
-    outer = _pts_from_df(corners_df, _CORNER_COLS)
-    bars = _pts_from_df(bars_df, _REBAR_COLS)
+    bars = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS, 1)
     holes = st.session_state["holes_pts"]
     if len(outer) < 3:
         sec.error("Need at least 3 concrete corners; using the Quick Section outline.")
@@ -438,9 +480,9 @@ def build_inputs():
     tendons = []
     if use_pre:
         sec.markdown("_Tendons_")
-        tendons_df = sec.data_editor(st.session_state["tendons_base"], key="ed_tendons",
-                                     num_rows="dynamic", use_container_width=True)
-        tendons = _pts_from_df(tendons_df, _REBAR_COLS)
+        # Tendon IDs continue after the bars, matching the plot numbering.
+        tendons = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS,
+                                len(bars) + 1)
 
     # In elastic-only mode the stress-strain laws do not enter the analysis (it is
     # linear: steel via the modular ratio, concrete linear in compression with no
@@ -589,7 +631,7 @@ def build_inputs():
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_ts=sls_ts, sls_long=sls_long, sls_fctm=sls_fctm,
-                sls_cover=sls_cover, sls_phi=sls_phi,
+                sls_cover=sls_cover, sls_phi=sls_phi, label_scale=label_scale,
                 mode=mode, extent=extent, signature=sig)
 
 
@@ -784,7 +826,7 @@ def section_view(inp):
     tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
                                        title="Section", tendons=tendon_xy,
-                                       show_labels=True),
+                                       show_labels=True, label_scale=inp["label_scale"]),
                     use_container_width=True)
 
 
@@ -866,7 +908,7 @@ def plastic_view(inp, results):
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
                                tendons=tendon_xy, zones=_zones(inp["outer"], hp),
                                title=f"Section at V = {pt['V']:.0f} deg",
-                               show_labels=True),
+                               show_labels=True, label_scale=inp["label_scale"]),
             use_container_width=True)
     with cR:
         lines = [
@@ -915,14 +957,21 @@ def elastic_view(inp, results):
     hp = _elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"]) if has_comp else None
     na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"]) if hp else None
     zones = _zones(inp["outer"], hp) if hp else None
-    # Tendons are modelled as ordinary bars in the elastic run, in bar order.
-    bar_xy = ([(b[0], b[1]) for b in inp["bars"]]
-              + [(t[0], t[1]) for t in inp["tendons"]])
-    colors = [viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION for s in e["total"]]
+    # Tendons fold into the bar set for the solve, but are drawn as diamonds (bars
+    # as circles), each coloured by its stress sign -- consistent with the other
+    # views. The stress list runs bars first, then tendons.
+    nb = len(inp["bars"])
+    bar_xy = [(b[0], b[1]) for b in inp["bars"]]
+    tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
+    sign = lambda s: viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
+    bar_colors = [sign(s) for s in e["total"][:nb]]
+    tendon_colors = [sign(s) for s in e["total"][nb:]]
     st.plotly_chart(
-        viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=colors,
+        viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=bar_colors,
+                           tendons=tendon_xy, tendon_colors=tendon_colors,
                            na_line=na, zones=zones, show_labels=True,
-                           title="Elastic state (bars: green tension, red compression)"),
+                           label_scale=inp["label_scale"],
+                           title="Elastic state (green tension, red compression)"),
         use_container_width=True)
 
     # The per-bar stress table sits below the figure, sized to all rows.

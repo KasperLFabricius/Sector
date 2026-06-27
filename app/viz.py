@@ -279,60 +279,83 @@ def _ring_xy(ring):
 
 POINT_LABEL = "#2c2c2a"   # reinforcement point numbers
 CORNER_LABEL = "#5b6770"  # concrete corner numbers
-# Above this many concrete vertices the corner numbers become clutter (e.g. a
-# circular section is a fine polygon), so they are omitted.
-_MAX_CORNER_LABELS = 16
 
 
-def _add_point_labels(fig, outer, holes, bars, tendons):
+def _decimate(positions, min_dist):
+    """Greedy indices to keep so the kept points are at least ``min_dist`` apart.
+
+    Walks the points in order, keeping one only when it clears every already-kept
+    point -- so closely spaced labels thin out (every 2nd, 3rd, ...) while
+    well-spaced ones are all kept.
+    """
+    if min_dist <= 0.0:
+        return list(range(len(positions)))
+    keep, chosen = [], []
+    for i, p in enumerate(positions):
+        if all(math.hypot(p[0] - q[0], p[1] - q[1]) >= min_dist for q in chosen):
+            keep.append(i)
+            chosen.append(p)
+    return keep
+
+
+def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0):
     """Number the reinforcement (bars then tendons, continuously) and the
     concrete corners, so the drawing cross-references the result tables.
 
     Reinforcement numbering matches the elastic per-bar table (tendons follow the
     bars); corner numbering matches ``Section.concrete_vertices`` order (outer
     ring then holes), which is the "corner N" reported with the peak concrete
-    stress.
+    stress. Where labels would crowd they thin out by spacing, and ``label_scale``
+    scales both the font and that spacing.
     """
+    xs = [v[0] for v in outer] or [0.0]
+    ys = [v[1] for v in outer] or [0.0]
+    span = max(max(xs) - min(xs), max(ys) - min(ys)) or 1.0
+    size = 9.0 * label_scale
+    min_dist = 0.11 * span * label_scale      # below this, labels would overlap
+
     rebar = list(bars or []) + list(tendons or [])
     if rebar:
+        keep = _decimate(rebar, min_dist)
         fig.add_trace(go.Scatter(
-            x=[p[0] for p in rebar], y=[p[1] for p in rebar], mode="text",
-            text=[str(i + 1) for i in range(len(rebar))],
-            textposition="top center", textfont=dict(size=9, color=POINT_LABEL),
+            x=[rebar[i][0] for i in keep], y=[rebar[i][1] for i in keep], mode="text",
+            text=[str(i + 1) for i in keep], textposition="top center",
+            textfont=dict(size=size, color=POINT_LABEL),
             hoverinfo="skip", showlegend=False))
 
     verts = [v for ring in [outer, *(holes or [])] for v in ring]
-    if not (0 < len(verts) <= _MAX_CORNER_LABELS):
+    if not verts:
         return
-    cx = sum(v[0] for v in outer) / len(outer)
-    cy = sum(v[1] for v in outer) / len(outer)
-    xs = [v[0] for v in outer]
-    ys = [v[1] for v in outer]
-    off = 0.05 * (max(max(xs) - min(xs), max(ys) - min(ys)) or 1.0)
-    lx, ly = [], []
-    for v in verts:                       # nudge each label outward from the centre
+    cx = sum(xs) / len(xs)
+    cy = sum(ys) / len(ys)
+    off = 0.05 * span * label_scale
+    lx, ly, txt = [], [], []
+    for i in _decimate(verts, min_dist):      # nudge each kept label outward
+        v = verts[i]
         dx, dy = v[0] - cx, v[1] - cy
         d = math.hypot(dx, dy) or 1.0
         lx.append(v[0] + off * dx / d)
         ly.append(v[1] + off * dy / d)
+        txt.append(str(i + 1))
     fig.add_trace(go.Scatter(
-        x=lx, y=ly, mode="text", text=[str(i + 1) for i in range(len(verts))],
-        textfont=dict(size=9, color=CORNER_LABEL), hoverinfo="skip",
+        x=lx, y=ly, mode="text", text=txt,
+        textfont=dict(size=size, color=CORNER_LABEL), hoverinfo="skip",
         showlegend=False))
 
 
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
-                   na_line=None, title="Section", tendons=None, zones=None,
-                   show_labels=False):
+                   na_line=None, title="Section", tendons=None, tendon_colors=None,
+                   zones=None, show_labels=False, label_scale=1.0):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
-    ``outer`` / ``holes`` are vertex lists (m). ``bars`` is a list of (x, y).
-    ``bar_colors`` (optional) one colour per bar. ``tendons`` (optional) is a
-    list of (x, y) prestressing-tendon positions, drawn as diamonds. ``na_line``
-    is ``(x0, y0, x1, y1)`` for the neutral axis. ``zones`` (optional) is a list
-    of ``(vertices, fillcolor, name)`` regions (e.g. compression/tension zones)
-    shaded beneath the holes. ``show_labels`` numbers the reinforcement and the
-    concrete corners for cross-referencing the result tables.
+    Reinforcement is drawn consistently across the views: bars are circles and
+    tendons are diamonds, each coloured by ``bar_colors`` / ``tendon_colors``
+    (e.g. by stress sign) when given, else a neutral colour. ``outer`` / ``holes``
+    are vertex lists (m). ``na_line`` is ``(x0, y0, x1, y1)`` for the neutral
+    axis. ``zones`` (optional) is a list of ``(vertices, fillcolor, name)``
+    regions shaded beneath the holes. ``show_labels`` numbers the reinforcement
+    and concrete corners (thinned out where they crowd); ``label_scale`` scales
+    the label font and spacing.
     """
     fig = go.Figure()
     xs, ys = _ring_xy(outer)
@@ -354,30 +377,31 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         bx = [b[0] for b in bars]
         by = [b[1] for b in bars]
         colors = bar_colors or [BAR_NEUTRAL] * len(bars)
-        fig.add_trace(go.Scatter(x=bx, y=by, mode="markers",
-                                 marker=dict(size=9, color=colors,
+        fig.add_trace(go.Scatter(x=bx, y=by, mode="markers", name="reinforcing bar",
+                                 marker=dict(size=9, symbol="circle", color=colors,
                                              line=dict(color="white", width=1)),
-                                 hoverinfo="skip", showlegend=False))
+                                 hoverinfo="skip", showlegend=True))
     if tendons:
         tx = [t[0] for t in tendons]
         ty = [t[1] for t in tendons]
-        fig.add_trace(go.Scatter(x=tx, y=ty, mode="markers",
-                                 marker=dict(size=11, color=TENDON, symbol="diamond",
+        colors = tendon_colors or [TENDON] * len(tendons)
+        fig.add_trace(go.Scatter(x=tx, y=ty, mode="markers", name="tendon",
+                                 marker=dict(size=11, symbol="diamond", color=colors,
                                              line=dict(color="white", width=1)),
-                                 hoverinfo="skip", showlegend=False))
+                                 hoverinfo="skip", showlegend=True))
     if na_line:
         x0, y0, x1, y1 = na_line
         fig.add_trace(go.Scatter(x=[x0, x1], y=[y0, y1], mode="lines",
                                  line=dict(color=NA_LINE, width=2, dash="dash"),
                                  name="neutral axis"))
     if show_labels:
-        _add_point_labels(fig, outer, holes, bars, tendons)
+        _add_point_labels(fig, outer, holes, bars, tendons, label_scale)
     fig.update_layout(
         title=title, template="plotly_white", height=440,
         margin=dict(l=10, r=10, t=40, b=10),
         xaxis=dict(title="x (m)", zeroline=True),
         yaxis=dict(title="y (m)", scaleanchor="x", scaleratio=1, zeroline=True),
-        showlegend=bool(na_line) or bool(zones),
+        showlegend=bool(na_line) or bool(zones) or bool(bars) or bool(tendons),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, font=dict(size=10)),
     )
     return fig
