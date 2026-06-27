@@ -277,8 +277,53 @@ def _ring_xy(ring):
     return xs, ys
 
 
+POINT_LABEL = "#2c2c2a"   # reinforcement point numbers
+CORNER_LABEL = "#5b6770"  # concrete corner numbers
+# Above this many concrete vertices the corner numbers become clutter (e.g. a
+# circular section is a fine polygon), so they are omitted.
+_MAX_CORNER_LABELS = 16
+
+
+def _add_point_labels(fig, outer, holes, bars, tendons):
+    """Number the reinforcement (bars then tendons, continuously) and the
+    concrete corners, so the drawing cross-references the result tables.
+
+    Reinforcement numbering matches the elastic per-bar table (tendons follow the
+    bars); corner numbering matches ``Section.concrete_vertices`` order (outer
+    ring then holes), which is the "corner N" reported with the peak concrete
+    stress.
+    """
+    rebar = list(bars or []) + list(tendons or [])
+    if rebar:
+        fig.add_trace(go.Scatter(
+            x=[p[0] for p in rebar], y=[p[1] for p in rebar], mode="text",
+            text=[str(i + 1) for i in range(len(rebar))],
+            textposition="top center", textfont=dict(size=9, color=POINT_LABEL),
+            hoverinfo="skip", showlegend=False))
+
+    verts = [v for ring in [outer, *(holes or [])] for v in ring]
+    if not (0 < len(verts) <= _MAX_CORNER_LABELS):
+        return
+    cx = sum(v[0] for v in outer) / len(outer)
+    cy = sum(v[1] for v in outer) / len(outer)
+    xs = [v[0] for v in outer]
+    ys = [v[1] for v in outer]
+    off = 0.05 * (max(max(xs) - min(xs), max(ys) - min(ys)) or 1.0)
+    lx, ly = [], []
+    for v in verts:                       # nudge each label outward from the centre
+        dx, dy = v[0] - cx, v[1] - cy
+        d = math.hypot(dx, dy) or 1.0
+        lx.append(v[0] + off * dx / d)
+        ly.append(v[1] + off * dy / d)
+    fig.add_trace(go.Scatter(
+        x=lx, y=ly, mode="text", text=[str(i + 1) for i in range(len(verts))],
+        textfont=dict(size=9, color=CORNER_LABEL), hoverinfo="skip",
+        showlegend=False))
+
+
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
-                   na_line=None, title="Section", tendons=None, zones=None):
+                   na_line=None, title="Section", tendons=None, zones=None,
+                   show_labels=False):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     ``outer`` / ``holes`` are vertex lists (m). ``bars`` is a list of (x, y).
@@ -286,7 +331,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     list of (x, y) prestressing-tendon positions, drawn as diamonds. ``na_line``
     is ``(x0, y0, x1, y1)`` for the neutral axis. ``zones`` (optional) is a list
     of ``(vertices, fillcolor, name)`` regions (e.g. compression/tension zones)
-    shaded beneath the holes.
+    shaded beneath the holes. ``show_labels`` numbers the reinforcement and the
+    concrete corners for cross-referencing the result tables.
     """
     fig = go.Figure()
     xs, ys = _ring_xy(outer)
@@ -324,6 +370,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         fig.add_trace(go.Scatter(x=[x0, x1], y=[y0, y1], mode="lines",
                                  line=dict(color=NA_LINE, width=2, dash="dash"),
                                  name="neutral axis"))
+    if show_labels:
+        _add_point_labels(fig, outer, holes, bars, tendons)
     fig.update_layout(
         title=title, template="plotly_white", height=440,
         margin=dict(l=10, r=10, t=40, b=10),

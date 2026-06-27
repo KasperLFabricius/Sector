@@ -80,6 +80,34 @@ def test_na_line_at_spans_the_extent():
     assert {round(x0, 3), round(x1, 3)} == {-0.5, 0.5}
 
 
+def test_section_figure_numbers_rebar_and_corners():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    bars = [(-0.1, -0.25), (0.1, -0.25)]
+    tendons = [(0.0, 0.27)]
+    fig = viz.section_figure(outer, bars=bars, tendons=tendons, show_labels=True)
+    texts = [t for t in fig.data if getattr(t, "mode", None) == "text"]
+    # Reinforcement: bars then tendons, numbered continuously 1, 2, 3.
+    rebar = next(t for t in texts if list(t.text) == ["1", "2", "3"])
+    assert list(rebar.x)[:2] == [-0.1, 0.1]      # bars precede the tendon
+    # Concrete corners: the four outer vertices numbered 1..4.
+    assert any(list(t.text) == ["1", "2", "3", "4"] for t in texts)
+
+
+def test_section_figure_omits_corner_labels_when_too_many():
+    from sector import templates
+    outer = [tuple(v) for v in templates.circular(0.6)]   # 48-vertex polygon
+    fig = viz.section_figure(outer, bars=[(0.0, -0.2)], show_labels=True)
+    texts = [t for t in fig.data if getattr(t, "mode", None) == "text"]
+    assert any(list(t.text) == ["1"] for t in texts)      # the bar is still numbered
+    assert all(len(t.text) <= viz._MAX_CORNER_LABELS for t in texts)  # corners omitted
+
+
+def test_section_figure_no_labels_by_default():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(outer, bars=[(0.0, 0.0)])
+    assert not any(getattr(t, "mode", None) == "text" for t in fig.data)
+
+
 def test_section_figure_shades_zones():
     outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
     comp = [(-0.2, 0.0), (0.2, 0.0), (0.2, 0.3), (-0.2, 0.3)]

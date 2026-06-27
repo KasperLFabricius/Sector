@@ -700,7 +700,8 @@ def section_view(inp):
     bar_xy = [(b[0], b[1]) for b in inp["bars"]]
     tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
-                                       title="Section", tendons=tendon_xy),
+                                       title="Section", tendons=tendon_xy,
+                                       show_labels=True),
                     use_container_width=True)
 
 
@@ -781,7 +782,8 @@ def plastic_view(inp, results):
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
                                tendons=tendon_xy, zones=_zones(inp["outer"], hp),
-                               title=f"Section at V = {pt['V']:.0f} deg"),
+                               title=f"Section at V = {pt['V']:.0f} deg",
+                               show_labels=True),
             use_container_width=True)
     with cR:
         lines = [
@@ -837,7 +839,7 @@ def elastic_view(inp, results):
                   for s in e["total"]]
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=colors,
-                               na_line=na, zones=zones,
+                               na_line=na, zones=zones, show_labels=True,
                                title="Elastic state (bars: green tension, red compression)"),
             use_container_width=True)
     with cR:
