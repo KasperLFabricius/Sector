@@ -13,6 +13,8 @@ BAR_COMPRESSION = "#c0392b"
 BAR_NEUTRAL = "#534ab7"
 TENDON = "#0b7285"
 NA_LINE = "#e08a1e"
+COMP_ZONE_FILL = "rgba(192,57,43,0.22)"   # concrete compression zone
+TENS_ZONE_FILL = "rgba(29,158,117,0.12)"  # tension side (no concrete stress)
 ENVELOPE = "#534ab7"
 LOAD_POINT = "#c0392b"
 DESIGN_LINE = "#534ab7"
@@ -276,19 +278,27 @@ def _ring_xy(ring):
 
 
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
-                   na_line=None, title="Section", tendons=None):
+                   na_line=None, title="Section", tendons=None, zones=None):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     ``outer`` / ``holes`` are vertex lists (m). ``bars`` is a list of (x, y).
     ``bar_colors`` (optional) one colour per bar. ``tendons`` (optional) is a
     list of (x, y) prestressing-tendon positions, drawn as diamonds. ``na_line``
-    is ``(x0, y0, x1, y1)`` for the neutral axis.
+    is ``(x0, y0, x1, y1)`` for the neutral axis. ``zones`` (optional) is a list
+    of ``(vertices, fillcolor, name)`` regions (e.g. compression/tension zones)
+    shaded beneath the holes.
     """
     fig = go.Figure()
     xs, ys = _ring_xy(outer)
     fig.add_trace(go.Scatter(x=xs, y=ys, fill="toself", mode="lines",
                              fillcolor=CONCRETE_FILL, line=dict(color=CONCRETE_LINE),
                              hoverinfo="skip", showlegend=False))
+    for verts, color, name in zones or []:
+        if len(verts) >= 3:
+            zx, zy = _ring_xy(verts)
+            fig.add_trace(go.Scatter(x=zx, y=zy, fill="toself", mode="lines",
+                                     fillcolor=color, line=dict(width=0),
+                                     hoverinfo="skip", name=name))
     for hole in holes or []:
         hx, hy = _ring_xy(hole)
         fig.add_trace(go.Scatter(x=hx, y=hy, fill="toself", mode="lines",
@@ -319,7 +329,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         margin=dict(l=10, r=10, t=40, b=10),
         xaxis=dict(title="x (m)", zeroline=True),
         yaxis=dict(title="y (m)", scaleanchor="x", scaleratio=1, zeroline=True),
-        showlegend=bool(na_line),
+        showlegend=bool(na_line) or bool(zones),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, font=dict(size=10)),
     )
     return fig
 
@@ -359,3 +370,13 @@ def na_endpoints(x_int, y_int, extent):
     if fy and not fx:  # horizontal line y = y_int
         return (-extent, y_int, extent, y_int)
     return None
+
+
+def na_line_at(a, b, c, extent):
+    """Endpoints of the line ``a*x + b*y + c = 0`` spanning +/- ``extent``.
+
+    ``(a, b)`` is the (unit) normal. The line's closest point to the origin is
+    ``-c*(a, b)``; the segment runs along the line direction ``(-b, a)``.
+    """
+    px, py = -c * a, -c * b
+    return (px - extent * b, py + extent * a, px + extent * b, py - extent * a)

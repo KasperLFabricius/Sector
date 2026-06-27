@@ -73,6 +73,21 @@ def test_steel_figure_shows_input_modulus_slope_label():
     assert "E<sub>s</sub>" in texts and "205 GPa" in texts
 
 
+def test_na_line_at_spans_the_extent():
+    # Horizontal line y = 0 (a=0, b=1, c=0): endpoints span +/- extent in x.
+    x0, y0, x1, y1 = viz.na_line_at(0.0, 1.0, 0.0, 0.5)
+    assert y0 == pytest.approx(0.0) and y1 == pytest.approx(0.0)
+    assert {round(x0, 3), round(x1, 3)} == {-0.5, 0.5}
+
+
+def test_section_figure_shades_zones():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    comp = [(-0.2, 0.0), (0.2, 0.0), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(outer, zones=[(comp, viz.COMP_ZONE_FILL, "compression zone")])
+    fills = [t for t in fig.data if getattr(t, "fill", None) == "toself"]
+    assert any(t.name == "compression zone" for t in fills)
+
+
 def test_hard_cutoff_renders_as_a_true_vertical():
     # Concrete crushes at eps_cu2 = 3.5 permille: the drop to zero must be drawn
     # vertical (two trace points at the same strain), not sloped across samples.

@@ -251,20 +251,47 @@ def test_results_views_render_after_calculate():
         assert not at.exception, v
 
 
-def test_section_view_warns_and_hides_stale_neutral_axis():
-    # Run elastic (draws a neutral axis), then change a dimension and stay on
-    # the Section view: the cached axis must be hidden with a stale warning.
+def test_section_view_is_geometry_only():
+    # The Section view shows input geometry only -- no neutral axis, no stale
+    # notice -- even after a calculation and an input change. Results (incl. the
+    # neutral axis) live in the result views.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
     at.button(key="calculate").click().run()
     at.selectbox(key="view").set_value("Section").run()
-    assert not at.exception
-    assert not at.warning  # fresh results -> no stale notice
-
     at.number_input(key="h").set_value(0.75).run()  # geometry now differs
     assert not at.exception
-    assert any("neutral axis is hidden" in w.value for w in at.warning)
+    assert not any("neutral axis" in w.value for w in at.warning)
+
+
+def test_plastic_results_table_and_state_selector():
+    # The plastic view exposes the per-angle table data and a state selector.
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    assert not at.exception
+    p = at.session_state["results"]["plastic"]
+    assert len(p["points"]) > 0
+    pt = p["points"][0]
+    for k in ("V", "Mx", "My", "na_x", "na_y", "eps_c", "eps_s", "kappa",
+              "comp_force", "lever", "dx", "dy"):
+        assert k in pt
+    # selecting a different neutral-axis state recomputes the diagnostic cleanly
+    at.selectbox(key="pl_state").set_value(3).run()
+    assert not at.exception
+
+
+def test_elastic_results_show_neutral_axis_and_max_steel():
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.button(key="calculate").click().run()
+    at.selectbox(key="view").set_value("Elastic Results").run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert "max_steel" in e and "max_conc_xy" in e and "na_x" in e
 
 
 def test_prestress_plastic_increases_capacity():
