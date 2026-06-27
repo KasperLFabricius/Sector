@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from sector.codes import ecm, fctm
+from sector.elastic import solve_elastic, transformed_properties
 from sector.section import Section
 from sector.serviceability import (
     analyse_cracking,
@@ -141,6 +142,24 @@ def test_pure_compression_never_cracks():
     assert math.isinf(r.lambda_cr)
     assert not r.cracked
     assert r.crack is None
+
+
+def test_transformed_section_properties_match_hand_calc():
+    # The uncracked transformed section and the cracked transformed section
+    # (compression block + n*As) reproduce the hand-worked area, centroid and
+    # second moment about the bending (x) axis.
+    sec = beam_section()
+    pu = transformed_properties(sec, 6.0, cracked=False)
+    assert pu.area == pytest.approx(0.18884, rel=1e-3)
+    assert pu.cy == pytest.approx(0.28830, abs=1e-4)
+    assert pu.Ix == pytest.approx(0.0059265, rel=1e-3)
+
+    r = solve_elastic(sec, 0.0, 150.0, 0.0, 6.0)
+    pc = transformed_properties(sec, 6.0, eps0=r.eps0, kx=r.kx, ky=r.ky, cracked=True)
+    assert pc.Ix == pytest.approx(0.0017511, rel=1e-3)
+    assert pc.area < pu.area          # cracked section drops the tension concrete
+    # For pure bending the cracked centroid sits on the neutral axis.
+    assert pc.cy == pytest.approx(r.na_y_intercept, abs=1e-3)
 
 
 def test_ecm_and_fctm_table_3_1():

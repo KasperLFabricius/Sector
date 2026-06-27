@@ -350,6 +350,68 @@ def solve_elastic_uncracked(
 
 
 @dataclass
+class SectionProperties:
+    """Transformed (modular-ratio-weighted) section properties about the section
+    centroid.
+
+    Lengths are in the section's own units (m for a kN/m/m section), so the area
+    is in m^2 and the second moments in m^4. Reinforcement is included at ``n*A``.
+    ``Ix`` is the second moment about the x-axis (it resists ``Mx``, the bending
+    whose stress varies with y); ``Iy`` is about the y-axis.
+    """
+
+    area: float
+    cx: float
+    cy: float
+    Ix: float
+    Iy: float
+    Ixy: float
+
+
+def transformed_properties(
+    section: Section,
+    n: float,
+    *,
+    eps0: float | None = None,
+    kx: float | None = None,
+    ky: float | None = None,
+    cracked: bool = False,
+) -> SectionProperties:
+    """Transformed-section properties for the uncracked or cracked state.
+
+    Uncracked (``cracked=False``): the whole concrete section is active. Cracked:
+    the active concrete is the compression zone of the strain plane
+    ``(eps0, kx, ky)`` -- the same half-plane the solver integrates -- so the
+    properties are those of the cracked transformed section. Reinforcement enters
+    at ``n*A`` in both cases.
+    """
+    rings = section.integration_rings()
+    bx, by, ba = section.bar_arrays()
+    cm = AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    for ring in rings:
+        active = clip_halfplane(ring, -kx, -ky, -eps0) if cracked else ring
+        cm = cm + area_moments(active)
+    A, Sx, Sy, Sxx, Syy, Sxy = cm.area, cm.sx, cm.sy, cm.sxx, cm.syy, cm.sxy
+    if bx.size:
+        g = float(n) * ba
+        A += float(g.sum())
+        Sx += float((g * bx).sum())
+        Sy += float((g * by).sum())
+        Sxx += float((g * bx * bx).sum())
+        Syy += float((g * by * by).sum())
+        Sxy += float((g * bx * by).sum())
+    if A <= 0.0:
+        return SectionProperties(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    cx, cy = Sx / A, Sy / A
+    return SectionProperties(
+        area=A, cx=cx, cy=cy,
+        Ix=Syy - A * cy * cy,
+        Iy=Sxx - A * cx * cx,
+        Ixy=Sxy - A * cx * cy,
+    )
+
+
+@dataclass
 class CombinedElasticResult:
     """Result of a combined long- and short-term elastic analysis.
 
