@@ -68,9 +68,9 @@ def _number(box, prefix, field, meta):
                             key=f"{prefix}_{field}")
 
 
-def concrete_panel(parent):
-    """Concrete section: preset, editable parameters and stress-strain diagram."""
-    box = parent.expander("Concrete", expanded=False)
+def concrete_panel(box):
+    """Concrete material: preset and editable parameters (diagram is in the main view)."""
+    box.markdown("**Concrete**")
     presets = mp.CONCRETE_PRESETS
     labels = list(presets)
     preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
@@ -93,13 +93,12 @@ def concrete_panel(parent):
                                  alpha_cc=alpha_cc)
     note = "  (alpha_cc tracks fck via eta_cc)" if auto is not None else ""
     box.caption(f"curve {curve},  fcd = {concrete.fcd:.1f} MPa{note}")
-    box.plotly_chart(viz.concrete_curve_figure(concrete), use_container_width=True)
     return concrete
 
 
-def mild_panel(parent):
-    """Mild-steel section: preset, editable parameters and stress-strain diagram."""
-    box = parent.expander("Mild steel", expanded=False)
+def mild_panel(box):
+    """Mild-steel material: preset and editable parameters (diagram is in the main view)."""
+    box.markdown("**Mild steel**")
     presets = mp.MILD_PRESETS
     labels = list(presets)
     preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
@@ -110,13 +109,12 @@ def mild_panel(parent):
             for f in mp.MILD_FIELDS_BY_CURVE[curve]}
     steel = mp.build_mild(curve=curve, **vals)
     box.caption(f"curve {curve},  fyd = {steel.fytk / vals['gamma_y']:.0f} MPa")
-    box.plotly_chart(viz.steel_curve_figure(steel), use_container_width=True)
     return steel
 
 
-def prestress_panel(parent):
-    """Prestressing-steel section: preset, editable parameters and diagram."""
-    box = parent.expander("Prestressing steel", expanded=False)
+def prestress_panel(box):
+    """Prestressing-steel material: preset and editable parameters (diagram is in the main view)."""
+    box.markdown("**Prestressing steel**")
     presets = mp.PRESTRESS_PRESETS
     labels = list(presets)
     preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
@@ -130,7 +128,6 @@ def prestress_panel(parent):
     if curve in (6, 7):
         cap += f",  fpd = {vals['fytk'] / vals['gamma_y']:.0f} MPa"
     box.caption(cap)
-    box.plotly_chart(viz.prestress_curve_figure(pre), use_container_width=True)
     return pre
 
 
@@ -139,52 +136,74 @@ def prestress_panel(parent):
 # ---------------------------------------------------------------------------
 
 def build_inputs():
+    """Render the sidebar dropdown panels and return the section, materials and
+    loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
+    Section, Material Parameters, Loads."""
     s = st.sidebar
-    s.header("Section")
-    shape = s.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
-                                  "Box girder", "Circular"], key="shape")
+
+    with s.expander("About", expanded=False):
+        st.markdown(
+            "**Sector** analyses reinforced-concrete (and optionally "
+            "prestressed) cross-sections, returning the plastic bending "
+            "capacity and the cracked-section elastic stresses.")
+        st.caption("Define the section and materials, choose elastic and/or "
+                   "plastic analysis, then press Calculate. The section drawing "
+                   "and the stress-strain diagrams update live; the results "
+                   "update on Calculate.")
+        st.caption(f"Version {APP_VERSION}")
+
+    aset = s.expander("Analysis & Result Settings", expanded=False)
+    mode = aset.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode")
+    ratio = aset.number_input("Modular ratio n = Es/Ec", 5.0, 30.0, 15.0, 0.5,
+                              key="ratio",
+                              disabled=mode not in ("Elastic", "Both"),
+                              help="Used by the cracked-section elastic analysis.")
+
+    sec = s.expander("Section", expanded=True)
+    shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
+                                    "Box girder", "Circular"], key="shape")
 
     holes = []
     if shape == "Rectangle":
-        b = s.number_input("Width b (m)", 0.05, 10.0, 0.40, 0.05, key="b")
-        h = s.number_input("Height h (m)", 0.05, 10.0, 0.60, 0.05, key="h")
+        b = sec.number_input("Width b (m)", 0.05, 10.0, 0.40, 0.05, key="b")
+        h = sec.number_input("Height h (m)", 0.05, 10.0, 0.60, 0.05, key="h")
         outer = templates.rectangle(b, h)
         width_b = b
     elif shape == "Slab strip":
-        h = s.number_input("Thickness h (m)", 0.05, 3.0, 0.30, 0.01, key="h")
+        h = sec.number_input("Thickness h (m)", 0.05, 3.0, 0.30, 0.01, key="h")
         b = 1.0
         outer = templates.slab_strip(h)
         width_b = b
     elif shape == "T-section":
-        bf = s.number_input("Flange width bf (m)", 0.1, 12.0, 1.20, 0.05, key="bf")
-        hf = s.number_input("Flange thickness hf (m)", 0.05, 2.0, 0.20, 0.01, key="hf")
-        bw = s.number_input("Web width bw (m)", 0.05, 4.0, 0.30, 0.05, key="bw")
-        hw = s.number_input("Web depth hw (m)", 0.1, 6.0, 0.60, 0.05, key="hw")
+        bf = sec.number_input("Flange width bf (m)", 0.1, 12.0, 1.20, 0.05, key="bf")
+        hf = sec.number_input("Flange thickness hf (m)", 0.05, 2.0, 0.20, 0.01, key="hf")
+        bw = sec.number_input("Web width bw (m)", 0.05, 4.0, 0.30, 0.05, key="bw")
+        hw = sec.number_input("Web depth hw (m)", 0.1, 6.0, 0.60, 0.05, key="hw")
         outer = templates.t_section(bf, hf, bw, hw)
         b, h, width_b = bw, hf + hw, bf
     elif shape == "Box girder":
-        b = s.number_input("Width b (m)", 0.2, 12.0, 0.80, 0.05, key="b")
-        h = s.number_input("Height h (m)", 0.2, 12.0, 1.00, 0.05, key="h")
+        b = sec.number_input("Width b (m)", 0.2, 12.0, 0.80, 0.05, key="b")
+        h = sec.number_input("Height h (m)", 0.2, 12.0, 1.00, 0.05, key="h")
         # Cap the wall so the cavity stays positive (2*wall < b and < h).
         max_wall = round(min(b, h) / 2 - 0.01, 3)
-        wall = s.number_input("Wall thickness (m)", 0.02, max_wall,
-                              min(0.20, max_wall), 0.01, key="wall")
+        wall = sec.number_input("Wall thickness (m)", 0.02, max_wall,
+                                min(0.20, max_wall), 0.01, key="wall")
         outer, holes = templates.box(b, h, wall)
         width_b = b
     else:  # Circular
-        dia = s.number_input("Diameter (m)", 0.1, 6.0, 0.60, 0.05, key="dia")
+        dia = sec.number_input("Diameter (m)", 0.1, 6.0, 0.60, 0.05, key="dia")
         outer = templates.circular(dia)
         b = h = dia
         width_b = dia
 
-    s.header("Reinforcement")
+    sec.markdown("**Reinforcement**")
     if shape == "Circular":
-        nb = s.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n")
-        rd = s.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4, key="ring_d")
-        cov = s.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="ring_c")
+        nb = sec.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n")
+        rd = sec.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4, key="ring_d")
+        cov = sec.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="ring_c")
         bars = templates.bar_ring(0.0, 0.0, dia / 2 - cov, int(nb), rd)
     else:
-        c1, c2 = s.columns(2)
+        c1, c2 = sec.columns(2)
         with c1:
             st.markdown("**Bottom**")
             nb_bot = st.number_input("n##bot", 0, 100, 6, 1, key="bot_n", label_visibility="collapsed")
@@ -193,7 +212,7 @@ def build_inputs():
             st.markdown("**Top**")
             nb_top = st.number_input("n##top", 0, 100, 2, 1, key="top_n", label_visibility="collapsed")
             rd_top = st.selectbox("dia##top", templates.BAR_DIAMETERS, index=4, key="top_d", label_visibility="collapsed")
-        cov = s.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="cover")
+        cov = sec.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="cover")
         bw_eff = width_b if shape == "T-section" else b
         bars = templates.merge_bars(
             templates.bar_row(-h / 2 + cov, -(b if shape != "T-section" else bw_eff) / 2 + cov,
@@ -203,14 +222,14 @@ def build_inputs():
             templates.bar_row(h / 2 - cov, -width_b / 2 + cov, width_b / 2 - cov, int(nb_top), rd_top),
         )
 
-    s.header("Prestressing")
-    use_pre = s.checkbox("Include prestressing tendons", value=False, key="use_pre")
+    sec.markdown("**Prestressing**")
+    use_pre = sec.checkbox("Include prestressing tendons", value=False, key="use_pre")
     tendons = []
     prestress = None
     if use_pre:
-        nt = s.number_input("Tendons", 0, 200, 4, 1, key="tnd_n")
-        a_t = s.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a")
-        cov_p = s.number_input("Tendon cover (m)", 0.0, 2.0, 0.10, 0.01, key="tnd_c")
+        nt = sec.number_input("Tendons", 0, 200, 4, 1, key="tnd_n")
+        a_t = sec.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a")
+        cov_p = sec.number_input("Tendon cover (m)", 0.0, 2.0, 0.10, 0.01, key="tnd_c")
         if shape == "Circular":
             tendons = templates.point_ring(0.0, 0.0, max(dia / 2 - cov_p, 0.0),
                                            int(nt), a_t)
@@ -220,23 +239,18 @@ def build_inputs():
             tendons = templates.point_row(-h / 2 + cov_p, -b / 2 + cov_p,
                                           b / 2 - cov_p, int(nt), a_t)
 
-    s.header("Material Parameters")
-    concrete = concrete_panel(s)
-    steel = mild_panel(s)
+    mat = s.expander("Material Parameters", expanded=False)
+    concrete = concrete_panel(mat)
+    mat.divider()
+    steel = mild_panel(mat)
     if use_pre:
-        prestress = prestress_panel(s)
+        mat.divider()
+        prestress = prestress_panel(mat)
 
-    s.header("Loads")
-    P = s.number_input("Axial force P (kN, + = compression)", -50000.0, 50000.0, 0.0, 50.0, key="P")
-    mode = s.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode")
-    if mode in ("Elastic", "Both"):
-        Mx = s.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0, key="Mx")
-        My = s.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0, key="My")
-        ratio = s.number_input("Modular ratio n = Es/Ec", 5.0, 30.0, 15.0, 0.5, key="ratio")
-    else:
-        Mx = s.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0, key="Mx")
-        My = s.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0, key="My")
-        ratio = 15.0
+    loads = s.expander("Loads", expanded=True)
+    P = loads.number_input("Axial force P (kN, + = compression)", -50000.0, 50000.0, 0.0, 50.0, key="P")
+    Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0, key="Mx")
+    My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0, key="My")
 
     section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                    tendons_xy_area_mm2=tendons, holes=holes)
@@ -307,11 +321,90 @@ def _radial_util(mx, my, ax, ay):
 
 
 # ---------------------------------------------------------------------------
+# Views (main area). A "View" dropdown selects what fills the main viewport,
+# the way BriCoS switches between its result diagrams. The Section drawing and
+# the stress-strain diagrams reflect the inputs live; the Plastic and Elastic
+# result views need a Calculate.
+# ---------------------------------------------------------------------------
+
+VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results"]
+
+
+def section_view(inp, results, stale):
+    """The section drawing, with the elastic neutral axis when available.
+
+    The geometry redraws live, but the neutral axis comes from the last
+    calculation. When the inputs have changed since then (``stale``), the
+    cached axis would sit on a different section, so it is hidden and a notice
+    is shown instead of drawing a misleading line.
+    """
+    bar_xy = [(b[0], b[1]) for b in inp["bars"]]
+    tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
+    has_elastic = bool(results and "elastic" in results)
+    na_line = None
+    if has_elastic and not stale:
+        na_line = viz.na_endpoints(results["elastic"]["na_x"],
+                                   results["elastic"]["na_y"], inp["extent"])
+    if has_elastic and stale:
+        st.warning("Inputs changed since the last calculation - the neutral "
+                   "axis is hidden; press Calculate to update.")
+    st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
+                                       na_line=na_line, title="Section",
+                                       tendons=tendon_xy),
+                    use_container_width=True)
+
+
+def materials_view(inp):
+    """Stress-strain diagrams for the chosen materials (live, no Calculate)."""
+    c1, c2 = st.columns(2)
+    c1.plotly_chart(viz.concrete_curve_figure(inp["concrete"]), use_container_width=True)
+    c2.plotly_chart(viz.steel_curve_figure(inp["steel"]), use_container_width=True)
+    if inp["prestress"] is not None:
+        st.plotly_chart(viz.prestress_curve_figure(inp["prestress"]),
+                        use_container_width=True)
+
+
+def plastic_view(inp, results):
+    """Plastic capacity metrics and the biaxial interaction envelope."""
+    if not results or "plastic" not in results:
+        st.info("Run a Plastic or Both analysis, then press Calculate.")
+        return
+    p = results["plastic"]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Max Mx", f"{p['max_mx']:.0f} kNm")
+    m2.metric("Max My", f"{p['max_my']:.0f} kNm")
+    m3.metric("Utilisation", f"{p['util']:.2f}",
+              help="applied / capacity in the load direction")
+    st.plotly_chart(
+        viz.interaction_figure(p["mx"], p["my"], applied=(inp["Mx"], inp["My"])),
+        use_container_width=True)
+
+
+def elastic_view(inp, results):
+    """Cracked-section elastic stresses: peak concrete and per-bar stresses."""
+    if not results or "elastic" not in results:
+        st.info("Run an Elastic or Both analysis, then press Calculate.")
+        return
+    e = results["elastic"]
+    st.metric("Max concrete compression", f"{e['max_conc']:.1f} MPa")
+    st.dataframe(
+        {"Bar": list(range(1, len(e["bar_stress"]) + 1)),
+         "Stress (MPa)": [round(s, 1) for s in e["bar_stress"]]},
+        hide_index=True, use_container_width=True)
+
+
+# ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
 
 inp = build_inputs()
-calc = st.sidebar.button("Calculate", type="primary", key="calculate")
+
+c_view, c_calc = st.columns([3, 1])
+view = c_view.selectbox("View", VIEWS, key="view")
+# Nudge the unlabelled button down so it lines up with the selectbox input.
+c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
+calc = c_calc.button("Calculate", type="primary", key="calculate",
+                     use_container_width=True)
 
 if calc:
     st.session_state["results"] = run_analysis(inp)
@@ -319,42 +412,14 @@ if calc:
 
 results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
+if stale and view in ("Plastic Results", "Elastic Results"):
+    st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
-left, right = st.columns(2)
-with left:
-    bar_xy = [(b[0], b[1]) for b in inp["bars"]]
-    na_line = None
-    if results and "elastic" in results:
-        na_line = viz.na_endpoints(results["elastic"]["na_x"],
-                                   results["elastic"]["na_y"], inp["extent"])
-    tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
-    st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
-                                       na_line=na_line, title="Section",
-                                       tendons=tendon_xy),
-                    use_container_width=True)
-
-with right:
-    if results is None:
-        st.info("Define the section, then press Calculate.")
-    else:
-        if stale:
-            st.warning("Inputs changed since the last calculation - press Calculate to update.")
-        if "plastic" in results:
-            p = results["plastic"]
-            st.subheader("Plastic capacity")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Max Mx", f"{p['max_mx']:.0f} kNm")
-            m2.metric("Max My", f"{p['max_my']:.0f} kNm")
-            u = p["util"]
-            m3.metric("Utilisation", f"{u:.2f}", help="applied / capacity in the load direction")
-            st.plotly_chart(
-                viz.interaction_figure(p["mx"], p["my"], applied=(inp["Mx"], inp["My"])),
-                use_container_width=True)
-        if "elastic" in results:
-            e = results["elastic"]
-            st.subheader("Elastic stresses")
-            st.metric("Max concrete compression", f"{e['max_conc']:.1f} MPa")
-            st.dataframe(
-                {"Bar": list(range(1, len(e["bar_stress"]) + 1)),
-                 "Stress (MPa)": [round(s, 1) for s in e["bar_stress"]]},
-                hide_index=True, use_container_width=True)
+if view == "Section":
+    section_view(inp, results, stale)
+elif view == "Stress-Strain diagrams":
+    materials_view(inp)
+elif view == "Plastic Results":
+    plastic_view(inp, results)
+else:
+    elastic_view(inp, results)
