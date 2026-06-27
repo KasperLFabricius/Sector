@@ -92,6 +92,48 @@ def test_2023_concrete_fck_edit_calculates():
     assert "plastic" in at.session_state["results"]
 
 
+def test_prestress_plastic_increases_capacity():
+    # Enabling tendons in the tension zone must raise the plastic +Mx capacity.
+    base = _fresh()
+    base.run()
+    base.button(key="calculate").click().run()
+    assert not base.exception
+    mx0 = base.session_state["results"]["plastic"]["max_mx"]
+
+    at = _fresh()
+    at.run()
+    at.checkbox(key="use_pre").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    res = at.session_state["results"]
+    assert "plastic" in res
+    assert res["plastic"]["max_mx"] > mx0
+
+
+def test_prestress_both_modes_run_with_tendons():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="use_pre").set_value(True).run()
+    at.radio(key="mode").set_value("Both").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    res = at.session_state["results"]
+    # Elastic models each tendon as an extra bar, so its stress list grows.
+    assert "plastic" in res and "elastic" in res
+    assert len(res["elastic"]["bar_stress"]) > 0
+
+
+def test_prestress_preset_curve6_calculates():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="use_pre").set_value(True).run()
+    at.selectbox(key="pre_preset").set_value("Curve 6 (bilinear)").run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
 def test_material_manual_override_calculates():
     at = _fresh()
     at.run()

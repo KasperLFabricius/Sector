@@ -90,6 +90,29 @@ def test_bar_ring_on_circle():
     assert all(math.hypot(x, y) == pytest.approx(0.25) for x, y, _ in bars)
 
 
+def test_point_row_count_spacing_and_area():
+    pts = templates.point_row(-0.2, -0.3, 0.3, 4, 150.0)
+    assert len(pts) == 4
+    xs = [p[0] for p in pts]
+    assert xs[0] == pytest.approx(-0.3) and xs[-1] == pytest.approx(0.3)
+    assert all(p[1] == pytest.approx(-0.2) for p in pts)
+    assert all(p[2] == pytest.approx(150.0) for p in pts)  # area given directly
+    gaps = [xs[i + 1] - xs[i] for i in range(3)]
+    assert max(gaps) == pytest.approx(min(gaps))
+
+
+def test_point_row_single_is_centred_and_empty_for_zero():
+    assert templates.point_row(0.0, -0.3, 0.3, 1, 100.0)[0][0] == pytest.approx(0.0)
+    assert templates.point_row(0.0, -0.3, 0.3, 0, 100.0) == []
+
+
+def test_point_ring_on_circle_with_given_area():
+    pts = templates.point_ring(0.0, 0.0, 0.25, 6, 140.0)
+    assert len(pts) == 6
+    assert all(math.hypot(x, y) == pytest.approx(0.25) for x, y, _ in pts)
+    assert all(a == pytest.approx(140.0) for _, _, a in pts)
+
+
 def test_edge_layer_faces():
     b, h, c = 0.4, 0.6, 0.05
     bottom = templates.edge_layer(b, h, c, 3, 16, "bottom")

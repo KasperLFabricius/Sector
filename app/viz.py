@@ -11,6 +11,7 @@ CONCRETE_LINE = "#5b6770"
 BAR_TENSION = "#1d9e75"
 BAR_COMPRESSION = "#c0392b"
 BAR_NEUTRAL = "#534ab7"
+TENDON = "#0b7285"
 NA_LINE = "#e08a1e"
 ENVELOPE = "#534ab7"
 LOAD_POINT = "#c0392b"
@@ -38,6 +39,9 @@ _MARKER_LABELS = {
     "eps_ud": _EPS + "<sub>ud</sub>",
     "eps_y1": _EPS + "<sub>y1</sub>",
     "eps_y2": _EPS + "<sub>y2</sub>",
+    "eps_pd": _EPS + "<sub>pd</sub>",
+    "fpd": "f<sub>pd</sub>",
+    "fpud": "f<sub>pud</sub>",
 }
 
 
@@ -186,6 +190,19 @@ def concrete_curve_figure(concrete, title="Concrete"):
     return _curve_figure(concrete, -0.0042, 0.0006, title)
 
 
+def prestress_curve_figure(prestress, title="Prestressing steel"):
+    """Stress-strain diagram for a prestressing-steel law (tension only).
+
+    Tendons carry tension only, so the strain window starts just below zero and
+    runs a little past the rupture strain (so the ultimate point shows). The
+    strain axis is the *total* tendon strain -- the effective prestrain plus the
+    section strain at the tendon.
+    """
+    top = prestress.rupture_strain
+    top = top if 0.0 < top <= 0.06 else 0.035
+    return _curve_figure(prestress, -0.001, top * 1.02, title)
+
+
 def steel_curve_figure(steel, title="Mild steel", eps_max=0.025):
     """Stress-strain diagram for a reinforcement law (tension and compression).
 
@@ -205,12 +222,13 @@ def _ring_xy(ring):
 
 
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
-                   na_line=None, title="Section"):
+                   na_line=None, title="Section", tendons=None):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     ``outer`` / ``holes`` are vertex lists (m). ``bars`` is a list of (x, y).
-    ``bar_colors`` (optional) one colour per bar. ``na_line`` is
-    ``(x0, y0, x1, y1)`` for the neutral axis.
+    ``bar_colors`` (optional) one colour per bar. ``tendons`` (optional) is a
+    list of (x, y) prestressing-tendon positions, drawn as diamonds. ``na_line``
+    is ``(x0, y0, x1, y1)`` for the neutral axis.
     """
     fig = go.Figure()
     xs, ys = _ring_xy(outer)
@@ -228,6 +246,13 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         colors = bar_colors or [BAR_NEUTRAL] * len(bars)
         fig.add_trace(go.Scatter(x=bx, y=by, mode="markers",
                                  marker=dict(size=9, color=colors,
+                                             line=dict(color="white", width=1)),
+                                 hoverinfo="skip", showlegend=False))
+    if tendons:
+        tx = [t[0] for t in tendons]
+        ty = [t[1] for t in tendons]
+        fig.add_trace(go.Scatter(x=tx, y=ty, mode="markers",
+                                 marker=dict(size=11, color=TENDON, symbol="diamond",
                                              line=dict(color="white", width=1)),
                                  hoverinfo="skip", showlegend=False))
     if na_line:
