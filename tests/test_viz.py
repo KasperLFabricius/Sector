@@ -93,25 +93,36 @@ def test_section_figure_numbers_rebar_and_corners():
     assert any(list(t.text) == ["1", "2", "3", "4"] for t in texts)
 
 
-def test_corner_labels_thin_out_when_crowded():
+def _corner_count(fig):
+    texts = [t for t in fig.data if getattr(t, "mode", None) == "text"]
+    return len(max(texts, key=lambda t: len(t.text)).text) if texts else 0
+
+
+def test_label_min_gap_thins_crowded_corners():
     from sector import templates
     outer = [tuple(v) for v in templates.circular(0.6)]   # 48-vertex polygon
-    fig = viz.section_figure(outer, bars=[(0.0, -0.2)], show_labels=True)
-    corner_trace = max((t for t in fig.data if getattr(t, "mode", None) == "text"),
-                       key=lambda t: len(t.text))
-    n_shown = len(corner_trace.text)
-    assert 0 < n_shown < 48                                # decimated, not all 48
-    # A bigger label size thins them further (spacing scales with the font).
-    fig_big = viz.section_figure(outer, bars=[(0.0, -0.2)], show_labels=True,
-                                 label_scale=2.0)
-    big = max((t for t in fig_big.data if getattr(t, "mode", None) == "text"),
-              key=lambda t: len(t.text))
-    assert len(big.text) < n_shown
+    # gap 0 keeps every corner; a larger gap thins the crowded ones.
+    assert _corner_count(viz.section_figure(outer, show_labels=True,
+                                            label_min_gap=0.0)) == 48
+    thinned = _corner_count(viz.section_figure(outer, show_labels=True,
+                                               label_min_gap=0.15))
+    assert 0 < thinned < 48
+
+
+def test_label_min_gap_is_independent_of_size():
+    # The hide threshold (which labels show) does not depend on the font size.
+    from sector import templates
+    outer = [tuple(v) for v in templates.circular(0.6)]
+    small = viz.section_figure(outer, show_labels=True, label_min_gap=0.15,
+                               label_scale=1.0)
+    big = viz.section_figure(outer, show_labels=True, label_min_gap=0.15,
+                             label_scale=2.5)
+    assert _corner_count(small) == _corner_count(big)
 
 
 def test_sparse_corners_all_labelled():
     outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
-    fig = viz.section_figure(outer, show_labels=True)
+    fig = viz.section_figure(outer, show_labels=True)   # default gap keeps all 4
     assert any(list(t.text) == ["1", "2", "3", "4"]
                for t in fig.data if getattr(t, "mode", None) == "text")
 
@@ -120,7 +131,7 @@ def test_label_scale_sets_font_size():
     outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
     fig = viz.section_figure(outer, bars=[(0.0, 0.0)], show_labels=True, label_scale=2.0)
     sizes = [t.textfont.size for t in fig.data if getattr(t, "mode", None) == "text"]
-    assert sizes and all(sz == pytest.approx(18.0) for sz in sizes)   # 9 * 2.0
+    assert sizes and all(sz == pytest.approx(22.0) for sz in sizes)   # 11 * 2.0
 
 
 def test_tendons_drawn_as_diamonds_with_given_colors():
