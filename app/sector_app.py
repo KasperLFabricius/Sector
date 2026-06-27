@@ -1075,19 +1075,20 @@ def _elastic_sls_section(inp, e):
 
 inp = build_inputs()
 
-# Plot-label controls live in the main viewport, above the View dropdown. They
-# only affect the drawings, so they are not part of the result-staleness signature.
-with st.expander("Plot label settings", expanded=False):
-    lc1, lc2 = st.columns(2)
-    inp["label_scale"] = lc1.number_input(
-        "Label size", 0.5, 3.0, 1.0, 0.1, key="label_scale",
-        help="Scales the corner / bar / tendon number labels on the section "
-             "drawings.")
-    inp["label_min_gap"] = lc2.number_input(
-        "Label spacing (hide threshold)", 0.0, 0.5, 0.04, 0.01, key="label_min_gap",
-        help="Labels closer together than this fraction of the section size are "
-             "hidden to avoid overlap. Lower shows more (0 shows every label); "
-             "raise it for dense outlines like a circular section.")
+# Plot-label controls sit inline in the main viewport, directly above the View
+# dropdown (not tucked inside a submenu). They only affect the drawings, so they
+# are not part of the result-staleness signature.
+st.markdown("**Plot labels**")
+lc1, lc2 = st.columns(2)
+inp["label_scale"] = lc1.number_input(
+    "Label size", 0.5, 3.0, 1.0, 0.1, key="label_scale",
+    help="Scales the corner / bar / tendon number labels on the section "
+         "drawings.")
+inp["label_min_gap"] = lc2.number_input(
+    "Label spacing (hide threshold)", 0.0, 0.5, 0.04, 0.01, key="label_min_gap",
+    help="Labels closer together than this fraction of the section size are "
+         "hidden to avoid overlap. Lower shows more (0 shows every label); "
+         "raise it for dense outlines like a circular section.")
 
 c_view, c_calc = st.columns([3, 1])
 view = c_view.selectbox("View", VIEWS, key="view",
