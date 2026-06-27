@@ -121,6 +121,22 @@ def test_results_views_render_after_calculate():
         assert not at.exception, v
 
 
+def test_section_view_warns_and_hides_stale_neutral_axis():
+    # Run elastic (draws a neutral axis), then change a dimension and stay on
+    # the Section view: the cached axis must be hidden with a stale warning.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.button(key="calculate").click().run()
+    at.selectbox(key="view").set_value("Section").run()
+    assert not at.exception
+    assert not at.warning  # fresh results -> no stale notice
+
+    at.number_input(key="h").set_value(0.75).run()  # geometry now differs
+    assert not at.exception
+    assert any("neutral axis is hidden" in w.value for w in at.warning)
+
+
 def test_prestress_plastic_increases_capacity():
     # Enabling tendons in the tension zone must raise the plastic +Mx capacity.
     base = _fresh()

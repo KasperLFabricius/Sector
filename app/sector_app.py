@@ -330,14 +330,24 @@ def _radial_util(mx, my, ax, ay):
 VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results"]
 
 
-def section_view(inp, results):
-    """The section drawing, with the elastic neutral axis when available."""
+def section_view(inp, results, stale):
+    """The section drawing, with the elastic neutral axis when available.
+
+    The geometry redraws live, but the neutral axis comes from the last
+    calculation. When the inputs have changed since then (``stale``), the
+    cached axis would sit on a different section, so it is hidden and a notice
+    is shown instead of drawing a misleading line.
+    """
     bar_xy = [(b[0], b[1]) for b in inp["bars"]]
     tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
+    has_elastic = bool(results and "elastic" in results)
     na_line = None
-    if results and "elastic" in results:
+    if has_elastic and not stale:
         na_line = viz.na_endpoints(results["elastic"]["na_x"],
                                    results["elastic"]["na_y"], inp["extent"])
+    if has_elastic and stale:
+        st.warning("Inputs changed since the last calculation - the neutral "
+                   "axis is hidden; press Calculate to update.")
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
                                        na_line=na_line, title="Section",
                                        tendons=tendon_xy),
@@ -406,7 +416,7 @@ if stale and view in ("Plastic Results", "Elastic Results"):
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
 if view == "Section":
-    section_view(inp, results)
+    section_view(inp, results, stale)
 elif view == "Stress-Strain diagrams":
     materials_view(inp)
 elif view == "Plastic Results":
