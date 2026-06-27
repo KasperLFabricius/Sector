@@ -189,6 +189,21 @@ def test_points_are_source_of_truth_until_loaded():
     assert at.session_state["results"]["plastic"]["max_mx"] > base_mx  # deeper -> stronger
 
 
+def test_point_tables_have_plot_matching_ids():
+    # Each point table carries an ID column matching the plot numbering: corners
+    # and bars from 1, and tendons continuing after the bars.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="use_pre").set_value(True).run()
+    at.button(key="load_qs").click().run()
+    cb = at.session_state["corners_base"]
+    bb = at.session_state["bars_base"]
+    tb = at.session_state["tendons_base"]
+    assert list(cb["ID"]) == list(range(1, len(cb) + 1))
+    assert list(bb["ID"]) == list(range(1, len(bb) + 1))
+    assert list(tb["ID"]) == list(range(len(bb) + 1, len(bb) + 1 + len(tb)))
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
