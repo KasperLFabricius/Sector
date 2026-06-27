@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from sector.materials import EPS_CU, EPS_C_PEAK, ES, Concrete, MildSteel
+from sector.materials import EPS_CU, EPS_C_PEAK, ES, Concrete, MildSteel, Prestress
 
 
 def test_concrete_markers_are_points():
@@ -53,6 +53,24 @@ def test_mild_curve3_tension_and_compression_yields():
     # The two compression yields are at negative strain and stress.
     assert pts[3][0] < 0 and pts[3][1] == pytest.approx(-0.9 * 550.0)
     assert pts[4] == (pytest.approx(-0.005), pytest.approx(-550.0), "eps_y2", "f2")
+
+
+def test_prestress_proof_point_lies_on_the_curve():
+    # The fpd marker must sit on the actual law for both user-defined curves.
+    # Curve 6 (bilinear) reaches fpd at the end of the elastic branch...
+    p6 = Prestress(curve=6, IS=0.0, fytk=1600.0, futk=1860.0, eut=0.035,
+                   gamma_y=1.15, gamma_u=1.15, gamma_E=1.0)
+    eps_pd, fpd, ek, sk = p6.diagram_markers(design=True)[0]
+    assert (ek, sk) == ("eps_pd", "fpd")
+    assert eps_pd == pytest.approx(fpd / ES)
+    assert p6.stress(eps_pd, design=True) == pytest.approx(fpd)
+
+    # ...curve 7 (two yield) only reaches fpd after the plastic strain ey0t.
+    p7 = Prestress(curve=7, IS=0.0, fytk=1600.0, futk=1860.0, eut=0.035,
+                   k=0.9, ey0t=0.002, gamma_y=1.15, gamma_u=1.15, gamma_E=1.0)
+    eps_pd, fpd, _, _ = p7.diagram_markers(design=True)[0]
+    assert eps_pd == pytest.approx(0.002 + fpd / ES)
+    assert p7.stress(eps_pd, design=True) == pytest.approx(fpd)
 
 
 def test_elastic_slope_reflects_partial_factor():
