@@ -59,6 +59,27 @@ def test_both_mode_runs_elastic_and_plastic():
     assert "plastic" in res and "elastic" in res
 
 
+def test_plastic_and_elastic_use_independent_loads():
+    # The two analyses take their own load sets; changing the elastic moment
+    # must not move the plastic utilisation, and vice versa.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    at.number_input(key="pl_Mx").set_value(150.0).run()
+    at.number_input(key="el_Mx").set_value(50.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    res = at.session_state["results"]
+    util0 = res["plastic"]["util"]
+    stress0 = list(res["elastic"]["bar_stress"])
+
+    at.number_input(key="el_Mx").set_value(120.0).run()  # change only the elastic load
+    at.button(key="calculate").click().run()
+    res2 = at.session_state["results"]
+    assert res2["plastic"]["util"] == pytest.approx(util0)   # plastic unchanged
+    assert res2["elastic"]["bar_stress"] != stress0         # elastic changed
+
+
 def test_circular_shape_calculates():
     at = _fresh()
     at.run()
@@ -172,7 +193,7 @@ def test_inputs_carry_help_tooltips():
     at = _fresh()
     at.run()
     for key in ("shape", "b", "h", "cover", "conc_fck", "mild_fytk", "mild_eut",
-                "P", "Mx", "ratio", "view"):
+                "pl_P", "pl_Mx", "ratio", "view"):
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
