@@ -75,6 +75,15 @@ CONCRETE_FIELD_META = {
     "alpha_cc": ("alpha_cc", 0.01, 1.2, 0.01),
 }
 
+# Help text shown as a hover tooltip next to each field.
+CONCRETE_HELP = {
+    "fck": "Characteristic compressive cylinder strength of the concrete.",
+    "gamma_c": "Partial safety factor on the concrete strength (design = "
+               "characteristic / gamma_c).",
+    "alpha_cc": "Coefficient for long-term and loading effects on the concrete "
+                "design strength (fcd = alpha_cc * fck / gamma_c).",
+}
+
 
 def build_concrete(curve, fck, gamma_c, alpha_cc) -> Concrete:
     """Build a :class:`~sector.materials.Concrete` from the panel parameters."""
@@ -161,6 +170,24 @@ MILD_FIELD_META = {
     "Es": ("Es (MPa)", 1000.0, 500000.0, 1000.0),
 }
 
+MILD_HELP = {
+    "fytk": "Characteristic yield stress in tension.",
+    "fyck": "Characteristic yield stress in compression (set 0 for no "
+            "compression capacity).",
+    "futk": "Characteristic ultimate (rupture) stress in tension.",
+    "eut": "Tensile strain at rupture.",
+    "gamma_y": "Partial safety factor on the yield stress.",
+    "gamma_u": "Partial safety factor on the ultimate stress.",
+    "gamma_E": "Partial safety factor on the elastic modulus.",
+    "k": "Ratio of the first to the second yield stress (f1 / fytk). Use k = 1 "
+         "for a single yield point (bilinear or elastic-perfectly-plastic).",
+    "ey0t": "Plastic strain at the second tensile yield. Use 0 for a single "
+            "yield point.",
+    "ey0c": "Total strain at the second compression yield. A large value keeps "
+            "the compression side flat at fyck (no second yield).",
+    "Es": "Elastic (Young's) modulus of the reinforcement.",
+}
+
 MILD_FIELDS_BY_CURVE = {
     1: ["fytk", "fyck", "futk", "eut", "gamma_y", "gamma_u", "gamma_E", "Es"],
     2: ["fytk", "fyck", "eut", "gamma_y", "Es"],
@@ -227,6 +254,21 @@ PRESTRESS_FIELD_META = {
     "k": ("k (f1 / fp0.1k)", 0.0, 1.0, 0.01),
     "ey0t": ("ey0t (permille)", 0.0, 1000.0, 0.1),
     "Es": ("Ep (MPa)", 1000.0, 500000.0, 1000.0),
+}
+
+PRESTRESS_HELP = {
+    "IS": "Initial (effective) prestrain locked into the tendon after losses; "
+          "the section strain adds to this.",
+    "fytk": "Characteristic 0.1% proof stress (fp0.1k).",
+    "futk": "Characteristic ultimate (rupture) stress (fpk).",
+    "eut": "Strain at rupture.",
+    "gamma_y": "Partial safety factor on the proof stress.",
+    "gamma_u": "Partial safety factor on the ultimate stress.",
+    "gamma_E": "Partial safety factor on the elastic modulus.",
+    "k": "Ratio of the first to the proof stress (f1 / fp0.1k). Use k = 1 for a "
+         "bilinear curve.",
+    "ey0t": "Plastic strain at the proof stress. Use 0 for a bilinear curve.",
+    "Es": "Elastic modulus of the prestressing steel (Ep).",
 }
 
 PRESTRESS_FIELDS_BY_CURVE = {

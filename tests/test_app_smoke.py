@@ -167,6 +167,25 @@ def test_degenerate_rupture_stress_does_not_crash():
     assert not at.exception
 
 
+def test_inputs_carry_help_tooltips():
+    # Inputs across the panels expose hover help (the "?" tooltip).
+    at = _fresh()
+    at.run()
+    for key in ("shape", "b", "h", "cover", "conc_fck", "mild_fytk", "mild_eut",
+                "P", "Mx", "ratio", "view"):
+        w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
+             or _widget(at.radio, key))
+        assert w is not None and w.help, key
+    assert at.radio(key="mode").help
+
+
+def _widget(seq, key):
+    for w in seq:
+        if w.key == key:
+            return w
+    return None
+
+
 def test_view_dropdown_switches_without_error():
     # Every view must render. The live views (Section, Stress-Strain) need no
     # Calculate; the result views show a prompt until one is run.

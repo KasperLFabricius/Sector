@@ -29,6 +29,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
 
+# Colour the input help "?" icons amber-yellow so they stand out as hover hints.
+st.markdown(
+    "<style>[data-testid='stTooltipIcon']{color:#e0a800;}"
+    "[data-testid='stTooltipIcon'] svg{stroke:#e0a800;}</style>",
+    unsafe_allow_html=True)
+
 
 @st.cache_resource(show_spinner="Preparing the solver...")
 def _warm_solver():
@@ -53,6 +59,10 @@ st.caption("Reinforced-concrete cross-section analysis - elastic stresses and pl
 # stress-strain diagram. A preset only prefills values; all stay editable.
 # ---------------------------------------------------------------------------
 
+_PRESET_HELP = ("Prefills a named stress-strain law (a legacy curve shape or a "
+                "Eurocode edition). Every parameter stays editable afterwards.")
+
+
 def _prefill(prefix, preset, presets):
     """Load a preset's defaults into the field keys when the selection changes."""
     prev = f"{prefix}_prev"
@@ -62,10 +72,11 @@ def _prefill(prefix, preset, presets):
         st.session_state[prev] = preset
 
 
-def _number(box, prefix, field, meta):
+def _number(box, prefix, field, meta, help_map=None):
     label, lo, hi, step = meta[field]
     return box.number_input(label, float(lo), float(hi), step=float(step),
-                            key=f"{prefix}_{field}")
+                            key=f"{prefix}_{field}",
+                            help=(help_map or {}).get(field))
 
 
 def _safe_build(box, builder, curve, vals):
@@ -109,11 +120,11 @@ def concrete_panel(box):
     presets = mp.CONCRETE_PRESETS
     labels = list(presets)
     preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
-                           key="conc_preset")
+                           key="conc_preset", help=_PRESET_HELP)
     _prefill("conc", preset, presets)
     curve = presets[preset]["curve"]
-    fck = _number(box, "conc", "fck", mp.CONCRETE_FIELD_META)
-    gamma_c = _number(box, "conc", "gamma_c", mp.CONCRETE_FIELD_META)
+    fck = _number(box, "conc", "fck", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
+    gamma_c = _number(box, "conc", "gamma_c", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
     # For a strength-dependent edition (EN 2023), keep alpha_cc tracking fck --
     # recompute it whenever fck changes, while still allowing a manual override
     # in between. Constant-alpha_cc editions just keep the editable value.
@@ -123,7 +134,7 @@ def concrete_panel(box):
         st.session_state["conc_alpha_fck"] = fck
     if auto is None:
         st.session_state.pop("conc_alpha_fck", None)
-    alpha_cc = _number(box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META)
+    alpha_cc = _number(box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc)
     note = "  (alpha_cc tracks fck via eta_cc)" if auto is not None else ""
@@ -143,10 +154,11 @@ def mild_panel(box):
     presets = mp.MILD_PRESETS
     labels = list(presets)
     preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
-                           key="mild_preset")
+                           key="mild_preset", help=_PRESET_HELP)
     _prefill("mild", preset, presets)
     curve = presets[preset]["curve"]
-    vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META) for f in mp.MILD_FIELD_META}
+    vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META, mp.MILD_HELP)
+            for f in mp.MILD_FIELD_META}
     _clamp_eut(box, vals, mp.MILD_FIELDS_BY_CURVE[curve])
     steel = _safe_build(box, mp.build_mild, curve, vals)
     box.caption(f"fyd = {steel.fytk / vals['gamma_y']:.0f} MPa,  "
@@ -165,10 +177,11 @@ def prestress_panel(box):
     presets = mp.PRESTRESS_PRESETS
     labels = list(presets)
     preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
-                           key="pre_preset")
+                           key="pre_preset", help=_PRESET_HELP)
     _prefill("pre", preset, presets)
     curve = presets[preset]["curve"]
-    vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META) for f in mp.PRESTRESS_FIELD_META}
+    vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP)
+            for f in mp.PRESTRESS_FIELD_META}
     _clamp_eut(box, vals, mp.PRESTRESS_FIELDS_BY_CURVE[curve])
     pre = _safe_build(box, mp.build_prestress, curve, vals)
     if curve in (1, 2, 3, 4, 5):
@@ -203,66 +216,91 @@ def build_inputs():
         st.caption(f"Version {APP_VERSION}")
 
     aset = s.expander("Analysis & Result Settings", expanded=False)
-    mode = aset.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode")
+    mode = aset.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode",
+                      help="Plastic: ultimate bending capacity (M-M envelope). "
+                           "Elastic: cracked-section concrete and bar stresses "
+                           "for the applied loads. Both: run the two.")
     ratio = aset.number_input("Modular ratio n = Es/Ec", 5.0, 30.0, 15.0, 0.5,
                               key="ratio",
                               disabled=mode not in ("Elastic", "Both"),
-                              help="Used by the cracked-section elastic analysis.")
+                              help="Ratio of the steel to concrete elastic "
+                                   "modulus (Es/Ec) for the cracked elastic "
+                                   "analysis.")
 
     sec = s.expander("Section", expanded=True)
     shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
-                                    "Box girder", "Circular"], key="shape")
+                                    "Box girder", "Circular"], key="shape",
+                          help="Outline of the concrete cross-section to analyse.")
 
     holes = []
     if shape == "Rectangle":
-        b = sec.number_input("Width b (m)", 0.05, 10.0, 0.40, 0.05, key="b")
-        h = sec.number_input("Height h (m)", 0.05, 10.0, 0.60, 0.05, key="h")
+        b = sec.number_input("Width b (m)", 0.05, 10.0, 0.40, 0.05, key="b",
+                             help="Overall section width.")
+        h = sec.number_input("Height h (m)", 0.05, 10.0, 0.60, 0.05, key="h",
+                             help="Overall section height (depth).")
         outer = templates.rectangle(b, h)
         width_b = b
     elif shape == "Slab strip":
-        h = sec.number_input("Thickness h (m)", 0.05, 3.0, 0.30, 0.01, key="h")
+        h = sec.number_input("Thickness h (m)", 0.05, 3.0, 0.30, 0.01, key="h",
+                             help="Slab thickness; the strip is analysed per 1 m width.")
         b = 1.0
         outer = templates.slab_strip(h)
         width_b = b
     elif shape == "T-section":
-        bf = sec.number_input("Flange width bf (m)", 0.1, 12.0, 1.20, 0.05, key="bf")
-        hf = sec.number_input("Flange thickness hf (m)", 0.05, 2.0, 0.20, 0.01, key="hf")
-        bw = sec.number_input("Web width bw (m)", 0.05, 4.0, 0.30, 0.05, key="bw")
-        hw = sec.number_input("Web depth hw (m)", 0.1, 6.0, 0.60, 0.05, key="hw")
+        bf = sec.number_input("Flange width bf (m)", 0.1, 12.0, 1.20, 0.05, key="bf",
+                              help="Width of the (top) flange.")
+        hf = sec.number_input("Flange thickness hf (m)", 0.05, 2.0, 0.20, 0.01, key="hf",
+                              help="Thickness of the flange.")
+        bw = sec.number_input("Web width bw (m)", 0.05, 4.0, 0.30, 0.05, key="bw",
+                              help="Width of the web.")
+        hw = sec.number_input("Web depth hw (m)", 0.1, 6.0, 0.60, 0.05, key="hw",
+                              help="Depth of the web below the flange.")
         outer = templates.t_section(bf, hf, bw, hw)
         b, h, width_b = bw, hf + hw, bf
     elif shape == "Box girder":
-        b = sec.number_input("Width b (m)", 0.2, 12.0, 0.80, 0.05, key="b")
-        h = sec.number_input("Height h (m)", 0.2, 12.0, 1.00, 0.05, key="h")
+        b = sec.number_input("Width b (m)", 0.2, 12.0, 0.80, 0.05, key="b",
+                             help="Overall outer width of the box.")
+        h = sec.number_input("Height h (m)", 0.2, 12.0, 1.00, 0.05, key="h",
+                             help="Overall outer height of the box.")
         # Cap the wall so the cavity stays positive (2*wall < b and < h).
         max_wall = round(min(b, h) / 2 - 0.01, 3)
         wall = sec.number_input("Wall thickness (m)", 0.02, max_wall,
-                                min(0.20, max_wall), 0.01, key="wall")
+                                min(0.20, max_wall), 0.01, key="wall",
+                                help="Thickness of the box walls (uniform).")
         outer, holes = templates.box(b, h, wall)
         width_b = b
     else:  # Circular
-        dia = sec.number_input("Diameter (m)", 0.1, 6.0, 0.60, 0.05, key="dia")
+        dia = sec.number_input("Diameter (m)", 0.1, 6.0, 0.60, 0.05, key="dia",
+                               help="Outer diameter of the circular section.")
         outer = templates.circular(dia)
         b = h = dia
         width_b = dia
 
     sec.markdown("**Reinforcement**")
     if shape == "Circular":
-        nb = sec.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n")
-        rd = sec.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4, key="ring_d")
-        cov = sec.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="ring_c")
+        nb = sec.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n",
+                              help="Number of bars evenly spaced around the perimeter.")
+        rd = sec.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4,
+                           key="ring_d", help="Diameter of each reinforcement bar.")
+        cov = sec.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="ring_c",
+                               help="Distance from the section face to the bar centres.")
         bars = templates.bar_ring(0.0, 0.0, dia / 2 - cov, int(nb), rd)
     else:
         c1, c2 = sec.columns(2)
         with c1:
             st.markdown("**Bottom**")
-            nb_bot = st.number_input("n##bot", 0, 100, 6, 1, key="bot_n", label_visibility="collapsed")
-            rd_bot = st.selectbox("dia##bot", templates.BAR_DIAMETERS, index=4, key="bot_d", label_visibility="collapsed")
+            nb_bot = st.number_input("n##bot", 0, 100, 6, 1, key="bot_n", label_visibility="collapsed",
+                                     help="Number of bars in the bottom layer.")
+            rd_bot = st.selectbox("dia##bot", templates.BAR_DIAMETERS, index=4, key="bot_d",
+                                  label_visibility="collapsed", help="Bottom bar diameter (mm).")
         with c2:
             st.markdown("**Top**")
-            nb_top = st.number_input("n##top", 0, 100, 2, 1, key="top_n", label_visibility="collapsed")
-            rd_top = st.selectbox("dia##top", templates.BAR_DIAMETERS, index=4, key="top_d", label_visibility="collapsed")
-        cov = sec.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="cover")
+            nb_top = st.number_input("n##top", 0, 100, 2, 1, key="top_n", label_visibility="collapsed",
+                                     help="Number of bars in the top layer.")
+            rd_top = st.selectbox("dia##top", templates.BAR_DIAMETERS, index=4, key="top_d",
+                                  label_visibility="collapsed", help="Top bar diameter (mm).")
+        cov = sec.number_input("Cover (m)", 0.0, 0.5, 0.05, 0.005, key="cover",
+                               help="Distance from the top/bottom face to the bar centres.")
         bw_eff = width_b if shape == "T-section" else b
         bars = templates.merge_bars(
             templates.bar_row(-h / 2 + cov, -(b if shape != "T-section" else bw_eff) / 2 + cov,
@@ -273,13 +311,19 @@ def build_inputs():
         )
 
     sec.markdown("**Prestressing**")
-    use_pre = sec.checkbox("Include prestressing tendons", value=False, key="use_pre")
+    use_pre = sec.checkbox("Include prestressing tendons", value=False, key="use_pre",
+                           help="Add a row of prestressing tendons and the "
+                                "Prestressing-steel material panel.")
     tendons = []
     prestress = None
     if use_pre:
-        nt = sec.number_input("Tendons", 0, 200, 4, 1, key="tnd_n")
-        a_t = sec.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a")
-        cov_p = sec.number_input("Tendon cover (m)", 0.0, 2.0, 0.10, 0.01, key="tnd_c")
+        nt = sec.number_input("Tendons", 0, 200, 4, 1, key="tnd_n",
+                              help="Number of tendons in the row.")
+        a_t = sec.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a",
+                               help="Cross-sectional area of a single tendon.")
+        cov_p = sec.number_input("Tendon cover (m)", 0.0, 2.0, 0.10, 0.01, key="tnd_c",
+                                 help="Distance from the bottom face (or the "
+                                      "circular ring) to the tendons.")
         if shape == "Circular":
             tendons = templates.point_ring(0.0, 0.0, max(dia / 2 - cov_p, 0.0),
                                            int(nt), a_t)
@@ -298,9 +342,15 @@ def build_inputs():
         prestress = prestress_panel(mat)
 
     loads = s.expander("Loads", expanded=True)
-    P = loads.number_input("Axial force P (kN, + = compression)", -50000.0, 50000.0, 0.0, 50.0, key="P")
-    Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0, key="Mx")
-    My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0, key="My")
+    P = loads.number_input("Axial force P (kN, + = compression)", -50000.0, 50000.0, 0.0, 50.0,
+                           key="P", help="Axial force on the section; positive is "
+                                         "compression. Used by both analyses.")
+    Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, 200.0, 10.0, key="Mx",
+                            help="Applied moment about the x-axis: the elastic "
+                                 "stresses are computed for it, and it sets the "
+                                 "plastic utilisation point on the M-M envelope.")
+    My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0, key="My",
+                            help="Applied moment about the y-axis (biaxial bending).")
 
     section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                    tendons_xy_area_mm2=tendons, holes=holes)
@@ -450,11 +500,15 @@ def elastic_view(inp, results):
 inp = build_inputs()
 
 c_view, c_calc = st.columns([3, 1])
-view = c_view.selectbox("View", VIEWS, key="view")
+view = c_view.selectbox("View", VIEWS, key="view",
+                        help="What to show in the main area. Section and "
+                             "Stress-Strain diagrams update live; the result "
+                             "views need a Calculate.")
 # Nudge the unlabelled button down so it lines up with the selectbox input.
 c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
 calc = c_calc.button("Calculate", type="primary", key="calculate",
-                     use_container_width=True)
+                     use_container_width=True,
+                     help="Run the selected analysis for the current inputs.")
 
 if calc:
     st.session_state["results"] = run_analysis(inp)
