@@ -97,13 +97,25 @@ def test_plastic_sweep_stays_within_requested_bounds():
     at.run()
     at.number_input(key="v_min").set_value(0.0).run()
     at.number_input(key="v_max").set_value(10.0).run()
-    at.number_input(key="v_inc").set_value(6.0).run()  # does not divide evenly
+    at.number_input(key="v_inc").set_value(7.0).run()  # max increment, doesn't divide
     at.button(key="calculate").click().run()
     assert not at.exception
-    vs = [p["V"] for p in at.session_state["results"]["plastic"]["points"]]
-    assert min(vs) == pytest.approx(0.0)
-    assert max(vs) == pytest.approx(10.0)
+    p = at.session_state["results"]["plastic"]
+    vs = sorted(pt["V"] for pt in p["points"])
+    assert vs[0] == pytest.approx(0.0)
+    assert vs[-1] == pytest.approx(10.0)
     assert all(-1e-6 <= v <= 10.0 + 1e-6 for v in vs)
+    # V.inc is a maximum increment: the actual step is never coarser.
+    assert max(vs[i + 1] - vs[i] for i in range(len(vs) - 1)) <= 7.0 + 1e-6
+    # A partial sweep is an open arc -> no utilisation reported.
+    assert p["util"] is None
+
+
+def test_full_sweep_reports_utilisation():
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()  # default 0-360 sweep
+    assert at.session_state["results"]["plastic"]["util"] is not None
 
 
 def test_both_mode_runs_elastic_and_plastic():

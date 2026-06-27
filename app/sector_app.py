@@ -420,15 +420,16 @@ def build_inputs():
 def _sweep(v_min, v_max, v_inc):
     """Normalise a (min, max, increment) sweep so it lands exactly on both ends.
 
-    The solver steps ``v_min + i*inc`` for a rounded step count, which can
-    overshoot or miss ``v_max`` when the increment does not divide the span. We
-    keep the requested resolution but snap the step so the last angle is exactly
-    ``v_max`` and no angle falls outside [v_min, v_max].
+    The solver steps ``v_min + i*inc`` for a step count, which could overshoot or
+    miss ``v_max`` when the increment does not divide the span. ``v_inc`` is a
+    *maximum* increment: a ceiling interval count keeps the step at or below the
+    requested resolution while landing exactly on ``v_max`` (no angle outside
+    [v_min, v_max]).
     """
     span = max(v_max, v_min) - v_min   # >= 0 (guards a reversed range)
     if span < 1e-9 or v_inc <= 0.0:
         return v_min, v_min, max(v_inc, 1.0)   # a single angle
-    n = max(1, round(span / v_inc))
+    n = max(1, math.ceil(span / v_inc))
     return v_min, v_min + span, span / n
 
 
@@ -440,10 +441,16 @@ def run_analysis(inp):
                             inp["P_pl"], vlo, vhi, vstep, prestress=inp["prestress"])
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
+        # Utilisation interpolates the capacity in the applied direction, which is
+        # only a closed envelope when the sweep spans the full 360 deg. A partial
+        # sweep is an open arc, so report no utilisation rather than a wrap-around
+        # interpolation between the arc endpoints.
+        closed = (vhi - vlo) >= 360.0 - 1e-6
+        util = _radial_util(mx, my, inp["Mx_pl"], inp["My_pl"]) if closed else None
         out["plastic"] = dict(
             mx=mx, my=my,
             max_mx=max(mx), max_my=max(my),
-            util=_radial_util(mx, my, inp["Mx_pl"], inp["My_pl"]),
+            util=util, closed=closed,
             converged=all(p.converged for p in pts),
             points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
                          na_y=p.na_y_intercept, eps_c=p.eps_concrete,
@@ -614,8 +621,13 @@ def plastic_view(inp, results):
     m1, m2, m3 = st.columns(3)
     m1.metric("Max Mx", f"{p['max_mx']:.0f} kNm")
     m2.metric("Max My", f"{p['max_my']:.0f} kNm")
-    m3.metric("Utilisation", f"{p['util']:.2f}",
-              help="applied / capacity in the load direction")
+    if p["util"] is None:
+        m3.metric("Utilisation", "-",
+                  help="Only meaningful for a full 0-360 deg sweep; the current "
+                       "sweep is a partial arc.")
+    else:
+        m3.metric("Utilisation", f"{p['util']:.2f}",
+                  help="applied / capacity in the load direction")
     st.plotly_chart(
         viz.interaction_figure(p["mx"], p["my"], applied=(inp["Mx_pl"], inp["My_pl"])),
         use_container_width=True)
