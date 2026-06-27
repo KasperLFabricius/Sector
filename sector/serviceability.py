@@ -1,0 +1,297 @@
+"""Serviceability cracked-section analysis: cracking threshold, tension
+stiffening and crack width.
+
+The plain cracked elastic analysis in :mod:`sector.elastic` assumes the section
+is *already* fully cracked -- concrete carries no tension anywhere, so it always
+reports the fully cracked (Stage II) stresses. That is the right model once a
+section has cracked, but it says nothing about *whether* it has cracked, and it
+ignores the stiffening contribution of the intact concrete between cracks.
+
+This module adds both, following EN 1992-1-1:
+
+* **Cracking threshold.** The uncracked (Stage I) state is linear, so its peak
+  concrete tensile stress scales with the applied load. The load factor that
+  first reaches ``f_ctm`` is ``lambda_cr = f_ctm / sigma_ct,I``; ``lambda_cr >= 1``
+  means the section has not cracked under the applied load and the Stage I
+  stresses govern. This generalises ``M_cr / M`` to combined axial-plus-biaxial
+  loading by scaling the whole action vector proportionally.
+
+* **Tension stiffening.** Where cracked, deformation quantities are interpolated
+  between the uncracked and fully cracked states with the distribution
+  coefficient ``zeta = 1 - beta * lambda_cr^2`` (EC2 7.18; reduces to
+  ``1 - beta (M_cr/M)^2`` in pure flexure), ``beta = 1.0`` for short-term and
+  ``0.5`` for sustained/repeated loading. The mean strain plane is
+  ``u_m = zeta * u_II + (1 - zeta) * u_I``. The *peak* steel stress at a crack is
+  unchanged -- it is the Stage II value -- so tension stiffening softens the mean
+  response (curvature, mean strain, crack width) but not the governing bar stress.
+
+* **Crack width.** ``w_k = s_r,max * (eps_sm - eps_cm)`` with the mean strain from
+  EC2 (7.9) and the maximum crack spacing from (7.11). This part is
+  uniaxial-dominant: the effective tension area and crack spacing are defined for
+  a single bending direction, so the depth axis is taken along the cracked-state
+  strain gradient and the governing (most tensile) bar is used.
+
+Units. The :mod:`sector.elastic` solver works with ``Ec = 1`` and returns
+stresses in load-consistent units (kN/m^2 for kN/m/m sections); this module takes
+``f_ctm`` and ``Es`` in MPa and works the EC2 formulas in MPa and mm, so
+``w_k`` comes out in mm.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Optional
+
+import numpy as np
+
+from .elastic import ElasticResult, solve_elastic, solve_elastic_uncracked
+from .geometry import area_moments, clip_halfplane
+from .section import Section
+
+# kN/m^2 per MPa: the solver returns stresses in kN/m^2 for sections built in
+# kN/m/m units, so a stress in MPa is 1000x the numeric value.
+_KPA_PER_MPA = 1000.0
+
+
+@dataclass
+class CrackWidthResult:
+    """EC2 crack-width breakdown for the governing tension bar."""
+
+    wk: float            # crack width (mm)
+    sr_max: float        # maximum crack spacing (mm)
+    esm_ecm: float       # mean strain (eps_sm - eps_cm), dimensionless
+    sigma_s: float       # Stage II steel stress at the governing bar (MPa)
+    rho_p_eff: float     # effective reinforcement ratio As,eff / Ac,eff
+    ac_eff: float        # effective tension area (m^2)
+    hc_ef: float         # effective tension height (m)
+    phi: float           # governing bar diameter (mm)
+    gov_bar: int         # index of the governing (most tensile) bar
+
+
+@dataclass
+class CrackingResult:
+    """Serviceability state of the section under one action combination.
+
+    Holds the cracking decision, the tension-stiffening coefficient, the
+    uncracked and fully cracked solves, the mean (tension-stiffened) strain
+    plane, and -- where the section is cracked and the geometry is available --
+    the crack width.
+    """
+
+    cracked: bool
+    lambda_cr: float            # load factor to first cracking (inf if uncracked)
+    sigma_ct: float             # Stage I peak concrete tension at the load (MPa)
+    fctm: float                 # tensile strength used (MPa)
+    zeta: float                 # tension-stiffening distribution coefficient
+    uncracked: ElasticResult    # Stage I
+    cracked_state: ElasticResult  # Stage II
+    eps0_m: float               # mean strain plane (tension-stiffened)
+    kx_m: float
+    ky_m: float
+    crack: Optional[CrackWidthResult] = None
+
+    @property
+    def mean_plane(self) -> tuple[float, float, float]:
+        return (self.eps0_m, self.kx_m, self.ky_m)
+
+    @property
+    def governing(self) -> ElasticResult:
+        """The state whose stresses govern: Stage I if uncracked, else Stage II."""
+        return self.cracked_state if self.cracked else self.uncracked
+
+
+def cracking_factor(sigma_ct_mpa: float, fctm: float) -> float:
+    """Load factor to first cracking, ``f_ctm / sigma_ct,I``.
+
+    ``sigma_ct_mpa`` is the uncracked peak concrete tensile stress under the
+    applied load (MPa). Returns ``inf`` when the section is nowhere in net
+    tension (it never cracks under proportional scaling of this load).
+    """
+    if sigma_ct_mpa <= 0.0:
+        return math.inf
+    return fctm / sigma_ct_mpa
+
+
+def tension_stiffening_zeta(lambda_cr: float, beta: float) -> float:
+    """EC2 distribution coefficient ``zeta = 1 - beta * lambda_cr^2``.
+
+    Zero (use the uncracked state) when ``lambda_cr >= 1`` (uncracked); clamped
+    to ``[0, 1]``. As ``lambda_cr -> 0`` (deeply cracked) ``zeta -> 1`` and the
+    mean response approaches the fully cracked state.
+    """
+    if lambda_cr >= 1.0:
+        return 0.0
+    return max(0.0, min(1.0, 1.0 - beta * lambda_cr * lambda_cr))
+
+
+def _depth_axis(kx: float, ky: float) -> tuple[float, float, float]:
+    """Unit gradient direction of the strain plane and its magnitude.
+
+    Strain increases along ``(gx, gy)``; ``mag`` is ``|grad eps|`` so that the
+    strain at depth coordinate ``s`` is ``eps0 + mag * s``.
+    """
+    mag = math.hypot(kx, ky)
+    if mag < 1.0e-12:
+        return 0.0, 0.0, 0.0
+    return kx / mag, ky / mag, mag
+
+
+def _crack_width(
+    section: Section,
+    cracked_state: ElasticResult,
+    n: float,
+    fctm: float,
+    Es: float,
+    cover: float,
+    kt: float,
+    k1: float,
+    k2: float,
+    k3: float,
+    k4: float,
+    bar_diameter: Optional[float],
+) -> Optional[CrackWidthResult]:
+    """EC2 7.3.4 crack width for the governing (most tensile) bar.
+
+    ``cover`` and ``bar_diameter`` are in mm; ``fctm`` and ``Es`` in MPa.
+    Returns ``None`` when there is no tension bar or no usable bending gradient
+    (pure axial tension uses a different effective-area definition).
+    """
+    bx, by, ba = section.bar_arrays()
+    if not bx.size:
+        return None
+    sigma = np.asarray(cracked_state.bar_stress, dtype=float)
+    gov = int(np.argmax(sigma))
+    sigma_s = float(sigma[gov]) / _KPA_PER_MPA  # MPa, tension positive
+    if sigma_s <= 0.0:
+        return None  # no bar in tension -> no crack to control
+
+    gx, gy, mag = _depth_axis(cracked_state.kx, cracked_state.ky)
+    if mag == 0.0:
+        return None  # no bending gradient; uniform-strain cracking not handled
+
+    verts = section.concrete_vertices()
+    s_vert = verts[:, 0] * gx + verts[:, 1] * gy
+    s_tface = float(s_vert.max())
+    s_cface = float(s_vert.min())
+    h = s_tface - s_cface
+    s_na = -cracked_state.eps0 / mag
+    x = min(max(s_na - s_cface, 0.0), h)          # compression depth
+    s_bar = float(bx[gov] * gx + by[gov] * gy)
+    d = s_bar - s_cface                            # effective depth
+    hc_ef = min(2.5 * (h - d), (h - s_na) / 3.0, h / 2.0)
+    if hc_ef <= 0.0:
+        return None
+
+    # Effective tension area: the concrete band of depth hc_ef at the tension
+    # face, i.e. s >= s_tface - hc_ef. Clip each ring to that half-plane.
+    c_lo = s_tface - hc_ef
+    ac_eff = 0.0
+    for ring in section.integration_rings():
+        clipped = clip_halfplane(ring, gx, gy, -c_lo)
+        ac_eff += area_moments(clipped).area
+    if ac_eff <= 0.0:
+        return None
+
+    # Reinforcement inside the effective band.
+    in_band = (bx * gx + by * gy) >= c_lo
+    as_eff = float(ba[in_band].sum())
+    if as_eff <= 0.0:
+        return None
+    rho = as_eff / ac_eff
+
+    # Governing bar diameter from its area (circular) unless supplied (mm).
+    if bar_diameter is not None and bar_diameter > 0.0:
+        phi = float(bar_diameter)
+    else:
+        phi = math.sqrt(4.0 * float(ba[gov]) * 1.0e6 / math.pi)  # m^2 -> mm
+
+    alpha_e = n
+    # EC2 (7.9): mean strain, with the 0.6 sigma_s/Es lower bound.
+    esm_ecm = (sigma_s - kt * fctm / rho * (1.0 + alpha_e * rho)) / Es
+    esm_ecm = max(esm_ecm, 0.6 * sigma_s / Es)
+
+    # EC2 (7.11): maximum crack spacing (cover and phi in mm).
+    sr_max = k3 * cover + k1 * k2 * k4 * phi / rho
+    wk = sr_max * esm_ecm
+    return CrackWidthResult(
+        wk=wk, sr_max=sr_max, esm_ecm=esm_ecm, sigma_s=sigma_s, rho_p_eff=rho,
+        ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, gov_bar=gov,
+    )
+
+
+def analyse_cracking(
+    section: Section,
+    P: float,
+    Mx: float,
+    My: float,
+    n: float,
+    *,
+    fctm: float,
+    Es: float = 200_000.0,
+    beta: float = 1.0,
+    kt: float = 0.6,
+    cover: Optional[float] = None,
+    bar_diameter: Optional[float] = None,
+    k1: float = 0.8,
+    k2: float = 0.5,
+    k3: float = 3.4,
+    k4: float = 0.425,
+) -> CrackingResult:
+    """Serviceability analysis of the section under one action combination.
+
+    Parameters
+    ----------
+    section, P, Mx, My, n:
+        As for :func:`sector.elastic.solve_elastic` -- the action combination and
+        the (effective, creep-adjusted) modular ratio for the serviceability
+        check.
+    fctm:
+        Concrete mean tensile strength (MPa); use :func:`sector.codes.fctm`.
+    Es:
+        Reinforcement modulus (MPa).
+    beta:
+        Tension-stiffening load-duration factor: ``1.0`` short-term / single
+        load, ``0.5`` sustained or repeated.
+    kt:
+        Crack-width load-duration factor (EC2 7.9): ``0.6`` short-term,
+        ``0.4`` long-term.
+    cover:
+        Clear cover to the governing bar (mm). Crack width is computed only when
+        supplied (and the section is cracked).
+    bar_diameter:
+        Governing bar diameter (mm); defaults to the equivalent circular
+        diameter of the governing bar's area.
+    k1, k2, k3, k4:
+        EC2 crack-spacing coefficients (recommended values by default).
+
+    Returns
+    -------
+    CrackingResult
+        Cracking decision, ``lambda_cr``, ``zeta``, the Stage I and Stage II
+        solves, the mean tension-stiffened strain plane, and the crack width.
+    """
+    uncr = solve_elastic_uncracked(section, P, Mx, My, n)
+    sigma_ct = uncr.max_concrete_tension / _KPA_PER_MPA  # MPa
+    lam = cracking_factor(sigma_ct, fctm)
+    cracked = lam < 1.0
+
+    crk = solve_elastic(section, P, Mx, My, n)
+    zeta = tension_stiffening_zeta(lam, beta) if cracked else 0.0
+
+    # Mean (tension-stiffened) strain plane: interpolate Stage I and Stage II.
+    eps0_m = zeta * crk.eps0 + (1.0 - zeta) * uncr.eps0
+    kx_m = zeta * crk.kx + (1.0 - zeta) * uncr.kx
+    ky_m = zeta * crk.ky + (1.0 - zeta) * uncr.ky
+
+    crack = None
+    if cracked and cover is not None:
+        crack = _crack_width(
+            section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter
+        )
+
+    return CrackingResult(
+        cracked=cracked, lambda_cr=lam, sigma_ct=sigma_ct, fctm=fctm, zeta=zeta,
+        uncracked=uncr, cracked_state=crk, eps0_m=eps0_m, kx_m=kx_m, ky_m=ky_m,
+        crack=crack,
+    )

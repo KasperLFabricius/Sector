@@ -35,6 +35,7 @@ values (the national consequence/control factor ``gamma_3 = 1.0``).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -63,6 +64,30 @@ STEEL_GRADES = {
 # rupture strain is far beyond any attainable section strain, so the concrete
 # crushing strain always governs (matching design option (b)).
 _NO_STRAIN_LIMIT = 1.0
+
+
+def fctm(fck: float) -> float:
+    """Mean axial tensile strength ``f_ctm`` (MPa), EC2 Table 3.1.
+
+    ``f_ctm = 0.30 * fck^(2/3)`` up to C50/60; above that
+    ``f_ctm = 2.12 * ln(1 + fcm/10)`` with the mean strength ``fcm = fck + 8``.
+    This is the strength used for the serviceability cracking check
+    (``fct,eff = fctm`` when cracking is expected at >= 28 days).
+    """
+    if fck <= 50.0:
+        return 0.30 * fck ** (2.0 / 3.0)
+    return 2.12 * math.log(1.0 + (fck + 8.0) / 10.0)
+
+
+def ecm(fck: float) -> float:
+    """Secant modulus of elasticity ``E_cm`` (MPa), EC2 Table 3.1.
+
+    ``E_cm = 22000 * (fcm/10)^0.3`` with ``fcm = fck + 8`` (quartzite
+    aggregate). Used to form the serviceability modular ratio
+    ``alpha_e = Es / E_cm`` when a default is wanted; the analysis itself takes
+    the modular ratio per load so creep can be carried explicitly.
+    """
+    return 22000.0 * ((fck + 8.0) / 10.0) ** 0.3
 
 
 @dataclass(frozen=True)
