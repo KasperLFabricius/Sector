@@ -252,11 +252,21 @@ def _pts_from_df(df, cols):
     return out
 
 
-def _with_ids(df, start):
-    """Return a copy of ``df`` with a leading 1-based ``ID`` column from ``start``
-    (matching the numbers drawn on the plots)."""
-    out = df.copy()
-    out.insert(0, "ID", range(start, start + len(out)))
+def _renumber(df, cols, start):
+    """Editor base from ``df`` with a leading ``ID`` column numbered from
+    ``start`` -- but only on complete rows. Blank/NaN rows (which the analysis and
+    the plot skip) get no ID, so the table IDs always match the plotted/result
+    numbering."""
+    rows = df[cols].reset_index(drop=True)
+    ids, n = [], start
+    for _, row in rows.iterrows():
+        if any(pd.isna(row[c]) for c in cols):
+            ids.append(pd.NA)
+        else:
+            ids.append(n)
+            n += 1
+    out = rows.copy()
+    out.insert(0, "ID", pd.array(ids, dtype="Int64"))
     return out
 
 
@@ -273,7 +283,7 @@ def _point_editor(box, base_key, ed_key, cols, id_start):
         column_config={"ID": st.column_config.NumberColumn(
             "ID", disabled=True, help="Matches the number drawn on the plots.")})
     pts = _pts_from_df(edited, cols)
-    st.session_state[base_key] = _with_ids(edited[cols].reset_index(drop=True), id_start)
+    st.session_state[base_key] = _renumber(edited, cols, id_start)
     st.session_state.pop(ed_key, None)
     return pts
 
@@ -444,10 +454,11 @@ def build_inputs():
                          help="Overwrite the editable point tables below with the "
                               "Quick Section above.")
     if "pts_init" not in st.session_state or load_qs:
-        st.session_state["corners_base"] = _with_ids(_corners_df(qs_outer), 1)
-        st.session_state["bars_base"] = _with_ids(_rebar_df(qs_bars), 1)
-        st.session_state["tendons_base"] = _with_ids(_rebar_df(qs_tendons),
-                                                     len(qs_bars) + 1)
+        st.session_state["corners_base"] = _renumber(_corners_df(qs_outer),
+                                                     _CORNER_COLS, 1)
+        st.session_state["bars_base"] = _renumber(_rebar_df(qs_bars), _REBAR_COLS, 1)
+        st.session_state["tendons_base"] = _renumber(_rebar_df(qs_tendons),
+                                                     _REBAR_COLS, len(qs_bars) + 1)
         st.session_state["holes_pts"] = qs_holes
         for k in ("ed_corners", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
