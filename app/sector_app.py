@@ -442,11 +442,11 @@ def build_inputs():
 
     # ---- Cross-section points (always live; the source of truth) ----
     # The Quick Section above only prefills these on demand (the Load button), so a
-    # later Quick Section tweak never silently discards manual point edits. Holes
-    # (e.g. a box cavity) are captured from the Quick Section and are not
-    # hand-editable in this version.
+    # later Quick Section tweak never silently discards manual point edits. The
+    # void (e.g. a box cavity) is an editable corner table too; a single void is
+    # supported here (multiple voids are a future extension).
     qs_outer = [(float(p[0]), float(p[1])) for p in outer]
-    qs_holes = [[(float(p[0]), float(p[1])) for p in ring] for ring in (holes or [])]
+    qs_hole = ([(float(p[0]), float(p[1])) for p in holes[0]] if holes else [])
     qs_bars = [(float(p[0]), float(p[1]), float(p[2])) for p in bars]
     qs_tendons = [(float(p[0]), float(p[1]), float(p[2])) for p in (tendons or [])]
     load_qs = sec.button("Load Quick Section into points", key="load_qs",
@@ -456,27 +456,38 @@ def build_inputs():
     if "pts_init" not in st.session_state or load_qs:
         st.session_state["corners_base"] = _renumber(_corners_df(qs_outer),
                                                      _CORNER_COLS, 1)
+        st.session_state["hole_base"] = _renumber(_corners_df(qs_hole), _CORNER_COLS,
+                                                  len(qs_outer) + 1)
         st.session_state["bars_base"] = _renumber(_rebar_df(qs_bars), _REBAR_COLS, 1)
         st.session_state["tendons_base"] = _renumber(_rebar_df(qs_tendons),
                                                      _REBAR_COLS, len(qs_bars) + 1)
-        st.session_state["holes_pts"] = qs_holes
-        for k in ("ed_corners", "ed_bars", "ed_tendons"):
+        for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
         st.session_state["pts_init"] = True
+    # Migrate a session that predates the void table: seed hole_base (from any old
+    # holes state) without disturbing the other tables, so it never KeyErrors.
+    if "hole_base" not in st.session_state:
+        old = st.session_state.get("holes_pts") or []
+        st.session_state["hole_base"] = _renumber(
+            _corners_df(old[0] if old else []), _CORNER_COLS, 1)
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
-    sec.caption("Concrete corners define the outline (3 or more, in order). Bars "
-                "and tendons are points with an area (mm2). The ID column matches "
-                "the numbers drawn on the plots. Edit freely; use Load Quick "
-                "Section to refill from the template above.")
+    sec.caption("Concrete corners define the outline (3 or more, in order); the "
+                "void is an optional inner ring (3 or more corners, else ignored). "
+                "Bars and tendons are points with an area (mm2). The ID column "
+                "matches the numbers drawn on the plots. Edit freely; use Load "
+                "Quick Section to refill from the template above.")
     sec.markdown("_Concrete corners_")
     outer = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS, 1)
-    sec.markdown("_Reinforcing bars_")
-    bars = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS, 1)
-    holes = st.session_state["holes_pts"]
     if len(outer) < 3:
         sec.error("Need at least 3 concrete corners; using the Quick Section outline.")
         outer = qs_outer
+    sec.markdown("_Concrete void (hole)_")
+    # Void corner IDs continue after the outer corners (the concrete-vertex order).
+    hole_ring = _point_editor(sec, "hole_base", "ed_hole", _CORNER_COLS, len(outer) + 1)
+    holes = [hole_ring] if len(hole_ring) >= 3 else []
+    sec.markdown("_Reinforcing bars_")
+    bars = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS, 1)
     tendons = []
     if use_pre:
         sec.markdown("_Tendons_")
