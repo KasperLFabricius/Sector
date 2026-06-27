@@ -220,6 +220,47 @@ def test_blank_point_row_gets_no_id():
     assert ids[0] == 1 and ids[2] == 2 and pd.isna(ids[1])
 
 
+def test_box_girder_void_is_editable_with_continuing_ids():
+    # The box cavity loads into an editable void table whose corner IDs continue
+    # after the outer corners, and the section still calculates.
+    at = _fresh()
+    at.run()
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.button(key="load_qs").click().run()
+    n_outer = len(at.session_state["corners_base"])
+    hb = at.session_state["hole_base"]
+    assert len(hb) >= 3
+    assert hb["ID"].dropna().astype(int).tolist() == \
+        list(range(n_outer + 1, n_outer + 1 + len(hb)))
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
+def test_default_solid_section_has_no_void():
+    at = _fresh()
+    at.run()
+    at.button(key="load_qs").click().run()   # default rectangle, no cavity
+    assert len(at.session_state["hole_base"]) == 0
+
+
+def test_injected_void_changes_the_capacity():
+    # A void carved out of the compression zone removes concrete, so the plastic
+    # +Mx capacity changes -- the void table drives the section.
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    solid_mx = at.session_state["results"]["plastic"]["max_mx"]
+    at.session_state["hole_base"] = pd.DataFrame(
+        {"ID": [5, 6, 7, 8], "x (m)": [-0.15, 0.15, 0.15, -0.15],
+         "y (m)": [0.10, 0.10, 0.28, 0.28]})   # void in the (compression) top
+    at.run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert at.session_state["results"]["plastic"]["max_mx"] != pytest.approx(solid_mx)
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
