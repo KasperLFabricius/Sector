@@ -464,6 +464,12 @@ def build_inputs():
         for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
         st.session_state["pts_init"] = True
+    # Migrate a session that predates the void table: seed hole_base (from any old
+    # holes state) without disturbing the other tables, so it never KeyErrors.
+    if "hole_base" not in st.session_state:
+        old = st.session_state.get("holes_pts") or []
+        st.session_state["hole_base"] = _renumber(
+            _corners_df(old[0] if old else []), _CORNER_COLS, 1)
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
     sec.caption("Concrete corners define the outline (3 or more, in order); the "

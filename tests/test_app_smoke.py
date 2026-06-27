@@ -237,6 +237,17 @@ def test_box_girder_void_is_editable_with_continuing_ids():
     assert "plastic" in at.session_state["results"]
 
 
+def test_void_table_migrates_for_old_sessions():
+    # An existing (hot-reloaded) session may have pts_init set but no hole_base;
+    # the app must re-create it rather than KeyError (Codex review).
+    at = _fresh()
+    at.run()
+    del at.session_state["hole_base"]
+    at.run()
+    assert not at.exception
+    assert "hole_base" in at.session_state
+
+
 def test_default_solid_section_has_no_void():
     at = _fresh()
     at.run()
