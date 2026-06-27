@@ -327,13 +327,6 @@ def build_inputs():
                               help="Angular step between swept neutral-axis angles; "
                                    "a finer step gives a smoother M-M envelope.")
 
-    aset.markdown("**Drawing**")
-    label_scale = aset.number_input("Point label size", 0.5, 3.0, 1.0, 0.1,
-                                    key="label_scale",
-                                    help="Scales the corner / bar / tendon number "
-                                         "labels on the section drawings. Crowded "
-                                         "labels thin out automatically.")
-
     sec = s.expander("Section", expanded=True)
     shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
                                     "Box girder", "Circular"], key="shape",
@@ -642,7 +635,7 @@ def build_inputs():
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_ts=sls_ts, sls_long=sls_long, sls_fctm=sls_fctm,
-                sls_cover=sls_cover, sls_phi=sls_phi, label_scale=label_scale,
+                sls_cover=sls_cover, sls_phi=sls_phi,
                 mode=mode, extent=extent, signature=sig)
 
 
@@ -837,7 +830,8 @@ def section_view(inp):
     tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
                                        title="Section", tendons=tendon_xy,
-                                       show_labels=True, label_scale=inp["label_scale"]),
+                                       show_labels=True, label_scale=inp["label_scale"],
+                                       label_min_gap=inp["label_min_gap"]),
                     use_container_width=True)
 
 
@@ -919,7 +913,8 @@ def plastic_view(inp, results):
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
                                tendons=tendon_xy, zones=_zones(inp["outer"], hp),
                                title=f"Section at V = {pt['V']:.0f} deg",
-                               show_labels=True, label_scale=inp["label_scale"]),
+                               show_labels=True, label_scale=inp["label_scale"],
+                               label_min_gap=inp["label_min_gap"]),
             use_container_width=True)
     with cR:
         lines = [
@@ -982,6 +977,7 @@ def elastic_view(inp, results):
                            tendons=tendon_xy, tendon_colors=tendon_colors,
                            na_line=na, zones=zones, show_labels=True,
                            label_scale=inp["label_scale"],
+                           label_min_gap=inp["label_min_gap"],
                            title="Elastic state (green tension, red compression)"),
         use_container_width=True)
 
@@ -1078,6 +1074,20 @@ def _elastic_sls_section(inp, e):
 # ---------------------------------------------------------------------------
 
 inp = build_inputs()
+
+# Plot-label controls live in the main viewport, above the View dropdown. They
+# only affect the drawings, so they are not part of the result-staleness signature.
+with st.expander("Plot label settings", expanded=False):
+    lc1, lc2 = st.columns(2)
+    inp["label_scale"] = lc1.number_input(
+        "Label size", 0.5, 3.0, 1.0, 0.1, key="label_scale",
+        help="Scales the corner / bar / tendon number labels on the section "
+             "drawings.")
+    inp["label_min_gap"] = lc2.number_input(
+        "Label spacing (hide threshold)", 0.0, 0.5, 0.04, 0.01, key="label_min_gap",
+        help="Labels closer together than this fraction of the section size are "
+             "hidden to avoid overlap. Lower shows more (0 shows every label); "
+             "raise it for dense outlines like a circular section.")
 
 c_view, c_calc = st.columns([3, 1])
 view = c_view.selectbox("View", VIEWS, key="view",

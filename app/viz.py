@@ -298,21 +298,26 @@ def _decimate(positions, min_dist):
     return keep
 
 
-def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0):
+_LABEL_BASE_SIZE = 11.0   # default point-label font (px), scaled by label_scale
+
+
+def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
+                      label_min_gap=0.04):
     """Number the reinforcement (bars then tendons, continuously) and the
     concrete corners, so the drawing cross-references the result tables.
 
     Reinforcement numbering matches the elastic per-bar table (tendons follow the
     bars); corner numbering matches ``Section.concrete_vertices`` order (outer
     ring then holes), which is the "corner N" reported with the peak concrete
-    stress. Where labels would crowd they thin out by spacing, and ``label_scale``
-    scales both the font and that spacing.
+    stress. ``label_scale`` scales the font; ``label_min_gap`` is the minimum
+    label spacing as a fraction of the section size -- labels closer than that
+    thin out, independently of the font size (0 keeps every label).
     """
     xs = [v[0] for v in outer] or [0.0]
     ys = [v[1] for v in outer] or [0.0]
     span = max(max(xs) - min(xs), max(ys) - min(ys)) or 1.0
-    size = 9.0 * label_scale
-    min_dist = 0.11 * span * label_scale      # below this, labels would overlap
+    size = _LABEL_BASE_SIZE * label_scale
+    min_dist = label_min_gap * span           # below this, labels are thinned out
 
     rebar = list(bars or []) + list(tendons or [])
     if rebar:
@@ -345,7 +350,7 @@ def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0):
 
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
-                   zones=None, show_labels=False, label_scale=1.0):
+                   zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     Reinforcement is drawn consistently across the views: bars are circles and
@@ -354,8 +359,9 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     are vertex lists (m). ``na_line`` is ``(x0, y0, x1, y1)`` for the neutral
     axis. ``zones`` (optional) is a list of ``(vertices, fillcolor, name)``
     regions shaded beneath the holes. ``show_labels`` numbers the reinforcement
-    and concrete corners (thinned out where they crowd); ``label_scale`` scales
-    the label font and spacing.
+    and concrete corners; ``label_scale`` scales the label font and
+    ``label_min_gap`` is the minimum label spacing (fraction of the section size)
+    below which labels are thinned out -- the two are independent.
     """
     fig = go.Figure()
     xs, ys = _ring_xy(outer)
@@ -395,7 +401,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                                  line=dict(color=NA_LINE, width=2, dash="dash"),
                                  name="neutral axis"))
     if show_labels:
-        _add_point_labels(fig, outer, holes, bars, tendons, label_scale)
+        _add_point_labels(fig, outer, holes, bars, tendons, label_scale, label_min_gap)
     fig.update_layout(
         title=title, template="plotly_white", height=440,
         margin=dict(l=10, r=10, t=40, b=10),

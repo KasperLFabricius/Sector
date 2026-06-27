@@ -433,6 +433,18 @@ def _widget(seq, key):
     return None
 
 
+def test_label_controls_live_in_the_main_view():
+    # The label size and spacing controls are in the main viewport (not the
+    # sidebar) and changing them re-renders without error.
+    at = _fresh()
+    at.run()
+    keys = {ni.key for ni in at.number_input}
+    assert "label_scale" in keys and "label_min_gap" in keys
+    at.number_input(key="label_min_gap").set_value(0.2).run()
+    at.number_input(key="label_scale").set_value(1.5).run()
+    assert not at.exception
+
+
 def test_view_dropdown_switches_without_error():
     # Every view must render. The live views (Section, Stress-Strain) need no
     # Calculate; the result views show a prompt until one is run.
