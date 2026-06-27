@@ -92,6 +92,44 @@ def test_2023_concrete_fck_edit_calculates():
     assert "plastic" in at.session_state["results"]
 
 
+def test_es_field_present_and_editable():
+    # The steel modulus Es/Ep is a direct input for both materials (the prestress
+    # panel appears once tendons are enabled).
+    at = _fresh()
+    at.run()
+    at.checkbox(key="use_pre").set_value(True).run()
+    keys = {ni.key for ni in at.number_input}
+    assert "mild_Es" in keys and "pre_Es" in keys
+    at.number_input(key="mild_Es").set_value(210000.0).run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
+def test_eut_below_yield_strain_warns_and_calculates():
+    # Meaningful constraint: a rupture strain below the yield strain is clamped
+    # with a warning rather than accepted.
+    at = _fresh()
+    at.run()
+    at.number_input(key="mild_eut").set_value(0.0005).run()  # below ey ~ 0.0025
+    assert any("yield strain" in w.value for w in at.warning)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+
+
+def test_two_yield_fields_live_under_default_preset():
+    # The default preset builds the general law, so editing a two-yield field
+    # (k) is accepted and recomputes without error.
+    at = _fresh()
+    at.run()
+    at.number_input(key="mild_k").set_value(0.8).run()
+    at.number_input(key="mild_ey0t").set_value(0.003).run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+
+
 def test_mild_fyck_zero_is_allowed_and_calculates():
     # The old 100 MPa floor on fyck is gone; zero compression yield must be a
     # valid input and still compute.

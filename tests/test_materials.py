@@ -319,3 +319,50 @@ def test_prestress_type7_design_and_validation():
     assert p.stress(0.035, design=True) == pytest.approx(1860.0 / 1.12, abs=1.0)
     with pytest.raises(ValueError):
         Prestress(curve=7, fytk=0.0, futk=0.0)
+
+
+# --- generalised law: Es input, curve-3 as the general law, fyck independent --
+
+def test_mild_Es_sets_the_elastic_slope():
+    s = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.0, curve=2,
+                  Es=210000.0)
+    assert s.stress(0.001, design=True) == pytest.approx(210000.0 * 0.001)
+    assert s.elastic_slope(design=True) == pytest.approx(210000.0)
+
+
+def test_prestress_Es_sets_the_elastic_slope():
+    p = Prestress(curve=6, IS=0.0, fytk=1600.0, futk=1860.0, eut=0.035,
+                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, Es=205000.0)
+    assert p.stress(0.001, design=True) == pytest.approx(205000.0 * 0.001)
+
+
+def test_curve3_reproduces_bilinear_curve1():
+    # The general law (curve 3) with k=1, ey0t=0 and a flat compression (large
+    # ey0c) reproduces the bilinear curve 1 in tension and compression.
+    common = dict(fytk=550.0, fyck=550.0, futk=620.0, eut=0.05,
+                  gamma_y=1.1, gamma_u=1.15, gamma_E=1.0)
+    c1 = MildSteel(curve=1, **common)
+    c3 = MildSteel(curve=3, k=1.0, ey0t=0.0, ey0c=1.0, **common)
+    for e in (-0.02, -0.003, -0.001, 0.0, 0.001, 0.003, 0.02, 0.05):
+        assert c3.stress(e, design=True) == pytest.approx(
+            c1.stress(e, design=True), abs=1e-6), e
+
+
+def test_curve3_reproduces_epp_curve2():
+    # Curve 2 ties the modulus to gamma_y, so curve 3 must use gamma_E = gamma_y.
+    c2 = MildSteel(curve=2, fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.15)
+    c3 = MildSteel(curve=3, fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
+                   gamma_y=1.15, gamma_u=1.15, gamma_E=1.15,
+                   k=1.0, ey0t=0.0, ey0c=1.0)
+    for e in (-0.02, -0.001, 0.0, 0.001, 0.02, 0.05):
+        assert c3.stress(e, design=True) == pytest.approx(
+            c2.stress(e, design=True), abs=1e-6), e
+
+
+def test_curve3_compression_uses_fyck_independently():
+    # The general law's compression yield is fyck, not fytk: setting them apart
+    # gives different tension and compression magnitudes.
+    s = MildSteel(curve=3, fytk=500.0, fyck=300.0, futk=550.0, eut=0.05,
+                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, k=1.0, ey0t=0.0, ey0c=1.0)
+    assert s.stress(0.02, design=True) > 500.0            # tension hardens past fytk
+    assert -s.stress(-0.02, design=True) == pytest.approx(300.0)  # compression = fyck

@@ -34,10 +34,11 @@ def test_concrete_eurocode_presets_match_codes():
 
 
 def test_mild_eurocode_presets_have_unfactored_modulus():
-    # EC2 presets use curve 1 with gamma_E = 1 (un-factored Es) and gamma_s yield.
+    # EC2 presets build the general law (curve 3) reduced to a flat design
+    # diagram: gamma_E = 1 (un-factored Es) and the yield held flat to fyd.
     for label, code in codes.CODES.items():
         p = mp.MILD_PRESETS[label]
-        assert p["curve"] == 1
+        assert p["curve"] == 3
         assert p["gamma_E"] == pytest.approx(1.0)
         assert p["gamma_y"] == pytest.approx(code.gamma_s)
         s = mp.build_mild(**p)
@@ -84,6 +85,32 @@ def test_curve3_preset_second_yield_is_continuous():
     assert p["ey0c"] > e1
     sig = -s.stress(-(e1 + 1.0e-4), design=False)  # compression magnitude
     assert f1 <= sig < f1 + 0.2 * (f2 - f1)
+
+
+def test_all_mild_presets_use_the_general_law():
+    # Every mild preset builds curve 3 so every field is live on the diagram.
+    for p in mp.MILD_PRESETS.values():
+        assert p["curve"] == 3
+        assert "Es" in p
+
+
+def test_parametric_prestress_presets_use_the_general_law():
+    # The user-defined and Eurocode prestress presets build curve 7; the built-in
+    # characteristic curves stay fixed.
+    assert mp.PRESTRESS_PRESETS["Curve 6 (bilinear)"]["curve"] == 7
+    assert mp.PRESTRESS_PRESETS["Curve 7 (two yield)"]["curve"] == 7
+    for label in codes.CODES:
+        assert mp.PRESTRESS_PRESETS[label]["curve"] == 7
+    assert mp.PRESTRESS_PRESETS["Curve 1 (built-in)"]["curve"] == 1
+
+
+def test_eurocode_prestress_presets_set_Ep_directly():
+    # Ep is now the direct input (gamma_E = 1), 195/200 GPa by edition.
+    for label, code in codes.CODES.items():
+        p = mp.PRESTRESS_PRESETS[label]
+        assert p["gamma_E"] == pytest.approx(1.0)
+        expected = 200000.0 if code.key == "EC2-2023" else 195000.0
+        assert p["Es"] == pytest.approx(expected)
 
 
 def test_field_metadata_matches_fields():
