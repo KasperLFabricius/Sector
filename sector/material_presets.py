@@ -149,7 +149,9 @@ MILD_FIELD_META = {
     "fytk": ("fytk (MPa)", 0.0, 5000.0, 10.0),
     "fyck": ("fyck (MPa)", 0.0, 5000.0, 10.0),
     "futk": ("futk (MPa)", 0.0, 5000.0, 10.0),
-    "eut": ("eut (permille)", 0.1, 2000.0, 0.5),
+    # min 0 keeps the step grid (min + k*step) on round values like 50 and 1000;
+    # the eut >= yield clamp guards the lower end at build time.
+    "eut": ("eut (permille)", 0.0, 2000.0, 0.5),
     "gamma_y": ("gamma_y", 1.0, 2.0, 0.01),
     "gamma_u": ("gamma_u", 1.0, 2.0, 0.01),
     "gamma_E": ("gamma_E", 0.5, 2.0, 0.01),
@@ -218,7 +220,7 @@ PRESTRESS_FIELD_META = {
     "IS": ("Prestrain IS (permille)", 0.0, 50.0, 0.1),
     "fytk": ("fp0.1k (MPa)", 0.0, 5000.0, 10.0),
     "futk": ("fpk (MPa)", 0.0, 5000.0, 10.0),
-    "eut": ("eut (permille)", 0.1, 2000.0, 0.5),
+    "eut": ("eut (permille)", 0.0, 2000.0, 0.5),
     "gamma_y": ("gamma_y", 1.0, 2.0, 0.01),
     "gamma_u": ("gamma_u", 1.0, 2.0, 0.01),
     "gamma_E": ("gamma_E", 0.5, 2.0, 0.01),
