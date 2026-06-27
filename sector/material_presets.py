@@ -16,7 +16,7 @@ each mild-steel curve so the UI shows the relevant ones.
 from __future__ import annotations
 
 from . import codes
-from .materials import Concrete, MildSteel
+from .materials import Concrete, MildSteel, Prestress
 
 _DEFAULT_FCK = 35.0
 _DEFAULT_FYK = 500.0
@@ -135,3 +135,61 @@ def build_mild(curve, **fields) -> MildSteel:
     curve = int(curve)
     used = {f: float(fields[f]) for f in MILD_FIELDS_BY_CURVE[curve] if f in fields}
     return MildSteel(curve=curve, **used)
+
+
+# ---------------------------------------------------------------------------
+# Prestressing steel (tendons)
+# ---------------------------------------------------------------------------
+
+def _prestress_presets():
+    presets = {}
+    # The built-in characteristic curves: only the prestrain and partial factor.
+    for n in (1, 2, 3, 4, 5):
+        presets["Curve %d (built-in)" % n] = {"curve": n, "IS": 0.0059,
+                                              "gamma_y": 1.1}
+    presets["Curve 6 (bilinear)"] = {
+        "curve": 6, "IS": 0.0059, "fytk": 1600.0, "futk": 1860.0, "eut": 0.035,
+        "gamma_y": 1.1, "gamma_u": 1.1, "gamma_E": 1.0}
+    presets["Curve 7 (two yield)"] = {
+        "curve": 7, "IS": 0.0059, "fytk": 1600.0, "futk": 1860.0, "eut": 0.035,
+        "k": 0.9, "ey0t": 0.002, "gamma_y": 1.1, "gamma_u": 1.1, "gamma_E": 1.0}
+    # Eurocode editions: a bilinear (curve 6) design diagram, fpd = fp0,1k/gamma_s,
+    # default values for a Y1860 strand. Ep is 195 GPa for 2005 / the DK NA and
+    # 200 GPa for 2023 -- expressed through gamma_E since the engine modulus is
+    # 200 GPa (ES / gamma_E).
+    for label, code in codes.CODES.items():
+        ep_gpa = 200.0 if code.key == "EC2-2023" else 195.0
+        presets[label] = {
+            "curve": 6, "IS": 0.0, "fytk": 1640.0, "futk": 1860.0, "eut": 0.035,
+            "gamma_y": code.gamma_s, "gamma_u": code.gamma_s,
+            "gamma_E": round(200.0 / ep_gpa, 4)}
+    return presets
+
+
+PRESTRESS_PRESETS = _prestress_presets()
+
+PRESTRESS_FIELD_META = {
+    "IS": ("Prestrain IS (strain)", 0.0, 0.02, 0.0005),
+    "fytk": ("fp0.1k (MPa)", 100.0, 2000.0, 10.0),
+    "futk": ("fpk (MPa)", 100.0, 2200.0, 10.0),
+    "eut": ("eut (strain)", 0.001, 0.1, 0.001),
+    "gamma_y": ("gamma_y", 1.0, 1.5, 0.01),
+    "gamma_u": ("gamma_u", 1.0, 1.5, 0.01),
+    "gamma_E": ("gamma_E", 0.8, 1.5, 0.01),
+    "k": ("k (f1 / fp0.1k)", 0.5, 1.0, 0.01),
+    "ey0t": ("ey0t (strain)", 0.0, 0.05, 0.001),
+}
+
+PRESTRESS_FIELDS_BY_CURVE = {
+    1: ["IS", "gamma_y"], 2: ["IS", "gamma_y"], 3: ["IS", "gamma_y"],
+    4: ["IS", "gamma_y"], 5: ["IS", "gamma_y"],
+    6: ["IS", "fytk", "futk", "eut", "gamma_y", "gamma_u", "gamma_E"],
+    7: ["IS", "fytk", "futk", "eut", "k", "ey0t", "gamma_y", "gamma_u", "gamma_E"],
+}
+
+
+def build_prestress(curve, **fields) -> Prestress:
+    """Build a :class:`~sector.materials.Prestress` from the panel parameters."""
+    curve = int(curve)
+    used = {f: float(fields[f]) for f in PRESTRESS_FIELDS_BY_CURVE[curve] if f in fields}
+    return Prestress(curve=curve, **used)

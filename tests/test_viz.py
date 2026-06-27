@@ -12,7 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import viz  # noqa: E402
-from sector.materials import Concrete, MildSteel  # noqa: E402
+from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 
 _EPS = chr(0x3B5)       # epsilon
 _SIGMA = chr(0x3C3)     # sigma
@@ -67,3 +67,16 @@ def test_steel_figure_shows_modulus_slope_label():
 def test_concrete_figure_has_no_modulus_label():
     fig = viz.concrete_curve_figure(Concrete(fck=35.0, gamma_c=1.5, curve=2))
     assert not any("E<sub>d</sub>" in a.text for a in fig.layout.annotations)
+
+
+def test_prestress_figure_tension_only_with_proof_and_ultimate_labels():
+    p = Prestress(curve=6, IS=0.0, fytk=1600.0, futk=1860.0, eut=0.035,
+                  gamma_y=1.15, gamma_u=1.15, gamma_E=1.0)
+    fig = viz.prestress_curve_figure(p)
+    # Tension-only: the plotted strain never goes far into compression.
+    xs = [x for tr in fig.data for x in (tr.x or [])]
+    assert min(xs) >= -1.5  # per-mille; just below zero, no compression branch
+    assert _has_marker_trace(fig)
+    texts = " ".join(a.text for a in fig.layout.annotations)
+    assert "f<sub>pd</sub>" in texts and "f<sub>pud</sub>" in texts
+    assert _EPS + "<sub>pd</sub>" in texts

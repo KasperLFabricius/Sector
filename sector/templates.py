@@ -121,6 +121,28 @@ def edge_layer(b: float, h: float, cover: float, n: int, diameter_mm: float,
     raise ValueError("face must be bottom, top, left or right")
 
 
+def point_row(y: float, x_start: float, x_end: float, n: int, area_mm2: float):
+    """``n`` point areas (e.g. tendons) evenly spaced from ``x_start`` to ``x_end``.
+
+    Like :func:`bar_row` but the area (mm2) is given directly rather than via a
+    diameter, as tendons are specified by their cross-sectional area.
+    """
+    if n <= 0:
+        return []
+    if n == 1:
+        return [(0.5 * (x_start + x_end), y, area_mm2)]
+    step = (x_end - x_start) / (n - 1)
+    return [(x_start + k * step, y, area_mm2) for k in range(n)]
+
+
+def point_ring(cx: float, cy: float, radius: float, n: int, area_mm2: float):
+    """``n`` point areas (e.g. tendons) on a circle, area (mm2) given directly."""
+    if n <= 0:
+        return []
+    return [(cx + radius * math.cos(2 * math.pi * k / n),
+             cy + radius * math.sin(2 * math.pi * k / n), area_mm2) for k in range(n)]
+
+
 def merge_bars(*groups: Sequence[Sequence[float]]):
     """Concatenate several bar groups into one list."""
     out = []

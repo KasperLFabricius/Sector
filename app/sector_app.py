@@ -114,6 +114,26 @@ def mild_panel(parent):
     return steel
 
 
+def prestress_panel(parent):
+    """Prestressing-steel section: preset, editable parameters and diagram."""
+    box = parent.expander("Prestressing steel", expanded=False)
+    presets = mp.PRESTRESS_PRESETS
+    labels = list(presets)
+    preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
+                           key="pre_preset")
+    _prefill("pre", preset, presets)
+    curve = presets[preset]["curve"]
+    vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META)
+            for f in mp.PRESTRESS_FIELDS_BY_CURVE[curve]}
+    pre = mp.build_prestress(curve=curve, **vals)
+    cap = f"curve {curve},  IS = {vals['IS'] * 100.0:.2f}%"
+    if curve in (6, 7):
+        cap += f",  fpd = {vals['fytk'] / vals['gamma_y']:.0f} MPa"
+    box.caption(cap)
+    box.plotly_chart(viz.prestress_curve_figure(pre), use_container_width=True)
+    return pre
+
+
 # ---------------------------------------------------------------------------
 # Build the section + materials from the sidebar inputs
 # ---------------------------------------------------------------------------
@@ -183,9 +203,28 @@ def build_inputs():
             templates.bar_row(h / 2 - cov, -width_b / 2 + cov, width_b / 2 - cov, int(nb_top), rd_top),
         )
 
+    s.header("Prestressing")
+    use_pre = s.checkbox("Include prestressing tendons", value=False, key="use_pre")
+    tendons = []
+    prestress = None
+    if use_pre:
+        nt = s.number_input("Tendons", 0, 200, 4, 1, key="tnd_n")
+        a_t = s.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a")
+        cov_p = s.number_input("Tendon cover (m)", 0.0, 2.0, 0.10, 0.01, key="tnd_c")
+        if shape == "Circular":
+            tendons = templates.point_ring(0.0, 0.0, max(dia / 2 - cov_p, 0.0),
+                                           int(nt), a_t)
+        else:
+            # Bottom (tension) row; b and h are already the web/overall dimensions
+            # for the T-section, matching the bottom reinforcement placement.
+            tendons = templates.point_row(-h / 2 + cov_p, -b / 2 + cov_p,
+                                          b / 2 - cov_p, int(nt), a_t)
+
     s.header("Material Parameters")
     concrete = concrete_panel(s)
     steel = mild_panel(s)
+    if use_pre:
+        prestress = prestress_panel(s)
 
     s.header("Loads")
     P = s.number_input("Axial force P (kN, + = compression)", -50000.0, 50000.0, 0.0, 50.0, key="P")
@@ -199,7 +238,8 @@ def build_inputs():
         My = s.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0, key="My")
         ratio = 15.0
 
-    section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars, holes=holes)
+    section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
+                                   tendons_xy_area_mm2=tendons, holes=holes)
     extent = max(abs(b), abs(h)) * 0.75
     sig = (st.session_state.get(k) for k in
            ("shape", "b", "h", "bf", "hf", "bw", "hw", "wall", "dia",
@@ -207,9 +247,13 @@ def build_inputs():
             "cover", "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
             "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
             "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
-            "mild_ey0t", "mild_ey0c", "P", "Mx", "My", "ratio", "mode"))
+            "mild_ey0t", "mild_ey0c", "use_pre", "tnd_n", "tnd_a", "tnd_c",
+            "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
+            "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t",
+            "P", "Mx", "My", "ratio", "mode"))
     return dict(section=section, concrete=concrete, steel=steel, ratio=ratio,
-                bars=bars, outer=outer, holes=holes, P=P, Mx=Mx, My=My, mode=mode,
+                bars=bars, outer=outer, holes=holes, tendons=tendons,
+                prestress=prestress, P=P, Mx=Mx, My=My, mode=mode,
                 extent=extent, signature=tuple(sig))
 
 
@@ -221,7 +265,7 @@ def run_analysis(inp):
     out = {}
     if inp["mode"] in ("Plastic", "Both"):
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            inp["P"], 0.0, 360.0, 15.0)
+                            inp["P"], 0.0, 360.0, 15.0, prestress=inp["prestress"])
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
         out["plastic"] = dict(
@@ -231,7 +275,14 @@ def run_analysis(inp):
             converged=all(p.converged for p in pts),
         )
     if inp["mode"] in ("Elastic", "Both"):
-        r = solve_elastic(inp["section"], inp["P"], inp["Mx"], inp["My"], inp["ratio"])
+        # The elastic analysis ignores the section's tendons, so model each tendon
+        # as an ordinary bar by folding them into the bar set for this run.
+        sec = inp["section"]
+        if inp["tendons"]:
+            sec = Section.from_polygon(corners=inp["outer"],
+                                       bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
+                                       holes=inp["holes"])
+        r = solve_elastic(sec, inp["P"], inp["Mx"], inp["My"], inp["ratio"])
         out["elastic"] = dict(
             bar_stress=[s / 1000.0 for s in r.bar_stress],  # kN/m2 -> MPa
             max_conc=r.max_concrete_compression / 1000.0,
@@ -276,8 +327,10 @@ with left:
     if results and "elastic" in results:
         na_line = viz.na_endpoints(results["elastic"]["na_x"],
                                    results["elastic"]["na_y"], inp["extent"])
+    tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
-                                       na_line=na_line, title="Section"),
+                                       na_line=na_line, title="Section",
+                                       tendons=tendon_xy),
                     use_container_width=True)
 
 with right:
