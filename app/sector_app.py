@@ -432,8 +432,10 @@ def build_inputs():
                            help="Tension-stiffening factors: long-term beta = 0.5, "
                                 "kt = 0.4; short-term beta = 1.0, kt = 0.6."
                            ) == "Long-term (sustained)"
-    _auto_cover = max(round(float(st.session_state.get("cover", 0.05)) * 1000.0
-                            - _rep_bar_dia(bars) / 2.0, 1), 0.0)
+    # ``cov`` is the cover to the bar centres for the current shape (the circular
+    # shape stores it under a different widget key, so use the local value, not a
+    # fixed session key). The clear cover to the surface is that minus phi/2.
+    _auto_cover = max(round(cov * 1000.0 - _rep_bar_dia(bars) / 2.0, 1), 0.0)
     st.session_state.setdefault("sls_cover", _auto_cover)
     if loads.button(f"Auto cover (c - phi/2 = {_auto_cover:.1f} mm)",
                     key="sls_cover_auto", disabled=not _cw_on, use_container_width=True,

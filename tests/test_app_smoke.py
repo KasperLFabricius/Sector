@@ -533,3 +533,19 @@ def test_fctm_auto_button_tracks_grade():
     at.button(key="sls_fctm_auto").click().run()
     assert not at.exception
     assert at.number_input(key="sls_fctm").value == pytest.approx(4.07, abs=0.05)
+
+
+def test_circular_cover_auto_uses_ring_cover():
+    # For a circular section the cover lives under a different widget key; the
+    # Auto cover must use it, not the rectangular default. A 100 mm ring cover
+    # gives an auto clear cover well above what the 50 mm rectangular default
+    # would (this guards the circular-cover-key fix).
+    at = _fresh()
+    at.run()
+    at.selectbox(key="shape").set_value("Circular").run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.checkbox(key="sls_ts").set_value(True).run()
+    at.number_input(key="ring_c").set_value(0.10).run()
+    at.button(key="sls_cover_auto").click().run()
+    assert not at.exception
+    assert at.number_input(key="sls_cover").value > 70.0
