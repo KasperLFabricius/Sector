@@ -91,6 +91,11 @@ def test_uncracked_below_cracking_load_uses_stage_i():
     assert r.crack is None
     assert r.mean_plane == pytest.approx(r.uncracked.strain_plane)
     assert r.governing is r.uncracked
+    # Stage I and Stage II differ substantially here, so anything that plots the
+    # governing state (the crack-control view) must use the uncracked solve, not
+    # the cracked one.
+    assert r.uncracked.na_y_intercept != pytest.approx(
+        r.cracked_state.na_y_intercept, abs=1e-3)
 
 
 def test_beta_zero_gives_fully_cracked_mean():

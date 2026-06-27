@@ -433,12 +433,12 @@ def test_material_manual_override_calculates():
     assert "plastic" in at.session_state["results"]
 
 
-def test_crack_control_cracks_and_reports_crack_width():
-    # Enabling the SLS check and applying a moment large enough to crack the
+def test_tension_stiffening_cracks_and_reports_crack_width():
+    # The tension-stiffening check with a moment large enough to crack the
     # section produces the cracking decision, zeta and a crack width.
     at = _fresh()
     at.run()
-    at.checkbox(key="sls_on").set_value(True).run()
+    at.checkbox(key="sls_ts").set_value(True).run()
     at.number_input(key="sls_Mx").set_value(400.0).run()  # force cracking
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -446,7 +446,23 @@ def test_crack_control_cracks_and_reports_crack_width():
     assert c["cracked"] is True
     assert 0.0 < c["lambda_cr"] < 1.0
     assert 0.0 < c["zeta"] <= 1.0
+    assert c["show_ts"] is True
     assert c["crack"] is not None and c["crack"]["wk"] > 0.0
+
+
+def test_cracking_threshold_only_omits_crack_width():
+    # The cracking-threshold check alone reports the decision but no tension
+    # stiffening / crack width (show_ts False, crack None).
+    at = _fresh()
+    at.run()
+    at.checkbox(key="sls_threshold").set_value(True).run()
+    at.number_input(key="sls_Mx").set_value(400.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    c = at.session_state["results"]["cracking"]
+    assert c["cracked"] is True
+    assert c["show_ts"] is False
+    assert c["crack"] is None
 
 
 def test_crack_control_uncracked_below_threshold():
@@ -454,7 +470,7 @@ def test_crack_control_uncracked_below_threshold():
     # no crack width.
     at = _fresh()
     at.run()
-    at.checkbox(key="sls_on").set_value(True).run()
+    at.checkbox(key="sls_threshold").set_value(True).run()
     at.number_input(key="sls_Mx").set_value(5.0).run()
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -464,24 +480,39 @@ def test_crack_control_uncracked_below_threshold():
     assert c["crack"] is None
 
 
-def test_crack_control_view_renders():
+def test_extended_elastic_view_renders():
     at = _fresh()
     at.run()
-    at.checkbox(key="sls_on").set_value(True).run()
+    at.checkbox(key="sls_ts").set_value(True).run()
     at.number_input(key="sls_Mx").set_value(400.0).run()
-    at.selectbox(key="view").set_value("Crack control").run()
+    at.selectbox(key="view").set_value("Extended elastic (SLS)").run()
     at.button(key="calculate").click().run()
     assert not at.exception
 
 
-def test_crack_control_independent_of_elastic_load():
-    # The SLS check uses its own load set; it runs in plastic mode and does not
+def test_extended_elastic_independent_of_elastic_load():
+    # The SLS checks use their own load set; they run in plastic mode and do not
     # depend on the elastic long/short loads.
     at = _fresh()
     at.run()
-    at.checkbox(key="sls_on").set_value(True).run()
+    at.checkbox(key="sls_threshold").set_value(True).run()
     at.number_input(key="sls_Mx").set_value(400.0).run()
     at.button(key="calculate").click().run()
     assert not at.exception
     res = at.session_state["results"]
     assert "cracking" in res and "plastic" in res  # plastic is the default mode
+
+
+def test_plain_elastic_unchanged_by_sls_toggles():
+    # The default elastic analysis stays the cracked-section (zero concrete
+    # tension) result regardless of the extended SLS checks.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.button(key="calculate").click().run()
+    base = list(at.session_state["results"]["elastic"]["total"])
+    at.checkbox(key="sls_ts").set_value(True).run()
+    at.number_input(key="sls_Mx").set_value(400.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert list(at.session_state["results"]["elastic"]["total"]) == base
