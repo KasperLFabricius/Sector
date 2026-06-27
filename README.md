@@ -12,8 +12,15 @@ cross-section and reports, for the same section:
 * **Plastic analysis** - the ultimate bending capacity under a given axial force
   and biaxial bending, traced as the neutral axis is rotated through the section
   to give the full N-M interaction envelope. The ultimate-limit-state side.
+* **Crack control (SLS)** - an optional serviceability check that decides whether
+  the section has cracked (comparing the uncracked concrete tension with the
+  tensile strength `fctm`), then reports the tension-stiffened mean state and the
+  crack width `wk` per EN 1992-1-1. Unlike the plain cracked-section elastic
+  analysis, which assumes the section is already fully cracked, this accounts for
+  the cracking threshold and the stiffening of the intact concrete between cracks.
 
-You choose elastic, plastic, or both from one section definition.
+You choose elastic, plastic, crack control, or any combination from one section
+definition.
 
 ## Goals
 
@@ -51,6 +58,7 @@ sector/        computation core (headless, exhaustively tested)
   section      the cross-section model
   elastic      cracked-section elastic stresses
   plastic      ultimate capacity (neutral-axis sweep, governing failure)
+  serviceability  cracking threshold, tension stiffening, crack width (SLS)
   templates    parametric section + reinforcement builders
 app/           Streamlit interface (sector_app, viz)
 tools/         developer tooling (e.g. regression-fixture generation)

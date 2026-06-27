@@ -20,10 +20,11 @@ import numpy as np  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import viz  # noqa: E402
-from sector import geometry, kernels, material_presets as mp, templates  # noqa: E402
+from sector import codes, geometry, kernels, material_presets as mp, templates  # noqa: E402
 from sector.elastic import solve_elastic_combined  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
+from sector.serviceability import analyse_cracking  # noqa: E402
 
 APP_VERSION = "0.1.0"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -203,11 +204,12 @@ def build_inputs():
         st.markdown(
             "**Sector** analyses reinforced-concrete (and optionally "
             "prestressed) cross-sections, returning the plastic bending "
-            "capacity and the cracked-section elastic stresses.")
-        st.caption("Define the section and materials, choose elastic and/or "
-                   "plastic analysis, then press Calculate. The section drawing "
-                   "and the stress-strain diagrams update live; the results "
-                   "update on Calculate.")
+            "capacity, the cracked-section elastic stresses, and a "
+            "serviceability crack-control check (cracking threshold, tension "
+            "stiffening and crack width).")
+        st.caption("Define the section and materials, choose the analyses, then "
+                   "press Calculate. The section drawing and the stress-strain "
+                   "diagrams update live; the results update on Calculate.")
         st.caption(f"Version {APP_VERSION}")
 
     aset = s.expander("Analysis & Result Settings", expanded=False)
@@ -229,6 +231,39 @@ def build_inputs():
                               key="v_inc", disabled=not plastic_on,
                               help="Angular step between swept neutral-axis angles; "
                                    "a finer step gives a smoother M-M envelope.")
+
+    # Serviceability crack control: an optional check, run from its own load set,
+    # that decides whether the section has cracked and -- where it has -- the
+    # tension-stiffened state and crack width (EN 1992-1-1). Independent of the
+    # plastic/elastic mode above.
+    aset.markdown("**Crack control (SLS)**")
+    sls_on = aset.checkbox(
+        "Run crack-control check", value=False, key="sls_on",
+        help="Serviceability check: compare the uncracked concrete tension with "
+             "fctm to decide whether the section cracks, then report the "
+             "tension-stiffened mean state and the crack width.")
+    sls_long = aset.radio(
+        "Load duration", ["Long-term (sustained)", "Short-term"], key="sls_dur",
+        disabled=not sls_on,
+        help="Sets the tension-stiffening factors: long-term beta = 0.5, "
+             "kt = 0.4; short-term beta = 1.0, kt = 0.6.") == "Long-term (sustained)"
+    _fck_now = float(st.session_state.get("conc_fck", 30.0))
+    sls_fctm = aset.number_input(
+        "Concrete tensile strength fctm (MPa)", 0.0, 10.0,
+        value=round(codes.fctm(_fck_now), 3), step=0.1, key="sls_fctm",
+        disabled=not sls_on,
+        help="Mean axial tensile strength for the cracking check (fct,eff). "
+             "Defaults to the EC2 Table 3.1 value for the concrete grade.")
+    aset.caption(f"EC2 Table 3.1 for the current grade: fctm = "
+                 f"{codes.fctm(_fck_now):.2f} MPa")
+    sls_cover = aset.number_input(
+        "Cover to bar surface c (mm)", 0.0, 200.0, 40.0, 1.0, key="sls_cover",
+        disabled=not sls_on,
+        help="Clear cover to the governing bar, used for the crack spacing sr,max.")
+    sls_phi = aset.number_input(
+        "Bar diameter (mm, 0 = auto)", 0.0, 60.0, 0.0, 1.0, key="sls_phi",
+        disabled=not sls_on,
+        help="Governing bar diameter for sr,max; 0 derives it from the bar area.")
 
     sec = s.expander("Section", expanded=True)
     shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
@@ -389,6 +424,18 @@ def build_inputs():
                             key="ns", disabled=not elastic_on,
                             help="Modular ratio for the instantaneous load.")
 
+    loads.divider()
+    loads.markdown("**Crack control (SLS)**")
+    loads.caption("The serviceability action combination (typically "
+                  "quasi-permanent) for the crack-control check.")
+    P_sls, Mx_sls, My_sls = _load_set(
+        "sls", "Axial force for the serviceability combination.",
+        "Moment for the serviceability combination.", sls_on)
+    n_sls = loads.number_input("Effective modular ratio n_eff = Es/Ec", 1.0, 50.0, 15.0, 0.5,
+                               key="sls_n", disabled=not sls_on,
+                               help="Modular ratio for the serviceability check "
+                                    "(creep-adjusted for a sustained combination).")
+
     section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                    tendons_xy_area_mm2=tendons, holes=holes)
     extent = max(abs(b), abs(h)) * 0.75
@@ -403,13 +450,18 @@ def build_inputs():
             "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t",
             "pre_Es", "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx",
             "el_long_My", "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
-            "v_min", "v_max", "v_inc", "mode"))
+            "v_min", "v_max", "v_inc", "mode",
+            "sls_on", "sls_dur", "sls_fctm", "sls_cover", "sls_phi",
+            "sls_P", "sls_Mx", "sls_My", "sls_n"))
     return dict(section=section, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 v_min=v_min, v_max=v_max, v_inc=v_inc,
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
+                sls_on=sls_on, sls_long=sls_long, sls_fctm=sls_fctm,
+                sls_cover=sls_cover, sls_phi=sls_phi,
+                P_sls=P_sls, Mx_sls=Mx_sls, My_sls=My_sls, n_sls=n_sls,
                 mode=mode, extent=extent, signature=tuple(sig))
 
 
@@ -481,6 +533,34 @@ def run_analysis(inp):
             max_steel=max(total) if total else 0.0,
             max_steel_bar=(int(np.argmax(total)) + 1) if total else 0,
             converged=r.converged,
+        )
+    if inp["sls_on"]:
+        # Fold tendons into the bar set, as the cracked-section model does.
+        sec = inp["section"]
+        if inp["tendons"]:
+            sec = Section.from_polygon(corners=inp["outer"],
+                                       bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
+                                       holes=inp["holes"])
+        beta, kt = (0.5, 0.4) if inp["sls_long"] else (1.0, 0.6)
+        cr = analyse_cracking(
+            sec, inp["P_sls"], inp["Mx_sls"], inp["My_sls"], inp["n_sls"],
+            fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=beta, kt=kt,
+            cover=inp["sls_cover"],
+            bar_diameter=(inp["sls_phi"] if inp["sls_phi"] > 0.0 else None))
+        cw = cr.crack
+        out["cracking"] = dict(
+            cracked=cr.cracked, lambda_cr=cr.lambda_cr, sigma_ct=cr.sigma_ct,
+            fctm=cr.fctm, zeta=cr.zeta, long_term=inp["sls_long"],
+            na_x=cr.cracked_state.na_x_intercept, na_y=cr.cracked_state.na_y_intercept,
+            max_conc=cr.cracked_state.max_concrete_compression / 1000.0,
+            max_conc_xy=tuple(cr.cracked_state.max_concrete_xy),
+            bars_cracked=[s / 1000.0 for s in cr.cracked_state.bar_stress],
+            bars_uncracked=[s / 1000.0 for s in cr.uncracked.bar_stress],
+            converged=cr.cracked_state.converged,
+            crack=(None if cw is None else dict(
+                wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm, sigma_s=cw.sigma_s,
+                rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff, hc_ef=cw.hc_ef,
+                phi=cw.phi, gov_bar=cw.gov_bar + 1)),
         )
     return out
 
@@ -557,7 +637,8 @@ def _radial_util(mx, my, ax, ay):
 # result views need a Calculate.
 # ---------------------------------------------------------------------------
 
-VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results"]
+VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results",
+         "Crack control"]
 
 
 def section_view(inp):
@@ -723,6 +804,94 @@ def elastic_view(inp, results):
                    "concrete stresses neutralised.")
 
 
+def crack_control_view(inp, results):
+    """Serviceability crack control: the cracking decision, the tension-stiffened
+    state and the crack width (EN 1992-1-1)."""
+    if not results or "cracking" not in results:
+        st.info("Tick **Crack control (SLS)** in Analysis & Result Settings, set "
+                "the serviceability load, then press Calculate.")
+        return
+    c = results["cracking"]
+    bars = c["bars_cracked"] if c["cracked"] else c["bars_uncracked"]
+    max_steel = max(bars) if bars else 0.0
+
+    if c["cracked"]:
+        st.warning(f"**Cracked** - the uncracked concrete tension reaches fctm at "
+                   f"a load factor lambda_cr = {c['lambda_cr']:.3f} "
+                   f"(= Mcr/M for pure bending), so the section has cracked under "
+                   f"this load.")
+    else:
+        lam = "infinite" if math.isinf(c["lambda_cr"]) else f"{c['lambda_cr']:.2f}"
+        st.success(f"**Uncracked** - peak concrete tension {c['sigma_ct']:.2f} MPa "
+                   f"< fctm {c['fctm']:.2f} MPa (cracking load factor "
+                   f"lambda_cr = {lam}). Stage I stresses govern.")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Cracking factor lambda_cr",
+              "inf" if math.isinf(c["lambda_cr"]) else f"{c['lambda_cr']:.3f}",
+              help="Proportional load factor to first cracking, fctm / sigma_ct,I "
+                   "(= Mcr/M in pure bending). < 1 means cracked.")
+    m2.metric("Tension stiffening zeta", f"{c['zeta']:.3f}",
+              help="EC2 distribution coefficient. 0 = uncracked (Stage I); "
+                   "-> 1 deeply cracked (Stage II). Softens the mean response.")
+    m3.metric("Max steel tension", f"{max_steel:.1f} MPa",
+              help="Governing bar, in the state that governs (Stage II if cracked).")
+    if c["crack"] is not None:
+        m4.metric("Crack width wk", f"{c['crack']['wk']:.3f} mm",
+                  help="EC2 7.3.4, on the governing tension bar.")
+    else:
+        m4.metric("Crack width wk", "-",
+                  help="Not computed (uncracked, no tension bar, or no cover set).")
+
+    # Section drawing of the cracked state: compression zone, neutral axis and the
+    # bars coloured by their cracked-state stress.
+    has_comp = c["max_conc"] > 0.0
+    hp = _elastic_halfplane(c["na_x"], c["na_y"], c["max_conc_xy"]) if has_comp else None
+    na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"]) if hp else None
+    zones = _zones(inp["outer"], hp) if hp else None
+    cL, cR = st.columns([3, 2])
+    with cL:
+        bar_xy = ([(b[0], b[1]) for b in inp["bars"]]
+                  + [(t[0], t[1]) for t in inp["tendons"]])
+        colors = [viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION for s in bars]
+        title = ("Cracked state (bars: green tension, red compression)"
+                 if c["cracked"] else "Uncracked (Stage I) state")
+        st.plotly_chart(
+            viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=colors,
+                               na_line=na, zones=zones, title=title),
+            use_container_width=True)
+    with cR:
+        if c["crack"] is not None:
+            cw = c["crack"]
+            st.markdown("**Crack width (EC2 7.3.4)**")
+            st.dataframe(
+                {"Quantity": ["wk (mm)", "sr,max (mm)", "esm - ecm",
+                              "sigma_s (MPa)", "rho_p,eff", "hc,ef (m)",
+                              "Ac,eff (m2)", "bar dia (mm)", "gov. bar"],
+                 "Value": [f"{cw['wk']:.3f}", f"{cw['sr_max']:.1f}",
+                           f"{cw['esm_ecm']:.3e}", f"{cw['sigma_s']:.1f}",
+                           f"{cw['rho_p_eff']:.4f}", f"{cw['hc_ef']:.3f}",
+                           f"{cw['ac_eff']:.4f}", f"{cw['phi']:.1f}",
+                           str(cw["gov_bar"])]},
+                hide_index=True, use_container_width=True)
+            st.caption("Crack width is uniaxial-dominant: the effective tension "
+                       "area and crack spacing are taken about the cracked-state "
+                       "bending axis on the governing bar.")
+        else:
+            st.markdown("**Bar stresses (MPa, tension +)**")
+            st.dataframe(
+                {"Bar": list(range(1, len(bars) + 1)),
+                 "Uncracked": [round(s, 1) for s in c["bars_uncracked"]],
+                 "Cracked": [round(s, 1) for s in c["bars_cracked"]]},
+                hide_index=True, use_container_width=True)
+
+    st.caption("Tension stiffening softens the *mean* response (curvature, "
+               "deflection, mean crack width) via zeta; the peak steel stress at "
+               "a crack stays the cracked-section (Stage II) value. A nonlinear "
+               "concrete tension-softening law (continuous partial cracking) is a "
+               "planned future extension.")
+
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
@@ -755,5 +924,7 @@ elif view == "Stress-Strain diagrams":
     materials_view(inp)
 elif view == "Plastic Results":
     plastic_view(inp, results)
-else:
+elif view == "Elastic Results":
     elastic_view(inp, results)
+else:
+    crack_control_view(inp, results)

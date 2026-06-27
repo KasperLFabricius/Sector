@@ -431,3 +431,57 @@ def test_material_manual_override_calculates():
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
+
+
+def test_crack_control_cracks_and_reports_crack_width():
+    # Enabling the SLS check and applying a moment large enough to crack the
+    # section produces the cracking decision, zeta and a crack width.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="sls_on").set_value(True).run()
+    at.number_input(key="sls_Mx").set_value(400.0).run()  # force cracking
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    c = at.session_state["results"]["cracking"]
+    assert c["cracked"] is True
+    assert 0.0 < c["lambda_cr"] < 1.0
+    assert 0.0 < c["zeta"] <= 1.0
+    assert c["crack"] is not None and c["crack"]["wk"] > 0.0
+
+
+def test_crack_control_uncracked_below_threshold():
+    # A small moment leaves the section uncracked: lambda_cr >= 1, zeta = 0 and
+    # no crack width.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="sls_on").set_value(True).run()
+    at.number_input(key="sls_Mx").set_value(5.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    c = at.session_state["results"]["cracking"]
+    assert c["cracked"] is False
+    assert c["zeta"] == 0.0
+    assert c["crack"] is None
+
+
+def test_crack_control_view_renders():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="sls_on").set_value(True).run()
+    at.number_input(key="sls_Mx").set_value(400.0).run()
+    at.selectbox(key="view").set_value("Crack control").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+
+
+def test_crack_control_independent_of_elastic_load():
+    # The SLS check uses its own load set; it runs in plastic mode and does not
+    # depend on the elastic long/short loads.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="sls_on").set_value(True).run()
+    at.number_input(key="sls_Mx").set_value(400.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    res = at.session_state["results"]
+    assert "cracking" in res and "plastic" in res  # plastic is the default mode
