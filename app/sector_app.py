@@ -17,6 +17,7 @@ sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE))
 
 import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import viz  # noqa: E402
@@ -222,6 +223,35 @@ def _rep_bar_dia(bars):
     return math.sqrt(4.0 * max(b[2] for b in bars) / math.pi)
 
 
+# Editable cross-section point tables (the section's source of truth).
+_CORNER_COLS = ["x (m)", "y (m)"]
+_REBAR_COLS = ["x (m)", "y (m)", "area (mm2)"]
+
+
+def _corners_df(pts):
+    """Concrete-corner DataFrame ``(x, y)`` from a list of points."""
+    return pd.DataFrame([{"x (m)": float(p[0]), "y (m)": float(p[1])} for p in pts],
+                        columns=_CORNER_COLS)
+
+
+def _rebar_df(pts):
+    """Reinforcement DataFrame ``(x, y, area)`` from a list of (x, y, area)."""
+    return pd.DataFrame(
+        [{"x (m)": float(p[0]), "y (m)": float(p[1]), "area (mm2)": float(p[2])}
+         for p in pts], columns=_REBAR_COLS)
+
+
+def _pts_from_df(df, cols):
+    """Rows of ``df`` as tuples, skipping any with a blank/NaN cell."""
+    out = []
+    for _, row in df.iterrows():
+        vals = [row.get(c) for c in cols]
+        if any(pd.isna(v) for v in vals):
+            continue
+        out.append(tuple(float(v) for v in vals))
+    return out
+
+
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
     loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
@@ -367,6 +397,51 @@ def build_inputs():
             tendons = templates.point_row(-h / 2 + cov_p, -b / 2 + cov_p,
                                           b / 2 - cov_p, int(nt), a_t)
 
+    # ---- Cross-section points (always live; the source of truth) ----
+    # The Quick Section above only prefills these on demand (the Load button), so a
+    # later Quick Section tweak never silently discards manual point edits. Holes
+    # (e.g. a box cavity) are captured from the Quick Section and are not
+    # hand-editable in this version.
+    qs_outer = [(float(p[0]), float(p[1])) for p in outer]
+    qs_holes = [[(float(p[0]), float(p[1])) for p in ring] for ring in (holes or [])]
+    qs_bars = [(float(p[0]), float(p[1]), float(p[2])) for p in bars]
+    qs_tendons = [(float(p[0]), float(p[1]), float(p[2])) for p in (tendons or [])]
+    load_qs = sec.button("Load Quick Section into points", key="load_qs",
+                         use_container_width=True,
+                         help="Overwrite the editable point tables below with the "
+                              "Quick Section above.")
+    if "pts_init" not in st.session_state or load_qs:
+        st.session_state["corners_base"] = _corners_df(qs_outer)
+        st.session_state["bars_base"] = _rebar_df(qs_bars)
+        st.session_state["tendons_base"] = _rebar_df(qs_tendons)
+        st.session_state["holes_pts"] = qs_holes
+        for k in ("ed_corners", "ed_bars", "ed_tendons"):
+            st.session_state.pop(k, None)
+        st.session_state["pts_init"] = True
+
+    sec.markdown("**Cross-section points** (the analysis uses these)")
+    sec.caption("Concrete corners define the outline (3 or more, in order). Bars "
+                "and tendons are points with an area (mm2). Edit freely; use Load "
+                "Quick Section to refill from the template above.")
+    sec.markdown("_Concrete corners_")
+    corners_df = sec.data_editor(st.session_state["corners_base"], key="ed_corners",
+                                 num_rows="dynamic", use_container_width=True)
+    sec.markdown("_Reinforcing bars_")
+    bars_df = sec.data_editor(st.session_state["bars_base"], key="ed_bars",
+                              num_rows="dynamic", use_container_width=True)
+    outer = _pts_from_df(corners_df, _CORNER_COLS)
+    bars = _pts_from_df(bars_df, _REBAR_COLS)
+    holes = st.session_state["holes_pts"]
+    if len(outer) < 3:
+        sec.error("Need at least 3 concrete corners; using the Quick Section outline.")
+        outer = qs_outer
+    tendons = []
+    if use_pre:
+        sec.markdown("_Tendons_")
+        tendons_df = sec.data_editor(st.session_state["tendons_base"], key="ed_tendons",
+                                     num_rows="dynamic", use_container_width=True)
+        tendons = _pts_from_df(tendons_df, _REBAR_COLS)
+
     # In elastic-only mode the stress-strain laws do not enter the analysis (it is
     # linear: steel via the modular ratio, concrete linear in compression with no
     # tension), so lock the parameters that have no elastic effect. fck (it feeds
@@ -485,18 +560,26 @@ def build_inputs():
 
     section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                    tendons_xy_area_mm2=tendons, holes=holes)
-    extent = max(abs(b), abs(h)) * 0.75
-    sig = (st.session_state.get(k) for k in
-           ("shape", "b", "h", "bf", "hf", "bw", "hw", "wall", "dia",
-            "bot_n", "bot_d", "top_n", "top_d", "ring_n", "ring_d", "ring_c",
-            "cover", "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
+    if outer:
+        xs = [p[0] for p in outer]
+        ys = [p[1] for p in outer]
+        extent = 0.75 * max(max(xs) - min(xs), max(ys) - min(ys), 1e-6)
+    else:
+        extent = 1.0
+    # The geometry signature is the point tables themselves (the source of truth),
+    # so editing a point marks the results stale; Quick Section inputs do not, as
+    # they only prefill on demand.
+    geom_sig = (tuple(outer), tuple(bars), tuple(tendons),
+                tuple(tuple(r) for r in holes))
+    sig = geom_sig + tuple(st.session_state.get(k) for k in
+           ("conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
             "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
             "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
-            "mild_ey0t", "mild_ey0c", "mild_Es", "use_pre", "tnd_n", "tnd_a",
-            "tnd_c", "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
-            "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t",
-            "pre_Es", "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx",
-            "el_long_My", "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
+            "mild_ey0t", "mild_ey0c", "mild_Es", "use_pre", "pre_preset",
+            "pre_IS", "pre_fytk", "pre_futk", "pre_eut", "pre_gamma_y",
+            "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
+            "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
+            "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
             "v_min", "v_max", "v_inc", "mode",
             "sls_ts", "sls_dur", "sls_fctm", "sls_cover", "sls_phi"))
     return dict(section=section, concrete=concrete, steel=steel,
@@ -507,7 +590,7 @@ def build_inputs():
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_ts=sls_ts, sls_long=sls_long, sls_fctm=sls_fctm,
                 sls_cover=sls_cover, sls_phi=sls_phi,
-                mode=mode, extent=extent, signature=tuple(sig))
+                mode=mode, extent=extent, signature=sig)
 
 
 # ---------------------------------------------------------------------------

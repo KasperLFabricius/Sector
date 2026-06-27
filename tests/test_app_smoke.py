@@ -168,9 +168,25 @@ def test_circular_shape_calculates():
     at = _fresh()
     at.run()
     at.selectbox(key="shape").set_value("Circular").run()
+    at.button(key="load_qs").click().run()   # apply the Quick Section to the points
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
+
+
+def test_points_are_source_of_truth_until_loaded():
+    # The point tables drive the analysis: changing a Quick Section input does
+    # nothing until "Load Quick Section into points" is pressed.
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    base_mx = at.session_state["results"]["plastic"]["max_mx"]
+    at.number_input(key="h").set_value(1.0).run()        # taller, but NOT loaded
+    at.button(key="calculate").click().run()
+    assert at.session_state["results"]["plastic"]["max_mx"] == pytest.approx(base_mx)
+    at.button(key="load_qs").click().run()               # apply the Quick Section
+    at.button(key="calculate").click().run()
+    assert at.session_state["results"]["plastic"]["max_mx"] > base_mx  # deeper -> stronger
 
 
 def test_material_preset_switch_calculates():
@@ -372,7 +388,7 @@ def test_section_view_is_geometry_only():
     at.radio(key="mode").set_value("Elastic").run()
     at.button(key="calculate").click().run()
     at.selectbox(key="view").set_value("Section").run()
-    at.number_input(key="h").set_value(0.75).run()  # geometry now differs
+    at.number_input(key="h").set_value(0.75).run()  # change an input after calc
     assert not at.exception
     assert not any("neutral axis" in w.value for w in at.warning)
 
@@ -433,6 +449,7 @@ def test_prestress_plastic_increases_capacity():
     at = _fresh()
     at.run()
     at.checkbox(key="use_pre").set_value(True).run()
+    at.button(key="load_qs").click().run()   # load the tendons into the points
     at.button(key="calculate").click().run()
     assert not at.exception
     res = at.session_state["results"]
@@ -444,6 +461,7 @@ def test_prestress_both_modes_run_with_tendons():
     at = _fresh()
     at.run()
     at.checkbox(key="use_pre").set_value(True).run()
+    at.button(key="load_qs").click().run()   # load the tendons into the points
     at.radio(key="mode").set_value("Both").run()
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -457,6 +475,7 @@ def test_prestress_preset_curve6_calculates():
     at = _fresh()
     at.run()
     at.checkbox(key="use_pre").set_value(True).run()
+    at.button(key="load_qs").click().run()   # load the tendons into the points
     at.selectbox(key="pre_preset").set_value("Curve 6 (bilinear)").run()
     assert not at.exception
     at.button(key="calculate").click().run()
