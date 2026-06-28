@@ -189,20 +189,19 @@ def test_points_are_source_of_truth_until_loaded():
     assert at.session_state["results"]["plastic"]["max_mx"] > base_mx  # deeper -> stronger
 
 
-def test_point_tables_have_plot_matching_ids():
-    # Each point table carries an ID column matching the plot numbering: corners
-    # and bars from 1, and tendons continuing after the bars.
+def test_point_tables_are_data_only_and_hold_loaded_points():
+    # The point tables hold just the coordinate columns (no stored ID -- the plot
+    # numbers points by row order); Load Quick Section fills them.
     at = _fresh()
     at.run()
     at.checkbox(key="use_pre").set_value(True).run()
     at.button(key="load_qs").click().run()
-    cb = at.session_state["corners_base"]
-    bb = at.session_state["bars_base"]
-    tb = at.session_state["tendons_base"]
-    assert cb["ID"].dropna().astype(int).tolist() == list(range(1, len(cb) + 1))
-    assert bb["ID"].dropna().astype(int).tolist() == list(range(1, len(bb) + 1))
-    assert tb["ID"].dropna().astype(int).tolist() == \
-        list(range(len(bb) + 1, len(bb) + 1 + len(tb)))
+    assert list(at.session_state["corners_base"].columns) == ["x (m)", "y (m)"]
+    assert list(at.session_state["bars_base"].columns) == \
+        ["x (m)", "y (m)", "area (mm2)"]
+    assert len(at.session_state["corners_base"]) >= 3
+    assert len(at.session_state["bars_base"]) >= 1
+    assert len(at.session_state["tendons_base"]) >= 1
 
 
 def test_clear_section_empties_all_point_tables():
@@ -234,50 +233,31 @@ def test_cleared_section_does_not_fall_back_to_quick_section():
     assert at.session_state["results"] == {}
 
 
-def test_blank_point_row_gets_no_id():
-    # A blank row between valid points must not consume an ID: the valid rows stay
-    # numbered to match the plot, and the blank row's ID is empty (Codex review).
+def test_blank_and_partial_point_rows_are_skipped():
+    # A blank row and a half-typed point (x with no y) and a non-numeric paste are
+    # ignored, never crash, and only the complete numeric rows become points.
     import pandas as pd
     at = _fresh()
     at.run()
+    at.radio(key="mode").set_value("Elastic").run()
     at.session_state["bars_base"] = pd.DataFrame(
-        {"ID": [1, 2, 3], "x (m)": [0.05, None, 0.15],
-         "y (m)": [0.05, 0.05, 0.05], "area (mm2)": [491.0, 491.0, 491.0]})
-    at.run()
-    assert not at.exception
-    ids = list(at.session_state["bars_base"]["ID"])
-    assert ids[0] == 1 and ids[2] == 2 and pd.isna(ids[1])
-
-
-def test_point_table_tolerates_bad_and_partial_cells():
-    # A half-typed point (x with no y) and a stray non-numeric paste must be
-    # skipped rather than crash the parsing (regression: float() got a 'list').
-    import pandas as pd
-    at = _fresh()
-    at.run()
-    at.session_state["bars_base"] = pd.DataFrame(
-        {"ID": [1, 2, 3, 4],
-         "x (m)": [0.05, 0.15, 0.25, "oops"],   # row 4 non-numeric
-         "y (m)": [0.05, None, 0.05, 0.05],      # row 2 half-typed (no y)
+        {"x (m)": [0.05, None, 0.15, "oops"],   # row 2 blank, row 4 non-numeric
+         "y (m)": [0.05, 0.05, None, 0.05],      # row 3 half-typed (no y)
          "area (mm2)": [491.0, 491.0, 491.0, 491.0]})
-    at.run()
+    at.button(key="calculate").click().run()
     assert not at.exception
-    ids = [int(i) for i in at.session_state["bars_base"]["ID"] if pd.notna(i)]
-    assert ids == [1, 2]   # only the two complete, numeric rows are numbered
+    assert len(at.session_state["results"]["elastic"]["total"]) == 1   # one valid bar
 
 
-def test_box_girder_void_is_editable_with_continuing_ids():
-    # The box cavity loads into an editable void table whose corner IDs continue
-    # after the outer corners, and the section still calculates.
+def test_box_girder_void_loads_and_calculates():
+    # The box cavity loads into the (data-only) void table and the section still
+    # calculates.
     at = _fresh()
     at.run()
     at.selectbox(key="shape").set_value("Box girder").run()
     at.button(key="load_qs").click().run()
-    n_outer = len(at.session_state["corners_base"])
     hb = at.session_state["hole_base"]
-    assert len(hb) >= 3
-    assert hb["ID"].dropna().astype(int).tolist() == \
-        list(range(n_outer + 1, n_outer + 1 + len(hb)))
+    assert len(hb) >= 3 and list(hb.columns) == ["x (m)", "y (m)"]
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
@@ -293,35 +273,47 @@ def _two_void_table():
 
 
 def test_two_voids_separated_by_blank_row():
-    # Two voids in one table (a blank row between them) become two holes; their
-    # corner IDs continue after the outer corners and the section calculates.
-    import pandas as pd
+    # Two voids in one table (a blank row between them) become two holes and the
+    # section calculates; the table keeps the six corners and the one separator.
     at = _fresh()
     at.run()
-    n_outer = len(at.session_state["corners_base"])
     at.session_state["hole_base"] = _two_void_table()
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
     hb = at.session_state["hole_base"]
-    ids = [int(i) for i in hb["ID"] if pd.notna(i)]
-    assert ids == list(range(n_outer + 1, n_outer + 7))   # 2 voids x 3 corners
-    assert int(hb["ID"].isna().sum()) == 1                # the separator row
+    assert len(hb) == 7                                    # 2 voids x 3 + 1 blank
+    assert int(hb.isna().any(axis=1).sum()) == 1           # one separator row
 
 
 def test_remove_void_button_drops_the_last_void():
-    import pandas as pd
     at = _fresh()
     at.run()
-    n_outer = len(at.session_state["corners_base"])
     at.session_state["hole_base"] = _two_void_table()
     at.run()
     at.button(key="rem_void").click().run()
     assert not at.exception
     hb = at.session_state["hole_base"]
-    ids = [int(i) for i in hb["ID"] if pd.notna(i)]
-    assert ids == list(range(n_outer + 1, n_outer + 4))   # one void left
-    assert int(hb["ID"].isna().sum()) == 0                # separator gone
+    assert len(hb) == 3                                    # one void left
+    assert int(hb.isna().any(axis=1).sum()) == 0           # separator gone
+
+
+def test_void_buttons_preserve_unsaved_edits():
+    # Codex P2: void corners typed into the editor (held in its delta, not yet in
+    # the base) must survive a + Add void click, not be discarded.
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    # base = one void; an extra corner is held only in the live editor delta.
+    at.session_state["hole_base"] = pd.DataFrame({
+        "x (m)": [-0.10, -0.04, -0.07], "y (m)": [-0.05, -0.05, 0.05]})
+    at.session_state["ed_hole"] = {
+        "edited_rows": {}, "deleted_rows": [],
+        "added_rows": [{"x (m)": 0.08, "y (m)": -0.05}]}   # an unsaved corner
+    at.button(key="add_void").click().run()   # handler reads the delta before re-render
+    assert not at.exception
+    hb = at.session_state["hole_base"]
+    assert (hb["x (m)"] == 0.08).any()   # the unsaved corner survived the rebuild
 
 
 def test_void_cap_enforced_when_parsing_not_only_the_button():
@@ -354,7 +346,7 @@ def test_add_void_button_appends_a_separator():
     assert not at.exception
     hb = at.session_state["hole_base"]
     assert len(hb) == before + 1                  # a blank separator row was added
-    assert int(hb["ID"].isna().sum()) == 1
+    assert int(hb.isna().any(axis=1).sum()) == 1
 
 
 def test_void_table_migrates_for_old_sessions():
