@@ -154,10 +154,44 @@ def concrete_panel(box, locked=False, lock_elastic=False):
         st.session_state.pop("conc_alpha_fck", None)
     alpha_cc = _number(box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
                        disabled=locked)
+
+    # Concrete strain limits eps_c2, eps_cu2 and the parabola exponent n shape the
+    # ULS compression curve (plastic-only). Making them editable lets grades above
+    # C50/60 -- where EC2 Table 3.1 makes them strength-dependent -- be modelled;
+    # they apply to the parabola-rectangle (curve 2). The Auto button fills the
+    # Table 3.1 values for the current grade (constant up to C50/60).
+    parabola = curve == 2
+    strain_lock = locked or not parabola
+    a_ec2 = round(codes.eps_c2(fck) * 1000.0, 2)
+    a_ecu2 = round(codes.eps_cu2(fck) * 1000.0, 2)
+    a_n = round(codes.n_exponent(fck), 3)
+    if box.button(f"Auto eps/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
+                  key="conc_strain_auto", use_container_width=True, disabled=strain_lock,
+                  help="Set eps_c2, eps_cu2 and n from EC2 Table 3.1 for the current "
+                       "grade (strength-dependent above C50/60). Press again after "
+                       "changing fck."):
+        st.session_state["conc_eps_c2"] = a_ec2
+        st.session_state["conc_eps_cu2"] = a_ecu2
+        st.session_state["conc_n"] = a_n
+    eps_c2 = _number(box, "conc", "eps_c2", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
+                     disabled=strain_lock)
+    eps_cu2 = _number(box, "conc", "eps_cu2", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
+                      disabled=strain_lock)
+    n = _number(box, "conc", "n", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
+                disabled=strain_lock)
+    # The two strains are independent inputs, so the form allows eps_cu2 < eps_c2
+    # (the law would reject it). Cross-validate here and lift eps_cu2 to the peak
+    # strain so a half-finished edit shows a warning instead of aborting the run.
+    if eps_cu2 < eps_c2:
+        box.warning("eps_cu2 must be at least eps_c2 (the peak strain); using that "
+                    "value for the diagram and analysis.")
+        eps_cu2 = eps_c2
+
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
-                                 alpha_cc=alpha_cc)
+                                 alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n)
     note = "  (alpha_cc tracks fck via eta_cc)" if auto is not None else ""
-    box.caption(f"curve {curve},  fcd = {concrete.fcd:.1f} MPa{note}")
+    box.caption(f"curve {curve},  fcd = {concrete.fcd:.1f} MPa,  "
+                f"eps_cu2 = {concrete.eps_cu2 * 1000.0:.2f} permille{note}")
 
     # Mean tensile strength fctm feeds the serviceability cracking check. It lives
     # with the concrete (not the loads); the Auto button refreshes it from the
@@ -853,6 +887,7 @@ def build_inputs():
                 tuple(tuple(r) for r in holes))
     sig = geom_sig + tuple(st.session_state.get(k) for k in
            ("conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
+            "conc_eps_c2", "conc_eps_cu2", "conc_n",
             "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
             "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
             "mild_ey0t", "mild_ey0c", "mild_Es", "mild_active_comp",

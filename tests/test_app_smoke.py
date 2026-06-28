@@ -411,6 +411,33 @@ def test_void_slicing_the_section_is_rejected():
     assert "plastic" not in at.session_state["results"]
 
 
+def test_high_grade_concrete_auto_strain_calculates():
+    # Above C50/60 the Auto button fills the EC2 Table 3.1 strain limits and the
+    # section still calculates (eps_cu2 ~ 2.66 permille at C70).
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_fck").set_value(70.0).run()
+    at.button(key="conc_strain_auto").click().run()
+    assert at.session_state["conc_eps_cu2"] == pytest.approx(2.66, abs=0.05)
+    assert at.session_state["conc_n"] == pytest.approx(1.44, abs=0.02)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
+def test_invalid_concrete_strain_order_is_recoverable():
+    # eps_cu2 < eps_c2 is a valid-in-the-form edit but the law rejects it; the panel
+    # must warn and clamp, not abort the run.
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_eps_c2").set_value(5.0).run()   # peak above eps_cu2 (3.5)
+    assert not at.exception
+    assert any("eps_cu2 must be at least eps_c2" in w.value for w in at.warning)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()

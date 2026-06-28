@@ -82,6 +82,35 @@ def test_concrete_crushed_beyond_ultimate():
     assert c.stress(-(EPS_CU + 0.001), design=False) == 0.0
 
 
+def test_concrete_custom_strain_limits_shift_peak_and_crush():
+    # A high-strength-style curve: peak at eps_c2 = 2.4 permille, crush at
+    # eps_cu2 = 2.7 permille, exponent n = 1.45.
+    c = Concrete(fck=70.0, curve=2, eps_c2=0.0024, eps_cu2=0.0027, n=1.45)
+    assert c.stress(-0.0024, design=False) == pytest.approx(-70.0)  # peak at eps_c2
+    assert c.stress(-0.0027, design=False) == pytest.approx(-70.0)  # plateau to eps_cu2
+    assert c.stress(-0.0028, design=False) == 0.0                   # crushed past eps_cu2
+    # General parabola sigma = fck*[1 - (1 - eps/eps_c2)^n] on the ascending branch.
+    e = 0.0012
+    expected = 70.0 * (1.0 - (1.0 - e / 0.0024) ** 1.45)
+    assert c.stress(-e, design=False) == pytest.approx(-expected)
+
+
+def test_concrete_default_curve2_matches_legacy_parabola():
+    # Defaults (eps_c2 = 0.2%, n = 2) reproduce the old hardcoded f = 10 e (1-2.5 e) fck.
+    c = Concrete(fck=40.0, curve=2)
+    for e_pct in (0.05, 0.1, 0.15, 0.19):
+        e = e_pct / 100.0
+        legacy = 10.0 * e_pct * (1.0 - 2.5 * e_pct) * 40.0
+        assert c.stress(-e, design=False) == pytest.approx(-legacy)
+
+
+def test_concrete_rejects_inconsistent_strain_limits():
+    with pytest.raises(ValueError):
+        Concrete(fck=30.0, curve=2, eps_c2=0.004, eps_cu2=0.0035)  # eps_cu2 < eps_c2
+    with pytest.raises(ValueError):
+        Concrete(fck=30.0, curve=2, n=0.0)
+
+
 # ---------------------------------------------------------------------------
 # Mild steel type 2 (elastic-perfectly-plastic)
 # ---------------------------------------------------------------------------

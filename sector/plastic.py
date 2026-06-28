@@ -29,7 +29,7 @@ import numpy as np
 
 from . import kernels
 from .geometry import _clip_pts, _poly_moments
-from .materials import EPS_C_PEAK, EPS_CU, Concrete, MildSteel, Prestress
+from .materials import Concrete, MildSteel, Prestress
 from .section import Section
 
 _MN_TO_KN = 1000.0
@@ -64,18 +64,18 @@ class PlasticPoint:
     converged: bool
 
 
-def _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons):
+def _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons, eps_cu):
     """Curvature at ultimate for a trial compression depth ``c`` (s-units).
 
     The strain profile is scaled until the first material limit is reached:
-    concrete crushing (extreme fibre at EPS_CU), mild-steel rupture (most
+    concrete crushing (extreme fibre at ``eps_cu``), mild-steel rupture (most
     tensile bar at its ``eut``), or tendon rupture (most tensile cable's total
     strain at its rupture strain). The governing curvature is the smallest of
     these, so no material is ever driven past its limit. ``bars`` and ``tendons``
     are ``(x, y, area)`` tuples precomputed once for the whole sweep.
     """
     s_na = s_max - c
-    phi = EPS_CU / c  # concrete-crushing limit
+    phi = eps_cu / c  # concrete-crushing limit
 
     # When steel or a tendon governs it sits exactly at its rupture strain, where
     # it is still intact (carrying its rupture force). Back the limiting curvature
@@ -135,7 +135,7 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
 
     # -- concrete (always compression over the zone s > s_na) --
     fcd = concrete.fcd
-    s_peak = s_na + EPS_C_PEAK / kappa  # strain reaches the 0.2% plateau here
+    s_peak = s_na + concrete.eps_c2 / kappa  # strain reaches the peak plateau here
     s_top = min(s_peak, s_max)
 
     if ring_xy is not None:
@@ -268,7 +268,8 @@ def plastic_capacity_at_angle(
     c_full = s_max - s_min
 
     def net_axial(c):
-        phi = _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons)
+        phi = _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons,
+                                   concrete.eps_cu2)
         acc = _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi,
                           n_bands, rings, bars, tendons,
                           ring_xy, ring_starts, buf_a, buf_b)
@@ -310,7 +311,8 @@ def plastic_capacity_at_angle(
                 break
         c = 0.5 * (lo + hi)
 
-    phi = _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons)
+    phi = _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons,
+                               concrete.eps_cu2)
     (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
      min_eps, min_eps_cable) = _accumulate(
         concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
@@ -321,7 +323,7 @@ def plastic_capacity_at_angle(
     My = comp_Fx + ten_Fx
     kappa = phi
     s_na = s_max - c
-    eps_concrete = phi * c  # extreme concrete strain (<= EPS_CU; less if steel governs)
+    eps_concrete = phi * c  # extreme concrete strain (<= eps_cu2; less if steel governs)
 
     # Resultant load position. R is signed (Mx = P*R*sin U, My = P*R*cos U), so a
     # tensile axial force (P < 0) gives a negative R.

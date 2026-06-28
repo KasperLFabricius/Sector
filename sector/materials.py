@@ -78,6 +78,9 @@ class Concrete:
     gamma_c: float = 1.0
     curve: int = 2
     alpha_cc: float = 1.0
+    eps_c2: float = EPS_C_PEAK   # strain at peak stress (parabola apex), fraction
+    eps_cu2: float = EPS_CU      # ultimate (crushing) strain, fraction
+    n: float = 2.0              # parabola-rectangle exponent
 
     def __post_init__(self) -> None:
         if self.curve not in (1, 2):
@@ -86,21 +89,32 @@ class Concrete:
             raise ValueError("fck must be positive")
         if self.alpha_cc <= 0:
             raise ValueError("alpha_cc must be positive")
+        if self.eps_c2 <= 0.0 or self.eps_cu2 < self.eps_c2:
+            raise ValueError("need 0 < eps_c2 <= eps_cu2")
+        if self.n <= 0.0:
+            raise ValueError("parabola exponent n must be positive")
 
     def _char_compressive(self, e_pct: float) -> float:
         """Characteristic compressive stress (MPa, >=0) at strain ``e_pct`` (%).
 
-        ``e_pct`` is the compressive strain in percent, 0 <= e_pct <= 0.35.
+        ``e_pct`` is the compressive strain in percent. The parabola-rectangle
+        (curve 2) rises as ``fck * [1 - (1 - eps/eps_c2)^n]`` to the peak at
+        ``eps_c2``, then holds ``fck`` to the ultimate strain ``eps_cu2``; making
+        ``eps_c2``, ``eps_cu2`` and ``n`` parameters covers the strength-dependent
+        values EC2 Table 3.1 gives for concrete above C50/60. Curve 1 is the
+        program's fixed cubic, defined for the normal-strength peak at 0.2 %.
         """
         fc = self.fck
         if e_pct < 0.0:
             return 0.0
-        if e_pct >= EPS_C_PEAK * 100.0:  # 0.2 %
-            if e_pct <= EPS_CU * 100.0 + 1e-12:  # plateau up to 0.35 %
+        peak_pct = self.eps_c2 * 100.0
+        if e_pct >= peak_pct:
+            if e_pct <= self.eps_cu2 * 100.0 + 1e-12:  # plateau up to eps_cu2
                 return fc
             return 0.0  # crushed beyond the ultimate strain
         if self.curve == 2:
-            return 10.0 * e_pct * (1.0 - 2.5 * e_pct) * fc
+            r = e_pct / peak_pct                       # eps / eps_c2
+            return fc * (1.0 - (1.0 - r) ** self.n)
         # curve == 1
         e0 = 51.0 * fc / (13.0 + fc)
         return (10.0 * e0 * e_pct
@@ -132,11 +146,11 @@ class Concrete:
         ``sigma_key`` are ASCII identifiers the UI maps to symbols; either may be
         ``None`` when that coordinate is not a distinct value to label here.
         """
-        peak = self.stress(-EPS_C_PEAK, design=design)  # compression (negative)
+        peak = self.stress(-self.eps_c2, design=design)  # compression (negative)
         fkey = "fcd" if design else "fck"
         return [
-            (-EPS_C_PEAK, peak, "eps_c2", fkey),
-            (-EPS_CU, peak, "eps_cu2", None),  # same stress level as eps_c2
+            (-self.eps_c2, peak, "eps_c2", fkey),
+            (-self.eps_cu2, peak, "eps_cu2", None),  # same stress level as eps_c2
         ]
 
 
