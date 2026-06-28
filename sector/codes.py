@@ -140,6 +140,10 @@ class DesignCode:
         (EN 1992-1-1:2023, with ``eta_cc_ref = 40 MPa``).
     k_tc:
         Sustained-load / time factor on the design concrete strength (2023).
+    const_strains:
+        Keep the ultimate parabola strains (``eps_c2 = 0.2%``, ``eps_cu2 = 0.35%``,
+        ``n = 2``) constant for every class instead of the EC2 Table 3.1
+        strength-dependent values. EN 1992-1-1:2023 keeps them constant.
     """
 
     key: str
@@ -149,6 +153,7 @@ class DesignCode:
     alpha_cc: float = 1.0
     eta_cc_ref: Optional[float] = None
     k_tc: float = 1.0
+    const_strains: bool = False
 
     def concrete_factor(self, fck: float) -> float:
         """Effective coefficient on the design concrete strength for ``fck``."""
@@ -160,13 +165,18 @@ class DesignCode:
     def concrete(self, fck: float) -> Concrete:
         """Concrete law for characteristic strength ``fck`` (MPa) under this code.
 
-        The strain limits and parabola exponent follow EC2 Table 3.1, so a class
-        above C50/60 gets its strength-dependent ``eps_c2``/``eps_cu2``/``n``
-        automatically (constant ``0.2%``/``0.35%``/``2`` up to C50/60).
+        Unless the edition keeps constant strains (``const_strains``), the strain
+        limits and parabola exponent follow EC2 Table 3.1, so a class above C50/60
+        gets its strength-dependent ``eps_c2``/``eps_cu2``/``n`` automatically
+        (constant ``0.2%``/``0.35%``/``2`` up to C50/60).
         """
+        if self.const_strains:
+            e_c2, e_cu2, n = 0.002, 0.0035, 2.0
+        else:
+            e_c2, e_cu2, n = eps_c2(fck), eps_cu2(fck), n_exponent(fck)
         return Concrete(fck=fck, gamma_c=self.gamma_c, curve=2,
                         alpha_cc=self.concrete_factor(fck),
-                        eps_c2=eps_c2(fck), eps_cu2=eps_cu2(fck), n=n_exponent(fck))
+                        eps_c2=e_c2, eps_cu2=e_cu2, n=n)
 
     def steel(self, fyk: float) -> MildSteel:
         """Reinforcement law for characteristic yield ``fyk`` (MPa) under this code.
@@ -216,6 +226,7 @@ EC2_2023 = DesignCode(
     gamma_s=1.15,
     eta_cc_ref=40.0,
     k_tc=1.0,
+    const_strains=True,   # the 2023 ultimate parabola keeps constant strains
 )
 
 # Registry of selectable codes, keyed by their display label.

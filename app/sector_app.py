@@ -179,6 +179,13 @@ def concrete_panel(box, locked=False, lock_elastic=False):
                       disabled=strain_lock)
     n = _number(box, "conc", "n", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
                 disabled=strain_lock)
+    # The two strains are independent inputs, so the form allows eps_cu2 < eps_c2
+    # (the law would reject it). Cross-validate here and lift eps_cu2 to the peak
+    # strain so a half-finished edit shows a warning instead of aborting the run.
+    if eps_cu2 < eps_c2:
+        box.warning("eps_cu2 must be at least eps_c2 (the peak strain); using that "
+                    "value for the diagram and analysis.")
+        eps_cu2 = eps_c2
 
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n)

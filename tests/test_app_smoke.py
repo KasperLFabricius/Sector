@@ -425,6 +425,19 @@ def test_high_grade_concrete_auto_strain_calculates():
     assert "plastic" in at.session_state["results"]
 
 
+def test_invalid_concrete_strain_order_is_recoverable():
+    # eps_cu2 < eps_c2 is a valid-in-the-form edit but the law rejects it; the panel
+    # must warn and clamp, not abort the run.
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_eps_c2").set_value(5.0).run()   # peak above eps_cu2 (3.5)
+    assert not at.exception
+    assert any("eps_cu2 must be at least eps_c2" in w.value for w in at.warning)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()

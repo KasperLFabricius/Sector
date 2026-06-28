@@ -62,6 +62,15 @@ def test_code_concrete_above_c50_is_strength_dependent():
     assert code.concrete(30.0).eps_cu2 == pytest.approx(0.0035)
 
 
+def test_ec2_2023_keeps_constant_concrete_strains():
+    # The 2023 edition keeps the ultimate parabola strains constant for all classes
+    # (only eta_cc changes); a high grade must not get the Table 3.1 values.
+    c = codes.CODES["DS/EN 1992-1-1:2023"].concrete(70.0)
+    assert c.eps_c2 == pytest.approx(0.002)
+    assert c.eps_cu2 == pytest.approx(0.0035)
+    assert c.n == pytest.approx(2.0)
+
+
 def test_dk_na_2024_partial_factors():
     code = codes.CODES["DS/EN 1992-1-1:2005 + DK NA:2024"]
     # In-situ reinforced concrete, normal control class.
