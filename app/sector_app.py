@@ -167,7 +167,21 @@ def concrete_panel(box, locked=False):
                                 key="sls_fctm",
                                 help="Mean axial tensile strength for the cracking "
                                      "check (fct,eff). Use Auto for the EC2 value.")
-    return concrete, fctm_val
+
+    # Elastic modulus Ec: only used by the elastic analysis, to derive the modular
+    # ratios n = Es/Ec. The Auto button sets the EC2 secant modulus for the grade.
+    ecm_gpa = round(codes.ecm(fck) / 1000.0, 1)
+    st.session_state.setdefault("conc_Ec", ecm_gpa)
+    if box.button(f"Auto Ec (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
+                  use_container_width=True,
+                  help="Set Ec = Ecm = 22*(fcm/10)^0.3 GPa (EC2 Table 3.1) for the "
+                       "current grade. Press again after changing the grade."):
+        st.session_state["conc_Ec"] = ecm_gpa
+    Ec = box.number_input("Elastic modulus Ec (GPa)", 1.0, 100.0, step=0.5,
+                          key="conc_Ec",
+                          help="Concrete secant modulus, used only by the elastic "
+                               "analysis to auto-derive the modular ratios n = Es/Ec.")
+    return concrete, fctm_val, Ec
 
 
 def mild_panel(box, locked=False):
@@ -559,7 +573,7 @@ def build_inputs():
                     "elastic results and are locked. Only fck (feeds fctm) and the "
                     "steel modulus Es (crack width) stay editable; switch to "
                     "Plastic or Both to edit the full laws.")
-    concrete, sls_fctm = concrete_panel(mat, locked=lock_mats)
+    concrete, sls_fctm, conc_Ec = concrete_panel(mat, locked=lock_mats)
     mat.divider()
     steel = mild_panel(mat, locked=lock_mats)
     if use_pre:
@@ -602,17 +616,37 @@ def build_inputs():
     P_el_l, Mx_el_l, My_el_l = _load_set(
         "el_long", "Sustained axial force (long-term).",
         "Sustained moment (long-term).", elastic_on)
-    nl = loads.number_input("Long-term modular ratio n_l = Es/Ec", 1.0, 50.0, 15.0, 0.5,
-                            key="nl", disabled=not elastic_on,
+    phi_creep = loads.number_input("Creep coefficient phi (long-term)", 0.0, 5.0, 2.0,
+                                   0.1, key="el_phi", disabled=not elastic_on,
+                                   help="Final creep coefficient for the long-term "
+                                        "modular ratio n_l = Es*(1+phi)/Ec.")
+    _nl_auto = round(min(50.0, max(1.0, steel.Es * (1.0 + phi_creep)
+                                   / (conc_Ec * 1000.0))), 1)
+    st.session_state.setdefault("nl", 15.0)
+    if loads.button(f"Auto n_l (Es(1+phi)/Ec = {_nl_auto:.1f})", key="nl_auto",
+                    disabled=not elastic_on, use_container_width=True,
+                    help="Long-term modular ratio from the concrete Ec, creep-reduced "
+                         "by phi (effective-modulus method)."):
+        st.session_state["nl"] = _nl_auto
+    nl = loads.number_input("Long-term modular ratio n_l = Es/Ec_eff", 1.0, 50.0,
+                            step=0.5, key="nl", disabled=not elastic_on,
                             help="Modular ratio for the sustained load (creep-reduced "
-                                 "concrete stiffness, so larger than the short-term ratio).")
+                                 "concrete stiffness, so larger than the short-term "
+                                 "ratio). Use Auto to derive it from Ec and phi.")
     loads.markdown("_Short-term_")
     P_el_s, Mx_el_s, My_el_s = _load_set(
         "el_short", "Instantaneous (variable) axial force.",
         "Instantaneous (variable) moment.", elastic_on, mx_default=0.0)
-    ns = loads.number_input("Short-term modular ratio n_s = Es/Ec", 1.0, 50.0, 15.0, 0.5,
-                            key="ns", disabled=not elastic_on,
-                            help="Modular ratio for the instantaneous load.")
+    _ns_auto = round(min(50.0, max(1.0, steel.Es / (conc_Ec * 1000.0))), 1)
+    st.session_state.setdefault("ns", 15.0)
+    if loads.button(f"Auto n_s (Es/Ec = {_ns_auto:.1f})", key="ns_auto",
+                    disabled=not elastic_on, use_container_width=True,
+                    help="Short-term (instantaneous) modular ratio from the concrete Ec."):
+        st.session_state["ns"] = _ns_auto
+    ns = loads.number_input("Short-term modular ratio n_s = Es/Ec", 1.0, 50.0,
+                            step=0.5, key="ns", disabled=not elastic_on,
+                            help="Modular ratio for the instantaneous load. Use Auto "
+                                 "to derive it from Ec.")
 
     section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                    tendons_xy_area_mm2=tendons, holes=holes)

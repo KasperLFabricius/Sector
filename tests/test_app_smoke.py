@@ -787,6 +787,23 @@ def test_fctm_auto_button_tracks_grade():
     assert at.number_input(key="sls_fctm").value == pytest.approx(4.07, abs=0.05)
 
 
+def test_modular_ratios_auto_from_ec():
+    # The Auto buttons derive the modular ratios from the concrete Ec: n_s = Es/Ec
+    # (~6 for a normal grade) and n_l = Es*(1+phi)/Ec, i.e. (1+phi)*n_s = 3*n_s
+    # with the default creep coefficient phi = 2.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.button(key="conc_Ec_auto").click().run()      # Ec = Ecm for the grade
+    at.button(key="ns_auto").click().run()
+    at.button(key="nl_auto").click().run()
+    assert not at.exception
+    ns = at.number_input(key="ns").value
+    nl = at.number_input(key="nl").value
+    assert 3.5 < ns < 12.0                            # short-term Es/Ec
+    assert nl == pytest.approx(3.0 * ns, rel=0.05)    # n_l = (1+phi)*n_s, phi = 2
+
+
 def test_crack_width_auto_cover_circular_section():
     # No cover input: the crack width takes each bar's clear cover from the
     # geometry. A 100 mm ring cover (to centres) on a circular section gives a
