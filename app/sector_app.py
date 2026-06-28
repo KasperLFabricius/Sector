@@ -6,6 +6,7 @@ analysis, then press Calculate to review the stresses and the ultimate capacity.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import pathlib
 import sys
@@ -25,7 +26,7 @@ from sector import codes, geometry, kernels, material_presets as mp, templates  
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
-from sector.serviceability import analyse_cracking  # noqa: E402
+from sector.serviceability import analyse_cracking, crack_width  # noqa: E402
 
 APP_VERSION = "0.1.0"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -724,20 +725,20 @@ def run_analysis(inp):
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
-            cracked_short=None, lambda_cr_short=None,
         )
-        # Crack width is its own opt-in, reported for both the long-term state
-        # (above, at nl) and the short-term state -- the total long+short load at
-        # ns. Each bar's clear cover comes from the geometry.
-        if inp["sls_cw"]:
-            cr_s = analyse_cracking(
-                sec, inp["P_el_l"] + inp["P_el_s"], inp["Mx_el_l"] + inp["Mx_el_s"],
-                inp["My_el_l"] + inp["My_el_s"], inp["ns"],
-                fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=1.0, kt=0.6,
-                bar_diameter=phi)
+        # Crack width is its own opt-in, reported for both load cases once the
+        # (quasi-permanent) section has cracked. The long-term state is the solve
+        # at nl above. The short-term state reuses the combined creep solve `r`:
+        # its instantaneous neutral axis with the displayed total steel stress
+        # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
+        # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
+        if inp["sls_cw"] and cr_l.cracked:
+            short_state = dataclasses.replace(r.short_term,
+                                              bar_stress=r.bar_stress_total)
+            cw_short = crack_width(sec, short_state, inp["ns"], fctm=inp["sls_fctm"],
+                                   Es=inp["steel"].Es, kt=0.6, bar_diameter=phi)
             out["elastic"].update(
-                crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cr_s.crack),
-                cracked_short=cr_s.cracked, lambda_cr_short=cr_s.lambda_cr,
+                crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cw_short),
             )
     return out
 

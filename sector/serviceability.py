@@ -318,3 +318,31 @@ def analyse_cracking(
         uncracked=uncr, cracked_state=crk, eps0_m=eps0_m, kx_m=kx_m, ky_m=ky_m,
         crack=crack,
     )
+
+
+def crack_width(
+    section: Section,
+    cracked_state: ElasticResult,
+    n: float,
+    *,
+    fctm: float,
+    Es: float = 200_000.0,
+    kt: float = 0.6,
+    cover: Optional[float] = None,
+    bar_diameter: Optional[float] = None,
+    k1: float = 0.8,
+    k2: float = 0.5,
+    k3: float = 3.4,
+    k4: float = 0.425,
+) -> Optional[CrackWidthResult]:
+    """EC2 7.3.4 crack width for an externally supplied cracked-section state.
+
+    Unlike :func:`analyse_cracking`, the cracked state is given rather than solved
+    here, so it can carry a steel stress that is not a single linear solve -- e.g.
+    the instantaneous (short-term) state of the combined creep analysis, whose
+    bar stress is ``s2 + RST1``. ``cracked_state`` supplies the neutral axis /
+    strain gradient and the per-bar steel stress; the bar with the largest ``wk``
+    governs. See :func:`analyse_cracking` for the remaining parameters.
+    """
+    return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
+                        k1, k2, k3, k4, bar_diameter)

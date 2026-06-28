@@ -645,6 +645,27 @@ def test_crack_width_reports_both_load_cases():
     assert e["crack"]["cover"] > 0.0       # auto cover from the geometry
 
 
+def test_short_term_crack_uses_combined_creep_state():
+    # With creep (ns != nl) the short-term crack width must come from the combined
+    # instantaneous state (total = s2 + RST1), so the governing bar's sigma_s
+    # equals the Total steel-stress column -- not a raw (long+short)-at-ns solve.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(300.0).run()
+    at.number_input(key="el_short_Mx").set_value(150.0).run()
+    at.number_input(key="nl").set_value(15.0).run()
+    at.number_input(key="ns").set_value(6.0).run()      # creep: ns != nl
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    cs = e["crack_short"]
+    assert cs is not None
+    gov = cs["gov_bar"]                                  # 1-based bar index
+    assert cs["sigma_s"] == pytest.approx(e["total"][gov - 1], rel=0.02)
+
+
 def test_elastic_uncracked_below_threshold():
     # A small long-term moment leaves the section uncracked: zeta 0, no crack
     # width, and no cracked-section properties.
