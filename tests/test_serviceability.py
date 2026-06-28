@@ -93,6 +93,19 @@ def test_auto_per_bar_cover_matches_hand_calc():
     assert r.crack.wk == pytest.approx(0.1975, rel=0.02)
 
 
+def test_per_bar_k1_lets_a_plain_bar_govern():
+    # k1 (bond) may be given per bar -- e.g. mild bars vs prestressing tendons.
+    # A plain bar (k1 = 1.6) cracks wider than the identical ribbed bars (k1 = 0.8)
+    # around it, so it governs the reported crack width.
+    sec = beam_section()
+    base = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                            beta=0.5, kt=0.4, bar_diameter=25.0, k1=0.8)
+    mixed = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                             beta=0.5, kt=0.4, bar_diameter=25.0, k1=[1.6, 0.8, 0.8])
+    assert mixed.crack.gov_bar == 0          # the plain (k1 = 1.6) bar
+    assert mixed.crack.wk > base.crack.wk
+
+
 def test_effective_height_uses_neutral_axis_term():
     # A deep, lightly reinforced section where the (h - x)/3 limit governs hc,ef
     # (not 2.5(h-d) or h/2). The corrected limit is (s_tface - s_na)/3 ~ 0.27 m;

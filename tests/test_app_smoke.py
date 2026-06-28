@@ -683,6 +683,21 @@ def test_bond_coefficient_k1_widens_cracks():
     assert wk_plain > wk_ribbed
 
 
+def test_crack_width_with_tendons_runs():
+    # With prestressing tendons present, the per-bar k1 (tendons fixed at 1.6,
+    # folded after the bars) must line up with the section, so the crack-width
+    # path runs without a length mismatch.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.checkbox(key="use_pre").set_value(True).run()
+    at.button(key="load_qs").click().run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+
+
 def test_elastic_uncracked_below_threshold():
     # A small long-term moment leaves the section uncracked: zeta 0, no crack
     # width, and no cracked-section properties.
