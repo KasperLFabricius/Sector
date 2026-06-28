@@ -555,8 +555,11 @@ def build_inputs():
     sec.markdown("_Concrete corners_")
     outer = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS, 1)
     if len(outer) < 3:
-        sec.error("Need at least 3 concrete corners; using the Quick Section outline.")
-        outer = qs_outer
+        # No valid outline. Leave it empty (do NOT fall back to the Quick Section,
+        # or Clear Section would silently revert to the template) and let the
+        # downstream treat the section as blank.
+        sec.warning("The section has no concrete outline. Add at least 3 corners, "
+                    "or press Load Quick Section.")
     sec.markdown("_Concrete void (hole)_")
     # Void corner IDs continue after the outer corners (the concrete-vertex order).
     hole_ring = _point_editor(sec, "hole_base", "ed_hole", _CORNER_COLS, len(outer) + 1)
@@ -657,8 +660,9 @@ def build_inputs():
                             help="Modular ratio for the instantaneous load. Use Auto "
                                  "to derive it from Ec.")
 
-    section = Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
-                                   tendons_xy_area_mm2=tendons, holes=holes)
+    section = (Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
+                                    tendons_xy_area_mm2=tendons, holes=holes)
+               if len(outer) >= 3 else None)
     if outer:
         xs = [p[0] for p in outer]
         ys = [p[1] for p in outer]
@@ -729,6 +733,8 @@ def _crack_dict(cw):
 
 def run_analysis(inp):
     out = {}
+    if inp["section"] is None:
+        return out                          # no valid concrete outline -> nothing to run
     if inp["mode"] in ("Plastic", "Both"):
         vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
@@ -911,6 +917,10 @@ def section_view(inp):
     This view is only for verifying the section. Analysis results -- the neutral
     axis, the compression zone, stresses -- are shown in the result views.
     """
+    if inp["section"] is None:
+        st.info("The section has no concrete outline yet -- add at least 3 corners "
+                "in the Section panel, or press Load Quick Section. Any reinforcement "
+                "you have added is still drawn below.")
     bar_xy = [(b[0], b[1]) for b in inp["bars"]]
     tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,

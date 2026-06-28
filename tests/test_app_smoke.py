@@ -220,6 +220,20 @@ def test_clear_section_empties_all_point_tables():
         assert len(at.session_state[base]) == 0
 
 
+def test_cleared_section_does_not_fall_back_to_quick_section():
+    # After Clear Section the source-of-truth outline is genuinely empty -- it must
+    # not revert to the Quick Section. The Section view and a Calculate run without
+    # error, and no results are produced (the section is blank).
+    at = _fresh()
+    at.run()
+    at.button(key="clear_pts").click().run()
+    at.selectbox(key="view").set_value("Section").run()
+    assert not at.exception
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert at.session_state["results"] == {}
+
+
 def test_blank_point_row_gets_no_id():
     # A blank row between valid points must not consume an ID: the valid rows stay
     # numbered to match the plot, and the blank row's ID is empty (Codex review).
