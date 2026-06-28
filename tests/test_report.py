@@ -87,9 +87,11 @@ def test_report_omits_unused_material_sections():
     assert "Design yield" in txt
     assert "Initial prestrain" not in txt
     # Tendons only -> prestress is reported, mild steel is omitted.
+    import sector.material_presets as mp
     inp2 = _inp()
     inp2["bars"] = []
     inp2["tendons"] = [(0.0, -0.12, 5.0e-4)]
+    inp2["prestress"] = mp.build_prestress(**list(mp.PRESTRESS_PRESETS.values())[0])
     txt2 = _pdf_text(sector_report.build_report({}, inp2, _out(), figures=False))
     assert "Initial prestrain" in txt2
     assert "Design yield" not in txt2

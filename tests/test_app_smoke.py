@@ -539,6 +539,26 @@ def test_generate_report_produces_pdf():
     assert at.session_state["report_buffer"][:4] == b"%PDF"
 
 
+def test_load_project_without_tendon_table_does_not_crash():
+    # An older / partial project may omit the tendon table; the always-mounted
+    # tendon editor must still find a (seeded) base rather than KeyError.
+    import json
+    at = _fresh()
+    at.run()
+    project = {
+        "format": "sector-project", "version": 1,
+        "tables": {"corners_base": {"columns": ["x (mm)", "y (mm)"],
+                                    "rows": [[-100.0, -150.0], [100.0, -150.0],
+                                             [100.0, 150.0], [-100.0, 150.0]]}},
+        "scalars": {"mode": "Plastic"},
+    }
+    at.session_state["_pending_project"] = json.dumps(project)
+    at.run()
+    assert not at.exception
+    assert "tendons_base" in at.session_state
+    assert len(at.session_state["tendons_base"]) == 0
+
+
 def test_prestress_always_available_without_a_toggle():
     # The "include prestressing tendons" checkbox is gone: the prestress material
     # panel and the tendon point table are always present.

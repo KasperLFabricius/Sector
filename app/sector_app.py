@@ -861,7 +861,14 @@ def build_inputs():
             ("bars_base", _REBAR_COLS, "ed_bars"),
             ("tendons_base", _REBAR_COLS, "ed_tendons")):
         df = st.session_state.get(base_key)
-        if df is not None and list(df.columns) != cols:
+        if df is None:
+            # A loaded or partial project may omit a table (e.g. a non-prestressed
+            # project has no tendon table); seed it empty so the always-mounted
+            # editor has a base to read.
+            st.session_state[base_key] = (_corners_df([]) if cols is _CORNER_COLS
+                                          else _rebar_df([]))
+            continue
+        if list(df.columns) != cols:
             if set(cols).issubset(df.columns):
                 st.session_state[base_key] = df.reindex(columns=cols)  # drop a legacy ID col
             else:   # an older schema (e.g. metre column names) -> reset to empty
