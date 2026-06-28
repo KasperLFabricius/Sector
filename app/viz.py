@@ -376,15 +376,16 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     below which labels are thinned out -- the two are independent.
     """
     # Scale every geometry input once, up front, so the traces and the labels are
-    # all drawn in the display units.
-    outer = [(p[0] * scale, p[1] * scale) for p in (outer or [])]
-    holes = [[(p[0] * scale, p[1] * scale) for p in ring] for ring in (holes or [])]
-    bars = [(b[0] * scale, b[1] * scale) + tuple(b[2:]) for b in (bars or [])]
-    tendons = [(t[0] * scale, t[1] * scale) + tuple(t[2:]) for t in (tendons or [])]
-    if na_line:
+    # all drawn in the display units. Guard with ``is None`` rather than a truth
+    # test so NumPy vertex arrays (whose truth value is ambiguous) pass through.
+    outer = [] if outer is None else [(p[0] * scale, p[1] * scale) for p in outer]
+    holes = [] if holes is None else [[(p[0] * scale, p[1] * scale) for p in ring] for ring in holes]
+    bars = [] if bars is None else [(b[0] * scale, b[1] * scale) + tuple(b[2:]) for b in bars]
+    tendons = [] if tendons is None else [(t[0] * scale, t[1] * scale) + tuple(t[2:]) for t in tendons]
+    if na_line is not None:
         na_line = tuple(v * scale for v in na_line)
-    zones = [([(p[0] * scale, p[1] * scale) for p in verts], color, name)
-             for verts, color, name in (zones or [])]
+    zones = [] if zones is None else [([(p[0] * scale, p[1] * scale) for p in verts], color, name)
+                                      for verts, color, name in zones]
 
     fig = go.Figure()
     xs, ys = _ring_xy(outer)

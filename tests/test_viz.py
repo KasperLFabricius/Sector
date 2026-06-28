@@ -49,6 +49,17 @@ def test_section_figure_draws_in_mm_with_scale():
     assert max(fig.data[0].y) == pytest.approx(600.0)
 
 
+def test_section_figure_accepts_numpy_array_rings():
+    # Sections store rings as NumPy arrays; section_figure must not truth-test them
+    # (an array's truth value is ambiguous) when scaling for display.
+    import numpy as np
+    outer = np.array([[0.0, 0.0], [0.4, 0.0], [0.4, 0.6], [0.0, 0.6]])
+    holes = [np.array([[0.1, 0.1], [0.3, 0.1], [0.3, 0.5], [0.1, 0.5]])]
+    bars = np.array([[0.2, 0.05, 2.0e-4]])
+    fig = viz.section_figure(outer, holes=holes, bars=bars, scale=1000.0, unit="mm")
+    assert max(fig.data[0].x) == pytest.approx(400.0)
+
+
 def test_tension_only_curve_has_no_spurious_vertical_at_origin():
     # A tension-only law (zero in compression, elastic in tension) is continuous
     # at the origin: the 0 -> elastic-branch transition must NOT be drawn as a
