@@ -196,12 +196,23 @@ def test_point_tables_are_data_only_and_hold_loaded_points():
     at.run()
     at.checkbox(key="use_pre").set_value(True).run()
     at.button(key="load_qs").click().run()
-    assert list(at.session_state["corners_base"].columns) == ["x (m)", "y (m)"]
+    assert list(at.session_state["corners_base"].columns) == ["x (mm)", "y (mm)"]
     assert list(at.session_state["bars_base"].columns) == \
-        ["x (m)", "y (m)", "area (mm2)"]
+        ["x (mm)", "y (mm)", "area (mm2)"]
     assert len(at.session_state["corners_base"]) >= 3
     assert len(at.session_state["bars_base"]) >= 1
     assert len(at.session_state["tendons_base"]) >= 1
+
+
+def test_coordinates_are_in_millimetres():
+    # Coordinates are entered and stored in mm: the default 400 x 600 mm rectangle
+    # (centred) has corners at +/-200 mm and +/-300 mm.
+    at = _fresh()
+    at.run()
+    cb = at.session_state["corners_base"]
+    assert list(cb.columns) == ["x (mm)", "y (mm)"]
+    assert set(cb["x (mm)"].abs().round().tolist()) == {200.0}
+    assert set(cb["y (mm)"].abs().round().tolist()) == {300.0}
 
 
 def test_clear_section_empties_all_point_tables():
@@ -241,8 +252,8 @@ def test_blank_and_partial_point_rows_are_skipped():
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
     at.session_state["bars_base"] = pd.DataFrame(
-        {"x (m)": [0.05, None, 0.15, "oops"],   # row 2 blank, row 4 non-numeric
-         "y (m)": [0.05, 0.05, None, 0.05],      # row 3 half-typed (no y)
+        {"x (mm)": [50.0, None, 150.0, "oops"],   # row 2 blank, row 4 non-numeric
+         "y (mm)": [50.0, 50.0, None, 50.0],       # row 3 half-typed (no y)
          "area (mm2)": [491.0, 491.0, 491.0, 491.0]})
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -257,7 +268,7 @@ def test_box_girder_void_loads_and_calculates():
     at.selectbox(key="shape").set_value("Box girder").run()
     at.button(key="load_qs").click().run()
     hb = at.session_state["hole_base"]
-    assert len(hb) >= 3 and list(hb.columns) == ["x (m)", "y (m)"]
+    assert len(hb) >= 3 and list(hb.columns) == ["x (mm)", "y (mm)"]
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
@@ -268,8 +279,8 @@ def _two_void_table():
     # two small triangular voids inside the default (centred) rectangle, separated
     # by a blank row.
     return pd.DataFrame({
-        "x (m)": [-0.10, -0.04, -0.07, None, 0.04, 0.10, 0.07],
-        "y (m)": [-0.05, -0.05, 0.05, None, -0.05, -0.05, 0.05]})
+        "x (mm)": [-100.0, -40.0, -70.0, None, 40.0, 100.0, 70.0],
+        "y (mm)": [-50.0, -50.0, 50.0, None, -50.0, -50.0, 50.0]})
 
 
 def test_two_voids_separated_by_blank_row():
@@ -306,14 +317,14 @@ def test_void_buttons_preserve_unsaved_edits():
     at.run()
     # base = one void; an extra corner is held only in the live editor delta.
     at.session_state["hole_base"] = pd.DataFrame({
-        "x (m)": [-0.10, -0.04, -0.07], "y (m)": [-0.05, -0.05, 0.05]})
+        "x (mm)": [-100.0, -40.0, -70.0], "y (mm)": [-50.0, -50.0, 50.0]})
     at.session_state["ed_hole"] = {
         "edited_rows": {}, "deleted_rows": [],
-        "added_rows": [{"x (m)": 0.08, "y (m)": -0.05}]}   # an unsaved corner
+        "added_rows": [{"x (mm)": 80.0, "y (mm)": -50.0}]}   # an unsaved corner
     at.button(key="add_void").click().run()   # handler reads the delta before re-render
     assert not at.exception
     hb = at.session_state["hole_base"]
-    assert (hb["x (m)"] == 0.08).any()   # the unsaved corner survived the rebuild
+    assert (hb["x (mm)"] == 80.0).any()   # the unsaved corner survived the rebuild
 
 
 def test_void_cap_enforced_when_parsing_not_only_the_button():
@@ -326,9 +337,9 @@ def test_void_cap_enforced_when_parsing_not_only_the_button():
     for i in range(11):                       # 11 small triangular voids
         if i > 0:
             xs.append(None); ys.append(None)  # blank separator
-        xs += [0.01 * i, 0.01 * i + 0.005, 0.01 * i + 0.002]
-        ys += [0.0, 0.0, 0.01]
-    at.session_state["hole_base"] = pd.DataFrame({"x (m)": xs, "y (m)": ys})
+        xs += [10.0 * i, 10.0 * i + 5.0, 10.0 * i + 2.0]
+        ys += [0.0, 0.0, 10.0]
+    at.session_state["hole_base"] = pd.DataFrame({"x (mm)": xs, "y (mm)": ys})
     at.run()
     assert not at.exception
     assert any("ignored" in w.value.lower() for w in at.warning)
@@ -339,7 +350,7 @@ def test_add_void_button_appends_a_separator():
     at = _fresh()
     at.run()
     at.session_state["hole_base"] = pd.DataFrame({
-        "x (m)": [-0.10, -0.04, -0.07], "y (m)": [-0.05, -0.05, 0.05]})
+        "x (mm)": [-100.0, -40.0, -70.0], "y (mm)": [-50.0, -50.0, 50.0]})
     at.run()
     before = len(at.session_state["hole_base"])
     at.button(key="add_void").click().run()
@@ -376,8 +387,8 @@ def test_injected_void_changes_the_capacity():
     at.button(key="calculate").click().run()
     solid_mx = at.session_state["results"]["plastic"]["max_mx"]
     at.session_state["hole_base"] = pd.DataFrame(
-        {"ID": [5, 6, 7, 8], "x (m)": [-0.15, 0.15, 0.15, -0.15],
-         "y (m)": [0.10, 0.10, 0.28, 0.28]})   # void in the (compression) top
+        {"x (mm)": [-150.0, 150.0, 150.0, -150.0],
+         "y (mm)": [100.0, 100.0, 280.0, 280.0]})   # void in the (compression) top
     at.run()
     at.button(key="calculate").click().run()
     assert not at.exception

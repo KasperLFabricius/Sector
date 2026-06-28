@@ -275,27 +275,42 @@ def prestress_panel(box, locked=False):
 # Build the section + materials from the sidebar inputs
 # ---------------------------------------------------------------------------
 
-# Editable cross-section point tables (the section's source of truth).
-_CORNER_COLS = ["x (m)", "y (m)"]
-_REBAR_COLS = ["x (m)", "y (m)", "area (mm2)"]
+# Editable cross-section point tables (the section's source of truth). Coordinates
+# are entered and drawn in millimetres; the engine works in metres, so the points
+# are converted at the table/plot boundary.
+_MM = 1000.0   # millimetres per metre
+_CORNER_COLS = ["x (mm)", "y (mm)"]
+_REBAR_COLS = ["x (mm)", "y (mm)", "area (mm2)"]
+
+
+def _pts_to_m(pts):
+    """Convert (x, y[, area]) points from mm to m for the engine (area unchanged)."""
+    return [(p[0] / _MM, p[1] / _MM) + tuple(p[2:]) for p in pts]
+
+
+def _pts_to_mm(pts):
+    """Convert (x, y[, area]) points from m to mm for the tables (area unchanged)."""
+    return [(p[0] * _MM, p[1] * _MM) + tuple(p[2:]) for p in pts]
 
 
 def _corners_df(pts):
-    """Concrete-corner DataFrame ``(x, y)`` from a list of points.
+    """Concrete-corner DataFrame ``(x, y)`` in mm from a list of mm points.
 
     The columns are forced to ``float64`` (even when empty) so the editor always
     renders numeric inputs -- an object-dtype column lets a paste land a string or
     a list in a cell, which then crashes the numeric parsing.
     """
-    return pd.DataFrame([{"x (m)": float(p[0]), "y (m)": float(p[1])} for p in pts],
-                        columns=_CORNER_COLS).astype("float64")
+    return pd.DataFrame(
+        [{_CORNER_COLS[0]: float(p[0]), _CORNER_COLS[1]: float(p[1])} for p in pts],
+        columns=_CORNER_COLS).astype("float64")
 
 
 def _rebar_df(pts):
-    """Reinforcement DataFrame ``(x, y, area)`` from a list of (x, y, area)."""
+    """Reinforcement DataFrame ``(x, y, area)`` in mm/mm2 from mm/mm2 points."""
     return pd.DataFrame(
-        [{"x (m)": float(p[0]), "y (m)": float(p[1]), "area (mm2)": float(p[2])}
-         for p in pts], columns=_REBAR_COLS).astype("float64")
+        [{_REBAR_COLS[0]: float(p[0]), _REBAR_COLS[1]: float(p[1]),
+          _REBAR_COLS[2]: float(p[2])} for p in pts],
+        columns=_REBAR_COLS).astype("float64")
 
 
 def _to_number(v):
@@ -637,10 +652,11 @@ def build_inputs():
                                 "bars and tendons from the point tables, to start "
                                 "from a blank section.")
     if "pts_init" not in st.session_state or load_qs:
-        st.session_state["corners_base"] = _corners_df(qs_outer)
-        st.session_state["hole_base"] = _corners_df(qs_hole)
-        st.session_state["bars_base"] = _rebar_df(qs_bars)
-        st.session_state["tendons_base"] = _rebar_df(qs_tendons)
+        # The Quick Section template is in metres; the tables hold millimetres.
+        st.session_state["corners_base"] = _corners_df(_pts_to_mm(qs_outer))
+        st.session_state["hole_base"] = _corners_df(_pts_to_mm(qs_hole))
+        st.session_state["bars_base"] = _rebar_df(_pts_to_mm(qs_bars))
+        st.session_state["tendons_base"] = _rebar_df(_pts_to_mm(qs_tendons))
         for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
         st.session_state["pts_init"] = True
@@ -658,11 +674,19 @@ def build_inputs():
     if "hole_base" not in st.session_state:
         old = st.session_state.get("holes_pts") or []
         st.session_state["hole_base"] = _corners_df(old[0] if old else [])
-    for base_key, cols in (("corners_base", _CORNER_COLS), ("hole_base", _CORNER_COLS),
-                           ("bars_base", _REBAR_COLS), ("tendons_base", _REBAR_COLS)):
+    for base_key, cols, ed_key in (
+            ("corners_base", _CORNER_COLS, "ed_corners"),
+            ("hole_base", _CORNER_COLS, "ed_hole"),
+            ("bars_base", _REBAR_COLS, "ed_bars"),
+            ("tendons_base", _REBAR_COLS, "ed_tendons")):
         df = st.session_state.get(base_key)
-        if df is not None and list(df.columns) != cols:   # drop a legacy ID column
-            st.session_state[base_key] = df.reindex(columns=cols)
+        if df is not None and list(df.columns) != cols:
+            if set(cols).issubset(df.columns):
+                st.session_state[base_key] = df.reindex(columns=cols)  # drop a legacy ID col
+            else:   # an older schema (e.g. metre column names) -> reset to empty
+                st.session_state[base_key] = (_corners_df([]) if cols is _CORNER_COLS
+                                              else _rebar_df([]))
+            st.session_state.pop(ed_key, None)
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
     sec.caption("Concrete corners define the outline (3 or more, in order); the "
@@ -673,8 +697,9 @@ def build_inputs():
                 "ID matches the plots). Use Load Quick Section to refill from the "
                 "template above.")
     sec.markdown("_Concrete corners_")
-    outer = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS)
-    _points_preview(sec, outer, _CORNER_COLS, 1)
+    outer_mm = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS)
+    _points_preview(sec, outer_mm, _CORNER_COLS, 1)
+    outer = _pts_to_m(outer_mm)
     if len(outer) < 3:
         # No valid outline. Leave it empty (do NOT fall back to the Quick Section,
         # or Clear Section would silently revert to the template) and let the
@@ -702,17 +727,20 @@ def build_inputs():
         groups = _void_groups(void_now, _CORNER_COLS)
         st.session_state["hole_base"] = _void_table_from_groups(groups[:-1])
         st.session_state.pop("ed_hole", None)
-    holes = _void_editor(sec, "hole_base", "ed_hole")
-    _points_preview(sec, [p for ring in holes for p in ring], _CORNER_COLS,
+    holes_mm = _void_editor(sec, "hole_base", "ed_hole")
+    _points_preview(sec, [p for ring in holes_mm for p in ring], _CORNER_COLS,
                     len(outer) + 1)
+    holes = [_pts_to_m(ring) for ring in holes_mm]
     sec.markdown("_Reinforcing bars_")
-    bars = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS)
-    _points_preview(sec, bars, _REBAR_COLS, 1)
+    bars_mm = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS)
+    _points_preview(sec, bars_mm, _REBAR_COLS, 1)
+    bars = _pts_to_m(bars_mm)
     tendons = []
     if use_pre:
         sec.markdown("_Tendons_")
-        tendons = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS)
-        _points_preview(sec, tendons, _REBAR_COLS, len(bars) + 1)
+        tendons_mm = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS)
+        _points_preview(sec, tendons_mm, _REBAR_COLS, len(bars) + 1)
+        tendons = _pts_to_m(tendons_mm)
 
     # In elastic-only mode the stress-strain laws do not enter the analysis (it is
     # linear: steel via the modular ratio, concrete linear in compression with no
@@ -1070,7 +1098,8 @@ def section_view(inp):
     st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
                                        title="Section", tendons=tendon_xy,
                                        show_labels=True, label_scale=inp["label_scale"],
-                                       label_min_gap=inp["label_min_gap"], height=640),
+                                       label_min_gap=inp["label_min_gap"], height=640,
+                                       scale=_MM, unit="mm"),
                     use_container_width=True)
 
 
@@ -1095,15 +1124,15 @@ def _plastic_table(pts, cable):
         "V (deg)": [round(pt["V"], 1) for pt in pts],
         "Mx (kNm)": [round(pt["Mx"], 1) for pt in pts],
         "My (kNm)": [round(pt["My"], 1) for pt in pts],
-        "NA x (m)": [_fmt(pt["na_x"]) for pt in pts],
-        "NA y (m)": [_fmt(pt["na_y"]) for pt in pts],
+        "NA x (mm)": [_fmt(pt["na_x"] * _MM) for pt in pts],
+        "NA y (mm)": [_fmt(pt["na_y"] * _MM) for pt in pts],
         "eps_c (%)": [round(pt["eps_c"], 2) for pt in pts],
         "eps_s (%)": [round(pt["eps_s"], 2) for pt in pts],
         "kappa (1/m)": [round(pt["kappa"], 4) for pt in pts],
         "Comp (kN)": [round(pt["comp_force"], 0) for pt in pts],
-        "L (m)": [round(pt["lever"], 3) for pt in pts],
-        "Dx (m)": [round(pt["dx"], 3) for pt in pts],
-        "Dy (m)": [round(pt["dy"], 3) for pt in pts],
+        "L (mm)": [round(pt["lever"] * _MM, 1) for pt in pts],
+        "Dx (mm)": [round(pt["dx"] * _MM, 1) for pt in pts],
+        "Dy (mm)": [round(pt["dy"] * _MM, 1) for pt in pts],
     }
     if cable:
         cols["eps_cable (%)"] = [round(pt["eps_cable"], 2) for pt in pts]
@@ -1153,17 +1182,19 @@ def plastic_view(inp, results):
                                tendons=tendon_xy, zones=_zones(inp["outer"], hp),
                                title=f"Section at V = {pt['V']:.0f} deg",
                                show_labels=True, label_scale=inp["label_scale"],
-                               label_min_gap=inp["label_min_gap"]),
+                               label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm"),
             use_container_width=True)
     with cR:
         lines = [
             f"- **Mx / My**: {pt['Mx']:.0f} / {pt['My']:.0f} kNm",
             f"- **Curvature kappa**: {pt['kappa']:.4g} 1/m",
             f"- **Compression force**: {pt['comp_force']:.0f} kN",
-            f"- **Lever arm L**: {pt['lever']:.3f} m  (Dx {pt['dx']:.3f}, Dy {pt['dy']:.3f})",
+            f"- **Lever arm L**: {pt['lever'] * _MM:.0f} mm  "
+            f"(Dx {pt['dx'] * _MM:.0f}, Dy {pt['dy'] * _MM:.0f})",
             f"- **Concrete strain**: {pt['eps_c']:.2f} %",
             f"- **Steel strain**: {pt['eps_s']:.2f} %",
-            f"- **NA intercepts**: x {_fmt(pt['na_x'])}, y {_fmt(pt['na_y'])} m",
+            f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
+            f"y {_fmt(pt['na_y'] * _MM)} mm",
         ]
         if inp["tendons"]:
             lines.insert(6, f"- **Tendon strain**: {pt['eps_cable']:.2f} %")
@@ -1194,7 +1225,7 @@ def elastic_view(inp, results):
     has_comp = e["max_conc"] > 0.0
     if has_comp:
         st.caption(f"Neutral-axis intercepts (for concrete stress): "
-                   f"x {_fmt(e['na_x'])} m,  y {_fmt(e['na_y'])} m")
+                   f"x {_fmt(e['na_x'] * _MM)} mm,  y {_fmt(e['na_y'] * _MM)} mm")
     else:
         st.caption("The concrete carries no compression (the section is fully "
                    "cracked in tension); no neutral axis is shown.")
@@ -1216,7 +1247,7 @@ def elastic_view(inp, results):
                            tendons=tendon_xy, tendon_colors=tendon_colors,
                            na_line=na, zones=zones, show_labels=True,
                            label_scale=inp["label_scale"],
-                           label_min_gap=inp["label_min_gap"],
+                           label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
                            title="Elastic state (green tension, red compression)"),
         use_container_width=True)
 
