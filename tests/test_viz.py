@@ -103,6 +103,28 @@ def test_curve3_figure_labels_input_parameters_not_derived():
         assert sym not in texts, sym
 
 
+def _named_trace(fig, name):
+    return next(t for t in fig.data if getattr(t, "name", None) == name)
+
+
+def test_yield_corner_is_an_exact_vertex_with_full_elastic_slope():
+    # Perfectly plastic steel: characteristic yield strain = fytk/Es = 2.75 per-mille.
+    # The grid must carry an exact vertex there so the elastic branch keeps its full
+    # slope (Es) up to the corner, instead of a segment spanning the corner averaging
+    # the elastic slope and the plateau (the spurious "second slope").
+    s = MildSteel(fytk=550.0, fyck=550.0, futk=550.0, eut=1.0, curve=2,
+                  Es=200000.0, gamma_y=1.0, gamma_E=1.0, gamma_u=1.0)
+    char = _named_trace(viz.steel_curve_figure(s), "characteristic")
+    xs, ys = list(char.x), list(char.y)
+    i = min(range(len(xs)), key=lambda j: abs(xs[j] - 2.75))
+    assert xs[i] == pytest.approx(2.75, abs=1e-6)     # exact vertex at the corner
+    assert ys[i] == pytest.approx(550.0, abs=1e-6)
+    slope_below = (ys[i] - ys[i - 1]) / (xs[i] - xs[i - 1])
+    slope_above = (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i])
+    assert slope_below == pytest.approx(200.0, abs=1e-3)  # Es: 200 MPa per per-mille
+    assert slope_above == pytest.approx(0.0, abs=1e-6)    # flat plateau above yield
+
+
 def test_steel_figure_shows_input_modulus_slope_label():
     fig = viz.steel_curve_figure(
         MildSteel(fytk=500.0, fyck=500.0, gamma_y=1.15, curve=2, Es=205000.0))
