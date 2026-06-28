@@ -93,6 +93,19 @@ def test_auto_per_bar_cover_matches_hand_calc():
     assert r.crack.wk == pytest.approx(0.1975, rel=0.02)
 
 
+def test_effective_height_uses_neutral_axis_term():
+    # A deep, lightly reinforced section where the (h - x)/3 limit governs hc,ef
+    # (not 2.5(h-d) or h/2). The corrected limit is (s_tface - s_na)/3 ~ 0.27 m;
+    # the old (h - s_na)/3 form would instead let h/2 = 0.5 m govern.
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 1.0), (0.0, 1.0)],
+        bars_xy_area_mm2=[(0.15, 0.2, 1500.0)],
+    )
+    r = analyse_cracking(sec, 0.0, 300.0, 0.0, 6.0, fctm=fctm(30.0), bar_diameter=25.0)
+    assert r.cracked and r.crack is not None
+    assert 0.22 < r.crack.hc_ef < 0.33     # ~ (h - x)/3, well below h/2 = 0.5
+
+
 def test_uncracked_below_cracking_load_uses_stage_i():
     # A small moment leaves the section uncracked: lambda_cr >= 1, zeta = 0, the
     # mean plane equals Stage I and no crack width is produced.

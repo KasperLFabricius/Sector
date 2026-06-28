@@ -185,7 +185,10 @@ def _crack_width(
     s_bars = bx * gx + by * gy
     gov0 = int(np.argmax(sigma))                   # deepest tension fibre
     d = float(s_bars[gov0]) - s_cface              # effective depth
-    hc_ef = min(2.5 * (h - d), (h - s_na) / 3.0, h / 2.0)
+    # EC2 hc,ef = min(2.5(h-d), (h-x)/3, h/2). The neutral-axis depth x is measured
+    # from the compression face, so (h-x) = s_tface - s_na (the tension-side depth),
+    # not h - s_na (which would only match when the compression face is at s = 0).
+    hc_ef = min(2.5 * (h - d), (s_tface - s_na) / 3.0, h / 2.0)
     if hc_ef <= 0.0:
         return None
 
