@@ -28,7 +28,7 @@ def _tables():
 
 def test_round_trip_tables_and_scalars():
     tables = _tables()
-    scalars = {"conc_fck": 55.0, "mode": "Both", "use_pre": True,
+    scalars = {"conc_fck": 55.0, "mode": "Both", "rep_author": "KLA",
                "conc_preset": "Curve 2 (parabola-rectangle)", "label_scale": 1.5}
     rt, rs = project_io.parse_project(project_io.dump_project(tables, scalars))
     assert rs == scalars

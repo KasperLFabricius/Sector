@@ -793,20 +793,18 @@ def build_inputs():
             templates.bar_row(h / 2 - cov, -width_b / 2 + cov, width_b / 2 - cov, int(nb_top), rd_top),
         )
 
-    sec.markdown("**Prestressing**")
-    use_pre = sec.checkbox("Include prestressing tendons", value=False, key="use_pre",
-                           help="Add a row of prestressing tendons and the "
-                                "Prestressing-steel material panel.")
+    sec.markdown("**Prestressing tendons** (Quick Section)")
+    nt = sec.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",
+                          help="Number of tendons the Quick Section places (0 = none). "
+                               "Tendons can always be entered in the points table below, "
+                               "regardless of this.")
+    a_t = sec.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a",
+                           help="Cross-sectional area of a single tendon.")
+    cov_p = sec.number_input("Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, key="tnd_c_mm",
+                             help="Distance from the bottom face (or the circular "
+                                  "ring) to the tendons.") / 1000.0
     tendons = []
-    prestress = None
-    if use_pre:
-        nt = sec.number_input("Tendons", 0, 200, 4, 1, key="tnd_n",
-                              help="Number of tendons in the row.")
-        a_t = sec.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a",
-                               help="Cross-sectional area of a single tendon.")
-        cov_p = sec.number_input("Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, key="tnd_c_mm",
-                                 help="Distance from the bottom face (or the "
-                                      "circular ring) to the tendons.") / 1000.0
+    if nt > 0:
         if shape == "Circular":
             tendons = templates.point_ring(0.0, 0.0, max(dia / 2 - cov_p, 0.0),
                                            int(nt), a_t)
@@ -918,12 +916,12 @@ def build_inputs():
     bars_mm = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS)
     _points_preview(sec, bars_mm, _REBAR_COLS, 1)
     bars = _pts_to_m(bars_mm)
-    tendons = []
-    if use_pre:
-        sec.markdown("_Tendons_")
-        tendons_mm = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS)
-        _points_preview(sec, tendons_mm, _REBAR_COLS, len(bars) + 1)
-        tendons = _pts_to_m(tendons_mm)
+    # Tendons are always definable; they only enter the analysis and the report when
+    # at least one is present (a section with no tendons is simply not prestressed).
+    sec.markdown("_Tendons_")
+    tendons_mm = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS)
+    _points_preview(sec, tendons_mm, _REBAR_COLS, len(bars) + 1)
+    tendons = _pts_to_m(tendons_mm)
 
     # In elastic-only mode the stress-strain laws do not enter the analysis (it is
     # linear: steel via the modular ratio, concrete linear in compression with no
@@ -942,9 +940,10 @@ def build_inputs():
                                                  lock_elastic=lock_elastic)
     mat.divider()
     steel = mild_panel(mat, locked=lock_mats)
-    if use_pre:
-        mat.divider()
-        prestress = prestress_panel(mat, locked=lock_mats)
+    # The reinforcement laws are always definable; whether each is used follows from
+    # the section (mild steel when bars exist, prestress when tendons exist).
+    mat.divider()
+    prestress = prestress_panel(mat, locked=lock_mats)
 
     # Loads: the plastic and elastic analyses take their own load sets, so a
     # capacity check (e.g. ULS) and a stress check (e.g. SLS) use different
@@ -1040,7 +1039,7 @@ def build_inputs():
             "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
             "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
             "mild_ey0t", "mild_ey0c", "mild_Es", "mild_active_comp",
-            "use_pre", "pre_preset",
+            "pre_preset",
             "pre_IS", "pre_fytk", "pre_futk", "pre_eut", "pre_gamma_y",
             "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
             "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
@@ -1100,8 +1099,10 @@ def run_analysis(inp):
         return out                          # no valid concrete outline -> nothing to run
     if inp["mode"] in ("Plastic", "Both"):
         vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
+        # Prestress enters the analysis only when the section actually has tendons.
+        pre = inp["prestress"] if inp["tendons"] else None
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            inp["P_pl"], vlo, vhi, vstep, prestress=inp["prestress"])
+                            inp["P_pl"], vlo, vhi, vstep, prestress=pre)
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
         # Utilisation interpolates the capacity in the applied direction, which is

@@ -303,12 +303,14 @@ class ReportBuilder:
                                  scale=_MM, unit="mm", height=420)
         self._fig(fig, 150, 100)
         self._geometry_tables()
-        # Materials.
+        # Materials are reported only when the section actually uses them: mild
+        # steel when there are bars, prestress when there are tendons.
         self._h2("Concrete")
         self._concrete_block()
-        self._h2("Reinforcement")
-        self._steel_block()
-        if inp.get("prestress") is not None:
+        if inp.get("bars"):
+            self._h2("Reinforcement")
+            self._steel_block()
+        if inp.get("tendons"):
             self._h2("Prestressing steel")
             self._prestress_block()
         # Loads & settings.
