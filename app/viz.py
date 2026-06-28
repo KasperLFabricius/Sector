@@ -207,6 +207,23 @@ def _trace_xy(fn, grid, peak):
     return xs, ys
 
 
+def _with_corners(grid, markers, lo, hi):
+    """Add a law's corner strains to a uniform sampling grid.
+
+    A piecewise-linear law (e.g. the elastic-then-yield steel branches) changes
+    slope at its corners. On a uniform grid a corner almost never lands on a
+    sample, so the single segment spanning it averages the two slopes and draws
+    the kink as a shallow ramp -- looking like a spurious second yield. Injecting
+    the corner strains (from ``diagram_markers``) and the origin as exact grid
+    points puts a true vertex at every slope change, so each branch keeps its own
+    slope right up to the corner.
+    """
+    pts = set(grid)
+    pts.add(0.0 if lo <= 0.0 <= hi else lo)
+    pts.update(m[0] for m in markers if lo <= m[0] <= hi)
+    return sorted(pts)
+
+
 def _curve_figure(material, eps_min, eps_max, title, n=240):
     """Stress-strain diagram of a material law over a strain range (tension +).
 
@@ -217,12 +234,16 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
     axis is in per-mille so compression (negative) and tension (positive) are
     both visible; stress in MPa.
     """
-    eps = _linspace(eps_min, eps_max, n)
-    design = [material.stress(e, design=True) for e in eps]
-    char = [material.stress(e, design=False) for e in eps]
+    base = _linspace(eps_min, eps_max, n)
+    # The design and characteristic curves have their corners at different strains
+    # (the partial factors shift the yield strain), so each gets its own grid.
+    eps_d = _with_corners(base, material.diagram_markers(design=True), eps_min, eps_max)
+    eps_c = _with_corners(base, material.diagram_markers(design=False), eps_min, eps_max)
+    design = [material.stress(e, design=True) for e in eps_d]
+    char = [material.stress(e, design=False) for e in eps_c]
     peak = max((abs(v) for v in design + char), default=0.0) or 1.0
-    xd, yd = _trace_xy(lambda e: material.stress(e, design=True), eps, peak)
-    xc, yc = _trace_xy(lambda e: material.stress(e, design=False), eps, peak)
+    xd, yd = _trace_xy(lambda e: material.stress(e, design=True), eps_d, peak)
+    xc, yc = _trace_xy(lambda e: material.stress(e, design=False), eps_c, peak)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=xd, y=yd, mode="lines", name="design",
