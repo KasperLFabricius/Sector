@@ -834,6 +834,12 @@ def build_inputs():
     section = (Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                     tendons_xy_area_mm2=tendons, holes=holes)
                if len(outer) >= 3 else None)
+    # A void must not split the concrete into disconnected pieces (e.g. a slot
+    # reaching across the section): such a section has no valid capacity.
+    void_error = None
+    if section is not None and holes and not geometry.concrete_is_connected(outer, holes):
+        void_error = ("A void splits the concrete into disconnected regions. "
+                      "Adjust the voids so the concrete outline stays continuous.")
     if outer:
         xs = [p[0] for p in outer]
         ys = [p[1] for p in outer]
@@ -858,7 +864,7 @@ def build_inputs():
             "v_min", "v_max", "v_inc", "mode",
             "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))
-    return dict(section=section, concrete=concrete, steel=steel,
+    return dict(section=section, void_error=void_error, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 v_min=v_min, v_max=v_max, v_inc=v_inc,
@@ -905,7 +911,7 @@ def _crack_dict(cw):
 
 def run_analysis(inp):
     out = {}
-    if inp["section"] is None:
+    if inp["section"] is None or inp.get("void_error"):
         return out                          # no valid concrete outline -> nothing to run
     if inp["mode"] in ("Plastic", "Both"):
         vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
@@ -1388,6 +1394,9 @@ results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
 if stale and view in ("Plastic Results", "Elastic Results"):
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
+
+if inp.get("void_error"):
+    st.error(inp["void_error"])
 
 if view == "Section":
     section_view(inp)

@@ -19,10 +19,46 @@ from sector.geometry import (
     area_moments,
     area_moments_rings,
     clip_halfplane,
+    concrete_is_connected,
     distance_to_boundary,
     orient,
     signed_area,
 )
+
+_RECT = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+
+
+def test_solid_outline_is_connected():
+    assert concrete_is_connected(_RECT, []) is True
+
+
+def test_interior_void_keeps_concrete_connected():
+    hole = [(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05), (-0.05, 0.05)]
+    assert concrete_is_connected(_RECT, [hole]) is True
+
+
+def test_two_interior_voids_keep_concrete_connected():
+    left = [(-0.15, -0.05), (-0.05, -0.05), (-0.05, 0.05), (-0.15, 0.05)]
+    right = [(0.05, -0.05), (0.15, -0.05), (0.15, 0.05), (0.05, 0.05)]
+    assert concrete_is_connected(_RECT, [left, right]) is True
+
+
+def test_slot_spanning_the_width_disconnects_the_concrete():
+    # A thin slot reaching across the full width cuts the section in two.
+    slot = [(-0.3, -0.02), (0.3, -0.02), (0.3, 0.02), (-0.3, 0.02)]
+    assert concrete_is_connected(_RECT, [slot]) is False
+
+
+def test_high_aspect_slot_is_detected():
+    # A very wide, thin section (10 m x 50 mm): sizing the grid by the long side
+    # alone would collapse the short axis to one row and miss a horizontal slot.
+    wide = [(-5.0, -0.025), (5.0, -0.025), (5.0, 0.025), (-5.0, 0.025)]
+    slot = [(-6.0, -0.005), (6.0, -0.005), (6.0, 0.005), (-6.0, 0.005)]
+    assert concrete_is_connected(wide, [slot]) is False
+
+
+def test_degenerate_outline_is_treated_as_connected():
+    assert concrete_is_connected([(0.0, 0.0), (1.0, 0.0)], []) is True
 
 
 def test_distance_to_boundary_rectangle_and_hole():
