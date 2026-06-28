@@ -395,6 +395,22 @@ def test_injected_void_changes_the_capacity():
     assert at.session_state["results"]["plastic"]["max_mx"] != pytest.approx(solid_mx)
 
 
+def test_void_slicing_the_section_is_rejected():
+    # A slot reaching across the full width disconnects the concrete: the app flags
+    # it and refuses to compute a capacity.
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    at.session_state["hole_base"] = pd.DataFrame(
+        {"x (mm)": [-250.0, 250.0, 250.0, -250.0],
+         "y (mm)": [-20.0, -20.0, 20.0, 20.0]})       # full-width slot at mid-height
+    at.run()
+    assert any("disconnected" in e.value for e in at.error)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" not in at.session_state["results"]
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()

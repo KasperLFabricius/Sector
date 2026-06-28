@@ -203,6 +203,87 @@ def distance_to_boundary(px: float, py: float, rings: Iterable[Vertices]) -> flo
     return best
 
 
+def _points_in_polygon(px: np.ndarray, py: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    """Even-odd (ray-casting) point-in-polygon test, vectorised over the points.
+
+    ``px``/``py`` are arrays of query coordinates; ``poly`` is an ``(M, 2)`` ring.
+    Loops over the few polygon edges (not the many points), so it stays fast for a
+    dense grid of samples. Returns a boolean array, True where the point is inside.
+    """
+    inside = np.zeros(px.shape, dtype=bool)
+    n = len(poly)
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly[i, 0], poly[i, 1]
+        xj, yj = poly[j, 0], poly[j, 1]
+        straddles = (yi > py) != (yj > py)        # edge crosses the point's row
+        with np.errstate(divide="ignore", invalid="ignore"):
+            x_cross = (xj - xi) * (py - yi) / (yj - yi) + xi
+        inside ^= straddles & (px < x_cross)      # toggle on each crossing to the left
+        j = i
+    return inside
+
+
+def concrete_is_connected(outer: Vertices, holes: Iterable[Vertices] = ()) -> bool:
+    """Whether the concrete (``outer`` minus ``holes``) is a single connected region.
+
+    A void must not split the concrete in two -- e.g. a slot reaching across the
+    section -- because a disconnected cross-section has no valid meaning. The region
+    is rasterised onto a grid sized by the section's larger dimension (so the cell
+    count is bounded) and the filled cells are checked for 4-connectivity: cells
+    touching only at a corner count as separated, matching the physical reality that
+    a point contact carries no force. A solid outline (no holes) is always connected.
+
+    The test is exact at the grid resolution (about 1/240 of the larger dimension);
+    a ligament thinner than a cell -- far below any real concrete web -- could be
+    missed, which is acceptable for input validation.
+    """
+    arr = _as_array(outer)
+    holes = [h for h in (_as_array(r) for r in holes) if h.shape[0] >= 3]
+    if arr.shape[0] < 3 or not holes:
+        return True
+    x0, y0 = float(arr[:, 0].min()), float(arr[:, 1].min())
+    x1, y1 = float(arr[:, 0].max()), float(arr[:, 1].max())
+    span = max(x1 - x0, y1 - y0)
+    if span <= 0.0:
+        return True
+    grid = 240
+    cell = span / grid
+    nx = max(1, int(round((x1 - x0) / cell)))
+    ny = max(1, int(round((y1 - y0) / cell)))
+    # Sample at cell centres so the boundary is never sampled ambiguously.
+    xs = x0 + (np.arange(nx) + 0.5) * (x1 - x0) / nx
+    ys = y0 + (np.arange(ny) + 0.5) * (y1 - y0) / ny
+    gx, gy = np.meshgrid(xs, ys)
+    fx, fy = gx.ravel(), gy.ravel()
+    mask = _points_in_polygon(fx, fy, arr)
+    for hole in holes:
+        mask &= ~_points_in_polygon(fx, fy, hole)
+    mask = mask.reshape(ny, nx)
+    return _single_component(mask)
+
+
+def _single_component(mask: np.ndarray) -> bool:
+    """True if the filled cells of a boolean grid form one 4-connected region."""
+    filled = np.argwhere(mask)
+    if filled.shape[0] == 0:
+        return True                       # nothing filled -> not "split"
+    ny, nx = mask.shape
+    seen = np.zeros_like(mask)
+    si, sj = int(filled[0, 0]), int(filled[0, 1])
+    seen[si, sj] = True
+    stack = [(si, sj)]
+    reached = 0
+    while stack:
+        i, j = stack.pop()
+        reached += 1
+        for ni, nj in ((i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)):
+            if 0 <= ni < ny and 0 <= nj < nx and mask[ni, nj] and not seen[ni, nj]:
+                seen[ni, nj] = True
+                stack.append((ni, nj))
+    return reached == filled.shape[0]
+
+
 def orient(verts: Vertices, ccw: bool = True) -> np.ndarray:
     """Return the vertices reordered to the requested orientation.
 
