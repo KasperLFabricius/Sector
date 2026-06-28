@@ -46,7 +46,7 @@ from typing import Optional
 import numpy as np
 
 from .elastic import ElasticResult, solve_elastic, solve_elastic_uncracked
-from .geometry import area_moments, clip_halfplane
+from .geometry import area_moments, clip_halfplane, distance_to_boundary
 from .section import Section
 
 # kN/m^2 per MPa: the solver returns stresses in kN/m^2 for sections built in
@@ -56,7 +56,7 @@ _KPA_PER_MPA = 1000.0
 
 @dataclass
 class CrackWidthResult:
-    """EC2 crack-width breakdown for the governing tension bar."""
+    """EC2 crack-width breakdown for the governing (largest-wk) tension bar."""
 
     wk: float            # crack width (mm)
     sr_max: float        # maximum crack spacing (mm)
@@ -66,7 +66,8 @@ class CrackWidthResult:
     ac_eff: float        # effective tension area (m^2)
     hc_ef: float         # effective tension height (m)
     phi: float           # governing bar diameter (mm)
-    gov_bar: int         # index of the governing (most tensile) bar
+    cover: float         # clear cover to that bar's surface (mm)
+    gov_bar: int         # index of the governing (largest-wk) bar
 
 
 @dataclass
@@ -151,19 +152,24 @@ def _crack_width(
     k4: float,
     bar_diameter: Optional[float],
 ) -> Optional[CrackWidthResult]:
-    """EC2 7.3.4 crack width for the governing (most tensile) bar.
+    """EC2 7.3.4 crack width, evaluated per bar, returning the largest-wk bar.
 
-    ``cover`` and ``bar_diameter`` are in mm; ``fctm`` and ``Es`` in MPa.
-    Returns ``None`` when there is no tension bar or no usable bending gradient
-    (pure axial tension uses a different effective-area definition).
+    ``fctm`` and ``Es`` are in MPa. ``bar_diameter`` (mm) overrides the diameter
+    derived from each bar's area. ``cover`` (mm), when given, is used for every
+    bar; when ``None`` each bar's clear cover is taken from the geometry as the
+    distance to the nearest concrete face minus half its diameter. The effective
+    tension area, height and reinforcement ratio are section quantities (defined
+    for the bending direction); the crack spacing and mean strain are then formed
+    per bar (its own cover, diameter and Stage II stress) and the bar with the
+    largest ``wk`` governs. Returns ``None`` when there is no tension bar in the
+    effective zone or no usable bending gradient (pure axial tension uses a
+    different effective-area definition).
     """
     bx, by, ba = section.bar_arrays()
     if not bx.size:
         return None
-    sigma = np.asarray(cracked_state.bar_stress, dtype=float)
-    gov = int(np.argmax(sigma))
-    sigma_s = float(sigma[gov]) / _KPA_PER_MPA  # MPa, tension positive
-    if sigma_s <= 0.0:
+    sigma = np.asarray(cracked_state.bar_stress, dtype=float) / _KPA_PER_MPA  # MPa
+    if float(sigma.max()) <= 0.0:
         return None  # no bar in tension -> no crack to control
 
     gx, gy, mag = _depth_axis(cracked_state.kx, cracked_state.ky)
@@ -176,9 +182,9 @@ def _crack_width(
     s_cface = float(s_vert.min())
     h = s_tface - s_cface
     s_na = -cracked_state.eps0 / mag
-    x = min(max(s_na - s_cface, 0.0), h)          # compression depth
-    s_bar = float(bx[gov] * gx + by[gov] * gy)
-    d = s_bar - s_cface                            # effective depth
+    s_bars = bx * gx + by * gy
+    gov0 = int(np.argmax(sigma))                   # deepest tension fibre
+    d = float(s_bars[gov0]) - s_cface              # effective depth
     hc_ef = min(2.5 * (h - d), (h - s_na) / 3.0, h / 2.0)
     if hc_ef <= 0.0:
         return None
@@ -193,31 +199,46 @@ def _crack_width(
     if ac_eff <= 0.0:
         return None
 
-    # Reinforcement inside the effective band.
-    in_band = (bx * gx + by * gy) >= c_lo
+    # Reinforcement inside the effective band sets the (shared) ratio rho_p,eff.
+    in_band = s_bars >= c_lo
     as_eff = float(ba[in_band].sum())
     if as_eff <= 0.0:
         return None
     rho = as_eff / ac_eff
-
-    # Governing bar diameter from its area (circular) unless supplied (mm).
-    if bar_diameter is not None and bar_diameter > 0.0:
-        phi = float(bar_diameter)
-    else:
-        phi = math.sqrt(4.0 * float(ba[gov]) * 1.0e6 / math.pi)  # m^2 -> mm
-
     alpha_e = n
-    # EC2 (7.9): mean strain, with the 0.6 sigma_s/Es lower bound.
-    esm_ecm = (sigma_s - kt * fctm / rho * (1.0 + alpha_e * rho)) / Es
-    esm_ecm = max(esm_ecm, 0.6 * sigma_s / Es)
 
-    # EC2 (7.11): maximum crack spacing (cover and phi in mm).
-    sr_max = k3 * cover + k1 * k2 * k4 * phi / rho
-    wk = sr_max * esm_ecm
-    return CrackWidthResult(
-        wk=wk, sr_max=sr_max, esm_ecm=esm_ecm, sigma_s=sigma_s, rho_p_eff=rho,
-        ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, gov_bar=gov,
-    )
+    # Per-bar crack width: each tension bar in the band uses its own cover,
+    # diameter and Stage II stress; the largest wk governs.
+    rings = list(section.integration_rings())
+    best: Optional[CrackWidthResult] = None
+    for i in range(bx.size):
+        if not in_band[i] or sigma[i] <= 0.0:
+            continue
+        sigma_s = float(sigma[i])
+        if bar_diameter is not None and bar_diameter > 0.0:
+            phi = float(bar_diameter)
+        else:
+            phi = math.sqrt(4.0 * float(ba[i]) * 1.0e6 / math.pi)  # m^2 -> mm
+        if cover is not None:
+            c_i = float(cover)
+        else:
+            # Clear cover to the bar surface = distance to the nearest concrete
+            # face (m -> mm) minus the bar radius.
+            c_i = max(distance_to_boundary(float(bx[i]), float(by[i]), rings)
+                      * 1000.0 - phi / 2.0, 0.0)
+        # EC2 (7.9): mean strain, with the 0.6 sigma_s/Es lower bound.
+        esm_ecm = max((sigma_s - kt * fctm / rho * (1.0 + alpha_e * rho)) / Es,
+                      0.6 * sigma_s / Es)
+        # EC2 (7.11): maximum crack spacing (cover and phi in mm).
+        sr_max = k3 * c_i + k1 * k2 * k4 * phi / rho
+        wk = sr_max * esm_ecm
+        if best is None or wk > best.wk:
+            best = CrackWidthResult(
+                wk=wk, sr_max=sr_max, esm_ecm=esm_ecm, sigma_s=sigma_s,
+                rho_p_eff=rho, ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, cover=c_i,
+                gov_bar=i,
+            )
+    return best
 
 
 def analyse_cracking(
@@ -257,8 +278,10 @@ def analyse_cracking(
         Crack-width load-duration factor (EC2 7.9): ``0.6`` short-term,
         ``0.4`` long-term.
     cover:
-        Clear cover to the governing bar (mm). Crack width is computed only when
-        supplied (and the section is cracked).
+        Clear cover override (mm) applied to every bar. When ``None`` (default)
+        each bar's clear cover is taken from the geometry (distance to the nearest
+        concrete face minus the bar radius). Crack width is computed whenever the
+        section is cracked.
     bar_diameter:
         Governing bar diameter (mm); defaults to the equivalent circular
         diameter of the governing bar's area.
@@ -285,7 +308,7 @@ def analyse_cracking(
     ky_m = zeta * crk.ky + (1.0 - zeta) * uncr.ky
 
     crack = None
-    if cracked and cover is not None:
+    if cracked:
         crack = _crack_width(
             section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter
         )
@@ -295,3 +318,31 @@ def analyse_cracking(
         uncracked=uncr, cracked_state=crk, eps0_m=eps0_m, kx_m=kx_m, ky_m=ky_m,
         crack=crack,
     )
+
+
+def crack_width(
+    section: Section,
+    cracked_state: ElasticResult,
+    n: float,
+    *,
+    fctm: float,
+    Es: float = 200_000.0,
+    kt: float = 0.6,
+    cover: Optional[float] = None,
+    bar_diameter: Optional[float] = None,
+    k1: float = 0.8,
+    k2: float = 0.5,
+    k3: float = 3.4,
+    k4: float = 0.425,
+) -> Optional[CrackWidthResult]:
+    """EC2 7.3.4 crack width for an externally supplied cracked-section state.
+
+    Unlike :func:`analyse_cracking`, the cracked state is given rather than solved
+    here, so it can carry a steel stress that is not a single linear solve -- e.g.
+    the instantaneous (short-term) state of the combined creep analysis, whose
+    bar stress is ``s2 + RST1``. ``cracked_state`` supplies the neutral axis /
+    strain gradient and the per-bar steel stress; the bar with the largest ``wk``
+    governs. See :func:`analyse_cracking` for the remaining parameters.
+    """
+    return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
+                        k1, k2, k3, k4, bar_diameter)

@@ -19,9 +19,21 @@ from sector.geometry import (
     area_moments,
     area_moments_rings,
     clip_halfplane,
+    distance_to_boundary,
     orient,
     signed_area,
 )
+
+
+def test_distance_to_boundary_rectangle_and_hole():
+    # A 0.3 x 0.6 rectangle: a point 0.05 above the bottom face is 0.05 from the
+    # nearest edge (the bottom), not the further side faces.
+    outer = [(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)]
+    assert distance_to_boundary(0.075, 0.05, [outer]) == pytest.approx(0.05)
+    assert distance_to_boundary(0.15, 0.30, [outer]) == pytest.approx(0.15)
+    # With a central hole the nearest face can be the hole edge.
+    hole = [(0.12, 0.27), (0.18, 0.27), (0.18, 0.33), (0.12, 0.33)]
+    assert distance_to_boundary(0.15, 0.20, [outer, hole]) == pytest.approx(0.07)
 
 # ---------------------------------------------------------------------------
 # signed_area
