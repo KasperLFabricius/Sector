@@ -79,6 +79,37 @@ def fctm(fck: float) -> float:
     return 2.12 * math.log(1.0 + (fck + 8.0) / 10.0)
 
 
+def eps_c2(fck: float) -> float:
+    """Strain at peak concrete stress ``eps_c2`` (fraction), EC2 Table 3.1.
+
+    ``0.2%`` up to C50/60; above that the strength-dependent
+    ``2.0 + 0.085*(fck-50)^0.53`` (per mille).
+    """
+    if fck <= 50.0:
+        return 0.002
+    return (2.0 + 0.085 * (fck - 50.0) ** 0.53) / 1000.0
+
+
+def eps_cu2(fck: float) -> float:
+    """Ultimate concrete strain ``eps_cu2`` (fraction), EC2 Table 3.1.
+
+    ``0.35%`` up to C50/60; above that ``2.6 + 35*((90-fck)/100)^4`` (per mille).
+    """
+    if fck <= 50.0:
+        return 0.0035
+    return (2.6 + 35.0 * ((90.0 - fck) / 100.0) ** 4) / 1000.0
+
+
+def n_exponent(fck: float) -> float:
+    """Parabola-rectangle exponent ``n``, EC2 Table 3.1.
+
+    ``2.0`` up to C50/60; above that ``1.4 + 23.4*((90-fck)/100)^4``.
+    """
+    if fck <= 50.0:
+        return 2.0
+    return 1.4 + 23.4 * ((90.0 - fck) / 100.0) ** 4
+
+
 def ecm(fck: float) -> float:
     """Secant modulus of elasticity ``E_cm`` (MPa), EC2 Table 3.1.
 
@@ -127,9 +158,15 @@ class DesignCode:
         return self.alpha_cc
 
     def concrete(self, fck: float) -> Concrete:
-        """Concrete law for characteristic strength ``fck`` (MPa) under this code."""
+        """Concrete law for characteristic strength ``fck`` (MPa) under this code.
+
+        The strain limits and parabola exponent follow EC2 Table 3.1, so a class
+        above C50/60 gets its strength-dependent ``eps_c2``/``eps_cu2``/``n``
+        automatically (constant ``0.2%``/``0.35%``/``2`` up to C50/60).
+        """
         return Concrete(fck=fck, gamma_c=self.gamma_c, curve=2,
-                        alpha_cc=self.concrete_factor(fck))
+                        alpha_cc=self.concrete_factor(fck),
+                        eps_c2=eps_c2(fck), eps_cu2=eps_cu2(fck), n=n_exponent(fck))
 
     def steel(self, fyk: float) -> MildSteel:
         """Reinforcement law for characteristic yield ``fyk`` (MPa) under this code.

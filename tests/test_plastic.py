@@ -101,3 +101,20 @@ def test_slab_matches_eurocode_rectangular_block():
 
     assert r.converged
     assert r.Mx == pytest.approx(mrd_block, rel=0.02)  # within ~2%
+
+
+def test_plastic_capacity_responds_to_ultimate_strain():
+    # The solver must use the concrete's own eps_cu2/eps_c2: with the steel forced
+    # to govern by yield (no rupture), changing the crushing strain reshapes the
+    # compression stress block, so the ultimate moment changes.
+    b, h, cover, As_mm2 = 1.0, 0.30, 0.04, 2000.0
+    slab = Section.from_polygon(
+        corners=[(-b / 2, 0.0), (-b / 2, h), (b / 2, h), (b / 2, 0.0)],
+        bars_xy_area_mm2=[(0.0, cover, As_mm2)],
+    )
+    steel = MildSteel(fytk=500.0, fyck=500.0, eut=1.0, gamma_y=1.15, curve=2)
+    full = Concrete(fck=30.0, gamma_c=1.5, curve=2)                  # eps_cu2 = 3.5 permille
+    short = Concrete(fck=30.0, gamma_c=1.5, curve=2, eps_cu2=0.0022)  # almost no plateau
+    m_full = plastic_capacity_at_angle(slab, full, steel, 0.0, 90.0).Mx
+    m_short = plastic_capacity_at_angle(slab, short, steel, 0.0, 90.0).Mx
+    assert abs(m_full - m_short) / m_full > 0.003   # eps_cu2 visibly changes Mrd

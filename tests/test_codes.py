@@ -38,6 +38,30 @@ def test_ec2_2005_factors_and_fcd():
         assert c.stress(e, design=True) == pytest.approx(ref.stress(e, design=True))
 
 
+def test_table_3_1_strain_limits():
+    # Up to C50/60 the strain limits and exponent are constant.
+    assert codes.eps_c2(30.0) == pytest.approx(0.002)
+    assert codes.eps_cu2(30.0) == pytest.approx(0.0035)
+    assert codes.n_exponent(30.0) == pytest.approx(2.0)
+    assert codes.eps_c2(50.0) == pytest.approx(0.002)
+    assert codes.eps_cu2(50.0) == pytest.approx(0.0035)
+    assert codes.n_exponent(50.0) == pytest.approx(2.0)
+    # Above C50/60 they are strength-dependent (EC2 Table 3.1; C70 ~ 2.4/2.7/1.45).
+    assert codes.eps_c2(70.0) == pytest.approx(0.0024158, abs=1e-6)
+    assert codes.eps_cu2(70.0) == pytest.approx(0.002656, abs=1e-6)
+    assert codes.n_exponent(70.0) == pytest.approx(1.43744, abs=1e-5)
+
+
+def test_code_concrete_above_c50_is_strength_dependent():
+    code = codes.CODES["EN 1992-1-1:2005"]
+    c = code.concrete(70.0)
+    assert c.eps_c2 == pytest.approx(codes.eps_c2(70.0))
+    assert c.eps_cu2 == pytest.approx(codes.eps_cu2(70.0))
+    assert c.n == pytest.approx(codes.n_exponent(70.0))
+    # A normal-strength class still gets the verified default law.
+    assert code.concrete(30.0).eps_cu2 == pytest.approx(0.0035)
+
+
 def test_dk_na_2024_partial_factors():
     code = codes.CODES["DS/EN 1992-1-1:2005 + DK NA:2024"]
     # In-situ reinforced concrete, normal control class.

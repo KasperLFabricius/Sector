@@ -44,12 +44,20 @@ def _to_fractions(used):
 # Concrete
 # ---------------------------------------------------------------------------
 
+# Default concrete strain limits and exponent (per mille / dimensionless): the
+# normal-strength parabola-rectangle (eps_c2 = 0.2%, eps_cu2 = 0.35%, n = 2).
+_DEFAULT_EPS_C2 = 2.0
+_DEFAULT_EPS_CU2 = 3.5
+_DEFAULT_N = 2.0
+
+
 def _concrete_presets():
+    base = {"eps_c2": _DEFAULT_EPS_C2, "eps_cu2": _DEFAULT_EPS_CU2, "n": _DEFAULT_N}
     presets = {
         "Curve 1 (cubic)":
-            {"curve": 1, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0},
+            {"curve": 1, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0, **base},
         "Curve 2 (parabola-rectangle)":
-            {"curve": 2, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0},
+            {"curve": 2, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0, **base},
     }
     for label, code in codes.CODES.items():
         presets[label] = {
@@ -57,13 +65,14 @@ def _concrete_presets():
             "fck": _DEFAULT_FCK,
             "gamma_c": code.gamma_c,
             "alpha_cc": round(code.concrete_factor(_DEFAULT_FCK), 4),
+            **base,
         }
     return presets
 
 
 CONCRETE_PRESETS = _concrete_presets()
 
-CONCRETE_FIELDS = ["fck", "gamma_c", "alpha_cc"]
+CONCRETE_FIELDS = ["fck", "gamma_c", "alpha_cc", "eps_c2", "eps_cu2", "n"]
 
 # Bounds are deliberately permissive: a preset only prefills typical values, and
 # every field stays freely editable. The lower bounds are the smallest the engine
@@ -73,6 +82,9 @@ CONCRETE_FIELD_META = {
     "fck": ("fck (MPa)", 1.0, 200.0, 1.0),
     "gamma_c": ("gamma_c", 1.0, 3.0, 0.01),
     "alpha_cc": ("alpha_cc", 0.01, 1.2, 0.01),
+    "eps_c2": ("eps_c2 (permille)", 0.5, 5.0, 0.05),
+    "eps_cu2": ("eps_cu2 (permille)", 0.5, 8.0, 0.05),
+    "n": ("n (parabola exponent)", 1.0, 4.0, 0.05),
 }
 
 # Help text shown as a hover tooltip next to each field.
@@ -82,13 +94,27 @@ CONCRETE_HELP = {
                "characteristic / gamma_c).",
     "alpha_cc": "Coefficient for long-term and loading effects on the concrete "
                 "design strength (fcd = alpha_cc * fck / gamma_c).",
+    "eps_c2": "Compressive strain at peak stress (parabola apex). EC2 Table 3.1: "
+              "0.2 permille up to C50/60, larger above (use Auto).",
+    "eps_cu2": "Ultimate (crushing) compressive strain. EC2 Table 3.1: 0.35 "
+               "permille up to C50/60, smaller above (use Auto).",
+    "n": "Exponent of the parabola-rectangle ascending branch. EC2 Table 3.1: "
+         "2.0 up to C50/60, smaller above (use Auto).",
 }
 
 
-def build_concrete(curve, fck, gamma_c, alpha_cc) -> Concrete:
-    """Build a :class:`~sector.materials.Concrete` from the panel parameters."""
+def build_concrete(curve, fck, gamma_c, alpha_cc,
+                   eps_c2=_DEFAULT_EPS_C2, eps_cu2=_DEFAULT_EPS_CU2,
+                   n=_DEFAULT_N) -> Concrete:
+    """Build a :class:`~sector.materials.Concrete` from the panel parameters.
+
+    ``eps_c2``/``eps_cu2`` are taken in per mille (the diagram's unit) and
+    converted to the fractions the law uses.
+    """
     return Concrete(fck=float(fck), gamma_c=float(gamma_c), curve=int(curve),
-                    alpha_cc=float(alpha_cc))
+                    alpha_cc=float(alpha_cc),
+                    eps_c2=float(eps_c2) / 1000.0, eps_cu2=float(eps_cu2) / 1000.0,
+                    n=float(n))
 
 
 def strength_dependent_alpha_cc(preset, fck):

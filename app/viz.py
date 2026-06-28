@@ -272,8 +272,9 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
 
 def concrete_curve_figure(concrete, title="Concrete"):
     """Stress-strain diagram for a concrete law (compression is negative)."""
-    # Slightly past the ultimate strain on the compression side, a little tension.
-    return _curve_figure(concrete, -0.0042, 0.0006, title)
+    # Slightly past the ultimate strain on the compression side, a little tension
+    # (the default eps_cu2 = 0.0035 gives the usual -0.0042 window).
+    return _curve_figure(concrete, -(concrete.eps_cu2 + 0.0007), 0.0006, title)
 
 
 def prestress_curve_figure(prestress, title="Prestressing steel"):
