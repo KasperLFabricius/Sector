@@ -7,6 +7,7 @@ analysis, then press Calculate to review the stresses and the ultimate capacity.
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
 import pathlib
 import sys
@@ -21,6 +22,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
+import project_io  # noqa: E402
 import viz  # noqa: E402
 from sector import codes, geometry, kernels, material_presets as mp, templates  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
@@ -481,6 +483,83 @@ def _points_preview(box, pts, cols, start):
                   height=min(35 * (len(pts) + 1) + 3, 240))
 
 
+_PROJECT_TABLES = (
+    ("corners_base", "ed_corners", _CORNER_COLS),
+    ("hole_base", "ed_hole", _CORNER_COLS),
+    ("bars_base", "ed_bars", _REBAR_COLS),
+    ("tendons_base", "ed_tendons", _REBAR_COLS),
+)
+
+
+def _gather_project() -> str:
+    """Serialise the current inputs (live point tables + scalar keys) to JSON."""
+    tables = {base: _current_table(base, ed, cols)
+              for base, ed, cols in _PROJECT_TABLES if base in st.session_state}
+    scalars = {k: st.session_state[k] for k in project_io.SCALAR_KEYS
+               if k in st.session_state}
+    return project_io.dump_project(tables, scalars)
+
+
+def _apply_pending_project() -> None:
+    """Apply an uploaded project, if any, before the widgets are created.
+
+    Runs at the top of the script so writing the loaded values into the widget
+    keys (and the point-table bases) happens before those widgets exist -- the
+    only point at which Streamlit allows their state to be set.
+    """
+    text = st.session_state.pop("_pending_project", None)
+    if text is None:
+        return
+    try:
+        tables, scalars = project_io.parse_project(text)
+    except ValueError as exc:
+        st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
+        return
+    for key, df in tables.items():
+        st.session_state[key] = df
+    for key, value in scalars.items():
+        st.session_state[key] = value
+    # Keep each preset's change-marker in step with the loaded preset so the panel
+    # does not re-prefill over the loaded field values.
+    for marker, src in project_io.PREV_MARKERS.items():
+        if src in scalars:
+            st.session_state[marker] = scalars[src]
+    # For a strength-dependent edition (EN 2023) alpha_cc tracks fck via a hidden
+    # marker; align it to the loaded fck so the loaded alpha_cc is not overwritten.
+    if "conc_fck" in scalars:
+        st.session_state["conc_alpha_fck"] = scalars["conc_fck"]
+    for ed in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
+        st.session_state.pop(ed, None)
+    st.session_state["pts_init"] = True   # do not re-seed the tables from a template
+    st.session_state["_project_msg"] = ("success", "Project loaded.")
+
+
+def _save_load_panel(parent) -> None:
+    """Download the current project and upload one to restore it.
+
+    Rendered into a slot reserved near the top of the sidebar but only *after* the
+    point tables and inputs have been seeded this run, so the download always
+    reflects the live section (not an empty one on a fresh session).
+    """
+    box = parent.expander("Save / Load", expanded=False)
+    box.download_button("Download project", data=_gather_project(),
+                        file_name="sector_section.json", mime="application/json",
+                        use_container_width=True,
+                        help="Save the section, materials, loads and settings to a "
+                             "JSON file.")
+    up = box.file_uploader("Load project", type=["json"], key="project_upload",
+                           help="Restore a section from a downloaded project file.")
+    if up is not None:
+        fid = (up.name, up.size)
+        if st.session_state.get("_project_upload_id") != fid:
+            st.session_state["_project_upload_id"] = fid
+            st.session_state["_pending_project"] = up.getvalue().decode("utf-8")
+            st.rerun()
+    msg = st.session_state.pop("_project_msg", None)
+    if msg:
+        (box.success if msg[0] == "success" else box.error)(msg[1])
+
+
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
     loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
@@ -505,6 +584,11 @@ def build_inputs():
                    "diagrams update live; the result views update on Calculate.")
         st.divider()
         st.caption(f"Sector v{APP_VERSION}  -  internal engineering tool, Sweco.")
+
+    # Reserve the Save / Load slot here (near the top) but fill it at the end of
+    # build_inputs, once the point tables and inputs exist, so the download
+    # captures the live section even on a fresh session.
+    save_slot = s.container()
 
     aset = s.expander("Analysis & Result Settings", expanded=False)
     mode = aset.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode",
@@ -899,6 +983,7 @@ def build_inputs():
             "v_min", "v_max", "v_inc", "mode",
             "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))
+    _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
     return dict(section=section, void_error=void_error, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
@@ -1393,6 +1478,7 @@ def _crack_width_panel(e):
 # Layout
 # ---------------------------------------------------------------------------
 
+_apply_pending_project()   # restore an uploaded project before any widget is built
 inp = build_inputs()
 
 # Plot-label controls sit inline in the main viewport, directly above the View
