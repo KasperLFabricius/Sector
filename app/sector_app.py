@@ -397,6 +397,41 @@ def _void_table_from_groups(groups, trailing_blank=False):
     return pd.DataFrame(rows, columns=_CORNER_COLS).astype("float64")
 
 
+def _current_table(base_key, ed_key, cols):
+    """The table as currently shown = the stable base plus the live editor delta.
+
+    The base is changed only by explicit actions, so a button handler that runs
+    before the editor re-renders (Add / Remove void) must fold in the user's
+    unsaved edits (held in the data_editor's delta) to avoid discarding them.
+    """
+    df = st.session_state[base_key].copy().reset_index(drop=True)
+    delta = st.session_state.get(ed_key) or {}
+    for i, changes in delta.get("edited_rows", {}).items():
+        for c, v in changes.items():
+            if c in df.columns and int(i) in df.index:
+                df.at[int(i), c] = v
+    deleted = [int(i) for i in (delta.get("deleted_rows") or []) if int(i) in df.index]
+    if deleted:
+        df = df.drop(index=deleted)
+    added = delta.get("added_rows") or []
+    if added:
+        df = pd.concat([df, pd.DataFrame(added).reindex(columns=cols)],
+                       ignore_index=True)
+    return df.reset_index(drop=True)
+
+
+def _points_preview(box, pts, cols, start):
+    """Read-only numbered view of the valid points, matching the plot numbering --
+    a non-editable ID next to each point (the editable table has no ID column)."""
+    if not pts:
+        return
+    data = {"ID": list(range(start, start + len(pts)))}
+    for j, c in enumerate(cols):
+        data[c] = [p[j] for p in pts]
+    box.dataframe(data, hide_index=True, use_container_width=True,
+                  height=min(35 * (len(pts) + 1) + 3, 240))
+
+
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
     loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
@@ -634,10 +669,12 @@ def build_inputs():
                 "voids are optional inner rings. Bars and tendons are points with an "
                 "area (mm2). Type or paste values (a block copied from a spreadsheet "
                 "auto-grows the table); a point is used once all its cells are "
-                "filled. The numbers drawn on the plots follow the row order. Use "
-                "Load Quick Section to refill from the template above.")
+                "filled. Below each table a read-only list numbers the points (the "
+                "ID matches the plots). Use Load Quick Section to refill from the "
+                "template above.")
     sec.markdown("_Concrete corners_")
     outer = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS)
+    _points_preview(sec, outer, _CORNER_COLS, 1)
     if len(outer) < 3:
         # No valid outline. Leave it empty (do NOT fall back to the Quick Section,
         # or Clear Section would silently revert to the template) and let the
@@ -647,28 +684,35 @@ def build_inputs():
     sec.markdown("_Concrete voids_")
     sec.caption("Several voids share this table, each separated by a blank row "
                 "(each void needs 3 or more corners).")
-    n_voids = len(_void_groups(st.session_state["hole_base"], _CORNER_COLS))
+    # The buttons act on the live table (base + unsaved editor edits) so typing a
+    # void and then adding/removing one does not discard the in-progress corners.
+    void_now = _current_table("hole_base", "ed_hole", _CORNER_COLS)
+    n_voids = len(_void_groups(void_now, _CORNER_COLS))
     vc1, vc2 = sec.columns(2)
     if vc1.button("+ Add void", key="add_void", use_container_width=True,
                   disabled=n_voids >= _MAX_VOIDS,
                   help=f"Append a blank separator row, so the next corners you enter "
                        f"start a new void (up to {_MAX_VOIDS})."):
-        groups = _void_groups(st.session_state["hole_base"], _CORNER_COLS)
+        groups = _void_groups(void_now, _CORNER_COLS)
         st.session_state["hole_base"] = _void_table_from_groups(groups,
                                                                 trailing_blank=True)
         st.session_state.pop("ed_hole", None)
     if vc2.button("Remove void", key="rem_void", use_container_width=True,
                   disabled=n_voids == 0, help="Drop the last void from the table."):
-        groups = _void_groups(st.session_state["hole_base"], _CORNER_COLS)
+        groups = _void_groups(void_now, _CORNER_COLS)
         st.session_state["hole_base"] = _void_table_from_groups(groups[:-1])
         st.session_state.pop("ed_hole", None)
     holes = _void_editor(sec, "hole_base", "ed_hole")
+    _points_preview(sec, [p for ring in holes for p in ring], _CORNER_COLS,
+                    len(outer) + 1)
     sec.markdown("_Reinforcing bars_")
     bars = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS)
+    _points_preview(sec, bars, _REBAR_COLS, 1)
     tendons = []
     if use_pre:
         sec.markdown("_Tendons_")
         tendons = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS)
+        _points_preview(sec, tendons, _REBAR_COLS, len(bars) + 1)
 
     # In elastic-only mode the stress-strain laws do not enter the analysis (it is
     # linear: steel via the modular ratio, concrete linear in compression with no

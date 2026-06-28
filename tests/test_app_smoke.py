@@ -298,6 +298,24 @@ def test_remove_void_button_drops_the_last_void():
     assert int(hb.isna().any(axis=1).sum()) == 0           # separator gone
 
 
+def test_void_buttons_preserve_unsaved_edits():
+    # Codex P2: void corners typed into the editor (held in its delta, not yet in
+    # the base) must survive a + Add void click, not be discarded.
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    # base = one void; an extra corner is held only in the live editor delta.
+    at.session_state["hole_base"] = pd.DataFrame({
+        "x (m)": [-0.10, -0.04, -0.07], "y (m)": [-0.05, -0.05, 0.05]})
+    at.session_state["ed_hole"] = {
+        "edited_rows": {}, "deleted_rows": [],
+        "added_rows": [{"x (m)": 0.08, "y (m)": -0.05}]}   # an unsaved corner
+    at.button(key="add_void").click().run()   # handler reads the delta before re-render
+    assert not at.exception
+    hb = at.session_state["hole_base"]
+    assert (hb["x (m)"] == 0.08).any()   # the unsaved corner survived the rebuild
+
+
 def test_void_cap_enforced_when_parsing_not_only_the_button():
     # Pasting more than the cap of voids must not bypass the limit: the extra
     # voids are ignored when building the holes (Codex P2), with a warning.
