@@ -602,27 +602,25 @@ def test_elastic_reports_cracking_and_section_properties():
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True
     assert 0.0 < e["lambda_cr"] < 1.0
-    assert e["show_ts"] is False and e["show_cw"] is False   # both off by default
+    assert e["show_cw"] is False           # crack width off by default
     assert e["crack"] is None              # crack width is its own opt-in
     assert e["props_un"]["area"] > 0.0 and e["props_un"]["Ix"] > 0.0
     assert e["props_cr"] is not None       # cracked -> cracked properties present
     assert e["props_cr"]["area"] < e["props_un"]["area"]   # cracked section is smaller
 
 
-def test_tension_stiffening_reports_zeta_only():
-    # Tension stiffening is independent of crack width: enabling it reports zeta
-    # but no crack width (that has its own toggle).
+def test_crack_width_off_by_default():
+    # Crack width is an opt-in: a cracked section reports the threshold and
+    # properties but no crack width until the toggle is on.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
     at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.checkbox(key="sls_ts").set_value(True).run()
     at.button(key="calculate").click().run()
     assert not at.exception
     e = at.session_state["results"]["elastic"]
-    assert e["show_ts"] is True
-    assert 0.0 < e["zeta"] <= 1.0
-    assert e["crack"] is None              # crack width toggle still off
+    assert e["show_cw"] is False
+    assert e["crack"] is None              # crack width toggle off
 
 
 def test_crack_width_reports_both_load_cases():
@@ -718,8 +716,8 @@ def test_dk_na_crack_edition_narrows_wk():
 
 
 def test_elastic_uncracked_below_threshold():
-    # A small long-term moment leaves the section uncracked: zeta 0, no crack
-    # width, and no cracked-section properties.
+    # A small long-term moment leaves the section uncracked: no crack width and
+    # no cracked-section properties.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
@@ -728,7 +726,6 @@ def test_elastic_uncracked_below_threshold():
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is False
-    assert e["zeta"] == 0.0
     assert e["crack"] is None
     assert e["props_cr"] is None
 
@@ -738,7 +735,6 @@ def test_elastic_view_renders_with_sls_subsection():
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
     at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.checkbox(key="sls_ts").set_value(True).run()
     at.checkbox(key="sls_cw").set_value(True).run()
     at.selectbox(key="view").set_value("Elastic Results").run()
     at.button(key="calculate").click().run()
@@ -761,14 +757,13 @@ def test_cracking_follows_the_long_term_load():
 
 def test_plain_elastic_unchanged_by_sls_toggle():
     # The regular cracked-section stresses (zero concrete tension) do not change
-    # when the tension-stiffening or crack-width checks are toggled on.
+    # when the crack-width check is toggled on.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
     at.number_input(key="el_long_Mx").set_value(400.0).run()
     at.button(key="calculate").click().run()
     base = list(at.session_state["results"]["elastic"]["total"])
-    at.checkbox(key="sls_ts").set_value(True).run()
     at.checkbox(key="sls_cw").set_value(True).run()
     at.button(key="calculate").click().run()
     assert not at.exception
