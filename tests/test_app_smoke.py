@@ -698,6 +698,25 @@ def test_crack_width_with_tendons_runs():
     assert not at.exception
 
 
+def test_dk_na_crack_edition_narrows_wk():
+    # Selecting the DK NA crack-width code applies the cover-dependent k3
+    # (3.4*(25/c)^(2/3)); for the default cover > 25 mm this narrows wk vs base.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
+    wk_base = at.session_state["results"]["elastic"]["crack"]["wk"]
+    at.selectbox(key="sls_code").set_value("DS/EN 1992-1-1 + DK NA").run()
+    at.selectbox(key="sls_member").set_value("Slab").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert "DK NA" in e["crack_code"]
+    assert e["crack"]["wk"] < wk_base
+
+
 def test_elastic_uncracked_below_threshold():
     # A small long-term moment leaves the section uncracked: zeta 0, no crack
     # width, and no cracked-section properties.

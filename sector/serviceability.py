@@ -151,6 +151,8 @@ def _crack_width(
     k3: float,
     k4: float,
     bar_diameter: Optional[float],
+    k3_cover_dependent: bool = False,
+    include_hx_term: bool = True,
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width, evaluated per bar, returning the largest-wk bar.
 
@@ -164,6 +166,12 @@ def _crack_width(
     largest ``wk`` governs. Returns ``None`` when there is no tension bar in the
     effective zone or no usable bending gradient (pure axial tension uses a
     different effective-area definition).
+
+    Two flags select the DK NA crack-width rules. ``k3_cover_dependent`` replaces
+    the cover-term coefficient ``k3`` by ``k3*(25/c)^(2/3)`` (DK NA 7.3.4(3)).
+    ``include_hx_term`` (default ``True``) keeps the ``(h-x)/3`` limit in
+    ``hc,ef``; set it ``False`` for an ordinary beam under the DK NA, where that
+    limit applies only to slabs and prestressed members (7.3.2(3)).
     """
     bx, by, ba = section.bar_arrays()
     if not bx.size:
@@ -188,7 +196,12 @@ def _crack_width(
     # EC2 hc,ef = min(2.5(h-d), (h-x)/3, h/2). The neutral-axis depth x is measured
     # from the compression face, so (h-x) = s_tface - s_na (the tension-side depth),
     # not h - s_na (which would only match when the compression face is at s = 0).
-    hc_ef = min(2.5 * (h - d), (s_tface - s_na) / 3.0, h / 2.0)
+    # The (h-x)/3 limit can be dropped (DK NA 7.3.2(3): it applies only to slabs and
+    # prestressed members, not ordinary beams).
+    if include_hx_term:
+        hc_ef = min(2.5 * (h - d), (s_tface - s_na) / 3.0, h / 2.0)
+    else:
+        hc_ef = min(2.5 * (h - d), h / 2.0)
     if hc_ef <= 0.0:
         return None
 
@@ -235,8 +248,10 @@ def _crack_width(
         # EC2 (7.9): mean strain, with the 0.6 sigma_s/Es lower bound.
         esm_ecm = max((sigma_s - kt * fctm / rho * (1.0 + alpha_e * rho)) / Es,
                       0.6 * sigma_s / Es)
-        # EC2 (7.11): maximum crack spacing (cover and phi in mm).
-        sr_max = k3 * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
+        # EC2 (7.11): maximum crack spacing (cover and phi in mm). Under the DK NA
+        # (7.3.4(3)) the cover term coefficient is k3*(25/c)^(2/3) instead of k3.
+        k3_i = k3 * (25.0 / c_i) ** (2.0 / 3.0) if k3_cover_dependent and c_i > 0.0 else k3
+        sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
         wk = sr_max * esm_ecm
         if best is None or wk > best.wk:
             best = CrackWidthResult(
@@ -264,6 +279,8 @@ def analyse_cracking(
     k2: float = 0.5,
     k3: float = 3.4,
     k4: float = 0.425,
+    k3_cover_dependent: bool = False,
+    include_hx_term: bool = True,
 ) -> CrackingResult:
     """Serviceability analysis of the section under one action combination.
 
@@ -318,7 +335,8 @@ def analyse_cracking(
     crack = None
     if cracked:
         crack = _crack_width(
-            section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter
+            section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter,
+            k3_cover_dependent=k3_cover_dependent, include_hx_term=include_hx_term,
         )
 
     return CrackingResult(
@@ -342,6 +360,8 @@ def crack_width(
     k2: float = 0.5,
     k3: float = 3.4,
     k4: float = 0.425,
+    k3_cover_dependent: bool = False,
+    include_hx_term: bool = True,
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width for an externally supplied cracked-section state.
 
@@ -353,4 +373,6 @@ def crack_width(
     governs. See :func:`analyse_cracking` for the remaining parameters.
     """
     return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
-                        k1, k2, k3, k4, bar_diameter)
+                        k1, k2, k3, k4, bar_diameter,
+                        k3_cover_dependent=k3_cover_dependent,
+                        include_hx_term=include_hx_term)
