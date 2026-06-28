@@ -283,6 +283,80 @@ def test_box_girder_void_is_editable_with_continuing_ids():
     assert "plastic" in at.session_state["results"]
 
 
+def _two_void_table():
+    import pandas as pd
+    # two small triangular voids inside the default (centred) rectangle, separated
+    # by a blank row.
+    return pd.DataFrame({
+        "x (m)": [-0.10, -0.04, -0.07, None, 0.04, 0.10, 0.07],
+        "y (m)": [-0.05, -0.05, 0.05, None, -0.05, -0.05, 0.05]})
+
+
+def test_two_voids_separated_by_blank_row():
+    # Two voids in one table (a blank row between them) become two holes; their
+    # corner IDs continue after the outer corners and the section calculates.
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    n_outer = len(at.session_state["corners_base"])
+    at.session_state["hole_base"] = _two_void_table()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+    hb = at.session_state["hole_base"]
+    ids = [int(i) for i in hb["ID"] if pd.notna(i)]
+    assert ids == list(range(n_outer + 1, n_outer + 7))   # 2 voids x 3 corners
+    assert int(hb["ID"].isna().sum()) == 1                # the separator row
+
+
+def test_remove_void_button_drops_the_last_void():
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    n_outer = len(at.session_state["corners_base"])
+    at.session_state["hole_base"] = _two_void_table()
+    at.run()
+    at.button(key="rem_void").click().run()
+    assert not at.exception
+    hb = at.session_state["hole_base"]
+    ids = [int(i) for i in hb["ID"] if pd.notna(i)]
+    assert ids == list(range(n_outer + 1, n_outer + 4))   # one void left
+    assert int(hb["ID"].isna().sum()) == 0                # separator gone
+
+
+def test_void_cap_enforced_when_parsing_not_only_the_button():
+    # Pasting more than the cap of voids must not bypass the limit: the extra
+    # voids are ignored when building the holes (Codex P2), with a warning.
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    xs, ys = [], []
+    for i in range(11):                       # 11 small triangular voids
+        if i > 0:
+            xs.append(None); ys.append(None)  # blank separator
+        xs += [0.01 * i, 0.01 * i + 0.005, 0.01 * i + 0.002]
+        ys += [0.0, 0.0, 0.01]
+    at.session_state["hole_base"] = pd.DataFrame({"x (m)": xs, "y (m)": ys})
+    at.run()
+    assert not at.exception
+    assert any("ignored" in w.value.lower() for w in at.warning)
+
+
+def test_add_void_button_appends_a_separator():
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    at.session_state["hole_base"] = pd.DataFrame({
+        "x (m)": [-0.10, -0.04, -0.07], "y (m)": [-0.05, -0.05, 0.05]})
+    at.run()
+    before = len(at.session_state["hole_base"])
+    at.button(key="add_void").click().run()
+    assert not at.exception
+    hb = at.session_state["hole_base"]
+    assert len(hb) == before + 1                  # a blank separator row was added
+    assert int(hb["ID"].isna().sum()) == 1
+
+
 def test_void_table_migrates_for_old_sessions():
     # An existing (hot-reloaded) session may have pts_init set but no hole_base;
     # the app must re-create it rather than KeyError (Codex review).

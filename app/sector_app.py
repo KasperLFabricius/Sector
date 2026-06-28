@@ -320,15 +320,16 @@ def _renumber(df, cols, start):
     return out
 
 
-def _point_editor(box, base_key, ed_key, cols, id_start):
-    """Render an editable point table with a read-only, plot-matching ID column.
+_MAX_VOIDS = 10   # arbitrary cap on the number of separate voids
+
+
+def _render_point_table(box, base_key, ed_key, cols):
+    """Draw the editable table (numeric columns + read-only ID) and commit the
+    edits back to the base (renumbering) -- the shared half of the point editors.
 
     Every data column is a numeric input, so a value can be typed or pasted (a
     block of rows pasted from a spreadsheet auto-grows the table) and a cell can
-    never become text or a list. A row is only used once all its coordinates are
-    filled, so a half-typed point is ignored rather than rejected. Edits are
-    committed back to the base each run (the widget delta cleared) so the IDs
-    renumber as rows are added or removed. Returns the valid points.
+    never become text or a list. Returns the committed (renumbered) base.
     """
     column_config = {"ID": st.column_config.NumberColumn(
         "ID", disabled=True, help="Matches the number drawn on the plots.")}
@@ -337,10 +338,64 @@ def _point_editor(box, base_key, ed_key, cols, id_start):
     edited = box.data_editor(
         st.session_state[base_key], key=ed_key, num_rows="dynamic",
         use_container_width=True, hide_index=True, column_config=column_config)
+    return edited
+
+
+def _point_editor(box, base_key, ed_key, cols, id_start):
+    """Editable point table. A row is only used once all its coordinates are
+    filled, so a half-typed point is ignored rather than rejected. Returns the
+    valid points (IDs renumber live as rows are added or removed)."""
+    edited = _render_point_table(box, base_key, ed_key, cols)
     pts = _pts_from_df(edited, cols)
     st.session_state[base_key] = _renumber(edited, cols, id_start)
     st.session_state.pop(ed_key, None)
     return pts
+
+
+def _void_groups(df, cols):
+    """Split the void table into voids: runs of complete (x, y) rows, separated by
+    a blank row. Returns the groups in order (each a list of points), including
+    short ones (fewer than 3 corners), so callers can both count and validate."""
+    groups, current = [], []
+    for _, row in df.iterrows():
+        vals = [_to_number(row.get(c)) for c in cols]
+        if any(v is None for v in vals):     # a blank/partial row separates voids
+            if current:
+                groups.append(current)
+                current = []
+        else:
+            current.append(tuple(vals))
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _void_editor(box, base_key, ed_key, id_start):
+    """Editable void table: several voids in one table, separated by a blank row.
+    Returns the hole rings (each void with 3 or more corners), capped at
+    ``_MAX_VOIDS`` -- the cap is enforced here, not only on the Add button, so a
+    paste of more voids cannot push extra holes into the drawing and analysis."""
+    edited = _render_point_table(box, base_key, ed_key, _CORNER_COLS)
+    rings = [g for g in _void_groups(edited, _CORNER_COLS) if len(g) >= 3]
+    st.session_state[base_key] = _renumber(edited, _CORNER_COLS, id_start)
+    st.session_state.pop(ed_key, None)
+    if len(rings) > _MAX_VOIDS:
+        box.warning(f"Only the first {_MAX_VOIDS} voids are used; "
+                    f"{len(rings) - _MAX_VOIDS} extra ignored.")
+    return rings[:_MAX_VOIDS]
+
+
+def _void_table_from_groups(groups, trailing_blank=False):
+    """Rebuild a void DataFrame from a list of voids, one blank row between each.
+    With ``trailing_blank`` a blank row is also appended (an empty void slot)."""
+    rows = []
+    for i, g in enumerate(groups):
+        if i > 0:
+            rows.append({c: None for c in _CORNER_COLS})   # separator
+        rows.extend({_CORNER_COLS[0]: x, _CORNER_COLS[1]: y} for x, y in g)
+    if trailing_blank:
+        rows.append({c: None for c in _CORNER_COLS})
+    return pd.DataFrame(rows, columns=_CORNER_COLS).astype("float64")
 
 
 def build_inputs():
@@ -590,10 +645,28 @@ def build_inputs():
         # downstream treat the section as blank.
         sec.warning("The section has no concrete outline. Add at least 3 corners, "
                     "or press Load Quick Section.")
-    sec.markdown("_Concrete void (hole)_")
-    # Void corner IDs continue after the outer corners (the concrete-vertex order).
-    hole_ring = _point_editor(sec, "hole_base", "ed_hole", _CORNER_COLS, len(outer) + 1)
-    holes = [hole_ring] if len(hole_ring) >= 3 else []
+    sec.markdown("_Concrete voids_")
+    sec.caption("Several voids share this table, each separated by a blank row "
+                "(each void needs 3 or more corners). Corner IDs continue after "
+                "the outer corners.")
+    n_voids = len(_void_groups(st.session_state["hole_base"], _CORNER_COLS))
+    vc1, vc2 = sec.columns(2)
+    if vc1.button("+ Add void", key="add_void", use_container_width=True,
+                  disabled=n_voids >= _MAX_VOIDS,
+                  help=f"Append a blank separator row, so the next corners you enter "
+                       f"start a new void (up to {_MAX_VOIDS})."):
+        groups = _void_groups(st.session_state["hole_base"], _CORNER_COLS)
+        st.session_state["hole_base"] = _renumber(
+            _void_table_from_groups(groups, trailing_blank=True),
+            _CORNER_COLS, len(outer) + 1)
+        st.session_state.pop("ed_hole", None)
+    if vc2.button("Remove void", key="rem_void", use_container_width=True,
+                  disabled=n_voids == 0, help="Drop the last void from the table."):
+        groups = _void_groups(st.session_state["hole_base"], _CORNER_COLS)
+        st.session_state["hole_base"] = _renumber(
+            _void_table_from_groups(groups[:-1]), _CORNER_COLS, len(outer) + 1)
+        st.session_state.pop("ed_hole", None)
+    holes = _void_editor(sec, "hole_base", "ed_hole", len(outer) + 1)
     sec.markdown("_Reinforcing bars_")
     bars = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS, 1)
     tendons = []
