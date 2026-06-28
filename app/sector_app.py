@@ -26,7 +26,7 @@ from sector import codes, geometry, kernels, material_presets as mp, templates  
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
-from sector.serviceability import analyse_cracking, crack_width  # noqa: E402
+from sector.serviceability import analyse_cracking, crack_width, curvatures  # noqa: E402
 
 APP_VERSION = "0.1.0"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -672,7 +672,7 @@ def build_inputs():
             "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
             "v_min", "v_max", "v_inc", "mode",
             "sls_ts", "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
-            "sls_code", "sls_member"))
+            "sls_code", "sls_member", "conc_Ec"))
     return dict(section=section, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
@@ -681,7 +681,7 @@ def build_inputs():
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_ts=sls_ts, sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na, sls_member=sls_member,
-                mode=mode, extent=extent, signature=sig)
+                Ec=conc_Ec, mode=mode, extent=extent, signature=sig)
 
 
 # ---------------------------------------------------------------------------
@@ -799,7 +799,14 @@ def run_analysis(inp):
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
+            kappa_un=None, kappa_cr=None, kappa_m=None,
         )
+        # Tension stiffening, made tangible: the real curvatures (1/m) of the
+        # uncracked, fully cracked and mean (tension-stiffened) long-term states,
+        # using the concrete Ec (GPa -> kN/m^2, the solver's stress units).
+        if inp["sls_ts"] and cr_l.cracked:
+            k_un, k_cr, k_m = curvatures(cr_l, inp["Ec"] * 1.0e6)
+            out["elastic"].update(kappa_un=k_un, kappa_cr=k_cr, kappa_m=k_m)
         # Crack width is its own opt-in, reported for both load cases once the
         # (quasi-permanent) section has cracked. The long-term state is the solve
         # at nl above. The short-term state reuses the combined creep solve `r`:
@@ -1107,6 +1114,22 @@ def _elastic_sls_section(inp, e):
                         help="EC2 distribution coefficient (long-term). 0 = "
                              "uncracked; -> 1 deeply cracked. Softens the mean "
                              "response, not the peak crack stress.")
+
+    if show_ts and e.get("kappa_m") is not None:
+        k_un, k_cr, k_m = e["kappa_un"], e["kappa_cr"], e["kappa_m"]
+        st.markdown("**Tension-stiffened mean curvature (long-term)**")
+        kc = st.columns(3)
+        kc[0].metric("Uncracked kappa_I", f"{k_un:.2e} 1/m")
+        kc[1].metric("Mean kappa_m", f"{k_m:.2e} 1/m",
+                     help="EC2 7.18 zeta-interpolated mean curvature: the stiffening "
+                          "of the intact concrete between cracks. This is the "
+                          "deformation quantity tension stiffening produces.")
+        kc[2].metric("Cracked kappa_II", f"{k_cr:.2e} 1/m")
+        red = (1.0 - k_m / k_cr) * 100.0 if k_cr > 0.0 else 0.0
+        st.caption(f"The mean curvature is {red:.0f}% below the fully cracked value "
+                   f"-- the tension-stiffening reduction relevant to deflection. "
+                   f"Curvatures from the long-term cracked solve, scaled by "
+                   f"Ec = {inp['Ec']:.1f} GPa.")
 
     pL, pR = st.columns(2)
     with pL:

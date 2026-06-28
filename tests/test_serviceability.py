@@ -20,6 +20,7 @@ from sector.section import Section
 from sector.serviceability import (
     analyse_cracking,
     cracking_factor,
+    curvatures,
     tension_stiffening_zeta,
 )
 
@@ -166,6 +167,24 @@ def test_uncracked_below_cracking_load_uses_stage_i():
     # the cracked one.
     assert r.uncracked.na_y_intercept != pytest.approx(
         r.cracked_state.na_y_intercept, abs=1e-3)
+
+
+def test_curvatures_real_units_and_tension_stiffening_order():
+    # The fully cracked curvature equals M/(Ec*I_II) from the (hand-verified)
+    # transformed cracked section, confirming the Ec-normalisation conversion;
+    # and tension stiffening puts the mean between uncracked and cracked.
+    from sector.elastic import transformed_properties
+    sec = beam_section()
+    Ec = 32.8e6  # kN/m^2 (~32.8 GPa)
+    r = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0), beta=0.5)
+    k_un, k_cr, k_m = curvatures(r, Ec)
+    assert k_un < k_m < k_cr
+    I_II = transformed_properties(sec, 6.0, eps0=r.cracked_state.eps0,
+                                  kx=r.cracked_state.kx, ky=r.cracked_state.ky,
+                                  cracked=True).Ix
+    assert k_cr == pytest.approx(150.0 / (Ec * I_II), rel=0.01)
+    # The mean follows the EC2 interpolation kappa_m = zeta*kappa_II+(1-zeta)*kappa_I.
+    assert k_m == pytest.approx(r.zeta * k_cr + (1.0 - r.zeta) * k_un, rel=1e-6)
 
 
 def test_beta_zero_gives_fully_cracked_mean():

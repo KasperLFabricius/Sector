@@ -623,6 +623,9 @@ def test_tension_stiffening_reports_zeta_only():
     assert e["show_ts"] is True
     assert 0.0 < e["zeta"] <= 1.0
     assert e["crack"] is None              # crack width toggle still off
+    # Tension stiffening now produces a tangible result: the mean curvature sits
+    # between the uncracked and fully cracked curvatures.
+    assert e["kappa_un"] < e["kappa_m"] < e["kappa_cr"]
 
 
 def test_crack_width_reports_both_load_cases():

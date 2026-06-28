@@ -376,3 +376,22 @@ def crack_width(
                         k1, k2, k3, k4, bar_diameter,
                         k3_cover_dependent=k3_cover_dependent,
                         include_hx_term=include_hx_term)
+
+
+def curvatures(result: CrackingResult, Ec: float) -> tuple[float, float, float]:
+    """Real curvatures (1/m) for the uncracked, fully cracked and mean states.
+
+    The elastic solver is written with ``Ec = 1`` (the *stresses* are independent
+    of the absolute modulus), so the strain-plane gradient ``|(kx, ky)|`` it
+    returns is ``Ec`` times the true curvature. Dividing by the real concrete
+    modulus ``Ec`` (in the solver's stress units, i.e. kN/m^2) recovers the
+    curvature in 1/m. Returns ``(kappa_uncracked, kappa_cracked, kappa_mean)``;
+    tension stiffening places the mean between the (stiff) uncracked and (soft)
+    fully cracked values, ``kappa_uncracked <= kappa_mean <= kappa_cracked``.
+    """
+    if Ec <= 0.0:
+        return (0.0, 0.0, 0.0)
+    k_un = math.hypot(result.uncracked.kx, result.uncracked.ky) / Ec
+    k_cr = math.hypot(result.cracked_state.kx, result.cracked_state.ky) / Ec
+    k_m = math.hypot(result.kx_m, result.ky_m) / Ec
+    return (k_un, k_cr, k_m)
