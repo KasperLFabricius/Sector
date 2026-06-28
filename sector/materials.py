@@ -196,6 +196,7 @@ class MildSteel:
     ey0t: float = 0.0
     ey0c: float = 0.0
     Es: float = ES   # elastic (strain) modulus, MPa
+    active_in_compression: bool = True   # False -> tension-only (no compression)
 
     def __post_init__(self) -> None:
         if self.curve not in (1, 2, 3):
@@ -205,6 +206,8 @@ class MildSteel:
 
     def stress(self, eps: float, *, design: bool = True) -> float:
         """Stress (MPa, tension positive) at tension-positive strain ``eps``."""
+        if not self.active_in_compression and eps < 0.0:
+            return 0.0          # tension-only reinforcement carries no compression
         gy = self.gamma_y if design else 1.0
         gu = self.gamma_u if design else 1.0
         gE = self.gamma_E if design else 1.0
@@ -277,6 +280,14 @@ class MildSteel:
         return self.Es / (g if design else 1.0)
 
     def diagram_markers(self, *, design: bool = True):
+        """Labelled points of interest; the compression-side markers are dropped
+        when the bar is tension-only (``active_in_compression`` is False)."""
+        pts = self._markers(design=design)
+        if not self.active_in_compression:
+            pts = [m for m in pts if m[0] >= 0.0]
+        return pts
+
+    def _markers(self, *, design: bool = True):
         """Points of interest labelled with the *input* parameters.
 
         Returns ``(strain, stress, eps_key, sigma_key)`` points (see

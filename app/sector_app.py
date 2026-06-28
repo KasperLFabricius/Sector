@@ -67,6 +67,9 @@ st.caption("Reinforced-concrete cross-section analysis - elastic stresses and pl
 _PRESET_HELP = ("Prefills a named stress-strain law (a named curve shape or a "
                 "Eurocode edition). Every parameter stays editable afterwards.")
 
+# Default material edition (Danish practice: DS/EN with the DK National Annex).
+_DEFAULT_PRESET = "DS/EN 1992-1-1:2005 + DK NA:2024"
+
 
 def _prefill(prefix, preset, presets):
     """Load a preset's defaults into the field keys when the selection changes."""
@@ -84,23 +87,24 @@ def _number(box, prefix, field, meta, help_map=None, disabled=False):
                             help=(help_map or {}).get(field), disabled=disabled)
 
 
-def _safe_build(box, builder, curve, vals):
+def _safe_build(box, builder, curve, vals, **extra):
     """Build a material from the flat parameter set, surviving degenerate input.
 
     A flat form lets the user enter values the active curve cannot accept (e.g. a
     zero rupture stress on a hardening curve). Rather than break the whole app,
     show a notice and retry with the offending stresses nudged just above zero so
-    the diagram and the analysis still render.
+    the diagram and the analysis still render. ``extra`` carries non-field options
+    (e.g. ``active_in_compression``) straight through to the builder.
     """
     try:
-        return builder(curve=curve, **vals)
+        return builder(curve=curve, **vals, **extra)
     except ValueError as exc:
         box.warning(f"Adjusted for this curve: {exc}")
         v = dict(vals)
         for f in ("fytk", "futk"):
             if v.get(f, 1.0) <= 0.0:
                 v[f] = 1.0
-        return builder(curve=curve, **v)
+        return builder(curve=curve, **v, **extra)
 
 
 def _clamp_eut(box, vals, fields):
@@ -119,18 +123,20 @@ def _clamp_eut(box, vals, fields):
             vals["eut"] = ey
 
 
-def concrete_panel(box, locked=False):
+def concrete_panel(box, locked=False, lock_elastic=False):
     """Concrete material: preset and editable parameters (diagram is in the main view).
 
     ``locked`` (elastic-only mode) disables the parameters that do not affect the
     elastic results: gamma_c and alpha_cc set the design strength fcd, which is a
     plastic-only quantity. fck stays editable -- it feeds the serviceability fctm
     (the Auto button) -- and so does the preset, which prefills fck.
+    ``lock_elastic`` (plastic-only mode) disables fctm and Ec, which only affect
+    the elastic/SLS results.
     """
     box.markdown("**Concrete**")
     presets = mp.CONCRETE_PRESETS
     labels = list(presets)
-    preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
+    preset = box.selectbox("Preset", labels, index=labels.index(_DEFAULT_PRESET),
                            key="conc_preset", help=_PRESET_HELP)
     _prefill("conc", preset, presets)
     curve = presets[preset]["curve"]
@@ -159,12 +165,12 @@ def concrete_panel(box, locked=False):
     fctm_ec = round(codes.fctm(fck), 3)
     st.session_state.setdefault("sls_fctm", fctm_ec)
     if box.button(f"Auto fctm (EC2: {fctm_ec:.2f} MPa)", key="sls_fctm_auto",
-                  use_container_width=True,
+                  use_container_width=True, disabled=lock_elastic,
                   help="Set fctm = 0.30*fck^(2/3) (EC2 Table 3.1) for the current "
                        "concrete grade. Press again after changing the grade."):
         st.session_state["sls_fctm"] = fctm_ec
     fctm_val = box.number_input("Tensile strength fctm (MPa)", 0.0, 10.0, step=0.1,
-                                key="sls_fctm",
+                                key="sls_fctm", disabled=lock_elastic,
                                 help="Mean axial tensile strength for the cracking "
                                      "check (fct,eff). Use Auto for the EC2 value.")
 
@@ -173,12 +179,12 @@ def concrete_panel(box, locked=False):
     ecm_gpa = round(codes.ecm(fck) / 1000.0, 1)
     st.session_state.setdefault("conc_Ec", ecm_gpa)
     if box.button(f"Auto Ec (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
-                  use_container_width=True,
+                  use_container_width=True, disabled=lock_elastic,
                   help="Set Ec = Ecm = 22*(fcm/10)^0.3 GPa (EC2 Table 3.1) for the "
                        "current grade. Press again after changing the grade."):
         st.session_state["conc_Ec"] = ecm_gpa
     Ec = box.number_input("Elastic modulus Ec (GPa)", 1.0, 100.0, step=0.5,
-                          key="conc_Ec",
+                          key="conc_Ec", disabled=lock_elastic,
                           help="Concrete secant modulus, used only by the elastic "
                                "analysis to auto-derive the modular ratios n = Es/Ec.")
     return concrete, fctm_val, Ec
@@ -199,17 +205,34 @@ def mild_panel(box, locked=False):
     box.markdown("**Mild steel**")
     presets = mp.MILD_PRESETS
     labels = list(presets)
-    preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
+    preset = box.selectbox("Preset", labels, index=labels.index(_DEFAULT_PRESET),
                            key="mild_preset", help=_PRESET_HELP)
+    # Selecting a preset whose compression yield is active (fyck > 0) turns the
+    # "Active in compression" toggle on, so the preset's compression is not
+    # silently dropped. (Checked before _prefill, which updates the change marker.)
+    if (st.session_state.get("mild_prev") != preset
+            and presets[preset].get("fyck", 0.0) > 0.0):
+        st.session_state["mild_active_comp"] = True
     _prefill("mild", preset, presets)
     curve = presets[preset]["curve"]
+    st.session_state.setdefault("mild_active_comp", True)
+    active_comp = box.checkbox(
+        "Active in compression", key="mild_active_comp", disabled=locked,
+        help="On: the bar carries compression and its compression-side inputs "
+             "(fyck, ey0c) are used. Off: the reinforcement is tension-only "
+             "(no compression), for every curve type.")
+    # The compression-side inputs only matter when compression is active.
+    comp_only = {"fyck", "ey0c"}
     vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META, mp.MILD_HELP,
-                       disabled=locked and f != "Es")
+                       disabled=(locked and f != "Es")
+                       or (f in comp_only and not active_comp))
             for f in mp.MILD_FIELD_META}
     _clamp_eut(box, vals, mp.MILD_FIELDS_BY_CURVE[curve])
-    steel = _safe_build(box, mp.build_mild, curve, vals)
+    steel = _safe_build(box, mp.build_mild, curve, vals,
+                        active_in_compression=active_comp)
+    comp = "active" if active_comp else "tension-only"
     box.caption(f"fyd = {steel.fytk / vals['gamma_y']:.0f} MPa,  "
-                f"Es = {vals['Es'] / 1000.0:.0f} GPa")
+                f"Es = {vals['Es'] / 1000.0:.0f} GPa,  compression {comp}")
     return steel
 
 
@@ -682,13 +705,15 @@ def build_inputs():
     # the serviceability fctm) and the steel modulus Es (the crack-width mean
     # strain) still matter, so they stay editable.
     lock_mats = mode == "Elastic"
+    lock_elastic = mode == "Plastic"   # fctm + Ec are elastic-only inputs
     mat = s.expander("Material Parameters", expanded=False)
     if lock_mats:
         mat.caption("Elastic-only mode: the stress-strain laws do not affect the "
                     "elastic results and are locked. Only fck (feeds fctm) and the "
                     "steel modulus Es (crack width) stay editable; switch to "
                     "Plastic or Both to edit the full laws.")
-    concrete, sls_fctm, conc_Ec = concrete_panel(mat, locked=lock_mats)
+    concrete, sls_fctm, conc_Ec = concrete_panel(mat, locked=lock_mats,
+                                                 lock_elastic=lock_elastic)
     mat.divider()
     steel = mild_panel(mat, locked=lock_mats)
     if use_pre:
@@ -781,7 +806,8 @@ def build_inputs():
            ("conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
             "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
             "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
-            "mild_ey0t", "mild_ey0c", "mild_Es", "use_pre", "pre_preset",
+            "mild_ey0t", "mild_ey0c", "mild_Es", "mild_active_comp",
+            "use_pre", "pre_preset",
             "pre_IS", "pre_fytk", "pre_futk", "pre_eut", "pre_gamma_y",
             "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
             "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
