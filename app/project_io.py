@@ -47,6 +47,9 @@ SCALAR_KEYS = [
     "mode", "v_min", "v_max", "v_inc",
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "label_scale", "label_min_gap",
+    # Report metadata.
+    "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev", "rep_author",
+    "rep_checker", "rep_approver", "rep_comments",
 ]
 
 # A preset prefills its fields only when the selection *changes*; on load we set

@@ -12,5 +12,8 @@ numba>=0.62; python_version < "3.14"
 streamlit>=1.52,<2
 plotly>=5.18,<7
 reportlab>=4.0,<5
+# Exports the Plotly figures to PNG for the PDF report (needs a Chrome/Chromium
+# browser at runtime). The report degrades gracefully to tables-only if absent.
+kaleido>=0.2.1
 # Reads the handcalc reference PDFs used as verification fixtures.
 pypdf>=4.0,<6
