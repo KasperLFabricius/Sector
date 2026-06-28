@@ -524,14 +524,24 @@ def _apply_pending_project() -> None:
     for marker, src in project_io.PREV_MARKERS.items():
         if src in scalars:
             st.session_state[marker] = scalars[src]
+    # For a strength-dependent edition (EN 2023) alpha_cc tracks fck via a hidden
+    # marker; align it to the loaded fck so the loaded alpha_cc is not overwritten.
+    if "conc_fck" in scalars:
+        st.session_state["conc_alpha_fck"] = scalars["conc_fck"]
     for ed in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
         st.session_state.pop(ed, None)
     st.session_state["pts_init"] = True   # do not re-seed the tables from a template
     st.session_state["_project_msg"] = ("success", "Project loaded.")
 
 
-def _save_load_panel(box) -> None:
-    """Download the current project and upload one to restore it."""
+def _save_load_panel(parent) -> None:
+    """Download the current project and upload one to restore it.
+
+    Rendered into a slot reserved near the top of the sidebar but only *after* the
+    point tables and inputs have been seeded this run, so the download always
+    reflects the live section (not an empty one on a fresh session).
+    """
+    box = parent.expander("Save / Load", expanded=False)
     box.download_button("Download project", data=_gather_project(),
                         file_name="sector_section.json", mime="application/json",
                         use_container_width=True,
@@ -575,7 +585,10 @@ def build_inputs():
         st.divider()
         st.caption(f"Sector v{APP_VERSION}  -  internal engineering tool, Sweco.")
 
-    _save_load_panel(s.expander("Save / Load", expanded=False))
+    # Reserve the Save / Load slot here (near the top) but fill it at the end of
+    # build_inputs, once the point tables and inputs exist, so the download
+    # captures the live section even on a fresh session.
+    save_slot = s.container()
 
     aset = s.expander("Analysis & Result Settings", expanded=False)
     mode = aset.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode",
@@ -970,6 +983,7 @@ def build_inputs():
             "v_min", "v_max", "v_inc", "mode",
             "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))
+    _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
     return dict(section=section, void_error=void_error, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,

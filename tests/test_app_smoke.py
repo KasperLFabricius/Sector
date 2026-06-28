@@ -485,6 +485,47 @@ def test_save_load_round_trip_through_the_app():
     assert at.session_state["conc_fck"] == 48.0
 
 
+def test_fresh_session_project_captures_default_section():
+    # The download must reflect the live section even on a fresh session (the panel
+    # is filled after the tables are seeded), not an empty one.
+    import sys as _sys
+    at = _fresh()
+    at.run()
+    _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
+    import project_io  # noqa: E402
+    text = project_io.dump_project(
+        {k: at.session_state[k] for k in project_io.TABLE_KEYS if k in at.session_state},
+        {k: at.session_state[k] for k in project_io.SCALAR_KEYS if k in at.session_state})
+    tables, _ = project_io.parse_project(text)
+    assert len(tables["corners_base"]) >= 3   # default rectangle, not blank
+
+
+def test_load_preserves_manual_alpha_cc_for_strength_dependent_preset():
+    # A manually edited alpha_cc under EN 2023 (eta_cc tracks fck) must round-trip,
+    # not be overwritten by the automatic value when the project is reloaded.
+    import json
+    at = _fresh()
+    at.run()
+    project = {
+        "format": "sector-project", "version": 1,
+        "tables": {
+            "corners_base": {"columns": ["x (mm)", "y (mm)"],
+                             "rows": [[-100.0, -150.0], [100.0, -150.0],
+                                      [100.0, 150.0], [-100.0, 150.0]]},
+            "hole_base": {"columns": ["x (mm)", "y (mm)"], "rows": []},
+            "bars_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"],
+                          "rows": [[0.0, -120.0, 500.0]]},
+            "tendons_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"], "rows": []},
+        },
+        "scalars": {"conc_preset": "DS/EN 1992-1-1:2023", "conc_fck": 40.0,
+                    "conc_alpha_cc": 0.5, "mode": "Plastic"},
+    }
+    at.session_state["_pending_project"] = json.dumps(project)
+    at.run()
+    assert not at.exception
+    assert at.session_state["conc_alpha_cc"] == 0.5
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
