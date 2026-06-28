@@ -181,7 +181,7 @@ def test_points_are_source_of_truth_until_loaded():
     at.run()
     at.button(key="calculate").click().run()
     base_mx = at.session_state["results"]["plastic"]["max_mx"]
-    at.number_input(key="h").set_value(1.0).run()        # taller, but NOT loaded
+    at.number_input(key="h_mm").set_value(1000.0).run()  # taller, but NOT loaded
     at.button(key="calculate").click().run()
     assert at.session_state["results"]["plastic"]["max_mx"] == pytest.approx(base_mx)
     at.button(key="load_qs").click().run()               # apply the Quick Section
@@ -418,8 +418,8 @@ def test_inputs_carry_help_tooltips():
     # Inputs across the panels expose hover help (the "?" tooltip).
     at = _fresh()
     at.run()
-    for key in ("shape", "b", "h", "cover", "conc_fck", "mild_fytk", "mild_eut",
-                "pl_P", "pl_Mx", "nl", "view"):
+    for key in ("shape", "b_mm", "h_mm", "cover_mm", "conc_fck", "mild_fytk",
+                "mild_eut", "pl_P", "pl_Mx", "nl", "view"):
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
@@ -483,7 +483,7 @@ def test_section_view_is_geometry_only():
     at.radio(key="mode").set_value("Elastic").run()
     at.button(key="calculate").click().run()
     at.selectbox(key="view").set_value("Section").run()
-    at.number_input(key="h").set_value(0.75).run()  # change an input after calc
+    at.number_input(key="h_mm").set_value(750.0).run()  # change an input after calc
     assert not at.exception
     assert not any("neutral axis" in w.value for w in at.warning)
 
@@ -702,7 +702,7 @@ def test_circular_cover_auto_uses_ring_cover():
     at.selectbox(key="shape").set_value("Circular").run()
     at.radio(key="mode").set_value("Elastic").run()
     at.checkbox(key="sls_ts").set_value(True).run()
-    at.number_input(key="ring_c").set_value(0.10).run()
+    at.number_input(key="ring_c_mm").set_value(100.0).run()
     at.button(key="sls_cover_auto").click().run()
     assert not at.exception
     assert at.number_input(key="sls_cover").value > 70.0
