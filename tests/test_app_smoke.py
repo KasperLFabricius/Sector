@@ -324,6 +324,24 @@ def test_remove_void_button_drops_the_last_void():
     assert int(hb["ID"].isna().sum()) == 0                # separator gone
 
 
+def test_void_cap_enforced_when_parsing_not_only_the_button():
+    # Pasting more than the cap of voids must not bypass the limit: the extra
+    # voids are ignored when building the holes (Codex P2), with a warning.
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    xs, ys = [], []
+    for i in range(11):                       # 11 small triangular voids
+        if i > 0:
+            xs.append(None); ys.append(None)  # blank separator
+        xs += [0.01 * i, 0.01 * i + 0.005, 0.01 * i + 0.002]
+        ys += [0.0, 0.0, 0.01]
+    at.session_state["hole_base"] = pd.DataFrame({"x (m)": xs, "y (m)": ys})
+    at.run()
+    assert not at.exception
+    assert any("ignored" in w.value.lower() for w in at.warning)
+
+
 def test_add_void_button_appends_a_separator():
     import pandas as pd
     at = _fresh()

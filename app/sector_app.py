@@ -372,12 +372,17 @@ def _void_groups(df, cols):
 
 def _void_editor(box, base_key, ed_key, id_start):
     """Editable void table: several voids in one table, separated by a blank row.
-    Returns the hole rings (each void with 3 or more corners)."""
+    Returns the hole rings (each void with 3 or more corners), capped at
+    ``_MAX_VOIDS`` -- the cap is enforced here, not only on the Add button, so a
+    paste of more voids cannot push extra holes into the drawing and analysis."""
     edited = _render_point_table(box, base_key, ed_key, _CORNER_COLS)
     rings = [g for g in _void_groups(edited, _CORNER_COLS) if len(g) >= 3]
     st.session_state[base_key] = _renumber(edited, _CORNER_COLS, id_start)
     st.session_state.pop(ed_key, None)
-    return rings
+    if len(rings) > _MAX_VOIDS:
+        box.warning(f"Only the first {_MAX_VOIDS} voids are used; "
+                    f"{len(rings) - _MAX_VOIDS} extra ignored.")
+    return rings[:_MAX_VOIDS]
 
 
 def _void_table_from_groups(groups, trailing_blank=False):
