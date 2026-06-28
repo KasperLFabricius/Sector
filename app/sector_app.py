@@ -326,55 +326,31 @@ def _pts_from_df(df, cols):
     return out
 
 
-def _renumber(df, cols, start):
-    """Editor base from ``df`` with a leading ``ID`` column numbered from
-    ``start`` -- but only on complete rows. Blank/NaN rows (which the analysis and
-    the plot skip) get no ID, so the table IDs always match the plotted/result
-    numbering. Cells are coerced to numbers (non-numeric -> NaN) so a stray paste
-    cannot poison the table."""
-    rows = df[cols].reset_index(drop=True).apply(pd.to_numeric, errors="coerce")
-    ids, n = [], start
-    for _, row in rows.iterrows():
-        if any(pd.isna(row[c]) for c in cols):
-            ids.append(pd.NA)
-        else:
-            ids.append(n)
-            n += 1
-    out = rows.copy()
-    out.insert(0, "ID", pd.array(ids, dtype="Int64"))
-    return out
-
-
 _MAX_VOIDS = 10   # arbitrary cap on the number of separate voids
 
 
 def _render_point_table(box, base_key, ed_key, cols):
-    """Draw the editable table (numeric columns + read-only ID) and commit the
-    edits back to the base (renumbering) -- the shared half of the point editors.
+    """Draw the editable table and return its current contents.
 
-    Every data column is a numeric input, so a value can be typed or pasted (a
-    block of rows pasted from a spreadsheet auto-grows the table) and a cell can
-    never become text or a list. Returns the committed (renumbered) base.
+    The base DataFrame is the *stable* source the widget owns across reruns: it is
+    set only by explicit actions (Load / Clear / Add or Remove void), never
+    re-seeded or cleared on every run, so a typed or pasted value sticks on the
+    first keystroke instead of lagging a rerun behind. Every data column is a
+    numeric input, so a value can be typed or pasted (a spreadsheet block
+    auto-grows the table) and a cell can never become text or a list. The point
+    numbers are drawn on the plots (by position), not stored as an ID column.
     """
-    column_config = {"ID": st.column_config.NumberColumn(
-        "ID", disabled=True, help="Matches the number drawn on the plots.")}
-    for c in cols:
-        column_config[c] = st.column_config.NumberColumn(c, step=None)
-    edited = box.data_editor(
+    column_config = {c: st.column_config.NumberColumn(c, step=None) for c in cols}
+    return box.data_editor(
         st.session_state[base_key], key=ed_key, num_rows="dynamic",
         use_container_width=True, hide_index=True, column_config=column_config)
-    return edited
 
 
-def _point_editor(box, base_key, ed_key, cols, id_start):
+def _point_editor(box, base_key, ed_key, cols):
     """Editable point table. A row is only used once all its coordinates are
     filled, so a half-typed point is ignored rather than rejected. Returns the
-    valid points (IDs renumber live as rows are added or removed)."""
-    edited = _render_point_table(box, base_key, ed_key, cols)
-    pts = _pts_from_df(edited, cols)
-    st.session_state[base_key] = _renumber(edited, cols, id_start)
-    st.session_state.pop(ed_key, None)
-    return pts
+    valid points, numbered by position (the order they appear)."""
+    return _pts_from_df(_render_point_table(box, base_key, ed_key, cols), cols)
 
 
 def _void_groups(df, cols):
@@ -395,15 +371,13 @@ def _void_groups(df, cols):
     return groups
 
 
-def _void_editor(box, base_key, ed_key, id_start):
+def _void_editor(box, base_key, ed_key):
     """Editable void table: several voids in one table, separated by a blank row.
     Returns the hole rings (each void with 3 or more corners), capped at
     ``_MAX_VOIDS`` -- the cap is enforced here, not only on the Add button, so a
     paste of more voids cannot push extra holes into the drawing and analysis."""
     edited = _render_point_table(box, base_key, ed_key, _CORNER_COLS)
     rings = [g for g in _void_groups(edited, _CORNER_COLS) if len(g) >= 3]
-    st.session_state[base_key] = _renumber(edited, _CORNER_COLS, id_start)
-    st.session_state.pop(ed_key, None)
     if len(rings) > _MAX_VOIDS:
         box.warning(f"Only the first {_MAX_VOIDS} voids are used; "
                     f"{len(rings) - _MAX_VOIDS} extra ignored.")
@@ -628,42 +602,42 @@ def build_inputs():
                                 "bars and tendons from the point tables, to start "
                                 "from a blank section.")
     if "pts_init" not in st.session_state or load_qs:
-        st.session_state["corners_base"] = _renumber(_corners_df(qs_outer),
-                                                     _CORNER_COLS, 1)
-        st.session_state["hole_base"] = _renumber(_corners_df(qs_hole), _CORNER_COLS,
-                                                  len(qs_outer) + 1)
-        st.session_state["bars_base"] = _renumber(_rebar_df(qs_bars), _REBAR_COLS, 1)
-        st.session_state["tendons_base"] = _renumber(_rebar_df(qs_tendons),
-                                                     _REBAR_COLS, len(qs_bars) + 1)
+        st.session_state["corners_base"] = _corners_df(qs_outer)
+        st.session_state["hole_base"] = _corners_df(qs_hole)
+        st.session_state["bars_base"] = _rebar_df(qs_bars)
+        st.session_state["tendons_base"] = _rebar_df(qs_tendons)
         for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
         st.session_state["pts_init"] = True
     if clear_pts:
         # Empty every point table (corners, void, bars, tendons) and drop the live
         # editor edits, so the section starts blank.
-        st.session_state["corners_base"] = _renumber(_corners_df([]), _CORNER_COLS, 1)
-        st.session_state["hole_base"] = _renumber(_corners_df([]), _CORNER_COLS, 1)
-        st.session_state["bars_base"] = _renumber(_rebar_df([]), _REBAR_COLS, 1)
-        st.session_state["tendons_base"] = _renumber(_rebar_df([]), _REBAR_COLS, 1)
+        st.session_state["corners_base"] = _corners_df([])
+        st.session_state["hole_base"] = _corners_df([])
+        st.session_state["bars_base"] = _rebar_df([])
+        st.session_state["tendons_base"] = _rebar_df([])
         for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
-    # Migrate a session that predates the void table: seed hole_base (from any old
-    # holes state) without disturbing the other tables, so it never KeyErrors.
+    # Migrate a session that predates the void table (or the ID-column tables): seed
+    # hole_base, and coerce any stored table to the current data-only schema.
     if "hole_base" not in st.session_state:
         old = st.session_state.get("holes_pts") or []
-        st.session_state["hole_base"] = _renumber(
-            _corners_df(old[0] if old else []), _CORNER_COLS, 1)
+        st.session_state["hole_base"] = _corners_df(old[0] if old else [])
+    for base_key, cols in (("corners_base", _CORNER_COLS), ("hole_base", _CORNER_COLS),
+                           ("bars_base", _REBAR_COLS), ("tendons_base", _REBAR_COLS)):
+        df = st.session_state.get(base_key)
+        if df is not None and list(df.columns) != cols:   # drop a legacy ID column
+            st.session_state[base_key] = df.reindex(columns=cols)
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
     sec.caption("Concrete corners define the outline (3 or more, in order); the "
-                "void is an optional inner ring (3 or more corners, else ignored). "
-                "Bars and tendons are points with an area (mm2). The ID column "
-                "matches the numbers drawn on the plots. Type or paste values (a "
-                "block copied from a spreadsheet auto-grows the table); a point is "
-                "used once all its cells are filled. Use Load Quick Section to "
-                "refill from the template above.")
+                "voids are optional inner rings. Bars and tendons are points with an "
+                "area (mm2). Type or paste values (a block copied from a spreadsheet "
+                "auto-grows the table); a point is used once all its cells are "
+                "filled. The numbers drawn on the plots follow the row order. Use "
+                "Load Quick Section to refill from the template above.")
     sec.markdown("_Concrete corners_")
-    outer = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS, 1)
+    outer = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS)
     if len(outer) < 3:
         # No valid outline. Leave it empty (do NOT fall back to the Quick Section,
         # or Clear Section would silently revert to the template) and let the
@@ -672,8 +646,7 @@ def build_inputs():
                     "or press Load Quick Section.")
     sec.markdown("_Concrete voids_")
     sec.caption("Several voids share this table, each separated by a blank row "
-                "(each void needs 3 or more corners). Corner IDs continue after "
-                "the outer corners.")
+                "(each void needs 3 or more corners).")
     n_voids = len(_void_groups(st.session_state["hole_base"], _CORNER_COLS))
     vc1, vc2 = sec.columns(2)
     if vc1.button("+ Add void", key="add_void", use_container_width=True,
@@ -681,25 +654,21 @@ def build_inputs():
                   help=f"Append a blank separator row, so the next corners you enter "
                        f"start a new void (up to {_MAX_VOIDS})."):
         groups = _void_groups(st.session_state["hole_base"], _CORNER_COLS)
-        st.session_state["hole_base"] = _renumber(
-            _void_table_from_groups(groups, trailing_blank=True),
-            _CORNER_COLS, len(outer) + 1)
+        st.session_state["hole_base"] = _void_table_from_groups(groups,
+                                                                trailing_blank=True)
         st.session_state.pop("ed_hole", None)
     if vc2.button("Remove void", key="rem_void", use_container_width=True,
                   disabled=n_voids == 0, help="Drop the last void from the table."):
         groups = _void_groups(st.session_state["hole_base"], _CORNER_COLS)
-        st.session_state["hole_base"] = _renumber(
-            _void_table_from_groups(groups[:-1]), _CORNER_COLS, len(outer) + 1)
+        st.session_state["hole_base"] = _void_table_from_groups(groups[:-1])
         st.session_state.pop("ed_hole", None)
-    holes = _void_editor(sec, "hole_base", "ed_hole", len(outer) + 1)
+    holes = _void_editor(sec, "hole_base", "ed_hole")
     sec.markdown("_Reinforcing bars_")
-    bars = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS, 1)
+    bars = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS)
     tendons = []
     if use_pre:
         sec.markdown("_Tendons_")
-        # Tendon IDs continue after the bars, matching the plot numbering.
-        tendons = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS,
-                                len(bars) + 1)
+        tendons = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS)
 
     # In elastic-only mode the stress-strain laws do not enter the analysis (it is
     # linear: steel via the modular ratio, concrete linear in compression with no
