@@ -256,26 +256,48 @@ _REBAR_COLS = ["x (m)", "y (m)", "area (mm2)"]
 
 
 def _corners_df(pts):
-    """Concrete-corner DataFrame ``(x, y)`` from a list of points."""
+    """Concrete-corner DataFrame ``(x, y)`` from a list of points.
+
+    The columns are forced to ``float64`` (even when empty) so the editor always
+    renders numeric inputs -- an object-dtype column lets a paste land a string or
+    a list in a cell, which then crashes the numeric parsing.
+    """
     return pd.DataFrame([{"x (m)": float(p[0]), "y (m)": float(p[1])} for p in pts],
-                        columns=_CORNER_COLS)
+                        columns=_CORNER_COLS).astype("float64")
 
 
 def _rebar_df(pts):
     """Reinforcement DataFrame ``(x, y, area)`` from a list of (x, y, area)."""
     return pd.DataFrame(
         [{"x (m)": float(p[0]), "y (m)": float(p[1]), "area (mm2)": float(p[2])}
-         for p in pts], columns=_REBAR_COLS)
+         for p in pts], columns=_REBAR_COLS).astype("float64")
+
+
+def _to_number(v):
+    """Coerce a cell to a finite float, or ``None`` if it is blank/non-numeric
+    (NaN, text, a stray list from a paste). Never raises."""
+    if isinstance(v, (list, tuple, dict, set, np.ndarray)):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 def _pts_from_df(df, cols):
-    """Rows of ``df`` as tuples, skipping any with a blank/NaN cell."""
+    """Rows of ``df`` as numeric tuples, keeping only complete, valid points.
+
+    A row is kept only when every coordinate coerces to a finite number; partial
+    rows (e.g. an x with no y yet) and any non-numeric cell (a stray paste, text,
+    a list) are skipped rather than raising, so editing never crashes the app.
+    """
     out = []
     for _, row in df.iterrows():
-        vals = [row.get(c) for c in cols]
-        if any(pd.isna(v) for v in vals):
+        vals = [_to_number(row.get(c)) for c in cols]
+        if any(v is None for v in vals):
             continue
-        out.append(tuple(float(v) for v in vals))
+        out.append(tuple(vals))
     return out
 
 
@@ -283,8 +305,9 @@ def _renumber(df, cols, start):
     """Editor base from ``df`` with a leading ``ID`` column numbered from
     ``start`` -- but only on complete rows. Blank/NaN rows (which the analysis and
     the plot skip) get no ID, so the table IDs always match the plotted/result
-    numbering."""
-    rows = df[cols].reset_index(drop=True)
+    numbering. Cells are coerced to numbers (non-numeric -> NaN) so a stray paste
+    cannot poison the table."""
+    rows = df[cols].reset_index(drop=True).apply(pd.to_numeric, errors="coerce")
     ids, n = [], start
     for _, row in rows.iterrows():
         if any(pd.isna(row[c]) for c in cols):
@@ -300,15 +323,20 @@ def _renumber(df, cols, start):
 def _point_editor(box, base_key, ed_key, cols, id_start):
     """Render an editable point table with a read-only, plot-matching ID column.
 
-    Edits are committed back to the base each run (and the widget state cleared),
-    so the IDs renumber when rows are added or removed and tendon IDs follow the
-    live bar count. Returns the valid points (NaN/blank rows skipped).
+    Every data column is a numeric input, so a value can be typed or pasted (a
+    block of rows pasted from a spreadsheet auto-grows the table) and a cell can
+    never become text or a list. A row is only used once all its coordinates are
+    filled, so a half-typed point is ignored rather than rejected. Edits are
+    committed back to the base each run (the widget delta cleared) so the IDs
+    renumber as rows are added or removed. Returns the valid points.
     """
+    column_config = {"ID": st.column_config.NumberColumn(
+        "ID", disabled=True, help="Matches the number drawn on the plots.")}
+    for c in cols:
+        column_config[c] = st.column_config.NumberColumn(c, step=None)
     edited = box.data_editor(
         st.session_state[base_key], key=ed_key, num_rows="dynamic",
-        use_container_width=True, hide_index=True,
-        column_config={"ID": st.column_config.NumberColumn(
-            "ID", disabled=True, help="Matches the number drawn on the plots.")})
+        use_container_width=True, hide_index=True, column_config=column_config)
     pts = _pts_from_df(edited, cols)
     st.session_state[base_key] = _renumber(edited, cols, id_start)
     st.session_state.pop(ed_key, None)
@@ -550,8 +578,10 @@ def build_inputs():
     sec.caption("Concrete corners define the outline (3 or more, in order); the "
                 "void is an optional inner ring (3 or more corners, else ignored). "
                 "Bars and tendons are points with an area (mm2). The ID column "
-                "matches the numbers drawn on the plots. Edit freely; use Load "
-                "Quick Section to refill from the template above.")
+                "matches the numbers drawn on the plots. Type or paste values (a "
+                "block copied from a spreadsheet auto-grows the table); a point is "
+                "used once all its cells are filled. Use Load Quick Section to "
+                "refill from the template above.")
     sec.markdown("_Concrete corners_")
     outer = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS, 1)
     if len(outer) < 3:

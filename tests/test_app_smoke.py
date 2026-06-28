@@ -249,6 +249,23 @@ def test_blank_point_row_gets_no_id():
     assert ids[0] == 1 and ids[2] == 2 and pd.isna(ids[1])
 
 
+def test_point_table_tolerates_bad_and_partial_cells():
+    # A half-typed point (x with no y) and a stray non-numeric paste must be
+    # skipped rather than crash the parsing (regression: float() got a 'list').
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    at.session_state["bars_base"] = pd.DataFrame(
+        {"ID": [1, 2, 3, 4],
+         "x (m)": [0.05, 0.15, 0.25, "oops"],   # row 4 non-numeric
+         "y (m)": [0.05, None, 0.05, 0.05],      # row 2 half-typed (no y)
+         "area (mm2)": [491.0, 491.0, 491.0, 491.0]})
+    at.run()
+    assert not at.exception
+    ids = [int(i) for i in at.session_state["bars_base"]["ID"] if pd.notna(i)]
+    assert ids == [1, 2]   # only the two complete, numeric rows are numbered
+
+
 def test_box_girder_void_is_editable_with_continuing_ids():
     # The box cavity loads into an editable void table whose corner IDs continue
     # after the outer corners, and the section still calculates.
