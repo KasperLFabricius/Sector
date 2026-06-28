@@ -30,6 +30,7 @@ Conventions
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -171,6 +172,35 @@ def area_moments_rings(rings: Iterable[Vertices]) -> AreaMoments:
     for ring in rings:
         total = total + area_moments(ring)
     return total
+
+
+def _segment_distance(px, py, ax, ay, bx, by) -> float:
+    """Distance from point ``(px, py)`` to the segment ``(ax,ay)-(bx,by)``."""
+    dx, dy = bx - ax, by - ay
+    length2 = dx * dx + dy * dy
+    if length2 <= 0.0:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / length2
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def distance_to_boundary(px: float, py: float, rings: Iterable[Vertices]) -> float:
+    """Smallest distance from a point to the edges of any ring (outer + holes).
+
+    Used to find a bar's clear cover: the distance to the nearest concrete face.
+    """
+    best = math.inf
+    for ring in rings:
+        arr = _as_array(ring)
+        m = len(arr)
+        for i in range(m):
+            ax, ay = float(arr[i, 0]), float(arr[i, 1])
+            bx, by = float(arr[(i + 1) % m, 0]), float(arr[(i + 1) % m, 1])
+            d = _segment_distance(px, py, ax, ay, bx, by)
+            if d < best:
+                best = d
+    return best
 
 
 def orient(verts: Vertices, ccw: bool = True) -> np.ndarray:

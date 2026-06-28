@@ -602,15 +602,16 @@ def test_elastic_reports_cracking_and_section_properties():
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True
     assert 0.0 < e["lambda_cr"] < 1.0
-    assert e["show_ts"] is False           # crack width off by default
-    assert e["crack"] is None
+    assert e["show_ts"] is False and e["show_cw"] is False   # both off by default
+    assert e["crack"] is None              # crack width is its own opt-in
     assert e["props_un"]["area"] > 0.0 and e["props_un"]["Ix"] > 0.0
     assert e["props_cr"] is not None       # cracked -> cracked properties present
     assert e["props_cr"]["area"] < e["props_un"]["area"]   # cracked section is smaller
 
 
-def test_tension_stiffening_reports_crack_width():
-    # Enabling tension stiffening on a cracked section reports zeta and wk.
+def test_tension_stiffening_reports_zeta_only():
+    # Tension stiffening is independent of crack width: enabling it reports zeta
+    # but no crack width (that has its own toggle).
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
@@ -621,7 +622,27 @@ def test_tension_stiffening_reports_crack_width():
     e = at.session_state["results"]["elastic"]
     assert e["show_ts"] is True
     assert 0.0 < e["zeta"] <= 1.0
+    assert e["crack"] is None              # crack width toggle still off
+
+
+def test_crack_width_reports_both_load_cases():
+    # The crack-width toggle reports wk for both the long-term and the short-term
+    # load, with no cover input (cover is taken from the geometry per bar).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()
+    at.number_input(key="el_short_Mx").set_value(150.0).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["show_cw"] is True
     assert e["crack"] is not None and e["crack"]["wk"] > 0.0
+    assert e["crack_short"] is not None and e["crack_short"]["wk"] > 0.0
+    # The short-term state carries the extra variable load, so its crack is wider.
+    assert e["crack_short"]["wk"] > e["crack"]["wk"]
+    assert e["crack"]["cover"] > 0.0       # auto cover from the geometry
 
 
 def test_elastic_uncracked_below_threshold():
@@ -646,6 +667,7 @@ def test_elastic_view_renders_with_sls_subsection():
     at.radio(key="mode").set_value("Elastic").run()
     at.number_input(key="el_long_Mx").set_value(400.0).run()
     at.checkbox(key="sls_ts").set_value(True).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
     at.selectbox(key="view").set_value("Elastic Results").run()
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -667,7 +689,7 @@ def test_cracking_follows_the_long_term_load():
 
 def test_plain_elastic_unchanged_by_sls_toggle():
     # The regular cracked-section stresses (zero concrete tension) do not change
-    # when the tension-stiffening check is toggled on.
+    # when the tension-stiffening or crack-width checks are toggled on.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
@@ -675,6 +697,7 @@ def test_plain_elastic_unchanged_by_sls_toggle():
     at.button(key="calculate").click().run()
     base = list(at.session_state["results"]["elastic"]["total"])
     at.checkbox(key="sls_ts").set_value(True).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
     at.button(key="calculate").click().run()
     assert not at.exception
     assert list(at.session_state["results"]["elastic"]["total"]) == base
@@ -692,17 +715,20 @@ def test_fctm_auto_button_tracks_grade():
     assert at.number_input(key="sls_fctm").value == pytest.approx(4.07, abs=0.05)
 
 
-def test_circular_cover_auto_uses_ring_cover():
-    # For a circular section the cover lives under a different widget key; the
-    # Auto cover must use it, not the rectangular default. A 100 mm ring cover
-    # gives an auto clear cover well above what the 50 mm rectangular default
-    # would (this guards the circular-cover-key fix).
+def test_crack_width_auto_cover_circular_section():
+    # No cover input: the crack width takes each bar's clear cover from the
+    # geometry. A 100 mm ring cover (to centres) on a circular section gives a
+    # clear cover near 100 - phi/2 mm, comfortably above 70 mm.
     at = _fresh()
     at.run()
     at.selectbox(key="shape").set_value("Circular").run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.checkbox(key="sls_ts").set_value(True).run()
     at.number_input(key="ring_c_mm").set_value(100.0).run()
-    at.button(key="sls_cover_auto").click().run()
+    at.button(key="load_qs").click().run()        # apply the ring to the points
+    at.number_input(key="el_long_Mx").set_value(400.0).run()  # force cracking
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
     assert not at.exception
-    assert at.number_input(key="sls_cover").value > 70.0
+    e = at.session_state["results"]["elastic"]
+    if e["crack"] is not None:
+        assert e["crack"]["cover"] > 70.0

@@ -80,6 +80,19 @@ def test_rectangular_beam_matches_hand_calc():
     assert c.wk == pytest.approx(0.1975, rel=0.02)
 
 
+def test_auto_per_bar_cover_matches_hand_calc():
+    # With no explicit cover, each bar's clear cover is taken from the geometry:
+    # the bars sit 0.05 m above the bottom face, so c = 50 - 25/2 = 37.5 mm, which
+    # reproduces the worked crack width. The diameter is supplied (25 mm) so only
+    # the cover is auto.
+    sec = beam_section()
+    r = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                         Es=200_000.0, beta=0.5, kt=0.4, bar_diameter=25.0)
+    assert r.crack is not None
+    assert r.crack.cover == pytest.approx(37.5, abs=0.1)
+    assert r.crack.wk == pytest.approx(0.1975, rel=0.02)
+
+
 def test_uncracked_below_cracking_load_uses_stage_i():
     # A small moment leaves the section uncracked: lambda_cr >= 1, zeta = 0, the
     # mean plane equals Stage I and no crack width is produced.
