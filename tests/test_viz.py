@@ -38,6 +38,21 @@ def test_concrete_figure_greek_axes_dots_and_axis_labels():
     assert any(_EPS + "<sub>cu2</sub>" in t for t in texts)
 
 
+def test_tension_only_curve_has_no_spurious_vertical_at_origin():
+    # A tension-only law (zero in compression, elastic in tension) is continuous
+    # at the origin: the 0 -> elastic-branch transition must NOT be drawn as a
+    # rupture vertical (regression: a jump near 0,0 when compression is off).
+    fn = lambda e: 0.0 if e < 0.0 else 200000.0 * e
+    grid = [-0.025 + i * 0.05 / 239 for i in range(240)]
+    xs, ys = viz._trace_xy(fn, grid, peak=550.0)
+    spurious = [(x, y) for x, y in zip(xs, ys) if abs(x) < 0.05 and abs(y) > 1.0]
+    assert not spurious
+    # the diagram for a tension-only reinforcement still builds.
+    s = MildSteel(fytk=550.0, fyck=550.0, futk=550.0, eut=1.0, curve=3,
+                  active_in_compression=False)
+    assert viz.steel_curve_figure(s) is not None
+
+
 def test_merge_labels_joins_coincident_symbols():
     assert viz._merge_labels(["fytk", "futk"]) == "f<sub>ytk</sub>/f<sub>utk</sub>"
     assert viz._merge_labels(["fytk", "fytk"]) == "f<sub>ytk</sub>"  # de-duplicated

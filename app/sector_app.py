@@ -220,7 +220,9 @@ def mild_panel(box, locked=False):
         "Active in compression", key="mild_active_comp", disabled=locked,
         help="On: the bar carries compression and its compression-side inputs "
              "(fyck, ey0c) are used. Off: the reinforcement is tension-only "
-             "(no compression), for every curve type.")
+             "(no compression), for every curve type. This applies to the plastic "
+             "(ultimate) capacity; the elastic/SLS analysis is linear and treats "
+             "the bars in both directions.")
     # The compression-side inputs only matter when compression is active.
     comp_only = {"fyck", "ey0c"}
     vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META, mp.MILD_HELP,

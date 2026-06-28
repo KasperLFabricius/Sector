@@ -163,6 +163,9 @@ def _slope_label(fig, material):
         font=dict(size=11, color=DESIGN_LINE))
 
 
+_ORIGIN_EPS = 1.0e-4   # strain within this of zero is the origin, not a cutoff
+
+
 def _trace_xy(fn, grid, peak):
     """Sample a material law, inserting a true vertical at each hard cutoff.
 
@@ -181,7 +184,7 @@ def _trace_xy(fn, grid, peak):
         if ps is not None:
             z0, z1 = abs(ps) < 1e-9, abs(s) < 1e-9
             live = s if z0 else ps
-            if z0 != z1 and abs(live) > tol:           # a real failure drop
+            if z0 != z1 and abs(live) > tol:           # a candidate failure drop
                 lo, hi = pe, e
                 for _ in range(50):
                     mid = 0.5 * (lo + hi)
@@ -189,9 +192,15 @@ def _trace_xy(fn, grid, peak):
                         lo = mid
                     else:
                         hi = mid
-                ec = 0.5 * (lo + hi) * 1000.0
-                xs += [ec, ec]
-                ys += [0.0, live] if z0 else [live, 0.0]
+                ec_strain = 0.5 * (lo + hi)
+                # A genuine cutoff (rupture/crushing) is at a finite failure strain.
+                # A one-sided law (zero in compression, elastic in tension) crosses
+                # zero *at the origin*, where it is continuous -- not a drop -- so
+                # the elastic branch ramps from zero rather than stepping up.
+                if abs(ec_strain) > _ORIGIN_EPS:
+                    ec = ec_strain * 1000.0
+                    xs += [ec, ec]
+                    ys += [0.0, live] if z0 else [live, 0.0]
         xs.append(e * 1000.0)
         ys.append(s)
         pe, ps = e, s
