@@ -119,6 +119,36 @@ def test_effective_height_uses_neutral_axis_term():
     assert 0.22 < r.crack.hc_ef < 0.33     # ~ (h - x)/3, well below h/2 = 0.5
 
 
+def test_dk_na_cover_dependent_k3_narrows_cracks():
+    # DK NA 7.3.4(3): k3 = 3.4*(25/c)^(2/3). For cover > 25 mm this lowers the
+    # crack spacing, so wk is smaller than with the base constant k3 = 3.4. The
+    # verification beam's auto cover is ~ 37.5 mm.
+    sec = beam_section()
+    base = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                            beta=0.5, kt=0.4, bar_diameter=25.0)
+    dkna = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                            beta=0.5, kt=0.4, bar_diameter=25.0,
+                            k3_cover_dependent=True)
+    assert dkna.crack.sr_max < base.crack.sr_max
+    assert dkna.crack.wk < base.crack.wk
+
+
+def test_dk_na_beam_drops_hx_term_in_effective_height():
+    # DK NA 7.3.2(3): the (h-x)/3 limit applies only to slabs / prestressed
+    # members. For an ordinary beam (include_hx_term=False) hc,ef = min(2.5(h-d),
+    # h/2); on the deep section whose (h-x)/3 ~ 0.27 governed, it now uses h/2.
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 1.0), (0.0, 1.0)],
+        bars_xy_area_mm2=[(0.15, 0.2, 1500.0)],
+    )
+    beam = analyse_cracking(sec, 0.0, 300.0, 0.0, 6.0, fctm=fctm(30.0),
+                            bar_diameter=25.0, include_hx_term=False)
+    slab = analyse_cracking(sec, 0.0, 300.0, 0.0, 6.0, fctm=fctm(30.0),
+                            bar_diameter=25.0, include_hx_term=True)
+    assert beam.crack.hc_ef == pytest.approx(0.5, abs=0.02)   # h/2
+    assert slab.crack.hc_ef < 0.35                            # (h-x)/3 ~ 0.27
+
+
 def test_uncracked_below_cracking_load_uses_stage_i():
     # A small moment leaves the section uncracked: lambda_cr >= 1, zeta = 0, the
     # mean plane equals Stage I and no crack width is produced.

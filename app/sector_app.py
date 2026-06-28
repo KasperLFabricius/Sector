@@ -34,6 +34,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
+# Crack-width code edition -> whether the DK NA crack-spacing rules apply (cover-
+# dependent k3, and the (h-x)/3 effective-height term only for slabs/prestressed).
+_CRACK_CODES = {"EN 1992-1-1:2005": False, "DS/EN 1992-1-1 + DK NA": True}
+
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
 
 
@@ -368,6 +372,19 @@ def build_inputs():
              "mild reinforcement: 0.8 for ribbed / high-bond bars (e.g. Tentor), "
              "1.6 for plain round bars. Prestressing tendons always use k1 = 1.6.")
     sls_k1 = _BOND_K1[sls_bond]
+    sls_code = aset.selectbox(
+        "Crack-width code", list(_CRACK_CODES), key="sls_code",
+        disabled=not (elastic_on and sls_cw),
+        help="Code edition for the crack-spacing rules. The DK NA makes k3 cover-"
+             "dependent (k3 = 3.4*(25/c)^(2/3)) and limits the (h-x)/3 effective-"
+             "height term to slabs and prestressed members.")
+    sls_dk_na = _CRACK_CODES[sls_code]
+    sls_member = aset.selectbox(
+        "Member type", ["Beam", "Slab"], key="sls_member",
+        disabled=not (elastic_on and sls_cw and sls_dk_na),
+        help="Under the DK NA the (h-x)/3 effective-height term applies only to "
+             "slabs (and prestressed members); for a beam it is dropped. Ignored "
+             "for the base EN 1992-1-1 code.")
 
     sec = s.expander("Section", expanded=True)
     shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
@@ -620,7 +637,8 @@ def build_inputs():
             "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
             "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
             "v_min", "v_max", "v_inc", "mode",
-            "sls_ts", "sls_cw", "sls_fctm", "sls_phi", "sls_bond"))
+            "sls_ts", "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
+            "sls_code", "sls_member"))
     return dict(section=section, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
@@ -628,7 +646,7 @@ def build_inputs():
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_ts=sls_ts, sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
-                sls_k1=sls_k1,
+                sls_k1=sls_k1, sls_dk_na=sls_dk_na, sls_member=sls_member,
                 mode=mode, extent=extent, signature=sig)
 
 
@@ -727,10 +745,15 @@ def run_analysis(inp):
         # prestressing tendons (folded into the bar set after the bars) always
         # use 1.6. Order matches sec.bar_arrays() (bars first, then tendons).
         k1_bars = [inp["sls_k1"]] * len(inp["bars"]) + [1.6] * len(inp["tendons"])
+        # DK NA crack-spacing rules: cover-dependent k3, and -- for an ordinary beam
+        # (not a slab or a prestressed member) -- dropping the (h-x)/3 hc,ef term.
+        dk_na = inp["sls_dk_na"]
+        include_hx = (not dk_na) or inp["sls_member"] == "Slab" or bool(inp["tendons"])
         cr_l = analyse_cracking(
             sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
-            bar_diameter=phi, k1=k1_bars)
+            bar_diameter=phi, k1=k1_bars,
+            k3_cover_dependent=dk_na, include_hx_term=include_hx)
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
         props_cr = (transformed_properties(
             sec, inp["nl"], eps0=cr_l.cracked_state.eps0, kx=cr_l.cracked_state.kx,
@@ -754,9 +777,13 @@ def run_analysis(inp):
                                               bar_stress=r.bar_stress_total)
             cw_short = crack_width(sec, short_state, inp["ns"], fctm=inp["sls_fctm"],
                                    Es=inp["steel"].Es, kt=0.6, bar_diameter=phi,
-                                   k1=k1_bars)
+                                   k1=k1_bars, k3_cover_dependent=dk_na,
+                                   include_hx_term=include_hx)
             out["elastic"].update(
                 crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cw_short),
+                crack_code=("DS/EN 1992-1-1 + DK NA (fine crack system)" if dk_na
+                            else "EN 1992-1-1:2005"),
+                crack_member=(inp["sls_member"] if dk_na else None),
             )
     return out
 
@@ -1072,7 +1099,7 @@ def _crack_width_panel(e):
     by side. Each bar's clear cover is taken from the geometry and the bar with
     the largest wk governs, reported per load case."""
     cl, cs = e.get("crack"), e.get("crack_short")
-    st.markdown("**Crack width wk (EC2 7.3.4)**")
+    st.markdown(f"**Crack width wk** ({e.get('crack_code', 'EC2 7.3.4')})")
     if cl is None and cs is None:
         st.info("No crack width: uncracked, or no bar in tension, under either "
                 "the long-term or the short-term load.")
@@ -1096,6 +1123,11 @@ def _crack_width_panel(e):
                "is the distance to the nearest concrete face minus its radius. "
                "Tension stiffening softens the mean response, not the peak crack "
                "stress.")
+    member = e.get("crack_member")
+    if member:
+        st.caption(f"DK NA fine crack system: cover-dependent k3 = 3.4*(25/c)^(2/3); "
+                   f"member type = {member} (the (h-x)/3 effective-height term "
+                   f"applies to slabs and prestressed members).")
 
 
 # ---------------------------------------------------------------------------
