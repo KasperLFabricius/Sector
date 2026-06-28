@@ -560,6 +560,70 @@ def _save_load_panel(parent) -> None:
         (box.success if msg[0] == "success" else box.error)(msg[1])
 
 
+_REPORT_FIELDS = [("proj_no", "Project no."), ("proj_name", "Project name"),
+                  ("section", "Section"), ("rev", "Revision"), ("author", "Author"),
+                  ("checker", "Checker"), ("approver", "Approver")]
+
+
+def _report_panel(parent):
+    """Report metadata inputs plus Generate / Download, like the BriCoS panel."""
+    box = parent.expander("Report", expanded=False)
+    box.caption("Fill in the project details, press Generate, then download the PDF. "
+                "The report uses the current inputs and the analyses for the selected "
+                "mode.")
+    box.text_input(_REPORT_FIELDS[0][1], key="rep_proj_no")
+    box.text_input(_REPORT_FIELDS[1][1], key="rep_proj_name")
+    box.text_input(_REPORT_FIELDS[2][1], key="rep_section")
+    c1, c2 = box.columns(2)
+    c1.text_input("Revision", key="rep_rev")
+    c2.text_input("Author", key="rep_author")
+    c3, c4 = box.columns(2)
+    c3.text_input("Checker", key="rep_checker")
+    c4.text_input("Approver", key="rep_approver")
+    box.text_area("Comments", key="rep_comments", height=80)
+    # Only flag the request here; the report is built at the end of the run, once
+    # build_inputs has rendered every panel (so the materials/loads are complete).
+    # Re-running now would abort this run before those panels set their values.
+    if box.button("Generate report", type="primary", use_container_width=True,
+                  key="gen_report"):
+        st.session_state["_generating_report"] = True
+    msg = st.session_state.pop("_report_msg", None)
+    if msg:
+        (box.success if msg[0] == "success" else box.error)(msg[1])
+    if st.session_state.get("report_buffer"):
+        name = (st.session_state.get("rep_proj_no") or "section").strip() or "section"
+        box.download_button("Download report (PDF)", st.session_state["report_buffer"],
+                            file_name=f"Sector_report_{name}.pdf",
+                            mime="application/pdf", use_container_width=True)
+
+
+def _generate_report(inp):
+    """Build the PDF from the current inputs when the Generate button was pressed."""
+    if not st.session_state.pop("_generating_report", False):
+        return
+    if inp.get("section") is None or inp.get("void_error"):
+        st.session_state["_report_msg"] = ("error", "Define a valid section (and "
+                                           "resolve any void error) before generating "
+                                           "a report.")
+        st.rerun()
+    try:
+        import sector_report
+        meta = {k: st.session_state.get(f"rep_{k}", "")
+                for k, _ in _REPORT_FIELDS}
+        meta["comments"] = st.session_state.get("rep_comments", "")
+        figs = not st.session_state.get("_report_no_figures", False)
+        with st.spinner("Generating report (rendering figures may take a moment)..."):
+            out = run_analysis(inp)
+            pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
+                                             figures=figs)
+        st.session_state["report_buffer"] = pdf
+        st.session_state["_report_msg"] = ("success", "Report generated - use the "
+                                           "Download button in the Report panel.")
+    except Exception as exc:                       # never let it crash the app
+        st.session_state["_report_msg"] = ("error", f"Report generation failed: {exc}")
+    st.rerun()
+
+
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
     loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
@@ -589,6 +653,7 @@ def build_inputs():
     # build_inputs, once the point tables and inputs exist, so the download
     # captures the live section even on a fresh session.
     save_slot = s.container()
+    _report_panel(s)
 
     aset = s.expander("Analysis & Result Settings", expanded=False)
     mode = aset.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode",
@@ -1510,6 +1575,8 @@ calc = c_calc.button("Calculate", type="primary", key="calculate",
 if calc:
     st.session_state["results"] = run_analysis(inp)
     st.session_state["result_sig"] = inp["signature"]
+
+_generate_report(inp)   # builds the PDF when the Report panel's Generate was pressed
 
 results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]

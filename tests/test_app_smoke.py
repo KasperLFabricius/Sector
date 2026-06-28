@@ -526,6 +526,19 @@ def test_load_preserves_manual_alpha_cc_for_strength_dependent_preset():
     assert at.session_state["conc_alpha_cc"] == 0.5
 
 
+def test_generate_report_produces_pdf():
+    # The Report panel's Generate button builds a PDF from the current section
+    # (figures skipped in the test so it does not need a browser).
+    at = _fresh()
+    at.run()
+    at.session_state["_report_no_figures"] = True
+    at.session_state["rep_proj_no"] = "T-1"
+    at.button(key="gen_report").click().run()
+    assert not at.exception
+    assert "report_buffer" in at.session_state
+    assert at.session_state["report_buffer"][:4] == b"%PDF"
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
