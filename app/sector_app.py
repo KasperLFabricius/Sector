@@ -514,6 +514,11 @@ def build_inputs():
                          use_container_width=True,
                          help="Overwrite the editable point tables below with the "
                               "Quick Section above.")
+    clear_pts = sec.button("Clear Section (empty all points)", key="clear_pts",
+                           use_container_width=True,
+                           help="Remove every concrete corner, the void, and all "
+                                "bars and tendons from the point tables, to start "
+                                "from a blank section.")
     if "pts_init" not in st.session_state or load_qs:
         st.session_state["corners_base"] = _renumber(_corners_df(qs_outer),
                                                      _CORNER_COLS, 1)
@@ -525,6 +530,15 @@ def build_inputs():
         for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
         st.session_state["pts_init"] = True
+    if clear_pts:
+        # Empty every point table (corners, void, bars, tendons) and drop the live
+        # editor edits, so the section starts blank.
+        st.session_state["corners_base"] = _renumber(_corners_df([]), _CORNER_COLS, 1)
+        st.session_state["hole_base"] = _renumber(_corners_df([]), _CORNER_COLS, 1)
+        st.session_state["bars_base"] = _renumber(_rebar_df([]), _REBAR_COLS, 1)
+        st.session_state["tendons_base"] = _renumber(_rebar_df([]), _REBAR_COLS, 1)
+        for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
+            st.session_state.pop(k, None)
     # Migrate a session that predates the void table: seed hole_base (from any old
     # holes state) without disturbing the other tables, so it never KeyErrors.
     if "hole_base" not in st.session_state:

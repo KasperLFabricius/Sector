@@ -205,6 +205,21 @@ def test_point_tables_have_plot_matching_ids():
         list(range(len(bb) + 1, len(bb) + 1 + len(tb)))
 
 
+def test_clear_section_empties_all_point_tables():
+    # The Clear Section button empties every point table -- concrete corners, the
+    # void, bars and tendons -- so the section starts blank.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="use_pre").set_value(True).run()   # mount the tendon table too
+    at.button(key="load_qs").click().run()             # populate from the template
+    assert len(at.session_state["corners_base"]) > 0
+    assert len(at.session_state["bars_base"]) > 0
+    at.button(key="clear_pts").click().run()
+    assert not at.exception
+    for base in ("corners_base", "hole_base", "bars_base", "tendons_base"):
+        assert len(at.session_state[base]) == 0
+
+
 def test_blank_point_row_gets_no_id():
     # A blank row between valid points must not consume an ID: the valid rows stay
     # numbered to match the plot, and the blank row's ID is empty (Codex review).
