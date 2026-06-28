@@ -361,12 +361,7 @@ def build_inputs():
                                    "a finer step gives a smoother M-M envelope.")
 
     aset.markdown("**Serviceability (elastic SLS)**")
-    aset.caption("Extra cracked-section checks in the Elastic view. Tension "
-                 "stiffening and crack width are independent.")
-    sls_ts = aset.checkbox("Tension stiffening", value=False, key="sls_ts",
-                           disabled=not elastic_on,
-                           help="Report the EC2 distribution coefficient zeta and "
-                                "the tension-stiffened mean response (long-term).")
+    aset.caption("Extra cracked-section checks in the Elastic view.")
     sls_cw = aset.checkbox("Crack width", value=False, key="sls_cw",
                            disabled=not elastic_on,
                            help="Report the EC2 crack width wk for both the long-term "
@@ -671,7 +666,7 @@ def build_inputs():
             "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
             "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
             "v_min", "v_max", "v_inc", "mode",
-            "sls_ts", "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
+            "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))
     return dict(section=section, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
@@ -679,7 +674,7 @@ def build_inputs():
                 v_min=v_min, v_max=v_max, v_inc=v_inc,
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
-                sls_ts=sls_ts, sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
+                sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na, sls_member=sls_member,
                 mode=mode, extent=extent, signature=sig)
 
@@ -794,8 +789,7 @@ def run_analysis(inp):
             ky=cr_l.cracked_state.ky, cracked=True) if cr_l.cracked else None)
         out["elastic"].update(
             cracked=cr_l.cracked, lambda_cr=cr_l.lambda_cr, sigma_ct=cr_l.sigma_ct,
-            fctm=cr_l.fctm, zeta=cr_l.zeta,
-            show_ts=inp["sls_ts"], show_cw=inp["sls_cw"],
+            fctm=cr_l.fctm, show_cw=inp["sls_cw"],
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
@@ -1083,7 +1077,6 @@ def _elastic_sls_section(inp, e):
     long-term and the short-term (instantaneous) load."""
     if "cracked" not in e:
         return
-    show_ts = e.get("show_ts", False)
     show_cw = e.get("show_cw", False)
     st.divider()
     st.markdown("#### Serviceability checks")
@@ -1097,16 +1090,10 @@ def _elastic_sls_section(inp, e):
                    f"{e['sigma_ct']:.2f} MPa < fctm {e['fctm']:.2f} MPa "
                    f"(lambda_cr = {lam}).")
 
-    mcols = st.columns(2 if show_ts else 1)
-    mcols[0].metric("Cracking factor lambda_cr",
-                    "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
-                    help="Proportional load factor to first cracking, "
-                         "fctm / sigma_ct,I (= Mcr/M in pure bending). < 1 = cracked.")
-    if show_ts:
-        mcols[1].metric("Tension stiffening zeta", f"{e['zeta']:.3f}",
-                        help="EC2 distribution coefficient (long-term). 0 = "
-                             "uncracked; -> 1 deeply cracked. Softens the mean "
-                             "response, not the peak crack stress.")
+    st.metric("Cracking factor lambda_cr",
+              "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
+              help="Proportional load factor to first cracking, "
+                   "fctm / sigma_ct,I (= Mcr/M in pure bending). < 1 = cracked.")
 
     pL, pR = st.columns(2)
     with pL:
@@ -1154,9 +1141,7 @@ def _crack_width_panel(e):
                   "Short-term": column(cs)}, hide_index=True,
                  use_container_width=True)
     st.caption("Governing (largest-wk) bar per load case; each bar's clear cover "
-               "is the distance to the nearest concrete face minus its radius. "
-               "Tension stiffening softens the mean response, not the peak crack "
-               "stress.")
+               "is the distance to the nearest concrete face minus its radius.")
     member = e.get("crack_member")
     if member:
         st.caption(f"DK NA fine crack system: cover-dependent k3 = 3.4*(25/c)^(2/3); "
