@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 import numpy as np
 
@@ -146,7 +146,7 @@ def _crack_width(
     Es: float,
     cover: float,
     kt: float,
-    k1: float,
+    k1: Union[float, Sequence[float]],
     k2: float,
     k3: float,
     k4: float,
@@ -209,6 +209,9 @@ def _crack_width(
         return None
     rho = as_eff / ac_eff
     alpha_e = n
+    # k1 (bond) may be a scalar (all reinforcement) or one value per bar -- e.g.
+    # the mild-steel value for ordinary bars and 1.6 for prestressing tendons.
+    k1_arr = np.broadcast_to(np.asarray(k1, dtype=float), (bx.size,))
 
     # Per-bar crack width: each tension bar in the band uses its own cover,
     # diameter and Stage II stress; the largest wk governs.
@@ -233,7 +236,7 @@ def _crack_width(
         esm_ecm = max((sigma_s - kt * fctm / rho * (1.0 + alpha_e * rho)) / Es,
                       0.6 * sigma_s / Es)
         # EC2 (7.11): maximum crack spacing (cover and phi in mm).
-        sr_max = k3 * c_i + k1 * k2 * k4 * phi / rho
+        sr_max = k3 * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
         wk = sr_max * esm_ecm
         if best is None or wk > best.wk:
             best = CrackWidthResult(
@@ -257,7 +260,7 @@ def analyse_cracking(
     kt: float = 0.6,
     cover: Optional[float] = None,
     bar_diameter: Optional[float] = None,
-    k1: float = 0.8,
+    k1: Union[float, Sequence[float]] = 0.8,
     k2: float = 0.5,
     k3: float = 3.4,
     k4: float = 0.425,
@@ -289,7 +292,9 @@ def analyse_cracking(
         Governing bar diameter (mm); defaults to the equivalent circular
         diameter of the governing bar's area.
     k1, k2, k3, k4:
-        EC2 crack-spacing coefficients (recommended values by default).
+        EC2 crack-spacing coefficients (recommended values by default). ``k1``
+        (the bond coefficient) may be a single value or one per bar -- e.g. the
+        mild-steel value for ordinary bars and 1.6 for prestressing tendons.
 
     Returns
     -------
@@ -333,7 +338,7 @@ def crack_width(
     kt: float = 0.6,
     cover: Optional[float] = None,
     bar_diameter: Optional[float] = None,
-    k1: float = 0.8,
+    k1: Union[float, Sequence[float]] = 0.8,
     k2: float = 0.5,
     k3: float = 3.4,
     k4: float = 0.425,

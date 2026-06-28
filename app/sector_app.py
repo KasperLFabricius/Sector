@@ -362,11 +362,11 @@ def build_inputs():
     # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
     sls_bond = aset.selectbox(
-        "Reinforcement bond (k1)",
+        "Mild-steel bond (k1)",
         list(_BOND_K1), key="sls_bond", disabled=not (elastic_on and sls_cw),
-        help="EC2 7.11 bond coefficient k1 for the crack spacing: 0.8 for ribbed / "
-             "high-bond bars (e.g. Tentor), 1.6 for plain round bars. Prestressing "
-             "tendons would use 1.6; this setting applies to the reinforcement here.")
+        help="EC2 7.11 bond coefficient k1 for the crack spacing, applied to the "
+             "mild reinforcement: 0.8 for ribbed / high-bond bars (e.g. Tentor), "
+             "1.6 for plain round bars. Prestressing tendons always use k1 = 1.6.")
     sls_k1 = _BOND_K1[sls_bond]
 
     sec = s.expander("Section", expanded=True)
@@ -723,10 +723,14 @@ def run_analysis(inp):
         # state -- the total long+short load at ns (beta/kt = 1.0/0.6) -- gives the
         # short-term crack width. Crack width is reported for both loads.
         phi = inp["sls_phi"] if inp["sls_phi"] > 0.0 else None
+        # k1 per bar: the mild reinforcement uses the selected bond value; any
+        # prestressing tendons (folded into the bar set after the bars) always
+        # use 1.6. Order matches sec.bar_arrays() (bars first, then tendons).
+        k1_bars = [inp["sls_k1"]] * len(inp["bars"]) + [1.6] * len(inp["tendons"])
         cr_l = analyse_cracking(
             sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
-            bar_diameter=phi, k1=inp["sls_k1"])
+            bar_diameter=phi, k1=k1_bars)
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
         props_cr = (transformed_properties(
             sec, inp["nl"], eps0=cr_l.cracked_state.eps0, kx=cr_l.cracked_state.kx,
@@ -750,7 +754,7 @@ def run_analysis(inp):
                                               bar_stress=r.bar_stress_total)
             cw_short = crack_width(sec, short_state, inp["ns"], fctm=inp["sls_fctm"],
                                    Es=inp["steel"].Es, kt=0.6, bar_diameter=phi,
-                                   k1=inp["sls_k1"])
+                                   k1=k1_bars)
             out["elastic"].update(
                 crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cw_short),
             )
