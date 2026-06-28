@@ -110,6 +110,20 @@ def test_mild_type2_asymmetric_compression_yield():
     assert s.stress(-0.02) == pytest.approx(-300.0)
 
 
+def test_mild_tension_only_carries_no_compression():
+    # active_in_compression=False makes the bar tension-only for every curve type:
+    # the tension branch is unchanged but compression returns zero, and the
+    # compression-side markers drop off the diagram.
+    for curve in (1, 2, 3):
+        active = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, curve=curve)
+        tonly = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, curve=curve,
+                          active_in_compression=False)
+        assert tonly.stress(0.01) == pytest.approx(active.stress(0.01))  # tension same
+        assert active.stress(-0.01) < 0.0                                # default: yes
+        assert tonly.stress(-0.01) == 0.0                                # tension-only
+        assert all(strain >= 0.0 for strain, *_ in tonly.diagram_markers())
+
+
 def test_mild_type2_ruptures_beyond_eut():
     s = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.0, curve=2)
     assert s.stress(0.05) == pytest.approx(500.0)  # still intact at eut

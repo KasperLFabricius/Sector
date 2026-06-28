@@ -512,6 +512,42 @@ def test_material_laws_editable_in_both_and_plastic_modes():
     assert at.number_input(key="mild_fytk").disabled is False
 
 
+def test_fctm_and_ec_locked_in_plastic_only_mode():
+    # fctm and Ec only affect the elastic/SLS results, so plastic-only mode
+    # disables them; Elastic re-enables them.
+    at = _fresh()
+    at.run()                                   # default mode is Plastic
+    assert at.number_input(key="sls_fctm").disabled is True
+    assert at.number_input(key="conc_Ec").disabled is True
+    at.radio(key="mode").set_value("Elastic").run()
+    assert at.number_input(key="sls_fctm").disabled is False
+    assert at.number_input(key="conc_Ec").disabled is False
+
+
+def test_default_material_preset_is_dk_na_with_550():
+    # Defaults to the Danish edition with B550 reinforcement.
+    at = _fresh()
+    at.run()
+    assert at.session_state["conc_preset"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
+    assert at.session_state["mild_preset"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
+    for f in ("mild_fytk", "mild_fyck", "mild_futk"):
+        assert at.number_input(key=f).value == pytest.approx(550.0)
+
+
+def test_active_in_compression_toggle_changes_plastic_capacity():
+    # Switching the reinforcement to tension-only drops the compression bars'
+    # contribution, lowering the sagging moment capacity. fyck/ey0c also lock.
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    base = at.session_state["results"]["plastic"]["max_mx"]
+    at.checkbox(key="mild_active_comp").set_value(False).run()
+    assert at.number_input(key="mild_fyck").disabled is True
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert at.session_state["results"]["plastic"]["max_mx"] < base
+
+
 def test_elastic_calculates_with_locked_materials():
     # Locking the laws must not break the elastic run.
     at = _fresh()

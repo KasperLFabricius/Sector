@@ -142,9 +142,12 @@ def _mild_presets():
     # un-factored modulus (gamma_E = 1), flat post-yield branch (futk = fyk,
     # gamma_u = gamma_s) and no strain limit (see sector.codes).
     for label, code in codes.CODES.items():
+        # Danish practice uses B550 reinforcement, so the DK NA edition defaults
+        # to 550 MPa; the other editions keep the B500 default.
+        fyk = 550.0 if "DK NA" in label else _DEFAULT_FYK
         presets[label] = {
-            "curve": 3, "fytk": _DEFAULT_FYK, "fyck": _DEFAULT_FYK,
-            "futk": _DEFAULT_FYK, "eut": _NO_STRAIN_LIMIT,
+            "curve": 3, "fytk": fyk, "fyck": fyk,
+            "futk": fyk, "eut": _NO_STRAIN_LIMIT,
             "gamma_y": code.gamma_s, "gamma_u": code.gamma_s, "gamma_E": 1.0,
             "k": 1.0, "ey0t": 0.0, "ey0c": 0.0, "Es": _ES,
         }
@@ -199,15 +202,16 @@ MILD_FIELDS_BY_CURVE = {
 }
 
 
-def build_mild(curve, **fields) -> MildSteel:
+def build_mild(curve, *, active_in_compression=True, **fields) -> MildSteel:
     """Build a :class:`~sector.materials.MildSteel` from the panel parameters.
 
     Strain fields arrive in per-mille and are converted to the fractions the law
-    uses.
+    uses. ``active_in_compression`` False makes the bar tension-only.
     """
     curve = int(curve)
     used = {f: float(fields[f]) for f in MILD_FIELDS_BY_CURVE[curve] if f in fields}
-    return MildSteel(curve=curve, **_to_fractions(used))
+    return MildSteel(curve=curve, active_in_compression=bool(active_in_compression),
+                     **_to_fractions(used))
 
 
 # ---------------------------------------------------------------------------
