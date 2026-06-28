@@ -49,6 +49,14 @@ def test_slot_spanning_the_width_disconnects_the_concrete():
     assert concrete_is_connected(_RECT, [slot]) is False
 
 
+def test_high_aspect_slot_is_detected():
+    # A very wide, thin section (10 m x 50 mm): sizing the grid by the long side
+    # alone would collapse the short axis to one row and miss a horizontal slot.
+    wide = [(-5.0, -0.025), (5.0, -0.025), (5.0, 0.025), (-5.0, 0.025)]
+    slot = [(-6.0, -0.005), (6.0, -0.005), (6.0, 0.005), (-6.0, 0.005)]
+    assert concrete_is_connected(wide, [slot]) is False
+
+
 def test_degenerate_outline_is_treated_as_connected():
     assert concrete_is_connected([(0.0, 0.0), (1.0, 0.0)], []) is True
 

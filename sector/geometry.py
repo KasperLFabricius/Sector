@@ -244,16 +244,19 @@ def concrete_is_connected(outer: Vertices, holes: Iterable[Vertices] = ()) -> bo
         return True
     x0, y0 = float(arr[:, 0].min()), float(arr[:, 1].min())
     x1, y1 = float(arr[:, 0].max()), float(arr[:, 1].max())
-    span = max(x1 - x0, y1 - y0)
-    if span <= 0.0:
-        return True
+    w, h = x1 - x0, y1 - y0
+    if w <= 0.0 or h <= 0.0:
+        return True                          # degenerate outline encloses no area
+    # Resolve EACH axis to its own ``grid`` cells. Sizing both axes by the larger
+    # dimension would collapse the short axis of a high-aspect section to a single
+    # row, so a slot cutting across the short direction could fall between samples
+    # and be missed; per-axis cells (anisotropic, which is fine for a connectivity
+    # test) keep enough rows and columns either way.
     grid = 240
-    cell = span / grid
-    nx = max(1, int(round((x1 - x0) / cell)))
-    ny = max(1, int(round((y1 - y0) / cell)))
+    nx = ny = grid
     # Sample at cell centres so the boundary is never sampled ambiguously.
-    xs = x0 + (np.arange(nx) + 0.5) * (x1 - x0) / nx
-    ys = y0 + (np.arange(ny) + 0.5) * (y1 - y0) / ny
+    xs = x0 + (np.arange(nx) + 0.5) * w / nx
+    ys = y0 + (np.arange(ny) + 0.5) * h / ny
     gx, gy = np.meshgrid(xs, ys)
     fx, fy = gx.ravel(), gy.ravel()
     mask = _points_in_polygon(fx, fy, arr)
