@@ -828,6 +828,19 @@ def test_modular_ratios_auto_from_ec():
     assert nl == pytest.approx(3.0 * ns, rel=0.05)    # n_l = (1+phi)*n_s, phi = 2
 
 
+def test_modular_ratios_default_from_ec_without_buttons():
+    # The defaults are now the Ec-derived ratios (not a fixed 15): on first load,
+    # without pressing any Auto button, n_s ~ Es/Ec and n_l = (1+phi)*n_s.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    ns = at.number_input(key="ns").value
+    nl = at.number_input(key="nl").value
+    assert 3.5 < ns < 12.0
+    assert ns != pytest.approx(15.0)                  # not the old fixed default
+    assert nl == pytest.approx(3.0 * ns, rel=0.05)
+
+
 def test_crack_width_auto_cover_circular_section():
     # No cover input: the crack width takes each bar's clear cover from the
     # geometry. A 100 mm ring cover (to centres) on a circular section gives a

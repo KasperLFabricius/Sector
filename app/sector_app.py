@@ -634,7 +634,7 @@ def build_inputs():
                                         "modular ratio n_l = Es*(1+phi)/Ec.")
     _nl_auto = round(min(50.0, max(1.0, steel.Es * (1.0 + phi_creep)
                                    / (conc_Ec * 1000.0))), 1)
-    st.session_state.setdefault("nl", 15.0)
+    st.session_state.setdefault("nl", _nl_auto)   # default from Ec, phi (EC2)
     if loads.button(f"Auto n_l (Es(1+phi)/Ec = {_nl_auto:.1f})", key="nl_auto",
                     disabled=not elastic_on, use_container_width=True,
                     help="Long-term modular ratio from the concrete Ec, creep-reduced "
@@ -650,7 +650,7 @@ def build_inputs():
         "el_short", "Instantaneous (variable) axial force.",
         "Instantaneous (variable) moment.", elastic_on, mx_default=0.0)
     _ns_auto = round(min(50.0, max(1.0, steel.Es / (conc_Ec * 1000.0))), 1)
-    st.session_state.setdefault("ns", 15.0)
+    st.session_state.setdefault("ns", _ns_auto)   # default from Ec (Es/Ec)
     if loads.button(f"Auto n_s (Es/Ec = {_ns_auto:.1f})", key="ns_auto",
                     disabled=not elastic_on, use_container_width=True,
                     help="Short-term (instantaneous) modular ratio from the concrete Ec."):
