@@ -272,6 +272,8 @@ def steel_curve_figure(steel, title="Mild steel", eps_max=0.025):
 
 
 def _ring_xy(ring):
+    if len(ring) == 0:
+        return [], []
     xs = [p[0] for p in ring] + [ring[0][0]]
     ys = [p[1] for p in ring] + [ring[0][1]]
     return xs, ys
