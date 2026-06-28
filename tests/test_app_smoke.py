@@ -666,6 +666,23 @@ def test_short_term_crack_uses_combined_creep_state():
     assert cs["sigma_s"] == pytest.approx(e["total"][gov - 1], rel=0.02)
 
 
+def test_bond_coefficient_k1_widens_cracks():
+    # k1 (bond) is a user choice the geometry cannot supply: plain round bars
+    # (k1 = 1.6) give a wider crack than ribbed / high-bond bars (k1 = 0.8).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
+    wk_ribbed = at.session_state["results"]["elastic"]["crack"]["wk"]
+    at.selectbox(key="sls_bond").set_value("Plain round (k1 = 1.6)").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    wk_plain = at.session_state["results"]["elastic"]["crack"]["wk"]
+    assert wk_plain > wk_ribbed
+
+
 def test_elastic_uncracked_below_threshold():
     # A small long-term moment leaves the section uncracked: zeta 0, no crack
     # width, and no cracked-section properties.

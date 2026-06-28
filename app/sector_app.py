@@ -31,6 +31,9 @@ from sector.serviceability import analyse_cracking, crack_width  # noqa: E402
 APP_VERSION = "0.1.0"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
+_BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
+
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
 
 
@@ -356,6 +359,15 @@ def build_inputs():
                                 disabled=not (elastic_on and sls_cw),
                                 help="Governing bar diameter for the crack spacing "
                                      "sr,max; 0 derives it from each bar's area.")
+    # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
+    # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
+    sls_bond = aset.selectbox(
+        "Reinforcement bond (k1)",
+        list(_BOND_K1), key="sls_bond", disabled=not (elastic_on and sls_cw),
+        help="EC2 7.11 bond coefficient k1 for the crack spacing: 0.8 for ribbed / "
+             "high-bond bars (e.g. Tentor), 1.6 for plain round bars. Prestressing "
+             "tendons would use 1.6; this setting applies to the reinforcement here.")
+    sls_k1 = _BOND_K1[sls_bond]
 
     sec = s.expander("Section", expanded=True)
     shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
@@ -608,7 +620,7 @@ def build_inputs():
             "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
             "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
             "v_min", "v_max", "v_inc", "mode",
-            "sls_ts", "sls_cw", "sls_fctm", "sls_phi"))
+            "sls_ts", "sls_cw", "sls_fctm", "sls_phi", "sls_bond"))
     return dict(section=section, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
@@ -616,6 +628,7 @@ def build_inputs():
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_ts=sls_ts, sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
+                sls_k1=sls_k1,
                 mode=mode, extent=extent, signature=sig)
 
 
@@ -713,7 +726,7 @@ def run_analysis(inp):
         cr_l = analyse_cracking(
             sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
-            bar_diameter=phi)
+            bar_diameter=phi, k1=inp["sls_k1"])
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
         props_cr = (transformed_properties(
             sec, inp["nl"], eps0=cr_l.cracked_state.eps0, kx=cr_l.cracked_state.kx,
@@ -736,7 +749,8 @@ def run_analysis(inp):
             short_state = dataclasses.replace(r.short_term,
                                               bar_stress=r.bar_stress_total)
             cw_short = crack_width(sec, short_state, inp["ns"], fctm=inp["sls_fctm"],
-                                   Es=inp["steel"].Es, kt=0.6, bar_diameter=phi)
+                                   Es=inp["steel"].Es, kt=0.6, bar_diameter=phi,
+                                   k1=inp["sls_k1"])
             out["elastic"].update(
                 crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cw_short),
             )
