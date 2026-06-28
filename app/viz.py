@@ -362,19 +362,30 @@ def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
-                   height=440):
+                   height=440, scale=1.0, unit="m"):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     Reinforcement is drawn consistently across the views: bars are circles and
     tendons are diamonds, each coloured by ``bar_colors`` / ``tendon_colors``
     (e.g. by stress sign) when given, else a neutral colour. ``outer`` / ``holes``
-    are vertex lists (m). ``na_line`` is ``(x0, y0, x1, y1)`` for the neutral
-    axis. ``zones`` (optional) is a list of ``(vertices, fillcolor, name)``
-    regions shaded beneath the holes. ``show_labels`` numbers the reinforcement
-    and concrete corners; ``label_scale`` scales the label font and
+    / ``bars`` / ``na_line`` / ``zones`` are all given in metres; ``scale`` (and
+    the matching axis ``unit`` label) converts them for display -- e.g. ``1000`` /
+    ``"mm"`` draws the section in millimetres. ``show_labels`` numbers the
+    reinforcement and concrete corners; ``label_scale`` scales the label font and
     ``label_min_gap`` is the minimum label spacing (fraction of the section size)
     below which labels are thinned out -- the two are independent.
     """
+    # Scale every geometry input once, up front, so the traces and the labels are
+    # all drawn in the display units.
+    outer = [(p[0] * scale, p[1] * scale) for p in (outer or [])]
+    holes = [[(p[0] * scale, p[1] * scale) for p in ring] for ring in (holes or [])]
+    bars = [(b[0] * scale, b[1] * scale) + tuple(b[2:]) for b in (bars or [])]
+    tendons = [(t[0] * scale, t[1] * scale) + tuple(t[2:]) for t in (tendons or [])]
+    if na_line:
+        na_line = tuple(v * scale for v in na_line)
+    zones = [([(p[0] * scale, p[1] * scale) for p in verts], color, name)
+             for verts, color, name in (zones or [])]
+
     fig = go.Figure()
     xs, ys = _ring_xy(outer)
     fig.add_trace(go.Scatter(x=xs, y=ys, fill="toself", mode="lines",
@@ -417,8 +428,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     fig.update_layout(
         title=title, template="plotly_white", height=height,
         margin=dict(l=10, r=10, t=40, b=10),
-        xaxis=dict(title="x (m)", zeroline=True),
-        yaxis=dict(title="y (m)", scaleanchor="x", scaleratio=1, zeroline=True),
+        xaxis=dict(title=f"x ({unit})", zeroline=True),
+        yaxis=dict(title=f"y ({unit})", scaleanchor="x", scaleratio=1, zeroline=True),
         showlegend=bool(na_line) or bool(zones) or bool(bars) or bool(tendons),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, font=dict(size=10)),
     )

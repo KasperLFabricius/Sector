@@ -38,6 +38,17 @@ def test_concrete_figure_greek_axes_dots_and_axis_labels():
     assert any(_EPS + "<sub>cu2</sub>" in t for t in texts)
 
 
+def test_section_figure_draws_in_mm_with_scale():
+    # The section figure scales metre geometry for display: a 0.4 m corner is
+    # drawn at 400 mm and the axes are labelled mm.
+    fig = viz.section_figure([(0.0, 0.0), (0.4, 0.0), (0.4, 0.6), (0.0, 0.6)],
+                             scale=1000.0, unit="mm")
+    assert "mm" in fig.layout.xaxis.title.text
+    assert "mm" in fig.layout.yaxis.title.text
+    assert max(fig.data[0].x) == pytest.approx(400.0)
+    assert max(fig.data[0].y) == pytest.approx(600.0)
+
+
 def test_tension_only_curve_has_no_spurious_vertical_at_origin():
     # A tension-only law (zero in compression, elastic in tension) is continuous
     # at the origin: the 0 -> elastic-branch transition must NOT be drawn as a
