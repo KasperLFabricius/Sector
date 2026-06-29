@@ -73,6 +73,30 @@ def test_report_handles_no_results():
     assert pdf[:4] == b"%PDF"
 
 
+def _pdf_text(pdf):
+    import io
+    import pypdf
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    return "\n".join(page.extract_text() for page in reader.pages)
+
+
+def test_report_omits_unused_material_sections():
+    # Bars only -> mild steel is reported, prestress is omitted.
+    inp = _inp()
+    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+    assert "Design yield" in txt
+    assert "Initial prestrain" not in txt
+    # Tendons only -> prestress is reported, mild steel is omitted.
+    import sector.material_presets as mp
+    inp2 = _inp()
+    inp2["bars"] = []
+    inp2["tendons"] = [(0.0, -0.12, 5.0e-4)]
+    inp2["prestress"] = mp.build_prestress(**list(mp.PRESTRESS_PRESETS.values())[0])
+    txt2 = _pdf_text(sector_report.build_report({}, inp2, _out(), figures=False))
+    assert "Initial prestrain" in txt2
+    assert "Design yield" not in txt2
+
+
 def test_report_handles_uncracked_section():
     out = _out()
     out["elastic"]["cracked"] = False

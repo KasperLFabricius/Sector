@@ -303,12 +303,14 @@ class ReportBuilder:
                                  scale=_MM, unit="mm", height=420)
         self._fig(fig, 150, 100)
         self._geometry_tables()
-        # Materials.
+        # Materials are reported only when the section actually uses them: mild
+        # steel when there are bars, prestress when there are tendons.
         self._h2("Concrete")
         self._concrete_block()
-        self._h2("Reinforcement")
-        self._steel_block()
-        if inp.get("prestress") is not None:
+        if inp.get("bars"):
+            self._h2("Reinforcement")
+            self._steel_block()
+        if inp.get("tendons") and inp.get("prestress") is not None:
             self._h2("Prestressing steel")
             self._prestress_block()
         # Loads & settings.
@@ -403,7 +405,7 @@ class ReportBuilder:
                 ["Elastic modulus E<sub>p</sub>", f"{_fmt(getattr(p,'Es',0.0)/1000,0)} GPa"],
                 ["Rupture strain", f"{_fmt(getattr(p,'rupture_strain',0.0)*1000,1)} permille"]]
         self._table(rows, [80 * mm, 60 * mm])
-        if self.figures:
+        if self.figures and p is not None:
             self._fig(viz.prestress_curve_figure(p), 130, 80)
 
     def _loads_block(self):

@@ -194,7 +194,7 @@ def test_point_tables_are_data_only_and_hold_loaded_points():
     # numbers points by row order); Load Quick Section fills them.
     at = _fresh()
     at.run()
-    at.checkbox(key="use_pre").set_value(True).run()
+    at.number_input(key="tnd_n").set_value(4).run()
     at.button(key="load_qs").click().run()
     assert list(at.session_state["corners_base"].columns) == ["x (mm)", "y (mm)"]
     assert list(at.session_state["bars_base"].columns) == \
@@ -220,7 +220,7 @@ def test_clear_section_empties_all_point_tables():
     # void, bars and tendons -- so the section starts blank.
     at = _fresh()
     at.run()
-    at.checkbox(key="use_pre").set_value(True).run()   # mount the tendon table too
+    at.number_input(key="tnd_n").set_value(4).run()    # so Quick Section adds tendons
     at.button(key="load_qs").click().run()             # populate from the template
     assert len(at.session_state["corners_base"]) > 0
     assert len(at.session_state["bars_base"]) > 0
@@ -539,6 +539,36 @@ def test_generate_report_produces_pdf():
     assert at.session_state["report_buffer"][:4] == b"%PDF"
 
 
+def test_load_project_without_tendon_table_does_not_crash():
+    # An older / partial project may omit the tendon table; the always-mounted
+    # tendon editor must still find a (seeded) base rather than KeyError.
+    import json
+    at = _fresh()
+    at.run()
+    project = {
+        "format": "sector-project", "version": 1,
+        "tables": {"corners_base": {"columns": ["x (mm)", "y (mm)"],
+                                    "rows": [[-100.0, -150.0], [100.0, -150.0],
+                                             [100.0, 150.0], [-100.0, 150.0]]}},
+        "scalars": {"mode": "Plastic"},
+    }
+    at.session_state["_pending_project"] = json.dumps(project)
+    at.run()
+    assert not at.exception
+    assert "tendons_base" in at.session_state
+    assert len(at.session_state["tendons_base"]) == 0
+
+
+def test_prestress_always_available_without_a_toggle():
+    # The "include prestressing tendons" checkbox is gone: the prestress material
+    # panel and the tendon point table are always present.
+    at = _fresh()
+    at.run()
+    assert "use_pre" not in {cb.key for cb in at.checkbox}
+    assert "pre_Es" in {ni.key for ni in at.number_input}   # prestress panel rendered
+    assert "tendons_base" in at.session_state                # tendon table mounted
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
@@ -568,7 +598,7 @@ def test_es_field_present_and_editable():
     # panel appears once tendons are enabled).
     at = _fresh()
     at.run()
-    at.checkbox(key="use_pre").set_value(True).run()
+    at.number_input(key="tnd_n").set_value(4).run()
     keys = {ni.key for ni in at.number_input}
     assert "mild_Es" in keys and "pre_Es" in keys
     at.number_input(key="mild_Es").set_value(210000.0).run()
@@ -642,7 +672,7 @@ def test_material_laws_locked_in_elastic_only_mode():
 def test_prestress_law_locked_in_elastic_only_mode():
     at = _fresh()
     at.run()
-    at.checkbox(key="use_pre").set_value(True).run()
+    at.number_input(key="tnd_n").set_value(4).run()
     at.radio(key="mode").set_value("Elastic").run()
     for locked in ("pre_IS", "pre_fytk", "pre_Es", "pre_eut"):
         assert at.number_input(key=locked).disabled is True, locked
@@ -762,7 +792,7 @@ def test_view_dropdown_switches_without_error():
 def test_stress_strain_view_includes_prestress_when_enabled():
     at = _fresh()
     at.run()
-    at.checkbox(key="use_pre").set_value(True).run()
+    at.number_input(key="tnd_n").set_value(4).run()
     at.selectbox(key="view").set_value("Stress-Strain diagrams").run()
     assert not at.exception
 
@@ -846,7 +876,7 @@ def test_prestress_plastic_increases_capacity():
 
     at = _fresh()
     at.run()
-    at.checkbox(key="use_pre").set_value(True).run()
+    at.number_input(key="tnd_n").set_value(4).run()
     at.button(key="load_qs").click().run()   # load the tendons into the points
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -858,7 +888,7 @@ def test_prestress_plastic_increases_capacity():
 def test_prestress_both_modes_run_with_tendons():
     at = _fresh()
     at.run()
-    at.checkbox(key="use_pre").set_value(True).run()
+    at.number_input(key="tnd_n").set_value(4).run()
     at.button(key="load_qs").click().run()   # load the tendons into the points
     at.radio(key="mode").set_value("Both").run()
     at.button(key="calculate").click().run()
@@ -872,7 +902,7 @@ def test_prestress_both_modes_run_with_tendons():
 def test_prestress_preset_curve6_calculates():
     at = _fresh()
     at.run()
-    at.checkbox(key="use_pre").set_value(True).run()
+    at.number_input(key="tnd_n").set_value(4).run()
     at.button(key="load_qs").click().run()   # load the tendons into the points
     at.selectbox(key="pre_preset").set_value("Curve 6 (bilinear)").run()
     assert not at.exception
@@ -991,7 +1021,7 @@ def test_crack_width_with_tendons_runs():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.checkbox(key="use_pre").set_value(True).run()
+    at.number_input(key="tnd_n").set_value(4).run()
     at.button(key="load_qs").click().run()
     at.number_input(key="el_long_Mx").set_value(400.0).run()
     at.checkbox(key="sls_cw").set_value(True).run()

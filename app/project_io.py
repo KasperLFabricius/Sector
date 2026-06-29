@@ -38,7 +38,7 @@ SCALAR_KEYS = [
     "mild_eut", "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
     "mild_ey0t", "mild_ey0c", "mild_Es",
     # Prestressing steel.
-    "use_pre", "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
+    "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
     "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
     # Loads.
     "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My", "el_phi",
