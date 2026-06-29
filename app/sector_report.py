@@ -664,20 +664,24 @@ class ReportBuilder:
                         "tension, under either the long-term or the short-term load.")
             return
         self._crack_table(cl, cs)
-        self._crack_worked(cl or cs)
+        # Work the case that actually governs (the larger crack width).
+        gov_case = max((c for c in (cl, cs) if c), key=lambda c: c.get("wk", 0.0))
+        self._crack_worked(gov_case, "long-term" if gov_case is cl else "short-term")
 
     def _crack_table(self, cl, cs):
         # The full crack-width breakdown for both load cases, matching the view.
         self._h2("Crack width - both load cases")
-        specs = [("Crack width w<sub>k</sub> (mm)", "wk", 3, _MM),
-                 ("Crack spacing s<sub>r,max</sub> (mm)", "sr_max", 1, _MM),
+        # wk, sr_max, phi and cover come from the engine already in mm; hc_ef (m)
+        # and ac_eff (m^2) are metric.
+        specs = [("Crack width w<sub>k</sub> (mm)", "wk", 3, 1.0),
+                 ("Crack spacing s<sub>r,max</sub> (mm)", "sr_max", 1, 1.0),
                  ("Mean strain eps<sub>sm</sub>-eps<sub>cm</sub> (permille)", "esm_ecm", 4, 1000.0),
                  ("Steel stress sigma<sub>s</sub> (MPa)", "sigma_s", 1, 1.0),
                  ("Effective ratio rho<sub>p,eff</sub>", "rho_p_eff", 4, 1.0),
                  ("Effective height h<sub>c,ef</sub> (mm)", "hc_ef", 1, _MM),
                  ("Effective area A<sub>c,eff</sub> (m<super>2</super>)", "ac_eff", 5, 1.0),
-                 ("Clear cover c (mm)", "cover", 1, _MM),
-                 ("Bar diameter phi (mm)", "phi", 1, _MM),
+                 ("Clear cover c (mm)", "cover", 1, 1.0),
+                 ("Bar diameter phi (mm)", "phi", 1, 1.0),
                  ("Governing bar", "gov_bar", 0, 1.0)]
 
         def col(c):
@@ -689,12 +693,13 @@ class ReportBuilder:
             rows.append([spec[0], lcol[i], scol[i]])
         self._table(rows, [85 * mm, 38 * mm, 38 * mm])
 
-    def _crack_worked(self, cw):
+    def _crack_worked(self, cw, which=""):
         if not cw:
             return
-        self._h2("Crack width worked (governing bar)")
+        self._h2(f"Crack width worked - governing case ({which})" if which
+                 else "Crack width worked (governing bar)")
         self._small(f"Governing bar (largest w<sub>k</sub>): bar "
-                    f"{cw.get('gov_bar','-')}; clear cover c = {_fmt(cw.get('cover',0)*_MM,1)} mm.")
+                    f"{cw.get('gov_bar','-')}; clear cover c = {_fmt(cw.get('cover',0),1)} mm.")
         self._formula(
             "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
             "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
@@ -708,9 +713,9 @@ class ReportBuilder:
         self._formula(
             "w<sub>k</sub> = s<sub>r,max</sub> &#183; (eps<sub>sm</sub> - eps<sub>cm</sub>)",
             ref="Eq (7.8)",
-            subst=f"= {_fmt(cw.get('sr_max',0)*_MM,1)} mm &#183; "
+            subst=f"= {_fmt(cw.get('sr_max',0),1)} mm &#183; "
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
-            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0)*_MM,3)} mm")
+            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
         code = self.out["elastic"].get("crack_code")
         if code:
             self._small(f"Crack-width code: {code}. For the DK NA fine system "
