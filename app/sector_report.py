@@ -469,17 +469,20 @@ class ReportBuilder:
         self._h1("Ultimate (plastic) capacity")
         if not pl.get("converged", True):
             self._small("Warning: not all sweep points converged.")
+        applied = pl.get("applied")   # None for a capacity-only run
         self._fig(viz.interaction_figure(
-            pl["mx"], pl["my"],
-            applied=(inp.get("Mx_pl"), inp.get("My_pl")),
-            title="M-M interaction"), 130, 100)
+            pl["mx"], pl["my"], applied=applied, title="M-M interaction"), 130, 100)
         rows = [["Quantity", "Value"],
                 ["Max M<sub>x</sub> capacity", f"{_fmt(pl['max_mx'],1)} kNm"],
                 ["Max M<sub>y</sub> capacity", f"{_fmt(pl['max_my'],1)} kNm"]]
-        if pl.get("util") is not None:
+        if not pl.get("check_util", True):
+            rows.append(["Utilisation", "not checked (capacity only)"])
+        elif pl.get("util") is not None:
+            rows.append(["Applied M<sub>x</sub>, M<sub>y</sub>",
+                         f"{_fmt(applied[0],1)}, {_fmt(applied[1],1)} kNm"])
             rows.append(["Utilisation (applied direction)",
                          f"{_fmt(pl['util']*100,1)} %"])
-        elif "plastic" in self.out:
+        else:
             rows.append(["Utilisation", "open arc (no closed envelope)"])
         self._table(rows, [90 * mm, 60 * mm])
         # Per-angle summary table.

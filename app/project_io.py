@@ -44,7 +44,7 @@ SCALAR_KEYS = [
     "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My", "el_phi",
     "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
     # Analysis & result settings.
-    "mode", "v_min", "v_max", "v_inc",
+    "mode", "v_min", "v_max", "v_inc", "pl_check_util",
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "label_scale", "label_min_gap",
     # Report metadata.
