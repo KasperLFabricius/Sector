@@ -26,11 +26,13 @@ TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
 # Every scalar / string input that makes up a project. Missing keys are skipped on
 # save, so an older or partial file still loads what it has.
 SCALAR_KEYS = [
-    # Quick Section builder settings (the builder writes points into the tables).
-    "shape", "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "wall_mm",
-    "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
-    "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
-    "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm",
+    # Quick Section builder settings (durable mirror keys; the builder writes the
+    # generated points into the tables, which are saved separately).
+    "qsv_shape", "qsv_b_mm", "qsv_h_mm", "qsv_bf_mm", "qsv_hf_mm", "qsv_bw_mm",
+    "qsv_hw_mm", "qsv_wall_mm", "qsv_dia_mm", "qsv_ring_n", "qsv_ring_d",
+    "qsv_ring_c_mm", "qsv_qs_rebar_mode", "qsv_bot_n", "qsv_bot_d", "qsv_bot_s",
+    "qsv_top_n", "qsv_top_d", "qsv_top_s", "qsv_cover_mm", "qsv_tnd_n",
+    "qsv_tnd_a", "qsv_tnd_c_mm",
     # Concrete.
     "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
     "conc_eps_c2", "conc_eps_cu2", "conc_n", "conc_Ec", "sls_fctm",

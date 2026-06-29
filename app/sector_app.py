@@ -676,6 +676,38 @@ def _generate_report(inp):
 
 _QS_SHAPES = ["Rectangle", "Slab strip", "T-section", "Box girder", "Circular"]
 
+# The builder's own widget keys. Streamlit drops a widget's key from session state
+# on any run where the widget is not rendered, so while the builder is closed these
+# would be lost (resetting the builder to defaults on reopen, and dropping them
+# from a saved project). The builder mirrors them to durable "qsv_" keys whenever it
+# renders and restores them when it opens; project_io persists the durable copies.
+_QS_WIDGET_KEYS = (
+    "shape", "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "wall_mm",
+    "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
+    "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
+    "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm",
+)
+
+
+def _qs_restore_settings():
+    """Seed the builder widgets from their durable copies before they are created.
+
+    Only fills a key that is absent (the closed-builder case); a key already present
+    from the live widget this run is left alone, so in-progress edits are kept.
+    """
+    for k in _QS_WIDGET_KEYS:
+        dk = "qsv_" + k
+        if k not in st.session_state and dk in st.session_state:
+            st.session_state[k] = st.session_state[dk]
+
+
+def _qs_mirror_settings():
+    """Copy the builder widgets to their durable keys, so the settings survive the
+    builder being closed (and are what a saved project stores)."""
+    for k in _QS_WIDGET_KEYS:
+        if k in st.session_state:
+            st.session_state["qsv_" + k] = st.session_state[k]
+
 
 def _default_quick_section():
     """The section a fresh session starts from (used to seed the point tables): a
@@ -812,6 +844,7 @@ def _quick_section_viewport():
     of truth) or Back to leave them untouched. Mirrors the BriCoS manual viewport:
     a session flag (``_qs_open``) renders this instead of the normal layout.
     """
+    _qs_restore_settings()   # bring back the settings from the last time it was open
     st.markdown("## Quick Section builder")
     st.caption("Generate a parametric section. Apply overwrites the corner, bar "
                "and tendon point tables with what is drawn here; Back discards it "
@@ -824,6 +857,7 @@ def _quick_section_viewport():
     form, preview = st.columns([2, 3])
     with form:
         outer, holes, bars, tendons = _quick_section_geometry(st)
+    _qs_mirror_settings()   # keep the durable copy current with what is shown
     with preview:
         bar_xy = [(x, y) for x, y, _ in bars]
         tendon_xy = [(x, y) for x, y, _ in tendons]

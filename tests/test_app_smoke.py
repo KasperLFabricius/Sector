@@ -227,6 +227,20 @@ def test_quick_section_builder_places_bars_by_spacing():
     assert not at.exception
 
 
+def test_builder_settings_persist_between_openings():
+    # The builder widgets are dropped while it is closed, so the settings are
+    # mirrored to durable keys: reopening restores the last shape and dimensions.
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("T-section").run()
+    at.number_input(key="bf_mm").set_value(1500.0).run()
+    at.button(key="qs_back").click().run()                # close (settings kept)
+    _open_qs(at)
+    assert at.selectbox(key="shape").value == "T-section"
+    assert at.number_input(key="bf_mm").value == pytest.approx(1500.0)
+
+
 def test_point_tables_are_data_only_and_hold_loaded_points():
     # The point tables hold just the coordinate columns (no stored ID -- the plot
     # numbers points by row order); the builder Apply fills them.
