@@ -58,6 +58,21 @@ def _warm_solver():
 
 _warm_solver()
 
+# The sidebar's scroll container (stSidebarContent) ships with height:100% +
+# overflow:auto, which only scrolls while its <section> parent keeps a definite
+# height from the flex layout. When that height intermittently collapses to auto
+# (seen with a single tall expander open, e.g. only Material Parameters), the
+# container grows to full content height, no scrollbar appears, and everything
+# below the fold becomes unreachable. Capping it at the viewport height gives
+# overflow:auto a definite height to act against -- a no-op in the healthy case.
+st.markdown(
+    "<style>"
+    'section[data-testid="stSidebar"] [data-testid="stSidebarContent"]'
+    "{max-height:100vh;overflow-y:auto;}"
+    "</style>",
+    unsafe_allow_html=True,
+)
+
 _logo = ROOT / "assets" / "logo.png"
 if _logo.exists():
     st.sidebar.image(str(_logo), use_container_width=True)
@@ -173,11 +188,13 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     a_ec2 = round(codes.eps_c2(fck) * 1000.0, 2)
     a_ecu2 = round(codes.eps_cu2(fck) * 1000.0, 2)
     a_n = round(codes.n_exponent(fck), 3)
-    if box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
-                  key="conc_strain_auto", use_container_width=True, disabled=strain_lock,
-                  help="Set eps_c2, eps_cu2 and n from EC2 Table 3.1 for the current "
-                       "grade (strength-dependent above C50/60). Press again after "
-                       "changing fck."):
+    auto_all = st.session_state.get("_auto_all", False)
+    if (box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
+                   key="conc_strain_auto", use_container_width=True, disabled=strain_lock,
+                   help="Set eps_c2, eps_cu2 and n from EC2 Table 3.1 for the current "
+                        "grade (strength-dependent above C50/60). Press again after "
+                        "changing fck.")
+            or (auto_all and not strain_lock)):
         st.session_state["conc_eps_c2"] = a_ec2
         st.session_state["conc_eps_cu2"] = a_ecu2
         st.session_state["conc_n"] = a_n
@@ -206,10 +223,11 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     # current grade because the number_input persists across a grade change.
     fctm_ec = round(codes.fctm(fck), 3)
     st.session_state.setdefault("sls_fctm", fctm_ec)
-    if box.button(f"Auto $f_{{ctm}}$ (EC2: {fctm_ec:.2f} MPa)", key="sls_fctm_auto",
-                  use_container_width=True, disabled=lock_elastic,
-                  help="Set fctm = 0.30*fck^(2/3) (EC2 Table 3.1) for the current "
-                       "concrete grade. Press again after changing the grade."):
+    if (box.button(f"Auto $f_{{ctm}}$ (EC2: {fctm_ec:.2f} MPa)", key="sls_fctm_auto",
+                   use_container_width=True, disabled=lock_elastic,
+                   help="Set fctm = 0.30*fck^(2/3) (EC2 Table 3.1) for the current "
+                        "concrete grade. Press again after changing the grade.")
+            or (auto_all and not lock_elastic)):
         st.session_state["sls_fctm"] = fctm_ec
     fctm_val = box.number_input(r"Tensile strength $f_{ctm}$ (MPa)", 0.0, 10.0, step=0.1,
                                 key="sls_fctm", disabled=lock_elastic,
@@ -220,10 +238,11 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     # ratios n = Es/Ec. The Auto button sets the EC2 secant modulus for the grade.
     ecm_gpa = round(codes.ecm(fck) / 1000.0, 1)
     st.session_state.setdefault("conc_Ec", ecm_gpa)
-    if box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
-                  use_container_width=True, disabled=lock_elastic,
-                  help="Set Ec = Ecm = 22*(fcm/10)^0.3 GPa (EC2 Table 3.1) for the "
-                       "current grade. Press again after changing the grade."):
+    if (box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
+                   use_container_width=True, disabled=lock_elastic,
+                   help="Set Ec = Ecm = 22*(fcm/10)^0.3 GPa (EC2 Table 3.1) for the "
+                        "current grade. Press again after changing the grade.")
+            or (auto_all and not lock_elastic)):
         st.session_state["conc_Ec"] = ecm_gpa
     Ec = box.number_input(r"Elastic modulus $E_c$ (GPa)", 1.0, 100.0, step=0.5,
                           key="conc_Ec", disabled=lock_elastic,
@@ -685,6 +704,16 @@ def build_inputs():
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
 
+    # Recompute every auto-derived value from the current inputs in one click. It
+    # sets a flag that each panel's Auto handler honours as it renders later this
+    # run; the flag is cleared at the end of build_inputs (one-shot).
+    if aset.button("Auto-calc all derived values", use_container_width=True,
+                   key="auto_all_btn",
+                   help="Recompute all auto values from the current grade and creep: "
+                        "the concrete strain limits eps_c2/eps_cu2/n, fctm, Ec, and "
+                        "the modular ratios n_l and n_s."):
+        st.session_state["_auto_all"] = True
+
     aset.markdown("**Neutral-axis sweep (plastic)**")
     v_min = aset.number_input(r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
                               key="v_min", disabled=not plastic_on,
@@ -909,12 +938,13 @@ def build_inputs():
                 "voids are optional inner rings. Bars and tendons are points with an "
                 "area (mm2). Type or paste values (a block copied from a spreadsheet "
                 "auto-grows the table); a point is used once all its cells are "
-                "filled. Below each table a read-only list numbers the points (the "
+                "filled. Next to each table a read-only list numbers the points (the "
                 "ID matches the plots). Use Load Quick Section to refill from the "
                 "template above.")
     sec.markdown("_Concrete corners_")
-    outer_mm = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS)
-    _points_preview(sec, outer_mm, _CORNER_COLS, 1)
+    ed_c, id_c = sec.columns([3, 2])
+    outer_mm = _point_editor(ed_c, "corners_base", "ed_corners", _CORNER_COLS)
+    _points_preview(id_c, outer_mm, _CORNER_COLS, 1)
     outer = _pts_to_m(outer_mm)
     if len(outer) < 3:
         # No valid outline. Leave it empty (do NOT fall back to the Quick Section,
@@ -943,19 +973,22 @@ def build_inputs():
         groups = _void_groups(void_now, _CORNER_COLS)
         st.session_state["hole_base"] = _void_table_from_groups(groups[:-1])
         st.session_state.pop("ed_hole", None)
-    holes_mm = _void_editor(sec, "hole_base", "ed_hole")
-    _points_preview(sec, [p for ring in holes_mm for p in ring], _CORNER_COLS,
+    ed_v, id_v = sec.columns([3, 2])
+    holes_mm = _void_editor(ed_v, "hole_base", "ed_hole")
+    _points_preview(id_v, [p for ring in holes_mm for p in ring], _CORNER_COLS,
                     len(outer) + 1)
     holes = [_pts_to_m(ring) for ring in holes_mm]
     sec.markdown("_Reinforcing bars_")
-    bars_mm = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS)
-    _points_preview(sec, bars_mm, _REBAR_COLS, 1)
+    ed_b, id_b = sec.columns([3, 2])
+    bars_mm = _point_editor(ed_b, "bars_base", "ed_bars", _REBAR_COLS)
+    _points_preview(id_b, bars_mm, _REBAR_COLS, 1)
     bars = _pts_to_m(bars_mm)
     # Tendons are always definable; they only enter the analysis and the report when
     # at least one is present (a section with no tendons is simply not prestressed).
     sec.markdown("_Tendons_")
-    tendons_mm = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS)
-    _points_preview(sec, tendons_mm, _REBAR_COLS, len(bars) + 1)
+    ed_t, id_t = sec.columns([3, 2])
+    tendons_mm = _point_editor(ed_t, "tendons_base", "ed_tendons", _REBAR_COLS)
+    _points_preview(id_t, tendons_mm, _REBAR_COLS, len(bars) + 1)
     tendons = _pts_to_m(tendons_mm)
 
     # In elastic-only mode the stress-strain laws do not enter the analysis (it is
@@ -1027,10 +1060,11 @@ def build_inputs():
     _nl_auto = round(min(50.0, max(1.0, steel.Es * (1.0 + phi_creep)
                                    / (conc_Ec * 1000.0))), 1)
     st.session_state.setdefault("nl", _nl_auto)   # default from Ec, phi (EC2)
-    if loads.button(f"Auto $n_l$ ($E_s(1+\\varphi)/E_c$ = {_nl_auto:.1f})", key="nl_auto",
-                    disabled=not elastic_on, use_container_width=True,
-                    help="Long-term modular ratio from the concrete Ec, creep-reduced "
-                         "by phi (effective-modulus method)."):
+    if (loads.button(f"Auto $n_l$ ($E_s(1+\\varphi)/E_c$ = {_nl_auto:.1f})", key="nl_auto",
+                     disabled=not elastic_on, use_container_width=True,
+                     help="Long-term modular ratio from the concrete Ec, creep-reduced "
+                          "by phi (effective-modulus method).")
+            or (st.session_state.get("_auto_all", False) and elastic_on)):
         st.session_state["nl"] = _nl_auto
     nl = loads.number_input(r"Long-term modular ratio $n_l = E_s/E_{c,eff}$", 1.0, 50.0,
                             step=0.5, key="nl", disabled=not elastic_on,
@@ -1043,9 +1077,10 @@ def build_inputs():
         "Instantaneous (variable) moment.", elastic_on, mx_default=0.0)
     _ns_auto = round(min(50.0, max(1.0, steel.Es / (conc_Ec * 1000.0))), 1)
     st.session_state.setdefault("ns", _ns_auto)   # default from Ec (Es/Ec)
-    if loads.button(f"Auto $n_s$ ($E_s/E_c$ = {_ns_auto:.1f})", key="ns_auto",
-                    disabled=not elastic_on, use_container_width=True,
-                    help="Short-term (instantaneous) modular ratio from the concrete Ec."):
+    if (loads.button(f"Auto $n_s$ ($E_s/E_c$ = {_ns_auto:.1f})", key="ns_auto",
+                     disabled=not elastic_on, use_container_width=True,
+                     help="Short-term (instantaneous) modular ratio from the concrete Ec.")
+            or (st.session_state.get("_auto_all", False) and elastic_on)):
         st.session_state["ns"] = _ns_auto
     ns = loads.number_input(r"Short-term modular ratio $n_s = E_s/E_c$", 1.0, 50.0,
                             step=0.5, key="ns", disabled=not elastic_on,
@@ -1086,6 +1121,7 @@ def build_inputs():
             "v_min", "v_max", "v_inc", "mode", "pl_check_util",
             "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))
+    st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
     return dict(section=section, void_error=void_error, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
