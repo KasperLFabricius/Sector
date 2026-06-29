@@ -68,11 +68,19 @@ def test_report_pdf_generates():
 
 def test_report_mirrors_the_views():
     txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
-    assert "Comp" in txt and "kappa" in txt        # full plastic table columns
+    assert "Comp" in txt and "NA x" in txt         # full plastic table columns
     assert "Cracked" in txt                        # cracked transformed-props column
     assert "both load cases" in txt                # full crack-width table
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
     assert "Utilisation check" in txt              # analysis settings documented
+
+
+def test_report_renders_greek_glyphs():
+    # The ASCII engineering tokens are rendered as Greek glyphs in the PDF.
+    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    assert chr(0x3C3) in txt        # sigma
+    assert chr(0x3BA) in txt        # kappa
+    assert "kappa" not in txt and "sigma" not in txt
 
 
 def test_report_crack_width_uses_millimetres_not_metres():
