@@ -71,6 +71,16 @@ def test_ec2_2023_keeps_constant_concrete_strains():
     assert c.n == pytest.approx(2.0)
 
 
+def test_strain_law_is_edition_aware():
+    # strain_law is the single source the concrete law and the Auto buttons share.
+    table = codes.CODES["EN 1992-1-1:2005"].strain_law(70.0)
+    assert table == pytest.approx((codes.eps_c2(70.0), codes.eps_cu2(70.0),
+                                   codes.n_exponent(70.0)))
+    # The 2023 edition stays constant even above C50/60.
+    assert codes.CODES["DS/EN 1992-1-1:2023"].strain_law(70.0) == pytest.approx(
+        (0.002, 0.0035, 2.0))
+
+
 def test_dk_na_2024_partial_factors():
     code = codes.CODES["DS/EN 1992-1-1:2005 + DK NA:2024"]
     # In-situ reinforced concrete, normal control class.

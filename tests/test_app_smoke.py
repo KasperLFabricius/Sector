@@ -585,6 +585,44 @@ def test_prestress_always_available_without_a_toggle():
     assert "tendons_base" in at.session_state                # tendon table mounted
 
 
+def test_auto_calc_all_updates_every_derived_value():
+    # One button recomputes all the auto-derived values from the current inputs.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    at.number_input(key="conc_fck").set_value(70.0).run()    # high grade -> Table 3.1
+    # Manually push the auto values off their derived values.
+    at.number_input(key="conc_eps_cu2").set_value(5.0).run()
+    at.number_input(key="nl").set_value(8.0).run()
+    at.button(key="auto_all_btn").click().run()
+    assert not at.exception
+    # eps_cu2 back to the Table 3.1 value for C70 (~2.66 permille), not 5.0.
+    assert at.session_state["conc_eps_cu2"] == pytest.approx(2.66, abs=0.05)
+    # n_l back to the Ec/creep-derived ratio (not 8.0); n_l = (1+phi)*n_s, phi=3.
+    nl = at.session_state["nl"]
+    ns = at.session_state["ns"]
+    assert nl == pytest.approx(4.0 * ns, rel=0.05)
+    assert nl != pytest.approx(8.0)
+
+
+def test_auto_calc_all_respects_2023_constant_strains():
+    # EN 1992-1-1:2023 keeps the ultimate parabola strains constant for every class.
+    # Auto-calc-all must not silently overwrite them with the Table 3.1
+    # strength-dependent values above C50/60 (the Codex P2 on PR #67).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
+    at.number_input(key="conc_fck").set_value(70.0).run()
+    at.number_input(key="conc_eps_cu2").set_value(2.0).run()     # skew it
+    at.button(key="auto_all_btn").click().run()
+    assert not at.exception
+    # Constant 0.2%/0.35%/2 -- NOT the Table 3.1 value (~2.66 permille) for C70.
+    assert at.session_state["conc_eps_cu2"] == pytest.approx(3.5)
+    assert at.session_state["conc_eps_c2"] == pytest.approx(2.0)
+    assert at.session_state["conc_n"] == pytest.approx(2.0)
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
