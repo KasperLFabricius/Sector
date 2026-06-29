@@ -970,14 +970,14 @@ def build_inputs():
         # ``moments_active`` lets the moments lock independently of the axial force
         # (the plastic capacity-only mode keeps N but disables the applied moments).
         moments_active = active if moments_active is None else moments_active
-        P = loads.number_input("Axial force N (kN, + = compression)", -50000.0,
+        P = loads.number_input(r"Axial force $N$ (kN, + = compression)", -50000.0,
                                50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help,
                                disabled=not active)
-        Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, mx_default,
+        Mx = loads.number_input(r"Applied $M_x$ (kNm)", -100000.0, 100000.0, mx_default,
                                 10.0, key=f"{prefix}_Mx", disabled=not moments_active,
                                 help=f"{m_help} Bending moment about the x-axis "
                                      "(its stress varies with y).")
-        My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0,
+        My = loads.number_input(r"Applied $M_y$ (kNm)", -100000.0, 100000.0, 0.0, 10.0,
                                 key=f"{prefix}_My", disabled=not moments_active,
                                 help="Bending moment about the y-axis (its stress "
                                      "varies with x); biaxial bending.")
@@ -1268,10 +1268,12 @@ def section_view(inp):
 
 
 def materials_view(inp):
-    """Stress-strain diagrams for the chosen materials (live, no Calculate)."""
-    c1, c2 = st.columns(2)
-    c1.plotly_chart(viz.concrete_curve_figure(inp["concrete"]), use_container_width=True)
-    c2.plotly_chart(viz.steel_curve_figure(inp["steel"]), use_container_width=True)
+    """Stress-strain diagrams for the chosen materials (live, no Calculate).
+
+    One diagram per row (full width) so each curve is large and easy to read.
+    """
+    st.plotly_chart(viz.concrete_curve_figure(inp["concrete"]), use_container_width=True)
+    st.plotly_chart(viz.steel_curve_figure(inp["steel"]), use_container_width=True)
     if inp["prestress"] is not None:
         st.plotly_chart(viz.prestress_curve_figure(inp["prestress"]),
                         use_container_width=True)
@@ -1313,8 +1315,8 @@ def plastic_view(inp, results):
     p = results["plastic"]
     pts = p["points"]
     m1, m2, m3 = st.columns(3)
-    m1.metric("Max Mx", f"{p['max_mx']:.0f} kNm")
-    m2.metric("Max My", f"{p['max_my']:.0f} kNm")
+    m1.metric("Max $M_x$", f"{p['max_mx']:.0f} kNm")
+    m2.metric("Max $M_y$", f"{p['max_my']:.0f} kNm")
     if not p.get("check_util", True):
         m3.metric("Utilisation", "-",
                   help="Capacity-only run: the applied moments are not checked. "
@@ -1354,18 +1356,18 @@ def plastic_view(inp, results):
             use_container_width=True)
     with cR:
         lines = [
-            f"- **Mx / My**: {pt['Mx']:.0f} / {pt['My']:.0f} kNm",
-            f"- **Curvature kappa**: {pt['kappa']:.4g} 1/m",
+            f"- **$M_x$ / $M_y$**: {pt['Mx']:.0f} / {pt['My']:.0f} kNm",
+            f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
             f"- **Compression force**: {pt['comp_force']:.0f} kN",
-            f"- **Lever arm L**: {pt['lever'] * _MM:.0f} mm  "
-            f"(Dx {pt['dx'] * _MM:.0f}, Dy {pt['dy'] * _MM:.0f})",
-            f"- **Concrete strain**: {pt['eps_c']:.2f} %",
-            f"- **Steel strain**: {pt['eps_s']:.2f} %",
+            f"- **Lever arm $L$**: {pt['lever'] * _MM:.0f} mm  "
+            f"($D_x$ {pt['dx'] * _MM:.0f}, $D_y$ {pt['dy'] * _MM:.0f})",
+            f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.2f} %",
+            f"- **Steel strain $\\varepsilon_s$**: {pt['eps_s']:.2f} %",
             f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
             f"y {_fmt(pt['na_y'] * _MM)} mm",
         ]
         if inp["tendons"]:
-            lines.insert(6, f"- **Tendon strain**: {pt['eps_cable']:.2f} %")
+            lines.insert(6, f"- **Tendon strain $\\varepsilon_p$**: {pt['eps_cable']:.2f} %")
         st.markdown("\n".join(lines))
 
     with st.expander("Full results table (per neutral-axis angle)"):
@@ -1449,15 +1451,15 @@ def _elastic_sls_section(inp, e):
     st.markdown("#### Serviceability checks")
     if e["cracked"]:
         st.warning(f"**Cracked** under the long-term load - the uncracked concrete "
-                   f"tension reaches fctm at a load factor lambda_cr = "
-                   f"{e['lambda_cr']:.3f} (= Mcr/M for pure bending).")
+                   f"tension reaches $f_{{ctm}}$ at a load factor $\\lambda_{{cr}}$ = "
+                   f"{e['lambda_cr']:.3f} (= $M_{{cr}}/M$ for pure bending).")
     else:
         lam = "infinite" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.2f}"
         st.success(f"**Uncracked** under the long-term load - peak concrete tension "
-                   f"{e['sigma_ct']:.2f} MPa < fctm {e['fctm']:.2f} MPa "
-                   f"(lambda_cr = {lam}).")
+                   f"{e['sigma_ct']:.2f} MPa < $f_{{ctm}}$ {e['fctm']:.2f} MPa "
+                   f"($\\lambda_{{cr}}$ = {lam}).")
 
-    st.metric("Cracking factor lambda_cr",
+    st.metric(r"Cracking factor $\lambda_{cr}$",
               "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
               help="Proportional load factor to first cracking, "
                    "fctm / sigma_ct,I (= Mcr/M in pure bending). < 1 = cracked.")

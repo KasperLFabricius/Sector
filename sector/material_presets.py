@@ -78,13 +78,14 @@ CONCRETE_FIELDS = ["fck", "gamma_c", "alpha_cc", "eps_c2", "eps_cu2", "n"]
 # every field stays freely editable. The lower bounds are the smallest the engine
 # accepts (concrete needs fck, gamma_c and alpha_cc strictly positive); they are
 # not code limits.
+# Labels carry LaTeX ($...$) so Streamlit renders proper Greek and sub/superscripts.
 CONCRETE_FIELD_META = {
-    "fck": ("fck (MPa)", 1.0, 200.0, 1.0),
-    "gamma_c": ("gamma_c", 1.0, 3.0, 0.01),
-    "alpha_cc": ("alpha_cc", 0.01, 1.2, 0.01),
-    "eps_c2": ("eps_c2 (permille)", 0.5, 5.0, 0.05),
-    "eps_cu2": ("eps_cu2 (permille)", 0.5, 8.0, 0.05),
-    "n": ("n (parabola exponent)", 1.0, 4.0, 0.05),
+    "fck": (r"$f_{ck}$ (MPa)", 1.0, 200.0, 1.0),
+    "gamma_c": (r"$\gamma_c$", 1.0, 3.0, 0.01),
+    "alpha_cc": (r"$\alpha_{cc}$", 0.01, 1.2, 0.01),
+    "eps_c2": (r"$\varepsilon_{c2}$ (permille)", 0.5, 5.0, 0.05),
+    "eps_cu2": (r"$\varepsilon_{cu2}$ (permille)", 0.5, 8.0, 0.05),
+    "n": (r"$n$ (parabola exponent)", 1.0, 4.0, 0.05),
 }
 
 # Help text shown as a hover tooltip next to each field.
@@ -187,19 +188,19 @@ MILD_PRESETS = _mild_presets()
 # factor may dip below 1 when Ep exceeds the 200 GPa reference. These are input
 # limits to keep the widgets sane, not Eurocode limits.
 MILD_FIELD_META = {
-    "fytk": ("fytk (MPa)", 0.0, 5000.0, 10.0),
-    "fyck": ("fyck (MPa)", 0.0, 5000.0, 10.0),
-    "futk": ("futk (MPa)", 0.0, 5000.0, 10.0),
+    "fytk": (r"$f_{ytk}$ (MPa)", 0.0, 5000.0, 10.0),
+    "fyck": (r"$f_{yck}$ (MPa)", 0.0, 5000.0, 10.0),
+    "futk": (r"$f_{utk}$ (MPa)", 0.0, 5000.0, 10.0),
     # min 0 keeps the step grid (min + k*step) on round values like 50 and 1000;
     # the eut >= yield clamp guards the lower end at build time.
-    "eut": ("eut (permille)", 0.0, 2000.0, 0.5),
-    "gamma_y": ("gamma_y", 1.0, 2.0, 0.01),
-    "gamma_u": ("gamma_u", 1.0, 2.0, 0.01),
-    "gamma_E": ("gamma_E", 0.5, 2.0, 0.01),
-    "k": ("k (f1 / fytk)", 0.0, 1.0, 0.01),
-    "ey0t": ("ey0t (permille)", 0.0, 1000.0, 0.1),
-    "ey0c": ("ey0c (permille)", 0.0, 1000.0, 0.1),
-    "Es": ("Es (MPa)", 1000.0, 500000.0, 1000.0),
+    "eut": (r"$\varepsilon_{ut}$ (permille)", 0.0, 2000.0, 0.5),
+    "gamma_y": (r"$\gamma_y$", 1.0, 2.0, 0.01),
+    "gamma_u": (r"$\gamma_u$", 1.0, 2.0, 0.01),
+    "gamma_E": (r"$\gamma_E$", 0.5, 2.0, 0.01),
+    "k": (r"$k$ ($f_1 / f_{ytk}$)", 0.0, 1.0, 0.01),
+    "ey0t": (r"$\varepsilon_{0t}$ (permille)", 0.0, 1000.0, 0.1),
+    "ey0c": (r"$\varepsilon_{0c}$ (permille)", 0.0, 1000.0, 0.1),
+    "Es": (r"$E_s$ (MPa)", 1000.0, 500000.0, 1000.0),
 }
 
 MILD_HELP = {
@@ -277,16 +278,16 @@ def _prestress_presets():
 PRESTRESS_PRESETS = _prestress_presets()
 
 PRESTRESS_FIELD_META = {
-    "IS": ("Prestrain IS (permille)", 0.0, 50.0, 0.1),
-    "fytk": ("fp0.1k (MPa)", 0.0, 5000.0, 10.0),
-    "futk": ("fpk (MPa)", 0.0, 5000.0, 10.0),
-    "eut": ("eut (permille)", 0.0, 2000.0, 0.5),
-    "gamma_y": ("gamma_y", 1.0, 2.0, 0.01),
-    "gamma_u": ("gamma_u", 1.0, 2.0, 0.01),
-    "gamma_E": ("gamma_E", 0.5, 2.0, 0.01),
-    "k": ("k (f1 / fp0.1k)", 0.0, 1.0, 0.01),
-    "ey0t": ("ey0t (permille)", 0.0, 1000.0, 0.1),
-    "Es": ("Ep (MPa)", 1000.0, 500000.0, 1000.0),
+    "IS": (r"Prestrain $\varepsilon_{p}^{(0)}$ (permille)", 0.0, 50.0, 0.1),
+    "fytk": (r"$f_{p0.1k}$ (MPa)", 0.0, 5000.0, 10.0),
+    "futk": (r"$f_{pk}$ (MPa)", 0.0, 5000.0, 10.0),
+    "eut": (r"$\varepsilon_{ut}$ (permille)", 0.0, 2000.0, 0.5),
+    "gamma_y": (r"$\gamma_y$", 1.0, 2.0, 0.01),
+    "gamma_u": (r"$\gamma_u$", 1.0, 2.0, 0.01),
+    "gamma_E": (r"$\gamma_E$", 0.5, 2.0, 0.01),
+    "k": (r"$k$ ($f_1 / f_{p0.1k}$)", 0.0, 1.0, 0.01),
+    "ey0t": (r"$\varepsilon_{0t}$ (permille)", 0.0, 1000.0, 0.1),
+    "Es": (r"$E_p$ (MPa)", 1000.0, 500000.0, 1000.0),
 }
 
 PRESTRESS_HELP = {
