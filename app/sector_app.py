@@ -1020,7 +1020,7 @@ def build_inputs():
     P_el_l, Mx_el_l, My_el_l = _load_set(
         "el_long", "Sustained axial force (long-term).",
         "Sustained moment (long-term).", elastic_on)
-    phi_creep = loads.number_input(r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0, 2.0,
+    phi_creep = loads.number_input(r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0, 3.0,
                                    0.1, key="el_phi", disabled=not elastic_on,
                                    help="Final creep coefficient for the long-term "
                                         "modular ratio n_l = Es*(1+phi)/Ec.")

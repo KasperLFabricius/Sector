@@ -1133,8 +1133,8 @@ def test_fctm_auto_button_tracks_grade():
 
 def test_modular_ratios_auto_from_ec():
     # The Auto buttons derive the modular ratios from the concrete Ec: n_s = Es/Ec
-    # (~6 for a normal grade) and n_l = Es*(1+phi)/Ec, i.e. (1+phi)*n_s = 3*n_s
-    # with the default creep coefficient phi = 2.
+    # (~6 for a normal grade) and n_l = Es*(1+phi)/Ec, i.e. (1+phi)*n_s = 4*n_s
+    # with the default creep coefficient phi = 3.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
@@ -1145,12 +1145,12 @@ def test_modular_ratios_auto_from_ec():
     ns = at.number_input(key="ns").value
     nl = at.number_input(key="nl").value
     assert 3.5 < ns < 12.0                            # short-term Es/Ec
-    assert nl == pytest.approx(3.0 * ns, rel=0.05)    # n_l = (1+phi)*n_s, phi = 2
+    assert nl == pytest.approx(4.0 * ns, rel=0.05)    # n_l = (1+phi)*n_s, phi = 3
 
 
 def test_modular_ratios_default_from_ec_without_buttons():
     # The defaults are now the Ec-derived ratios (not a fixed 15): on first load,
-    # without pressing any Auto button, n_s ~ Es/Ec and n_l = (1+phi)*n_s.
+    # without pressing any Auto button, n_s ~ Es/Ec and n_l = (1+phi)*n_s, phi = 3.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
@@ -1158,7 +1158,7 @@ def test_modular_ratios_default_from_ec_without_buttons():
     nl = at.number_input(key="nl").value
     assert 3.5 < ns < 12.0
     assert ns != pytest.approx(15.0)                  # not the old fixed default
-    assert nl == pytest.approx(3.0 * ns, rel=0.05)
+    assert nl == pytest.approx(4.0 * ns, rel=0.05)
 
 
 def test_crack_width_auto_cover_circular_section():

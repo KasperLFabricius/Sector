@@ -158,8 +158,10 @@ def test_mild_type2_ruptures_beyond_eut():
     assert s.stress(0.05) == pytest.approx(500.0)  # still intact at eut
     assert s.stress(0.0500001) == 0.0              # fractured just beyond
     assert s.stress(0.1) == 0.0
-    # Compression has no rupture limit (it is bounded by concrete crushing).
-    assert s.stress(-0.1) == pytest.approx(-500.0)
+    # Rupture is symmetric: compression also fractures beyond eut.
+    assert s.stress(-0.04) == pytest.approx(-500.0)   # within eut -> yield
+    assert s.stress(-0.0500001) == 0.0                # fractured just beyond -eut
+    assert s.stress(-0.1) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +215,20 @@ def test_mild_type1_ruptures_beyond_eut():
     assert s.stress(0.05) == pytest.approx(540.0)  # rupture stress at eut
     assert s.stress(0.0500001) == 0.0              # fractured just beyond eut
     assert s.stress(0.2) == 0.0
-    # Compression is unaffected by the tensile rupture limit.
-    assert s.stress(-0.2) == pytest.approx(-500.0)
+    # Rupture is symmetric: compression also fractures beyond eut.
+    assert s.stress(-0.04) == pytest.approx(-500.0)   # within eut -> yield plateau
+    assert s.stress(-0.0500001) == 0.0                # fractured just beyond -eut
+    assert s.stress(-0.2) == 0.0
+
+
+def test_mild_type3_ruptures_symmetrically():
+    # The default two-yield law fractures past eut in both tension and compression.
+    s = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, k=0.9, ey0t=0.002,
+                  ey0c=0.002, gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, curve=3)
+    assert s.stress(0.05) == pytest.approx(-s.stress(-0.05))  # symmetric at eut
+    assert s.stress(0.0500001) == 0.0       # tension fractured beyond eut
+    assert s.stress(-0.04) < 0.0            # within eut: compressive force
+    assert s.stress(-0.0500001) == 0.0      # compression fractured beyond -eut
 
 
 # ---------------------------------------------------------------------------

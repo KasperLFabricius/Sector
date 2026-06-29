@@ -235,6 +235,8 @@ class MildSteel:
                 if eps > self.eut:
                     return 0.0  # ruptured: no force beyond the rupture strain
                 return min(slope * eps, fyt)
+            if -eps > self.eut:
+                return 0.0  # rupture is symmetric: also fractures in compression
             return max(slope * eps, -fyc)
 
         if self.curve == 3:
@@ -250,10 +252,12 @@ class MildSteel:
                 return 0.0       # fyck = 0: no compression capacity
             # Compression mirror of the tension law: the second yield fyck sits at
             # the *plastic* offset ey0c, i.e. at the total strain ey0c + fyck/slope
-            # (symmetric with the tensile ey0t). Steel does not fracture in
-            # compression, so it holds -fu beyond eut.
-            f1c = self.k * fyc         # first compressive yield stress
+            # (symmetric with the tensile ey0t), and the rupture is symmetric too --
+            # the bar fractures past eut in compression as in tension.
             a = -eps
+            if a > self.eut:
+                return 0.0
+            f1c = self.k * fyc         # first compressive yield stress
             e1 = f1c / slope
             e2c = self.ey0c + fyc / slope   # total strain of the second yield
             if a <= e1:
@@ -265,7 +269,7 @@ class MildSteel:
                 return -(fyc + (fu - fyc) * (a - e2c) / (self.eut - e2c))
             return -fu
 
-        # type 1: hardening in tension, flat plateau in compression
+        # type 1: hardening in tension, plateau in compression; rupture is symmetric
         slope = self.Es / gE
         if eps >= 0.0:
             if eps > self.eut:
@@ -276,6 +280,8 @@ class MildSteel:
             fu = self.futk / gu
             # Hardening branch, reaching the design rupture stress at eut.
             return fyt + (fu - fyt) * (eps - eps_y) / (self.eut - eps_y)
+        if -eps > self.eut:
+            return 0.0  # rupture is symmetric: also fractures in compression
         eps_yc = -fyc / slope
         if eps >= eps_yc:
             return slope * eps
