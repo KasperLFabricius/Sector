@@ -24,13 +24,18 @@ import streamlit as st  # noqa: E402
 
 import project_io  # noqa: E402
 import viz  # noqa: E402
+from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, geometry, kernels, material_presets as mp, templates  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
 from sector.serviceability import analyse_cracking, crack_width  # noqa: E402
 
-APP_VERSION = "0.1.0"
+# The tool version comes from the sector package (the single source of truth); it
+# shows in the title, the browser tab, the About panel and the report footer.
+APP_VERSION = sector_version
+APP_AUTHOR = "Kasper Lindskov Fabricius"
+APP_EMAIL = "Kasper.LindskovFabricius@sweco.dk"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Greek glyphs for the result tables (st.dataframe renders plain Unicode, not LaTeX,
@@ -911,7 +916,9 @@ def build_inputs():
                    "press Calculate. The section drawing and the stress-strain "
                    "diagrams update live; the result views update on Calculate.")
         st.divider()
-        st.caption(f"Sector v{APP_VERSION}  -  internal engineering tool, Sweco.")
+        st.markdown(f"**Sector v{APP_VERSION}**")
+        st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
+        st.caption("Internal engineering tool, Sweco.")
 
     # Reserve the Save / Load slot here (near the top) but fill it at the end of
     # build_inputs, once the point tables and inputs exist, so the download

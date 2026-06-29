@@ -52,4 +52,7 @@ __all__ = [
     "solve_plastic",
 ]
 
-__version__ = "0.1.0"
+# The single source of truth for the Sector version (the app imports this as
+# APP_VERSION). Semantic versioning: MINOR for a feature, PATCH for a fix, MAJOR
+# once production-ready (pre-1.0 = internal, still evolving).
+__version__ = "0.2.0"

@@ -40,6 +40,17 @@ def test_app_loads_without_error():
     assert "results" not in at.session_state
 
 
+def test_about_panel_shows_version_and_author():
+    # The About panel carries the single-source version plus the author/email block.
+    at = _fresh()
+    at.run()
+    blob = " | ".join(m.value for m in at.markdown) + \
+        " | ".join(c.value for c in at.caption)
+    assert "0.2.0" in blob and "v0.2.0" in (at.title[0].value if at.title else "")
+    assert "Kasper Lindskov Fabricius" in blob
+    assert "Kasper.LindskovFabricius@sweco.dk" in blob
+
+
 def test_calculate_plastic_produces_an_envelope():
     at = _fresh()
     at.run()
