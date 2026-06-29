@@ -1,0 +1,148 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="./tabulator.min.css" />
+  <script src="./tabulator.min.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; }
+    #wrap { padding: 1px; }
+    /* The frozen ID column reads as a row header: muted, non-editable. */
+    .tabulator .tabulator-cell.pg-id { color: #6b7280; background: #f3f4f6; font-variant-numeric: tabular-nums; }
+    .tabulator .tabulator-cell.pg-del { color: #b91c1c; cursor: pointer; text-align: center; user-select: none; }
+    .tabulator .tabulator-cell.pg-del:hover { background: #fee2e2; }
+    #addrow { margin-top: 6px; padding: 4px 10px; font-size: 14px; cursor: pointer;
+              border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
+    #addrow:hover { background: #f3f4f6; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="grid"></div>
+    <button id="addrow" type="button">+ Add row</button>
+  </div>
+
+  <script>
+    // ---- Streamlit component bridge (bare postMessage protocol) ----
+    function _send(type, data) {
+      window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), "*");
+    }
+    function setFrameHeight(h) { _send("streamlit:setFrameHeight", { height: h }); }
+    function sendValue(value) { _send("streamlit:setComponentValue", { value, dataType: "json" }); }
+
+    let table = null;
+    let cols = [];          // editable column keys, e.g. ["x (mm)", "y (mm)", "area (mm2)"]
+    let idStart = 1;
+    let dataVersion = null; // rebuild the grid only when this changes (stable base)
+
+    // A row is a "valid point" once every editable cell is a finite number; only
+    // those are numbered, so the ID column matches the plot (blank/partial rows and
+    // void separators get no ID).
+    function isComplete(row) {
+      return cols.every((c) => {
+        const v = row[c];
+        return v !== null && v !== undefined && v !== "" && isFinite(Number(v));
+      });
+    }
+
+    // Recompute the running 1..N ids (offset by idStart) in document order.
+    function renumber() {
+      if (!table) return;
+      let n = idStart;
+      table.getRows().forEach((r) => {
+        const d = r.getData();
+        d._id = isComplete(d) ? n++ : "";
+      });
+      table.getColumn("_id") && table.redraw(true);
+    }
+
+    function currentRows() {
+      // Return only the editable columns (drop _id), preserving order and blanks.
+      return table.getData().map((d) => {
+        const o = {};
+        cols.forEach((c) => { o[c] = (d[c] === "" ? null : d[c]); });
+        return o;
+      });
+    }
+
+    function emit() {
+      renumber();
+      sendValue(currentRows());
+      reportHeight();
+    }
+
+    function reportHeight() {
+      const h = document.getElementById("wrap").scrollHeight;
+      setFrameHeight(h + 2);
+    }
+
+    function buildColumns() {
+      const columns = [];
+      // Frozen, non-editable ID column (the left "row header").
+      columns.push({
+        title: "ID", field: "_id", frozen: true, width: 56, hozAlign: "right",
+        headerSort: false, editable: false, cssClass: "pg-id",
+      });
+      cols.forEach((c) => {
+        columns.push({
+          title: c, field: c, editor: "number", editorParams: { selectContents: true },
+          headerSort: false, hozAlign: "right",
+          mutatorEdit: (value) => (value === "" || value === null ? null : Number(value)),
+        });
+      });
+      // Per-row delete control.
+      columns.push({
+        title: "", field: "_del", width: 34, headerSort: false, editable: false,
+        hozAlign: "center", cssClass: "pg-del", formatter: () => "&times;",
+        cellClick: (e, cell) => { cell.getRow().delete(); },
+      });
+      return columns;
+    }
+
+    function build(args) {
+      cols = args.columns;
+      idStart = args.id_start || 1;
+      dataVersion = args.data_version;
+      const rows = (args.data || []).map((d) => Object.assign({}, d));
+
+      document.getElementById("grid").innerHTML = "";
+      table = new Tabulator("#grid", {
+        data: rows,
+        layout: "fitColumns",
+        columns: buildColumns(),
+        height: false,                 // grow with content; the iframe height is reported
+        clipboard: true,               // copy + paste
+        clipboardPasteAction: "replace",
+        clipboardPasteParser: "table",
+        addRowPos: "bottom",
+        reactiveData: false,
+      });
+      table.on("tableBuilt", () => { emit(); });
+      table.on("cellEdited", () => emit());
+      table.on("rowDeleted", () => emit());
+      table.on("clipboardPasted", () => emit());
+      table.on("dataChanged", () => reportHeight());
+    }
+
+    document.getElementById("addrow").addEventListener("click", () => {
+      if (table) table.addRow({}).then(() => emit());
+    });
+
+    function onRender(args) {
+      if (!args) return;
+      // Rebuild only on an explicit re-seed (Load / Clear / Add-void changes the
+      // version); plain edits keep the live grid so typing never lags or resets.
+      if (table === null || args.data_version !== dataVersion) {
+        build(args);
+      } else {
+        reportHeight();
+      }
+    }
+
+    window.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "streamlit:render") onRender(event.data.args);
+    });
+    _send("streamlit:componentReady", { apiVersion: 1 });
+  </script>
+</body>
+</html>

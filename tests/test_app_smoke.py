@@ -390,18 +390,19 @@ def test_remove_void_button_drops_the_last_void():
 
 
 def test_void_buttons_preserve_unsaved_edits():
-    # Codex P2: void corners typed into the editor (held in its delta, not yet in
+    # Codex P2: void corners typed into the grid (its last reported rows, not yet in
     # the base) must survive a + Add void click, not be discarded.
     import pandas as pd
     at = _fresh()
     at.run()
-    # base = one void; an extra corner is held only in the live editor delta.
+    # base = one void; the grid's live rows carry an extra, not-yet-saved corner.
     at.session_state["hole_base"] = pd.DataFrame({
         "x (mm)": [-100.0, -40.0, -70.0], "y (mm)": [-50.0, -50.0, 50.0]})
-    at.session_state["ed_hole"] = {
-        "edited_rows": {}, "deleted_rows": [],
-        "added_rows": [{"x (mm)": 80.0, "y (mm)": -50.0}]}   # an unsaved corner
-    at.button(key="add_void").click().run()   # handler reads the delta before re-render
+    at.session_state["ed_hole"] = [
+        {"x (mm)": -100.0, "y (mm)": -50.0}, {"x (mm)": -40.0, "y (mm)": -50.0},
+        {"x (mm)": -70.0, "y (mm)": 50.0},
+        {"x (mm)": 80.0, "y (mm)": -50.0}]   # an unsaved corner, live in the grid
+    at.button(key="add_void").click().run()   # handler reads the live rows before re-render
     assert not at.exception
     hb = at.session_state["hole_base"]
     assert (hb["x (mm)"] == 80.0).any()   # the unsaved corner survived the rebuild
