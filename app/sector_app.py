@@ -11,6 +11,7 @@ import json
 import math
 import pathlib
 import sys
+import threading
 
 # Make both the repo root (for ``sector``) and this app folder (for ``viz``)
 # importable when run as a script or via Streamlit's AppTest.
@@ -54,11 +55,22 @@ _CRACK_CODES = {"EN 1992-1-1:2005": False, "DS/EN 1992-1-1 + DK NA": True}
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
 
 
-@st.cache_resource(show_spinner="Preparing the solver...")
+@st.cache_resource(show_spinner=False)
 def _warm_solver():
-    """Compile the solver kernels once per server, so the cost is paid at
-    startup rather than on the first Calculate."""
-    return kernels.warmup()
+    """Compile the solver kernels in a background thread, so the ~1 s JIT warm-up
+    does not block the first paint.
+
+    The live Section and Stress-Strain views never call the kernels, so the page is
+    interactive while the thread compiles; by the time a section is defined and
+    Calculate is pressed the warm-up is normally finished. A Calculate that races
+    the thread is safe -- numba's per-dispatcher compile lock makes the second
+    caller wait for the first rather than compile twice. ``cache_resource`` starts
+    the thread exactly once per server.
+    """
+    thread = threading.Thread(target=kernels.warmup, name="sector-warmup",
+                              daemon=True)
+    thread.start()
+    return thread
 
 
 _warm_solver()
@@ -1433,6 +1445,26 @@ def _radial_util(mx, my, ax, ay):
 VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results"]
 
 
+def _memo_fig(name, sig, build):
+    """Return a cached live figure, rebuilding only when its inputs change.
+
+    Streamlit reruns the whole script on every widget change, so the live Section
+    and Stress-Strain views would otherwise re-run the ~10-20 ms plotly figure
+    construction each time -- e.g. rebuilding the material curves when the user
+    only touched a load. One slot per figure kind is kept in session state, keyed
+    by ``sig`` (compared by value); the figure is reused in place rather than
+    pickled (unlike ``st.cache_data``), which is safe because the views only read
+    it. On a cache miss the cost is just the rebuild that would happen anyway, so
+    this never makes the point-editing path (where the geometry changes every
+    keystroke) slower.
+    """
+    cache = st.session_state.setdefault("_fig_cache", {})
+    entry = cache.get(name)
+    if entry is None or entry[0] != sig:
+        entry = cache[name] = (sig, build())
+    return entry[1]
+
+
 def section_view(inp):
     """The input geometry: concrete outline, reinforcement and tendons.
 
@@ -1445,23 +1477,29 @@ def section_view(inp):
                 "you have added is still drawn below.")
     bar_xy = [(b[0], b[1]) for b in inp["bars"]]
     tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
-    st.plotly_chart(viz.section_figure(inp["outer"], inp["holes"], bar_xy,
-                                       title="Section", tendons=tendon_xy,
-                                       show_labels=True, label_scale=inp["label_scale"],
-                                       label_min_gap=inp["label_min_gap"], height=640,
-                                       scale=_MM, unit="mm"),
-                    use_container_width=True)
+    sig = (inp["outer"], inp["holes"], bar_xy, tendon_xy,
+           inp["label_scale"], inp["label_min_gap"])
+    fig = _memo_fig("section", sig, lambda: viz.section_figure(
+        inp["outer"], inp["holes"], bar_xy, title="Section", tendons=tendon_xy,
+        show_labels=True, label_scale=inp["label_scale"],
+        label_min_gap=inp["label_min_gap"], height=640, scale=_MM, unit="mm"))
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def materials_view(inp):
     """Stress-strain diagrams for the chosen materials (live, no Calculate).
 
-    One diagram per row (full width) so each curve is large and easy to read.
+    One diagram per row (full width) so each curve is large and easy to read. The
+    material objects are value-comparable (frozen dataclasses), so the figures are
+    memoised on them and only rebuilt when a material parameter actually changes.
     """
-    st.plotly_chart(viz.concrete_curve_figure(inp["concrete"]), use_container_width=True)
-    st.plotly_chart(viz.steel_curve_figure(inp["steel"]), use_container_width=True)
-    if inp["prestress"] is not None:
-        st.plotly_chart(viz.prestress_curve_figure(inp["prestress"]),
+    conc, steel, pre = inp["concrete"], inp["steel"], inp["prestress"]
+    st.plotly_chart(_memo_fig("concrete", conc, lambda: viz.concrete_curve_figure(conc)),
+                    use_container_width=True)
+    st.plotly_chart(_memo_fig("steel", steel, lambda: viz.steel_curve_figure(steel)),
+                    use_container_width=True)
+    if pre is not None:
+        st.plotly_chart(_memo_fig("prestress", pre, lambda: viz.prestress_curve_figure(pre)),
                         use_container_width=True)
 
 
