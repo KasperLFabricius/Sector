@@ -185,15 +185,24 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     # Table 3.1 values for the current grade (constant up to C50/60).
     parabola = curve == 2
     strain_lock = locked or not parabola
-    a_ec2 = round(codes.eps_c2(fck) * 1000.0, 2)
-    a_ecu2 = round(codes.eps_cu2(fck) * 1000.0, 2)
-    a_n = round(codes.n_exponent(fck), 3)
+    # Auto values follow the selected edition: EN 1992-1-1:2023 keeps the ultimate
+    # parabola strains constant for every class, so deriving the Table 3.1
+    # strength-dependent values above C50/60 would silently overwrite the 2023 law
+    # (the manual button and Auto-calc-all share these). Non-edition curve presets
+    # are not in the registry -> fall back to Table 3.1.
+    _code = codes.CODES.get(preset)
+    _ec2_f, _ecu2_f, _n_f = (_code.strain_law(fck) if _code is not None
+                             else (codes.eps_c2(fck), codes.eps_cu2(fck),
+                                   codes.n_exponent(fck)))
+    a_ec2 = round(_ec2_f * 1000.0, 2)
+    a_ecu2 = round(_ecu2_f * 1000.0, 2)
+    a_n = round(_n_f, 3)
     auto_all = st.session_state.get("_auto_all", False)
     if (box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
                    key="conc_strain_auto", use_container_width=True, disabled=strain_lock,
-                   help="Set eps_c2, eps_cu2 and n from EC2 Table 3.1 for the current "
-                        "grade (strength-dependent above C50/60). Press again after "
-                        "changing fck.")
+                   help="Set eps_c2, eps_cu2 and n for the current grade and edition "
+                        "(EC2 Table 3.1, strength-dependent above C50/60; kept constant "
+                        "for EN 1992-1-1:2023). Press again after changing fck or preset.")
             or (auto_all and not strain_lock)):
         st.session_state["conc_eps_c2"] = a_ec2
         st.session_state["conc_eps_cu2"] = a_ecu2

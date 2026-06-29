@@ -162,6 +162,17 @@ class DesignCode:
             return eta_cc * self.k_tc
         return self.alpha_cc
 
+    def strain_law(self, fck: float) -> tuple[float, float, float]:
+        """``(eps_c2, eps_cu2, n)`` (fractions) for ``fck`` under this edition.
+
+        Constant ``0.2%``/``0.35%``/``2`` when the edition keeps constant strains
+        (``const_strains``, EN 1992-1-1:2023); otherwise the EC2 Table 3.1 values,
+        which are strength-dependent above C50/60.
+        """
+        if self.const_strains:
+            return 0.002, 0.0035, 2.0
+        return eps_c2(fck), eps_cu2(fck), n_exponent(fck)
+
     def concrete(self, fck: float) -> Concrete:
         """Concrete law for characteristic strength ``fck`` (MPa) under this code.
 
@@ -170,10 +181,7 @@ class DesignCode:
         gets its strength-dependent ``eps_c2``/``eps_cu2``/``n`` automatically
         (constant ``0.2%``/``0.35%``/``2`` up to C50/60).
         """
-        if self.const_strains:
-            e_c2, e_cu2, n = 0.002, 0.0035, 2.0
-        else:
-            e_c2, e_cu2, n = eps_c2(fck), eps_cu2(fck), n_exponent(fck)
+        e_c2, e_cu2, n = self.strain_law(fck)
         return Concrete(fck=fck, gamma_c=self.gamma_c, curve=2,
                         alpha_cc=self.concrete_factor(fck),
                         eps_c2=e_c2, eps_cu2=e_cu2, n=n)

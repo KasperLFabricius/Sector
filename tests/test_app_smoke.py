@@ -605,6 +605,24 @@ def test_auto_calc_all_updates_every_derived_value():
     assert nl != pytest.approx(8.0)
 
 
+def test_auto_calc_all_respects_2023_constant_strains():
+    # EN 1992-1-1:2023 keeps the ultimate parabola strains constant for every class.
+    # Auto-calc-all must not silently overwrite them with the Table 3.1
+    # strength-dependent values above C50/60 (the Codex P2 on PR #67).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
+    at.number_input(key="conc_fck").set_value(70.0).run()
+    at.number_input(key="conc_eps_cu2").set_value(2.0).run()     # skew it
+    at.button(key="auto_all_btn").click().run()
+    assert not at.exception
+    # Constant 0.2%/0.35%/2 -- NOT the Table 3.1 value (~2.66 permille) for C70.
+    assert at.session_state["conc_eps_cu2"] == pytest.approx(3.5)
+    assert at.session_state["conc_eps_c2"] == pytest.approx(2.0)
+    assert at.session_state["conc_n"] == pytest.approx(2.0)
+
+
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
