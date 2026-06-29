@@ -39,7 +39,7 @@ def _out():
     return {
         "plastic": {"mx": [100.0, 0.0, -100.0, 0.0], "my": [0.0, 100.0, 0.0, -100.0],
                     "max_mx": 100.0, "max_my": 100.0, "util": 0.8, "closed": True,
-                    "converged": True,
+                    "check_util": True, "applied": (80.0, 0.0), "converged": True,
                     "points": [{"V": 0.0, "Mx": 100.0, "My": 0.0, "na_x": 0.0,
                                 "na_y": 0.05, "eps_c": 0.35, "eps_s": 2.0,
                                 "eps_cable": 0.0, "kappa": 0.02, "comp_force": 300.0,
@@ -64,6 +64,25 @@ def test_report_pdf_generates():
 
 def test_report_handles_plastic_only():
     out = {"plastic": _out()["plastic"]}
+    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    assert pdf[:4] == b"%PDF"
+
+
+def test_report_capacity_only_omits_utilisation():
+    # A capacity-only run (utilisation not checked) reports no utilisation value.
+    out = _out()
+    out["plastic"].update(util=None, check_util=False, applied=None)
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "capacity only" in txt
+    assert "applied direction" not in txt    # no utilisation percentage row
+    assert "Plastic (applied)" not in txt    # ignored moments not listed as loads
+
+
+def test_report_tolerates_plastic_payload_without_applied():
+    # An older plastic payload may have a utilisation but no 'applied' point; the
+    # report must not crash indexing it.
+    out = _out()
+    out["plastic"].pop("applied", None)
     pdf = sector_report.build_report({}, _inp(), out, figures=False)
     assert pdf[:4] == b"%PDF"
 

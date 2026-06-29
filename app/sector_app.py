@@ -674,6 +674,12 @@ def build_inputs():
                               key="v_inc", disabled=not plastic_on,
                               help="Angular step between swept neutral-axis angles; "
                                    "a finer step gives a smoother M-M envelope.")
+    check_util = aset.checkbox(
+        "Check utilisation against applied moment", value=True, key="pl_check_util",
+        disabled=not plastic_on,
+        help="On: the applied plastic Mx/My are checked against the capacity envelope "
+             "(utilisation). Off: report the capacity only -- the applied Mx/My are "
+             "ignored and locked.")
 
     aset.markdown("**Serviceability (elastic SLS)**")
     aset.caption("Extra cracked-section checks in the Elastic view.")
@@ -960,16 +966,19 @@ def build_inputs():
     # switch instead of being reset when Streamlit drops unrendered widgets.
     loads = s.expander("Loads", expanded=True)
 
-    def _load_set(prefix, n_help, m_help, active, mx_default=200.0):
+    def _load_set(prefix, n_help, m_help, active, mx_default=200.0, moments_active=None):
+        # ``moments_active`` lets the moments lock independently of the axial force
+        # (the plastic capacity-only mode keeps N but disables the applied moments).
+        moments_active = active if moments_active is None else moments_active
         P = loads.number_input("Axial force N (kN, + = compression)", -50000.0,
                                50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help,
                                disabled=not active)
         Mx = loads.number_input("Applied Mx (kNm)", -100000.0, 100000.0, mx_default,
-                                10.0, key=f"{prefix}_Mx", disabled=not active,
+                                10.0, key=f"{prefix}_Mx", disabled=not moments_active,
                                 help=f"{m_help} Bending moment about the x-axis "
                                      "(its stress varies with y).")
         My = loads.number_input("Applied My (kNm)", -100000.0, 100000.0, 0.0, 10.0,
-                                key=f"{prefix}_My", disabled=not active,
+                                key=f"{prefix}_My", disabled=not moments_active,
                                 help="Bending moment about the y-axis (its stress "
                                      "varies with x); biaxial bending.")
         return P, Mx, My
@@ -977,7 +986,8 @@ def build_inputs():
     loads.markdown("**Plastic capacity**")
     P_pl, Mx_pl, My_pl = _load_set(
         "pl", "Axial force for which the plastic M-M capacity envelope is computed.",
-        "Applied moment checked against the plastic envelope (utilisation).", plastic_on)
+        "Applied moment checked against the plastic envelope (utilisation).",
+        plastic_on, moments_active=plastic_on and check_util)
 
     loads.divider()
     loads.markdown("**Elastic stresses (long + short term)**")
@@ -1051,13 +1061,14 @@ def build_inputs():
             "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
             "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
             "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
-            "v_min", "v_max", "v_inc", "mode",
+            "v_min", "v_max", "v_inc", "mode", "pl_check_util",
             "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))
     _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
     return dict(section=section, void_error=void_error, concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
+                check_util=check_util,
                 v_min=v_min, v_max=v_max, v_inc=v_inc,
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
@@ -1117,11 +1128,16 @@ def run_analysis(inp):
         # sweep is an open arc, so report no utilisation rather than a wrap-around
         # interpolation between the arc endpoints.
         closed = (vhi - vlo) >= 360.0 - 1e-6
-        util = _radial_util(mx, my, inp["Mx_pl"], inp["My_pl"]) if closed else None
+        # Utilisation is only reported when the user asks to check it; otherwise this
+        # is a capacity-only run (the applied moments are ignored and locked).
+        check_util = inp.get("check_util", True)
+        util = (_radial_util(mx, my, inp["Mx_pl"], inp["My_pl"])
+                if (closed and check_util) else None)
         out["plastic"] = dict(
             mx=mx, my=my,
             max_mx=max(mx), max_my=max(my),
-            util=util, closed=closed,
+            util=util, closed=closed, check_util=check_util,
+            applied=((inp["Mx_pl"], inp["My_pl"]) if check_util else None),
             converged=all(p.converged for p in pts),
             points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
                          na_y=p.na_y_intercept, eps_c=p.eps_concrete,
@@ -1350,7 +1366,11 @@ def plastic_view(inp, results):
     m1, m2, m3 = st.columns(3)
     m1.metric("Max Mx", f"{p['max_mx']:.0f} kNm")
     m2.metric("Max My", f"{p['max_my']:.0f} kNm")
-    if p["util"] is None:
+    if not p.get("check_util", True):
+        m3.metric("Utilisation", "-",
+                  help="Capacity-only run: the applied moments are not checked. "
+                       "Enable 'Check utilisation against applied moment' to check.")
+    elif p["util"] is None:
         m3.metric("Utilisation", "-",
                   help="Only meaningful for a full 0-360 deg sweep; the current "
                        "sweep is a partial arc.")
@@ -1358,7 +1378,7 @@ def plastic_view(inp, results):
         m3.metric("Utilisation", f"{p['util']:.2f}",
                   help="applied / capacity in the load direction")
     st.plotly_chart(
-        viz.interaction_figure(p["mx"], p["my"], applied=(inp["Mx_pl"], inp["My_pl"])),
+        viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied")),
         use_container_width=True)
 
     default_i = max(range(len(pts)), key=lambda i: pts[i]["Mx"])

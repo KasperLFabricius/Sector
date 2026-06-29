@@ -559,6 +559,21 @@ def test_load_project_without_tendon_table_does_not_crash():
     assert len(at.session_state["tendons_base"]) == 0
 
 
+def test_capacity_only_toggle_locks_moments_and_drops_utilisation():
+    # With utilisation checking off, the applied plastic moments lock and the result
+    # carries no utilisation (capacity only); the axial force stays editable.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="pl_check_util").set_value(False).run()
+    assert at.number_input(key="pl_Mx").disabled is True
+    assert at.number_input(key="pl_My").disabled is True
+    assert at.number_input(key="pl_P").disabled is False
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    pl = at.session_state["results"]["plastic"]
+    assert pl["util"] is None and pl["check_util"] is False and pl["applied"] is None
+
+
 def test_prestress_always_available_without_a_toggle():
     # The "include prestressing tendons" checkbox is gone: the prestress material
     # panel and the tendon point table are always present.
