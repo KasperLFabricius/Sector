@@ -472,15 +472,27 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
     rather than a wide one. ``applied`` is given as ``(Mx, My)`` and placed
     accordingly.
     """
+    # Snap the floating-point noise at the apexes to zero: a pure-Mx (or pure-My)
+    # point should sit on the axis, but the solver leaves a tiny residual that the
+    # hover would otherwise show as e.g. "(333.9551, 0.0007)". Round it to 0 so the
+    # apex reads cleanly; the threshold is relative to the envelope size.
+    scale = max((abs(v) for v in list(mx) + list(my)), default=1.0) or 1.0
+    snap = lambda v: 0.0 if abs(v) <= scale * 1e-4 else v
+    mx = [snap(v) for v in mx]
+    my = [snap(v) for v in my]
+    # Round the hover read-out too, so a long float shows as e.g. "388.5 kNm".
+    hover = "My = %{x:.1f} kNm<br>Mx = %{y:.1f} kNm<extra></extra>"
+
     fig = go.Figure()
     # My on the horizontal axis, Mx on the vertical -- see the note above.
     fig.add_trace(go.Scatter(x=my + my[:1], y=mx + mx[:1], mode="lines",
-                             line=dict(color=ENVELOPE, width=2), name="capacity"))
+                             line=dict(color=ENVELOPE, width=2), name="capacity",
+                             hovertemplate=hover))
     if applied is not None:
-        a_mx, a_my = applied
+        a_mx, a_my = snap(applied[0]), snap(applied[1])
         fig.add_trace(go.Scatter(x=[a_my], y=[a_mx], mode="markers",
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
-                                 name="applied"))
+                                 name="applied", hovertemplate=hover))
     fig.update_layout(
         title=title, template="plotly_white", height=440,
         margin=dict(l=10, r=10, t=40, b=10),

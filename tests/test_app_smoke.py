@@ -408,6 +408,21 @@ def test_void_buttons_preserve_unsaved_edits():
     assert (hb["x (mm)"] == 80.0).any()   # the unsaved corner survived the rebuild
 
 
+def test_cleared_grid_is_respected_not_resurrected():
+    # Codex P2: when the grid reports an empty list (every row deleted), the live
+    # table must be empty -- not fall back to the stale base. With a void in the
+    # base but the grid cleared, the void count is 0 so Remove void is disabled.
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    at.session_state["hole_base"] = pd.DataFrame(
+        {"x (mm)": [-100.0, -40.0, -70.0], "y (mm)": [-50.0, -50.0, 50.0]})
+    at.session_state["ed_hole"] = []          # the grid reports all rows deleted
+    at.run()
+    assert not at.exception
+    assert at.button(key="rem_void").disabled  # 0 voids -> Remove disabled
+
+
 def test_void_cap_enforced_when_parsing_not_only_the_button():
     # Pasting more than the cap of voids must not bypass the limit: the extra
     # voids are ignored when building the holes (Codex P2), with a warning.

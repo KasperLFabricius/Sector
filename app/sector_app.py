@@ -377,8 +377,13 @@ def _pts_to_m(pts):
 
 
 def _pts_to_mm(pts):
-    """Convert (x, y[, area]) points from m to mm for the tables (area unchanged)."""
-    return [(p[0] * _MM, p[1] * _MM) + tuple(p[2:]) for p in pts]
+    """Convert (x, y[, area]) points from m to mm for the tables (area unchanged).
+
+    The coordinates are rounded to clean the float noise the m->mm scaling adds
+    (e.g. -0.15 * 1000 = -150.00000000000003), so the grid shows -150, not a long
+    truncated value. 6 decimals is far finer than any real placement tolerance.
+    """
+    return [(round(p[0] * _MM, 6), round(p[1] * _MM, 6)) + tuple(p[2:]) for p in pts]
 
 
 def _corners_df(pts):
@@ -521,9 +526,9 @@ def _current_table(base_key, ed_key, cols):
     re-seeded), so unsaved edits are never discarded.
     """
     value = st.session_state.get(ed_key)
-    if not isinstance(value, list) or not value:   # the grid reports a list of rows
+    if not isinstance(value, list):   # absent / not yet reported -- use the base
         return st.session_state[base_key].copy().reset_index(drop=True)
-    return _rows_to_df(value, cols)
+    return _rows_to_df(value, cols)   # an empty list is a valid (cleared) grid
 
 
 _PROJECT_TABLES = (
