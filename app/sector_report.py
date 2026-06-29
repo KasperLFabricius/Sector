@@ -20,12 +20,16 @@ import contextlib
 import datetime
 import io
 import math
+import os
+import re
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
@@ -38,6 +42,44 @@ _BLUE = colors.HexColor("#1F3B66")
 _GREY = colors.HexColor("#5A5A5A")
 _LINE = colors.HexColor("#9AA5B1")
 _HEAD_BG = colors.HexColor("#E8ECF2")
+
+# A Unicode (Greek-capable) font for the report. DejaVuSans is free and shipped
+# with the app; Helvetica is the fallback (Greek glyphs then render as boxes, but
+# the report still generates). BriCoS uses Helvetica -- DejaVuSans keeps the same
+# clean sans-serif look while adding the Greek the engineering notation needs.
+_FONT, _FONT_BOLD = "Helvetica", "Helvetica-Bold"
+
+
+def _register_fonts():
+    global _FONT, _FONT_BOLD
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
+    try:
+        pdfmetrics.registerFont(TTFont("DejaVuSans", os.path.join(d, "DejaVuSans.ttf")))
+        pdfmetrics.registerFont(TTFont("DejaVuSans-Bold",
+                                       os.path.join(d, "DejaVuSans-Bold.ttf")))
+        pdfmetrics.registerFontFamily("DejaVuSans", normal="DejaVuSans",
+                                      bold="DejaVuSans-Bold", italic="DejaVuSans",
+                                      boldItalic="DejaVuSans-Bold")
+        _FONT, _FONT_BOLD = "DejaVuSans", "DejaVuSans-Bold"
+    except Exception:
+        pass
+
+
+_register_fonts()
+
+# ASCII engineering tokens -> their Greek glyph (numeric entity, so the source
+# stays ASCII). Applied at render time with word boundaries, so Python identifiers
+# (c.eps_c2) and dict keys (cw.get("phi")) are never touched.
+_GREEK = {"eps": "&#949;", "sigma": "&#963;", "lambda": "&#955;", "alpha": "&#945;",
+          "gamma": "&#947;", "kappa": "&#954;", "rho": "&#961;", "phi": "&#966;",
+          "permille": "&#8240;"}
+_GREEK_RE = re.compile(r"\b(" + "|".join(_GREEK) + r")\b")
+
+
+def _greek(s):
+    """Replace the ASCII engineering tokens in display text with Greek glyphs."""
+    s = _GREEK_RE.sub(lambda m: _GREEK[m.group(1)], s)
+    return s.replace("&lt;=", "&#8804;").replace("&gt;=", "&#8805;")
 
 
 @contextlib.contextmanager
@@ -94,7 +136,7 @@ class _NumberedCanvas(canvas.Canvas):
         super().save()
 
     def _draw_footer(self, total):
-        self.setFont("Helvetica", 8)
+        self.setFont(_FONT, 8)
         self.setFillColor(_GREY)
         self.drawString(20 * mm, 12 * mm, self._footer)
         self.drawRightString(190 * mm, 12 * mm,
@@ -107,25 +149,25 @@ def _styles():
     ss = getSampleStyleSheet()
     out = {}
     out["title"] = ParagraphStyle("t", parent=ss["Title"], fontSize=20,
-                                  textColor=_BLUE, spaceAfter=4)
+                                  fontName=_FONT_BOLD, textColor=_BLUE, spaceAfter=4)
     out["subtitle"] = ParagraphStyle("st", parent=ss["Normal"], fontSize=11,
-                                     textColor=_GREY, spaceAfter=2)
+                                     fontName=_FONT, textColor=_GREY, spaceAfter=2)
     out["h1"] = ParagraphStyle("h1", parent=ss["Heading1"], fontSize=14,
-                              textColor=_BLUE, spaceBefore=10, spaceAfter=6,
-                              keepWithNext=1)
+                              fontName=_FONT_BOLD, textColor=_BLUE, spaceBefore=10,
+                              spaceAfter=6, keepWithNext=1)
     out["h2"] = ParagraphStyle("h2", parent=ss["Heading2"], fontSize=11.5,
-                              textColor=_BLUE, spaceBefore=8, spaceAfter=4,
-                              keepWithNext=1)
+                              fontName=_FONT_BOLD, textColor=_BLUE, spaceBefore=8,
+                              spaceAfter=4, keepWithNext=1)
     out["body"] = ParagraphStyle("b", parent=ss["Normal"], fontSize=9.5,
-                                leading=13, spaceAfter=4)
+                                fontName=_FONT, leading=13, spaceAfter=4)
     out["small"] = ParagraphStyle("s", parent=ss["Normal"], fontSize=8.5,
-                                 leading=11, textColor=_GREY)
+                                 fontName=_FONT, leading=11, textColor=_GREY)
     out["formula"] = ParagraphStyle("f", parent=ss["Normal"], fontSize=9.5,
                                     leading=13, leftIndent=10, spaceAfter=2,
-                                    fontName="Helvetica")
+                                    fontName=_FONT)
     out["ref"] = ParagraphStyle("r", parent=ss["Normal"], fontSize=8,
-                               leading=10, leftIndent=10, textColor=_GREY,
-                               spaceAfter=4)
+                               fontName=_FONT, leading=10, leftIndent=10,
+                               textColor=_GREY, spaceAfter=4)
     return out
 
 
@@ -162,33 +204,33 @@ class ReportBuilder:
     # -- flowable helpers --------------------------------------------------
     def _h1(self, text):
         self._chapter += 1
-        self.flow.append(Paragraph(f"{self._chapter}. {text}", self.s["h1"]))
+        self.flow.append(Paragraph(_greek(f"{self._chapter}. {text}"), self.s["h1"]))
 
     def _h2(self, text):
-        self.flow.append(Paragraph(text, self.s["h2"]))
+        self.flow.append(Paragraph(_greek(text), self.s["h2"]))
 
     def _p(self, text):
-        self.flow.append(Paragraph(text, self.s["body"]))
+        self.flow.append(Paragraph(_greek(text), self.s["body"]))
 
     def _small(self, text):
-        self.flow.append(Paragraph(text, self.s["small"]))
+        self.flow.append(Paragraph(_greek(text), self.s["small"]))
 
     def _gap(self, h=4):
         self.flow.append(Spacer(1, h))
 
     def _formula(self, expr, ref=None, subst=None, result=None):
-        self.flow.append(Paragraph(expr, self.s["formula"]))
+        self.flow.append(Paragraph(_greek(expr), self.s["formula"]))
         if subst:
-            self.flow.append(Paragraph(subst, self.s["formula"]))
+            self.flow.append(Paragraph(_greek(subst), self.s["formula"]))
         if result:
-            self.flow.append(Paragraph(f"<b>{result}</b>", self.s["formula"]))
+            self.flow.append(Paragraph(_greek(f"<b>{result}</b>"), self.s["formula"]))
         if ref:
-            self.flow.append(Paragraph(ref, self.s["ref"]))
+            self.flow.append(Paragraph(_greek(ref), self.s["ref"]))
 
     def _table(self, data, widths, header=True, font=8.5, keep=True):
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
-                              leading=font + 2)
-        head = ParagraphStyle("ch", parent=body, fontName="Helvetica-Bold")
+                              fontName=_FONT, leading=font + 2)
+        head = ParagraphStyle("ch", parent=body, fontName=_FONT_BOLD)
         rows = []
         for r, row in enumerate(data):
             cells = []
@@ -196,7 +238,7 @@ class ReportBuilder:
                 st = head if (header and r == 0) else body
                 st = ParagraphStyle("x", parent=st,
                                     alignment=TA_LEFT if ci == 0 else TA_CENTER)
-                cells.append(Paragraph(str(cell), st))
+                cells.append(Paragraph(_greek(str(cell)), st))
             rows.append(cells)
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
