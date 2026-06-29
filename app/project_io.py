@@ -26,9 +26,10 @@ TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
 # Every scalar / string input that makes up a project. Missing keys are skipped on
 # save, so an older or partial file still loads what it has.
 SCALAR_KEYS = [
-    # Quick Section template (prefills the tables on demand).
+    # Quick Section builder settings (the builder writes points into the tables).
     "shape", "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "wall_mm",
-    "dia_mm", "ring_n", "ring_d", "ring_c_mm", "bot_n", "bot_d", "top_n", "top_d",
+    "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
+    "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
     "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm",
     # Concrete.
     "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",

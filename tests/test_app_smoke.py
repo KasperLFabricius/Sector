@@ -19,6 +19,19 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _open_qs(at):
+    """Open the full-width Quick Section builder so its widgets render."""
+    at.session_state["_qs_open"] = True
+    at.run()
+    return at
+
+
+def _apply_qs(at):
+    """Apply the builder to the point tables and return to the analysis layout."""
+    at.button(key="qs_apply").click().run()
+    return at
+
+
 def test_app_loads_without_error():
     at = _fresh()
     at.run()
@@ -167,35 +180,61 @@ def test_load_sets_survive_a_mode_switch():
 def test_circular_shape_calculates():
     at = _fresh()
     at.run()
+    _open_qs(at)
     at.selectbox(key="shape").set_value("Circular").run()
-    at.button(key="load_qs").click().run()   # apply the Quick Section to the points
+    _apply_qs(at)                            # apply the builder to the points
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
 
-def test_points_are_source_of_truth_until_loaded():
-    # The point tables drive the analysis: changing a Quick Section input does
-    # nothing until "Load Quick Section into points" is pressed.
+def test_builder_does_not_touch_points_until_applied():
+    # The point tables drive the analysis; the Quick Section builder only writes to
+    # them on Apply. Opening it, changing a dimension and pressing Back changes
+    # nothing; Apply does.
     at = _fresh()
     at.run()
     at.button(key="calculate").click().run()
     base_mx = at.session_state["results"]["plastic"]["max_mx"]
-    at.number_input(key="h_mm").set_value(1000.0).run()  # taller, but NOT loaded
+    _open_qs(at)
+    at.number_input(key="h_mm").set_value(1000.0).run()  # taller...
+    at.button(key="qs_back").click().run()               # ...but discarded
     at.button(key="calculate").click().run()
     assert at.session_state["results"]["plastic"]["max_mx"] == pytest.approx(base_mx)
-    at.button(key="load_qs").click().run()               # apply the Quick Section
+    _open_qs(at)
+    at.number_input(key="h_mm").set_value(1000.0).run()
+    at.button(key="qs_apply").click().run()              # now applied
     at.button(key="calculate").click().run()
     assert at.session_state["results"]["plastic"]["max_mx"] > base_mx  # deeper -> stronger
 
 
-def test_point_tables_are_data_only_and_hold_loaded_points():
-    # The point tables hold just the coordinate columns (no stored ID -- the plot
-    # numbers points by row order); Load Quick Section fills them.
+def test_quick_section_builder_places_bars_by_spacing():
+    # The builder opens full-width, places slab bars at a target spacing, and Apply
+    # writes the generated points into the tables (which then analyse).
     at = _fresh()
     at.run()
+    _open_qs(at)
+    assert any(b.key == "qs_apply" for b in at.button)    # the builder is showing
+    at.selectbox(key="shape").set_value("Slab strip").run()
+    at.radio(key="qs_rebar_mode").set_value("By spacing").run()
+    at.number_input(key="bot_s").set_value(150.0).run()
+    at.number_input(key="top_s").set_value(150.0).run()
+    _apply_qs(at)
+    assert not at.exception
+    # 1 m slab, 50 mm cover -> a 0.9 m face at 150 mm gives 7 bars per row (14 total).
+    assert len(at.session_state["bars_base"]) == 14
+    at.button(key="calculate").click().run()
+    assert not at.exception
+
+
+def test_point_tables_are_data_only_and_hold_loaded_points():
+    # The point tables hold just the coordinate columns (no stored ID -- the plot
+    # numbers points by row order); the builder Apply fills them.
+    at = _fresh()
+    at.run()
+    _open_qs(at)
     at.number_input(key="tnd_n").set_value(4).run()
-    at.button(key="load_qs").click().run()
+    _apply_qs(at)
     assert list(at.session_state["corners_base"].columns) == ["x (mm)", "y (mm)"]
     assert list(at.session_state["bars_base"].columns) == \
         ["x (mm)", "y (mm)", "area (mm2)"]
@@ -220,8 +259,9 @@ def test_clear_section_empties_all_point_tables():
     # void, bars and tendons -- so the section starts blank.
     at = _fresh()
     at.run()
-    at.number_input(key="tnd_n").set_value(4).run()    # so Quick Section adds tendons
-    at.button(key="load_qs").click().run()             # populate from the template
+    _open_qs(at)
+    at.number_input(key="tnd_n").set_value(4).run()    # so the builder adds tendons
+    _apply_qs(at)                                       # populate from the builder
     assert len(at.session_state["corners_base"]) > 0
     assert len(at.session_state["bars_base"]) > 0
     at.button(key="clear_pts").click().run()
@@ -265,8 +305,9 @@ def test_box_girder_void_loads_and_calculates():
     # calculates.
     at = _fresh()
     at.run()
+    _open_qs(at)
     at.selectbox(key="shape").set_value("Box girder").run()
-    at.button(key="load_qs").click().run()
+    _apply_qs(at)
     hb = at.session_state["hole_base"]
     assert len(hb) >= 3 and list(hb.columns) == ["x (mm)", "y (mm)"]
     at.button(key="calculate").click().run()
@@ -374,7 +415,8 @@ def test_void_table_migrates_for_old_sessions():
 def test_default_solid_section_has_no_void():
     at = _fresh()
     at.run()
-    at.button(key="load_qs").click().run()   # default rectangle, no cavity
+    _open_qs(at)
+    _apply_qs(at)                            # default rectangle, no cavity
     assert len(at.session_state["hole_base"]) == 0
 
 
@@ -649,10 +691,9 @@ def test_2023_concrete_fck_edit_calculates():
 
 def test_es_field_present_and_editable():
     # The steel modulus Es/Ep is a direct input for both materials (the prestress
-    # panel appears once tendons are enabled).
+    # panel is always shown, like mild steel).
     at = _fresh()
     at.run()
-    at.number_input(key="tnd_n").set_value(4).run()
     keys = {ni.key for ni in at.number_input}
     assert "mild_Es" in keys and "pre_Es" in keys
     at.number_input(key="mild_Es").set_value(210000.0).run()
@@ -726,7 +767,6 @@ def test_material_laws_locked_in_elastic_only_mode():
 def test_prestress_law_locked_in_elastic_only_mode():
     at = _fresh()
     at.run()
-    at.number_input(key="tnd_n").set_value(4).run()
     at.radio(key="mode").set_value("Elastic").run()
     for locked in ("pre_IS", "pre_fytk", "pre_Es", "pre_eut"):
         assert at.number_input(key=locked).disabled is True, locked
@@ -805,12 +845,16 @@ def test_inputs_carry_help_tooltips():
     # Inputs across the panels expose hover help (the "?" tooltip).
     at = _fresh()
     at.run()
-    for key in ("shape", "b_mm", "h_mm", "cover_mm", "conc_fck", "mild_fytk",
-                "mild_eut", "pl_P", "pl_Mx", "nl", "view"):
+    for key in ("conc_fck", "mild_fytk", "mild_eut", "pl_P", "pl_Mx", "nl", "view"):
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
     assert at.radio(key="mode").help
+    # The Quick Section builder inputs carry help too.
+    _open_qs(at)
+    for key in ("shape", "b_mm", "h_mm", "cover_mm"):
+        w = _widget(at.number_input, key) or _widget(at.selectbox, key)
+        assert w is not None and w.help, key
 
 
 def _widget(seq, key):
@@ -846,7 +890,9 @@ def test_view_dropdown_switches_without_error():
 def test_stress_strain_view_includes_prestress_when_enabled():
     at = _fresh()
     at.run()
+    _open_qs(at)
     at.number_input(key="tnd_n").set_value(4).run()
+    _apply_qs(at)                            # put tendons in the section
     at.selectbox(key="view").set_value("Stress-Strain diagrams").run()
     assert not at.exception
 
@@ -870,7 +916,7 @@ def test_section_view_is_geometry_only():
     at.radio(key="mode").set_value("Elastic").run()
     at.button(key="calculate").click().run()
     at.selectbox(key="view").set_value("Section").run()
-    at.number_input(key="h_mm").set_value(750.0).run()  # change an input after calc
+    at.number_input(key="conc_fck").set_value(40.0).run()  # change an input after calc
     assert not at.exception
     assert not any("neutral axis" in w.value for w in at.warning)
 
@@ -930,8 +976,9 @@ def test_prestress_plastic_increases_capacity():
 
     at = _fresh()
     at.run()
+    _open_qs(at)
     at.number_input(key="tnd_n").set_value(4).run()
-    at.button(key="load_qs").click().run()   # load the tendons into the points
+    _apply_qs(at)                            # put the tendons in the section
     at.button(key="calculate").click().run()
     assert not at.exception
     res = at.session_state["results"]
@@ -942,8 +989,9 @@ def test_prestress_plastic_increases_capacity():
 def test_prestress_both_modes_run_with_tendons():
     at = _fresh()
     at.run()
+    _open_qs(at)
     at.number_input(key="tnd_n").set_value(4).run()
-    at.button(key="load_qs").click().run()   # load the tendons into the points
+    _apply_qs(at)                            # load the tendons into the points
     at.radio(key="mode").set_value("Both").run()
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -956,8 +1004,9 @@ def test_prestress_both_modes_run_with_tendons():
 def test_prestress_preset_curve6_calculates():
     at = _fresh()
     at.run()
+    _open_qs(at)
     at.number_input(key="tnd_n").set_value(4).run()
-    at.button(key="load_qs").click().run()   # load the tendons into the points
+    _apply_qs(at)                            # load the tendons into the points
     at.selectbox(key="pre_preset").set_value("Curve 6 (bilinear)").run()
     assert not at.exception
     at.button(key="calculate").click().run()
@@ -1075,8 +1124,9 @@ def test_crack_width_with_tendons_runs():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
+    _open_qs(at)
     at.number_input(key="tnd_n").set_value(4).run()
-    at.button(key="load_qs").click().run()
+    _apply_qs(at)
     at.number_input(key="el_long_Mx").set_value(400.0).run()
     at.checkbox(key="sls_cw").set_value(True).run()
     at.button(key="calculate").click().run()
@@ -1205,10 +1255,11 @@ def test_crack_width_auto_cover_circular_section():
     # clear cover near 100 - phi/2 mm, comfortably above 70 mm.
     at = _fresh()
     at.run()
-    at.selectbox(key="shape").set_value("Circular").run()
     at.radio(key="mode").set_value("Elastic").run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Circular").run()
     at.number_input(key="ring_c_mm").set_value(100.0).run()
-    at.button(key="load_qs").click().run()        # apply the ring to the points
+    _apply_qs(at)                                 # apply the ring to the points
     at.number_input(key="el_long_Mx").set_value(400.0).run()  # force cracking
     at.checkbox(key="sls_cw").set_value(True).run()
     at.button(key="calculate").click().run()
