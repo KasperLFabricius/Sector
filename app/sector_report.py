@@ -190,16 +190,22 @@ def _fmt(v, nd=2):
 class ReportBuilder:
     """Builds the PDF into ``buffer`` from ``meta``, ``inp`` and ``out``."""
 
-    def __init__(self, buffer, meta, inp, out, version="", figures=True):
+    def __init__(self, buffer, meta, inp, out, version="", figures=True,
+                 progress=None):
         self.buffer = buffer
         self.meta = meta or {}
         self.inp = inp
         self.out = out or {}
         self.version = version
         self.figures = figures
+        self._progress = progress
         self.s = _styles()
         self.flow = []
         self._chapter = 0
+
+    def _tick(self, frac, text):
+        if self._progress is not None:
+            self._progress(frac, text)
 
     # -- flowable helpers --------------------------------------------------
     def _h1(self, text):
@@ -267,18 +273,23 @@ class ReportBuilder:
     # -- build -------------------------------------------------------------
     def build(self):
         with _persistent_image_export():
+            self._tick(0.05, "Cover and conventions...")
             self._cover()
             self._conventions()
+            self._tick(0.2, "Section and materials...")
             self._inputs()
             self._theory()
             if "plastic" in self.out:
+                self._tick(0.45, "Plastic capacity...")
                 self.flow.append(PageBreak())
                 self._plastic()
             if "elastic" in self.out:
+                self._tick(0.7, "Elastic stresses and crack width...")
                 self.flow.append(PageBreak())
                 self._elastic()
                 self._cracking()
             self._appendix()
+        self._tick(0.92, "Writing PDF...")
         footer = f"Sector {self.version}  -  Sweco".strip()
         doc = SimpleDocTemplate(self.buffer, pagesize=A4,
                                 leftMargin=20 * mm, rightMargin=20 * mm,
@@ -286,6 +297,7 @@ class ReportBuilder:
                                 title="Sector cross-section report")
         doc.build(self.flow,
                   canvasmaker=lambda *a, **k: _NumberedCanvas(*a, footer=footer, **k))
+        self._tick(1.0, "Done")
 
     # -- sections ----------------------------------------------------------
     def _cover(self):
@@ -784,9 +796,14 @@ class ReportBuilder:
         self._small(f"Generated {ts} by Sector {self.version}.")
 
 
-def build_report(meta, inp, out, version="", figures=True) -> bytes:
-    """Build the PDF report and return its bytes."""
+def build_report(meta, inp, out, version="", figures=True, progress=None) -> bytes:
+    """Build the PDF report and return its bytes.
+
+    ``progress`` is an optional ``callable(fraction, text)`` invoked as the report
+    is assembled, so the UI can show a progress bar.
+    """
     buffer = io.BytesIO()
-    ReportBuilder(buffer, meta, inp, out, version=version, figures=figures).build()
+    ReportBuilder(buffer, meta, inp, out, version=version, figures=figures,
+                  progress=progress).build()
     buffer.seek(0)
     return buffer.getvalue()
