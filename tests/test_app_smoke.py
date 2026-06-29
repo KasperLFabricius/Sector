@@ -40,6 +40,20 @@ def test_app_loads_without_error():
     assert "results" not in at.session_state
 
 
+def test_live_curve_figures_are_memoised():
+    # The Stress-Strain curve figures are rebuilt only when a material actually
+    # changes -- an unrelated rerun reuses the cached figure (perf: skip the
+    # ~20 ms plotly construction).
+    at = _fresh()
+    at.run()
+    at.selectbox(key="view").set_value("Stress-Strain diagrams").run()
+    conc_id = id(at.session_state["_fig_cache"]["concrete"][1])
+    at.number_input(key="nl").set_value(7.0).run()         # unrelated to the concrete law
+    assert id(at.session_state["_fig_cache"]["concrete"][1]) == conc_id     # reused
+    at.number_input(key="conc_fck").set_value(45.0).run()  # changes the concrete law
+    assert id(at.session_state["_fig_cache"]["concrete"][1]) != conc_id     # rebuilt
+
+
 def test_about_panel_shows_version_and_author():
     # The About panel carries the single-source version plus the author/email block.
     at = _fresh()
