@@ -6,6 +6,8 @@ import math
 
 import plotly.graph_objects as go
 
+from sector import geometry
+
 CONCRETE_FILL = "rgba(120,130,140,0.18)"
 CONCRETE_LINE = "#5b6770"
 BAR_TENSION = "#1d9e75"
@@ -514,3 +516,54 @@ def na_line_at(a, b, c, extent):
     """
     px, py = -c * a, -c * b
     return (px - extent * b, py + extent * a, px + extent * b, py - extent * a)
+
+
+def plastic_halfplane(V_deg, na_x, na_y):
+    """Compression half-plane (a*x + b*y + c >= 0) for a plastic NA angle.
+
+    The compression gradient is ``(cos V, sin V)``; the NA is ``a*x + b*y = s_na``
+    with ``s_na`` recovered from whichever axis intercept is finite.
+    """
+    v = math.radians(V_deg)
+    a, b = math.cos(v), math.sin(v)
+    if math.isfinite(na_x) and abs(a) > 1e-9:
+        s_na = na_x * a
+    elif math.isfinite(na_y) and abs(b) > 1e-9:
+        s_na = na_y * b
+    else:
+        s_na = 0.0
+    return a, b, -s_na
+
+
+def elastic_halfplane(na_x, na_y, inside_xy):
+    """Compression half-plane from the NA axis intercepts, oriented so the point
+    of maximum concrete compression lies on the positive (compression) side."""
+    fx, fy = math.isfinite(na_x), math.isfinite(na_y)
+    if fx and fy:
+        a, b, c = na_y, na_x, -na_x * na_y      # line through (na_x,0) and (0,na_y)
+    elif fx:
+        a, b, c = 1.0, 0.0, -na_x               # vertical x = na_x
+    elif fy:
+        a, b, c = 0.0, 1.0, -na_y               # horizontal y = na_y
+    else:
+        return None
+    n = math.hypot(a, b) or 1.0
+    a, b, c = a / n, b / n, c / n
+    if a * inside_xy[0] + b * inside_xy[1] + c < 0.0:
+        a, b, c = -a, -b, -c
+    return a, b, c
+
+
+def compression_zones(outer, halfplane):
+    """Compression and tension zone polygons for a section split by a half-plane."""
+    if halfplane is None:
+        return None
+    a, b, c = halfplane
+    comp = geometry.clip_halfplane(outer, a, b, c)
+    tens = geometry.clip_halfplane(outer, -a, -b, -c)
+    zones = []
+    if len(comp) >= 3:
+        zones.append((comp.tolist(), COMP_ZONE_FILL, "compression zone"))
+    if len(tens) >= 3:
+        zones.append((tens.tolist(), TENS_ZONE_FILL, "tension side"))
+    return zones or None

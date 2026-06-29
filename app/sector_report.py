@@ -427,22 +427,36 @@ class ReportBuilder:
         self._table(rows, [55 * mm, 35 * mm, 38 * mm, 38 * mm])
 
     def _settings_block(self):
+        # Every input that influences the reported results is documented here so the
+        # report is self-contained and QA-able.
         inp = self.inp
         rows = [["Setting", "Value"]]
+        rows.append(["Analysis mode", str(inp.get("mode", "-"))])
+        if "plastic" in self.out:
+            rows.append(["Sweep start V.min", f"{_fmt(inp.get('v_min'),0)} deg"])
+            rows.append(["Sweep end V.max", f"{_fmt(inp.get('v_max'),0)} deg"])
+            rows.append(["Sweep increment V.inc", f"max {_fmt(inp.get('v_inc'),0)} deg"])
+            checked = self.out["plastic"].get("check_util", True)
+            rows.append(["Utilisation check",
+                         "applied moment checked" if checked else "capacity only"])
         if "elastic" in self.out:
+            el = self.out["elastic"]
             rows.append(["Long-term modular ratio n<sub>l</sub> = E<sub>s</sub>/E<sub>c,eff</sub>",
                          _fmt(inp.get("nl"), 1)])
             rows.append(["Short-term modular ratio n<sub>s</sub> = E<sub>s</sub>/E<sub>c</sub>",
                          _fmt(inp.get("ns"), 1)])
             rows.append(["Mean tensile strength f<sub>ctm</sub>",
                          f"{_fmt(inp.get('sls_fctm'),2)} MPa"])
+            rows.append(["Crack width checked", "yes" if inp.get("sls_cw") else "no"])
             if inp.get("sls_cw"):
-                rows.append(["Crack-width code", str(self.out["elastic"].get("crack_code", "-"))])
-                if self.out["elastic"].get("crack_member"):
-                    rows.append(["Member type", str(self.out["elastic"]["crack_member"])])
-        if "plastic" in self.out:
-            rows.append(["NA sweep", f"{_fmt(inp.get('v_min'),0)} to "
-                         f"{_fmt(inp.get('v_max'),0)} deg, step <= {_fmt(inp.get('v_inc'),0)}"])
+                rows.append(["Crack-width code", str(el.get("crack_code", "-"))])
+                if el.get("crack_member"):
+                    rows.append(["Member type", str(el["crack_member"])])
+                dia = inp.get("sls_phi") or 0.0
+                rows.append(["Crack-width bar diameter",
+                             "auto (from geometry)" if not dia else f"{_fmt(dia,1)} mm"])
+                rows.append(["Mild-steel bond coefficient k<sub>1</sub>",
+                             _fmt(inp.get("sls_k1"), 2)])
         self._table(rows, [110 * mm, 55 * mm])
 
     def _theory(self):
@@ -491,16 +505,27 @@ class ReportBuilder:
         else:
             rows.append(["Utilisation", "open arc (no closed envelope)"])
         self._table(rows, [90 * mm, 60 * mm])
-        # Per-angle summary table.
+        # Per-angle results table -- the full column set, matching the result view.
         self._h2("Capacity over the neutral-axis sweep")
-        rows = [["V (deg)", "M<sub>x</sub> (kNm)", "M<sub>y</sub> (kNm)",
-                 "NA x (mm)", "NA y (mm)", "eps<sub>c</sub> (%)", "kappa (1/m)"]]
+        cable = bool(self.inp.get("tendons"))
+        head = ["V", "M<sub>x</sub>", "M<sub>y</sub>", "NA x", "NA y", "eps<sub>c</sub>",
+                "eps<sub>s</sub>", "kappa", "Comp", "L", "D<sub>x</sub>", "D<sub>y</sub>"]
+        if cable:
+            head.append("eps<sub>p</sub>")
+        rows = [head]
         for p in pl["points"]:
-            rows.append([_fmt(p["V"], 0), _fmt(p["Mx"], 1), _fmt(p["My"], 1),
-                         _fmt(p["na_x"] * _MM, 0), _fmt(p["na_y"] * _MM, 0),
-                         _fmt(p["eps_c"], 2), _fmt(p["kappa"], 4)])
-        w = 165 * mm / 7
-        self._table(rows, [w] * 7, font=8, keep=False)
+            row = [_fmt(p["V"], 0), _fmt(p["Mx"], 1), _fmt(p["My"], 1),
+                   _fmt(p["na_x"] * _MM, 0), _fmt(p["na_y"] * _MM, 0),
+                   _fmt(p["eps_c"], 2), _fmt(p["eps_s"], 2), _fmt(p["kappa"], 4),
+                   _fmt(p["comp_force"], 0), _fmt(p["lever"] * _MM, 0),
+                   _fmt(p["dx"] * _MM, 0), _fmt(p["dy"] * _MM, 0)]
+            if cable:
+                row.append(_fmt(p["eps_cable"], 2))
+            rows.append(row)
+        ncol = len(head)
+        self._table(rows, [170 * mm / ncol] * ncol, font=6.5, keep=False)
+        self._small("V deg; M kNm; NA x/y, L, D<sub>x</sub>, D<sub>y</sub> mm; "
+                    "eps<sub>c</sub>/eps<sub>s</sub>/eps<sub>p</sub> %; kappa 1/m; Comp kN.")
         # Governing case worked.
         self._plastic_worked(pl)
 
@@ -533,6 +558,19 @@ class ReportBuilder:
                              f"{_fmt(abs(Fc - T - P),3)} kN)")
         self._small("The tension resultant T = F<sub>c</sub> - N balances the "
                     "section; the moments above are the resultants about the origin.")
+        # Section state at the governing angle (neutral axis + compression zone).
+        if self.figures:
+            inp = self.inp
+            hp = viz.plastic_halfplane(gov["V"], gov["na_x"], gov["na_y"])
+            na = viz.na_line_at(hp[0], hp[1], hp[2], inp.get("extent", 1.0))
+            zones = viz.compression_zones(inp.get("outer", []), hp)
+            bar_xy = [(b[0], b[1]) for b in inp.get("bars", [])]
+            ten_xy = [(t[0], t[1]) for t in inp.get("tendons", [])]
+            self._h2("Section state at the governing angle")
+            self._fig(viz.section_figure(
+                inp.get("outer", []), inp.get("holes", []), bar_xy, na_line=na,
+                tendons=ten_xy, zones=zones, show_labels=True, scale=_MM, unit="mm",
+                title=f"Compression zone at V = {_fmt(gov['V'],0)} deg"), 150, 100)
 
     def _elastic(self):
         el = self.out["elastic"]
@@ -542,16 +580,44 @@ class ReportBuilder:
                 f"<b>{state}</b>. Neutral-axis intercepts: "
                 f"x<sub>na</sub> = {_fmt(el['na_x']*_MM,0)} mm, "
                 f"y<sub>na</sub> = {_fmt(el['na_y']*_MM,0)} mm.")
-        # Transformed properties.
-        self._h2("Transformed section properties (uncracked, n<sub>l</sub>)")
+        # Elastic state diagram (bars coloured by stress sign, compression zone).
+        if self.figures and el.get("max_conc", 0.0) > 0.0:
+            hp = viz.elastic_halfplane(el["na_x"], el["na_y"],
+                                       el.get("max_conc_xy", (0.0, 0.0)))
+            if hp is not None:
+                inp = self.inp
+                na = viz.na_line_at(hp[0], hp[1], hp[2], inp.get("extent", 1.0))
+                zones = viz.compression_zones(inp.get("outer", []), hp)
+                nb = len(inp.get("bars", []))
+                total = el.get("total", [])
+                sgn = lambda s: viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
+                self._fig(viz.section_figure(
+                    inp.get("outer", []), inp.get("holes", []),
+                    [(b[0], b[1]) for b in inp.get("bars", [])],
+                    bar_colors=[sgn(s) for s in total[:nb]],
+                    tendons=[(t[0], t[1]) for t in inp.get("tendons", [])],
+                    tendon_colors=[sgn(s) for s in total[nb:]], na_line=na, zones=zones,
+                    show_labels=True, scale=_MM, unit="mm",
+                    title="Elastic state (green tension, red compression)"), 150, 100)
+        # Transformed properties: uncracked and (when cracked) cracked, n_l-weighted.
+        self._h2("Transformed section properties (n<sub>l</sub>)")
         pu = el.get("props_un") or {}
-        rows = [["Property", "Value"],
-                ["Area A", f"{_fmt(pu.get('area'),4)} m<super>2</super>"],
-                ["Centroid x", f"{_fmt(pu.get('cx',0)*_MM,1)} mm"],
-                ["Centroid y", f"{_fmt(pu.get('cy',0)*_MM,1)} mm"],
-                ["I<sub>x</sub>", f"{_fmt(pu.get('Ix'),6)} m<super>4</super>"],
-                ["I<sub>y</sub>", f"{_fmt(pu.get('Iy'),6)} m<super>4</super>"]]
-        self._table(rows, [60 * mm, 60 * mm])
+        pc = el.get("props_cr")
+        specs = [("Area A", "area", 4, "m<super>2</super>", 1.0),
+                 ("Centroid x", "cx", 1, "mm", _MM),
+                 ("Centroid y", "cy", 1, "mm", _MM),
+                 ("I<sub>x</sub>", "Ix", 6, "m<super>4</super>", 1.0),
+                 ("I<sub>y</sub>", "Iy", 6, "m<super>4</super>", 1.0)]
+        head = ["Property", "Uncracked"] + (["Cracked"] if pc else [])
+        rows = [head]
+        for label, k, nd, unit, sc in specs:
+            row = [f"{label} ({unit})", _fmt(pu.get(k, 0.0) * sc, nd)]
+            if pc:
+                row.append(_fmt(pc.get(k, 0.0) * sc, nd))
+            rows.append(row)
+        self._table(rows, [55 * mm, 45 * mm] + ([45 * mm] if pc else []))
+        self._small("Transformed (n<sub>l</sub>-weighted) about the centroid; the "
+                    "cracked column drops the concrete in tension.")
         # Per-bar stress table.
         self._h2("Reinforcement stresses (creep decomposition)")
         self._small("TOTAL = long + short at the section state; LONG = long-term "
@@ -592,30 +658,48 @@ class ReportBuilder:
         if not el.get("show_cw"):
             self._small("Crack width was not requested for this run.")
             return
-        if not el.get("cracked"):
-            self._small("Section uncracked under the quasi-permanent load; no crack "
-                        "width is reported.")
+        cl, cs = el.get("crack"), el.get("crack_short")
+        if cl is None and cs is None:
+            self._small("No crack width: the section is uncracked, or no bar is in "
+                        "tension, under either the long-term or the short-term load.")
             return
-        self._crack_worked("Long-term (quasi-permanent)", el.get("crack"))
-        self._crack_worked("Short-term (instantaneous total)", el.get("crack_short"))
+        self._crack_table(cl, cs)
+        # Work the case that actually governs (the larger crack width).
+        gov_case = max((c for c in (cl, cs) if c), key=lambda c: c.get("wk", 0.0))
+        self._crack_worked(gov_case, "long-term" if gov_case is cl else "short-term")
 
-    def _crack_worked(self, label, cw):
+    def _crack_table(self, cl, cs):
+        # The full crack-width breakdown for both load cases, matching the view.
+        self._h2("Crack width - both load cases")
+        # wk, sr_max, phi and cover come from the engine already in mm; hc_ef (m)
+        # and ac_eff (m^2) are metric.
+        specs = [("Crack width w<sub>k</sub> (mm)", "wk", 3, 1.0),
+                 ("Crack spacing s<sub>r,max</sub> (mm)", "sr_max", 1, 1.0),
+                 ("Mean strain eps<sub>sm</sub>-eps<sub>cm</sub> (permille)", "esm_ecm", 4, 1000.0),
+                 ("Steel stress sigma<sub>s</sub> (MPa)", "sigma_s", 1, 1.0),
+                 ("Effective ratio rho<sub>p,eff</sub>", "rho_p_eff", 4, 1.0),
+                 ("Effective height h<sub>c,ef</sub> (mm)", "hc_ef", 1, _MM),
+                 ("Effective area A<sub>c,eff</sub> (m<super>2</super>)", "ac_eff", 5, 1.0),
+                 ("Clear cover c (mm)", "cover", 1, 1.0),
+                 ("Bar diameter phi (mm)", "phi", 1, 1.0),
+                 ("Governing bar", "gov_bar", 0, 1.0)]
+
+        def col(c):
+            return ["-"] * len(specs) if c is None else \
+                [_fmt(c.get(k, 0.0) * sc, nd) for _, k, nd, sc in specs]
+        lcol, scol = col(cl), col(cs)
+        rows = [["Quantity", "Long-term", "Short-term"]]
+        for i, spec in enumerate(specs):
+            rows.append([spec[0], lcol[i], scol[i]])
+        self._table(rows, [85 * mm, 38 * mm, 38 * mm])
+
+    def _crack_worked(self, cw, which=""):
         if not cw:
             return
-        self._h2(f"Crack width worked - {label}")
+        self._h2(f"Crack width worked - governing case ({which})" if which
+                 else "Crack width worked (governing bar)")
         self._small(f"Governing bar (largest w<sub>k</sub>): bar "
-                    f"{cw.get('gov_bar','-')}; clear cover c = {_fmt(cw.get('cover',0)*_MM,1)} mm.")
-        rows = [["Quantity", "Symbol", "Value"],
-                ["Steel stress", "sigma<sub>s</sub>", f"{_fmt(cw.get('sigma_s'),1)} MPa"],
-                ["Effective height", "h<sub>c,ef</sub>", f"{_fmt(cw.get('hc_ef',0)*_MM,1)} mm"],
-                ["Effective area", "A<sub>c,eff</sub>", f"{_fmt(cw.get('ac_eff'),5)} m<super>2</super>"],
-                ["Effective ratio", "rho<sub>p,eff</sub>", f"{_fmt(cw.get('rho_p_eff'),4)}"],
-                ["Bar diameter", "phi", f"{_fmt(cw.get('phi',0)*_MM,1)} mm"],
-                ["Mean strain", "eps<sub>sm</sub>-eps<sub>cm</sub>",
-                 f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille"],
-                ["Crack spacing", "s<sub>r,max</sub>", f"{_fmt(cw.get('sr_max',0)*_MM,1)} mm"],
-                ["Crack width", "w<sub>k</sub>", f"{_fmt(cw.get('wk',0)*_MM,3)} mm"]]
-        self._table(rows, [55 * mm, 35 * mm, 55 * mm])
+                    f"{cw.get('gov_bar','-')}; clear cover c = {_fmt(cw.get('cover',0),1)} mm.")
         self._formula(
             "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
             "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
@@ -629,9 +713,9 @@ class ReportBuilder:
         self._formula(
             "w<sub>k</sub> = s<sub>r,max</sub> &#183; (eps<sub>sm</sub> - eps<sub>cm</sub>)",
             ref="Eq (7.8)",
-            subst=f"= {_fmt(cw.get('sr_max',0)*_MM,1)} mm &#183; "
+            subst=f"= {_fmt(cw.get('sr_max',0),1)} mm &#183; "
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
-            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0)*_MM,3)} mm")
+            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
         code = self.out["elastic"].get("crack_code")
         if code:
             self._small(f"Crack-width code: {code}. For the DK NA fine system "
