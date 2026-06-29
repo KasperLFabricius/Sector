@@ -295,13 +295,14 @@ def prestress_curve_figure(prestress, title="Prestressing steel"):
 def steel_curve_figure(steel, title="Mild steel", eps_max=0.025):
     """Stress-strain diagram for a reinforcement law (tension and compression).
 
-    The tension side extends to the rupture strain when that is finite and not
-    far off (so the ultimate point shows); a no-strain-limit law just uses the
-    default window. Compression does not rupture, so it keeps the base range.
+    The window is scaled to the largest visible strain -- the rupture strain
+    ``eut`` when it is finite and not extreme -- and is symmetric, because the
+    rupture applies in both tension and compression. A no-strain-limit law (very
+    large ``eut``) falls back to the default window.
     """
-    top = steel.eut if 0.0 < steel.eut <= 0.06 else eps_max
-    top = max(top, 0.01)
-    return _curve_figure(steel, -eps_max, top, title)
+    top = steel.eut if 0.0 < steel.eut <= 0.1 else eps_max
+    top = max(top, 0.01) * 1.06   # a little past eut so the rupture drop is visible
+    return _curve_figure(steel, -top, top, title)
 
 
 def _ring_xy(ring):

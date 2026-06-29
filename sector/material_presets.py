@@ -167,14 +167,16 @@ def _mild_presets():
     }
     # Eurocode editions: the general law reduced to EC2's flat design diagram --
     # un-factored modulus (gamma_E = 1), flat post-yield branch (futk = fyk,
-    # gamma_u = gamma_s) and no strain limit (see sector.codes).
+    # gamma_u = gamma_s). eut defaults to 50 permille (the characteristic ultimate
+    # strain euk of class B reinforcement); the design value is typically 0.9*euk
+    # (EC2 3.2.7), which the user enters as the design value.
     for label, code in codes.CODES.items():
         # Danish practice uses B550 reinforcement, so the DK NA edition defaults
         # to 550 MPa; the other editions keep the B500 default.
         fyk = 550.0 if "DK NA" in label else _DEFAULT_FYK
         presets[label] = {
             "curve": 3, "fytk": fyk, "fyck": fyk,
-            "futk": fyk, "eut": _NO_STRAIN_LIMIT,
+            "futk": fyk, "eut": 50.0,
             "gamma_y": code.gamma_s, "gamma_u": code.gamma_s, "gamma_E": 1.0,
             "k": 1.0, "ey0t": 0.0, "ey0c": 0.0, "Es": _ES,
         }
@@ -208,7 +210,10 @@ MILD_HELP = {
     "fyck": "Characteristic yield stress in compression (set 0 for no "
             "compression capacity).",
     "futk": "Characteristic ultimate (rupture) stress in tension.",
-    "eut": "Tensile strain at rupture.",
+    "eut": "Design rupture strain (applied symmetrically in tension and "
+           "compression). Per EC2 3.2.7 the design value is typically 0.9*euk "
+           "(e.g. ~45 permille for class B steel, euk = 50 permille); enter the "
+           "design value.",
     "gamma_y": "Partial safety factor on the yield stress.",
     "gamma_u": "Partial safety factor on the ultimate stress.",
     "gamma_E": "Partial safety factor on the elastic modulus.",

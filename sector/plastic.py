@@ -88,6 +88,13 @@ def _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons, eps_
         s_bar_min = min(x * dx + y * dy for x, y, _ in bars)  # most tensile bar
         if s_bar_min < s_na:
             phi = min(phi, intact * steel.eut / (s_na - s_bar_min))
+        # The rupture strain is symmetric, so a compression bar must not be driven
+        # past eut either. This only bites when eut < the concrete crushing strain
+        # (otherwise the concrete fibre, beyond the bars, governs first).
+        if steel.active_in_compression:
+            s_bar_max = max(x * dx + y * dy for x, y, _ in bars)  # most compressed bar
+            if s_bar_max > s_na:
+                phi = min(phi, intact * steel.eut / (s_bar_max - s_na))
 
     if prestress is not None and tendons:
         s_cab_min = min(x * dx + y * dy for x, y, _ in tendons)  # most tensile cable
