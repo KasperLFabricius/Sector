@@ -432,7 +432,8 @@ def test_invalid_concrete_strain_order_is_recoverable():
     at.run()
     at.number_input(key="conc_eps_c2").set_value(5.0).run()   # peak above eps_cu2 (3.5)
     assert not at.exception
-    assert any("eps_cu2 must be at least eps_c2" in w.value for w in at.warning)
+    assert any("must be at least" in w.value and "peak strain" in w.value
+               for w in at.warning)
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]

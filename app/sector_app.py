@@ -33,6 +33,12 @@ from sector.serviceability import analyse_cracking, crack_width  # noqa: E402
 APP_VERSION = "0.1.0"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
+# Greek glyphs for the result tables (st.dataframe renders plain Unicode, not LaTeX,
+# so widget labels use $...$ but table headers/cells use these). Written via chr()
+# so the source stays ASCII (BMP code points, no surrogate pairs).
+_EPS, _SIGMA, _RHO, _PHI = chr(0x3B5), chr(0x3C3), chr(0x3C1), chr(0x3C6)
+_KAPPA = chr(0x3BA)
+
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
@@ -167,7 +173,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     a_ec2 = round(codes.eps_c2(fck) * 1000.0, 2)
     a_ecu2 = round(codes.eps_cu2(fck) * 1000.0, 2)
     a_n = round(codes.n_exponent(fck), 3)
-    if box.button(f"Auto eps/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
+    if box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
                   key="conc_strain_auto", use_container_width=True, disabled=strain_lock,
                   help="Set eps_c2, eps_cu2 and n from EC2 Table 3.1 for the current "
                        "grade (strength-dependent above C50/60). Press again after "
@@ -185,27 +191,27 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     # (the law would reject it). Cross-validate here and lift eps_cu2 to the peak
     # strain so a half-finished edit shows a warning instead of aborting the run.
     if eps_cu2 < eps_c2:
-        box.warning("eps_cu2 must be at least eps_c2 (the peak strain); using that "
-                    "value for the diagram and analysis.")
+        box.warning(r"$\varepsilon_{cu2}$ must be at least $\varepsilon_{c2}$ (the peak "
+                    "strain); using that value for the diagram and analysis.")
         eps_cu2 = eps_c2
 
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n)
     note = "  (alpha_cc tracks fck via eta_cc)" if auto is not None else ""
-    box.caption(f"curve {curve},  fcd = {concrete.fcd:.1f} MPa,  "
-                f"eps_cu2 = {concrete.eps_cu2 * 1000.0:.2f} permille{note}")
+    box.caption(f"curve {curve},  $f_{{cd}}$ = {concrete.fcd:.1f} MPa,  "
+                f"$\\varepsilon_{{cu2}}$ = {concrete.eps_cu2 * 1000.0:.2f} permille{note}")
 
     # Mean tensile strength fctm feeds the serviceability cracking check. It lives
     # with the concrete (not the loads); the Auto button refreshes it from the
     # current grade because the number_input persists across a grade change.
     fctm_ec = round(codes.fctm(fck), 3)
     st.session_state.setdefault("sls_fctm", fctm_ec)
-    if box.button(f"Auto fctm (EC2: {fctm_ec:.2f} MPa)", key="sls_fctm_auto",
+    if box.button(f"Auto $f_{{ctm}}$ (EC2: {fctm_ec:.2f} MPa)", key="sls_fctm_auto",
                   use_container_width=True, disabled=lock_elastic,
                   help="Set fctm = 0.30*fck^(2/3) (EC2 Table 3.1) for the current "
                        "concrete grade. Press again after changing the grade."):
         st.session_state["sls_fctm"] = fctm_ec
-    fctm_val = box.number_input("Tensile strength fctm (MPa)", 0.0, 10.0, step=0.1,
+    fctm_val = box.number_input(r"Tensile strength $f_{ctm}$ (MPa)", 0.0, 10.0, step=0.1,
                                 key="sls_fctm", disabled=lock_elastic,
                                 help="Mean axial tensile strength for the cracking "
                                      "check (fct,eff). Use Auto for the EC2 value.")
@@ -214,12 +220,12 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     # ratios n = Es/Ec. The Auto button sets the EC2 secant modulus for the grade.
     ecm_gpa = round(codes.ecm(fck) / 1000.0, 1)
     st.session_state.setdefault("conc_Ec", ecm_gpa)
-    if box.button(f"Auto Ec (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
+    if box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
                   use_container_width=True, disabled=lock_elastic,
                   help="Set Ec = Ecm = 22*(fcm/10)^0.3 GPa (EC2 Table 3.1) for the "
                        "current grade. Press again after changing the grade."):
         st.session_state["conc_Ec"] = ecm_gpa
-    Ec = box.number_input("Elastic modulus Ec (GPa)", 1.0, 100.0, step=0.5,
+    Ec = box.number_input(r"Elastic modulus $E_c$ (GPa)", 1.0, 100.0, step=0.5,
                           key="conc_Ec", disabled=lock_elastic,
                           help="Concrete secant modulus, used only by the elastic "
                                "analysis to auto-derive the modular ratios n = Es/Ec.")
@@ -269,8 +275,8 @@ def mild_panel(box, locked=False):
     steel = _safe_build(box, mp.build_mild, curve, vals,
                         active_in_compression=active_comp)
     comp = "active" if active_comp else "tension-only"
-    box.caption(f"fyd = {steel.fytk / vals['gamma_y']:.0f} MPa,  "
-                f"Es = {vals['Es'] / 1000.0:.0f} GPa,  compression {comp}")
+    box.caption(f"$f_{{yd}}$ = {steel.fytk / vals['gamma_y']:.0f} MPa,  "
+                f"$E_s$ = {vals['Es'] / 1000.0:.0f} GPa,  compression {comp}")
     return steel
 
 
@@ -564,6 +570,10 @@ _REPORT_FIELDS = [("proj_no", "Project no."), ("proj_name", "Project name"),
                   ("section", "Section"), ("rev", "Revision"), ("author", "Author"),
                   ("checker", "Checker"), ("approver", "Approver")]
 
+# The progress placeholder lives in the Report panel; report generation (which runs
+# later in the same script run) fills it.
+_REPORT_PROG = None
+
 
 def _report_panel(parent):
     """Report metadata inputs plus Generate / Download, like the BriCoS panel."""
@@ -587,6 +597,10 @@ def _report_panel(parent):
     if box.button("Generate report", type="primary", use_container_width=True,
                   key="gen_report"):
         st.session_state["_generating_report"] = True
+    # A progress placeholder in the panel (filled live during generation, which runs
+    # at the end of this same run), in the BriCoS location -- below the button.
+    global _REPORT_PROG
+    _REPORT_PROG = box.empty()
     msg = st.session_state.pop("_report_msg", None)
     if msg:
         (box.success if msg[0] == "success" else box.error)(msg[1])
@@ -606,21 +620,29 @@ def _generate_report(inp):
                                            "resolve any void error) before generating "
                                            "a report.")
         st.rerun()
+    prog = _REPORT_PROG
+    bar = prog.progress(0.0, text="Preparing report...") if prog is not None else None
+
+    def _on_progress(frac, text="Generating report..."):
+        if bar is not None:
+            bar.progress(max(0.0, min(1.0, float(frac))), text=text)
+
     try:
         import sector_report
         meta = {k: st.session_state.get(f"rep_{k}", "")
                 for k, _ in _REPORT_FIELDS}
         meta["comments"] = st.session_state.get("rep_comments", "")
         figs = not st.session_state.get("_report_no_figures", False)
-        with st.spinner("Generating report (rendering figures may take a moment)..."):
-            out = run_analysis(inp)
-            pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
-                                             figures=figs)
+        out = run_analysis(inp)
+        pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
+                                         figures=figs, progress=_on_progress)
         st.session_state["report_buffer"] = pdf
         st.session_state["_report_msg"] = ("success", "Report generated - use the "
                                            "Download button in the Report panel.")
     except Exception as exc:                       # never let it crash the app
         st.session_state["_report_msg"] = ("error", f"Report generation failed: {exc}")
+    if prog is not None:
+        prog.empty()
     st.rerun()
 
 
@@ -664,13 +686,13 @@ def build_inputs():
     elastic_on = mode in ("Elastic", "Both")
 
     aset.markdown("**Neutral-axis sweep (plastic)**")
-    v_min = aset.number_input("Start angle V.min (deg)", 0.0, 360.0, 0.0, 5.0,
+    v_min = aset.number_input(r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
                               key="v_min", disabled=not plastic_on,
                               help="First neutral-axis rotation angle of the plastic sweep.")
-    v_max = aset.number_input("End angle V.max (deg)", 0.0, 360.0, 360.0, 5.0,
+    v_max = aset.number_input(r"End angle $V_{max}$ (deg)", 0.0, 360.0, 360.0, 5.0,
                               key="v_max", disabled=not plastic_on,
                               help="Last neutral-axis rotation angle of the plastic sweep.")
-    v_inc = aset.number_input("Increment V.inc (deg)", 1.0, 90.0, 15.0, 1.0,
+    v_inc = aset.number_input(r"Increment $V_{inc}$ (deg)", 1.0, 90.0, 15.0, 1.0,
                               key="v_inc", disabled=not plastic_on,
                               help="Angular step between swept neutral-axis angles; "
                                    "a finer step gives a smoother M-M envelope.")
@@ -688,7 +710,7 @@ def build_inputs():
                            help="Report the EC2 crack width wk for both the long-term "
                                 "and the short-term (instantaneous) load. Each bar's "
                                 "clear cover is taken from the geometry.")
-    sls_phi = aset.number_input("Crack-width bar diameter (mm, 0 = auto)", 0.0, 60.0,
+    sls_phi = aset.number_input(r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0, 60.0,
                                 0.0, 1.0, key="sls_phi",
                                 disabled=not (elastic_on and sls_cw),
                                 help="Governing bar diameter for the crack spacing "
@@ -723,33 +745,33 @@ def build_inputs():
 
     holes = []
     if shape == "Rectangle":
-        b = sec.number_input("Width b (mm)", 50.0, 10000.0, 400.0, 10.0, key="b_mm",
+        b = sec.number_input(r"Width $b$ (mm)", 50.0, 10000.0, 400.0, 10.0, key="b_mm",
                              help="Overall section width.") / 1000.0
-        h = sec.number_input("Height h (mm)", 50.0, 10000.0, 600.0, 10.0, key="h_mm",
+        h = sec.number_input(r"Height $h$ (mm)", 50.0, 10000.0, 600.0, 10.0, key="h_mm",
                              help="Overall section height (depth).") / 1000.0
         outer = templates.rectangle(b, h)
         width_b = b
     elif shape == "Slab strip":
-        h = sec.number_input("Thickness h (mm)", 50.0, 3000.0, 300.0, 10.0, key="h_mm",
+        h = sec.number_input(r"Thickness $h$ (mm)", 50.0, 3000.0, 300.0, 10.0, key="h_mm",
                              help="Slab thickness; the strip is analysed per 1 m width.") / 1000.0
         b = 1.0
         outer = templates.slab_strip(h)
         width_b = b
     elif shape == "T-section":
-        bf = sec.number_input("Flange width bf (mm)", 100.0, 12000.0, 1200.0, 10.0, key="bf_mm",
+        bf = sec.number_input(r"Flange width $b_f$ (mm)", 100.0, 12000.0, 1200.0, 10.0, key="bf_mm",
                               help="Width of the (top) flange.") / 1000.0
-        hf = sec.number_input("Flange thickness hf (mm)", 50.0, 2000.0, 200.0, 10.0, key="hf_mm",
+        hf = sec.number_input(r"Flange thickness $h_f$ (mm)", 50.0, 2000.0, 200.0, 10.0, key="hf_mm",
                               help="Thickness of the flange.") / 1000.0
-        bw = sec.number_input("Web width bw (mm)", 50.0, 4000.0, 300.0, 10.0, key="bw_mm",
+        bw = sec.number_input(r"Web width $b_w$ (mm)", 50.0, 4000.0, 300.0, 10.0, key="bw_mm",
                               help="Width of the web.") / 1000.0
-        hw = sec.number_input("Web depth hw (mm)", 100.0, 6000.0, 600.0, 10.0, key="hw_mm",
+        hw = sec.number_input(r"Web depth $h_w$ (mm)", 100.0, 6000.0, 600.0, 10.0, key="hw_mm",
                               help="Depth of the web below the flange.") / 1000.0
         outer = templates.t_section(bf, hf, bw, hw)
         b, h, width_b = bw, hf + hw, bf
     elif shape == "Box girder":
-        b = sec.number_input("Width b (mm)", 200.0, 12000.0, 800.0, 10.0, key="b_mm",
+        b = sec.number_input(r"Width $b$ (mm)", 200.0, 12000.0, 800.0, 10.0, key="b_mm",
                              help="Overall outer width of the box.") / 1000.0
-        h = sec.number_input("Height h (mm)", 200.0, 12000.0, 1000.0, 10.0, key="h_mm",
+        h = sec.number_input(r"Height $h$ (mm)", 200.0, 12000.0, 1000.0, 10.0, key="h_mm",
                              help="Overall outer height of the box.") / 1000.0
         # Cap the wall so the cavity stays positive (2*wall < b and < h).
         max_wall = round((min(b, h) / 2 - 0.01) * 1000.0, 0)
@@ -998,19 +1020,19 @@ def build_inputs():
     P_el_l, Mx_el_l, My_el_l = _load_set(
         "el_long", "Sustained axial force (long-term).",
         "Sustained moment (long-term).", elastic_on)
-    phi_creep = loads.number_input("Creep coefficient phi (long-term)", 0.0, 5.0, 2.0,
+    phi_creep = loads.number_input(r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0, 2.0,
                                    0.1, key="el_phi", disabled=not elastic_on,
                                    help="Final creep coefficient for the long-term "
                                         "modular ratio n_l = Es*(1+phi)/Ec.")
     _nl_auto = round(min(50.0, max(1.0, steel.Es * (1.0 + phi_creep)
                                    / (conc_Ec * 1000.0))), 1)
     st.session_state.setdefault("nl", _nl_auto)   # default from Ec, phi (EC2)
-    if loads.button(f"Auto n_l (Es(1+phi)/Ec = {_nl_auto:.1f})", key="nl_auto",
+    if loads.button(f"Auto $n_l$ ($E_s(1+\\varphi)/E_c$ = {_nl_auto:.1f})", key="nl_auto",
                     disabled=not elastic_on, use_container_width=True,
                     help="Long-term modular ratio from the concrete Ec, creep-reduced "
                          "by phi (effective-modulus method)."):
         st.session_state["nl"] = _nl_auto
-    nl = loads.number_input("Long-term modular ratio n_l = Es/Ec_eff", 1.0, 50.0,
+    nl = loads.number_input(r"Long-term modular ratio $n_l = E_s/E_{c,eff}$", 1.0, 50.0,
                             step=0.5, key="nl", disabled=not elastic_on,
                             help="Modular ratio for the sustained load (creep-reduced "
                                  "concrete stiffness, so larger than the short-term "
@@ -1021,11 +1043,11 @@ def build_inputs():
         "Instantaneous (variable) moment.", elastic_on, mx_default=0.0)
     _ns_auto = round(min(50.0, max(1.0, steel.Es / (conc_Ec * 1000.0))), 1)
     st.session_state.setdefault("ns", _ns_auto)   # default from Ec (Es/Ec)
-    if loads.button(f"Auto n_s (Es/Ec = {_ns_auto:.1f})", key="ns_auto",
+    if loads.button(f"Auto $n_s$ ($E_s/E_c$ = {_ns_auto:.1f})", key="ns_auto",
                     disabled=not elastic_on, use_container_width=True,
                     help="Short-term (instantaneous) modular ratio from the concrete Ec."):
         st.session_state["ns"] = _ns_auto
-    ns = loads.number_input("Short-term modular ratio n_s = Es/Ec", 1.0, 50.0,
+    ns = loads.number_input(r"Short-term modular ratio $n_s = E_s/E_c$", 1.0, 50.0,
                             step=0.5, key="ns", disabled=not elastic_on,
                             help="Modular ratio for the instantaneous load. Use Auto "
                                  "to derive it from Ec.")
@@ -1292,16 +1314,16 @@ def _plastic_table(pts, cable):
         "My (kNm)": [round(pt["My"], 1) for pt in pts],
         "NA x (mm)": [_fmt(pt["na_x"] * _MM) for pt in pts],
         "NA y (mm)": [_fmt(pt["na_y"] * _MM) for pt in pts],
-        "eps_c (%)": [round(pt["eps_c"], 2) for pt in pts],
-        "eps_s (%)": [round(pt["eps_s"], 2) for pt in pts],
-        "kappa (1/m)": [round(pt["kappa"], 4) for pt in pts],
+        f"{_EPS}c (%)": [round(pt["eps_c"], 2) for pt in pts],
+        f"{_EPS}s (%)": [round(pt["eps_s"], 2) for pt in pts],
+        f"{_KAPPA} (1/m)": [round(pt["kappa"], 4) for pt in pts],
         "Comp (kN)": [round(pt["comp_force"], 0) for pt in pts],
         "L (mm)": [round(pt["lever"] * _MM, 1) for pt in pts],
         "Dx (mm)": [round(pt["dx"] * _MM, 1) for pt in pts],
         "Dy (mm)": [round(pt["dy"] * _MM, 1) for pt in pts],
     }
     if cable:
-        cols["eps_cable (%)"] = [round(pt["eps_cable"], 2) for pt in pts]
+        cols[f"{_EPS}cable (%)"] = [round(pt["eps_cable"], 2) for pt in pts]
     return cols
 
 
@@ -1466,7 +1488,7 @@ def _elastic_sls_section(inp, e):
 
     pL, pR = st.columns(2)
     with pL:
-        st.markdown("**Transformed section properties (at n_l)**")
+        st.markdown(r"**Transformed section properties (at $n_l$)**")
         un = e["props_un"]
         cr = e.get("props_cr")
         rows = ["Area A (m2)", "Centroid x (m)", "Centroid y (m)",
@@ -1476,7 +1498,7 @@ def _elastic_sls_section(inp, e):
         if cr is not None:
             data["Cracked"] = [f"{cr[k]:.4g}" for k in keys]
         st.dataframe(data, hide_index=True, use_container_width=True)
-        st.caption("Transformed (n_l-weighted) properties about the section "
+        st.caption("Transformed ($n_l$-weighted) properties about the section "
                    "centroid; the cracked column drops the concrete in tension. "
                    "Ix resists Mx (bending about the x-axis).")
     with pR:
@@ -1489,13 +1511,14 @@ def _crack_width_panel(e):
     by side. Each bar's clear cover is taken from the geometry and the bar with
     the largest wk governs, reported per load case."""
     cl, cs = e.get("crack"), e.get("crack_short")
-    st.markdown(f"**Crack width wk** ({e.get('crack_code', 'EC2 7.3.4')})")
+    st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
     if cl is None and cs is None:
         st.info("No crack width: uncracked, or no bar in tension, under either "
                 "the long-term or the short-term load.")
         return
-    quants = ["wk (mm)", "sr,max (mm)", "esm - ecm", "sigma_s (MPa)", "rho_p,eff",
-              "hc,ef (m)", "cover c (mm)", "bar dia (mm)", "gov. bar"]
+    quants = ["wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
+              f"{_SIGMA}s (MPa)", f"{_RHO}p,eff", "hc,ef (m)", "cover c (mm)",
+              f"bar dia {_PHI} (mm)", "gov. bar"]
     keys = ["wk", "sr_max", "esm_ecm", "sigma_s", "rho_p_eff", "hc_ef", "cover",
             "phi", "gov_bar"]
     fmts = ["{:.3f}", "{:.1f}", "{:.3e}", "{:.1f}", "{:.4f}", "{:.3f}", "{:.1f}",
@@ -1509,7 +1532,7 @@ def _crack_width_panel(e):
     st.dataframe({"Quantity": quants, "Long-term": column(cl),
                   "Short-term": column(cs)}, hide_index=True,
                  use_container_width=True)
-    st.caption("Governing (largest-wk) bar per load case; each bar's clear cover "
+    st.caption("Governing (largest-$w_k$) bar per load case; each bar's clear cover "
                "is the distance to the nearest concrete face minus its radius.")
     member = e.get("crack_member")
     if member:
