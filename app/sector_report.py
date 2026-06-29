@@ -412,8 +412,13 @@ class ReportBuilder:
         inp = self.inp
         rows = [["Load case", "N (kN)", "M<sub>x</sub> (kNm)", "M<sub>y</sub> (kNm)"]]
         if "plastic" in self.out:
-            rows.append(["Plastic (applied)", _fmt(inp.get("P_pl"), 1),
-                         _fmt(inp.get("Mx_pl"), 1), _fmt(inp.get("My_pl"), 1)])
+            # In a capacity-only run the applied moments are ignored, so only the
+            # axial force (which defines the envelope) is listed.
+            cap_only = not self.out["plastic"].get("check_util", True)
+            label = "Plastic (axial, capacity only)" if cap_only else "Plastic (applied)"
+            mx = "-" if cap_only else _fmt(inp.get("Mx_pl"), 1)
+            my = "-" if cap_only else _fmt(inp.get("My_pl"), 1)
+            rows.append([label, _fmt(inp.get("P_pl"), 1), mx, my])
         if "elastic" in self.out:
             rows.append(["Elastic long-term", _fmt(inp.get("P_el_l"), 1),
                          _fmt(inp.get("Mx_el_l"), 1), _fmt(inp.get("My_el_l"), 1)])
@@ -478,8 +483,9 @@ class ReportBuilder:
         if not pl.get("check_util", True):
             rows.append(["Utilisation", "not checked (capacity only)"])
         elif pl.get("util") is not None:
-            rows.append(["Applied M<sub>x</sub>, M<sub>y</sub>",
-                         f"{_fmt(applied[0],1)}, {_fmt(applied[1],1)} kNm"])
+            if applied is not None:
+                rows.append(["Applied M<sub>x</sub>, M<sub>y</sub>",
+                             f"{_fmt(applied[0],1)}, {_fmt(applied[1],1)} kNm"])
             rows.append(["Utilisation (applied direction)",
                          f"{_fmt(pl['util']*100,1)} %"])
         else:

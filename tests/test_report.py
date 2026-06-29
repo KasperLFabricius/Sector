@@ -74,7 +74,17 @@ def test_report_capacity_only_omits_utilisation():
     out["plastic"].update(util=None, check_util=False, applied=None)
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "capacity only" in txt
-    assert "applied direction" not in txt   # no utilisation percentage row
+    assert "applied direction" not in txt    # no utilisation percentage row
+    assert "Plastic (applied)" not in txt    # ignored moments not listed as loads
+
+
+def test_report_tolerates_plastic_payload_without_applied():
+    # An older plastic payload may have a utilisation but no 'applied' point; the
+    # report must not crash indexing it.
+    out = _out()
+    out["plastic"].pop("applied", None)
+    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    assert pdf[:4] == b"%PDF"
 
 
 def test_report_handles_no_results():
