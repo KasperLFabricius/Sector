@@ -1223,57 +1223,6 @@ def run_analysis(inp):
     return out
 
 
-def _plastic_halfplane(V_deg, na_x, na_y):
-    """Compression half-plane (a*x + b*y + c >= 0) for a plastic NA angle.
-
-    The compression gradient is ``(cos V, sin V)``; the NA is ``a*x + b*y = s_na``
-    with ``s_na`` recovered from whichever axis intercept is finite.
-    """
-    v = math.radians(V_deg)
-    a, b = math.cos(v), math.sin(v)
-    if math.isfinite(na_x) and abs(a) > 1e-9:
-        s_na = na_x * a
-    elif math.isfinite(na_y) and abs(b) > 1e-9:
-        s_na = na_y * b
-    else:
-        s_na = 0.0
-    return a, b, -s_na
-
-
-def _elastic_halfplane(na_x, na_y, inside_xy):
-    """Compression half-plane from the NA axis intercepts, oriented so the point
-    of maximum concrete compression lies on the positive (compression) side."""
-    fx, fy = math.isfinite(na_x), math.isfinite(na_y)
-    if fx and fy:
-        a, b, c = na_y, na_x, -na_x * na_y      # line through (na_x,0) and (0,na_y)
-    elif fx:
-        a, b, c = 1.0, 0.0, -na_x               # vertical x = na_x
-    elif fy:
-        a, b, c = 0.0, 1.0, -na_y               # horizontal y = na_y
-    else:
-        return None
-    n = math.hypot(a, b) or 1.0
-    a, b, c = a / n, b / n, c / n
-    if a * inside_xy[0] + b * inside_xy[1] + c < 0.0:
-        a, b, c = -a, -b, -c
-    return a, b, c
-
-
-def _zones(outer, halfplane):
-    """Compression and tension zone polygons for a section split by a half-plane."""
-    if halfplane is None:
-        return None
-    a, b, c = halfplane
-    comp = geometry.clip_halfplane(outer, a, b, c)
-    tens = geometry.clip_halfplane(outer, -a, -b, -c)
-    zones = []
-    if len(comp) >= 3:
-        zones.append((comp.tolist(), viz.COMP_ZONE_FILL, "compression zone"))
-    if len(tens) >= 3:
-        zones.append((tens.tolist(), viz.TENS_ZONE_FILL, "tension side"))
-    return zones or None
-
-
 def _radial_util(mx, my, ax, ay):
     a_rad = float(np.hypot(ax, ay))
     if a_rad < 1e-9:
@@ -1390,7 +1339,7 @@ def plastic_view(inp, results):
                        key="pl_state",
                        help="Inspect the section state at one swept neutral-axis angle.")
     pt = pts[sel]
-    hp = _plastic_halfplane(pt["V"], pt["na_x"], pt["na_y"])
+    hp = viz.plastic_halfplane(pt["V"], pt["na_x"], pt["na_y"])
     na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"])
     cL, cR = st.columns([3, 2])
     with cL:
@@ -1398,7 +1347,7 @@ def plastic_view(inp, results):
         tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
-                               tendons=tendon_xy, zones=_zones(inp["outer"], hp),
+                               tendons=tendon_xy, zones=viz.compression_zones(inp["outer"], hp),
                                title=f"Section at V = {pt['V']:.0f} deg",
                                show_labels=True, label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm"),
@@ -1449,9 +1398,9 @@ def elastic_view(inp, results):
         st.caption("The concrete carries no compression (the section is fully "
                    "cracked in tension); no neutral axis is shown.")
 
-    hp = _elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"]) if has_comp else None
+    hp = viz.elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"]) if has_comp else None
     na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"]) if hp else None
-    zones = _zones(inp["outer"], hp) if hp else None
+    zones = viz.compression_zones(inp["outer"], hp) if hp else None
     # Tendons fold into the bar set for the solve, but are drawn as diamonds (bars
     # as circles), each coloured by its stress sign -- consistent with the other
     # views. The stress list runs bars first, then tendons.

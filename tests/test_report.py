@@ -45,13 +45,15 @@ def _out():
                                 "eps_cable": 0.0, "kappa": 0.02, "comp_force": 300.0,
                                 "lever": 0.2, "dx": 0.0, "dy": 0.2}]},
         "elastic": {"total": [150.0], "long": [120.0], "dif": [30.0], "rst1": [0.0],
-                    "max_conc": -12.0, "max_conc_xy": (0.0, 0.15), "max_conc_point": 3,
+                    "max_conc": 12.0, "max_conc_xy": (0.0, 0.15), "max_conc_point": 3,
                     "na_x": 0.0, "na_y": 0.04, "max_steel": 150.0, "max_steel_bar": 1,
                     "converged": True, "cracked": True, "lambda_cr": 0.4,
                     "sigma_ct": 7.2, "fctm": 2.9, "show_cw": True,
                     "props_un": {"area": 0.06, "cx": 0.0, "cy": 0.0, "Ix": 4.5e-4,
                                  "Iy": 2.0e-4, "Ixy": 0.0},
-                    "props_cr": None, "crack": _crack(), "crack_short": _crack(),
+                    "props_cr": {"area": 0.03, "cx": 0.0, "cy": 0.02, "Ix": 2.1e-4,
+                                 "Iy": 1.0e-4, "Ixy": 0.0},
+                    "crack": _crack(), "crack_short": _crack(),
                     "crack_code": "EN 1992-1-1:2005", "crack_member": None}}
 
 
@@ -60,6 +62,15 @@ def test_report_pdf_generates():
                                      _inp(), _out(), version="0.1.0", figures=False)
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 3000
+
+
+def test_report_mirrors_the_views():
+    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    assert "Comp" in txt and "kappa" in txt        # full plastic table columns
+    assert "Cracked" in txt                        # cracked transformed-props column
+    assert "both load cases" in txt                # full crack-width table
+    assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
+    assert "Utilisation check" in txt              # analysis settings documented
 
 
 def test_report_handles_plastic_only():
@@ -121,5 +132,6 @@ def test_report_handles_uncracked_section():
     out["elastic"]["cracked"] = False
     out["elastic"]["crack"] = None
     out["elastic"]["crack_short"] = None
+    out["elastic"]["props_cr"] = None
     pdf = sector_report.build_report({}, _inp(), out, figures=False)
     assert pdf[:4] == b"%PDF"
