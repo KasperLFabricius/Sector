@@ -103,6 +103,22 @@ def test_slab_matches_eurocode_rectangular_block():
     assert r.Mx == pytest.approx(mrd_block, rel=0.02)  # within ~2%
 
 
+def test_governing_curvature_caps_compression_steel_rupture():
+    # The symmetric rupture must also cap the curvature for a compression bar: with
+    # eut below the concrete crushing strain, a compression bar reaches eut first.
+    from sector.plastic import _governing_curvature
+    # dx = 1, dy = 0 so s = x; s_na = s_max - c = 0.1. A bar 0.08 past the NA on the
+    # compression side reaches eut = 2 permille before the concrete crushes.
+    bars = [(0.18, 0.0, 1.0e-4), (0.099, 0.0, 1.0e-4)]
+    low = MildSteel(fytk=500.0, fyck=500.0, eut=0.002, gamma_y=1.0, curve=2)
+    phi = _governing_curvature(low, None, 1.0, 0.0, 0.2, 0.1, bars, [], 0.0035)
+    assert phi == pytest.approx(0.002 / 0.08, rel=1e-6)    # compression bar governs
+    # With a large eut the concrete crushing limit governs instead (no cap effect).
+    high = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.0, curve=2)
+    phi2 = _governing_curvature(high, None, 1.0, 0.0, 0.2, 0.1, bars, [], 0.0035)
+    assert phi2 == pytest.approx(0.0035 / 0.1, rel=1e-6)   # concrete governs
+
+
 def test_plastic_capacity_responds_to_ultimate_strain():
     # The solver must use the concrete's own eps_cu2/eps_c2: with the steel forced
     # to govern by yield (no rupture), changing the crushing strain reshapes the
