@@ -674,6 +674,220 @@ def _generate_report(inp):
     st.rerun()
 
 
+_QS_SHAPES = ["Rectangle", "Slab strip", "T-section", "Box girder", "Circular"]
+
+# The builder's own widget keys. Streamlit drops a widget's key from session state
+# on any run where the widget is not rendered, so while the builder is closed these
+# would be lost (resetting the builder to defaults on reopen, and dropping them
+# from a saved project). The builder mirrors them to durable "qsv_" keys whenever it
+# renders and restores them when it opens; project_io persists the durable copies.
+_QS_WIDGET_KEYS = (
+    "shape", "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "wall_mm",
+    "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
+    "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
+    "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm",
+)
+
+
+def _qs_restore_settings():
+    """Seed the builder widgets from their durable copies before they are created.
+
+    Only fills a key that is absent (the closed-builder case); a key already present
+    from the live widget this run is left alone, so in-progress edits are kept.
+    """
+    for k in _QS_WIDGET_KEYS:
+        dk = "qsv_" + k
+        if k not in st.session_state and dk in st.session_state:
+            st.session_state[k] = st.session_state[dk]
+
+
+def _qs_mirror_settings():
+    """Copy the builder widgets to their durable keys, so the settings survive the
+    builder being closed (and are what a saved project stores)."""
+    for k in _QS_WIDGET_KEYS:
+        if k in st.session_state:
+            st.session_state["qsv_" + k] = st.session_state[k]
+
+
+def _default_quick_section():
+    """The section a fresh session starts from (used to seed the point tables): a
+    400 x 600 mm rectangle with 6 bottom and 2 top 20 mm bars at 50 mm cover."""
+    b, h, cov = 0.4, 0.6, 0.05
+    outer = templates.rectangle(b, h)
+    bars = templates.merge_bars(
+        templates.bar_row(-h / 2 + cov, -b / 2 + cov, b / 2 - cov, 6, 20.0),
+        templates.bar_row(h / 2 - cov, -b / 2 + cov, b / 2 - cov, 2, 20.0))
+    return outer, [], bars, []
+
+
+def _quick_section_geometry(box):
+    """Render the shape, dimension and reinforcement inputs in ``box`` and return
+    the generated ``(outer, holes, bars, tendons)`` (metres / mm areas).
+
+    Shared by the builder viewport: the widgets keep their own keys so the last
+    settings persist between openings. Reinforcement is two rows (bottom / top)
+    placed either by bar count or by centre-to-centre spacing (slab ``phi @ s``);
+    a circular section uses a perimeter ring.
+    """
+    shape = box.selectbox("Shape", _QS_SHAPES, key="shape",
+                          help="Outline of the concrete cross-section to analyse.")
+    holes = []
+    if shape == "Rectangle":
+        b = box.number_input(r"Width $b$ (mm)", 50.0, 10000.0, 400.0, 10.0, key="b_mm",
+                             help="Overall section width.") / 1000.0
+        h = box.number_input(r"Height $h$ (mm)", 50.0, 10000.0, 600.0, 10.0, key="h_mm",
+                             help="Overall section height (depth).") / 1000.0
+        outer = templates.rectangle(b, h)
+        width_b = b
+    elif shape == "Slab strip":
+        h = box.number_input(r"Thickness $h$ (mm)", 50.0, 3000.0, 300.0, 10.0, key="h_mm",
+                             help="Slab thickness; the strip is analysed per 1 m width.") / 1000.0
+        b = width_b = 1.0
+        outer = templates.slab_strip(h)
+    elif shape == "T-section":
+        bf = box.number_input(r"Flange width $b_f$ (mm)", 100.0, 12000.0, 1200.0, 10.0, key="bf_mm",
+                              help="Width of the (top) flange.") / 1000.0
+        hf = box.number_input(r"Flange thickness $h_f$ (mm)", 50.0, 2000.0, 200.0, 10.0, key="hf_mm",
+                              help="Thickness of the flange.") / 1000.0
+        bw = box.number_input(r"Web width $b_w$ (mm)", 50.0, 4000.0, 300.0, 10.0, key="bw_mm",
+                              help="Width of the web.") / 1000.0
+        hw = box.number_input(r"Web depth $h_w$ (mm)", 100.0, 6000.0, 600.0, 10.0, key="hw_mm",
+                              help="Depth of the web below the flange.") / 1000.0
+        outer = templates.t_section(bf, hf, bw, hw)
+        b, h, width_b = bw, hf + hw, bf
+    elif shape == "Box girder":
+        b = box.number_input(r"Width $b$ (mm)", 200.0, 12000.0, 800.0, 10.0, key="b_mm",
+                             help="Overall outer width of the box.") / 1000.0
+        h = box.number_input(r"Height $h$ (mm)", 200.0, 12000.0, 1000.0, 10.0, key="h_mm",
+                             help="Overall outer height of the box.") / 1000.0
+        max_wall = round((min(b, h) / 2 - 0.01) * 1000.0, 0)
+        wall = box.number_input("Wall thickness (mm)", 20.0, max_wall,
+                                min(200.0, max_wall), 10.0, key="wall_mm",
+                                help="Thickness of the box walls (uniform).") / 1000.0
+        outer, holes = templates.box(b, h, wall)
+        width_b = b
+    else:  # Circular
+        dia = box.number_input("Diameter (mm)", 100.0, 6000.0, 600.0, 10.0, key="dia_mm",
+                               help="Outer diameter of the circular section.") / 1000.0
+        outer = templates.circular(dia)
+        b = h = width_b = dia
+
+    box.markdown("**Reinforcement**")
+    if shape == "Circular":
+        nb = box.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n",
+                              help="Number of bars evenly spaced around the perimeter.")
+        rd = box.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4,
+                           key="ring_d", help="Diameter of each reinforcement bar.")
+        cov = box.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="ring_c_mm",
+                               help="Distance from the section face to the bar centres.") / 1000.0
+        bars = templates.bar_ring(0.0, 0.0, dia / 2 - cov, int(nb), rd)
+    else:
+        by_spacing = box.radio(
+            "Bar placement", ["By number", "By spacing"], horizontal=True,
+            key="qs_rebar_mode",
+            help="Place each row as a fixed bar count, or at a target centre-to-"
+                 "centre spacing (slab phi @ s); the count is then derived from the "
+                 "face width.") == "By spacing"
+        cov = box.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="cover_mm",
+                               help="Distance from the top/bottom face to the bar centres.") / 1000.0
+        bot_w, top_w = b - 2.0 * cov, width_b - 2.0 * cov
+        c1, c2 = box.columns(2)
+        c1.markdown("**Bottom**")
+        c2.markdown("**Top**")
+        rd_bot = c1.selectbox("Bottom dia (mm)", templates.BAR_DIAMETERS, index=4,
+                              key="bot_d", help="Bottom bar diameter (mm).")
+        rd_top = c2.selectbox("Top dia (mm)", templates.BAR_DIAMETERS, index=4,
+                              key="top_d", help="Top bar diameter (mm).")
+        if by_spacing:
+            s_bot = c1.number_input("Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
+                                    key="bot_s", help="Target centre-to-centre spacing.") / 1000.0
+            s_top = c2.number_input("Top spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
+                                    key="top_s", help="Target centre-to-centre spacing.") / 1000.0
+            nb_bot = templates.count_for_spacing(bot_w, s_bot)
+            nb_top = templates.count_for_spacing(top_w, s_top)
+            c1.caption(f"-> {nb_bot} bars")
+            c2.caption(f"-> {nb_top} bars")
+        else:
+            nb_bot = c1.number_input("Bottom bars", 0, 100, 6, 1, key="bot_n",
+                                     help="Number of bars in the bottom layer.")
+            nb_top = c2.number_input("Top bars", 0, 100, 2, 1, key="top_n",
+                                     help="Number of bars in the top layer.")
+        bars = templates.merge_bars(
+            templates.bar_row(-h / 2 + cov, -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot),
+            templates.bar_row(h / 2 - cov, -width_b / 2 + cov, width_b / 2 - cov,
+                              int(nb_top), rd_top))
+
+    box.markdown("**Prestressing tendons**")
+    nt = box.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",
+                          help="Number of tendons the Quick Section places (0 = none). "
+                               "Tendons can also be entered directly in the points table.")
+    a_t = box.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a",
+                           help="Cross-sectional area of a single tendon.")
+    cov_p = box.number_input("Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, key="tnd_c_mm",
+                             help="Distance from the bottom face (or the circular "
+                                  "ring) to the tendons.") / 1000.0
+    tendons = []
+    if nt > 0:
+        if shape == "Circular":
+            tendons = templates.point_ring(0.0, 0.0, max(b / 2 - cov_p, 0.0), int(nt), a_t)
+        else:
+            tendons = templates.point_row(-h / 2 + cov_p, -b / 2 + cov_p,
+                                          b / 2 - cov_p, int(nt), a_t)
+    return outer, (holes or []), bars, tendons
+
+
+def _quick_section_viewport():
+    """Full-width Quick Section builder shown in place of the analysis layout.
+
+    Pick a shape, dimensions and a reinforcement layout with a live preview, then
+    Apply to write explicit points into the editable tables (which stay the source
+    of truth) or Back to leave them untouched. Mirrors the BriCoS manual viewport:
+    a session flag (``_qs_open``) renders this instead of the normal layout.
+    """
+    _qs_restore_settings()   # bring back the settings from the last time it was open
+    st.markdown("## Quick Section builder")
+    st.caption("Generate a parametric section. Apply overwrites the corner, bar "
+               "and tendon point tables with what is drawn here; Back discards it "
+               "and leaves the current points untouched.")
+    bcol, acol, _ = st.columns([1, 1, 3])
+    back = bcol.button("Back", use_container_width=True, key="qs_back")
+    apply = acol.button("Apply to point tables", type="primary",
+                        use_container_width=True, key="qs_apply")
+
+    form, preview = st.columns([2, 3])
+    with form:
+        outer, holes, bars, tendons = _quick_section_geometry(st)
+    _qs_mirror_settings()   # keep the durable copy current with what is shown
+    with preview:
+        bar_xy = [(x, y) for x, y, _ in bars]
+        tendon_xy = [(x, y) for x, y, _ in tendons]
+        st.plotly_chart(
+            viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
+                               title="Preview", show_labels=True, height=560,
+                               scale=_MM, unit="mm"),
+            use_container_width=True)
+        st.caption(f"{len(outer)} concrete corners, {len(holes)} void(s), "
+                   f"{len(bars)} bars, {len(tendons)} tendons.")
+
+    if back:
+        st.session_state["_qs_open"] = False
+        st.rerun()
+    if apply:
+        qs_hole = [(float(p[0]), float(p[1])) for p in holes[0]] if holes else []
+        st.session_state["corners_base"] = _corners_df(_pts_to_mm(
+            [(float(p[0]), float(p[1])) for p in outer]))
+        st.session_state["hole_base"] = _corners_df(_pts_to_mm(qs_hole))
+        st.session_state["bars_base"] = _rebar_df(_pts_to_mm(
+            [(float(p[0]), float(p[1]), float(p[2])) for p in bars]))
+        st.session_state["tendons_base"] = _rebar_df(_pts_to_mm(
+            [(float(p[0]), float(p[1]), float(p[2])) for p in tendons]))
+        for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
+            st.session_state.pop(k, None)
+        st.session_state["pts_init"] = True
+        st.session_state["_qs_open"] = False
+        st.rerun()
+
+
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
     loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
@@ -777,133 +991,31 @@ def build_inputs():
              "for the base EN 1992-1-1 code.")
 
     sec = s.expander("Section", expanded=True)
-    shape = sec.selectbox("Shape", ["Rectangle", "Slab strip", "T-section",
-                                    "Box girder", "Circular"], key="shape",
-                          help="Outline of the concrete cross-section to analyse.")
-
-    holes = []
-    if shape == "Rectangle":
-        b = sec.number_input(r"Width $b$ (mm)", 50.0, 10000.0, 400.0, 10.0, key="b_mm",
-                             help="Overall section width.") / 1000.0
-        h = sec.number_input(r"Height $h$ (mm)", 50.0, 10000.0, 600.0, 10.0, key="h_mm",
-                             help="Overall section height (depth).") / 1000.0
-        outer = templates.rectangle(b, h)
-        width_b = b
-    elif shape == "Slab strip":
-        h = sec.number_input(r"Thickness $h$ (mm)", 50.0, 3000.0, 300.0, 10.0, key="h_mm",
-                             help="Slab thickness; the strip is analysed per 1 m width.") / 1000.0
-        b = 1.0
-        outer = templates.slab_strip(h)
-        width_b = b
-    elif shape == "T-section":
-        bf = sec.number_input(r"Flange width $b_f$ (mm)", 100.0, 12000.0, 1200.0, 10.0, key="bf_mm",
-                              help="Width of the (top) flange.") / 1000.0
-        hf = sec.number_input(r"Flange thickness $h_f$ (mm)", 50.0, 2000.0, 200.0, 10.0, key="hf_mm",
-                              help="Thickness of the flange.") / 1000.0
-        bw = sec.number_input(r"Web width $b_w$ (mm)", 50.0, 4000.0, 300.0, 10.0, key="bw_mm",
-                              help="Width of the web.") / 1000.0
-        hw = sec.number_input(r"Web depth $h_w$ (mm)", 100.0, 6000.0, 600.0, 10.0, key="hw_mm",
-                              help="Depth of the web below the flange.") / 1000.0
-        outer = templates.t_section(bf, hf, bw, hw)
-        b, h, width_b = bw, hf + hw, bf
-    elif shape == "Box girder":
-        b = sec.number_input(r"Width $b$ (mm)", 200.0, 12000.0, 800.0, 10.0, key="b_mm",
-                             help="Overall outer width of the box.") / 1000.0
-        h = sec.number_input(r"Height $h$ (mm)", 200.0, 12000.0, 1000.0, 10.0, key="h_mm",
-                             help="Overall outer height of the box.") / 1000.0
-        # Cap the wall so the cavity stays positive (2*wall < b and < h).
-        max_wall = round((min(b, h) / 2 - 0.01) * 1000.0, 0)
-        wall = sec.number_input("Wall thickness (mm)", 20.0, max_wall,
-                                min(200.0, max_wall), 10.0, key="wall_mm",
-                                help="Thickness of the box walls (uniform).") / 1000.0
-        outer, holes = templates.box(b, h, wall)
-        width_b = b
-    else:  # Circular
-        dia = sec.number_input("Diameter (mm)", 100.0, 6000.0, 600.0, 10.0, key="dia_mm",
-                               help="Outer diameter of the circular section.") / 1000.0
-        outer = templates.circular(dia)
-        b = h = dia
-        width_b = dia
-
-    sec.markdown("**Reinforcement**")
-    if shape == "Circular":
-        nb = sec.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n",
-                              help="Number of bars evenly spaced around the perimeter.")
-        rd = sec.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4,
-                           key="ring_d", help="Diameter of each reinforcement bar.")
-        cov = sec.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="ring_c_mm",
-                               help="Distance from the section face to the bar centres.") / 1000.0
-        bars = templates.bar_ring(0.0, 0.0, dia / 2 - cov, int(nb), rd)
-    else:
-        c1, c2 = sec.columns(2)
-        with c1:
-            st.markdown("**Bottom**")
-            nb_bot = st.number_input("n##bot", 0, 100, 6, 1, key="bot_n", label_visibility="collapsed",
-                                     help="Number of bars in the bottom layer.")
-            rd_bot = st.selectbox("dia##bot", templates.BAR_DIAMETERS, index=4, key="bot_d",
-                                  label_visibility="collapsed", help="Bottom bar diameter (mm).")
-        with c2:
-            st.markdown("**Top**")
-            nb_top = st.number_input("n##top", 0, 100, 2, 1, key="top_n", label_visibility="collapsed",
-                                     help="Number of bars in the top layer.")
-            rd_top = st.selectbox("dia##top", templates.BAR_DIAMETERS, index=4, key="top_d",
-                                  label_visibility="collapsed", help="Top bar diameter (mm).")
-        cov = sec.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="cover_mm",
-                               help="Distance from the top/bottom face to the bar centres.") / 1000.0
-        bw_eff = width_b if shape == "T-section" else b
-        bars = templates.merge_bars(
-            templates.bar_row(-h / 2 + cov, -(b if shape != "T-section" else bw_eff) / 2 + cov,
-                              (b if shape != "T-section" else bw_eff) / 2 - cov, int(nb_bot), rd_bot)
-            if shape != "T-section" else
-            templates.bar_row(-(hf + hw) / 2 + cov, -bw / 2 + cov, bw / 2 - cov, int(nb_bot), rd_bot),
-            templates.bar_row(h / 2 - cov, -width_b / 2 + cov, width_b / 2 - cov, int(nb_top), rd_top),
-        )
-
-    sec.markdown("**Prestressing tendons** (Quick Section)")
-    nt = sec.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",
-                          help="Number of tendons the Quick Section places (0 = none). "
-                               "Tendons can always be entered in the points table below, "
-                               "regardless of this.")
-    a_t = sec.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a",
-                           help="Cross-sectional area of a single tendon.")
-    cov_p = sec.number_input("Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, key="tnd_c_mm",
-                             help="Distance from the bottom face (or the circular "
-                                  "ring) to the tendons.") / 1000.0
-    tendons = []
-    if nt > 0:
-        if shape == "Circular":
-            tendons = templates.point_ring(0.0, 0.0, max(dia / 2 - cov_p, 0.0),
-                                           int(nt), a_t)
-        else:
-            # Bottom (tension) row; b and h are already the web/overall dimensions
-            # for the T-section, matching the bottom reinforcement placement.
-            tendons = templates.point_row(-h / 2 + cov_p, -b / 2 + cov_p,
-                                          b / 2 - cov_p, int(nt), a_t)
-
-    # ---- Cross-section points (always live; the source of truth) ----
-    # The Quick Section above only prefills these on demand (the Load button), so a
-    # later Quick Section tweak never silently discards manual point edits. The
-    # void (e.g. a box cavity) is an editable corner table too; a single void is
-    # supported here (multiple voids are a future extension).
-    qs_outer = [(float(p[0]), float(p[1])) for p in outer]
-    qs_hole = ([(float(p[0]), float(p[1])) for p in holes[0]] if holes else [])
-    qs_bars = [(float(p[0]), float(p[1]), float(p[2])) for p in bars]
-    qs_tendons = [(float(p[0]), float(p[1]), float(p[2])) for p in (tendons or [])]
-    load_qs = sec.button("Load Quick Section into points", key="load_qs",
-                         use_container_width=True,
-                         help="Overwrite the editable point tables below with the "
-                              "Quick Section above.")
+    sec.caption("The section is a set of explicit points (the source of truth). "
+                "Use the Quick Section builder to generate a parametric shape and "
+                "write its points here, or edit the point tables directly.")
+    if sec.button("Quick Section builder...", key="open_qs", use_container_width=True,
+                  help="Open a full-width builder: pick a shape, dimensions and "
+                       "reinforcement with a live preview, then Apply to fill the "
+                       "point tables."):
+        st.session_state["_qs_open"] = True
+        st.rerun()
     clear_pts = sec.button("Clear Section (empty all points)", key="clear_pts",
                            use_container_width=True,
                            help="Remove every concrete corner, the void, and all "
                                 "bars and tendons from the point tables, to start "
                                 "from a blank section.")
-    if "pts_init" not in st.session_state or load_qs:
-        # The Quick Section template is in metres; the tables hold millimetres.
-        st.session_state["corners_base"] = _corners_df(_pts_to_mm(qs_outer))
-        st.session_state["hole_base"] = _corners_df(_pts_to_mm(qs_hole))
-        st.session_state["bars_base"] = _rebar_df(_pts_to_mm(qs_bars))
-        st.session_state["tendons_base"] = _rebar_df(_pts_to_mm(qs_tendons))
+    if "pts_init" not in st.session_state:
+        # Seed the tables once from the default Quick Section (metres -> mm).
+        d_outer, d_holes, d_bars, d_tendons = _default_quick_section()
+        d_hole = [(float(p[0]), float(p[1])) for p in d_holes[0]] if d_holes else []
+        st.session_state["corners_base"] = _corners_df(_pts_to_mm(
+            [(float(p[0]), float(p[1])) for p in d_outer]))
+        st.session_state["hole_base"] = _corners_df(_pts_to_mm(d_hole))
+        st.session_state["bars_base"] = _rebar_df(_pts_to_mm(
+            [(float(p[0]), float(p[1]), float(p[2])) for p in d_bars]))
+        st.session_state["tendons_base"] = _rebar_df(_pts_to_mm(
+            [(float(p[0]), float(p[1]), float(p[2])) for p in d_tendons]))
         for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
             st.session_state.pop(k, None)
         st.session_state["pts_init"] = True
@@ -1591,7 +1703,19 @@ def _crack_width_panel(e):
 # ---------------------------------------------------------------------------
 
 _apply_pending_project()   # restore an uploaded project before any widget is built
+# Always build the sidebar inputs, even while the Quick Section builder is open:
+# Streamlit discards a widget's state on any run where it is not rendered, so
+# skipping build_inputs would reset every material and load input to its minimum
+# (and break the next Calculate). build_inputs is cheap; its result is unused
+# while the builder owns the main area.
 inp = build_inputs()
+
+# The Quick Section builder takes over the main viewport (the BriCoS manual
+# pattern): render it in place of the analysis views while it is open, and stop
+# before they draw. The sidebar stays, so its widget state survives.
+if st.session_state.get("_qs_open"):
+    _quick_section_viewport()
+    st.stop()
 
 # Plot-label controls sit inline in the main viewport, directly above the View
 # dropdown (not tucked inside a submenu). They only affect the drawings, so they

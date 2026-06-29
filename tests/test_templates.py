@@ -84,6 +84,23 @@ def test_bar_row_single_is_centred():
     assert len(bars) == 1 and bars[0][0] == pytest.approx(0.0)
 
 
+def test_count_for_spacing():
+    # phi @ 150 over a 0.90 m face -> 6 gaps of exactly 150 mm = 7 bars.
+    assert templates.count_for_spacing(0.90, 0.15) == 7
+    # A face that does not divide evenly gets an extra bar (a tighter actual gap,
+    # never wider than the target): 0.50 m -> ceil(3.33)+1 = 5 bars (125 mm), not 4.
+    assert templates.count_for_spacing(0.50, 0.15) == 5
+    # Degenerate spans give a single bar; a positive span never gives fewer than 2.
+    assert templates.count_for_spacing(0.0, 0.15) == 1
+    assert templates.count_for_spacing(0.10, 0.15) == 2
+    # The actual centre-to-centre spacing never exceeds the target, for any face.
+    for span in (0.30, 0.50, 0.77, 0.90, 1.23):
+        n = templates.count_for_spacing(span, 0.15)
+        bars = templates.bar_row(0.0, -span / 2, span / 2, n, 12)
+        gaps = [bars[i + 1][0] - bars[i][0] for i in range(n - 1)]
+        assert max(gaps) <= 0.15 + 1e-9, span
+
+
 def test_bar_ring_on_circle():
     bars = templates.bar_ring(0.0, 0.0, 0.25, 8, 20)
     assert len(bars) == 8

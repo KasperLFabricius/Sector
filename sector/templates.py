@@ -80,6 +80,24 @@ def box(b: float, h: float, wall: float):
 # ---------------------------------------------------------------------------
 
 
+def count_for_spacing(span: float, spacing: float) -> int:
+    """Number of evenly-spaced bars to place across ``span`` so the centre-to-centre
+    gap does not exceed the target ``spacing`` (same units for both).
+
+    ``spacing`` is a *maximum* (slab-style ``phi @ s``): the bars are spread evenly
+    over the whole face, so the count is ``ceil(span / spacing) + 1`` -- enough gaps
+    that each is ``<= spacing``. A face that is not an exact multiple of the spacing
+    gets an extra bar (a tighter actual spacing) rather than one too few. A
+    collapsed or non-positive span gives a single bar; a positive span never gives
+    fewer than two, so a by-spacing row always spans the face.
+    """
+    if span <= 0 or spacing <= 0:
+        return 1
+    # The 1e-9 slack keeps an exact multiple (e.g. 0.90 m at 150 mm -> 6 gaps) from
+    # rounding up to an extra gap on a floating-point 6.0000001.
+    return max(2, int(math.ceil(span / spacing - 1e-9)) + 1)
+
+
 def bar_row(y: float, x_start: float, x_end: float, n: int, diameter_mm: float):
     """``n`` bars of the given diameter evenly spaced from ``x_start`` to ``x_end``."""
     if n <= 0:
