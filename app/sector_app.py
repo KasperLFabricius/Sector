@@ -827,6 +827,7 @@ def _quick_section_geometry(box):
                               key="bot_d", help="Bottom bar diameter (mm).")
         rd_top = c2.selectbox("Top dia (mm)", templates.BAR_DIAMETERS, index=4,
                               key="top_d", help="Top bar diameter (mm).")
+        n_at_bot = n_at_top = None     # by-number: a fixed count per layer
         if by_spacing:
             s_bot = c1.number_input("Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
                                     key="bot_s", help="Target centre-to-centre spacing.") / 1000.0
@@ -836,6 +837,14 @@ def _quick_section_geometry(box):
             nb_top = templates.count_for_spacing(top_w, s_top)
             c1.caption(f"-> {nb_bot} bars")
             c2.caption(f"-> {nb_top} bars")
+
+            # By spacing the count follows each row's own clear span, so a top row
+            # narrowed to the web keeps the target spacing instead of the flange count.
+            def n_at_bot(xs, xe):
+                return templates.count_for_spacing(xe - xs, s_bot)
+
+            def n_at_top(xs, xe):
+                return templates.count_for_spacing(xe - xs, s_top)
         else:
             nb_bot = c1.number_input("Bottom bars", 0, 100, 6, 1, key="bot_n",
                                      help="Number of bars in each bottom layer.")
@@ -865,10 +874,11 @@ def _quick_section_geometry(box):
 
         bars = templates.merge_bars(
             templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
-                                 -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot),
+                                 -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot,
+                                 n_at=n_at_bot),
             templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
                                  -width_b / 2 + cov, width_b / 2 - cov,
-                                 int(nb_top), rd_top, span_at=top_span_at))
+                                 int(nb_top), rd_top, span_at=top_span_at, n_at=n_at_top))
 
     box.markdown("**Prestressing tendons**")
     nt = box.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",

@@ -110,6 +110,23 @@ def test_bar_layers_span_at_follows_a_width_step():
     assert max(by_y[0.15]) == pytest.approx(0.15)    # below the step -> web span
 
 
+def test_bar_layers_n_at_recomputes_count_per_row():
+    # By spacing the bar count follows each row's span: a narrowed row gets fewer bars
+    # (the fixed n_per is ignored when n_at is given).
+    def span(y):
+        return (-0.55, 0.55) if y >= 0.2 else (-0.10, 0.10)
+    def count(xs, xe):
+        return templates.count_for_spacing(xe - xs, 0.15)
+    bars = templates.bar_layers(0.35, -1.0, 2, 0.25, -0.55, 0.55, 99, 16,
+                                span_at=span, n_at=count)
+    by_y = {}
+    for x, y, _a in bars:
+        by_y.setdefault(round(y, 6), []).append(x)
+    assert len(by_y[0.35]) == templates.count_for_spacing(1.1, 0.15)    # wide row
+    assert len(by_y[0.10]) == templates.count_for_spacing(0.20, 0.15)   # narrow row
+    assert len(by_y[0.10]) < len(by_y[0.35])
+
+
 def test_bar_layers_direction_moves_top_rows_down():
     # direction = -1 (top face): later layers move toward the section interior (down).
     y0, ls = 0.27, 0.05

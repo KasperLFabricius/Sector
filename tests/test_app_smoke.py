@@ -292,6 +292,27 @@ def test_quick_section_tsection_lower_top_layer_fits_the_web():
     assert "plastic" in at.session_state["results"]
 
 
+def test_quick_section_tsection_spaced_web_layer_has_fewer_bars():
+    # By spacing, a T-section top layer narrowed to the web keeps the target spacing,
+    # so it has far fewer bars than the flange row (not the flange count crammed in).
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("T-section").run()
+    at.radio(key="qs_rebar_mode").set_value("By spacing").run()
+    at.number_input(key="top_s").set_value(150.0).run()
+    at.number_input(key="top_layers").set_value(2).run()
+    at.number_input(key="layer_s").set_value(250.0).run()       # lower row into the web
+    _apply_qs(at)
+    assert not at.exception
+    assert not any("within the concrete" in (e.value or "") for e in at.error)
+    bars = at.session_state["bars_base"]
+    flange_row = bars[(bars["y (mm)"] > 300) & (bars["y (mm)"] < 360)]   # y=350, flange
+    web_row = bars[(bars["y (mm)"] > 50) & (bars["y (mm)"] < 150)]       # y=100, web
+    assert 0 < len(web_row) < len(flange_row)
+    assert web_row["x (mm)"].abs().max() <= 110                  # stays in the web
+
+
 def test_builder_settings_persist_between_openings():
     # The builder widgets are dropped while it is closed, so the settings are
     # mirrored to durable keys: reopening restores the last shape and dimensions.
