@@ -634,6 +634,12 @@ class ReportBuilder:
                 f"<b>{state}</b>. Neutral-axis intercepts: "
                 f"x<sub>na</sub> = {_fmt(el['na_x']*_MM,0)} mm, "
                 f"y<sub>na</sub> = {_fmt(el['na_y']*_MM,0)} mm.")
+        ps = el.get("prestress")
+        if ps is not None:
+            self._p(f"The tendon prestress is applied from its initial strain (so N "
+                    f"is the external force only): equivalent prestress action "
+                    f"N = {_fmt(ps[0],0)} kN, M<sub>x</sub> = {_fmt(ps[1],0)} kNm, "
+                    f"M<sub>y</sub> = {_fmt(ps[2],0)} kNm (compression positive).")
         # Elastic state diagram (bars coloured by stress sign, compression zone).
         if self.figures and el.get("max_conc", 0.0) > 0.0:
             hp = viz.elastic_halfplane(el["na_x"], el["na_y"],

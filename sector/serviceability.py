@@ -281,6 +281,8 @@ def analyse_cracking(
     k4: float = 0.425,
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
+    n_mult: Optional[np.ndarray] = None,
+    prestress_stress: Optional[np.ndarray] = None,
 ) -> CrackingResult:
     """Serviceability analysis of the section under one action combination.
 
@@ -319,12 +321,32 @@ def analyse_cracking(
         Cracking decision, ``lambda_cr``, ``zeta``, the Stage I and Stage II
         solves, the mean tension-stiffened strain plane, and the crack width.
     """
-    uncr = solve_elastic_uncracked(section, P, Mx, My, n)
-    sigma_ct = uncr.max_concrete_tension / _KPA_PER_MPA  # MPa
-    lam = cracking_factor(sigma_ct, fctm)
+    uncr = solve_elastic_uncracked(section, P, Mx, My, n, n_mult=n_mult,
+                                   prestress_stress=prestress_stress)
+    sigma_ct = uncr.max_concrete_tension / _KPA_PER_MPA  # MPa, peak total tension
+    if prestress_stress is None:
+        lam = cracking_factor(sigma_ct, fctm)
+    else:
+        # The tendon prestress is a fixed (permanent) action; only the external
+        # P/M are factored. Decompression: cracking when sigma_pre + lam*sigma_ext
+        # = fctm at some fibre, i.e. lam = min_i (fctm - sigma_pre,i)/sigma_ext,i
+        # over fibres the external load puts into tension. (Reduces to
+        # fctm/sigma_ct when there is no prestress, since then sigma_pre = 0.)
+        ext = solve_elastic_uncracked(section, P, Mx, My, n, n_mult=n_mult)
+        verts = section.concrete_vertices()
+        sig_tot = (uncr.eps0 + uncr.kx * verts[:, 0]
+                   + uncr.ky * verts[:, 1]) / _KPA_PER_MPA
+        sig_ext = (ext.eps0 + ext.kx * verts[:, 0]
+                   + ext.ky * verts[:, 1]) / _KPA_PER_MPA
+        sig_pre = sig_tot - sig_ext                          # prestress alone
+        loaded = sig_ext > 1.0e-9                            # external puts in tension
+        lam = (float(np.min((fctm - sig_pre[loaded]) / sig_ext[loaded]))
+               if np.any(loaded) else math.inf)
     cracked = lam < 1.0
+    lam = max(0.0, lam) if math.isfinite(lam) else lam       # no negative load factor
 
-    crk = solve_elastic(section, P, Mx, My, n)
+    crk = solve_elastic(section, P, Mx, My, n, n_mult=n_mult,
+                        prestress_stress=prestress_stress)
     zeta = tension_stiffening_zeta(lam, beta) if cracked else 0.0
 
     # Mean (tension-stiffened) strain plane: interpolate Stage I and Stage II.
