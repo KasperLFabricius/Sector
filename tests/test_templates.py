@@ -97,6 +97,19 @@ def test_bar_layers_stacks_rows_into_the_section():
     assert one == templates.bar_row(y0, -0.15, 0.15, 6, 16)
 
 
+def test_bar_layers_span_at_follows_a_width_step():
+    # span_at(y) sets each row's span from its depth, so a top row narrows once it
+    # drops below a width step (a T-section flange -> web).
+    def span(y):
+        return (-0.6, 0.6) if y >= 0.2 else (-0.15, 0.15)
+    bars = templates.bar_layers(0.35, -1.0, 3, 0.1, -0.6, 0.6, 2, 16, span_at=span)
+    by_y = {}
+    for x, y, _a in bars:
+        by_y.setdefault(round(y, 6), []).append(x)
+    assert max(by_y[0.35]) == pytest.approx(0.6)     # in the flange -> wide span
+    assert max(by_y[0.15]) == pytest.approx(0.15)    # below the step -> web span
+
+
 def test_bar_layers_direction_moves_top_rows_down():
     # direction = -1 (top face): later layers move toward the section interior (down).
     y0, ls = 0.27, 0.05

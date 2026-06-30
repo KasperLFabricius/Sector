@@ -271,6 +271,27 @@ def test_quick_section_builder_stacks_multiple_bar_layers():
     assert not at.exception
 
 
+def test_quick_section_tsection_lower_top_layer_fits_the_web():
+    # A T-section's top face is the flange; a lower top layer pushed below the flange
+    # must narrow to the web, or it would sit outside the concrete and be rejected.
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("T-section").run()
+    at.number_input(key="top_layers").set_value(2).run()
+    at.number_input(key="layer_s").set_value(250.0).run()   # pushes layer 2 into the web
+    _apply_qs(at)
+    assert not at.exception
+    assert not any("within the concrete" in (e.value or "") for e in at.error)
+    bars = at.session_state["bars_base"]
+    lower_top = bars[(bars["y (mm)"] > 50) & (bars["y (mm)"] < 150)]   # the y=100 mm row
+    assert len(lower_top) >= 1
+    assert lower_top["x (mm)"].abs().max() <= 110           # within the web (bw/2 - cover)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
 def test_builder_settings_persist_between_openings():
     # The builder widgets are dropped while it is closed, so the settings are
     # mirrored to durable keys: reopening restores the last shape and dimensions.

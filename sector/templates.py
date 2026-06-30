@@ -110,18 +110,22 @@ def bar_row(y: float, x_start: float, x_end: float, n: int, diameter_mm: float):
 
 
 def bar_layers(y_face: float, direction: float, n_layers: int, layer_spacing: float,
-               x_start: float, x_end: float, n_per: int, diameter_mm: float):
+               x_start: float, x_end: float, n_per: int, diameter_mm: float,
+               span_at=None):
     """Stack ``n_layers`` identical rows of ``n_per`` bars.
 
     The first row sits at ``y_face`` (the cover line at a face) and each further
     layer is ``layer_spacing`` deeper into the section: ``direction`` is ``+1`` for
     a bottom face (layers move up) or ``-1`` for a top face (layers move down).
-    ``n_layers = 1`` is a single :func:`bar_row`.
+    ``n_layers = 1`` is a single :func:`bar_row`. ``span_at(y) -> (x_start, x_end)``,
+    when given, sets each row's span from its depth, so a row can follow a width
+    step (e.g. a T-section top row narrowing to the web below the flange).
     """
     rows = []
     for j in range(max(0, int(n_layers))):
-        rows.extend(bar_row(y_face + direction * j * layer_spacing,
-                            x_start, x_end, n_per, diameter_mm))
+        y = y_face + direction * j * layer_spacing
+        xs, xe = span_at(y) if span_at is not None else (x_start, x_end)
+        rows.extend(bar_row(y, xs, xe, n_per, diameter_mm))
     return rows
 
 

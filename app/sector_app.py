@@ -850,12 +850,25 @@ def _quick_section_geometry(box):
             disabled=int(nl_bot) == 1 and int(nl_top) == 1,
             help="Vertical centre-to-centre distance between stacked bar layers "
                  "(used only when a face has more than one layer).") / 1000.0
+        # A T-section's top face is the flange (width width_b); a top layer pushed
+        # below the flange must fit the narrower web (width b) or it would fall
+        # outside the concrete. The bottom layers stay in the web (b) and only ever
+        # widen into the flange, so they need no such limit.
+        top_span_at = None
+        if shape == "T-section":
+            flange_y = h / 2 - hf
+
+            def top_span_at(y):
+                if y >= flange_y:                 # within the flange
+                    return -width_b / 2 + cov, width_b / 2 - cov
+                return -b / 2 + cov, b / 2 - cov  # below the flange -> the web
+
         bars = templates.merge_bars(
             templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
                                  -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot),
             templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
                                  -width_b / 2 + cov, width_b / 2 - cov,
-                                 int(nb_top), rd_top))
+                                 int(nb_top), rd_top, span_at=top_span_at))
 
     box.markdown("**Prestressing tendons**")
     nt = box.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",
