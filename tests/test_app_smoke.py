@@ -715,6 +715,27 @@ def test_autosave_restores_last_session_on_next_launch(tmp_path, monkeypatch):
     assert at2.session_state["conc_fck"] == 42.0   # restored automatically
 
 
+def test_autosave_after_quick_section_apply_saves_applied_geometry(tmp_path, monkeypatch):
+    # Applying the Quick Section reseeds the tables and reruns with the builder
+    # closed; a due autosave must then capture the applied geometry, not the stale
+    # pre-apply tables (Codex P2).
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.number_input(key="h_mm").set_value(900.0).run()   # distinctive height (450 mm half)
+    at.session_state["_autosave_t"] = 0.0                # a save is due
+    at.button(key="qs_apply").click().run()              # reseed + close builder + rerun
+    assert not at.exception
+    saved = tmp_path / "autosave.json"
+    assert saved.exists()
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
+    import project_io  # noqa: E402
+    tables, _ = project_io.parse_project(saved.read_text(encoding="utf-8"))
+    assert tables["corners_base"]["y (mm)"].abs().max() == pytest.approx(450.0, abs=1.0)
+
+
 def test_autosave_disabled_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()

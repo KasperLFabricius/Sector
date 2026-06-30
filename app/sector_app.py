@@ -1974,16 +1974,18 @@ _apply_pending_project()   # restore an uploaded project before any widget is bu
 # while the builder owns the main area.
 inp = build_inputs()
 
-# Autosave rides this rerun (triggered by the user's edit/click) once the interval
-# has elapsed; the point tables are current now that build_inputs has rendered them.
-_maybe_autosave()
-
 # The Quick Section builder takes over the main viewport (the BriCoS manual
 # pattern): render it in place of the analysis views while it is open, and stop
 # before they draw. The sidebar stays, so its widget state survives.
 if st.session_state.get("_qs_open"):
     _quick_section_viewport()
     st.stop()
+
+# Autosave rides this rerun (triggered by the user's edit/click) once the interval
+# has elapsed. It runs only past the Quick Section branch: applying the builder
+# reseeds the tables and reruns with the builder closed, so this saves the applied
+# geometry rather than the stale pre-apply tables.
+_maybe_autosave()
 
 # Plot-label controls sit inline in the main viewport, directly above the View
 # dropdown (not tucked inside a submenu). They only affect the drawings, so they
