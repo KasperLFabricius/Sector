@@ -22,11 +22,6 @@ from .materials import Concrete, MildSteel, Prestress
 
 _DEFAULT_FCK = 35.0
 _DEFAULT_FYK = 500.0
-# A reinforcement strain limit far beyond any attainable section strain, i.e.
-# the EC2 horizontal branch with no strain limit (concrete crushing governs).
-# Strain inputs are in per-mille (to match the diagram axis), so this is 1000.
-_NO_STRAIN_LIMIT = 1000.0
-
 # Strain fields are entered and stored in per-mille; ``build_*`` converts them to
 # the fractions the material laws use.
 _PERMILLE_FIELDS = ("eut", "ey0t", "ey0c", "IS")

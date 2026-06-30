@@ -303,6 +303,11 @@ class MildSteel:
         """Labelled points of interest; the compression-side markers are dropped
         when the bar is tension-only (``active_in_compression`` is False)."""
         pts = self._markers(design=design)
+        # The law ruptures symmetrically, so mark the compression rupture at -eut
+        # too (parity with the tension-side eut marker); the stress there is the
+        # compression value just before the drop. Filtered out below when the bar
+        # is tension-only.
+        pts = pts + [(-self.eut, self.stress(-self.eut, design=design), "eut", None)]
         if not self.active_in_compression:
             pts = [m for m in pts if m[0] >= 0.0]
         return pts

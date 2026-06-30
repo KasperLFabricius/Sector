@@ -453,11 +453,14 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         _add_point_labels(fig, outer, holes, bars, tendons, label_scale, label_min_gap)
     fig.update_layout(
         title=title, template="plotly_white", height=height,
-        margin=dict(l=10, r=10, t=40, b=10),
+        margin=dict(l=10, r=10, t=40, b=64),
         xaxis=dict(title=f"x ({unit})", zeroline=True),
         yaxis=dict(title=f"y ({unit})", scaleanchor="x", scaleratio=1, zeroline=True),
         showlegend=bool(na_line) or bool(zones) or bool(bars) or bool(tendons),
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, font=dict(size=10)),
+        # Below the plot, clear of the title and the plotly modebar (which the
+        # above-the-plot position collided with).
+        legend=dict(orientation="h", yanchor="top", y=-0.1, x=0.5, xanchor="center",
+                    font=dict(size=10)),
     )
     return fig
 
@@ -495,11 +498,12 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
                                  name="applied", hovertemplate=hover))
     fig.update_layout(
         title=title, template="plotly_white", height=440,
-        margin=dict(l=10, r=10, t=40, b=10),
+        margin=dict(l=10, r=10, t=40, b=64),
         xaxis=dict(title="My - about the y-axis (kNm)", zeroline=True),
         yaxis=dict(title="Mx - about the x-axis (kNm)", scaleanchor="x",
                    scaleratio=1, zeroline=True),
-        legend=dict(orientation="h", yanchor="bottom", y=1.0),
+        # Below the plot, clear of the title and the plotly modebar.
+        legend=dict(orientation="h", yanchor="top", y=-0.1, x=0.5, xanchor="center"),
     )
     return fig
 
