@@ -52,11 +52,22 @@ def t_section(bf: float, hf: float, bw: float, hw: float):
     ]
 
 
-def circular(diameter: float, segments: int = 48):
+CIRCLE_SEGMENTS = 48   # N-gon used to approximate a circular outline
+
+
+def circular(diameter: float, segments: int = CIRCLE_SEGMENTS):
     """Circular section of the given diameter, approximated by an N-gon."""
     r = diameter / 2.0
     return [(r * math.cos(2 * math.pi * k / segments),
              r * math.sin(2 * math.pi * k / segments)) for k in range(segments)]
+
+
+def ring_radius(diameter: float, cover: float, segments: int = CIRCLE_SEGMENTS):
+    """Radius for reinforcement on a circular section: ``diameter/2 - cover``, but
+    never outside the inscribed N-gon's apothem, so a bar between two polygon
+    vertices is not left just outside the outline (e.g. at zero cover)."""
+    apothem = (diameter / 2.0) * math.cos(math.pi / segments)
+    return max(min(diameter / 2.0 - cover, apothem), 0.0)
 
 
 def box(b: float, h: float, wall: float):
@@ -187,6 +198,46 @@ def point_layers(y_face: float, direction: float, n_layers: int, layer_spacing: 
     for j in range(max(0, int(n_layers))):
         rows.extend(point_row(y_face + direction * j * layer_spacing,
                               x_start, x_end, n_per, area_mm2))
+    return rows
+
+
+def _even_span(x0: float, x1: float, n: int):
+    """``n`` x-positions evenly spaced from ``x0`` to ``x1``; a non-positive span
+    (the cover exceeds the available width) collapses to the centre."""
+    if n <= 0:
+        return []
+    if x1 < x0:
+        x0 = x1 = 0.5 * (x0 + x1)
+    if n == 1:
+        return [0.5 * (x0 + x1)]
+    step = (x1 - x0) / (n - 1)
+    return [x0 + k * step for k in range(n)]
+
+
+def box_row_xs(y: float, b: float, h: float, wall: float, cover: float, n: int):
+    """x-positions of ``n`` points across a box girder's concrete at depth ``y``:
+    the full width in a top/bottom wall, and split between the two side walls in the
+    hollow (so a row that rises into the cavity keeps its count in the webs rather
+    than placing points in the void)."""
+    if n <= 0:
+        return []
+    if not (-h / 2 + wall) < y < (h / 2 - wall):          # in a top/bottom wall
+        return _even_span(-b / 2 + cover, b / 2 - cover, n)
+    n_left = (n + 1) // 2                                 # split between the side walls
+    return (_even_span(-b / 2 + cover, -b / 2 + wall - cover, n_left)
+            + _even_span(b / 2 - wall + cover, b / 2 - cover, n - n_left))
+
+
+def box_layers(y_face: float, direction: float, n_layers: int, layer_spacing: float,
+               b: float, h: float, wall: float, cover: float, n_per: int,
+               area_mm2: float):
+    """Stack ``n_layers`` rows of ``n_per`` points for a box girder, each row placed
+    by :func:`box_row_xs` (full width in a wall, split into the side walls in the
+    hollow). ``area_mm2`` is the per-point area (a bar or tendon area)."""
+    rows = []
+    for j in range(max(0, int(n_layers))):
+        y = y_face + direction * j * layer_spacing
+        rows.extend((x, y, area_mm2) for x in box_row_xs(y, b, h, wall, cover, int(n_per)))
     return rows
 
 

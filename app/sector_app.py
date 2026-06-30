@@ -873,16 +873,6 @@ def _default_quick_section():
     return outer, [], bars, []
 
 
-def _clip_to_concrete(pts, outer, holes):
-    """Keep only the ``(x, y, area)`` points that lie in the concrete (inside the
-    outline and not in a void). Used to drop builder-generated reinforcement that
-    would otherwise fall in a hollow region."""
-    if not pts or len(outer) < 3:
-        return list(pts)
-    mask = geometry.points_inside_concrete(pts, outer, holes)
-    return [p for p, ok in zip(pts, mask) if ok]
-
-
 def _quick_section_geometry(box):
     """Render the shape, dimension and reinforcement inputs in ``box`` and return
     the generated ``(outer, holes, bars, tendons)`` (metres / mm areas).
@@ -943,7 +933,7 @@ def _quick_section_geometry(box):
                            key="ring_d", help="Diameter of each reinforcement bar.")
         cov = box.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="ring_c_mm",
                                help="Distance from the section face to the bar centres.") / 1000.0
-        bars = templates.bar_ring(0.0, 0.0, dia / 2 - cov, int(nb), rd)
+        bars = templates.bar_ring(0.0, 0.0, templates.ring_radius(dia, cov), int(nb), rd)
     else:
         by_spacing = box.radio(
             "Bar placement", ["By number", "By spacing"], horizontal=True,
@@ -1006,13 +996,24 @@ def _quick_section_geometry(box):
                     return -width_b / 2 + cov, width_b / 2 - cov
                 return -b / 2 + cov, b / 2 - cov  # below the flange -> the web
 
-        bars = templates.merge_bars(
-            templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
-                                 -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot,
-                                 n_at=n_at_bot),
-            templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
-                                 -width_b / 2 + cov, width_b / 2 - cov,
-                                 int(nb_top), rd_top, span_at=top_span_at, n_at=n_at_top))
+        if shape == "Box girder":
+            # A box girder's rows split into the side walls once they rise into the
+            # hollow, so multi-layer reinforcement keeps its count in the webs.
+            bars = templates.merge_bars(
+                templates.box_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
+                                     b, h, wall, cov, int(nb_bot),
+                                     templates.bar_area(rd_bot)),
+                templates.box_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
+                                     b, h, wall, cov, int(nb_top),
+                                     templates.bar_area(rd_top)))
+        else:
+            bars = templates.merge_bars(
+                templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
+                                     -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot,
+                                     n_at=n_at_bot),
+                templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
+                                     -width_b / 2 + cov, width_b / 2 - cov,
+                                     int(nb_top), rd_top, span_at=top_span_at, n_at=n_at_top))
 
     box.markdown("**Prestressing tendons**")
     nt = box.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",
@@ -1033,23 +1034,15 @@ def _quick_section_geometry(box):
     tendons = []
     if nt > 0:
         if shape == "Circular":
-            tendons = templates.point_ring(0.0, 0.0, max(b / 2 - cov_p, 0.0), int(nt), a_t)
+            tendons = templates.point_ring(
+                0.0, 0.0, templates.ring_radius(b, cov_p), int(nt), a_t)
+        elif shape == "Box girder":
+            tendons = templates.box_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
+                                           b, h, wall, cov_p, int(nt), a_t)
         else:
             tendons = templates.point_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
                                              -b / 2 + cov_p, b / 2 - cov_p, int(nt), a_t)
-
-    # A full-width row that rises into a hollow (a box girder's cavity, where only the
-    # side walls are concrete) would put its middle bars/tendons in the void, which the
-    # inside-concrete check rejects. Drop any generated reinforcement outside the
-    # concrete so the builder always yields a valid section; flag how many were dropped.
-    holes = holes or []
-    bars, n_bars0 = _clip_to_concrete(bars, outer, holes), len(bars)
-    tendons, n_tnd0 = _clip_to_concrete(tendons, outer, holes), len(tendons)
-    dropped = (n_bars0 - len(bars)) + (n_tnd0 - len(tendons))
-    if dropped:
-        box.caption(f"{dropped} bar(s)/tendon(s) fell outside the concrete (e.g. in a "
-                    "box girder's hollow) and were not placed.")
-    return outer, holes, bars, tendons
+    return outer, (holes or []), bars, tendons
 
 
 def _quick_section_viewport():

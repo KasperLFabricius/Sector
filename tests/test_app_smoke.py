@@ -290,10 +290,11 @@ def test_quick_section_builder_stacks_tendon_layers():
     assert not at.exception
 
 
-def test_quick_section_box_tendon_in_hollow_is_clipped():
-    # A box girder tendon layer that rises into the hollow puts its middle tendon in
-    # the void; the builder drops it so the section stays valid (Codex P2). Defaults:
-    # 800x1000x200 box, 100 mm cover; layer 2 (150 mm up, y=-250) is in the cavity.
+def test_quick_section_box_tendon_layer_splits_into_walls():
+    # A box girder tendon layer that rises into the hollow is split into the side
+    # walls, preserving the count, rather than placing a tendon in the cavity (the
+    # alternative to dropping). Defaults: 800x1000x200 box, 100 mm cover; layer 2
+    # (150 mm up, y=-250) is in the hollow.
     at = _fresh()
     at.run()
     _open_qs(at)
@@ -303,8 +304,29 @@ def test_quick_section_box_tendon_in_hollow_is_clipped():
     at.number_input(key="tnd_layer_s").set_value(150.0).run()
     _apply_qs(at)
     assert not at.exception
-    # Layer 1 (3, in the bottom wall) + layer 2 (2 in the side walls, middle dropped).
-    assert len(at.session_state["tendons_base"]) == 5
+    tendons = at.session_state["tendons_base"]
+    assert len(tendons) == 6                          # count preserved (3 per layer)
+    assert not any("within the concrete" in (e.value or "") for e in at.error)
+    hollow = tendons[(tendons["y (mm)"] > -260) & (tendons["y (mm)"] < -240)]
+    assert len(hollow) == 3                           # the hollow layer keeps its 3
+    assert (hollow["x (mm)"].abs() >= 200).all()      # in the side walls, not the cavity
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
+def test_quick_section_circular_zero_cover_keeps_all_bars():
+    # At zero cover the ring radius is capped at the polygon apothem, so every bar
+    # stays inside the N-gon outline and none are dropped/rejected (Codex P2).
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Circular").run()
+    at.number_input(key="ring_n").set_value(10).run()
+    at.number_input(key="ring_c_mm").set_value(0.0).run()
+    _apply_qs(at)
+    assert not at.exception
+    assert len(at.session_state["bars_base"]) == 10            # all 10 placed
     assert not any("within the concrete" in (e.value or "") for e in at.error)
     at.button(key="calculate").click().run()
     assert not at.exception
