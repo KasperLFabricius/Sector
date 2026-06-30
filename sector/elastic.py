@@ -102,6 +102,7 @@ def _resultants_and_jacobian(
     n: float,
     displace_concrete: bool,
     cracked: bool,
+    n_mult: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Internal resultants ``[N, Mx, My]`` and the 3x3 Jacobian d(res)/d u.
 
@@ -109,6 +110,10 @@ def _resultants_and_jacobian(
     resultants are linear in ``u`` for a fixed compression zone, so the Jacobian
     is just the (transformed, cracked) section stiffness; the moving-boundary
     term vanishes because the stress is zero on the neutral axis.
+
+    ``n_mult`` is an optional per-bar multiplier on the modular ratio (1 for mild
+    reinforcement, ``Ep/Es`` for prestressing tendons), so each bar's modulus is
+    ``n * n_mult``; ``None`` means every bar uses ``n``.
     """
     eps0, kx, ky = u
 
@@ -135,11 +140,12 @@ def _resultants_and_jacobian(
     # -- reinforcement contribution --
     if bx.size:
         eps_b = eps0 + kx * bx + ky * by
-        coef = np.full(bx.shape, float(n))
+        coef = (np.full(bx.shape, float(n)) if n_mult is None
+                else float(n) * np.asarray(n_mult, dtype=float))
         if displace_concrete:
             # Compression bars sit in concrete already integrated above; net
-            # stiffness there is (n - 1) instead of n.
-            coef = np.where(eps_b < 0.0, n - 1.0, n)
+            # stiffness there is (modulus - 1) instead of the full modulus.
+            coef = np.where(eps_b < 0.0, coef - 1.0, coef)
         g = coef * ba  # stiffness weight per bar
         f = g * eps_b  # bar force (tension positive)
         res = res + np.array([f.sum(), (f * by).sum(), (f * bx).sum()])
@@ -167,6 +173,7 @@ def _newton_solve(
     displace_concrete: bool,
     max_iter: int,
     tol: float,
+    n_mult: np.ndarray | None = None,
 ) -> tuple[np.ndarray, bool, int]:
     """Find the strain plane whose internal resultants equal ``target``.
 
@@ -175,7 +182,8 @@ def _newton_solve(
     compression zone, so the active (cracked) set settles in a few steps.
     """
     _, J0 = _resultants_and_jacobian(
-        rings, bx, by, ba, np.zeros(3), n, displace_concrete=False, cracked=False
+        rings, bx, by, ba, np.zeros(3), n, displace_concrete=False, cracked=False,
+        n_mult=n_mult,
     )
     try:
         u = np.linalg.solve(J0, target)
@@ -187,7 +195,7 @@ def _newton_solve(
     iterations = 0
     for iterations in range(1, max_iter + 1):
         res, J = _resultants_and_jacobian(
-            rings, bx, by, ba, u, n, displace_concrete, cracked=True
+            rings, bx, by, ba, u, n, displace_concrete, cracked=True, n_mult=n_mult,
         )
         r = res - target
         if np.max(np.abs(r)) <= tol * scale:
@@ -211,20 +219,36 @@ def _steel_resultant(
     return np.array([f.sum(), (f * by).sum(), (f * bx).sum()])
 
 
-def _bar_stress(u: np.ndarray, bx: np.ndarray, by: np.ndarray, n: float) -> np.ndarray:
-    """Steel stress ``sigma = n * eps`` at each bar (Ec = 1)."""
+def _prestress_resultant(
+    prestress_stress: np.ndarray | None, bx: np.ndarray, by: np.ndarray, ba: np.ndarray
+) -> np.ndarray:
+    """Constant ``[N, Mx, My]`` of the locked-in tendon prestress (tension positive),
+    or zeros when there is no prestress."""
+    if prestress_stress is None:
+        return np.zeros(3)
+    return _steel_resultant(np.asarray(prestress_stress, dtype=float), bx, by, ba)
+
+
+def _bar_stress(u: np.ndarray, bx: np.ndarray, by: np.ndarray, n: float,
+                n_mult: np.ndarray | None = None) -> np.ndarray:
+    """Load-induced steel stress at each bar (Ec = 1): ``sigma = n * n_mult * eps``.
+
+    This is the *passive* response only; a tendon's locked-in prestress ``Ep*IS``
+    is added to the reported stress by :func:`solve_elastic_combined`, not here, so
+    the crack-width check sees the load-induced increment rather than the total."""
     if not bx.size:
         return np.empty(0)
-    return n * (u[0] + u[1] * bx + u[2] * by)
+    coef = float(n) if n_mult is None else float(n) * np.asarray(n_mult, dtype=float)
+    return coef * (u[0] + u[1] * bx + u[2] * by)
 
 
 def _result_from_plane(
     section: Section, u: np.ndarray, bx: np.ndarray, by: np.ndarray, n: float,
-    converged: bool, iterations: int,
+    converged: bool, iterations: int, n_mult: np.ndarray | None = None,
 ) -> "ElasticResult":
     """Assemble an :class:`ElasticResult` from a solved strain plane."""
     eps0, kx, ky = float(u[0]), float(u[1]), float(u[2])
-    bar_stress = _bar_stress(u, bx, by, n)
+    bar_stress = _bar_stress(u, bx, by, n, n_mult)
 
     # Maximum concrete compression: the most negative strain over the concrete
     # vertices (that extreme fibre is necessarily inside the compression zone).
@@ -277,6 +301,8 @@ def solve_elastic(
     displace_concrete: bool = False,
     max_iter: int = 100,
     tol: float = _DEFAULT_TOL,
+    n_mult: np.ndarray | None = None,
+    prestress_stress: np.ndarray | None = None,
 ) -> ElasticResult:
     """Solve the cracked elastic section for an axial force and biaxial moments.
 
@@ -295,6 +321,9 @@ def solve_elastic(
         (the ``(n - 1)`` treatment). Default ``False`` -- the fully cracked
         transformed section uses ``n*A`` for every bar and counts the gross
         concrete compression block, which is what Sector reproduces.
+    n_mult, prestress_stress:
+        Per-bar modular-ratio multiplier and locked-in prestress stress (see
+        :func:`solve_elastic_combined`).
 
     Returns
     -------
@@ -307,12 +336,15 @@ def solve_elastic(
 
     # Target resultants in the tension-positive convention. A compressive P maps
     # to a negative axial resultant; the applied moments enter with the sign
-    # that places the compression zone consistently with the moments.
+    # that places the compression zone consistently with the moments. A locked-in
+    # tendon prestress adds a constant resultant, so it is subtracted from the
+    # target (the passive section then carries external load minus prestress).
     target = np.array([-float(P), -float(Mx), -float(My)], dtype=float)
+    target = target - _prestress_resultant(prestress_stress, bx, by, ba)
     u, converged, iterations = _newton_solve(
-        rings, bx, by, ba, target, n, displace_concrete, max_iter, tol
+        rings, bx, by, ba, target, n, displace_concrete, max_iter, tol, n_mult=n_mult
     )
-    return _result_from_plane(section, u, bx, by, n, converged, iterations)
+    return _result_from_plane(section, u, bx, by, n, converged, iterations, n_mult=n_mult)
 
 
 def solve_elastic_uncracked(
@@ -321,6 +353,9 @@ def solve_elastic_uncracked(
     Mx: float,
     My: float,
     n: float,
+    *,
+    n_mult: np.ndarray | None = None,
+    prestress_stress: np.ndarray | None = None,
 ) -> ElasticResult:
     """Solve the *uncracked* (Stage I) elastic section.
 
@@ -337,8 +372,10 @@ def solve_elastic_uncracked(
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
     target = np.array([-float(P), -float(Mx), -float(My)], dtype=float)
+    target = target - _prestress_resultant(prestress_stress, bx, by, ba)
     _, J = _resultants_and_jacobian(
-        rings, bx, by, ba, np.zeros(3), n, displace_concrete=False, cracked=False
+        rings, bx, by, ba, np.zeros(3), n, displace_concrete=False, cracked=False,
+        n_mult=n_mult,
     )
     try:
         u = np.linalg.solve(J, target)
@@ -346,7 +383,7 @@ def solve_elastic_uncracked(
     except np.linalg.LinAlgError:
         u = np.zeros(3)
         converged = False
-    return _result_from_plane(section, u, bx, by, n, converged, iterations=0)
+    return _result_from_plane(section, u, bx, by, n, converged, iterations=0, n_mult=n_mult)
 
 
 @dataclass
@@ -458,6 +495,8 @@ def solve_elastic_combined(
     displace_concrete: bool = False,
     max_iter: int = 100,
     tol: float = _DEFAULT_TOL,
+    n_mult: np.ndarray | None = None,
+    prestress_stress: np.ndarray | None = None,
 ) -> CombinedElasticResult:
     """Elastic analysis under combined long- and short-term load.
 
@@ -475,14 +514,23 @@ def solve_elastic_combined(
 
     Pass the short-term parts as zero (and ``ns`` equal to ``nl``) to recover a
     pure long-term analysis.
+
+    ``n_mult`` is a per-bar modular-ratio multiplier (1 for mild reinforcement,
+    ``Ep/Es`` for tendons). ``prestress_stress`` is the locked-in tendon prestress
+    (``Ep*IS``) per bar: its constant resultant is applied to every solve (so the
+    user's ``N`` is the external force only, as in the plastic solver), and it is
+    added to the reported tendon stresses. Being locked-in, it does not creep, so
+    it is kept out of the ``s2`` neutralising step.
     """
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
+    pre = _prestress_resultant(prestress_stress, bx, by, ba)   # constant tendon force
 
-    # 1. Long-term state at nl.
-    t_long = np.array([-float(P_long), -float(Mx_long), -float(My_long)])
-    u_long, c1, _ = _newton_solve(rings, bx, by, ba, t_long, nl, displace_concrete, max_iter, tol)
-    long_res = _result_from_plane(section, u_long, bx, by, nl, c1, 0)
+    # 1. Long-term state at nl (passive bar stresses; prestress applied via target).
+    t_long = np.array([-float(P_long), -float(Mx_long), -float(My_long)]) - pre
+    u_long, c1, _ = _newton_solve(rings, bx, by, ba, t_long, nl, displace_concrete,
+                                  max_iter, tol, n_mult=n_mult)
+    long_res = _result_from_plane(section, u_long, bx, by, nl, c1, 0, n_mult=n_mult)
     s1 = long_res.bar_stress
 
     # 2. Reduced steel stress and its resultant (the neutralising force).
@@ -494,13 +542,19 @@ def solve_elastic_combined(
         [-(float(P_long) + float(P_short)),
          -(float(Mx_long) + float(Mx_short)),
          -(float(My_long) + float(My_short))]
-    )
-    u_st, c2, _ = _newton_solve(rings, bx, by, ba, t_comb - neu, ns, displace_concrete, max_iter, tol)
-    st_res = _result_from_plane(section, u_st, bx, by, ns, c2, 0)
+    ) - pre
+    u_st, c2, _ = _newton_solve(rings, bx, by, ba, t_comb - neu, ns, displace_concrete,
+                                max_iter, tol, n_mult=n_mult)
+    st_res = _result_from_plane(section, u_st, bx, by, ns, c2, 0, n_mult=n_mult)
     rst1 = st_res.bar_stress
 
-    # 4. Combine.
+    # 4. Combine. The locked-in prestress is added to the reported tendon stresses
+    #    (physical stress = passive increment + Ep*IS); it cancels out of `dif`.
     total = s2 + rst1 if s1.size else rst1
+    if prestress_stress is not None and s1.size:
+        ps = np.asarray(prestress_stress, dtype=float)
+        s1 = s1 + ps
+        total = total + ps
     dif = total - s1 if s1.size else total
 
     return CombinedElasticResult(

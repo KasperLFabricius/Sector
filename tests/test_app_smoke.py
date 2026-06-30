@@ -823,8 +823,35 @@ def test_prestress_law_locked_in_elastic_only_mode():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    for locked in ("pre_IS", "pre_fytk", "pre_Es", "pre_eut"):
+    # The stress-strain law parameters are plastic-only, so they lock; but the
+    # initial prestrain IS and the modulus Es (Ep) stay editable -- the elastic
+    # analysis applies the tendon prestress Ep*IS and uses Ep/Ec for the tendon.
+    for locked in ("pre_fytk", "pre_eut"):
         assert at.number_input(key=locked).disabled is True, locked
+    for editable in ("pre_IS", "pre_Es"):
+        assert at.number_input(key=editable).disabled is False, editable
+
+
+def test_elastic_applies_tendon_prestress_from_initial_strain():
+    # With tendons + a prestrain, the elastic analysis applies the prestress force
+    # from IS (N stays the external force only): the result reports the prestress
+    # resultant, and changing IS changes the concrete state.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    _open_qs(at)
+    at.number_input(key="tnd_n").set_value(4).run()       # put tendons in the section
+    _apply_qs(at)
+    at.number_input(key="pre_IS").set_value(5.0).run()    # permille
+    at.number_input(key="el_long_Mx").set_value(200.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["prestress"] is not None and e["prestress"][0] != 0.0   # applied + reported
+    base_conc = e["max_conc"]
+    at.number_input(key="pre_IS").set_value(9.0).run()    # stronger prestress
+    at.button(key="calculate").click().run()
+    assert at.session_state["results"]["elastic"]["max_conc"] != pytest.approx(base_conc)
 
 
 def test_material_laws_editable_in_both_and_plastic_modes():

@@ -281,6 +281,8 @@ def analyse_cracking(
     k4: float = 0.425,
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
+    n_mult: Optional[np.ndarray] = None,
+    prestress_stress: Optional[np.ndarray] = None,
 ) -> CrackingResult:
     """Serviceability analysis of the section under one action combination.
 
@@ -319,12 +321,14 @@ def analyse_cracking(
         Cracking decision, ``lambda_cr``, ``zeta``, the Stage I and Stage II
         solves, the mean tension-stiffened strain plane, and the crack width.
     """
-    uncr = solve_elastic_uncracked(section, P, Mx, My, n)
+    uncr = solve_elastic_uncracked(section, P, Mx, My, n, n_mult=n_mult,
+                                   prestress_stress=prestress_stress)
     sigma_ct = uncr.max_concrete_tension / _KPA_PER_MPA  # MPa
     lam = cracking_factor(sigma_ct, fctm)
     cracked = lam < 1.0
 
-    crk = solve_elastic(section, P, Mx, My, n)
+    crk = solve_elastic(section, P, Mx, My, n, n_mult=n_mult,
+                        prestress_stress=prestress_stress)
     zeta = tension_stiffening_zeta(lam, beta) if cracked else 0.0
 
     # Mean (tension-stiffened) strain plane: interpolate Stage I and Stage II.

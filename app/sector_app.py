@@ -333,9 +333,10 @@ def prestress_panel(box, locked=False):
     two-yield law, so every parameter is live. The built-in characteristic
     curves are fixed shapes -- only the prestrain (and yield factor) apply.
 
-    ``locked`` (elastic-only mode) disables every parameter: in the elastic
-    analysis tendons are carried as ordinary bars at the modular ratio, so the
-    prestress stress-strain law has no effect on the elastic results.
+    ``locked`` (elastic-only mode) disables the stress-strain law parameters, which
+    only the plastic analysis uses. The initial prestrain ``IS`` and the modulus
+    ``Es`` (Ep) stay editable: the elastic analysis applies the tendon prestress
+    ``Ep*IS`` as a force and uses ``Ep/Ec`` for the tendon's modular ratio.
     """
     box.markdown("**Prestressing steel**")
     presets = mp.PRESTRESS_PRESETS
@@ -345,7 +346,7 @@ def prestress_panel(box, locked=False):
     _prefill("pre", preset, presets)
     curve = presets[preset]["curve"]
     vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP,
-                       disabled=locked)
+                       disabled=locked and f not in ("IS", "Es"))
             for f in mp.PRESTRESS_FIELD_META}
     _clamp_eut(box, vals, mp.PRESTRESS_FIELDS_BY_CURVE[curve])
     pre = _safe_build(box, mp.build_prestress, curve, vals)
@@ -1173,7 +1174,9 @@ def build_inputs():
                   "load at zero and set both ratios equal.")
     loads.markdown("_Long-term_")
     P_el_l, Mx_el_l, My_el_l = _load_set(
-        "el_long", "Sustained axial force (long-term).",
+        "el_long", "Sustained external axial force (long-term). A tendon's prestress "
+        "is applied automatically from its initial strain, so N is the external "
+        "force only -- as in the plastic solver; do not add the prestress force here.",
         "Sustained moment (long-term).", elastic_on)
     phi_creep = loads.number_input(r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0, 3.0,
                                    0.1, key="el_phi", disabled=not elastic_on,
@@ -1195,7 +1198,8 @@ def build_inputs():
                                  "ratio). Use Auto to derive it from Ec and phi.")
     loads.markdown("_Short-term_")
     P_el_s, Mx_el_s, My_el_s = _load_set(
-        "el_short", "Instantaneous (variable) axial force.",
+        "el_short", "Instantaneous (variable) external axial force (prestress is "
+        "applied automatically from the tendon initial strain).",
         "Instantaneous (variable) moment.", elastic_on, mx_default=0.0)
     _ns_auto = round(min(50.0, max(1.0, steel.Es / (conc_Ec * 1000.0))), 1)
     st.session_state.setdefault("ns", _ns_auto)   # default from Ec (Es/Ec)
@@ -1326,16 +1330,31 @@ def run_analysis(inp):
                          dx=p.dx, dy=p.dy) for p in pts],
         )
     if inp["mode"] in ("Elastic", "Both"):
-        # The elastic analysis ignores the section's tendons, so model each tendon
-        # as an ordinary bar by folding them into the bar set for this run.
+        # Tendons are folded into the bar set for the elastic run. Each tendon uses
+        # its own modular ratio (Ep/Ec, via the multiplier Ep/Es) and carries the
+        # locked-in prestress Ep*IS, applied as a force so the user's N is the
+        # external normal force only -- matching the plastic solver.
         sec = inp["section"]
+        n_mult = prestress_stress = pre_resultant = None
         if inp["tendons"]:
             sec = Section.from_polygon(corners=inp["outer"],
                                        bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
                                        holes=inp["holes"])
+            pre_mat = inp["prestress"]
+            if pre_mat is not None:
+                nb, nt = len(inp["bars"]), len(inp["tendons"])
+                ep, es = pre_mat.Es, inp["steel"].Es
+                sig_ps = ep * pre_mat.IS * 1000.0   # MPa -> kN/m2 (bar-stress units)
+                n_mult = np.array([1.0] * nb + [ep / es] * nt)
+                prestress_stress = np.array([0.0] * nb + [sig_ps] * nt)
+                bx, by, ba = sec.bar_arrays()
+                f = prestress_stress * ba           # kN per tendon
+                pre_resultant = (float(f.sum()), float((f * by).sum()),
+                                 float((f * bx).sum()))   # N, Mx, My (kN, kNm)
         r = solve_elastic_combined(sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"],
                                    inp["nl"], inp["P_el_s"], inp["Mx_el_s"],
-                                   inp["My_el_s"], inp["ns"])
+                                   inp["My_el_s"], inp["ns"],
+                                   n_mult=n_mult, prestress_stress=prestress_stress)
         mpa = lambda arr: [s / 1000.0 for s in arr]  # kN/m2 -> MPa
         total = mpa(r.bar_stress_total)
         out["elastic"] = dict(
@@ -1347,6 +1366,7 @@ def run_analysis(inp):
             na_x=r.na_x_intercept, na_y=r.na_y_intercept,
             max_steel=max(total) if total else 0.0,
             max_steel_bar=(int(np.argmax(total)) + 1) if total else 0,
+            prestress=pre_resultant,
             converged=r.converged,
         )
 
@@ -1369,7 +1389,8 @@ def run_analysis(inp):
             sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
             bar_diameter=phi, k1=k1_bars,
-            k3_cover_dependent=dk_na, include_hx_term=include_hx)
+            k3_cover_dependent=dk_na, include_hx_term=include_hx,
+            n_mult=n_mult, prestress_stress=prestress_stress)
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
         props_cr = (transformed_properties(
             sec, inp["nl"], eps0=cr_l.cracked_state.eps0, kx=cr_l.cracked_state.kx,
@@ -1388,8 +1409,12 @@ def run_analysis(inp):
         # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
         # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
         if inp["sls_cw"] and cr_l.cracked:
-            short_state = dataclasses.replace(r.short_term,
-                                              bar_stress=r.bar_stress_total)
+            # Crack width uses the load-induced steel stress, so strip the locked-in
+            # tendon prestress back out of the reported total (mild bars unaffected).
+            cw_stress = np.asarray(r.bar_stress_total, dtype=float)
+            if prestress_stress is not None:
+                cw_stress = cw_stress - prestress_stress
+            short_state = dataclasses.replace(r.short_term, bar_stress=cw_stress)
             cw_short = crack_width(sec, short_state, inp["ns"], fctm=inp["sls_fctm"],
                                    Es=inp["steel"].Es, kt=0.6, bar_diameter=phi,
                                    k1=k1_bars, k3_cover_dependent=dk_na,
@@ -1595,6 +1620,14 @@ def elastic_view(inp, results):
               help=f"at concrete corner {e['max_conc_point'] + 1}")
     m2.metric("Max steel tension", f"{e['max_steel']:.1f} MPa",
               help=f"in bar {e['max_steel_bar']}")
+
+    # The tendon prestress is applied automatically from the initial strain, so N
+    # is the external force only; show the equivalent prestress action that was added.
+    ps = e.get("prestress")
+    if ps is not None:
+        st.caption(f"Applied tendon prestress (from the initial strain): "
+                   f"N = {ps[0]:.0f} kN, $M_x$ = {ps[1]:.0f} kNm, $M_y$ = {ps[2]:.0f} kNm "
+                   f"(compression positive; this is added to the external N/M).")
 
     # The neutral axis and the compression/tension zones only make sense when the
     # concrete actually carries compression; a fully tensile case has none.
