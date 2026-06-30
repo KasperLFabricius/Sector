@@ -873,6 +873,16 @@ def _default_quick_section():
     return outer, [], bars, []
 
 
+def _clip_to_concrete(pts, outer, holes):
+    """Keep only the ``(x, y, area)`` points that lie in the concrete (inside the
+    outline and not in a void). Used to drop builder-generated reinforcement that
+    would otherwise fall in a hollow region."""
+    if not pts or len(outer) < 3:
+        return list(pts)
+    mask = geometry.points_inside_concrete(pts, outer, holes)
+    return [p for p, ok in zip(pts, mask) if ok]
+
+
 def _quick_section_geometry(box):
     """Render the shape, dimension and reinforcement inputs in ``box`` and return
     the generated ``(outer, holes, bars, tendons)`` (metres / mm areas).
@@ -1027,7 +1037,19 @@ def _quick_section_geometry(box):
         else:
             tendons = templates.point_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
                                              -b / 2 + cov_p, b / 2 - cov_p, int(nt), a_t)
-    return outer, (holes or []), bars, tendons
+
+    # A full-width row that rises into a hollow (a box girder's cavity, where only the
+    # side walls are concrete) would put its middle bars/tendons in the void, which the
+    # inside-concrete check rejects. Drop any generated reinforcement outside the
+    # concrete so the builder always yields a valid section; flag how many were dropped.
+    holes = holes or []
+    bars, n_bars0 = _clip_to_concrete(bars, outer, holes), len(bars)
+    tendons, n_tnd0 = _clip_to_concrete(tendons, outer, holes), len(tendons)
+    dropped = (n_bars0 - len(bars)) + (n_tnd0 - len(tendons))
+    if dropped:
+        box.caption(f"{dropped} bar(s)/tendon(s) fell outside the concrete (e.g. in a "
+                    "box girder's hollow) and were not placed.")
+    return outer, holes, bars, tendons
 
 
 def _quick_section_viewport():
