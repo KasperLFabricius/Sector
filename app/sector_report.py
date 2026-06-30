@@ -16,12 +16,13 @@ not depend on a Greek-capable font.
 
 from __future__ import annotations
 
-import contextlib
+import atexit
 import datetime
 import io
 import math
 import os
 import re
+import threading
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -82,37 +83,57 @@ def _greek(s):
     return s.replace("&lt;=", "&#8804;").replace("&gt;=", "&#8805;")
 
 
-@contextlib.contextmanager
-def _persistent_image_export():
-    """Keep one kaleido export process alive for all figures in the report.
-
-    With kaleido 1.x each ``to_image`` otherwise spawns and tears down a headless
-    browser; starting the sync server once makes every export just the render
-    time. Falls back silently (one browser per image) when the server or a
-    browser is unavailable, so report generation still works.
-    """
-    start = stop = None
+def _kaleido_server_api():
+    """``(start, stop)`` callables for the kaleido sync server, or ``(None, None)``
+    when kaleido (or its sync-server API) is unavailable. Split out so tests can
+    stand in a fake server without a real browser."""
     try:
         import kaleido
-        start = getattr(kaleido, "start_sync_server", None)
-        stop = getattr(kaleido, "stop_sync_server", None)
     except Exception:
-        start = stop = None
-    if start is None or stop is None:
-        yield
-        return
+        return None, None
+    return (getattr(kaleido, "start_sync_server", None),
+            getattr(kaleido, "stop_sync_server", None))
+
+
+_image_server_started = False
+_image_server_lock = threading.Lock()
+
+
+def _safe_stop(stop):
     try:
-        start(silence_warnings=True)
+        stop(silence_warnings=True)
     except Exception:
-        yield
+        pass
+
+
+def ensure_image_server():
+    """Start the kaleido export server once per process and leave it running.
+
+    With kaleido 1.x each ``to_image`` otherwise spawns and tears down a headless
+    browser. The per-report context manager that used to do this paid that cost on
+    every report; starting the server once and keeping it alive for the app's
+    lifetime means only the first report pays the browser start-up and the rest are
+    just render time. Idempotent (started exactly once, even across threads) and
+    best-effort: it returns silently -- falling back to one browser per image, or
+    tables-only -- when kaleido or a browser is unavailable, so reports still build.
+    The server is stopped at interpreter exit.
+    """
+    global _image_server_started
+    if _image_server_started:
         return
-    try:
-        yield
-    finally:
+    with _image_server_lock:
+        if _image_server_started:
+            return
+        _image_server_started = True          # attempt exactly once per process
+        start, stop = _kaleido_server_api()
+        if start is None:
+            return                            # nothing to start; per-image fallback
         try:
-            stop(silence_warnings=True)
+            start(silence_warnings=True)
         except Exception:
-            pass
+            return                            # browser unavailable; per-image fallback
+        if stop is not None:
+            atexit.register(lambda: _safe_stop(stop))
 
 
 class _NumberedCanvas(canvas.Canvas):
@@ -272,23 +293,27 @@ class ReportBuilder:
 
     # -- build -------------------------------------------------------------
     def build(self):
-        with _persistent_image_export():
-            self._tick(0.05, "Cover and conventions...")
-            self._cover()
-            self._conventions()
-            self._tick(0.2, "Section and materials...")
-            self._inputs()
-            self._theory()
-            if "plastic" in self.out:
-                self._tick(0.45, "Plastic capacity...")
-                self.flow.append(PageBreak())
-                self._plastic()
-            if "elastic" in self.out:
-                self._tick(0.7, "Elastic stresses and crack width...")
-                self.flow.append(PageBreak())
-                self._elastic()
-                self._cracking()
-            self._appendix()
+        # Reuse the one process-wide kaleido server (started on the first report and
+        # left running) rather than starting and stopping one per report. A
+        # tables-only report renders no figures, so it never starts a browser.
+        if self.figures:
+            ensure_image_server()
+        self._tick(0.05, "Cover and conventions...")
+        self._cover()
+        self._conventions()
+        self._tick(0.2, "Section and materials...")
+        self._inputs()
+        self._theory()
+        if "plastic" in self.out:
+            self._tick(0.45, "Plastic capacity...")
+            self.flow.append(PageBreak())
+            self._plastic()
+        if "elastic" in self.out:
+            self._tick(0.7, "Elastic stresses and crack width...")
+            self.flow.append(PageBreak())
+            self._elastic()
+            self._cracking()
+        self._appendix()
         self._tick(0.92, "Writing PDF...")
         footer = f"Sector {self.version}  -  Sweco".strip()
         doc = SimpleDocTemplate(self.buffer, pagesize=A4,

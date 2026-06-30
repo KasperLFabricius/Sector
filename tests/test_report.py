@@ -125,6 +125,41 @@ def test_report_ec2_2023_shows_refined_formula():
     assert "1.7" in txt                          # kw in the worked substitution
 
 
+def test_ensure_image_server_starts_once(monkeypatch):
+    # The app-wide kaleido server starts exactly once per process (even across
+    # threads / repeated calls) and is registered to stop only at interpreter exit,
+    # not after each report -- so a second report reuses the running browser.
+    calls = {"start": 0, "stop": 0, "atexit": 0}
+    monkeypatch.setattr(sector_report, "_kaleido_server_api",
+                        lambda: ((lambda **k: calls.__setitem__("start", calls["start"] + 1)),
+                                 (lambda **k: calls.__setitem__("stop", calls["stop"] + 1))))
+    monkeypatch.setattr(sector_report.atexit, "register",
+                        lambda f: calls.__setitem__("atexit", calls["atexit"] + 1))
+    monkeypatch.setattr(sector_report, "_image_server_started", False)
+    for _ in range(3):
+        sector_report.ensure_image_server()
+    assert calls["start"] == 1            # started once despite three calls
+    assert calls["atexit"] == 1           # stop deferred to interpreter exit
+    assert calls["stop"] == 0             # never stopped mid-session
+
+
+def test_ensure_image_server_without_kaleido_is_safe(monkeypatch):
+    # No kaleido / no sync-server API: it must not raise and must not retry.
+    monkeypatch.setattr(sector_report, "_kaleido_server_api", lambda: (None, None))
+    monkeypatch.setattr(sector_report, "_image_server_started", False)
+    sector_report.ensure_image_server()
+    assert sector_report._image_server_started is True
+
+
+def test_tables_only_report_does_not_start_the_image_server(monkeypatch):
+    # A figures-disabled report renders no figures, so it must not launch a browser.
+    calls = {"n": 0}
+    monkeypatch.setattr(sector_report, "ensure_image_server",
+                        lambda: calls.__setitem__("n", calls["n"] + 1))
+    sector_report.build_report({}, _inp(), _out(), figures=False)
+    assert calls["n"] == 0
+
+
 def test_report_handles_plastic_only():
     out = {"plastic": _out()["plastic"]}
     pdf = sector_report.build_report({}, _inp(), out, figures=False)
