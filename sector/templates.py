@@ -177,6 +177,19 @@ def point_row(y: float, x_start: float, x_end: float, n: int, area_mm2: float):
     return [(x_start + k * step, y, area_mm2) for k in range(n)]
 
 
+def point_layers(y_face: float, direction: float, n_layers: int, layer_spacing: float,
+                 x_start: float, x_end: float, n_per: int, area_mm2: float):
+    """Stack ``n_layers`` rows of ``n_per`` point areas (the tendon analogue of
+    :func:`bar_layers`): the first row at ``y_face`` and each next ``layer_spacing``
+    further in ``direction`` (``+1`` up from a bottom face). ``n_layers = 1`` is a
+    single :func:`point_row`."""
+    rows = []
+    for j in range(max(0, int(n_layers))):
+        rows.extend(point_row(y_face + direction * j * layer_spacing,
+                              x_start, x_end, n_per, area_mm2))
+    return rows
+
+
 def point_ring(cx: float, cy: float, radius: float, n: int, area_mm2: float):
     """``n`` point areas (e.g. tendons) on a circle, area (mm2) given directly."""
     if n <= 0:

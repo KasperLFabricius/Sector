@@ -135,6 +135,18 @@ def test_bar_layers_direction_moves_top_rows_down():
     assert ys == [pytest.approx(y0 - 2 * ls), pytest.approx(y0 - ls), pytest.approx(y0)]
 
 
+def test_point_layers_stacks_tendon_rows():
+    # The tendon analogue of bar_layers: stack rows of point areas from a face.
+    y0, ls = -0.27, 0.06
+    tendons = templates.point_layers(y0, 1.0, 3, ls, -0.15, 0.15, 4, 150.0)
+    assert len(tendons) == 12                                  # 3 rows x 4
+    ys = sorted({round(t[1], 6) for t in tendons})
+    assert ys == [pytest.approx(y0), pytest.approx(y0 + ls), pytest.approx(y0 + 2 * ls)]
+    assert all(t[2] == 150.0 for t in tendons)                 # area carried through
+    one = templates.point_layers(y0, 1.0, 1, ls, -0.15, 0.15, 4, 150.0)
+    assert one == templates.point_row(y0, -0.15, 0.15, 4, 150.0)
+
+
 def test_count_for_spacing():
     # phi @ 150 over a 0.90 m face -> 6 gaps of exactly 150 mm = 7 bars.
     assert templates.count_for_spacing(0.90, 0.15) == 7

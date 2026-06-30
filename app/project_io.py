@@ -33,7 +33,7 @@ SCALAR_KEYS = [
     "qsv_ring_c_mm", "qsv_qs_rebar_mode", "qsv_bot_n", "qsv_bot_d", "qsv_bot_s",
     "qsv_top_n", "qsv_top_d", "qsv_top_s", "qsv_bot_layers", "qsv_top_layers",
     "qsv_layer_s", "qsv_cover_mm", "qsv_tnd_n",
-    "qsv_tnd_a", "qsv_tnd_c_mm",
+    "qsv_tnd_a", "qsv_tnd_c_mm", "qsv_tnd_layers", "qsv_tnd_layer_s",
     # Concrete.
     "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
     "conc_eps_c2", "conc_eps_cu2", "conc_n", "conc_Ec", "sls_fctm",

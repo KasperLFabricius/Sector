@@ -838,7 +838,7 @@ _QS_WIDGET_KEYS = (
     "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
     "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
     "bot_layers", "top_layers", "layer_s",
-    "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm",
+    "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm", "tnd_layers", "tnd_layer_s",
 )
 
 
@@ -1013,13 +1013,20 @@ def _quick_section_geometry(box):
     cov_p = box.number_input("Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, key="tnd_c_mm",
                              help="Distance from the bottom face (or the circular "
                                   "ring) to the tendons.") / 1000.0
+    nl_t = box.number_input("Tendon layers", 1, 10, 1, 1, key="tnd_layers",
+                            help="Number of stacked tendon rows from the bottom face "
+                                 "(ignored for a circular ring).")
+    ls_t = box.number_input(
+        "Tendon layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, key="tnd_layer_s",
+        disabled=int(nl_t) == 1,
+        help="Vertical centre-to-centre distance between stacked tendon rows.") / 1000.0
     tendons = []
     if nt > 0:
         if shape == "Circular":
             tendons = templates.point_ring(0.0, 0.0, max(b / 2 - cov_p, 0.0), int(nt), a_t)
         else:
-            tendons = templates.point_row(-h / 2 + cov_p, -b / 2 + cov_p,
-                                          b / 2 - cov_p, int(nt), a_t)
+            tendons = templates.point_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
+                                             -b / 2 + cov_p, b / 2 - cov_p, int(nt), a_t)
     return outer, (holes or []), bars, tendons
 
 

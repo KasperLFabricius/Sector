@@ -271,6 +271,25 @@ def test_quick_section_builder_stacks_multiple_bar_layers():
     assert not at.exception
 
 
+def test_quick_section_builder_stacks_tendon_layers():
+    # Two tendon layers place the tendons at two y-levels stacked up from the bottom.
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.number_input(key="tnd_n").set_value(3).run()
+    at.number_input(key="tnd_layers").set_value(2).run()
+    at.number_input(key="tnd_layer_s").set_value(60.0).run()
+    _apply_qs(at)
+    assert not at.exception
+    tendons = at.session_state["tendons_base"]
+    assert len(tendons) == 6                          # 2 layers x 3 tendons
+    ys = sorted(round(float(y), 1) for y in set(tendons["y (mm)"]))
+    # 100 mm tendon cover from the -300 mm bottom face -> -200, then +60 -> -140.
+    assert ys == [-200.0, -140.0]
+    at.button(key="calculate").click().run()
+    assert not at.exception
+
+
 def test_quick_section_tsection_lower_top_layer_fits_the_web():
     # A T-section's top face is the flange; a lower top layer pushed below the flange
     # must narrow to the web, or it would sit outside the concrete and be rejected.
