@@ -84,6 +84,27 @@ def test_bar_row_single_is_centred():
     assert len(bars) == 1 and bars[0][0] == pytest.approx(0.0)
 
 
+def test_bar_layers_stacks_rows_into_the_section():
+    # Two bottom layers (6 bars each), the first at the cover line y0 and the next
+    # one layer_spacing further up. direction = +1 for a bottom face.
+    y0, ls = -0.27, 0.06
+    bars = templates.bar_layers(y0, 1.0, 2, ls, -0.15, 0.15, 6, 16)
+    assert len(bars) == 12
+    ys = sorted({round(b[1], 6) for b in bars})
+    assert ys == [pytest.approx(y0), pytest.approx(y0 + ls)]   # two distinct rows
+    # A single layer is just a bar_row at the face.
+    one = templates.bar_layers(y0, 1.0, 1, ls, -0.15, 0.15, 6, 16)
+    assert one == templates.bar_row(y0, -0.15, 0.15, 6, 16)
+
+
+def test_bar_layers_direction_moves_top_rows_down():
+    # direction = -1 (top face): later layers move toward the section interior (down).
+    y0, ls = 0.27, 0.05
+    bars = templates.bar_layers(y0, -1.0, 3, ls, -0.15, 0.15, 4, 20)
+    ys = sorted({round(b[1], 6) for b in bars})
+    assert ys == [pytest.approx(y0 - 2 * ls), pytest.approx(y0 - ls), pytest.approx(y0)]
+
+
 def test_count_for_spacing():
     # phi @ 150 over a 0.90 m face -> 6 gaps of exactly 150 mm = 7 bars.
     assert templates.count_for_spacing(0.90, 0.15) == 7

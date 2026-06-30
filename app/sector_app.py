@@ -713,6 +713,7 @@ _QS_WIDGET_KEYS = (
     "shape", "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "wall_mm",
     "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
     "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
+    "bot_layers", "top_layers", "layer_s",
     "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm",
 )
 
@@ -837,13 +838,24 @@ def _quick_section_geometry(box):
             c2.caption(f"-> {nb_top} bars")
         else:
             nb_bot = c1.number_input("Bottom bars", 0, 100, 6, 1, key="bot_n",
-                                     help="Number of bars in the bottom layer.")
+                                     help="Number of bars in each bottom layer.")
             nb_top = c2.number_input("Top bars", 0, 100, 2, 1, key="top_n",
-                                     help="Number of bars in the top layer.")
+                                     help="Number of bars in each top layer.")
+        nl_bot = c1.number_input("Bottom layers", 1, 10, 1, 1, key="bot_layers",
+                                 help="Number of stacked bar rows at the bottom face.")
+        nl_top = c2.number_input("Top layers", 1, 10, 1, 1, key="top_layers",
+                                 help="Number of stacked bar rows at the top face.")
+        layer_s = box.number_input(
+            "Layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, key="layer_s",
+            disabled=int(nl_bot) == 1 and int(nl_top) == 1,
+            help="Vertical centre-to-centre distance between stacked bar layers "
+                 "(used only when a face has more than one layer).") / 1000.0
         bars = templates.merge_bars(
-            templates.bar_row(-h / 2 + cov, -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot),
-            templates.bar_row(h / 2 - cov, -width_b / 2 + cov, width_b / 2 - cov,
-                              int(nb_top), rd_top))
+            templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
+                                 -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot),
+            templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
+                                 -width_b / 2 + cov, width_b / 2 - cov,
+                                 int(nb_top), rd_top))
 
     box.markdown("**Prestressing tendons**")
     nt = box.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",

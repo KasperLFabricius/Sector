@@ -252,6 +252,25 @@ def test_quick_section_builder_places_bars_by_spacing():
     assert not at.exception
 
 
+def test_quick_section_builder_stacks_multiple_bar_layers():
+    # Two bottom layers stack the 6 bottom bars at two y-levels (12), plus the 2 top
+    # bars = 14; the second layer sits one layer-spacing above the bottom cover line.
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.number_input(key="bot_layers").set_value(2).run()
+    at.number_input(key="layer_s").set_value(60.0).run()
+    _apply_qs(at)
+    assert not at.exception
+    bars = at.session_state["bars_base"]
+    assert len(bars) == 14                          # 2 x 6 bottom + 1 x 2 top
+    ys = sorted(round(float(y), 1) for y in set(bars["y (mm)"]))
+    # 600 mm section, 50 mm cover: bottom rows at -250 and -190 mm, top at 250 mm.
+    assert ys == [-250.0, -190.0, 250.0]
+    at.button(key="calculate").click().run()
+    assert not at.exception
+
+
 def test_builder_settings_persist_between_openings():
     # The builder widgets are dropped while it is closed, so the settings are
     # mirrored to durable keys: reopening restores the last shape and dimensions.
