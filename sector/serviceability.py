@@ -46,7 +46,12 @@ from typing import Optional, Sequence, Union
 import numpy as np
 
 from .elastic import ElasticResult, solve_elastic, solve_elastic_uncracked
-from .geometry import area_moments, clip_halfplane, distance_to_boundary
+from .geometry import (
+    AreaMoments,
+    area_moments,
+    clip_halfplane,
+    distance_to_boundary,
+)
 from .section import Section
 
 # kN/m^2 per MPa: the solver returns stresses in kN/m^2 for sections built in
@@ -68,6 +73,7 @@ class CrackWidthResult:
     phi: float           # governing bar diameter (mm)
     cover: float         # clear cover to that bar's surface (mm)
     gov_bar: int         # index of the governing (largest-wk) bar
+    coarse: bool = False  # DK NA coarse crack system (centroid-matched Ac,eff, wk/2)
 
 
 @dataclass
@@ -138,6 +144,40 @@ def _depth_axis(kx: float, ky: float) -> tuple[float, float, float]:
     return kx / mag, ky / mag, mag
 
 
+def _band_moments(rings, gx: float, gy: float, c_lo: float) -> AreaMoments:
+    """Area moments of the section clipped to the tension band ``s >= c_lo``
+    (``s`` measured along the depth axis ``(gx, gy)``)."""
+    total = AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    for ring in rings:
+        total = total + area_moments(clip_halfplane(ring, gx, gy, -c_lo))
+    return total
+
+
+def _centroid_matched_lo(rings, gx: float, gy: float, s_tface: float,
+                         s_cface: float, s_target: float) -> float:
+    """Lower bound ``c_lo`` of the tension band ``[c_lo, s_tface]`` whose
+    area-centroid (along the depth axis) coincides with ``s_target``.
+
+    This is the DK NA coarse-system effective area (figure 7.100 NA): the largest
+    concrete area at the tension face whose centroid matches the tension
+    reinforcement's centroid. The band centroid falls monotonically as ``c_lo``
+    drops (the band grows inward from the tension face), so a bisection converges;
+    ``s_target`` lies between the full-section centroid and ``s_tface``.
+    """
+    lo, hi = s_cface, s_tface
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        m = _band_moments(rings, gx, gy, mid)
+        too_high = m.area <= 0.0 or (m.sx * gx + m.sy * gy) / m.area > s_target
+        if too_high:
+            hi = mid                 # centroid too near the tension face -> grow band
+        else:
+            lo = mid                 # band too deep -> shrink it (raise c_lo)
+        if hi - lo < 1.0e-9:
+            break
+    return 0.5 * (lo + hi)
+
+
 def _crack_width(
     section: Section,
     cracked_state: ElasticResult,
@@ -153,6 +193,7 @@ def _crack_width(
     bar_diameter: Optional[float],
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
+    coarse: bool = False,
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width, evaluated per bar, returning the largest-wk bar.
 
@@ -167,11 +208,15 @@ def _crack_width(
     effective zone or no usable bending gradient (pure axial tension uses a
     different effective-area definition).
 
-    Two flags select the DK NA crack-width rules. ``k3_cover_dependent`` replaces
+    Three flags select the DK NA crack-width rules. ``k3_cover_dependent`` replaces
     the cover-term coefficient ``k3`` by ``k3*(25/c)^(2/3)`` (DK NA 7.3.4(3)).
     ``include_hx_term`` (default ``True``) keeps the ``(h-x)/3`` limit in
     ``hc,ef``; set it ``False`` for an ordinary beam under the DK NA, where that
-    limit applies only to slabs and prestressed members (7.3.2(3)).
+    limit applies only to slabs and prestressed members (7.3.2(3)). ``coarse``
+    selects the DK NA coarse crack system (7.3.4(1)): the effective tension area
+    becomes the band at the tension face whose centroid matches the tension
+    reinforcement (figure 7.100 NA) instead of the EC2 ``hc,ef`` band, and the
+    crack width is halved. ``include_hx_term`` is then irrelevant.
     """
     bx, by, ba = section.bar_arrays()
     if not bx.size:
@@ -193,26 +238,33 @@ def _crack_width(
     s_bars = bx * gx + by * gy
     gov0 = int(np.argmax(sigma))                   # deepest tension fibre
     d = float(s_bars[gov0]) - s_cface              # effective depth
-    # EC2 hc,ef = min(2.5(h-d), (h-x)/3, h/2). The neutral-axis depth x is measured
-    # from the compression face, so (h-x) = s_tface - s_na (the tension-side depth),
-    # not h - s_na (which would only match when the compression face is at s = 0).
-    # The (h-x)/3 limit can be dropped (DK NA 7.3.2(3): it applies only to slabs and
-    # prestressed members, not ordinary beams).
-    if include_hx_term:
-        hc_ef = min(2.5 * (h - d), (s_tface - s_na) / 3.0, h / 2.0)
+    rings = list(section.integration_rings())
+    if coarse:
+        # DK NA coarse crack system (7.3.4(1)): the effective tension area is the
+        # band at the tension face whose area-centroid matches the tension
+        # reinforcement's centroid (figure 7.100 NA); for a rectangle this is the
+        # 2*b*(h-d) band. The crack width (7.8) is then halved (applied below).
+        tens = sigma > 0.0
+        s_rc = float(np.sum(ba[tens] * s_bars[tens]) / np.sum(ba[tens]))
+        c_lo = _centroid_matched_lo(rings, gx, gy, s_tface, s_cface, s_rc)
+        hc_ef = s_tface - c_lo
+        ac_eff = _band_moments(rings, gx, gy, c_lo).area
     else:
-        hc_ef = min(2.5 * (h - d), h / 2.0)
-    if hc_ef <= 0.0:
-        return None
-
-    # Effective tension area: the concrete band of depth hc_ef at the tension
-    # face, i.e. s >= s_tface - hc_ef. Clip each ring to that half-plane.
-    c_lo = s_tface - hc_ef
-    ac_eff = 0.0
-    for ring in section.integration_rings():
-        clipped = clip_halfplane(ring, gx, gy, -c_lo)
-        ac_eff += area_moments(clipped).area
-    if ac_eff <= 0.0:
+        # EC2 hc,ef = min(2.5(h-d), (h-x)/3, h/2). The neutral-axis depth x is
+        # measured from the compression face, so (h-x) = s_tface - s_na (the
+        # tension-side depth), not h - s_na (which would only match when the
+        # compression face is at s = 0). The (h-x)/3 limit can be dropped (DK NA
+        # 7.3.2(3): it applies only to slabs and prestressed members).
+        if include_hx_term:
+            hc_ef = min(2.5 * (h - d), (s_tface - s_na) / 3.0, h / 2.0)
+        else:
+            hc_ef = min(2.5 * (h - d), h / 2.0)
+        # Effective tension area: the concrete band of depth hc_ef at the tension
+        # face, i.e. s >= s_tface - hc_ef. Clip each ring to that half-plane.
+        c_lo = s_tface - hc_ef
+        ac_eff = sum(area_moments(clip_halfplane(r, gx, gy, -c_lo)).area
+                     for r in rings)
+    if hc_ef <= 0.0 or ac_eff <= 0.0:
         return None
 
     # Reinforcement inside the effective band sets the (shared) ratio rho_p,eff.
@@ -228,7 +280,7 @@ def _crack_width(
 
     # Per-bar crack width: each tension bar in the band uses its own cover,
     # diameter and Stage II stress; the largest wk governs.
-    rings = list(section.integration_rings())
+    wk_factor = 0.5 if coarse else 1.0   # DK NA coarse system halves wk (7.3.4(1))
     best: Optional[CrackWidthResult] = None
     for i in range(bx.size):
         if not in_band[i] or sigma[i] <= 0.0:
@@ -252,12 +304,12 @@ def _crack_width(
         # (7.3.4(3)) the cover term coefficient is k3*(25/c)^(2/3) instead of k3.
         k3_i = k3 * (25.0 / c_i) ** (2.0 / 3.0) if k3_cover_dependent and c_i > 0.0 else k3
         sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
-        wk = sr_max * esm_ecm
+        wk = wk_factor * sr_max * esm_ecm
         if best is None or wk > best.wk:
             best = CrackWidthResult(
                 wk=wk, sr_max=sr_max, esm_ecm=esm_ecm, sigma_s=sigma_s,
                 rho_p_eff=rho, ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, cover=c_i,
-                gov_bar=i,
+                gov_bar=i, coarse=coarse,
             )
     return best
 
@@ -281,6 +333,7 @@ def analyse_cracking(
     k4: float = 0.425,
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
+    coarse: bool = False,
     n_mult: Optional[np.ndarray] = None,
     prestress_stress: Optional[np.ndarray] = None,
 ) -> CrackingResult:
@@ -359,6 +412,7 @@ def analyse_cracking(
         crack = _crack_width(
             section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter,
             k3_cover_dependent=k3_cover_dependent, include_hx_term=include_hx_term,
+            coarse=coarse,
         )
 
     return CrackingResult(
@@ -384,6 +438,7 @@ def crack_width(
     k4: float = 0.425,
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
+    coarse: bool = False,
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width for an externally supplied cracked-section state.
 
@@ -397,4 +452,4 @@ def crack_width(
     return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
                         k1, k2, k3, k4, bar_diameter,
                         k3_cover_dependent=k3_cover_dependent,
-                        include_hx_term=include_hx_term)
+                        include_hx_term=include_hx_term, coarse=coarse)

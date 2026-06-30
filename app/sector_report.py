@@ -770,18 +770,32 @@ class ReportBuilder:
             "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
             "&gt;= 0.6&#183;sigma<sub>s</sub>/E<sub>s</sub>",
             ref="Eq (7.9)")
+        coarse = bool(cw.get("coarse"))
         self._formula(
-            "w<sub>k</sub> = s<sub>r,max</sub> &#183; (eps<sub>sm</sub> - eps<sub>cm</sub>)",
-            ref="Eq (7.8)",
-            subst=f"= {_fmt(cw.get('sr_max',0),1)} mm &#183; "
-                  f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
+            ("w<sub>k</sub> = &#189;&#183;s<sub>r,max</sub> &#183; "
+             "(eps<sub>sm</sub> - eps<sub>cm</sub>)" if coarse else
+             "w<sub>k</sub> = s<sub>r,max</sub> &#183; "
+             "(eps<sub>sm</sub> - eps<sub>cm</sub>)"),
+            ref="DS/EN 1992-1-1 DK NA &#167;7.3.4(1), Eq (7.8)" if coarse else "Eq (7.8)",
+            subst=("= &#189; &#183; " if coarse else "= ")
+                  + f"{_fmt(cw.get('sr_max',0),1)} mm &#183; "
+                    f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
         code = self.out["elastic"].get("crack_code")
         if code:
-            self._small(f"Crack-width code: {code}. For the DK NA fine system "
-                        "k<sub>3</sub> = 3.4&#183;(25/c)<super>2/3</super> "
-                        "(&#167;7.3.4(3)) and the (h-x)/3 term in h<sub>c,ef</sub> "
-                        "applies to slabs and prestressed members only.")
+            note = f"Crack-width code: {code}. "
+            if "DK NA" in code:
+                note += ("k<sub>3</sub> = 3.4&#183;(25/c)<super>2/3</super> "
+                         "(&#167;7.3.4(3)). ")
+                if coarse:
+                    note += ("Coarse crack system (&#167;7.3.4(1)): A<sub>c,eff</sub> "
+                             "is the tension-face band whose centroid matches the "
+                             "tension reinforcement (figure 7.100 NA), and w<sub>k</sub> "
+                             "is halved.")
+                else:
+                    note += ("The (h-x)/3 term in h<sub>c,ef</sub> applies to slabs "
+                             "and prestressed members only.")
+            self._small(note)
 
     def _appendix(self):
         self.flow.append(PageBreak())
