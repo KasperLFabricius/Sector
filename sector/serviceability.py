@@ -204,6 +204,7 @@ def _crack_width(
     include_hx_term: bool = True,
     coarse: bool = False,
     edition: str = "2004",
+    n_mult: Optional[np.ndarray] = None,
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width, evaluated per bar, returning the largest-wk bar.
 
@@ -232,7 +233,7 @@ def _crack_width(
     """
     if edition == "2023":
         return _crack_width_2023(section, cracked_state, n, fctm, Es, cover, kt,
-                                 k1, bar_diameter)
+                                 k1, bar_diameter, n_mult=n_mult)
     bx, by, ba = section.bar_arrays()
     if not bx.size:
         return None
@@ -342,6 +343,7 @@ def _crack_width_2023(
     kt: float,
     k1: Union[float, Sequence[float]],
     bar_diameter: Optional[float],
+    n_mult: Optional[np.ndarray] = None,
 ) -> Optional[CrackWidthResult]:
     """EN 1992-1-1:2023 refined crack width (9.2.3), per bar, largest-wk governs.
 
@@ -407,7 +409,9 @@ def _crack_width_2023(
 
     # kfl (9.17, general; reduces to (9.16) for a rectangle): needs xg, the uncracked
     # transformed-section neutral axis (its centroid), projected on the depth axis.
-    props = transformed_properties(section, n, cracked=False)
+    # n_mult carries the per-bar modular ratio (Ep/Es for tendons) so a prestressed
+    # section's transformed centroid is correct.
+    props = transformed_properties(section, n, cracked=False, n_mult=n_mult)
     h_minus_xg = s_tface - (props.cx * gx + props.cy * gy)
     if h_minus_xg > 1.0e-9:
         kfl = 0.5 * (1.0 + (h_minus_xg - hc_ef) / h_minus_xg)
@@ -549,7 +553,7 @@ def analyse_cracking(
         crack = _crack_width(
             section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter,
             k3_cover_dependent=k3_cover_dependent, include_hx_term=include_hx_term,
-            coarse=coarse, edition=edition,
+            coarse=coarse, edition=edition, n_mult=n_mult,
         )
 
     return CrackingResult(
@@ -577,6 +581,7 @@ def crack_width(
     include_hx_term: bool = True,
     coarse: bool = False,
     edition: str = "2004",
+    n_mult: Optional[np.ndarray] = None,
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width for an externally supplied cracked-section state.
 
@@ -591,4 +596,4 @@ def crack_width(
                         k1, k2, k3, k4, bar_diameter,
                         k3_cover_dependent=k3_cover_dependent,
                         include_hx_term=include_hx_term, coarse=coarse,
-                        edition=edition)
+                        edition=edition, n_mult=n_mult)

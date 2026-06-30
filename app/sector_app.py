@@ -1463,7 +1463,7 @@ def run_analysis(inp):
                                    Es=inp["steel"].Es, kt=0.6, bar_diameter=phi,
                                    k1=k1_bars, k3_cover_dependent=dk_na,
                                    include_hx_term=include_hx, coarse=inp["sls_coarse"],
-                                   edition=inp["sls_edition"])
+                                   edition=inp["sls_edition"], n_mult=n_mult)
             out["elastic"].update(
                 crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cw_short),
                 crack_code=inp["sls_code"],

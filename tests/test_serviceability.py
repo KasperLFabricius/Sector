@@ -199,6 +199,37 @@ def test_ec2_2023_refined_crack_width_hand_calc():
     assert cw.wk == pytest.approx(cw.kw * cw.k1_r * cw.sr_max * cw.esm_ecm, rel=1e-9)
 
 
+def test_transformed_properties_use_per_bar_modular_ratio():
+    # n_mult scales each bar's modular ratio (Ep/Es for tendons): a stiffer bar pulls
+    # the transformed centroid toward it, so xg differs from the all-equal-n case.
+    from sector.elastic import transformed_properties
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.15, 0.05, 1000.0)],         # one bar near the bottom
+    )
+    base = transformed_properties(sec, 6.0, cracked=False)
+    stiffer = transformed_properties(sec, 6.0, cracked=False, n_mult=np.array([2.5]))
+    assert stiffer.cy < base.cy                          # stiffer bottom bar pulls cy down
+
+
+def test_ec2_2023_kfl_responds_to_n_mult():
+    # With a fixed cracked state, n_mult enters the 2023 result only through kfl (the
+    # uncracked transformed NA xg). A higher per-bar ratio shifts xg, so kfl -- and the
+    # crack spacing it feeds -- move; this is the prestress-aware path Codex flagged.
+    from sector.elastic import solve_elastic
+    from sector.serviceability import crack_width
+    sec = beam_section()
+    fc = fctm(30.0)
+    state = solve_elastic(sec, 0.0, 150.0, 0.0, 6.0)
+    base = crack_width(sec, state, 6.0, fctm=fc, bar_diameter=16.0, kt=0.4,
+                       edition="2023")
+    mult = crack_width(sec, state, 6.0, fctm=fc, bar_diameter=16.0, kt=0.4,
+                       edition="2023", n_mult=np.full(3, 3.0))
+    assert base.kfl != pytest.approx(mult.kfl, rel=1e-6)
+    assert base.sr_max != pytest.approx(mult.sr_max, rel=1e-6)   # kfl feeds sr,m,cal
+    assert base.sigma_s == pytest.approx(mult.sigma_s)           # state fixed -> sigma_s same
+
+
 def test_ec2_2023_and_2004_crack_widths_are_the_same_order():
     # The 2023 refined model gives a crack width in the same range as the 2004 model
     # (a different formula, not a different answer by an order of magnitude).
