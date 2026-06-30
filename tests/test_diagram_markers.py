@@ -34,11 +34,16 @@ def test_mild_curve2_labels_inputs():
 def test_mild_curve1_labels_inputs():
     s = MildSteel(fytk=500.0, fyck=500.0, futk=500.0, eut=1.0, gamma_y=1.15,
                   gamma_u=1.15, gamma_E=1.0, curve=1)
-    yld, ult, comp = s.diagram_markers(design=True)
+    # The last marker is the symmetric compression rupture at -eut (appended by
+    # diagram_markers); the first three are the yield, tension rupture and comp yield.
+    yld, ult, comp, comp_ult = s.diagram_markers(design=True)
     fyd = 500.0 / 1.15
     assert yld == (pytest.approx(fyd / ES), pytest.approx(fyd), None, "fytk")
     assert ult[2:] == ("eut", "futk") and ult[1] == pytest.approx(fyd)
     assert comp[2:] == (None, "fyck") and comp[1] == pytest.approx(-fyd)
+    # Compression rupture at -eut (futk = fytk here, so the stress is -fyd).
+    assert comp_ult[0] == pytest.approx(-1.0) and comp_ult[2] == "eut"
+    assert comp_ult[1] == pytest.approx(-fyd)
 
 
 def test_mild_curve3_labels_inputs_and_independent_fyck():

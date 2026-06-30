@@ -153,6 +153,19 @@ def test_mild_tension_only_carries_no_compression():
         assert all(strain >= 0.0 for strain, *_ in tonly.diagram_markers())
 
 
+def test_mild_diagram_marks_symmetric_rupture():
+    # The law ruptures symmetrically (drops to 0 past +/-eut), so the diagram marks
+    # the compression rupture at -eut as well as the tension rupture at +eut, with
+    # the eut strain label on both sides.
+    for curve in (1, 2, 3):
+        s = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, curve=curve)
+        markers = s.diagram_markers()
+        strains = [m[0] for m in markers]
+        assert any(abs(e - 0.05) < 1e-9 for e in strains), curve   # +eut marked
+        assert any(abs(e + 0.05) < 1e-9 for e in strains), curve   # -eut marked
+        assert "eut" in [m[2] for m in markers if abs(m[0] + 0.05) < 1e-9]
+
+
 def test_mild_type2_ruptures_beyond_eut():
     s = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.0, curve=2)
     assert s.stress(0.05) == pytest.approx(500.0)  # still intact at eut
