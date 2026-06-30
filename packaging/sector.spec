@@ -31,9 +31,12 @@ for pkg in ("streamlit", "numpy", "plotly", "pandas", "pyarrow", "altair", "kale
 
 # Sector's own code: Streamlit executes app/sector_app.py as a file and the app
 # adds its folder and the repo root to sys.path, so ship both trees as data with
-# their structure preserved (sources, the vendored point-grid frontend, assets).
+# their structure preserved (sources, the vendored point-grid frontend, fonts).
+# The sidebar logo lives in the repo-root ``assets`` folder (loaded relative to the
+# repo root / bundle base), so ship that too or the packaged UI drops the logo.
 datas += [(os.path.join(ROOT, "app"), "app"),
-          (os.path.join(ROOT, "sector"), "sector")]
+          (os.path.join(ROOT, "sector"), "sector"),
+          (os.path.join(ROOT, "assets"), "assets")]
 
 hiddenimports += [
     "sector",
