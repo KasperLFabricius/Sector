@@ -101,6 +101,18 @@ def test_report_crack_worked_uses_the_governing_case():
     assert "governing case (long-term)" not in txt
 
 
+def test_report_coarse_crack_system_shows_half_factor():
+    # The DK NA coarse crack system halves wk; the report's Eq (7.8) shows the 1/2
+    # factor and the crack-code note flags the centroid-matched effective area.
+    out = _out()
+    out["elastic"]["crack"] = dict(_crack(), coarse=True)
+    out["elastic"]["crack_short"] = dict(_crack(), coarse=True)
+    out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA (coarse crack system)"
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "coarse crack system" in txt
+    assert chr(0xBD) in txt            # the 1/2 glyph rendered in Eq (7.8)
+
+
 def test_report_handles_plastic_only():
     out = {"plastic": _out()["plastic"]}
     pdf = sector_report.build_report({}, _inp(), out, figures=False)

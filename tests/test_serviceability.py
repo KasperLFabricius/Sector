@@ -149,6 +149,58 @@ def test_dk_na_beam_drops_hx_term_in_effective_height():
     assert slab.crack.hc_ef < 0.35                            # (h-x)/3 ~ 0.27
 
 
+def test_dk_na_coarse_crack_system_band_and_half_width():
+    # DK NA 7.3.4(1) coarse crack system: the effective tension area is the band at
+    # the tension face whose centroid matches the reinforcement (figure 7.100 NA) --
+    # for this rectangle, 2*(h-d) = 0.10 m high, area b*0.10 = 0.03 m^2 -- and the
+    # crack width (7.8) is halved. The 3 bars sit 0.05 m from the tension face.
+    sec = beam_section()
+    fc = fctm(30.0)
+    fine = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fc, bar_diameter=25.0,
+                            k3_cover_dependent=True)
+    coarse = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fc, bar_diameter=25.0,
+                              k3_cover_dependent=True, coarse=True)
+    assert coarse.crack.coarse is True
+    assert coarse.crack.hc_ef == pytest.approx(0.10, abs=1e-4)        # 2*(h-d)
+    assert coarse.crack.ac_eff == pytest.approx(0.3 * 0.10, rel=1e-3)  # b * band
+    # wk = 1/2 * sr_max * (eps_sm - eps_cm) with the coarse effective ratio.
+    assert coarse.crack.wk == pytest.approx(
+        0.5 * coarse.crack.sr_max * coarse.crack.esm_ecm, rel=1e-9)
+    # The fine system keeps the EC2 hc,ef band (0.125 m here) and the full width.
+    assert fine.crack.coarse is False
+    assert fine.crack.hc_ef == pytest.approx(0.125, abs=1e-3)
+    assert fine.crack.wk == pytest.approx(
+        fine.crack.sr_max * fine.crack.esm_ecm, rel=1e-9)
+
+
+def test_dk_na_coarse_band_centroid_matches_reinforcement():
+    # The coarse effective band is solved by a centroid match, not a fixed 2*(h-d)
+    # for a rectangle only: its area-centroid along the depth axis must coincide
+    # with the tension reinforcement's centroid even when the width varies. A wide
+    # bottom flange (area bunched at the tension face) forces a taller band than the
+    # prismatic 2*(h-d) = 0.24 m to lift the centroid up to the bars.
+    from sector.serviceability import _band_moments, _depth_axis
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.6, 0.0), (0.6, 0.08), (0.2, 0.08),
+                 (0.2, 0.6), (0.0, 0.6)],                    # wide flange, y < 0.08
+        bars_xy_area_mm2=[(0.1, 0.12, 800.0), (0.15, 0.12, 800.0)],  # bars above the step
+    )
+    r = analyse_cracking(sec, 0.0, 200.0, 0.0, 6.0, fctm=fctm(30.0),
+                         bar_diameter=20.0, coarse=True)
+    assert r.cracked
+    cw = r.crack
+    assert cw is not None and cw.coarse is True
+    gx, gy, _ = _depth_axis(r.cracked_state.kx, r.cracked_state.ky)
+    verts = sec.concrete_vertices()
+    s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
+    band = _band_moments(list(sec.integration_rings()), gx, gy, s_tface - cw.hc_ef)
+    band_centroid = (band.sx * gx + band.sy * gy) / band.area
+    bx, by, ba = sec.bar_arrays()
+    s_rc = float(np.sum(ba * (bx * gx + by * gy)) / np.sum(ba))
+    assert band_centroid == pytest.approx(s_rc, abs=1e-4)
+    assert cw.hc_ef > 0.24                                    # taller than a prism
+
+
 def test_uncracked_below_cracking_load_uses_stage_i():
     # A small moment leaves the section uncracked: lambda_cr >= 1, zeta = 0, the
     # mean plane equals Stage I and no crack width is produced.

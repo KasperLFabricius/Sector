@@ -49,9 +49,17 @@ _KAPPA = chr(0x3BA)
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
-# Crack-width code edition -> whether the DK NA crack-spacing rules apply (cover-
-# dependent k3, and the (h-x)/3 effective-height term only for slabs/prestressed).
-_CRACK_CODES = {"EN 1992-1-1:2005": False, "DS/EN 1992-1-1 + DK NA": True}
+# Crack-width code edition -> the DK NA crack-spacing flags. dk_na: cover-dependent
+# k3 and the (h-x)/3 effective-height term only for slabs/prestressed. coarse: the
+# DK NA coarse crack system (7.3.4(1)) -- the effective area is the band whose
+# centroid matches the tension reinforcement (figure 7.100 NA) and wk is halved.
+_CRACK_CODES = {
+    "EN 1992-1-1:2005": dict(dk_na=False, coarse=False),
+    "DS/EN 1992-1-1 + DK NA (fine crack system)": dict(dk_na=True, coarse=False),
+    "DS/EN 1992-1-1 + DK NA (coarse crack system)": dict(dk_na=True, coarse=True),
+}
+# Old saved value for the fine DK NA option, renamed when the coarse system was added.
+_CRACK_CODE_ALIASES = {"DS/EN 1992-1-1 + DK NA": "DS/EN 1992-1-1 + DK NA (fine crack system)"}
 
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
 
@@ -994,19 +1002,26 @@ def build_inputs():
              "mild reinforcement: 0.8 for ribbed / high-bond bars (e.g. Tentor), "
              "1.6 for plain round bars. Prestressing tendons always use k1 = 1.6.")
     sls_k1 = _BOND_K1[sls_bond]
+    # Migrate the pre-coarse-system saved value before the selectbox reads it.
+    if st.session_state.get("sls_code") in _CRACK_CODE_ALIASES:
+        st.session_state["sls_code"] = _CRACK_CODE_ALIASES[st.session_state["sls_code"]]
     sls_code = aset.selectbox(
         "Crack-width code", list(_CRACK_CODES), key="sls_code",
         disabled=not (elastic_on and sls_cw),
         help="Code edition for the crack-spacing rules. The DK NA makes k3 cover-"
              "dependent (k3 = 3.4*(25/c)^(2/3)) and limits the (h-x)/3 effective-"
-             "height term to slabs and prestressed members.")
-    sls_dk_na = _CRACK_CODES[sls_code]
+             "height term to slabs and prestressed members. The coarse crack system "
+             "(7.3.4(1)) sets the effective area to the band whose centroid matches "
+             "the tension reinforcement (figure 7.100 NA) and halves the crack width.")
+    sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
+    sls_coarse = _CRACK_CODES[sls_code]["coarse"]
     sls_member = aset.selectbox(
         "Member type", ["Beam", "Slab"], key="sls_member",
-        disabled=not (elastic_on and sls_cw and sls_dk_na),
-        help="Under the DK NA the (h-x)/3 effective-height term applies only to "
-             "slabs (and prestressed members); for a beam it is dropped. Ignored "
-             "for the base EN 1992-1-1 code.")
+        disabled=not (elastic_on and sls_cw and sls_dk_na and not sls_coarse),
+        help="Under the DK NA fine system the (h-x)/3 effective-height term applies "
+             "only to slabs (and prestressed members); for a beam it is dropped. "
+             "Ignored for the base EN 1992-1-1 code and the coarse crack system "
+             "(which uses the centroid-matched effective area, not hc,ef).")
 
     sec = s.expander("Section", expanded=True)
     sec.caption("The section is a set of explicit points (the source of truth). "
@@ -1278,7 +1293,8 @@ def build_inputs():
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
-                sls_k1=sls_k1, sls_dk_na=sls_dk_na, sls_member=sls_member,
+                sls_k1=sls_k1, sls_dk_na=sls_dk_na, sls_coarse=sls_coarse,
+                sls_code=sls_code, sls_member=sls_member,
                 mode=mode, extent=extent, signature=sig)
 
 
@@ -1313,7 +1329,7 @@ def _crack_dict(cw):
         return None
     return dict(wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm, sigma_s=cw.sigma_s,
                 rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff, hc_ef=cw.hc_ef,
-                phi=cw.phi, cover=cw.cover, gov_bar=cw.gov_bar + 1)
+                phi=cw.phi, cover=cw.cover, gov_bar=cw.gov_bar + 1, coarse=cw.coarse)
 
 
 def run_analysis(inp):
@@ -1411,6 +1427,7 @@ def run_analysis(inp):
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
             bar_diameter=phi, k1=k1_bars,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
+            coarse=inp["sls_coarse"],
             n_mult=n_mult, prestress_stress=prestress_stress)
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
         props_cr = (transformed_properties(
@@ -1439,11 +1456,10 @@ def run_analysis(inp):
             cw_short = crack_width(sec, short_state, inp["ns"], fctm=inp["sls_fctm"],
                                    Es=inp["steel"].Es, kt=0.6, bar_diameter=phi,
                                    k1=k1_bars, k3_cover_dependent=dk_na,
-                                   include_hx_term=include_hx)
+                                   include_hx_term=include_hx, coarse=inp["sls_coarse"])
             out["elastic"].update(
                 crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cw_short),
-                crack_code=("DS/EN 1992-1-1 + DK NA (fine crack system)" if dk_na
-                            else "EN 1992-1-1:2005"),
+                crack_code=inp["sls_code"],
                 crack_member=(inp["sls_member"] if dk_na else None),
             )
     return out
