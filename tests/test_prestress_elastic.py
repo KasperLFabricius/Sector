@@ -9,6 +9,8 @@ the prestress must delay cracking.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -86,3 +88,27 @@ def test_prestress_delays_cracking():
     assert cracked_no_ps.cracked          # cracks without prestress
     assert not uncracked_ps.cracked       # prestress keeps it uncracked
     assert uncracked_ps.lambda_cr >= 1.0
+
+
+def test_lambda_cr_factors_only_the_external_load():
+    # Codex P2: the tendon prestress is fixed; only the external P/M are factored.
+    # lambda_cr is the factor on the external load that reaches cracking, so scaling
+    # the external load by it brings the peak concrete tension exactly to fctm. The
+    # naive fctm/sigma_ct is wrong here: the section is in net compression
+    # (sigma_ct = 0), so it would read inf -- never cracking.
+    sec = Section.from_polygon(
+        corners=[(-0.15, -0.3), (-0.15, 0.3), (0.15, 0.3), (0.15, -0.3)],
+        bars_xy_area_mm2=[(-0.1, 0.25, 500.0), (0.1, 0.25, 500.0),
+                          (0.0, 0.0, 1000.0)])          # concentric tendon
+    n = 6.0
+    n_mult = np.array([1.0, 1.0, 1.0])
+    ps = np.array([0.0, 0.0, 8.0e5])
+    mx = 80.0
+    common = dict(fctm=3.2, Es=200000.0, beta=0.5, kt=0.4)
+
+    r = analyse_cracking(sec, 0.0, mx, 0.0, n, n_mult=n_mult, prestress_stress=ps, **common)
+    assert r.sigma_ct == pytest.approx(0.0, abs=1e-6)   # net compression at this load
+    assert math.isfinite(r.lambda_cr) and r.lambda_cr > 1.0   # finite, not inf
+    at_crack = analyse_cracking(sec, 0.0, mx * r.lambda_cr, 0.0, n, n_mult=n_mult,
+                                prestress_stress=ps, **common)
+    assert at_crack.sigma_ct == pytest.approx(3.2, rel=1e-3)   # exactly at fctm
