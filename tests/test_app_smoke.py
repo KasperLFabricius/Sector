@@ -683,8 +683,8 @@ def test_autosave_defaults_on_with_five_minutes(tmp_path, monkeypatch):
 
 
 def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
-    # When an autosave is due (its fragment fires), the current section is written to
-    # the local autosave file and parses back to a project.
+    # Once the interval has elapsed, the next rerun (a user interaction) writes the
+    # current section to the local autosave file, which parses back to a project.
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     import sys as _sys
     at = _fresh()
@@ -698,6 +698,21 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     tables, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
     assert len(tables["corners_base"]) >= 3        # the live section, not blank
     assert at.session_state["_autosave_last"]      # the panel records the time
+
+
+def test_autosave_restores_last_session_on_next_launch(tmp_path, monkeypatch):
+    # The BriCoS principle: a pre-existing autosave is loaded automatically on the
+    # next launch, so the section resumes where the user left off.
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_fck").set_value(42.0).run()
+    at.session_state["_autosave_t"] = 0.0          # make a save due
+    at.run()
+    assert (tmp_path / "autosave.json").exists()
+    at2 = _fresh()                                 # a brand-new session
+    at2.run()
+    assert at2.session_state["conc_fck"] == 42.0   # restored automatically
 
 
 def test_autosave_disabled_writes_nothing(tmp_path, monkeypatch):
@@ -718,6 +733,33 @@ def test_autosave_path_respects_env_override(tmp_path, monkeypatch):
     assert sector_app._autosave_path() == tmp_path / "autosave.json"
     assert sector_app._write_autosave('{"x": 1}', tmp_path / "a.json") is True
     assert (tmp_path / "a.json").read_text(encoding="utf-8") == '{"x": 1}'
+
+
+def test_write_autosave_is_atomic_and_replaces(tmp_path):
+    # The write replaces the old file via a temp + os.replace, leaving no .tmp behind,
+    # so a crash mid-write cannot truncate the recovery file (Codex P2).
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
+    import sector_app  # noqa: E402
+    p = tmp_path / "autosave.json"
+    p.write_text("OLD", encoding="utf-8")
+    assert sector_app._write_autosave("NEW", p) is True
+    assert p.read_text(encoding="utf-8") == "NEW"
+    assert not (tmp_path / "autosave.json.tmp").exists()
+
+
+def test_autosave_skips_a_blank_outline(tmp_path, monkeypatch):
+    # Three blank/NaN corner rows are not three usable corners: autosave must not
+    # overwrite the recovery file with an outline-less project (Codex P2).
+    import pandas as pd
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    at.session_state["corners_base"] = pd.DataFrame(
+        {"x (mm)": [float("nan")] * 3, "y (mm)": [float("nan")] * 3})
+    at.session_state["_autosave_t"] = 0.0          # a save is due
+    at.run()
+    assert not (tmp_path / "autosave.json").exists()
 
 
 def test_load_preserves_manual_alpha_cc_for_strength_dependent_preset():

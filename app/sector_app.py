@@ -573,89 +573,110 @@ def _autosave_path() -> pathlib.Path:
 
 
 def _write_autosave(data: str, path) -> bool:
-    """Write the project JSON to ``path`` (creating the folder). Returns whether the
-    write succeeded; never raises, so a read-only or missing folder cannot break the
-    app."""
+    """Atomically write the project JSON to ``path`` (creating the folder).
+
+    The new content is written to a sibling temp file and then ``os.replace``d in,
+    so a crash or power loss mid-write -- the very failure autosave guards against --
+    cannot leave the recovery file empty or half-written; the old autosave survives
+    until the new one is complete. Returns whether the write succeeded; never raises,
+    so a read-only or missing folder cannot break the app."""
+    path = pathlib.Path(path)
+    tmp = path.parent / (path.name + ".tmp")
     try:
-        path = pathlib.Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(data, encoding="utf-8")
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, path)        # atomic on the same filesystem
         return True
     except Exception:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
         return False
 
 
-def _perform_autosave() -> None:
-    """Save the current project to the autosave file, skipping a section with no
-    outline and an unchanged project (so an idle session does not rewrite the file).
-    Records the time shown in the panel."""
-    if len(_current_table("corners_base", "ed_corners", _CORNER_COLS)) < 3:
-        return                                       # nothing meaningful to save yet
+def _perform_autosave() -> bool:
+    """Write the current project to the autosave file, returning whether it wrote.
+
+    Skips a section with no usable outline (fewer than three complete corners) and a
+    project unchanged since the last autosave, so the recovery file is never
+    overwritten with nothing or rewritten needlessly."""
+    corners = _pts_from_df(_current_table("corners_base", "ed_corners", _CORNER_COLS),
+                           _CORNER_COLS)
+    if len(corners) < 3:
+        return False   # no usable outline yet
     try:
         data = _gather_project()
     except Exception:
-        return
+        return False
     if data == st.session_state.get("_autosave_data"):
-        return                                       # unchanged since the last save
+        return False                                 # unchanged since the last save
     if _write_autosave(data, _autosave_path()):
         st.session_state["_autosave_data"] = data
         st.session_state["_autosave_last"] = datetime.now().strftime("%H:%M:%S")
+        return True
+    return False
 
 
-def _snapshot_autosave_for_recovery() -> None:
-    """Once per session, stash any pre-existing autosave so it can be offered for
-    recovery even after this session starts overwriting the file."""
-    if st.session_state.get("_autosave_checked"):
+def _reset_autosave_clock() -> None:
+    st.session_state["_autosave_t"] = time.time()    # restart the interval on a change
+
+
+def _maybe_autosave() -> None:
+    """Autosave on user interaction once the interval has elapsed (the BriCoS model:
+    the save rides the reruns that interaction triggers, so the app never reruns or
+    saves while idle). Call from the main flow after the inputs are built."""
+    if not st.session_state.get("autosave_on", True):
         return
-    st.session_state["_autosave_checked"] = True
-    st.session_state["_autosave_t"] = time.monotonic()   # first save is one interval in
+    interval = max(1, int(st.session_state.get("autosave_min", _AUTOSAVE_DEFAULT_MIN))) * 60
+    if time.time() - st.session_state.get("_autosave_t", 0.0) < interval:
+        return
+    st.session_state["_autosave_t"] = time.time()    # reset whether or not it writes
+    if _perform_autosave():
+        st.toast("Session autosaved.")
+
+
+def _autosave_startup() -> None:
+    """Once per session, restore the last autosaved project (the BriCoS principle:
+    re-open where you left off) and start the autosave clock. A missing autosave
+    just leaves the default section; an unreadable one starts fresh with a notice.
+    An explicitly uploaded project takes precedence over the autosave."""
+    if st.session_state.get("_autosave_init"):
+        return
+    st.session_state["_autosave_init"] = True
+    st.session_state["_autosave_t"] = time.time()
+    if "_pending_project" in st.session_state:
+        return                                       # an upload is already pending
     path = _autosave_path()
     try:
-        if path.exists():
-            when = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            st.session_state["_autosave_recovered"] = {
-                "data": path.read_text(encoding="utf-8"), "when": when}
+        if not path.exists():
+            return
+        text = path.read_text(encoding="utf-8")
+        project_io.parse_project(text)               # validate before restoring
     except Exception:
-        pass
+        st.session_state["_project_msg"] = (
+            "error", "An autosave file was found but could not be read; "
+                     "starting with the default section.")
+        return
+    st.session_state["_pending_project"] = text
+    st.session_state["_autosave_restoring"] = True
+    st.session_state["_autosave_data"] = text        # do not immediately re-save it
 
 
-def _autosave_controls(box) -> None:
-    """Autosave toggle, interval and status inside the Save / Load panel.
-
-    A fragment with ``run_every`` reruns on its own timer (even while the user is
-    idle), so the project is saved roughly every ``interval`` minutes; the
-    time check throttles the saves that the same fragment also does on ordinary
-    reruns. A pre-existing autosave (snapshotted at start-up) can be restored."""
-    enabled = box.checkbox("Autosave", value=True, key="autosave_on",
-                           help="Periodically save the section, materials, loads and "
-                                "settings to a local autosave file so work is not lost.")
-    interval = box.number_input("Autosave interval (min)", 1, 120,
-                                _AUTOSAVE_DEFAULT_MIN, 1, key="autosave_min",
-                                disabled=not enabled,
-                                help="Minutes between automatic saves.")
-    every = float(interval) * 60.0 if enabled else None
-
-    @st.fragment(run_every=every)
-    def _autosave_tick():
-        if st.session_state.get("autosave_on"):
-            due = time.monotonic() - st.session_state.get("_autosave_t", 0.0)
-            if due >= float(st.session_state.get("autosave_min", _AUTOSAVE_DEFAULT_MIN)) * 60.0 - 5.0:
-                st.session_state["_autosave_t"] = time.monotonic()
-                _perform_autosave()
-        last = st.session_state.get("_autosave_last")
-        st.caption(f"Autosaved at {last}." if last
-                   else "No autosave yet this session.")
-
-    with box:
-        _autosave_tick()
-
-    rec = st.session_state.get("_autosave_recovered")
-    if rec and box.button(f"Restore autosave ({rec['when']})",
-                          use_container_width=True,
-                          help="Load the section from the autosave file that was "
-                               "present when the app started."):
-        st.session_state["_pending_project"] = rec["data"]
-        st.rerun()
+def _autosave_panel(box) -> None:
+    """Autosave toggle, interval and status inside the Save / Load panel."""
+    enabled = box.checkbox(
+        "Autosave", value=True, key="autosave_on",
+        help="Save the section, materials, loads and settings to a local file and "
+             "restore them on the next launch. Saving happens as you work (on edits "
+             "and clicks) once the interval has passed, not while the app is idle.")
+    box.number_input(
+        "Autosave interval (min)", 1, 120, _AUTOSAVE_DEFAULT_MIN, 1, key="autosave_min",
+        disabled=not enabled, on_change=_reset_autosave_clock,
+        help="Minutes between automatic saves.")
+    last = st.session_state.get("_autosave_last")
+    box.caption(f"Autosaved at {last}." if last
+                else "Autosaves as you work; restored on the next launch.")
 
 
 def _apply_pending_project() -> None:
@@ -692,7 +713,10 @@ def _apply_pending_project() -> None:
     for ed in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
         st.session_state.pop(ed, None)
     st.session_state["pts_init"] = True   # do not re-seed the tables from a template
-    st.session_state["_project_msg"] = ("success", "Project loaded.")
+    if st.session_state.pop("_autosave_restoring", False):
+        st.session_state["_project_msg"] = ("success", "Restored your last autosaved session.")
+    else:
+        st.session_state["_project_msg"] = ("success", "Project loaded.")
 
 
 def _save_load_panel(parent) -> None:
@@ -708,7 +732,7 @@ def _save_load_panel(parent) -> None:
                         use_container_width=True,
                         help="Save the section, materials, loads and settings to a "
                              "JSON file.")
-    _autosave_controls(box)
+    _autosave_panel(box)
     up = box.file_uploader("Load project", type=["json"], key="project_upload",
                            help="Restore a section from a downloaded project file.")
     if up is not None:
@@ -1941,7 +1965,7 @@ def _crack_width_panel(e):
 # Layout
 # ---------------------------------------------------------------------------
 
-_snapshot_autosave_for_recovery()   # stash any prior autosave before this run writes
+_autosave_startup()        # restore the last autosaved session (BriCoS-style) on launch
 _apply_pending_project()   # restore an uploaded project before any widget is built
 # Always build the sidebar inputs, even while the Quick Section builder is open:
 # Streamlit discards a widget's state on any run where it is not rendered, so
@@ -1949,6 +1973,10 @@ _apply_pending_project()   # restore an uploaded project before any widget is bu
 # (and break the next Calculate). build_inputs is cheap; its result is unused
 # while the builder owns the main area.
 inp = build_inputs()
+
+# Autosave rides this rerun (triggered by the user's edit/click) once the interval
+# has elapsed; the point tables are current now that build_inputs has rendered them.
+_maybe_autosave()
 
 # The Quick Section builder takes over the main viewport (the BriCoS manual
 # pattern): render it in place of the analysis views while it is open, and stop
