@@ -14,6 +14,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "packagi
 import run_sector  # noqa: E402
 
 
+def test_packaging_files_are_in_the_repo():
+    # All build inputs must be committed -- notably sector.spec, which the generic
+    # .gitignore *.spec rule would drop (it is negated for this one). On a clean
+    # checkout (CI) a missing file is simply absent, so this catches it.
+    pkg = pathlib.Path(__file__).resolve().parent.parent / "packaging"
+    for name in ("sector.spec", "run_sector.py", "build.ps1", "README.md"):
+        assert (pkg / name).is_file(), f"packaging/{name} missing from the repo"
+
+
 def test_bundle_base_resolves_to_the_app_tree_in_dev():
     base = run_sector._bundle_base()
     assert (base / "app" / "sector_app.py").is_file()
