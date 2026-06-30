@@ -674,6 +674,52 @@ def test_fresh_session_project_captures_default_section():
     assert len(tables["corners_base"]) >= 3   # default rectangle, not blank
 
 
+def test_autosave_defaults_on_with_five_minutes(tmp_path, monkeypatch):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    assert at.session_state["autosave_on"] is True
+    assert at.session_state["autosave_min"] == 5
+
+
+def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
+    # When an autosave is due (its fragment fires), the current section is written to
+    # the local autosave file and parses back to a project.
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    import sys as _sys
+    at = _fresh()
+    at.run()
+    at.session_state["_autosave_t"] = 0.0          # make a save due, then rerun
+    at.run()
+    saved = tmp_path / "autosave.json"
+    assert saved.exists()
+    _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
+    import project_io  # noqa: E402
+    tables, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
+    assert len(tables["corners_base"]) >= 3        # the live section, not blank
+    assert at.session_state["_autosave_last"]      # the panel records the time
+
+
+def test_autosave_disabled_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    at.checkbox(key="autosave_on").set_value(False).run()
+    at.session_state["_autosave_t"] = 0.0          # due, but autosave is off
+    at.run()
+    assert not (tmp_path / "autosave.json").exists()
+
+
+def test_autosave_path_respects_env_override(tmp_path, monkeypatch):
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
+    import sector_app  # noqa: E402
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    assert sector_app._autosave_path() == tmp_path / "autosave.json"
+    assert sector_app._write_autosave('{"x": 1}', tmp_path / "a.json") is True
+    assert (tmp_path / "a.json").read_text(encoding="utf-8") == '{"x": 1}'
+
+
 def test_load_preserves_manual_alpha_cc_for_strength_dependent_preset():
     # A manually edited alpha_cc under EN 2023 (eta_cc tracks fck) must round-trip,
     # not be overwritten by the automatic value when the project is reloaded.

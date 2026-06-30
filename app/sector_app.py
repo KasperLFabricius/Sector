@@ -9,9 +9,12 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import os
 import pathlib
 import sys
 import threading
+import time
+from datetime import datetime
 
 # Make both the repo root (for ``sector``) and this app folder (for ``viz``)
 # importable when run as a script or via Streamlit's AppTest.
@@ -559,6 +562,102 @@ def _gather_project() -> str:
     return project_io.dump_project(tables, scalars)
 
 
+_AUTOSAVE_DEFAULT_MIN = 5     # default autosave interval (minutes), BriCoS-style
+
+
+def _autosave_path() -> pathlib.Path:
+    """The local autosave file. Overridable via ``SECTOR_AUTOSAVE_DIR`` (used by
+    tests and for a packaged build's data folder); defaults to ``~/.sector``."""
+    base = os.environ.get("SECTOR_AUTOSAVE_DIR") or (pathlib.Path.home() / ".sector")
+    return pathlib.Path(base) / "autosave.json"
+
+
+def _write_autosave(data: str, path) -> bool:
+    """Write the project JSON to ``path`` (creating the folder). Returns whether the
+    write succeeded; never raises, so a read-only or missing folder cannot break the
+    app."""
+    try:
+        path = pathlib.Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data, encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def _perform_autosave() -> None:
+    """Save the current project to the autosave file, skipping a section with no
+    outline and an unchanged project (so an idle session does not rewrite the file).
+    Records the time shown in the panel."""
+    if len(_current_table("corners_base", "ed_corners", _CORNER_COLS)) < 3:
+        return                                       # nothing meaningful to save yet
+    try:
+        data = _gather_project()
+    except Exception:
+        return
+    if data == st.session_state.get("_autosave_data"):
+        return                                       # unchanged since the last save
+    if _write_autosave(data, _autosave_path()):
+        st.session_state["_autosave_data"] = data
+        st.session_state["_autosave_last"] = datetime.now().strftime("%H:%M:%S")
+
+
+def _snapshot_autosave_for_recovery() -> None:
+    """Once per session, stash any pre-existing autosave so it can be offered for
+    recovery even after this session starts overwriting the file."""
+    if st.session_state.get("_autosave_checked"):
+        return
+    st.session_state["_autosave_checked"] = True
+    st.session_state["_autosave_t"] = time.monotonic()   # first save is one interval in
+    path = _autosave_path()
+    try:
+        if path.exists():
+            when = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            st.session_state["_autosave_recovered"] = {
+                "data": path.read_text(encoding="utf-8"), "when": when}
+    except Exception:
+        pass
+
+
+def _autosave_controls(box) -> None:
+    """Autosave toggle, interval and status inside the Save / Load panel.
+
+    A fragment with ``run_every`` reruns on its own timer (even while the user is
+    idle), so the project is saved roughly every ``interval`` minutes; the
+    time check throttles the saves that the same fragment also does on ordinary
+    reruns. A pre-existing autosave (snapshotted at start-up) can be restored."""
+    enabled = box.checkbox("Autosave", value=True, key="autosave_on",
+                           help="Periodically save the section, materials, loads and "
+                                "settings to a local autosave file so work is not lost.")
+    interval = box.number_input("Autosave interval (min)", 1, 120,
+                                _AUTOSAVE_DEFAULT_MIN, 1, key="autosave_min",
+                                disabled=not enabled,
+                                help="Minutes between automatic saves.")
+    every = float(interval) * 60.0 if enabled else None
+
+    @st.fragment(run_every=every)
+    def _autosave_tick():
+        if st.session_state.get("autosave_on"):
+            due = time.monotonic() - st.session_state.get("_autosave_t", 0.0)
+            if due >= float(st.session_state.get("autosave_min", _AUTOSAVE_DEFAULT_MIN)) * 60.0 - 5.0:
+                st.session_state["_autosave_t"] = time.monotonic()
+                _perform_autosave()
+        last = st.session_state.get("_autosave_last")
+        st.caption(f"Autosaved at {last}." if last
+                   else "No autosave yet this session.")
+
+    with box:
+        _autosave_tick()
+
+    rec = st.session_state.get("_autosave_recovered")
+    if rec and box.button(f"Restore autosave ({rec['when']})",
+                          use_container_width=True,
+                          help="Load the section from the autosave file that was "
+                               "present when the app started."):
+        st.session_state["_pending_project"] = rec["data"]
+        st.rerun()
+
+
 def _apply_pending_project() -> None:
     """Apply an uploaded project, if any, before the widgets are created.
 
@@ -609,6 +708,7 @@ def _save_load_panel(parent) -> None:
                         use_container_width=True,
                         help="Save the section, materials, loads and settings to a "
                              "JSON file.")
+    _autosave_controls(box)
     up = box.file_uploader("Load project", type=["json"], key="project_upload",
                            help="Restore a section from a downloaded project file.")
     if up is not None:
@@ -1841,6 +1941,7 @@ def _crack_width_panel(e):
 # Layout
 # ---------------------------------------------------------------------------
 
+_snapshot_autosave_for_recovery()   # stash any prior autosave before this run writes
 _apply_pending_project()   # restore an uploaded project before any widget is built
 # Always build the sidebar inputs, even while the Quick Section builder is open:
 # Streamlit discards a widget's state on any run where it is not rendered, so
