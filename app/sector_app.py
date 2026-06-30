@@ -25,6 +25,7 @@ import streamlit as st  # noqa: E402
 
 import project_io  # noqa: E402
 import viz  # noqa: E402
+from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, geometry, kernels, material_presets as mp, templates  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
@@ -376,8 +377,13 @@ def _pts_to_m(pts):
 
 
 def _pts_to_mm(pts):
-    """Convert (x, y[, area]) points from m to mm for the tables (area unchanged)."""
-    return [(p[0] * _MM, p[1] * _MM) + tuple(p[2:]) for p in pts]
+    """Convert (x, y[, area]) points from m to mm for the tables (area unchanged).
+
+    The coordinates are rounded to clean the float noise the m->mm scaling adds
+    (e.g. -0.15 * 1000 = -150.00000000000003), so the grid shows -150, not a long
+    truncated value. 6 decimals is far finer than any real placement tolerance.
+    """
+    return [(round(p[0] * _MM, 6), round(p[1] * _MM, 6)) + tuple(p[2:]) for p in pts]
 
 
 def _corners_df(pts):
@@ -431,28 +437,40 @@ def _pts_from_df(df, cols):
 _MAX_VOIDS = 10   # arbitrary cap on the number of separate voids
 
 
-def _render_point_table(box, base_key, ed_key, cols):
-    """Draw the editable table and return its current contents.
+def _reseed_table(base_key, ed_key, df):
+    """Replace a point table's contents and make its grid re-seed from them.
 
-    The base DataFrame is the *stable* source the widget owns across reruns: it is
-    set only by explicit actions (Load / Clear / Add or Remove void), never
-    re-seeded or cleared on every run, so a typed or pasted value sticks on the
-    first keystroke instead of lagging a rerun behind. Every data column is a
-    numeric input, so a value can be typed or pasted (a spreadsheet block
-    auto-grows the table) and a cell can never become text or a list. The point
-    numbers are drawn on the plots (by position), not stored as an ID column.
+    Bumping the version token is what tells the Tabulator grid to rebuild from the
+    new base; dropping the stale component value makes the grid fall back to it
+    until the frontend reports again. Only this table is touched, so a Load / Clear
+    / Add-void never disturbs the others.
     """
-    column_config = {c: st.column_config.NumberColumn(c, step=None) for c in cols}
-    return box.data_editor(
-        st.session_state[base_key], key=ed_key, num_rows="dynamic",
-        use_container_width=True, hide_index=True, column_config=column_config)
+    st.session_state[base_key] = df
+    st.session_state[ed_key + "_ver"] = st.session_state.get(ed_key + "_ver", 0) + 1
+    st.session_state.pop(ed_key, None)
 
 
-def _point_editor(box, base_key, ed_key, cols):
+def _render_point_table(box, base_key, ed_key, cols, id_start=1):
+    """Draw the editable grid and return its current contents as a DataFrame.
+
+    One Tabulator grid carries the frozen, auto-numbered ID column (from
+    ``id_start``, matching the plot), a frozen header and freely editable numeric
+    cells with Excel block paste. The grid owns its live state across reruns and
+    only re-seeds when its version token changes (see ``_reseed_table``), so a
+    typed or pasted value sticks on the first keystroke instead of lagging behind.
+    """
+    version = st.session_state.get(ed_key + "_ver", 0)
+    with box:
+        return point_grid(st.session_state[base_key], cols, key=ed_key,
+                          id_start=id_start, data_version=version)
+
+
+def _point_editor(box, base_key, ed_key, cols, id_start=1):
     """Editable point table. A row is only used once all its coordinates are
     filled, so a half-typed point is ignored rather than rejected. Returns the
     valid points, numbered by position (the order they appear)."""
-    return _pts_from_df(_render_point_table(box, base_key, ed_key, cols), cols)
+    return _pts_from_df(_render_point_table(box, base_key, ed_key, cols, id_start),
+                        cols)
 
 
 def _void_groups(df, cols):
@@ -473,12 +491,12 @@ def _void_groups(df, cols):
     return groups
 
 
-def _void_editor(box, base_key, ed_key):
+def _void_editor(box, base_key, ed_key, id_start=1):
     """Editable void table: several voids in one table, separated by a blank row.
     Returns the hole rings (each void with 3 or more corners), capped at
     ``_MAX_VOIDS`` -- the cap is enforced here, not only on the Add button, so a
     paste of more voids cannot push extra holes into the drawing and analysis."""
-    edited = _render_point_table(box, base_key, ed_key, _CORNER_COLS)
+    edited = _render_point_table(box, base_key, ed_key, _CORNER_COLS, id_start)
     rings = [g for g in _void_groups(edited, _CORNER_COLS) if len(g) >= 3]
     if len(rings) > _MAX_VOIDS:
         box.warning(f"Only the first {_MAX_VOIDS} voids are used; "
@@ -500,38 +518,17 @@ def _void_table_from_groups(groups, trailing_blank=False):
 
 
 def _current_table(base_key, ed_key, cols):
-    """The table as currently shown = the stable base plus the live editor delta.
+    """The grid's current rows as a DataFrame.
 
-    The base is changed only by explicit actions, so a button handler that runs
-    before the editor re-renders (Add / Remove void) must fold in the user's
-    unsaved edits (held in the data_editor's delta) to avoid discarding them.
+    The grid reports its full contents (not a delta), so a button handler that runs
+    before the grid re-renders (Add / Remove void) reads the last reported value;
+    it falls back to the stable base if the grid has not reported yet (just
+    re-seeded), so unsaved edits are never discarded.
     """
-    df = st.session_state[base_key].copy().reset_index(drop=True)
-    delta = st.session_state.get(ed_key) or {}
-    for i, changes in delta.get("edited_rows", {}).items():
-        for c, v in changes.items():
-            if c in df.columns and int(i) in df.index:
-                df.at[int(i), c] = v
-    deleted = [int(i) for i in (delta.get("deleted_rows") or []) if int(i) in df.index]
-    if deleted:
-        df = df.drop(index=deleted)
-    added = delta.get("added_rows") or []
-    if added:
-        df = pd.concat([df, pd.DataFrame(added).reindex(columns=cols)],
-                       ignore_index=True)
-    return df.reset_index(drop=True)
-
-
-def _points_preview(box, pts, cols, start):
-    """Read-only numbered view of the valid points, matching the plot numbering --
-    a non-editable ID next to each point (the editable table has no ID column)."""
-    if not pts:
-        return
-    data = {"ID": list(range(start, start + len(pts)))}
-    for j, c in enumerate(cols):
-        data[c] = [p[j] for p in pts]
-    box.dataframe(data, hide_index=True, use_container_width=True,
-                  height=min(35 * (len(pts) + 1) + 3, 240))
+    value = st.session_state.get(ed_key)
+    if not isinstance(value, list):   # absent / not yet reported -- use the base
+        return st.session_state[base_key].copy().reset_index(drop=True)
+    return _rows_to_df(value, cols)   # an empty list is a valid (cleared) grid
 
 
 _PROJECT_TABLES = (
@@ -566,8 +563,11 @@ def _apply_pending_project() -> None:
     except ValueError as exc:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
         return
+    ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
     for key, df in tables.items():
-        st.session_state[key] = df
+        # Re-seed the grid (bump its version) so it rebuilds from the loaded points
+        # rather than keeping the previous session's live state.
+        _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
     for key, value in scalars.items():
         st.session_state[key] = value
     # Keep each preset's change-marker in step with the loaded preset so the panel
@@ -891,15 +891,13 @@ def _quick_section_viewport():
         st.rerun()
     if apply:
         qs_hole = [(float(p[0]), float(p[1])) for p in holes[0]] if holes else []
-        st.session_state["corners_base"] = _corners_df(_pts_to_mm(
-            [(float(p[0]), float(p[1])) for p in outer]))
-        st.session_state["hole_base"] = _corners_df(_pts_to_mm(qs_hole))
-        st.session_state["bars_base"] = _rebar_df(_pts_to_mm(
-            [(float(p[0]), float(p[1]), float(p[2])) for p in bars]))
-        st.session_state["tendons_base"] = _rebar_df(_pts_to_mm(
-            [(float(p[0]), float(p[1]), float(p[2])) for p in tendons]))
-        for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
-            st.session_state.pop(k, None)
+        _reseed_table("corners_base", "ed_corners", _corners_df(_pts_to_mm(
+            [(float(p[0]), float(p[1])) for p in outer])))
+        _reseed_table("hole_base", "ed_hole", _corners_df(_pts_to_mm(qs_hole)))
+        _reseed_table("bars_base", "ed_bars", _rebar_df(_pts_to_mm(
+            [(float(p[0]), float(p[1]), float(p[2])) for p in bars])))
+        _reseed_table("tendons_base", "ed_tendons", _rebar_df(_pts_to_mm(
+            [(float(p[0]), float(p[1]), float(p[2])) for p in tendons])))
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
         st.rerun()
@@ -1028,25 +1026,21 @@ def build_inputs():
         # Seed the tables once from the default Quick Section (metres -> mm).
         d_outer, d_holes, d_bars, d_tendons = _default_quick_section()
         d_hole = [(float(p[0]), float(p[1])) for p in d_holes[0]] if d_holes else []
-        st.session_state["corners_base"] = _corners_df(_pts_to_mm(
-            [(float(p[0]), float(p[1])) for p in d_outer]))
-        st.session_state["hole_base"] = _corners_df(_pts_to_mm(d_hole))
-        st.session_state["bars_base"] = _rebar_df(_pts_to_mm(
-            [(float(p[0]), float(p[1]), float(p[2])) for p in d_bars]))
-        st.session_state["tendons_base"] = _rebar_df(_pts_to_mm(
-            [(float(p[0]), float(p[1]), float(p[2])) for p in d_tendons]))
-        for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
-            st.session_state.pop(k, None)
+        _reseed_table("corners_base", "ed_corners", _corners_df(_pts_to_mm(
+            [(float(p[0]), float(p[1])) for p in d_outer])))
+        _reseed_table("hole_base", "ed_hole", _corners_df(_pts_to_mm(d_hole)))
+        _reseed_table("bars_base", "ed_bars", _rebar_df(_pts_to_mm(
+            [(float(p[0]), float(p[1]), float(p[2])) for p in d_bars])))
+        _reseed_table("tendons_base", "ed_tendons", _rebar_df(_pts_to_mm(
+            [(float(p[0]), float(p[1]), float(p[2])) for p in d_tendons])))
         st.session_state["pts_init"] = True
     if clear_pts:
         # Empty every point table (corners, void, bars, tendons) and drop the live
         # editor edits, so the section starts blank.
-        st.session_state["corners_base"] = _corners_df([])
-        st.session_state["hole_base"] = _corners_df([])
-        st.session_state["bars_base"] = _rebar_df([])
-        st.session_state["tendons_base"] = _rebar_df([])
-        for k in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
-            st.session_state.pop(k, None)
+        _reseed_table("corners_base", "ed_corners", _corners_df([]))
+        _reseed_table("hole_base", "ed_hole", _corners_df([]))
+        _reseed_table("bars_base", "ed_bars", _rebar_df([]))
+        _reseed_table("tendons_base", "ed_tendons", _rebar_df([]))
     # Migrate a session that predates the void table (or the ID-column tables): seed
     # hole_base, and coerce any stored table to the current data-only schema.
     if "hole_base" not in st.session_state:
@@ -1061,42 +1055,38 @@ def build_inputs():
         if df is None:
             # A loaded or partial project may omit a table (e.g. a non-prestressed
             # project has no tendon table); seed it empty so the always-mounted
-            # editor has a base to read.
+            # grid has a base to read.
             st.session_state[base_key] = (_corners_df([]) if cols is _CORNER_COLS
                                           else _rebar_df([]))
             continue
         if list(df.columns) != cols:
             if set(cols).issubset(df.columns):
-                st.session_state[base_key] = df.reindex(columns=cols)  # drop a legacy ID col
+                _reseed_table(base_key, ed_key, df.reindex(columns=cols))  # drop legacy ID col
             else:   # an older schema (e.g. metre column names) -> reset to empty
-                st.session_state[base_key] = (_corners_df([]) if cols is _CORNER_COLS
-                                              else _rebar_df([]))
-            st.session_state.pop(ed_key, None)
+                _reseed_table(base_key, ed_key, _corners_df([]) if cols is _CORNER_COLS
+                              else _rebar_df([]))
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
     sec.caption("Concrete corners define the outline (3 or more, in order); the "
                 "voids are optional inner rings. Bars and tendons are points with an "
                 "area (mm2). Type or paste values (a block copied from a spreadsheet "
                 "auto-grows the table); a point is used once all its cells are "
-                "filled. Next to each table a read-only list numbers the points (the "
-                "ID matches the plots). Use Load Quick Section to refill from the "
-                "template above.")
+                "filled. The frozen ID column numbers the points to match the plots. "
+                "Use the Quick Section builder to refill the tables.")
     sec.markdown("_Concrete corners_")
-    ed_c, id_c = sec.columns([3, 2])
-    outer_mm = _point_editor(ed_c, "corners_base", "ed_corners", _CORNER_COLS)
-    _points_preview(id_c, outer_mm, _CORNER_COLS, 1)
+    outer_mm = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS, 1)
     outer = _pts_to_m(outer_mm)
     if len(outer) < 3:
         # No valid outline. Leave it empty (do NOT fall back to the Quick Section,
         # or Clear Section would silently revert to the template) and let the
         # downstream treat the section as blank.
         sec.warning("The section has no concrete outline. Add at least 3 corners, "
-                    "or press Load Quick Section.")
+                    "or open the Quick Section builder.")
     sec.markdown("_Concrete voids_")
     sec.caption("Several voids share this table, each separated by a blank row "
                 "(each void needs 3 or more corners).")
-    # The buttons act on the live table (base + unsaved editor edits) so typing a
-    # void and then adding/removing one does not discard the in-progress corners.
+    # The buttons act on the grid's current rows (its last reported value) so typing
+    # a void and then adding/removing one does not discard the in-progress corners.
     void_now = _current_table("hole_base", "ed_hole", _CORNER_COLS)
     n_voids = len(_void_groups(void_now, _CORNER_COLS))
     vc1, vc2 = sec.columns(2)
@@ -1105,30 +1095,22 @@ def build_inputs():
                   help=f"Append a blank separator row, so the next corners you enter "
                        f"start a new void (up to {_MAX_VOIDS})."):
         groups = _void_groups(void_now, _CORNER_COLS)
-        st.session_state["hole_base"] = _void_table_from_groups(groups,
-                                                                trailing_blank=True)
-        st.session_state.pop("ed_hole", None)
+        _reseed_table("hole_base", "ed_hole",
+                      _void_table_from_groups(groups, trailing_blank=True))
     if vc2.button("Remove void", key="rem_void", use_container_width=True,
                   disabled=n_voids == 0, help="Drop the last void from the table."):
         groups = _void_groups(void_now, _CORNER_COLS)
-        st.session_state["hole_base"] = _void_table_from_groups(groups[:-1])
-        st.session_state.pop("ed_hole", None)
-    ed_v, id_v = sec.columns([3, 2])
-    holes_mm = _void_editor(ed_v, "hole_base", "ed_hole")
-    _points_preview(id_v, [p for ring in holes_mm for p in ring], _CORNER_COLS,
-                    len(outer) + 1)
+        _reseed_table("hole_base", "ed_hole", _void_table_from_groups(groups[:-1]))
+    holes_mm = _void_editor(sec, "hole_base", "ed_hole", len(outer) + 1)
     holes = [_pts_to_m(ring) for ring in holes_mm]
     sec.markdown("_Reinforcing bars_")
-    ed_b, id_b = sec.columns([3, 2])
-    bars_mm = _point_editor(ed_b, "bars_base", "ed_bars", _REBAR_COLS)
-    _points_preview(id_b, bars_mm, _REBAR_COLS, 1)
+    bars_mm = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS, 1)
     bars = _pts_to_m(bars_mm)
     # Tendons are always definable; they only enter the analysis and the report when
     # at least one is present (a section with no tendons is simply not prestressed).
     sec.markdown("_Tendons_")
-    ed_t, id_t = sec.columns([3, 2])
-    tendons_mm = _point_editor(ed_t, "tendons_base", "ed_tendons", _REBAR_COLS)
-    _points_preview(id_t, tendons_mm, _REBAR_COLS, len(bars) + 1)
+    tendons_mm = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS,
+                               len(bars) + 1)
     tendons = _pts_to_m(tendons_mm)
 
     # In elastic-only mode the stress-strain laws do not enter the analysis (it is

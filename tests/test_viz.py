@@ -241,6 +241,19 @@ def test_concrete_figure_has_no_modulus_label():
                    for a in fig.layout.annotations)
 
 
+def test_interaction_figure_snaps_apex_noise_to_zero():
+    # A pure-Mx apex leaves a tiny floating-point residual in My; it must snap to 0
+    # so the hover does not read e.g. "(388.5, 0.0007)". A genuine value is kept.
+    mx = [388.5, 0.0, -388.5, 0.0]
+    my = [0.0007, 30.0, -0.0007, -30.0]
+    fig = viz.interaction_figure(mx, my, applied=(200.0, 0.0009))
+    cap = fig.data[0]
+    assert cap.x[0] == 0.0 and cap.x[2] == 0.0   # apex residuals snapped
+    assert cap.x[1] == 30.0                       # genuine My preserved
+    assert fig.data[1].x[0] == 0.0                # applied My noise snapped too
+    assert "kNm" in cap.hovertemplate
+
+
 def test_interaction_figure_plots_mx_vertical_my_horizontal():
     # Mx is bending *about* the x-axis, so it is the vertical plot axis and My
     # the horizontal one -- a tall (strong-about-x) section gives a tall envelope.

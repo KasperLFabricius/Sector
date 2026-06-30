@@ -1,0 +1,196 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="./tabulator.min.css" />
+  <script src="./tabulator.min.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; }
+    #wrap { padding: 1px; }
+    /* The frozen ID column reads as a row header: muted, non-editable. */
+    .tabulator .tabulator-cell.pg-id { color: #6b7280; background: #f3f4f6; font-variant-numeric: tabular-nums; }
+    .tabulator .tabulator-cell.pg-del { color: #b91c1c; cursor: pointer; text-align: center; user-select: none; }
+    .tabulator .tabulator-cell.pg-del:hover { background: #fee2e2; }
+    #addrow { margin-top: 6px; padding: 4px 10px; font-size: 14px; cursor: pointer;
+              border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
+    #addrow:hover { background: #f3f4f6; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="grid"></div>
+    <button id="addrow" type="button">+ Add row</button>
+  </div>
+
+  <script>
+    // ---- Streamlit component bridge (bare postMessage protocol) ----
+    function _send(type, data) {
+      window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), "*");
+    }
+    function setFrameHeight(h) { _send("streamlit:setFrameHeight", { height: h }); }
+    function sendValue(value) { _send("streamlit:setComponentValue", { value, dataType: "json" }); }
+
+    let table = null;
+    let cols = [];          // editable column keys, e.g. ["x (mm)", "y (mm)", "area (mm2)"]
+    let idStart = 1;
+    let dataVersion = null; // rebuild the grid only when this changes (stable base)
+
+    // A row is a "valid point" once every editable cell is a finite number; only
+    // those are numbered, so the ID column matches the plot (blank/partial rows and
+    // void separators get no ID).
+    function isComplete(row) {
+      return cols.every((c) => {
+        const v = row[c];
+        return v !== null && v !== undefined && v !== "" && isFinite(Number(v));
+      });
+    }
+
+    // Number the complete rows 1..N (offset by idStart) into the _id field, which
+    // the ID column displays. Blank/partial rows (and void separators) get no id.
+    function applyIds(rows) {
+      let n = idStart;
+      rows.forEach((d) => { d._id = isComplete(d) ? String(n++) : ""; });
+    }
+
+    // Re-number the live rows after a structural change. update() (not a direct
+    // mutation) makes Tabulator re-render only the cells whose id actually changed;
+    // it fires dataChanged, never cellEdited, so it does not re-enter renumber.
+    function renumber() {
+      let n = idStart;
+      table.getRows().forEach((r) => {
+        const d = r.getData();
+        const id = isComplete(d) ? String(n++) : "";
+        if (d._id !== id) r.update({ _id: id });
+      });
+    }
+
+    // Round for display so float noise (e.g. -150.00000000000003 from a m<->mm
+    // round-trip) and long values (bar areas) show consistently; the stored value
+    // is unchanged. parseFloat strips the trailing zeros toFixed leaves.
+    function fmtNum(cell) {
+      const v = cell.getValue();
+      if (v === null || v === undefined || v === "") return "";
+      const n = Number(v);
+      return isFinite(n) ? String(parseFloat(n.toFixed(4))) : "";
+    }
+
+    // Map a pasted spreadsheet block onto the EDITABLE columns only -- the frozen
+    // ID and delete columns are skipped, so a headerless x,y[,area] block lands in
+    // the right fields instead of being shifted by the ID column.
+    function pasteToEditableCols(clipboard) {
+      const lines = clipboard.split(/\r\n|\n|\r/).filter((l) => l.trim().length);
+      return lines.map((line) => {
+        const cells = line.split("\t");
+        const row = {};
+        cols.forEach((c, i) => {
+          const raw = cells[i] === undefined ? "" : String(cells[i]).trim();
+          const num = Number(raw);
+          row[c] = (raw === "" || !isFinite(num)) ? null : num;
+        });
+        return row;
+      });
+    }
+
+    function currentRows() {
+      // Return only the editable columns (drop _id), preserving order and blanks.
+      return table.getData().map((d) => {
+        const o = {};
+        cols.forEach((c) => { o[c] = (d[c] === "" ? null : d[c]); });
+        return o;
+      });
+    }
+
+    function emit() {
+      sendValue(currentRows());
+      reportHeight();
+    }
+
+    function reportHeight() {
+      const h = document.getElementById("wrap").scrollHeight;
+      setFrameHeight(h + 2);
+    }
+
+    function buildColumns() {
+      const columns = [];
+      // Frozen, non-editable ID column (the left "row header").
+      // First column, non-editable, styled as a left row-header. Not Tabulator-
+      // "frozen": the grid fits its width (no horizontal scroll), and frozen cells
+      // log a per-row getComponent warning on redraw.
+      columns.push({
+        title: "ID", field: "_id", width: 52, hozAlign: "right",
+        headerSort: false, editable: false, clipboard: false, cssClass: "pg-id",
+      });
+      cols.forEach((c) => {
+        columns.push({
+          title: c, field: c, editor: "number", editorParams: { selectContents: true },
+          headerSort: false, hozAlign: "right", formatter: fmtNum,
+          mutatorEdit: (value) => (value === "" || value === null ? null : Number(value)),
+        });
+      });
+      // Per-row delete control. The click is bound on the formatter's own element
+      // rather than via Tabulator's cellClick option -- cellClick pre-resolves a
+      // component for every cell at render time and logs a getComponent warning.
+      columns.push({
+        title: "", field: "_del", width: 34, headerSort: false, editable: false,
+        clipboard: false, hozAlign: "center", cssClass: "pg-del",
+        formatter: (cell) => {
+          const el = document.createElement("span");
+          el.innerHTML = "&times;";
+          el.title = "Delete row";
+          el.addEventListener("click", () => cell.getRow().delete());
+          return el;
+        },
+      });
+      return columns;
+    }
+
+    function build(args) {
+      cols = args.columns;
+      idStart = args.id_start || 1;
+      dataVersion = args.data_version;
+      const rows = (args.data || []).map((d) => Object.assign({}, d));
+      applyIds(rows);                // numbers are in the data, shown on first render
+
+      document.getElementById("grid").innerHTML = "";
+      table = new Tabulator("#grid", {
+        data: rows,
+        layout: "fitColumns",
+        columns: buildColumns(),
+        height: false,                 // grow with content; the iframe height is reported
+        clipboard: true,               // copy + paste
+        clipboardPasteAction: "replace",
+        clipboardPasteParser: pasteToEditableCols,
+        addRowPos: "bottom",
+        reactiveData: false,
+      });
+      // applyIds put the numbers in the data, so the initial render shows them; a
+      // structural change shifts other rows' ids, so re-number then report.
+      table.on("tableBuilt", () => emit());
+      table.on("cellEdited", () => { renumber(); emit(); });
+      table.on("rowDeleted", () => { renumber(); emit(); });
+      table.on("clipboardPasted", () => { renumber(); emit(); });
+      table.on("dataChanged", () => reportHeight());
+    }
+
+    document.getElementById("addrow").addEventListener("click", () => {
+      if (table) table.addRow({}).then(() => { renumber(); emit(); });
+    });
+
+    function onRender(args) {
+      if (!args) return;
+      // Rebuild only on an explicit re-seed (Load / Clear / Add-void changes the
+      // version); plain edits keep the live grid so typing never lags or resets.
+      if (table === null || args.data_version !== dataVersion) {
+        build(args);
+      } else {
+        reportHeight();
+      }
+    }
+
+    window.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "streamlit:render") onRender(event.data.args);
+    });
+    _send("streamlit:componentReady", { apiVersion: 1 });
+  </script>
+</body>
+</html>
