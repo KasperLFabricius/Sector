@@ -22,6 +22,7 @@ from sector.geometry import (
     concrete_is_connected,
     distance_to_boundary,
     orient,
+    points_inside_concrete,
     signed_area,
 )
 
@@ -70,6 +71,43 @@ def test_distance_to_boundary_rectangle_and_hole():
     # With a central hole the nearest face can be the hole edge.
     hole = [(0.12, 0.27), (0.18, 0.27), (0.18, 0.33), (0.12, 0.33)]
     assert distance_to_boundary(0.15, 0.20, [outer, hole]) == pytest.approx(0.07)
+
+
+# ---------------------------------------------------------------------------
+# points_inside_concrete
+# ---------------------------------------------------------------------------
+
+def test_points_inside_solid_section():
+    pts = [(0.0, 0.0), (0.1, 0.2), (-0.15, -0.25)]   # all well inside _RECT
+    assert points_inside_concrete(pts, _RECT).tolist() == [True, True, True]
+
+
+def test_point_outside_outline_is_flagged():
+    # Above the top face and beyond the right face -> outside the concrete.
+    pts = [(0.0, 0.0), (0.0, 0.5), (0.5, 0.0)]
+    assert points_inside_concrete(pts, _RECT).tolist() == [True, False, False]
+
+
+def test_point_inside_a_void_is_flagged():
+    hole = [(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05), (-0.05, 0.05)]
+    pts = [(0.0, 0.0),      # in the void -> not in concrete
+           (0.1, 0.1)]      # in concrete, clear of the void
+    assert points_inside_concrete(pts, _RECT, [hole]).tolist() == [False, True]
+
+
+def test_point_on_a_face_counts_as_inside():
+    # A bar at the top face (zero cover) and one hard against a void edge are valid.
+    hole = [(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05), (-0.05, 0.05)]
+    pts = [(0.0, 0.3),      # exactly on the outer top edge
+           (0.05, 0.0)]     # exactly on the void's right edge
+    assert points_inside_concrete(pts, _RECT, [hole]).tolist() == [True, True]
+
+
+def test_points_inside_concrete_empty_and_no_outline():
+    assert points_inside_concrete([], _RECT).tolist() == []
+    # With no valid outline nothing can be inside it.
+    assert points_inside_concrete([(0.0, 0.0)], [(0.0, 0.0), (1.0, 0.0)]).tolist() == [False]
+
 
 # ---------------------------------------------------------------------------
 # signed_area

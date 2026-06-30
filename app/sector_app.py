@@ -661,10 +661,10 @@ def _generate_report(inp):
     """Build the PDF from the current inputs when the Generate button was pressed."""
     if not st.session_state.pop("_generating_report", False):
         return
-    if inp.get("section") is None or inp.get("void_error"):
+    if inp.get("section") is None or inp.get("void_error") or inp.get("steel_error"):
         st.session_state["_report_msg"] = ("error", "Define a valid section (and "
-                                           "resolve any void error) before generating "
-                                           "a report.")
+                                           "resolve any void or reinforcement error) "
+                                           "before generating a report.")
         st.rerun()
     prog = _REPORT_PROG
     bar = prog.progress(0.0, text="Preparing report...") if prog is not None else None
@@ -1222,6 +1222,26 @@ def build_inputs():
     if section is not None and holes and not geometry.concrete_is_connected(outer, holes):
         void_error = ("A void splits the concrete into disconnected regions. "
                       "Adjust the voids so the concrete outline stays continuous.")
+    # Every reinforcing bar and tendon must sit in the concrete: outside the outline
+    # or inside a void it carries no force, so the section is ill-defined. Checked
+    # only once the outline itself is valid (a void error is the more basic fault).
+    steel_error = None
+    if section is not None and not void_error:
+        steel_pts = list(bars) + list(tendons)
+        if steel_pts:
+            ok = geometry.points_inside_concrete(steel_pts, outer, holes)
+            nb = len(bars)
+            bad_bars = [i + 1 for i in range(nb) if not ok[i]]
+            bad_tendons = [i - nb + 1 for i in range(nb, len(steel_pts)) if not ok[i]]
+            parts = []
+            if bad_bars:
+                parts.append(f"bar(s) {', '.join(map(str, bad_bars))}")
+            if bad_tendons:
+                parts.append(f"tendon(s) {', '.join(map(str, bad_tendons))}")
+            if parts:
+                steel_error = ("Reinforcement must lie within the concrete: "
+                               + " and ".join(parts) + " fall outside the section "
+                               "or inside a void. Move them into the concrete.")
     if outer:
         xs = [p[0] for p in outer]
         ys = [p[1] for p in outer]
@@ -1249,7 +1269,8 @@ def build_inputs():
             "sls_code", "sls_member"))
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
-    return dict(section=section, void_error=void_error, concrete=concrete, steel=steel,
+    return dict(section=section, void_error=void_error, steel_error=steel_error,
+                concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 check_util=check_util,
@@ -1297,8 +1318,8 @@ def _crack_dict(cw):
 
 def run_analysis(inp):
     out = {}
-    if inp["section"] is None or inp.get("void_error"):
-        return out                          # no valid concrete outline -> nothing to run
+    if inp["section"] is None or inp.get("void_error") or inp.get("steel_error"):
+        return out                          # invalid section -> nothing to run
     if inp["mode"] in ("Plastic", "Both"):
         vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
         # Prestress enters the analysis only when the section actually has tendons.
@@ -1814,8 +1835,9 @@ stale = results is not None and st.session_state.get("result_sig") != inp["signa
 if stale and view in ("Plastic Results", "Elastic Results"):
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
-if inp.get("void_error"):
-    st.error(inp["void_error"])
+for _section_err in (inp.get("void_error"), inp.get("steel_error")):
+    if _section_err:
+        st.error(_section_err)
 
 if view == "Section":
     section_view(inp)
