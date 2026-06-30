@@ -224,6 +224,47 @@ def _points_in_polygon(px: np.ndarray, py: np.ndarray, poly: np.ndarray) -> np.n
     return inside
 
 
+def points_inside_concrete(
+    points: Iterable[Sequence[float]],
+    outer: Vertices,
+    holes: Iterable[Vertices] = (),
+    tol: float = 1e-9,
+) -> np.ndarray:
+    """Boolean mask: whether each point lies in the concrete (inside ``outer`` and
+    not inside any void in ``holes``).
+
+    Used to reject reinforcement placed outside the section or buried in a void. A
+    point within ``tol`` of a boundary edge counts as inside, so a bar sitting
+    exactly on a concrete face (zero cover) or hard against a void edge is accepted;
+    only steel clearly beyond the outline -- or strictly within a void -- is flagged.
+    The boundary tolerance also sidesteps the ray-cast test's ambiguity for a point
+    that happens to fall exactly on an edge.
+    """
+    pts = list(points)
+    if not pts:
+        return np.zeros(0, dtype=bool)
+    px = np.array([float(p[0]) for p in pts])
+    py = np.array([float(p[1]) for p in pts])
+    outer_arr = _as_array(outer)
+    if outer_arr.shape[0] < 3:
+        return np.zeros(len(pts), dtype=bool)     # no outline -> nothing is "inside"
+    inside = _points_in_polygon(px, py, outer_arr)
+    on_outer = np.array(
+        [distance_to_boundary(x, y, (outer_arr,)) <= tol for x, y in zip(px, py)]
+    )
+    inside |= on_outer                            # a point on the outer face is in
+    for ring in holes:
+        harr = _as_array(ring)
+        if harr.shape[0] < 3:
+            continue
+        in_hole = _points_in_polygon(px, py, harr)
+        on_hole = np.array(
+            [distance_to_boundary(x, y, (harr,)) <= tol for x, y in zip(px, py)]
+        )
+        inside &= ~(in_hole & ~on_hole)           # strictly inside a void -> not in
+    return inside
+
+
 def concrete_is_connected(outer: Vertices, holes: Iterable[Vertices] = ()) -> bool:
     """Whether the concrete (``outer`` minus ``holes``) is a single connected region.
 

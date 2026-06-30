@@ -508,6 +508,21 @@ def test_void_slicing_the_section_is_rejected():
     assert "plastic" not in at.session_state["results"]
 
 
+def test_bar_outside_the_concrete_is_rejected():
+    # A bar beyond the concrete outline carries no force: the app flags it and
+    # refuses to compute (the default section spans y in [-300, 300] mm).
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    at.session_state["bars_base"] = pd.DataFrame(
+        {"x (mm)": [0.0], "y (mm)": [1000.0], "area (mm2)": [314.0]})
+    at.run()
+    assert any("within the concrete" in e.value for e in at.error)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" not in at.session_state["results"]
+
+
 def test_high_grade_concrete_auto_strain_calculates():
     # Above C50/60 the Auto button fills the EC2 Table 3.1 strain limits and the
     # section still calculates (eps_cu2 ~ 2.66 permille at C70).
