@@ -14,12 +14,14 @@
     #addrow { margin-top: 6px; padding: 4px 10px; font-size: 14px; cursor: pointer;
               border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
     #addrow:hover { background: #f3f4f6; }
+    #warn { color: #b91c1c; font-size: 13px; margin-top: 6px; }
   </style>
 </head>
 <body>
   <div id="wrap">
     <div id="grid"></div>
     <button id="addrow" type="button">+ Add row</button>
+    <div id="warn"></div>
   </div>
 
   <script>
@@ -110,6 +112,37 @@
       setFrameHeight(h + 2);
     }
 
+    function showWarn(msg) {
+      document.getElementById("warn").textContent = msg || "";
+      reportHeight();
+    }
+    function clearWarn() {
+      if (document.getElementById("warn").textContent) showWarn("");
+    }
+
+    // Apply an Excel block paste. The block must have exactly the table's editable
+    // column count or nothing is pasted (with a warning). Otherwise the block is
+    // written from the top of the table down: existing rows under it are kept, and
+    // the table grows if the block is taller than it.
+    function applyPaste(text) {
+      const lines = text.split(/\r\n|\n|\r/).filter((l) => l.trim().length);
+      if (!lines.length) return;
+      const blockCols = Math.max.apply(null, lines.map((l) => l.split("\t").length));
+      if (blockCols !== cols.length) {
+        showWarn("Pasted block has " + blockCols + " column(s); this table expects "
+                 + cols.length + " (" + cols.join(", ") + "). Nothing pasted.");
+        return;
+      }
+      clearWarn();
+      const pasted = pasteToEditableCols(text);
+      const current = currentRows();
+      const merged = [];
+      for (let i = 0; i < Math.max(current.length, pasted.length); i++) {
+        merged.push(i < pasted.length ? pasted[i] : current[i]);
+      }
+      table.setData(merged).then(() => { renumber(); emit(); });
+    }
+
     function buildColumns() {
       const columns = [];
       // Frozen, non-editable ID column (the left "row header").
@@ -166,7 +199,7 @@
       // applyIds put the numbers in the data, so the initial render shows them; a
       // structural change shifts other rows' ids, so re-number then report.
       table.on("tableBuilt", () => emit());
-      table.on("cellEdited", () => { renumber(); emit(); });
+      table.on("cellEdited", () => { clearWarn(); renumber(); emit(); });
       table.on("rowDeleted", () => { renumber(); emit(); });
       table.on("clipboardPasted", () => { renumber(); emit(); });
       table.on("dataChanged", () => reportHeight());
@@ -175,6 +208,22 @@
     document.getElementById("addrow").addEventListener("click", () => {
       if (table) table.addRow({}).then(() => { renumber(); emit(); });
     });
+
+    // Block paste from Excel. A cell editor (opened by a single click) would
+    // otherwise swallow a whole tab/newline-delimited block into one number input,
+    // turning it into a single huge number. Intercept a multi-cell paste here and
+    // apply it from the top of the table (see applyPaste); a single value (no tab
+    // or newline) falls through to the cell editor as a normal edit. Scoped to this
+    // grid's iframe document, so it never touches other inputs on the page.
+    document.addEventListener("paste", (e) => {
+      if (!table) return;
+      const cb = e.clipboardData || window.clipboardData;
+      const text = cb ? cb.getData("text") : "";
+      if (!text || (!text.includes("\t") && !/\n/.test(text.trim()))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      applyPaste(text);
+    }, true);
 
     function onRender(args) {
       if (!args) return;
