@@ -1196,6 +1196,22 @@ def test_coarse_crack_system_halves_the_width():
     assert coarse["crack"]["wk"] < fine["crack"]["wk"]
 
 
+def test_ec2_2023_crack_edition_calculates():
+    # Selecting EN 1992-1-1:2023 uses the refined model (9.2.3) and reports its wk.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.selectbox(key="sls_code").set_value("EN 1992-1-1:2023").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["crack_code"] == "EN 1992-1-1:2023"
+    assert e["crack"]["edition"] == "2023" and e["crack"]["kw"] == 1.7
+    assert e["crack"]["wk"] > 0.0 and e["crack"]["k1_r"] >= 1.0
+
+
 def test_old_crack_code_alias_targets_a_current_option():
     # A session saved before the coarse system used the bare DK NA label; the app
     # migrates it (in build_inputs, before the selectbox reads it) to the fine

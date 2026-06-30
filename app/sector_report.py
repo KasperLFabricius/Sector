@@ -760,6 +760,11 @@ class ReportBuilder:
                  else "Crack width worked (governing bar)")
         self._small(f"Governing bar (largest w<sub>k</sub>): bar "
                     f"{cw.get('gov_bar','-')}; clear cover c = {_fmt(cw.get('cover',0),1)} mm.")
+        code = self.out["elastic"].get("crack_code")
+        if cw.get("edition") == "2023":
+            self._crack_worked_2023(cw, code)
+            return
+        coarse = bool(cw.get("coarse"))
         self._formula(
             "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
             "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
@@ -770,7 +775,6 @@ class ReportBuilder:
             "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
             "&gt;= 0.6&#183;sigma<sub>s</sub>/E<sub>s</sub>",
             ref="Eq (7.9)")
-        coarse = bool(cw.get("coarse"))
         self._formula(
             ("w<sub>k</sub> = &#189;&#183;s<sub>r,max</sub> &#183; "
              "(eps<sub>sm</sub> - eps<sub>cm</sub>)" if coarse else
@@ -781,7 +785,6 @@ class ReportBuilder:
                   + f"{_fmt(cw.get('sr_max',0),1)} mm &#183; "
                     f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
-        code = self.out["elastic"].get("crack_code")
         if code:
             note = f"Crack-width code: {code}. "
             if "DK NA" in code:
@@ -796,6 +799,36 @@ class ReportBuilder:
                     note += ("The (h-x)/3 term in h<sub>c,ef</sub> applies to slabs "
                              "and prestressed members only.")
             self._small(note)
+
+    def _crack_worked_2023(self, cw, code):
+        """The EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
+        self._formula(
+            "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
+            "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
+            ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
+            subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
+                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0),1)} mm")
+        self._formula(
+            "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
+            "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
+            "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
+            "&gt;= (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>/E<sub>s</sub>",
+            ref="Eq (9.11)")
+        self._formula(
+            "w<sub>k,cal</sub> = k<sub>w</sub>&#183;k<sub>1/r</sub>&#183;"
+            "s<sub>r,m,cal</sub>&#183;(eps<sub>sm</sub> - eps<sub>cm</sub>)",
+            ref="Eq (9.8)",
+            subst=f"= {_fmt(cw.get('kw',1.7),2)} &#183; {_fmt(cw.get('k1_r',1),3)} &#183; "
+                  f"{_fmt(cw.get('sr_max',0),1)} mm &#183; "
+                  f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
+            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
+        if code:
+            self._small(f"Crack-width code: {code}. Refined control of cracking "
+                        "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
+                        "width to the calculated value, k<sub>1/r</sub> = (h-x)/"
+                        "(h-a<sub>y</sub>-x) accounts for curvature, and the mean "
+                        "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
+                        "/E<sub>s</sub>.")
 
     def _appendix(self):
         self.flow.append(PageBreak())
