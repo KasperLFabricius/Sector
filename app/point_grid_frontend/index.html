@@ -14,12 +14,14 @@
     #addrow { margin-top: 6px; padding: 4px 10px; font-size: 14px; cursor: pointer;
               border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
     #addrow:hover { background: #f3f4f6; }
+    #warn { color: #b91c1c; font-size: 13px; margin-top: 6px; }
   </style>
 </head>
 <body>
   <div id="wrap">
     <div id="grid"></div>
     <button id="addrow" type="button">+ Add row</button>
+    <div id="warn"></div>
   </div>
 
   <script>
@@ -34,6 +36,7 @@
     let cols = [];          // editable column keys, e.g. ["x (mm)", "y (mm)", "area (mm2)"]
     let idStart = 1;
     let dataVersion = null; // rebuild the grid only when this changes (stable base)
+    let pasteAnchorRow = 0; // 0-based row a block paste starts at (last clicked cell)
 
     // A row is a "valid point" once every editable cell is a finite number; only
     // those are numbered, so the ID column matches the plot (blank/partial rows and
@@ -74,12 +77,21 @@
       return isFinite(n) ? String(parseFloat(n.toFixed(4))) : "";
     }
 
+    // Split a pasted block into lines, dropping only a trailing blank line (the
+    // spreadsheet's trailing newline). INTERNAL blank lines are kept: the voids
+    // table uses a blank row to separate one void's ring from the next, so a copied
+    // multi-void block must keep its separators.
+    function splitPasteLines(text) {
+      const lines = text.split(/\r\n|\n|\r/);
+      while (lines.length && !lines[lines.length - 1].trim().length) lines.pop();
+      return lines;
+    }
+
     // Map a pasted spreadsheet block onto the EDITABLE columns only -- the frozen
     // ID and delete columns are skipped, so a headerless x,y[,area] block lands in
-    // the right fields instead of being shifted by the ID column.
-    function pasteToEditableCols(clipboard) {
-      const lines = clipboard.split(/\r\n|\n|\r/).filter((l) => l.trim().length);
-      return lines.map((line) => {
+    // the right fields. A blank line becomes an all-null row (a void separator).
+    function pasteToEditableCols(text) {
+      return splitPasteLines(text).map((line) => {
         const cells = line.split("\t");
         const row = {};
         cols.forEach((c, i) => {
@@ -108,6 +120,36 @@
     function reportHeight() {
       const h = document.getElementById("wrap").scrollHeight;
       setFrameHeight(h + 2);
+    }
+
+    function showWarn(msg) {
+      document.getElementById("warn").textContent = msg || "";
+      reportHeight();
+    }
+    function clearWarn() {
+      if (document.getElementById("warn").textContent) showWarn("");
+    }
+
+    // Apply an Excel block paste. The block must have exactly the table's editable
+    // column count or nothing is pasted (with a warning). Otherwise it is written
+    // from the anchor row down (the cell last clicked/edited, else the top): rows
+    // outside the block are kept, and the table grows if the block runs past the
+    // end. ``pasteAnchorRow`` is set when a cell starts editing.
+    function applyPaste(text) {
+      const lines = splitPasteLines(text);
+      if (!lines.length) return;
+      const blockCols = Math.max.apply(null, lines.map((l) => l.split("\t").length));
+      if (blockCols !== cols.length) {
+        showWarn("Pasted block has " + blockCols + " column(s); this table expects "
+                 + cols.length + " (" + cols.join(", ") + "). Nothing pasted.");
+        return;
+      }
+      clearWarn();
+      const pasted = pasteToEditableCols(text);
+      const merged = currentRows();
+      const start = Math.min(pasteAnchorRow, merged.length);   // clamp to the end
+      for (let i = 0; i < pasted.length; i++) merged[start + i] = pasted[i];
+      table.setData(merged).then(() => { renumber(); emit(); });
     }
 
     function buildColumns() {
@@ -148,6 +190,7 @@
       cols = args.columns;
       idStart = args.id_start || 1;
       dataVersion = args.data_version;
+      pasteAnchorRow = 0;            // reset; a fresh grid pastes from the top
       const rows = (args.data || []).map((d) => Object.assign({}, d));
       applyIds(rows);                // numbers are in the data, shown on first render
 
@@ -166,7 +209,13 @@
       // applyIds put the numbers in the data, so the initial render shows them; a
       // structural change shifts other rows' ids, so re-number then report.
       table.on("tableBuilt", () => emit());
-      table.on("cellEdited", () => { renumber(); emit(); });
+      // Remember which row the user is on, so a block paste starts there (a single
+      // click opens the editor and fires cellEditing).
+      table.on("cellEditing", (cell) => {
+        const pos = cell.getRow().getPosition(true);
+        pasteAnchorRow = pos > 0 ? pos - 1 : 0;
+      });
+      table.on("cellEdited", () => { clearWarn(); renumber(); emit(); });
       table.on("rowDeleted", () => { renumber(); emit(); });
       table.on("clipboardPasted", () => { renumber(); emit(); });
       table.on("dataChanged", () => reportHeight());
@@ -175,6 +224,22 @@
     document.getElementById("addrow").addEventListener("click", () => {
       if (table) table.addRow({}).then(() => { renumber(); emit(); });
     });
+
+    // Block paste from Excel. A cell editor (opened by a single click) would
+    // otherwise swallow a whole tab/newline-delimited block into one number input,
+    // turning it into a single huge number. Intercept a multi-cell paste here and
+    // apply it from the top of the table (see applyPaste); a single value (no tab
+    // or newline) falls through to the cell editor as a normal edit. Scoped to this
+    // grid's iframe document, so it never touches other inputs on the page.
+    document.addEventListener("paste", (e) => {
+      if (!table) return;
+      const cb = e.clipboardData || window.clipboardData;
+      const text = cb ? cb.getData("text") : "";
+      if (!text || (!text.includes("\t") && !/\n/.test(text.trim()))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      applyPaste(text);
+    }, true);
 
     function onRender(args) {
       if (!args) return;
