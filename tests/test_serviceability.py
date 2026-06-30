@@ -173,6 +173,75 @@ def test_dk_na_coarse_crack_system_band_and_half_width():
         fine.crack.sr_max * fine.crack.esm_ecm, rel=1e-9)
 
 
+def test_ec2_2023_refined_crack_width_hand_calc():
+    # EN 1992-1-1:2023 (9.2.3): wk,cal = kw * k1/r * sr,m,cal * (eps_sm - eps_cm),
+    # verified term by term for the 0.3x0.6 beam (3 x 491 mm2 bars at ay = 0.05 m),
+    # phi = 16 mm, n = 6, long-term (kt = 0.4).
+    sec = beam_section()
+    fc = fctm(30.0)
+    r = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fc, bar_diameter=16.0,
+                         beta=0.5, kt=0.4, edition="2023")
+    cw = r.crack
+    assert cw.edition == "2023" and cw.kw == 1.7
+    # hc,eff = min(ay+5phi, 10phi, 3.5ay, h-x, h/2) = ay + 5phi = 0.05 + 0.08 = 0.13 m.
+    assert cw.hc_ef == pytest.approx(0.13, abs=1e-4)
+    assert cw.rho_p_eff == pytest.approx(3 * 491e-6 / (0.3 * 0.13), rel=1e-3)
+    assert cw.cover == pytest.approx(42.0, abs=0.5)             # 50 mm - 16/2
+    assert cw.k1_r > 1.0                                        # curvature factor (9.9)
+    # (9.11) lower bound is (1 - kt)*sigma_s/Es, not the 2004 fixed 0.6*sigma_s/Es.
+    num = (cw.sigma_s - 0.4 * fc / cw.rho_p_eff * (1 + 6 * cw.rho_p_eff)) / 200_000.0
+    assert cw.esm_ecm == pytest.approx(max(num, (1 - 0.4) * cw.sigma_s / 200_000.0),
+                                       rel=1e-6)
+    # (9.15) mean spacing = 1.5c + (kfl*kb/7.2)*(phi/rho); kb = 0.9 (good bond, k1=0.8).
+    expect_sr = 1.5 * cw.cover + cw.kfl * 0.9 / 7.2 * cw.phi / cw.rho_p_eff
+    assert cw.sr_max == pytest.approx(expect_sr, rel=1e-6)   # matches => below the cap
+    # (9.8) assembly.
+    assert cw.wk == pytest.approx(cw.kw * cw.k1_r * cw.sr_max * cw.esm_ecm, rel=1e-9)
+
+
+def test_transformed_properties_use_per_bar_modular_ratio():
+    # n_mult scales each bar's modular ratio (Ep/Es for tendons): a stiffer bar pulls
+    # the transformed centroid toward it, so xg differs from the all-equal-n case.
+    from sector.elastic import transformed_properties
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.15, 0.05, 1000.0)],         # one bar near the bottom
+    )
+    base = transformed_properties(sec, 6.0, cracked=False)
+    stiffer = transformed_properties(sec, 6.0, cracked=False, n_mult=np.array([2.5]))
+    assert stiffer.cy < base.cy                          # stiffer bottom bar pulls cy down
+
+
+def test_ec2_2023_kfl_responds_to_n_mult():
+    # With a fixed cracked state, n_mult enters the 2023 result only through kfl (the
+    # uncracked transformed NA xg). A higher per-bar ratio shifts xg, so kfl -- and the
+    # crack spacing it feeds -- move; this is the prestress-aware path Codex flagged.
+    from sector.elastic import solve_elastic
+    from sector.serviceability import crack_width
+    sec = beam_section()
+    fc = fctm(30.0)
+    state = solve_elastic(sec, 0.0, 150.0, 0.0, 6.0)
+    base = crack_width(sec, state, 6.0, fctm=fc, bar_diameter=16.0, kt=0.4,
+                       edition="2023")
+    mult = crack_width(sec, state, 6.0, fctm=fc, bar_diameter=16.0, kt=0.4,
+                       edition="2023", n_mult=np.full(3, 3.0))
+    assert base.kfl != pytest.approx(mult.kfl, rel=1e-6)
+    assert base.sr_max != pytest.approx(mult.sr_max, rel=1e-6)   # kfl feeds sr,m,cal
+    assert base.sigma_s == pytest.approx(mult.sigma_s)           # state fixed -> sigma_s same
+
+
+def test_ec2_2023_and_2004_crack_widths_are_the_same_order():
+    # The 2023 refined model gives a crack width in the same range as the 2004 model
+    # (a different formula, not a different answer by an order of magnitude).
+    sec = beam_section()
+    fc = fctm(30.0)
+    w04 = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fc, bar_diameter=16.0,
+                           beta=0.5, kt=0.4, edition="2004").crack.wk
+    w23 = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fc, bar_diameter=16.0,
+                           beta=0.5, kt=0.4, edition="2023").crack.wk
+    assert 0.5 * w04 < w23 < 1.5 * w04
+
+
 def test_dk_na_coarse_band_centroid_matches_reinforcement():
     # The coarse effective band is solved by a centroid match, not a fixed 2*(h-d)
     # for a rectangle only: its area-centroid along the depth axis must coincide

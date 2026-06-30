@@ -49,14 +49,16 @@ _KAPPA = chr(0x3BA)
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
-# Crack-width code edition -> the DK NA crack-spacing flags. dk_na: cover-dependent
-# k3 and the (h-x)/3 effective-height term only for slabs/prestressed. coarse: the
-# DK NA coarse crack system (7.3.4(1)) -- the effective area is the band whose
-# centroid matches the tension reinforcement (figure 7.100 NA) and wk is halved.
+# Crack-width code edition -> the crack-spacing flags. edition: "2004" (EC2 7.3.4)
+# or "2023" (EC2 9.2.3 refined). dk_na: cover-dependent k3 and the (h-x)/3
+# effective-height term only for slabs/prestressed. coarse: the DK NA coarse crack
+# system (7.3.4(1)) -- the effective area is the band whose centroid matches the
+# tension reinforcement (figure 7.100 NA) and wk is halved.
 _CRACK_CODES = {
-    "EN 1992-1-1:2005": dict(dk_na=False, coarse=False),
-    "DS/EN 1992-1-1 + DK NA (fine crack system)": dict(dk_na=True, coarse=False),
-    "DS/EN 1992-1-1 + DK NA (coarse crack system)": dict(dk_na=True, coarse=True),
+    "EN 1992-1-1:2005": dict(dk_na=False, coarse=False, edition="2004"),
+    "DS/EN 1992-1-1 + DK NA (fine crack system)": dict(dk_na=True, coarse=False, edition="2004"),
+    "DS/EN 1992-1-1 + DK NA (coarse crack system)": dict(dk_na=True, coarse=True, edition="2004"),
+    "EN 1992-1-1:2023": dict(dk_na=False, coarse=False, edition="2023"),
 }
 # Old saved value for the fine DK NA option, renamed when the coarse system was added.
 _CRACK_CODE_ALIASES = {"DS/EN 1992-1-1 + DK NA": "DS/EN 1992-1-1 + DK NA (fine crack system)"}
@@ -1012,9 +1014,12 @@ def build_inputs():
              "dependent (k3 = 3.4*(25/c)^(2/3)) and limits the (h-x)/3 effective-"
              "height term to slabs and prestressed members. The coarse crack system "
              "(7.3.4(1)) sets the effective area to the band whose centroid matches "
-             "the tension reinforcement (figure 7.100 NA) and halves the crack width.")
+             "the tension reinforcement (figure 7.100 NA) and halves the crack width. "
+             "EN 1992-1-1:2023 uses the refined model (9.2.3): wk = kw*k1/r*sr,m,cal*"
+             "(esm-ecm) with kw = 1.7 and a per-bar curvature factor.")
     sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
     sls_coarse = _CRACK_CODES[sls_code]["coarse"]
+    sls_edition = _CRACK_CODES[sls_code]["edition"]
     sls_member = aset.selectbox(
         "Member type", ["Beam", "Slab"], key="sls_member",
         disabled=not (elastic_on and sls_cw and sls_dk_na and not sls_coarse),
@@ -1294,7 +1299,7 @@ def build_inputs():
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na, sls_coarse=sls_coarse,
-                sls_code=sls_code, sls_member=sls_member,
+                sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
                 mode=mode, extent=extent, signature=sig)
 
 
@@ -1329,7 +1334,8 @@ def _crack_dict(cw):
         return None
     return dict(wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm, sigma_s=cw.sigma_s,
                 rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff, hc_ef=cw.hc_ef,
-                phi=cw.phi, cover=cw.cover, gov_bar=cw.gov_bar + 1, coarse=cw.coarse)
+                phi=cw.phi, cover=cw.cover, gov_bar=cw.gov_bar + 1, coarse=cw.coarse,
+                edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl)
 
 
 def run_analysis(inp):
@@ -1427,7 +1433,7 @@ def run_analysis(inp):
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
             bar_diameter=phi, k1=k1_bars,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
-            coarse=inp["sls_coarse"],
+            coarse=inp["sls_coarse"], edition=inp["sls_edition"],
             n_mult=n_mult, prestress_stress=prestress_stress)
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
         props_cr = (transformed_properties(
@@ -1456,7 +1462,8 @@ def run_analysis(inp):
             cw_short = crack_width(sec, short_state, inp["ns"], fctm=inp["sls_fctm"],
                                    Es=inp["steel"].Es, kt=0.6, bar_diameter=phi,
                                    k1=k1_bars, k3_cover_dependent=dk_na,
-                                   include_hx_term=include_hx, coarse=inp["sls_coarse"])
+                                   include_hx_term=include_hx, coarse=inp["sls_coarse"],
+                                   edition=inp["sls_edition"], n_mult=n_mult)
             out["elastic"].update(
                 crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cw_short),
                 crack_code=inp["sls_code"],

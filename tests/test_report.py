@@ -113,6 +113,18 @@ def test_report_coarse_crack_system_shows_half_factor():
     assert chr(0xBD) in txt            # the 1/2 glyph rendered in Eq (7.8)
 
 
+def test_report_ec2_2023_shows_refined_formula():
+    # The EN 1992-1-1:2023 worked example shows the refined (9.8) formula with kw.
+    out = _out()
+    out["elastic"]["crack"] = dict(_crack(), edition="2023", kw=1.7, k1_r=1.13, kfl=0.77)
+    out["elastic"]["crack_short"] = dict(_crack(), edition="2023", kw=1.7, k1_r=1.13,
+                                         kfl=0.77)
+    out["elastic"]["crack_code"] = "EN 1992-1-1:2023"
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "9.8" in txt and "9.2.3" in txt      # the 2023 clause and crack formula
+    assert "1.7" in txt                          # kw in the worked substitution
+
+
 def test_report_handles_plastic_only():
     out = {"plastic": _out()["plastic"]}
     pdf = sector_report.build_report({}, _inp(), out, figures=False)

@@ -45,7 +45,12 @@ from typing import Optional, Sequence, Union
 
 import numpy as np
 
-from .elastic import ElasticResult, solve_elastic, solve_elastic_uncracked
+from .elastic import (
+    ElasticResult,
+    solve_elastic,
+    solve_elastic_uncracked,
+    transformed_properties,
+)
 from .geometry import (
     AreaMoments,
     area_moments,
@@ -74,6 +79,10 @@ class CrackWidthResult:
     cover: float         # clear cover to that bar's surface (mm)
     gov_bar: int         # index of the governing (largest-wk) bar
     coarse: bool = False  # DK NA coarse crack system (centroid-matched Ac,eff, wk/2)
+    edition: str = "2004"  # "2004" (EC2 7.3.4) or "2023" (EC2 9.2.3 refined)
+    kw: float = 1.0      # 2023 mean->characteristic factor (9.8); 1.0 for 2004
+    k1_r: float = 1.0    # 2023 curvature factor k1/r (9.9); 1.0 for 2004
+    kfl: float = 1.0     # 2023 flexural coefficient (9.16/9.17); 1.0 for 2004
 
 
 @dataclass
@@ -194,6 +203,8 @@ def _crack_width(
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
     coarse: bool = False,
+    edition: str = "2004",
+    n_mult: Optional[np.ndarray] = None,
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width, evaluated per bar, returning the largest-wk bar.
 
@@ -216,8 +227,13 @@ def _crack_width(
     selects the DK NA coarse crack system (7.3.4(1)): the effective tension area
     becomes the band at the tension face whose centroid matches the tension
     reinforcement (figure 7.100 NA) instead of the EC2 ``hc,ef`` band, and the
-    crack width is halved. ``include_hx_term`` is then irrelevant.
+    crack width is halved. ``include_hx_term`` is then irrelevant. ``edition``
+    ``"2023"`` switches to the EN 1992-1-1:2023 refined model (9.2.3), a different
+    formula handled by :func:`_crack_width_2023`; the DK NA flags then do not apply.
     """
+    if edition == "2023":
+        return _crack_width_2023(section, cracked_state, n, fctm, Es, cover, kt,
+                                 k1, bar_diameter, n_mult=n_mult)
     bx, by, ba = section.bar_arrays()
     if not bx.size:
         return None
@@ -314,6 +330,130 @@ def _crack_width(
     return best
 
 
+_KW_2023 = 1.7   # EN 1992-1-1:2023 (9.8) NOTE 1: mean -> calculated crack width
+
+
+def _crack_width_2023(
+    section: Section,
+    cracked_state: ElasticResult,
+    n: float,
+    fctm: float,
+    Es: float,
+    cover: Optional[float],
+    kt: float,
+    k1: Union[float, Sequence[float]],
+    bar_diameter: Optional[float],
+    n_mult: Optional[np.ndarray] = None,
+) -> Optional[CrackWidthResult]:
+    """EN 1992-1-1:2023 refined crack width (9.2.3), per bar, largest-wk governs.
+
+    Implements the bending case of Formula (9.8)::
+
+        wk,cal = kw * k1/r * sr,m,cal * (eps_sm - eps_cm)
+
+    with ``kw = 1.7`` (9.8 NOTE 1); the per-bar curvature factor ``k1/r`` (9.9); the
+    mean crack spacing ``sr,m,cal`` (9.15) with the flexural coefficient ``kfl``
+    (9.17) and bond factor ``kb`` (9.18); the effective height ``hc,eff`` (figure
+    9.3, single layer); and the mean strain (9.11) whose lower bound is now
+    ``(1 - kt) * sigma_s / Es``. ``bar_diameter`` (mm) overrides the area-derived
+    diameter; ``cover`` (mm) overrides the per-bar geometric cover. The ``k1`` bond
+    values map to ``kb`` (good bond -> 0.9, poor -> 1.2). Returns ``None`` when no
+    tension bar sits in the effective zone or there is no bending gradient.
+    """
+    bx, by, ba = section.bar_arrays()
+    if not bx.size:
+        return None
+    sigma = np.asarray(cracked_state.bar_stress, dtype=float) / _KPA_PER_MPA  # MPa
+    if float(sigma.max()) <= 0.0:
+        return None
+    gx, gy, mag = _depth_axis(cracked_state.kx, cracked_state.ky)
+    if mag == 0.0:
+        return None
+
+    verts = section.concrete_vertices()
+    s_vert = verts[:, 0] * gx + verts[:, 1] * gy
+    s_tface = float(s_vert.max())
+    s_cface = float(s_vert.min())
+    h = s_tface - s_cface
+    s_na = -cracked_state.eps0 / mag
+    hx = s_tface - s_na                 # (h - x): tension-zone depth at the cracked NA
+    if hx <= 0.0:
+        return None
+    s_bars = bx * gx + by * gy
+    ay = s_tface - s_bars               # distance from the tension face to each bar (m)
+    gov0 = int(np.argmax(sigma))
+
+    def _phi(i):
+        if bar_diameter is not None and bar_diameter > 0.0:
+            return float(bar_diameter)
+        return math.sqrt(4.0 * float(ba[i]) * 1.0e6 / math.pi)   # m^2 -> mm
+
+    # hc,eff (figure 9.3, single layer, bending): min{ay+5phi, 10phi, 3.5ay, h-x, h/2}
+    # (phi in mm -> m for the geometric terms). The governing tension bar sets it.
+    phi_gov_m = _phi(gov0) / 1000.0
+    ay_gov = float(ay[gov0])
+    hc_ef = min(ay_gov + 5.0 * phi_gov_m, 10.0 * phi_gov_m, 3.5 * ay_gov, hx, h / 2.0)
+    if hc_ef <= 0.0:
+        return None
+    c_lo = s_tface - hc_ef
+    rings = list(section.integration_rings())
+    ac_eff = sum(area_moments(clip_halfplane(r, gx, gy, -c_lo)).area for r in rings)
+    if ac_eff <= 0.0:
+        return None
+    in_band = s_bars >= c_lo
+    as_eff = float(ba[in_band].sum())
+    if as_eff <= 0.0:
+        return None
+    rho = as_eff / ac_eff
+    alpha_e = n
+
+    # kfl (9.17, general; reduces to (9.16) for a rectangle): needs xg, the uncracked
+    # transformed-section neutral axis (its centroid), projected on the depth axis.
+    # n_mult carries the per-bar modular ratio (Ep/Es for tendons) so a prestressed
+    # section's transformed centroid is correct.
+    props = transformed_properties(section, n, cracked=False, n_mult=n_mult)
+    h_minus_xg = s_tface - (props.cx * gx + props.cy * gy)
+    if h_minus_xg > 1.0e-9:
+        kfl = 0.5 * (1.0 + (h_minus_xg - hc_ef) / h_minus_xg)
+    else:
+        kfl = (h - hc_ef) / h          # degenerate fallback
+    kfl = max(0.0, kfl)
+
+    k1_arr = np.broadcast_to(np.asarray(k1, dtype=float), (bx.size,))
+    sr_cap = 1.3 / _KW_2023 * hx * 1000.0   # (1.3/kw)*(h-x), m -> mm
+    best: Optional[CrackWidthResult] = None
+    for i in range(bx.size):
+        if not in_band[i] or sigma[i] <= 0.0:
+            continue
+        denom = hx - float(ay[i])      # (h - x) - ay,i ; the bar must be below the NA
+        if denom <= 1.0e-9:
+            continue
+        sigma_s = float(sigma[i])
+        phi = _phi(i)
+        if cover is not None:
+            c_i = float(cover)
+        else:
+            c_i = max(distance_to_boundary(float(bx[i]), float(by[i]), rings)
+                      * 1000.0 - phi / 2.0, 0.0)
+        # (9.11): mean strain; lower bound (1 - kt)*sigma_s/Es (was a fixed 0.6 in 2004).
+        esm_ecm = max((sigma_s - kt * fctm / rho * (1.0 + alpha_e * rho)) / Es,
+                      (1.0 - kt) * sigma_s / Es)
+        # (9.18) bond factor: good bond (ribbed, k1<=1.0) -> 0.9, poor (plain) -> 1.2.
+        kb = 0.9 if float(k1_arr[i]) <= 1.0 else 1.2
+        # (9.15) mean crack spacing = 1.5c + (kfl*kb/7.2)*(phi/rho), capped at
+        # (1.3/kw)*(h-x). Cover and phi in mm.
+        sr = min(1.5 * c_i + kfl * kb / 7.2 * phi / rho, sr_cap)
+        k1r = hx / denom               # (9.9) curvature factor, >= 1
+        wk = _KW_2023 * k1r * sr * esm_ecm
+        if best is None or wk > best.wk:
+            best = CrackWidthResult(
+                wk=wk, sr_max=sr, esm_ecm=esm_ecm, sigma_s=sigma_s,
+                rho_p_eff=rho, ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, cover=c_i,
+                gov_bar=i, edition="2023", kw=_KW_2023, k1_r=k1r, kfl=kfl,
+            )
+    return best
+
+
 def analyse_cracking(
     section: Section,
     P: float,
@@ -334,6 +474,7 @@ def analyse_cracking(
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
     coarse: bool = False,
+    edition: str = "2004",
     n_mult: Optional[np.ndarray] = None,
     prestress_stress: Optional[np.ndarray] = None,
 ) -> CrackingResult:
@@ -412,7 +553,7 @@ def analyse_cracking(
         crack = _crack_width(
             section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter,
             k3_cover_dependent=k3_cover_dependent, include_hx_term=include_hx_term,
-            coarse=coarse,
+            coarse=coarse, edition=edition, n_mult=n_mult,
         )
 
     return CrackingResult(
@@ -439,6 +580,8 @@ def crack_width(
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
     coarse: bool = False,
+    edition: str = "2004",
+    n_mult: Optional[np.ndarray] = None,
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width for an externally supplied cracked-section state.
 
@@ -452,4 +595,5 @@ def crack_width(
     return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
                         k1, k2, k3, k4, bar_diameter,
                         k3_cover_dependent=k3_cover_dependent,
-                        include_hx_term=include_hx_term, coarse=coarse)
+                        include_hx_term=include_hx_term, coarse=coarse,
+                        edition=edition, n_mult=n_mult)

@@ -413,6 +413,7 @@ def transformed_properties(
     kx: float | None = None,
     ky: float | None = None,
     cracked: bool = False,
+    n_mult: np.ndarray | None = None,
 ) -> SectionProperties:
     """Transformed-section properties for the uncracked or cracked state.
 
@@ -420,7 +421,8 @@ def transformed_properties(
     the active concrete is the compression zone of the strain plane
     ``(eps0, kx, ky)`` -- the same half-plane the solver integrates -- so the
     properties are those of the cracked transformed section. Reinforcement enters
-    at ``n*A`` in both cases.
+    at ``n*A`` in both cases, or ``n*n_mult*A`` per bar when ``n_mult`` is given
+    (e.g. ``Ep/Es`` for prestressing tendons folded into the bar set).
     """
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
@@ -431,6 +433,8 @@ def transformed_properties(
     A, Sx, Sy, Sxx, Syy, Sxy = cm.area, cm.sx, cm.sy, cm.sxx, cm.syy, cm.sxy
     if bx.size:
         g = float(n) * ba
+        if n_mult is not None:
+            g = g * np.asarray(n_mult, dtype=float)
         A += float(g.sum())
         Sx += float((g * bx).sum())
         Sy += float((g * by).sum())
