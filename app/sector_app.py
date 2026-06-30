@@ -838,7 +838,7 @@ _QS_WIDGET_KEYS = (
     "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
     "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
     "bot_layers", "top_layers", "layer_s",
-    "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm",
+    "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm", "tnd_layers", "tnd_layer_s",
 )
 
 
@@ -933,7 +933,7 @@ def _quick_section_geometry(box):
                            key="ring_d", help="Diameter of each reinforcement bar.")
         cov = box.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="ring_c_mm",
                                help="Distance from the section face to the bar centres.") / 1000.0
-        bars = templates.bar_ring(0.0, 0.0, dia / 2 - cov, int(nb), rd)
+        bars = templates.bar_ring(0.0, 0.0, templates.ring_radius(dia, cov), int(nb), rd)
     else:
         by_spacing = box.radio(
             "Bar placement", ["By number", "By spacing"], horizontal=True,
@@ -996,13 +996,24 @@ def _quick_section_geometry(box):
                     return -width_b / 2 + cov, width_b / 2 - cov
                 return -b / 2 + cov, b / 2 - cov  # below the flange -> the web
 
-        bars = templates.merge_bars(
-            templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
-                                 -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot,
-                                 n_at=n_at_bot),
-            templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
-                                 -width_b / 2 + cov, width_b / 2 - cov,
-                                 int(nb_top), rd_top, span_at=top_span_at, n_at=n_at_top))
+        if shape == "Box girder":
+            # A box girder's rows split into the side walls once they rise into the
+            # hollow, so multi-layer reinforcement keeps its count in the webs.
+            bars = templates.merge_bars(
+                templates.box_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
+                                     b, h, wall, cov, int(nb_bot),
+                                     templates.bar_area(rd_bot)),
+                templates.box_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
+                                     b, h, wall, cov, int(nb_top),
+                                     templates.bar_area(rd_top)))
+        else:
+            bars = templates.merge_bars(
+                templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
+                                     -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot,
+                                     n_at=n_at_bot),
+                templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
+                                     -width_b / 2 + cov, width_b / 2 - cov,
+                                     int(nb_top), rd_top, span_at=top_span_at, n_at=n_at_top))
 
     box.markdown("**Prestressing tendons**")
     nt = box.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",
@@ -1013,13 +1024,24 @@ def _quick_section_geometry(box):
     cov_p = box.number_input("Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, key="tnd_c_mm",
                              help="Distance from the bottom face (or the circular "
                                   "ring) to the tendons.") / 1000.0
+    nl_t = box.number_input("Tendon layers", 1, 10, 1, 1, key="tnd_layers",
+                            help="Number of stacked tendon rows from the bottom face "
+                                 "(ignored for a circular ring).")
+    ls_t = box.number_input(
+        "Tendon layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, key="tnd_layer_s",
+        disabled=int(nl_t) == 1,
+        help="Vertical centre-to-centre distance between stacked tendon rows.") / 1000.0
     tendons = []
     if nt > 0:
         if shape == "Circular":
-            tendons = templates.point_ring(0.0, 0.0, max(b / 2 - cov_p, 0.0), int(nt), a_t)
+            tendons = templates.point_ring(
+                0.0, 0.0, templates.ring_radius(b, cov_p), int(nt), a_t)
+        elif shape == "Box girder":
+            tendons = templates.box_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
+                                           b, h, wall, cov_p, int(nt), a_t)
         else:
-            tendons = templates.point_row(-h / 2 + cov_p, -b / 2 + cov_p,
-                                          b / 2 - cov_p, int(nt), a_t)
+            tendons = templates.point_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
+                                             -b / 2 + cov_p, b / 2 - cov_p, int(nt), a_t)
     return outer, (holes or []), bars, tendons
 
 

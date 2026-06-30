@@ -135,6 +135,44 @@ def test_bar_layers_direction_moves_top_rows_down():
     assert ys == [pytest.approx(y0 - 2 * ls), pytest.approx(y0 - ls), pytest.approx(y0)]
 
 
+def test_ring_radius_caps_at_the_polygon_apothem():
+    # Zero cover -> the inscribed N-gon's apothem (just inside the polygon), not the
+    # full radius, so a bar between two vertices is not left outside the outline.
+    r = templates.ring_radius(0.6, 0.0)
+    assert r == pytest.approx(0.3 * math.cos(math.pi / templates.CIRCLE_SEGMENTS))
+    assert r < 0.3
+    assert templates.ring_radius(0.6, 0.05) == pytest.approx(0.25)   # a real cover: as-is
+
+
+def test_box_row_xs_full_width_in_wall_split_in_hollow():
+    # b=0.8, h=1.0, wall=0.2, cover=0.05. Bottom wall spans y in [-0.5, -0.3].
+    full = templates.box_row_xs(-0.45, 0.8, 1.0, 0.2, 0.05, 3)     # in the bottom wall
+    assert full == [pytest.approx(-0.35), pytest.approx(0.0), pytest.approx(0.35)]
+    split = templates.box_row_xs(-0.1, 0.8, 1.0, 0.2, 0.05, 3)     # in the hollow
+    assert len(split) == 3                                         # count preserved
+    assert all(abs(x) >= 0.2 for x in split)                       # in the side walls
+
+
+def test_box_layers_stacks_rows_and_carries_area():
+    rows = templates.box_layers(-0.45, 1.0, 2, 0.35, 0.8, 1.0, 0.2, 0.05, 3, 314.0)
+    assert len(rows) == 6                                          # 2 layers x 3
+    assert all(r[2] == 314.0 for r in rows)
+    # Layer 1 (y=-0.45, bottom wall) full width; layer 2 (y=-0.10, hollow) in the walls.
+    assert all(abs(x) >= 0.2 for x, y, _a in rows if y > -0.2)
+
+
+def test_point_layers_stacks_tendon_rows():
+    # The tendon analogue of bar_layers: stack rows of point areas from a face.
+    y0, ls = -0.27, 0.06
+    tendons = templates.point_layers(y0, 1.0, 3, ls, -0.15, 0.15, 4, 150.0)
+    assert len(tendons) == 12                                  # 3 rows x 4
+    ys = sorted({round(t[1], 6) for t in tendons})
+    assert ys == [pytest.approx(y0), pytest.approx(y0 + ls), pytest.approx(y0 + 2 * ls)]
+    assert all(t[2] == 150.0 for t in tendons)                 # area carried through
+    one = templates.point_layers(y0, 1.0, 1, ls, -0.15, 0.15, 4, 150.0)
+    assert one == templates.point_row(y0, -0.15, 0.15, 4, 150.0)
+
+
 def test_count_for_spacing():
     # phi @ 150 over a 0.90 m face -> 6 gaps of exactly 150 mm = 7 bars.
     assert templates.count_for_spacing(0.90, 0.15) == 7
