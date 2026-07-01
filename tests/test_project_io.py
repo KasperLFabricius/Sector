@@ -65,3 +65,33 @@ def test_parse_rejects_foreign_or_broken_json():
         project_io.parse_project('{"format": "something-else"}')
     with pytest.raises(ValueError):
         project_io.parse_project("not json at all")
+
+
+def test_parse_rejects_malformed_table_object():
+    # A table entry that is not a {columns, rows} object (here a bare list) must
+    # raise ValueError, not an AttributeError that escapes the caller's handling.
+    text = ('{"format": "%s", "version": 1, '
+            '"tables": {"bars_base": [1, 2, 3]}, "scalars": {}}' % project_io.FORMAT)
+    with pytest.raises(ValueError):
+        project_io.parse_project(text)
+
+
+def test_parse_rejects_non_object_sections():
+    # 'tables' / 'scalars' that are the wrong JSON type (a list) must raise
+    # ValueError rather than crash on a missing .items()/subscript.
+    bad_tables = '{"format": "%s", "tables": [1, 2], "scalars": {}}' % project_io.FORMAT
+    bad_scalars = '{"format": "%s", "tables": {}, "scalars": [1, 2]}' % project_io.FORMAT
+    with pytest.raises(ValueError):
+        project_io.parse_project(bad_tables)
+    with pytest.raises(ValueError):
+        project_io.parse_project(bad_scalars)
+
+
+def test_parse_rejects_non_tabular_table_rows():
+    # 'rows' that are bare scalars (not a list of rows) against named columns is
+    # not tabular -> ValueError from _obj_to_table, not an opaque pandas crash.
+    text = ('{"format": "%s", "tables": {"bars_base": '
+            '{"columns": ["x (mm)", "y (mm)"], "rows": [1, 2, 3]}}, '
+            '"scalars": {}}' % project_io.FORMAT)
+    with pytest.raises(ValueError):
+        project_io.parse_project(text)

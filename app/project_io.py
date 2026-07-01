@@ -92,10 +92,20 @@ def _table_to_obj(df) -> dict:
 
 
 def _obj_to_table(obj) -> pd.DataFrame:
-    """Rebuild a numeric (``float64``) DataFrame from ``{columns, rows}``."""
+    """Rebuild a numeric (``float64``) DataFrame from ``{columns, rows}``.
+
+    Raises :class:`ValueError` on a malformed table object (not a ``{columns,
+    rows}`` mapping) so the caller can report it rather than crash on an
+    ``AttributeError``.
+    """
+    if not isinstance(obj, dict):
+        raise ValueError("table entry is not a {columns, rows} object")
     cols = list(obj.get("columns", []))
     rows = obj.get("rows", []) or []
-    df = pd.DataFrame(rows, columns=cols)
+    try:
+        df = pd.DataFrame(rows, columns=cols)
+    except (ValueError, TypeError) as exc:      # ragged / non-tabular rows
+        raise ValueError("table rows are not tabular") from exc
     for c in cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.astype("float64") if cols else df
@@ -129,7 +139,9 @@ def parse_project(text: str):
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError("not a Sector project file")
     raw_tables = data.get("tables") or {}
+    raw_scalars = data.get("scalars") or {}
+    if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
+        raise ValueError("malformed 'tables' or 'scalars' section")
     tables = {k: _obj_to_table(raw_tables[k]) for k in TABLE_KEYS if k in raw_tables}
-    scalars = {k: v for k, v in (data.get("scalars") or {}).items()
-               if k in SCALAR_KEYS}
+    scalars = {k: v for k, v in raw_scalars.items() if k in SCALAR_KEYS}
     return tables, scalars
