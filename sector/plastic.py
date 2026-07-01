@@ -64,15 +64,16 @@ class PlasticPoint:
     converged: bool
 
 
-def _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons, eps_cu):
+def _governing_curvature(steel, prestress, s_max, c, s_bars, s_tendons, eps_cu):
     """Curvature at ultimate for a trial compression depth ``c`` (s-units).
 
     The strain profile is scaled until the first material limit is reached:
     concrete crushing (extreme fibre at ``eps_cu``), mild-steel rupture (most
     tensile bar at its ``eut``), or tendon rupture (most tensile cable's total
     strain at its rupture strain). The governing curvature is the smallest of
-    these, so no material is ever driven past its limit. ``bars`` and ``tendons``
-    are ``(x, y, area)`` tuples precomputed once for the whole sweep.
+    these, so no material is ever driven past its limit. ``s_bars`` / ``s_tendons``
+    are the bar / tendon depth projections ``x*dx + y*dy`` precomputed once for the
+    whole sweep (so the per-bisection-step extremes are just array reductions).
     """
     s_na = s_max - c
     phi = eps_cu / c  # concrete-crushing limit
@@ -84,20 +85,20 @@ def _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons, eps_
     # force). The back-off is far larger than rounding yet physically negligible.
     intact = 1.0 - 1.0e-9
 
-    if bars:
-        s_bar_min = min(x * dx + y * dy for x, y, _ in bars)  # most tensile bar
+    if s_bars.size:
+        s_bar_min = float(s_bars.min())  # most tensile bar
         if s_bar_min < s_na:
             phi = min(phi, intact * steel.eut / (s_na - s_bar_min))
         # The rupture strain is symmetric, so a compression bar must not be driven
         # past eut either. This only bites when eut < the concrete crushing strain
         # (otherwise the concrete fibre, beyond the bars, governs first).
         if steel.active_in_compression:
-            s_bar_max = max(x * dx + y * dy for x, y, _ in bars)  # most compressed bar
+            s_bar_max = float(s_bars.max())  # most compressed bar
             if s_bar_max > s_na:
                 phi = min(phi, intact * steel.eut / (s_bar_max - s_na))
 
-    if prestress is not None and tendons:
-        s_cab_min = min(x * dx + y * dy for x, y, _ in tendons)  # most tensile cable
+    if prestress is not None and s_tendons.size:
+        s_cab_min = float(s_tendons.min())  # most tensile cable
         margin = prestress.rupture_strain - prestress.IS
         if s_cab_min < s_na and margin > 0.0:
             phi = min(phi, intact * margin / (s_na - s_cab_min))
@@ -117,7 +118,7 @@ def _band_stresses(concrete, kappa, s_na, h, n_bands):
 
 
 def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
-                rings, bars, tendons, ring_xy=None, ring_starts=None,
+                rings, bar_data, tendon_data, ring_xy=None, ring_starts=None,
                 buf_a=None, buf_b=None):
     """Force resultants for a trial compression depth ``c`` (s-units).
 
@@ -125,10 +126,11 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
     and kNm, plus the most tensile mild-steel and tendon strains
     (compression-positive %). The neutral axis is at ``s = s_max - c`` and the
     curvature is ``phi`` (the governing ultimate curvature). ``rings`` are the
-    oriented concrete rings as ``(x, y)`` point lists, and ``bars`` / ``tendons``
-    are ``(x, y, area)`` tuples -- all precomputed once for the whole sweep.
-    Tendons (if any) carry tension only, and their stress is taken at the total
-    strain ``IS + section strain``.
+    oriented concrete rings as ``(x, y)`` point lists; ``bar_data`` /
+    ``tendon_data`` are ``(x, y, area, s)`` arrays (``s = x*dx + y*dy`` the depth
+    projection) precomputed once for the whole sweep. Tendons (if any) carry
+    tension only, and their stress is taken at the total strain ``IS + section
+    strain``.
 
     When ``ring_xy`` (the stacked ring vertices) is supplied the concrete
     integration runs in the compiled kernel; otherwise it uses the pure-Python
@@ -183,39 +185,39 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
                     comp_Fy += sig * m.sy * _MN_TO_KN
 
     # -- reinforcement (point areas, both signs) --
+    bx, by, ba, s_bars = bar_data
     min_eps = 0.0
-    for x, y, a in bars:
-        eps_c = kappa * (x * dx + y * dy - s_na)  # compression positive
-        min_eps = min(min_eps, eps_c)
-        sig = -steel.stress(-eps_c, design=True) * _MN_TO_KN  # comp +, per MPa*m2->kN
-        f = sig * a
-        if f >= 0.0:
-            comp_F += f
-            comp_Fx += f * x
-            comp_Fy += f * y
-        else:
-            ten_F += f
-            ten_Fx += f * x
-            ten_Fy += f * y
+    if bx.size:
+        eps_b = kappa * (s_bars - s_na)                     # compression positive
+        min_eps = float(eps_b.min())                        # most tensile bar strain
+        # The material law is a branchy scalar; evaluate it per bar, then form the
+        # forces and split compression / tension with array reductions.
+        sig_b = np.array([-steel.stress(-e, design=True) for e in eps_b])  # comp +, MPa
+        fb = sig_b * ba * _MN_TO_KN                          # kN, comp +
+        comp = fb >= 0.0
+        comp_F += float(fb[comp].sum())
+        comp_Fx += float((fb[comp] * bx[comp]).sum())
+        comp_Fy += float((fb[comp] * by[comp]).sum())
+        ten_F += float(fb[~comp].sum())
+        ten_Fx += float((fb[~comp] * bx[~comp]).sum())
+        ten_Fy += float((fb[~comp] * by[~comp]).sum())
 
     # -- prestressing tendons (tension only; stress at IS + section strain) --
+    tx, ty, ta, s_tendons = tendon_data
     min_eps_cable = 0.0
-    if prestress is not None:
-        for x, y, a in tendons:
-            eps_c = kappa * (x * dx + y * dy - s_na)        # section, compression +
-            e_total_tension = prestress.IS - eps_c          # total tendon strain (tension +)
-            # Reported tendon strain (compression positive), including IS.
-            min_eps_cable = min(min_eps_cable, eps_c - prestress.IS)
-            sig_t = prestress.stress(e_total_tension, design=True)  # tension +, MPa, >= 0
-            f = -sig_t * a * _MN_TO_KN                       # tension -> negative (comp +)
-            if f >= 0.0:
-                comp_F += f
-                comp_Fx += f * x
-                comp_Fy += f * y
-            else:
-                ten_F += f
-                ten_Fx += f * x
-                ten_Fy += f * y
+    if prestress is not None and tx.size:
+        eps_c = kappa * (s_tendons - s_na)                  # section, compression +
+        min_eps_cable = float((eps_c - prestress.IS).min())  # reported strain, incl. IS
+        e_total = prestress.IS - eps_c                      # total tendon strain (tension +)
+        sig_t = np.array([prestress.stress(e, design=True) for e in e_total])  # tension +, MPa
+        ft = -sig_t * ta * _MN_TO_KN                        # tension -> negative (comp +)
+        comp = ft >= 0.0
+        comp_F += float(ft[comp].sum())
+        comp_Fx += float((ft[comp] * tx[comp]).sum())
+        comp_Fy += float((ft[comp] * ty[comp]).sum())
+        ten_F += float(ft[~comp].sum())
+        ten_Fx += float((ft[~comp] * tx[~comp]).sum())
+        ten_Fy += float((ft[~comp] * ty[~comp]).sum())
 
     return comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy, min_eps, min_eps_cable
 
@@ -243,17 +245,20 @@ def plastic_capacity_at_angle(
     dx, dy = math.cos(V), math.sin(V)
 
     # Precompute the angle-independent geometry once: the oriented concrete rings
-    # as plain point lists, and the bar/tendon (x, y, area) tuples. These were
-    # being rebuilt on every bisection step, which dominated the run time.
+    # as plain point lists, the bar/tendon arrays, and their depth projections
+    # ``s = x*dx + y*dy`` (constant for the sweep). The bisection then only reduces
+    # these arrays, rather than rebuilding tuples and re-projecting every step.
     int_rings = section.integration_rings()
     rings = [r.tolist() for r in int_rings]
     bx, by, ba = section.bar_arrays()
-    bars = list(zip(bx.tolist(), by.tolist(), ba.tolist()))
+    bar_data = (bx, by, ba, bx * dx + by * dy)
     if prestress is not None:
         tx, ty, ta = section.tendon_arrays()
-        tendons = list(zip(tx.tolist(), ty.tolist(), ta.tolist()))
+        tendon_data = (tx, ty, ta, tx * dx + ty * dy)
     else:
-        tendons = []
+        _empty = np.empty(0)
+        tendon_data = (_empty, _empty, _empty, _empty)
+    s_bars, s_tendons = bar_data[3], tendon_data[3]
 
     # For the compiled path, also stack the rings into flat arrays once and
     # allocate clip scratch buffers sized for the largest ring.
@@ -275,10 +280,10 @@ def plastic_capacity_at_angle(
     c_full = s_max - s_min
 
     def net_axial(c):
-        phi = _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons,
+        phi = _governing_curvature(steel, prestress, s_max, c, s_bars, s_tendons,
                                    concrete.eps_cu2)
         acc = _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi,
-                          n_bands, rings, bars, tendons,
+                          n_bands, rings, bar_data, tendon_data,
                           ring_xy, ring_starts, buf_a, buf_b)
         return acc[0] + acc[3]  # comp_F + ten_F (kN)
 
@@ -302,11 +307,10 @@ def plastic_capacity_at_angle(
         n_hi = net_axial(hi)
         grow += 1
 
-    converged = n_lo <= P <= n_hi
     if P < n_lo:
-        c = lo
+        c = lo              # requested axial below the pure-tension state (unreachable)
     elif P > n_hi:
-        c = hi
+        c = hi              # requested axial above the squash load (unreachable)
     else:
         for _ in range(max_iter):
             c = 0.5 * (lo + hi)
@@ -318,13 +322,19 @@ def plastic_capacity_at_angle(
                 break
         c = 0.5 * (lo + hi)
 
-    phi = _governing_curvature(steel, prestress, dx, dy, s_max, c, bars, tendons,
+    phi = _governing_curvature(steel, prestress, s_max, c, s_bars, s_tendons,
                                concrete.eps_cu2)
     (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
      min_eps, min_eps_cable) = _accumulate(
         concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
-        rings, bars, tendons, ring_xy, ring_starts, buf_a, buf_b
+        rings, bar_data, tendon_data, ring_xy, ring_starts, buf_a, buf_b
     )
+
+    # Convergence is judged on the actual axial equilibrium at the returned depth,
+    # not merely on P having been bracketed: a monotonicity failure or a clamped
+    # (out-of-range) P leaves a residual that this catches, where the old
+    # "bracketable" test would have reported success.
+    converged = abs((comp_F + ten_F) - P) <= 1.0e-6 * max(1.0, abs(P))
 
     Mx = comp_Fy + ten_Fy
     My = comp_Fx + ten_Fx

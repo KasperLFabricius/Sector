@@ -106,16 +106,18 @@ def test_slab_matches_eurocode_rectangular_block():
 def test_governing_curvature_caps_compression_steel_rupture():
     # The symmetric rupture must also cap the curvature for a compression bar: with
     # eut below the concrete crushing strain, a compression bar reaches eut first.
+    import numpy as np
     from sector.plastic import _governing_curvature
-    # dx = 1, dy = 0 so s = x; s_na = s_max - c = 0.1. A bar 0.08 past the NA on the
-    # compression side reaches eut = 2 permille before the concrete crushes.
-    bars = [(0.18, 0.0, 1.0e-4), (0.099, 0.0, 1.0e-4)]
+    # s_na = s_max - c = 0.1. A bar 0.08 past the NA on the compression side (s = 0.18)
+    # reaches eut = 2 permille before the concrete crushes. s_bars are the projections.
+    s_bars = np.array([0.18, 0.099])
+    empty = np.empty(0)
     low = MildSteel(fytk=500.0, fyck=500.0, eut=0.002, gamma_y=1.0, curve=2)
-    phi = _governing_curvature(low, None, 1.0, 0.0, 0.2, 0.1, bars, [], 0.0035)
+    phi = _governing_curvature(low, None, 0.2, 0.1, s_bars, empty, 0.0035)
     assert phi == pytest.approx(0.002 / 0.08, rel=1e-6)    # compression bar governs
     # With a large eut the concrete crushing limit governs instead (no cap effect).
     high = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.0, curve=2)
-    phi2 = _governing_curvature(high, None, 1.0, 0.0, 0.2, 0.1, bars, [], 0.0035)
+    phi2 = _governing_curvature(high, None, 0.2, 0.1, s_bars, empty, 0.0035)
     assert phi2 == pytest.approx(0.0035 / 0.1, rel=1e-6)   # concrete governs
 
 
@@ -134,3 +136,33 @@ def test_plastic_capacity_responds_to_ultimate_strain():
     m_full = plastic_capacity_at_angle(slab, full, steel, 0.0, 90.0).Mx
     m_short = plastic_capacity_at_angle(slab, short, steel, 0.0, 90.0).Mx
     assert abs(m_full - m_short) / m_full > 0.003   # eps_cu2 visibly changes Mrd
+
+
+def _rect_with_top_and_bottom_bars():
+    return Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.15, 0.05, 500.0), (0.15, 0.55, 500.0)],
+    )
+
+
+_C30 = Concrete(fck=30.0, gamma_c=1.5, curve=2)
+_B500 = MildSteel(fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
+                  gamma_y=1.15, gamma_u=1.15, gamma_E=1.0, curve=1)
+
+
+def test_all_compressed_section_reports_the_bar_strain():
+    # Under high axial compression every bar is compressed; the reported most-tensile
+    # steel strain is the least-compressed bar's actual (positive) strain, not a
+    # floor of zero.
+    r = plastic_capacity_at_angle(_rect_with_top_and_bottom_bars(), _C30, _B500,
+                                  3500.0, 90.0)
+    assert r.converged
+    assert r.eps_steel > 0.0
+
+
+def test_unreachable_axial_is_flagged_not_converged():
+    # An axial force above the squash load cannot be balanced: the point is flagged
+    # not-converged (non-zero equilibrium residual), while a reachable one converges.
+    sec = _rect_with_top_and_bottom_bars()
+    assert not plastic_capacity_at_angle(sec, _C30, _B500, 1.0e6, 90.0).converged
+    assert plastic_capacity_at_angle(sec, _C30, _B500, 0.0, 90.0).converged
