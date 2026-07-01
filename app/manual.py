@@ -782,7 +782,14 @@ def _latex_to_rl(s: str) -> str:
         wrap = lambda x: "(" + x + ")" if re.search(r"[ +\-]", x) else x
         return wrap(m.group(1)) + "/" + wrap(m.group(2))
 
-    s = re.sub(r"\\t?frac\{([^{}]*)\}\{([^{}]*)\}", _frac, s)
+    # Iterate to a fixed point so a nested fraction (an inner tfrac inside the
+    # numerator of an outer frac) is fully flattened: the inner one goes first,
+    # which leaves the outer args brace-free for the next pass.
+    while True:
+        flat = re.sub(r"\\t?frac\{([^{}]*)\}\{([^{}]*)\}", _frac, s)
+        if flat == s:
+            break
+        s = flat
     for k in sorted(_LATEX_CMD, key=len, reverse=True):
         s = s.replace(k, _LATEX_CMD[k])
     s = re.sub(r"\\(min|max|ln|log)\b", r"\1", s)

@@ -161,6 +161,14 @@ def test_latex_to_rl_converts_the_subset():
     assert "min(" in out
     assert "\\" not in out and "{" not in out and "}" not in out  # nothing left over
 
+    # A nested fraction (the EC2 7.9 mean strain has a tfrac inside the frac
+    # numerator) must flatten fully -- no leftover 'frac' or backslash.
+    nested = manual._latex_to_rl(
+        r"\frac{\sigma_s - k_t\,\tfrac{f_{ct,eff}}{\rho_{p,eff}}(1+\alpha_e"
+        r"\rho_{p,eff})}{E_s}")
+    assert "frac" not in nested and "\\" not in nested
+    assert nested.endswith("/E<sub>s</sub>")             # outer division survived
+
 
 def test_manual_pdf_builds_tables_only():
     # Build without the Plotly-to-PNG export (no kaleido/browser needed): a valid,
