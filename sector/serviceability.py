@@ -252,6 +252,7 @@ def _crack_width(
     h = s_tface - s_cface
     s_na = -cracked_state.eps0 / mag
     s_bars = bx * gx + by * gy
+    w_bars = -gy * bx + gx * by                    # in-plane width coord (m)
     gov0 = int(np.argmax(sigma))                   # deepest tension fibre
     d = float(s_bars[gov0]) - s_cface              # effective depth
     rings = list(section.integration_rings())
@@ -297,6 +298,7 @@ def _crack_width(
     # Per-bar crack width: each tension bar in the band uses its own cover,
     # diameter and Stage II stress; the largest wk governs.
     wk_factor = 0.5 if coarse else 1.0   # DK NA coarse system halves wk (7.3.4(1))
+    band_tens = in_band & (sigma > 0.0)  # tension bars that set the crack spacing
     best: Optional[CrackWidthResult] = None
     for i in range(bx.size):
         if not in_band[i] or sigma[i] <= 0.0:
@@ -320,12 +322,19 @@ def _crack_width(
         # (7.3.4(3)) the cover term coefficient is k3*(25/c)^(2/3) instead of k3.
         k3_i = k3 * (25.0 / c_i) ** (2.0 / 3.0) if k3_cover_dependent and c_i > 0.0 else k3
         sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
-        # EC2 (7.14): where the bars are not fixed at close centres the spacing is
-        # bounded geometrically by 1.3*(h-x). Applying it as a cap reproduces the
-        # two branches -- (7.11) governs at close spacing (the smaller value), the
-        # bound at wide spacing -- so a sparsely reinforced section is not left with
-        # an unbounded (7.11) spacing. (h-x) = s_tface - s_na; convert m -> mm.
-        sr_max = min(sr_max, 1.3 * (s_tface - s_na) * 1000.0)
+        # EC2 (7.14): the geometric bound 1.3*(h-x) is the ALTERNATIVE spacing for
+        # bars NOT fixed at close centres. Clause 7.3.4(3) applies (7.11) only where
+        # the bar spacing does not exceed 5(c+phi/2); beyond that the bound governs.
+        # Apply it as a cap only for a bar whose nearest in-band tension neighbour is
+        # farther than 5(c+phi/2), so a closely spaced but shallow tension zone
+        # (bending with axial compression -> small h-x) is not clipped below its real
+        # (7.11) spacing. A lone bar (no neighbour) counts as wide. (h-x) = s_tface -
+        # s_na; widths are in m, cover/phi in mm.
+        neigh = band_tens.copy()
+        neigh[i] = False
+        nn = float(np.min(np.abs(w_bars[neigh] - w_bars[i]))) if neigh.any() else math.inf
+        if nn * 1000.0 > 5.0 * (c_i + phi / 2.0):
+            sr_max = min(sr_max, 1.3 * (s_tface - s_na) * 1000.0)
         wk = wk_factor * sr_max * esm_ecm
         if best is None or wk > best.wk:
             best = CrackWidthResult(

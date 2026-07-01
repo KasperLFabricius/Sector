@@ -250,6 +250,29 @@ def test_ec2_2004_wide_spacing_caps_crack_spacing():
     assert cw.sr_max == pytest.approx(1.3 * hx * 1000.0, rel=1e-6)
 
 
+def test_ec2_2004_close_spacing_keeps_full_crack_spacing():
+    # EC2 (7.14)'s 1.3*(h-x) bound is the ALTERNATIVE for bars NOT at close centres
+    # (7.3.4(3)). Two closely-spaced bars (40 mm apart) with a large cover in a
+    # shallow-tension section give a large (7.11) spacing while 1.3*(h-x) is small;
+    # the bound must NOT clip the close-spaced spacing (that was the mis-cap).
+    from sector.serviceability import _depth_axis
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (1.2, 0.0), (1.2, 0.25), (0.0, 0.25)],
+        bars_xy_area_mm2=[(0.58, 0.05, 201.0), (0.62, 0.05, 201.0)],
+    )
+    r = analyse_cracking(sec, 0.0, 40.0, 0.0, 6.0, fctm=fctm(30.0),
+                         bar_diameter=16.0, cover=80.0)
+    assert r.cracked
+    cw = r.crack
+    uncapped = 3.4 * cw.cover + 0.8 * 0.5 * 0.425 * cw.phi / cw.rho_p_eff  # Eq (7.11)
+    gx, gy, mag = _depth_axis(r.cracked_state.kx, r.cracked_state.ky)
+    verts = sec.concrete_vertices()
+    s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
+    hx = s_tface - (-r.cracked_state.eps0 / mag)                # h - x, m
+    assert 1.3 * hx * 1000.0 < uncapped                        # cap WOULD bite if applied
+    assert cw.sr_max == pytest.approx(uncapped, rel=1e-6)      # but close spacing keeps (7.11)
+
+
 def test_ec2_2023_hc_eff_covers_multiple_tension_layers():
     # Two tension layers (y = 0.05 and 0.10 m): hc,eff extends past the single-layer
     # band by the layer spread, per the n-layer form of figure 9.3.
