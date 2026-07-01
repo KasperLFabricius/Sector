@@ -572,9 +572,9 @@ class ReportBuilder:
             pl["mx"], pl["my"], applied=applied, title="M-M interaction"), 130, 100)
         rows = [["Quantity", "Value"],
                 ["Max / Min M<sub>x</sub> capacity",
-                 f"{_fmt(pl['max_mx'],1)} / {_fmt(pl.get('min_mx'),1)} kNm"],
+                 f"{_fmt(pl['max_mx'],1)} / {_fmt(pl.get('min_mx', min(pl['mx'])),1)} kNm"],
                 ["Max / Min M<sub>y</sub> capacity",
-                 f"{_fmt(pl['max_my'],1)} / {_fmt(pl.get('min_my'),1)} kNm"]]
+                 f"{_fmt(pl['max_my'],1)} / {_fmt(pl.get('min_my', min(pl['my'])),1)} kNm"]]
         if not pl.get("check_util", True):
             rows.append(["Utilisation", "not checked (capacity only)"])
         elif pl.get("util") is not None:

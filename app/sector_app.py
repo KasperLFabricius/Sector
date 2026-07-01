@@ -1777,11 +1777,15 @@ def plastic_view(inp, results):
         return
     p = results["plastic"]
     pts = p["points"]
+    # Derive the minima from the envelope if absent, so a result payload cached
+    # before min_mx/min_my existed (matching inputs -> no recompute) still renders.
+    min_mx = p.get("min_mx", min(p["mx"]))
+    min_my = p.get("min_my", min(p["my"]))
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Max $M_x$", f"{p['max_mx']:.0f} kNm")
-    m2.metric("Min $M_x$", f"{p['min_mx']:.0f} kNm")
+    m2.metric("Min $M_x$", f"{min_mx:.0f} kNm")
     m3.metric("Max $M_y$", f"{p['max_my']:.0f} kNm")
-    m4.metric("Min $M_y$", f"{p['min_my']:.0f} kNm")
+    m4.metric("Min $M_y$", f"{min_my:.0f} kNm")
     if not p.get("check_util", True):
         m5.metric("Utilisation", "-",
                   help="Capacity-only run: the applied moments are not checked. "
