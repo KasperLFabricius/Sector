@@ -1,7 +1,7 @@
 # Packaging Sector as a standalone Windows app
 
 This builds a self-contained Sector that colleagues can run **without installing
-Python** — a folder with `Sector.exe` and its bundled dependencies (PyInstaller
+Python** -- a folder with `Sector.exe` and its bundled dependencies (PyInstaller
 ONEDIR).
 
 ## Build
@@ -45,5 +45,5 @@ local URL. A console window stays open to show that URL and any messages.
 - **Report figures need a browser engine.** The PDF report exports its plots with
   kaleido, which needs a Chrome/Chromium install at runtime; without one the report
   still builds, with tables instead of figures.
-- **numba** speeds up the plastic solver but is optional — if it cannot load in the
+- **numba** speeds up the plastic solver but is optional -- if it cannot load in the
   frozen build the app falls back to the (slower) pure-Python kernels.
