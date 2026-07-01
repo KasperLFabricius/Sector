@@ -285,12 +285,16 @@ def test_prestress_figure_tension_only_labels_inputs():
 
 def test_legends_sit_below_the_axis_titles():
     # The horizontal legend must sit clear below the x-axis title (which has a
-    # small standoff), so the two do not overlap. Regression for the legend text
-    # colliding with the axis label.
-    inter = viz.interaction_figure([100.0, 0.0, -100.0], [0.0, 100.0, 0.0])
-    sect = viz.section_figure([(0.0, 0.0), (0.4, 0.0), (0.4, 0.6), (0.0, 0.6)],
-                              bars=[(0.2, 0.05)], scale=1000.0, unit="mm")
-    for fig in (inter, sect):
-        assert fig.layout.legend.y <= -0.2            # pushed below the axis title
-        assert fig.layout.margin.b >= 90              # room for title + legend
+    # small standoff) and stay inside the bottom margin -- at every plot height, so
+    # the taller Section (640) and Quick Section (560) views do not clip it. y is a
+    # fraction of the plot area, so the pixel offset (not y) must be the constant.
+    corners = [(0.0, 0.0), (0.4, 0.0), (0.4, 0.6), (0.0, 0.6)]
+    cases = [(viz.interaction_figure([100.0, 0.0, -100.0], [0.0, 100.0, 0.0]), 440)]
+    for h in (440, 560, 640):
+        cases.append((viz.section_figure(corners, bars=[(0.2, 0.05)], scale=1000.0,
+                                         unit="mm", height=h), h))
+    for fig, h in cases:
+        m = fig.layout.margin
+        offset_px = -fig.layout.legend.y * (h - m.t - m.b)   # px below the plot
+        assert 55 <= offset_px <= m.b                 # below the title, within margin
         assert fig.layout.xaxis.title.standoff == 10  # title kept near the axis

@@ -384,6 +384,21 @@ def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
         showlegend=False))
 
 
+# The section / interaction plots put a horizontal legend below the x-axis title.
+# ``legend.y`` is in paper coordinates (a fraction of the plot *area*, which grows
+# with the figure height), so a constant y would sit a larger pixel distance below
+# a taller plot and spill past the fixed bottom margin. Scale y inversely with the
+# plot-area height so the legend keeps a constant pixel gap below the axis title
+# (matching the stress-strain figure) and stays inside the margin at any height.
+_LEGEND_TOP_M, _LEGEND_BOT_M = 40, 96
+_LEGEND_GAP_PX = 68.0
+
+
+def _legend_y(height: float) -> float:
+    plot_h = max(height - _LEGEND_TOP_M - _LEGEND_BOT_M, 1.0)
+    return -_LEGEND_GAP_PX / plot_h
+
+
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
@@ -453,15 +468,15 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         _add_point_labels(fig, outer, holes, bars, tendons, label_scale, label_min_gap)
     fig.update_layout(
         title=title, template="plotly_white", height=height,
-        margin=dict(l=10, r=10, t=40, b=96),
+        margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text=f"x ({unit})", standoff=10), zeroline=True),
         yaxis=dict(title=f"y ({unit})", scaleanchor="x", scaleratio=1, zeroline=True),
         showlegend=bool(na_line) or bool(zones) or bool(bars) or bool(tendons),
         # Below the plot and below the x-axis title, clear of the plotly modebar
-        # (which the above-the-plot position collided with). y is pushed past the
-        # axis title so the two do not overlap.
-        legend=dict(orientation="h", yanchor="top", y=-0.25, x=0.5, xanchor="center",
-                    font=dict(size=10)),
+        # (which the above-the-plot position collided with). A height-scaled y keeps
+        # a constant gap below the title without spilling past the bottom margin.
+        legend=dict(orientation="h", yanchor="top", y=_legend_y(height), x=0.5,
+                    xanchor="center", font=dict(size=10)),
     )
     return fig
 
@@ -499,14 +514,14 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
                                  name="applied", hovertemplate=hover))
     fig.update_layout(
         title=title, template="plotly_white", height=440,
-        margin=dict(l=10, r=10, t=40, b=96),
+        margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text="My - about the y-axis (kNm)", standoff=10),
                    zeroline=True),
         yaxis=dict(title="Mx - about the x-axis (kNm)", scaleanchor="x",
                    scaleratio=1, zeroline=True),
         # Below the plot and below the x-axis title, clear of the plotly modebar.
-        # y is pushed past the axis title so the two do not overlap.
-        legend=dict(orientation="h", yanchor="top", y=-0.25, x=0.5, xanchor="center"),
+        legend=dict(orientation="h", yanchor="top", y=_legend_y(440), x=0.5,
+                    xanchor="center"),
     )
     return fig
 
