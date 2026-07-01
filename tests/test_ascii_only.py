@@ -20,7 +20,8 @@ def _source_files():
     seen = set()
     for pattern in ("sector/**/*.py", "tests/**/*.py", "tools/**/*.py",
                     "app/**/*.py", "packaging/**/*.py", "packaging/**/*.md",
-                    "packaging/**/*.spec", "packaging/**/*.ps1", "*.py", "*.md"):
+                    "packaging/**/*.spec", "packaging/**/*.ps1", "packaging/**/*.bat",
+                    "*.py", "*.md"):
         for path in ROOT.glob(pattern):
             # Skip scratch files (a single leading underscore, e.g. _audit.py)
             # but keep dunder source files such as __init__.py.
