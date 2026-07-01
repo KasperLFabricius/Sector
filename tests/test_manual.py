@@ -95,7 +95,48 @@ def test_manual_covers_both_examples_and_all_crack_editions():
 def test_manual_has_the_expected_parts_in_order():
     parts = [b[1] for b in manual.manual_blocks() if b[0] == "part"]
     assert parts == ["Part A - Get started", "Part B - Features & options",
-                     "Part D - Reference"]
+                     "Part C - Theory & methodology", "Part D - Reference"]
+
+
+def test_every_figure_block_builds():
+    # Every figure referenced by the manual must build (the live curves, the
+    # section drawings and the hand-drawn schematics), so no block renders as a
+    # broken-figure placeholder.
+    for b in manual.manual_blocks():
+        if b[0] == "figure":
+            assert b[1]() is not None, b[2]
+
+
+def test_part_c_worked_numbers_match_the_engine():
+    # The Part C derivations quote worked numbers for the beam example. Recompute
+    # them so the prose cannot silently drift from the solver.
+    ex = manual.example_beam()
+    c, s = ex["concrete"], ex["steel"]
+    assert c.fck / c.gamma_c * c.alpha_cc == pytest.approx(27.6, abs=0.1)   # fcd
+    assert s.fytk / s.gamma_y == pytest.approx(458.0, abs=1.0)              # fyd
+    # Curve 2 scales the elastic slope to Es/gamma_y, so the yield strain is
+    # fytk/Es (not fyd/Es): 2.75 per mille for B550, as the manual now states.
+    assert s.fytk / s.Es == pytest.approx(2.75e-3, abs=1e-5)
+    sec = manual._section_of(ex)
+    r = plastic_capacity_at_angle(sec, c, s, 0.0, 90.0)
+    assert r.Mx == pytest.approx(346.0, abs=2.0)                            # capacity
+    # eps_steel is a percentage: -1.89% = 18.9 per mille, past yield (2.75) but
+    # below rupture (50) -- the worked point is tension-controlled, as stated.
+    eps_frac = abs(r.eps_steel) / 100.0
+    assert s.fytk / s.Es < eps_frac < s.eut
+    fc = fctm(c.fck)
+    editions = {
+        "2005": (dict(), 0.188, 236.0),
+        "fine": (dict(k3_cover_dependent=True), 0.164, 206.0),
+        "coarse": (dict(k3_cover_dependent=True, coarse=True), 0.077, 184.0),
+        "2023": (dict(edition="2023"), 0.186, 134.0),
+    }
+    for _name, (kw, wk, sr) in editions.items():
+        cr = analyse_cracking(sec, 0.0, manual._BEAM_SLS_MX, 0.0, 6.0, fctm=fc,
+                              bar_diameter=25.0, cover=37.5, beta=0.5, kt=0.4, **kw)
+        assert cr.lambda_cr == pytest.approx(0.49, abs=0.02)
+        assert cr.crack.wk == pytest.approx(wk, abs=0.005)
+        assert cr.crack.sr_max == pytest.approx(sr, abs=1.5)
 
 
 def test_part_b_documents_the_panels_and_options():
