@@ -92,6 +92,21 @@ def test_manual_covers_both_examples_and_all_crack_editions():
     assert "mild steel" in text.lower() and "prestress" in text.lower()
 
 
+def test_manual_has_the_expected_parts_in_order():
+    parts = [b[1] for b in manual.manual_blocks() if b[0] == "part"]
+    assert parts == ["Part A - Get started", "Part B - Features & options",
+                     "Part D - Reference"]
+
+
+def test_part_b_documents_the_panels_and_options():
+    # Part B is the feature/option reference: it must name the analysis modes, the
+    # Quick Section shapes and the result views so it tracks the actual UI.
+    text = "\n".join(str(b) for b in manual.manual_blocks())
+    for token in ("Quick Section", "T-section", "Box girder", "Circular",
+                  "Plastic", "Elastic", "Crack width", "Active in compression"):
+        assert token in text, token
+
+
 def test_manual_opens_from_the_sidebar_button():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()

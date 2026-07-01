@@ -28,6 +28,8 @@ import streamlit as st
 
 from sector import templates
 from sector.materials import Concrete, MildSteel, Prestress
+from sector.plastic import solve_plastic
+from sector.section import Section
 
 import viz
 
@@ -115,6 +117,34 @@ def fig_beam_section():
 
 def fig_circular_section():
     return _section_fig(example_circular(), "Circular hollow section")
+
+
+def _section_of(ex: dict) -> Section:
+    return Section.from_polygon(corners=ex["outer"], holes=ex["holes"],
+                                bars_xy_area_mm2=ex["bars"],
+                                tendons_xy_area_mm2=ex["tendons"])
+
+
+def fig_beam_concrete_law():
+    return viz.concrete_curve_figure(example_beam()["concrete"])
+
+
+def fig_beam_steel_law():
+    return viz.steel_curve_figure(example_beam()["steel"])
+
+
+def fig_circular_prestress_law():
+    return viz.prestress_curve_figure(example_circular()["prestress"])
+
+
+def fig_beam_envelope():
+    """The rectangular example's M-M interaction envelope with its applied load."""
+    ex = example_beam()
+    pts = solve_plastic(_section_of(ex), ex["concrete"], ex["steel"], ex["P"],
+                        0.0, 360.0, 15.0)
+    mx = [p.Mx for p in pts]
+    my = [p.My for p in pts]
+    return viz.interaction_figure(mx, my, applied=(ex["Mx"], ex["My"]))
 
 
 # ==========================================================================
@@ -243,6 +273,142 @@ def manual_blocks() -> list:
        "limit, to whichever code edition applies to the job.\n"
        "- **Comparing layouts.** Change the bars or the concrete grade and read the "
        "capacity and crack width straight back.")
+
+    # =====================================================================
+    # PART B - FEATURES & OPTIONS
+    # =====================================================================
+    part("Part B - Features & options")
+
+    h1("The workspace")
+    md("The sidebar holds the input panels (*About*, *Save / Load*, *Report*, "
+       "*Analysis & Result Settings*, *Section*, *Material Parameters*, *Loads*); "
+       "the main area shows the drawings and results, chosen from the **View** "
+       "dropdown. The section drawing and the stress-strain diagrams update live; "
+       "the plastic and elastic result views recompute on **Calculate**.")
+    table(["View", "Shows"],
+          [["Section", "The concrete outline, voids and reinforcement (live)"],
+           ["Stress-Strain diagrams", "The concrete, mild-steel and tendon laws (live)"],
+           ["Plastic Results", "The M-M envelope and the utilisation (on Calculate)"],
+           ["Elastic Results", "The cracked-section stresses and crack width (on Calculate)"]])
+    call("tip", "*Auto-calc all derived values* (in Analysis & Result Settings) "
+         "recomputes every auto quantity from the current grade and creep at once: "
+         "the concrete strain limits, $f_{ctm}$, $E_c$ and the modular ratios.")
+
+    h1("Defining the section")
+    md("A section is a set of explicit points in millimetres -- the concrete "
+       "corners, any voids, the bars and the tendons. The point tables are the "
+       "**source of truth**; the Quick Section builder is a convenience that writes "
+       "into them.")
+    h2("The point tables")
+    md("Four editable tables hold the concrete corners, the voids, the bars "
+       "($x$, $y$, area) and the tendons ($x$, $y$, area). Coordinates and areas "
+       "are in millimetres. A void is a closed ring of corners; several voids are "
+       "separated by a blank row. Half-typed rows are ignored until complete, so "
+       "the tables are paste-friendly.")
+    call("concept", "Everything downstream reads these points. The builder, the "
+         "presets and the save file all end up as rows in these four tables, so you "
+         "can always edit the geometry by hand.")
+    h2("The Quick Section builder")
+    md("A full-width builder (opened from the *Section* panel) generates a "
+       "parametric shape with a live preview, then *Apply* writes its points into "
+       "the tables (or *Back* leaves them untouched). Reinforcement can be given by "
+       "a bar count or by a spacing, in one or several layers, and tendons as a "
+       "ring or in layers.")
+    table(["Shape", "Produces"],
+          [["Rectangle", "A solid rectangle b x h"],
+           ["Slab strip", "A 1 m-wide strip of a given thickness"],
+           ["T-section", "A flange over a web"],
+           ["Box girder", "A hollow box (one rectangular void)"],
+           ["Circular", "A circular section, optionally with a bar ring"]])
+    h2("Validity checks")
+    md("The section is rejected, with a message, when the geometry is not "
+       "analysable: a void that would disconnect the concrete, or a bar or tendon "
+       "that falls outside the concrete or inside a void.")
+    call("limit", "A void must leave the concrete in one connected piece. A slot "
+         "that splits the section in two is rejected rather than analysed, because "
+         "the plane-section assumption no longer holds across a break.")
+
+    h1("Materials")
+    md("Each material can be entered by hand or loaded from a code preset, then "
+       "adjusted. The presets carry the partial factors and the curve shape; the "
+       "*Preset* dropdown at the top of each material sets them.")
+    h2("Concrete")
+    md("The concrete follows the parabola-rectangle law. The inputs are the "
+       "characteristic strength $f_{ck}$, the partial factor $\\gamma_c$, the "
+       "coefficient $\\alpha_{cc}$, the strain limits $\\varepsilon_{c2}$ and "
+       "$\\varepsilon_{cu2}$ with the exponent $n$, the elastic modulus $E_c$ and "
+       "the mean tensile strength $f_{ctm}$. The strain limits, $E_c$ and $f_{ctm}$ "
+       "have *Auto* buttons that derive them from $f_{ck}$ and the edition.")
+    fig(fig_beam_concrete_law, "The concrete law for the rectangular example "
+        "(C40/50), as the Stress-Strain view draws it.")
+    h2("Mild steel")
+    md("The mild steel is bilinear (optionally with hardening). The inputs are the "
+       "yield and ultimate strengths $f_{yk}$ / $f_{tk}$, the ultimate strain "
+       "$\\varepsilon_{uk}$, the partial factors and the modulus $E_s$. The "
+       "**Active in compression** toggle decides whether the bars carry "
+       "compression: with it off the steel is tension-only.")
+    fig(fig_beam_steel_law, "The B550 mild-steel law for the rectangular example.")
+    call("standard", "The concrete and steel laws follow DS/EN 1992-1-1 3.1.7 and "
+         "3.2.7; the ultimate strains follow Table 3.1. Part C derives them in full.")
+    h2("Prestressing steel")
+    md("A prestress material adds the tendon law and, crucially, the initial strain "
+       "$\\varepsilon_{p,IS}$ locked into the tendons. The inputs mirror the mild "
+       "steel plus that initial strain. Tendons are analysed at their **total** "
+       "strain -- the initial strain plus the section strain at their location.")
+    fig(fig_circular_prestress_law, "The tendon law for the circular example.")
+
+    h1("Analysis & result settings")
+    h2("Analysis mode")
+    md("*Analysis* selects what runs: **Plastic** (the ultimate M-M envelope), "
+       "**Elastic** (the cracked-section stresses for the service loads), or "
+       "**Both**.")
+    h2("The plastic sweep")
+    md("The envelope is traced by rotating the neutral axis from $V_{min}$ to "
+       "$V_{max}$ in steps of $V_{inc}$ (degrees). Each angle gives one point on "
+       "the $M_x$-$M_y$ envelope at the design axial force. *Check utilisation* "
+       "compares the applied moment to the envelope; turning it off reports the "
+       "capacity only.")
+    fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the "
+        "applied load; the sweep from 0 to 360 degrees closes the curve.")
+    h2("Crack width")
+    md("With **Crack width** on, the elastic analysis also computes the crack "
+       "width. The bar diameter $\\phi$ (0 = derived from the bar area), the "
+       "mild-steel bond coefficient $k_1$ (0.8 ribbed, 1.6 plain), the code edition "
+       "and -- for the DK NA fine system -- the member type are the inputs.")
+    table(["Crack-width code", "What it changes"],
+          [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
+           ["DS/EN + DK NA (fine)", "Cover-dependent $k_3$; the $(h-x)/3$ term for slabs / prestressed only"],
+           ["DS/EN + DK NA (coarse)", "Centroid-matched effective area (fig 7.100 NA); $w_k$ halved"],
+           ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
+    call("standard", "All four editions are documented in full in Part C, with the "
+         "worked crack width for the examples.")
+    h2("Modular ratios and creep")
+    md("The cracked-elastic analysis uses a long-term modular ratio "
+       "$n_l = E_s/E_{c,eff}$ and a short-term $n_s = E_s/E_c$; the long-term value "
+       "carries creep through the coefficient $\\varphi$. Both have *Auto* buttons "
+       "that derive them from $E_c$ and $\\varphi$.")
+
+    h1("Loads")
+    md("The plastic check uses one action set (axial force $N$, positive in "
+       "compression, and moments $M_x$ / $M_y$). The elastic check uses a long-term "
+       "and a short-term set, so creep and load duration are captured. The crack "
+       "width is evaluated for both.")
+    table(["Load set", "Feeds"],
+          [["Plastic $N$, $M_x$, $M_y$", "The utilisation against the envelope"],
+           ["Long-term $N$, $M_x$, $M_y$ + $\\varphi$", "The creep (long-term) elastic stresses"],
+           ["Short-term $N$, $M_x$, $M_y$", "The instantaneous (total) elastic stresses"]])
+
+    h1("Reading the results")
+    h2("Plastic results")
+    md("The $M_x$-$M_y$ envelope is drawn with the applied load marked; the "
+       "**Neutral-axis state** selector steps through the swept angles and reports "
+       "the strains, the compression resultant and lever arm, and the neutral-axis "
+       "intercepts at each. The full per-angle table sits below.")
+    h2("Elastic results")
+    md("The cracked-section stresses are reported per bar for the long-term, "
+       "short-term and total states, with the peak concrete compression and the "
+       "neutral-axis position. When cracking is checked the section properties "
+       "(uncracked and cracked) and the crack width follow.")
 
     # =====================================================================
     # PART D - REFERENCE
