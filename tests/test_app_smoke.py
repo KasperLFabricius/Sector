@@ -1608,6 +1608,23 @@ def test_short_term_load_triggers_cracking():
     assert e["crack_short"] is not None and e["crack_short"]["wk"] > 0.0
 
 
+def test_counteracting_short_term_load_keeps_cracked():
+    # If the short-term action counteracts the sustained one so the total is
+    # uncracked, the section is still cracked (the long-term action already cracked
+    # it -- cracking is irreversible), and the long-term crack width is reported.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()    # cracks on its own
+    at.number_input(key="el_short_Mx").set_value(-380.0).run()  # total ~ 20, uncracked
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["cracked"] is True                    # cracked by the long-term action
+    assert e["crack"] is not None and e["crack"]["wk"] > 0.0
+
+
 def test_plain_elastic_unchanged_by_sls_toggle():
     # The regular cracked-section stresses (zero concrete tension) do not change
     # when the crack-width check is toggled on.

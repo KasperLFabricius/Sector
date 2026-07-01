@@ -1638,14 +1638,20 @@ def run_analysis(inp):
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             coarse=inp["sls_coarse"], edition=inp["sls_edition"],
             n_mult=n_mult, prestress_stress=prestress_stress)
-        cracked = cr_t.cracked
+        # The section is cracked if EITHER the long-term or the total action exceeds
+        # the cracking stress: cracking is irreversible, so a short-term action that
+        # counteracts the sustained one (a negative moment) can leave the total
+        # uncracked while the long-term already cracked. Report the governing (most
+        # onerous, smallest lambda_cr) of the two.
+        cr_gov = cr_t if cr_t.lambda_cr <= cr_l.lambda_cr else cr_l
+        cracked = cr_gov.cracked
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
         props_cr = (transformed_properties(
             sec, inp["nl"], eps0=cr_l.cracked_state.eps0, kx=cr_l.cracked_state.kx,
             ky=cr_l.cracked_state.ky, cracked=True) if cracked else None)
         out["elastic"].update(
-            cracked=cracked, lambda_cr=cr_t.lambda_cr, sigma_ct=cr_t.sigma_ct,
-            fctm=cr_t.fctm, show_cw=inp["sls_cw"],
+            cracked=cracked, lambda_cr=cr_gov.lambda_cr, sigma_ct=cr_gov.sigma_ct,
+            fctm=cr_gov.fctm, show_cw=inp["sls_cw"],
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
@@ -1956,21 +1962,21 @@ def _elastic_sls_section(inp, e):
     st.divider()
     st.markdown("#### Serviceability checks")
     if e["cracked"]:
-        st.warning(f"**Cracked** under the total (long + short) load - the uncracked "
-                   f"concrete tension reaches $f_{{ctm}}$ at a load factor "
-                   f"$\\lambda_{{cr}}$ = {e['lambda_cr']:.3f} "
-                   f"(= $M_{{cr}}/M$ for pure bending).")
+        st.warning(f"**Cracked** - the uncracked concrete tension reaches $f_{{ctm}}$ "
+                   f"at a load factor $\\lambda_{{cr}}$ = {e['lambda_cr']:.3f} "
+                   f"(governing of the long-term and total actions; "
+                   f"= $M_{{cr}}/M$ for pure bending).")
     else:
         lam = "infinite" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.2f}"
-        st.success(f"**Uncracked** under the total load - peak concrete tension "
-                   f"{e['sigma_ct']:.2f} MPa < $f_{{ctm}}$ {e['fctm']:.2f} MPa "
-                   f"($\\lambda_{{cr}}$ = {lam}).")
+        st.success(f"**Uncracked** - peak concrete tension {e['sigma_ct']:.2f} MPa "
+                   f"< $f_{{ctm}}$ {e['fctm']:.2f} MPa under both the long-term and "
+                   f"the total action ($\\lambda_{{cr}}$ = {lam}).")
 
     st.metric(r"Cracking factor $\lambda_{cr}$",
               "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
-              help="Proportional load factor to first cracking under the total "
-                   "(long + short) load, fctm / sigma_ct,I (= Mcr/M in pure "
-                   "bending). < 1 = cracked.")
+              help="Proportional load factor to first cracking, fctm / sigma_ct,I "
+                   "(= Mcr/M in pure bending), taken as the governing (smaller) of "
+                   "the long-term and total actions. < 1 = cracked.")
 
     pL, pR = st.columns(2)
     with pL:

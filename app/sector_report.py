@@ -657,8 +657,8 @@ class ReportBuilder:
         el = self.out["elastic"]
         self._h1("Cracked-section elastic stresses")
         state = "cracked" if el.get("cracked") else "uncracked"
-        self._p(f"Under the total (long + short) action the section is "
-                f"<b>{state}</b>. Neutral-axis intercepts: "
+        self._p(f"The section is <b>{state}</b> (governing of the long-term and "
+                f"total actions). Neutral-axis intercepts: "
                 f"x<sub>na</sub> = {_fmt(el['na_x']*_MM,0)} mm, "
                 f"y<sub>na</sub> = {_fmt(el['na_y']*_MM,0)} mm.")
         ps = el.get("prestress")
@@ -742,9 +742,9 @@ class ReportBuilder:
                             f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'),2)} MPa",
                       result=f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
                              f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)")
-        self._small("Evaluated under the total (long + short) action: cracking is "
-                    "triggered by the peak load the section sees, and is "
-                    "irreversible.")
+        self._small("Governing of the long-term and total (long + short) actions: "
+                    "cracking is triggered by the peak tension the section sees, and "
+                    "is irreversible.")
         if not el.get("show_cw"):
             self._small("Crack width was not requested for this run.")
             return
