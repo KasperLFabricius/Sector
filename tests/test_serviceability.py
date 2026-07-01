@@ -294,6 +294,40 @@ def test_ec2_2023_hc_eff_covers_multiple_tension_layers():
     assert cw2.hc_ef > cw1.hc_ef
 
 
+def test_ec2_2023_hc_eff_ignores_bars_above_the_neutral_axis():
+    # An externally supplied combined-creep state can leave a compression-side bar
+    # (above the NA) with a small positive residual stress. That bar must not be
+    # counted as an effective tension layer: hc,eff and rho_p,eff must be identical
+    # whether its stress is left compressive or forced positive (the per-bar loop
+    # skips it either way, so the layer set must too).
+    import dataclasses
+    from sector.serviceability import _depth_axis, crack_width
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.10, 0.05, 491.0), (0.20, 0.05, 491.0),
+                          (0.15, 0.55, 491.0)],   # third bar near the compression face
+    )
+    r = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                         bar_diameter=16.0, edition="2023")
+    st = r.cracked_state
+    gx, gy, mag = _depth_axis(st.kx, st.ky)
+    bx, by, _ = sec.bar_arrays()
+    verts = sec.concrete_vertices()
+    s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
+    ay = s_tface - (bx * gx + by * gy)
+    hx = s_tface - (-st.eps0 / mag)
+    top = int(np.argmax(ay))
+    assert ay[top] > hx                       # the third bar really is above the NA
+
+    ref = crack_width(sec, st, 6.0, fctm=fctm(30.0), bar_diameter=16.0, edition="2023")
+    bs = st.bar_stress.copy()
+    bs[top] = +50_000.0                        # +50 MPa spurious residual (kN/m^2 units)
+    pos = crack_width(sec, dataclasses.replace(st, bar_stress=bs), 6.0,
+                      fctm=fctm(30.0), bar_diameter=16.0, edition="2023")
+    assert pos.hc_ef == pytest.approx(ref.hc_ef)
+    assert pos.rho_p_eff == pytest.approx(ref.rho_p_eff)
+
+
 def test_ec2_2023_and_2004_crack_widths_are_the_same_order():
     # The 2023 refined model gives a crack width in the same range as the 2004 model
     # (a different formula, not a different answer by an order of magnitude).

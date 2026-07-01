@@ -396,7 +396,14 @@ def _crack_width_2023(
         return None
     s_bars = bx * gx + by * gy
     ay = s_tface - s_bars               # distance from the tension face to each bar (m)
-    gov0 = int(np.argmax(sigma))
+    # Effective layers: bars that are in tension (Stage II stress) AND geometrically
+    # below the neutral axis. An externally supplied combined-creep state can leave a
+    # bar above the NA with a small positive residual stress; the per-bar loop skips
+    # it (denom <= 0), so it must not expand hc,eff / dilute rho_p,eff either.
+    tens = (sigma > 0.0) & (ay < hx)
+    if not tens.any():
+        return None
+    gov0 = int(np.argmax(np.where(tens, sigma, -np.inf)))   # governing tension bar
 
     def _phi(i):
         if bar_diameter is not None and bar_diameter > 0.0:
@@ -409,9 +416,8 @@ def _crack_width_2023(
     # several layers is covered -- the general form of the n-layer +(n-1)*sy term
     # (which is zero for a single layer). The result is capped at h-x and h/2.
     phi_gov_m = _phi(gov0) / 1000.0
-    ay_tens = ay[sigma > 0.0]
-    ay_near = float(ay_tens.min())              # bars nearest the tension face
-    ay_far = float(ay_tens.max())               # deepest tension bars
+    ay_near = float(ay[tens].min())             # bars nearest the tension face
+    ay_far = float(ay[tens].max())              # deepest tension bars
     base = min(ay_near + 5.0 * phi_gov_m, 10.0 * phi_gov_m, 3.5 * ay_near)
     hc_ef = min(base + (ay_far - ay_near), hx, h / 2.0)
     if hc_ef <= 0.0:
