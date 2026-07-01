@@ -774,6 +774,7 @@ def _latex_to_rl(s: str) -> str:
     for c in (r"\left", r"\right", r"\!", r"\,", r"\;"):
         s = s.replace(c, "")
     s = s.replace(r"\qquad", "&nbsp;&nbsp;&nbsp;").replace(r"\quad", "&nbsp;&nbsp;")
+    s = re.sub(r"\\text\{([^{}]*)\}", r"\1", s)   # \text{label} -> label
     # Brace-form sub/superscripts first, so the fraction args are brace-free.
     s = re.sub(r"_\{([^{}]*)\}", r"<sub>\1</sub>", s)
     s = re.sub(r"\^\{([^{}]*)\}", r"<super>\1</super>", s)

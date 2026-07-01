@@ -169,6 +169,10 @@ def test_latex_to_rl_converts_the_subset():
     assert "frac" not in nested and "\\" not in nested
     assert nested.endswith("/E<sub>s</sub>")             # outer division survived
 
+    # \text{...} labels (e.g. the prestress total strain) keep their content.
+    txt = manual._latex_to_rl(r"\varepsilon_c(\text{tendon})")
+    assert "(tendon)" in txt and "texttendon" not in txt and "\\" not in txt
+
 
 def test_manual_pdf_builds_tables_only():
     # Build without the Plotly-to-PNG export (no kaleido/browser needed): a valid,
