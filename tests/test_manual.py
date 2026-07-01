@@ -148,6 +148,76 @@ def test_part_b_documents_the_panels_and_options():
         assert token in text, token
 
 
+def test_latex_to_rl_converts_the_subset():
+    # The PDF converter turns the LaTeX subset into ReportLab markup: Greek and
+    # operators to entities, sub/superscripts to tags, fractions to a/b, and it
+    # leaves no raw LaTeX punctuation behind.
+    out = manual._latex_to_rl(
+        r"\varphi = \min\!\left(\frac{\varepsilon_{cu2}}{c},\; "
+        r"\frac{\varepsilon_{ud}}{s_{na}-s_{bar,min}}\right)^{2}")
+    assert "&#966;" in out and "&#949;" in out            # phi, eps -> entities
+    assert "<sub>cu2</sub>" in out and "<super>2</super>" in out
+    assert "(s<sub>na</sub>-s<sub>bar,min</sub>)" in out  # compound denom parenthesised
+    assert "min(" in out
+    assert "\\" not in out and "{" not in out and "}" not in out  # nothing left over
+
+    # A nested fraction (the EC2 7.9 mean strain has a tfrac inside the frac
+    # numerator) must flatten fully -- no leftover 'frac' or backslash.
+    nested = manual._latex_to_rl(
+        r"\frac{\sigma_s - k_t\,\tfrac{f_{ct,eff}}{\rho_{p,eff}}(1+\alpha_e"
+        r"\rho_{p,eff})}{E_s}")
+    assert "frac" not in nested and "\\" not in nested
+    assert nested.endswith("/E<sub>s</sub>")             # outer division survived
+
+    # \text{...} labels (e.g. the prestress total strain) keep their content.
+    txt = manual._latex_to_rl(r"\varepsilon_c(\text{tendon})")
+    assert "(tendon)" in txt and "texttendon" not in txt and "\\" not in txt
+
+
+def test_display_equation_tolerates_trailing_punctuation():
+    # A display equation with punctuation outside the closing $$ must still render
+    # as centred math (MMath), not fall through to a body paragraph with stray $.
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import Paragraph
+    styles = getSampleStyleSheet()
+    for nm in ("MBody", "MMath"):
+        if nm not in styles.byName:
+            styles.add(ParagraphStyle(name=nm, parent=styles["Normal"]))
+    flow = []
+    manual._render_md_pdf(r"$$w_k = s_{r,max}\,\varepsilon$$.", flow, styles, Paragraph)
+    assert len(flow) == 1
+    assert flow[0].style.name == "MMath"
+    assert "$" not in flow[0].text and flow[0].text.endswith(".")
+
+
+def test_manual_pdf_has_no_stray_dollar_delimiters():
+    # No display equation should leak $ into the PDF (i.e. none fell through the
+    # display-math detection to inline rendering).
+    pytest.importorskip("fitz")
+    import fitz
+    pdf = manual.build_manual_pdf_bytes(figures=False)
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    text = "\n".join(doc[i].get_text() for i in range(doc.page_count))
+    assert "$" not in text
+
+
+def test_call_with_timeout_guards_slow_and_failing_work():
+    # The PDF build runs both the kaleido server startup and each figure render
+    # through this guard, so a wedged browser cannot hang the build.
+    import time
+    assert manual._call_with_timeout(lambda: 42, 5) == 42
+    assert manual._call_with_timeout(lambda: 1 / 0, 5) is None           # error -> None
+    assert manual._call_with_timeout(lambda: time.sleep(2), 0.2) is manual._FIG_TIMED_OUT
+
+
+def test_manual_pdf_builds_tables_only():
+    # Build without the Plotly-to-PNG export (no kaleido/browser needed): a valid,
+    # non-trivial PDF over all the content blocks.
+    pdf = manual.build_manual_pdf_bytes(figures=False)
+    assert pdf[:4] == b"%PDF"
+    assert len(pdf) > 8000
+
+
 def test_manual_opens_from_the_sidebar_button():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()

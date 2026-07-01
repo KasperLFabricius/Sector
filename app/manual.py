@@ -22,11 +22,14 @@ the same small subset to its own markup.
 
 from __future__ import annotations
 
+import io
 import re
+import threading
 
 import plotly.graph_objects as go
 import streamlit as st
 
+from sector import __version__ as APP_VERSION
 from sector import templates
 from sector.codes import fctm
 from sector.materials import Concrete, MildSteel, Prestress
@@ -749,6 +752,279 @@ def manual_blocks() -> list:
 
 
 # ==========================================================================
+# PDF RENDERER -- same content blocks, rendered with ReportLab
+# ==========================================================================
+# The in-app content uses Markdown + LaTeX (KaTeX). For the PDF the small, known
+# subset used here is converted to ReportLab's HTML-like markup: Greek and
+# operators become numeric entities, sub/superscripts become <sub>/<super>, and
+# fractions become an inline ``a/b`` (parenthesised when compound).
+
+_LATEX_CMD = {
+    r"\varepsilon": "&#949;", r"\gamma": "&#947;", r"\sigma": "&#963;",
+    r"\varphi": "&#966;", r"\alpha": "&#945;", r"\rho": "&#961;",
+    r"\lambda": "&#955;", r"\phi": "&#966;", r"\eta": "&#951;",
+    r"\Delta": "&#916;", r"\le": "&#8804;", r"\ge": "&#8805;",
+    r"\times": "&#215;", r"\cdot": "&#183;", r"\approx": "&#8776;",
+    r"\pm": "&#177;", r"\sum": "&#931;",
+}
+
+
+def _latex_to_rl(s: str) -> str:
+    """Convert the LaTeX subset used in the manual to ReportLab inline markup."""
+    for c in (r"\left", r"\right", r"\!", r"\,", r"\;"):
+        s = s.replace(c, "")
+    s = s.replace(r"\qquad", "&nbsp;&nbsp;&nbsp;").replace(r"\quad", "&nbsp;&nbsp;")
+    s = re.sub(r"\\text\{([^{}]*)\}", r"\1", s)   # \text{label} -> label
+    # Brace-form sub/superscripts first, so the fraction args are brace-free.
+    s = re.sub(r"_\{([^{}]*)\}", r"<sub>\1</sub>", s)
+    s = re.sub(r"\^\{([^{}]*)\}", r"<super>\1</super>", s)
+
+    def _frac(m):
+        wrap = lambda x: "(" + x + ")" if re.search(r"[ +\-]", x) else x
+        return wrap(m.group(1)) + "/" + wrap(m.group(2))
+
+    # Iterate to a fixed point so a nested fraction (an inner tfrac inside the
+    # numerator of an outer frac) is fully flattened: the inner one goes first,
+    # which leaves the outer args brace-free for the next pass.
+    while True:
+        flat = re.sub(r"\\t?frac\{([^{}]*)\}\{([^{}]*)\}", _frac, s)
+        if flat == s:
+            break
+        s = flat
+    for k in sorted(_LATEX_CMD, key=len, reverse=True):
+        s = s.replace(k, _LATEX_CMD[k])
+    s = re.sub(r"\\(min|max|ln|log)\b", r"\1", s)
+    s = re.sub(r"_([A-Za-z0-9])", r"<sub>\1</sub>", s)
+    s = re.sub(r"\^([A-Za-z0-9])", r"<super>\1</super>", s)
+    return s.replace("{", "").replace("}", "").replace("\\", "")
+
+
+def _inline_md_to_rl(text: str) -> str:
+    """Inline Markdown (``**bold**``, ``$math$``) -> ReportLab inline markup.
+    The literal ``<``/``>``/``&`` are escaped first so the introduced tags stay
+    valid, then the math and bold spans reintroduce real markup."""
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = re.sub(r"\$([^$]+)\$", lambda m: _latex_to_rl(m.group(1)), text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
+    return text
+
+
+def _render_md_pdf(text, flow, styles, Paragraph):
+    """Render a Markdown block (paragraphs, ``- ``/``1.`` lists, standalone
+    ``$$display$$`` formulas) to ReportLab flowables."""
+    buf = []
+
+    def flush():
+        if buf:
+            flow.append(Paragraph(_inline_md_to_rl(" ".join(buf).strip()),
+                                  styles["MBody"]))
+            buf.clear()
+
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s:
+            flush()
+            continue
+        # A standalone display equation, tolerating trailing sentence punctuation
+        # outside the closing ``$$`` so it still renders as centred math.
+        m_disp = re.match(r"^\$\$(.+)\$\$([.,;:]?)$", s)
+        if m_disp:
+            flush()
+            body = _latex_to_rl(m_disp.group(1).strip()) + m_disp.group(2)
+            flow.append(Paragraph(body, styles["MMath"]))
+            continue
+        mb = re.match(r"^[-*]\s+(.*)", s)
+        mn = re.match(r"^(\d+)\.\s+(.*)", s)
+        if mb:
+            flush()
+            flow.append(Paragraph("&bull;&nbsp; " + _inline_md_to_rl(mb.group(1)),
+                                  styles["MBody"]))
+        elif mn:
+            flush()
+            flow.append(Paragraph(f"{mn.group(1)}.&nbsp; "
+                                  + _inline_md_to_rl(mn.group(2)), styles["MBody"]))
+        else:
+            buf.append(s)
+    flush()
+
+
+_FIG_EXPORT_TIMEOUT_S = 30.0
+_FIG_TIMED_OUT = object()
+
+
+def _png_size(png):
+    return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
+def _call_with_timeout(fn, timeout):
+    """Run ``fn()`` in a daemon thread, returning its result (``None`` on error)
+    or the ``_FIG_TIMED_OUT`` sentinel if it does not finish within ``timeout``.
+
+    kaleido's browser export -- both the shared-server startup and each figure
+    render -- can block indefinitely when the headless browser is in a bad state,
+    so it runs off the main thread with a join timeout; the PDF then still
+    completes (with placeholders) instead of hanging the app."""
+    box = {}
+
+    def _work():
+        try:
+            box["v"] = fn()
+        except Exception:
+            box["v"] = None
+
+    worker = threading.Thread(target=_work, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        return _FIG_TIMED_OUT
+    return box.get("v")
+
+
+def _fig_to_png(fig_callable, timeout=_FIG_EXPORT_TIMEOUT_S):
+    """Render a manual figure to PNG bytes, ``None`` on failure, or the
+    ``_FIG_TIMED_OUT`` sentinel if kaleido does not finish in ``timeout``."""
+    def _render():
+        buf = io.BytesIO()
+        fig_callable().write_image(buf, format="png", scale=2)
+        return buf.getvalue()
+
+    return _call_with_timeout(_render, timeout)
+
+
+def build_manual_pdf(buffer, figures=True):
+    """Render the manual to ``buffer`` as a PDF over the same content blocks.
+
+    ``figures=False`` skips the Plotly-to-PNG export (used by the tests, and a
+    graceful fallback when kaleido or a browser is unavailable)."""
+    import sector_report as report
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (Image, KeepTogether, Paragraph, SimpleDocTemplate,
+                                    Spacer, Table, TableStyle)
+
+    report._styles()                 # ensure the Greek-capable font is registered
+    font, font_b = report._FONT, report._FONT_BOLD
+    styles = getSampleStyleSheet()
+
+    def _add(name, **kw):
+        if name not in styles.byName:
+            styles.add(ParagraphStyle(name=name, parent=styles["Normal"], **kw))
+
+    _add("MTitle", fontSize=20, spaceAfter=6, fontName=font_b)
+    _add("MPart", fontSize=17, spaceBefore=18, spaceAfter=8, fontName=font_b,
+         textColor=colors.HexColor("#0d2440"))
+    _add("MH1", fontSize=15, spaceBefore=14, spaceAfter=6, fontName=font_b,
+         textColor=colors.HexColor("#1f3b66"))
+    _add("MH2", fontSize=12.5, spaceBefore=9, spaceAfter=4, fontName=font_b)
+    _add("MH3", fontSize=11, spaceBefore=6, spaceAfter=3, fontName=font_b)
+    _add("MBody", fontSize=9.5, leading=13, spaceAfter=4, fontName=font)
+    _add("MMath", fontSize=11, leading=15, alignment=TA_CENTER, spaceBefore=6,
+         spaceAfter=6, fontName=font)
+    _add("MSmall", fontSize=8, leading=10, textColor=colors.grey, fontName=font)
+
+    page_w = 16.5 * cm
+    flow = [
+        Paragraph("Sector user manual", styles["MTitle"]),
+        Paragraph(f"Version {APP_VERSION}", styles["MSmall"]),
+        Spacer(1, 0.3 * cm),
+        Paragraph("What Sector computes, the theory it applies, its features, and "
+                  "how to use it.", styles["MBody"]),
+        Spacer(1, 0.4 * cm),
+    ]
+
+    # One shared kaleido server for all figures. Start it behind the same timeout
+    # as the figure renders, so a wedged browser startup cannot hang the build;
+    # if it times out, drop to tables-only. Skipped entirely when figures are off.
+    n1 = n2 = 0
+    figures_hung = False
+    if figures:
+        if _call_with_timeout(report.ensure_image_server,
+                              _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
+            figures_hung = True
+    for block in manual_blocks():
+        kind = block[0]
+        if kind == "part":
+            flow.append(Spacer(1, 0.3 * cm))
+            flow.append(Paragraph(_inline_md_to_rl(block[1]), styles["MPart"]))
+            n1 = n2 = 0
+        elif kind == "h1":
+            n1 += 1
+            n2 = 0
+            flow.append(Paragraph(f"{n1}. " + _inline_md_to_rl(_strip_num(block[1])),
+                                  styles["MH1"]))
+        elif kind == "h2":
+            n2 += 1
+            flow.append(Paragraph(f"{n1}.{n2} "
+                                  + _inline_md_to_rl(_strip_num(block[1])), styles["MH2"]))
+        elif kind == "h3":
+            flow.append(Paragraph(_inline_md_to_rl(_strip_num(block[1])), styles["MH3"]))
+        elif kind == "md":
+            _render_md_pdf(block[1], flow, styles, Paragraph)
+        elif kind == "callout":
+            _icon, ttl = _CALLOUT.get(block[1], ("", "Note"))
+            inner = Paragraph(f"<b>{ttl}:</b> " + _inline_md_to_rl(block[2]),
+                              styles["MBody"])
+            t = Table([[inner]], colWidths=[page_w])
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eef2f7")),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#9fb3c8")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+            flow.append(KeepTogether([t]))
+            flow.append(Spacer(1, 0.15 * cm))
+        elif kind == "figure":
+            png = None
+            if figures and not figures_hung:
+                png = _fig_to_png(block[1])
+                if png is _FIG_TIMED_OUT:
+                    figures_hung = True   # kaleido wedged: skip the rest promptly
+                    png = None
+            if png:
+                w, h = _png_size(png)
+                img_h = page_w * (h / w) if w else 8 * cm
+                flow.append(KeepTogether([
+                    Image(io.BytesIO(png), width=page_w, height=img_h),
+                    Paragraph(block[2], styles["MSmall"])]))
+            else:
+                flow.append(Paragraph(f"[figure unavailable] {block[2]}",
+                                      styles["MSmall"]))
+            flow.append(Spacer(1, 0.2 * cm))
+        elif kind == "table":
+            headers, rows = block[1], block[2]
+            ncol = len(headers)
+            data = [[Paragraph(f"<b>{_inline_md_to_rl(h)}</b>", styles["MSmall"])
+                     for h in headers]]
+            data += [[Paragraph(_inline_md_to_rl(str(c)), styles["MSmall"]) for c in row]
+                     for row in rows]
+            t = Table(data, colWidths=[page_w / ncol] * ncol)
+            t.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+            flow.append(t)
+            flow.append(Spacer(1, 0.2 * cm))
+
+    footer = f"Sector v{APP_VERSION} - user manual"
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2.2 * cm,
+                            rightMargin=2.2 * cm, topMargin=2 * cm, bottomMargin=2 * cm,
+                            title=f"Sector user manual v{APP_VERSION}")
+    doc.build(flow, canvasmaker=lambda *a, **k: report._NumberedCanvas(
+        *a, footer=footer, **k))
+
+
+def build_manual_pdf_bytes(figures=True):
+    buf = io.BytesIO()
+    build_manual_pdf(buf, figures=figures)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ==========================================================================
 # STREAMLIT RENDERER
 # ==========================================================================
 
@@ -758,10 +1034,22 @@ def render_manual_streamlit():
     Mirrors the Quick Section builder: a session flag (``_manual_open``) makes the
     app render this instead of the normal views. A *Back* button closes it.
     """
-    top = st.columns([1, 5])[0]
-    if top.button("Back", use_container_width=True, key="manual_back"):
+    c_back, c_gen, c_dl, _ = st.columns([1, 1, 1, 3])
+    if c_back.button("Back", use_container_width=True, key="manual_back"):
         st.session_state["_manual_open"] = False
         st.rerun()
+    if c_gen.button("Generate PDF", use_container_width=True, key="manual_gen_pdf"):
+        with st.spinner("Building the PDF manual..."):
+            try:
+                st.session_state["manual_pdf"] = build_manual_pdf_bytes()
+            except Exception as e:                       # never break the viewport
+                st.session_state["manual_pdf"] = None
+                st.error(f"PDF build failed: {e}")
+    if st.session_state.get("manual_pdf"):
+        c_dl.download_button("Download PDF", st.session_state["manual_pdf"],
+                             file_name="Sector_User_Manual.pdf",
+                             mime="application/pdf", use_container_width=True,
+                             key="manual_dl_pdf")
 
     st.markdown("# Sector user manual")
     st.caption("What Sector computes, the theory it applies, its features, and how "
