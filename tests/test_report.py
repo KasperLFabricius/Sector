@@ -101,6 +101,18 @@ def test_report_crack_worked_uses_the_governing_case():
     assert "governing case (long-term)" not in txt
 
 
+def test_report_wide_spacing_shows_geometric_formula():
+    # A 2004 wide-spacing result carries sr_max as Eq (7.14) = 1.3(h-x); the worked
+    # example must render (7.14), not the (7.11) close-centre formula it can't
+    # reproduce.
+    out = _out()
+    out["elastic"]["crack"] = dict(_crack(), sr_max_geometric=True)
+    out["elastic"]["crack_short"] = dict(_crack(), sr_max_geometric=True)
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "(7.14)" in txt
+    assert "close centres" in txt
+
+
 def test_report_coarse_crack_system_shows_half_factor():
     # The DK NA coarse crack system halves wk; the report's Eq (7.8) shows the 1/2
     # factor and the crack-code note flags the centroid-matched effective area.

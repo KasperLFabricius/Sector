@@ -230,6 +230,154 @@ def test_ec2_2023_kfl_responds_to_n_mult():
     assert base.sigma_s == pytest.approx(mult.sigma_s)           # state fixed -> sigma_s same
 
 
+def test_ec2_2004_wide_spacing_assigns_geometric_spacing():
+    # A single bar in a wide section (not at close centres): EC2 (7.14) assigns the
+    # crack spacing as 1.3*(h-x) directly. Here (7.11) is the larger value, so the
+    # assignment reads as a reduction from the close-centre formula.
+    from sector.serviceability import _depth_axis
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.5, 0.0), (0.5, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.25, 0.05, 314.0)],
+    )
+    r = analyse_cracking(sec, 0.0, 120.0, 0.0, 6.0, fctm=fctm(30.0), bar_diameter=20.0)
+    assert r.cracked
+    cw = r.crack
+    eq711 = 3.4 * cw.cover + 0.8 * 0.5 * 0.425 * cw.phi / cw.rho_p_eff  # Eq (7.11)
+    assert cw.sr_max < eq711                                   # (7.14) is smaller here
+    gx, gy, mag = _depth_axis(r.cracked_state.kx, r.cracked_state.ky)
+    verts = sec.concrete_vertices()
+    s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
+    hx = s_tface - (-r.cracked_state.eps0 / mag)               # h - x, m
+    assert cw.sr_max == pytest.approx(1.3 * hx * 1000.0, rel=1e-6)
+    assert cw.sr_max_geometric is True
+
+
+def test_ec2_2004_wide_spacing_uses_geometric_even_when_711_smaller():
+    # For a wide/isolated bar EC2 (7.14) is the ASSIGNED spacing, not merely an upper
+    # cap: an isolated bar in a deep tension zone with a high reinforcement ratio has
+    # (7.11) far below 1.3*(h-x), yet the wide-spacing case must still report 1.3*(h-x)
+    # (the old min() branch under-reported wk here).
+    from sector.serviceability import _depth_axis
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.4, 0.0), (0.4, 1.2), (0.0, 1.2)],
+        bars_xy_area_mm2=[(0.20, 0.06, 4000.0)],
+    )
+    r = analyse_cracking(sec, 0.0, 400.0, 0.0, 6.0, fctm=fctm(30.0),
+                         bar_diameter=16.0, cover=30.0)
+    assert r.cracked
+    cw = r.crack
+    eq711 = 3.4 * cw.cover + 0.8 * 0.5 * 0.425 * cw.phi / cw.rho_p_eff  # Eq (7.11)
+    gx, gy, mag = _depth_axis(r.cracked_state.kx, r.cracked_state.ky)
+    verts = sec.concrete_vertices()
+    s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
+    hx = s_tface - (-r.cracked_state.eps0 / mag)               # h - x, m
+    assert eq711 < 1.3 * hx * 1000.0                           # (7.11) is the smaller value
+    assert cw.sr_max == pytest.approx(1.3 * hx * 1000.0, rel=1e-6)   # yet (7.14) is assigned
+    assert cw.sr_max_geometric is True
+
+
+def test_ec2_2004_close_spacing_keeps_full_crack_spacing():
+    # EC2 (7.14)'s 1.3*(h-x) bound is the ALTERNATIVE for bars NOT at close centres
+    # (7.3.4(3)). Two closely-spaced bars (40 mm apart) with a large cover in a
+    # shallow-tension section give a large (7.11) spacing while 1.3*(h-x) is small;
+    # the bound must NOT clip the close-spaced spacing (that was the mis-cap).
+    from sector.serviceability import _depth_axis
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (1.2, 0.0), (1.2, 0.25), (0.0, 0.25)],
+        bars_xy_area_mm2=[(0.58, 0.05, 201.0), (0.62, 0.05, 201.0)],
+    )
+    r = analyse_cracking(sec, 0.0, 40.0, 0.0, 6.0, fctm=fctm(30.0),
+                         bar_diameter=16.0, cover=80.0)
+    assert r.cracked
+    cw = r.crack
+    uncapped = 3.4 * cw.cover + 0.8 * 0.5 * 0.425 * cw.phi / cw.rho_p_eff  # Eq (7.11)
+    gx, gy, mag = _depth_axis(r.cracked_state.kx, r.cracked_state.ky)
+    verts = sec.concrete_vertices()
+    s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
+    hx = s_tface - (-r.cracked_state.eps0 / mag)                # h - x, m
+    assert 1.3 * hx * 1000.0 < uncapped                        # cap WOULD bite if applied
+    assert cw.sr_max == pytest.approx(uncapped, rel=1e-6)      # but close spacing keeps (7.11)
+    assert cw.sr_max_geometric is False
+
+
+def test_ec2_2023_hc_eff_covers_multiple_tension_layers():
+    # Two tension layers (y = 0.05 and 0.10 m): hc,eff extends past the single-layer
+    # band by the layer spread, per the n-layer form of figure 9.3.
+    two = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.075, 0.05, 491.0), (0.225, 0.05, 491.0),
+                          (0.075, 0.10, 491.0), (0.225, 0.10, 491.0)],
+    )
+    one = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.075, 0.05, 491.0), (0.225, 0.05, 491.0)],
+    )
+    cw2 = analyse_cracking(two, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                           bar_diameter=16.0, edition="2023").crack
+    cw1 = analyse_cracking(one, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                           bar_diameter=16.0, edition="2023").crack
+    assert cw1.hc_ef == pytest.approx(0.13, abs=1e-3)          # single layer: ay+5phi
+    assert cw2.hc_ef == pytest.approx(0.18, abs=1e-3)          # + 0.05 m layer spread
+    assert cw2.hc_ef > cw1.hc_ef
+
+
+def test_ec2_2023_hc_eff_uses_near_face_layer_diameter():
+    # The hc,eff phi terms (ay+5phi, 10phi) must use the NEAR-FACE layer's diameter,
+    # not the maximum-stress bar's. With a small bar near the tension face and a large
+    # bar deeper, an externally supplied state where the deep bar carries the higher
+    # stress must still size hc,eff from the small near-face bar.
+    import dataclasses
+    from sector.serviceability import _depth_axis, crack_width
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.15, 0.04, 113.0), (0.15, 0.14, 804.0)],  # ~12 mm near, ~32 mm deep
+    )
+    st = analyse_cracking(sec, 0.0, 120.0, 0.0, 6.0, fctm=fctm(30.0),
+                          edition="2023").cracked_state
+    bs = st.bar_stress.copy()
+    bs[1] = bs[0] * 1.5                         # force the deep large bar to govern by stress
+    st2 = dataclasses.replace(st, bar_stress=bs)
+    auto = crack_width(sec, st2, 6.0, fctm=fctm(30.0), edition="2023")
+    near = crack_width(sec, st2, 6.0, fctm=fctm(30.0), edition="2023", bar_diameter=12.0)
+    deep = crack_width(sec, st2, 6.0, fctm=fctm(30.0), edition="2023", bar_diameter=32.0)
+    assert auto.hc_ef == pytest.approx(near.hc_ef, abs=1e-3)    # near-face (small) diameter
+    assert auto.hc_ef < deep.hc_ef                             # NOT the deep max-stress bar
+
+
+def test_ec2_2023_hc_eff_ignores_bars_above_the_neutral_axis():
+    # An externally supplied combined-creep state can leave a compression-side bar
+    # (above the NA) with a small positive residual stress. That bar must not be
+    # counted as an effective tension layer: hc,eff and rho_p,eff must be identical
+    # whether its stress is left compressive or forced positive (the per-bar loop
+    # skips it either way, so the layer set must too).
+    import dataclasses
+    from sector.serviceability import _depth_axis, crack_width
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.10, 0.05, 491.0), (0.20, 0.05, 491.0),
+                          (0.15, 0.55, 491.0)],   # third bar near the compression face
+    )
+    r = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                         bar_diameter=16.0, edition="2023")
+    st = r.cracked_state
+    gx, gy, mag = _depth_axis(st.kx, st.ky)
+    bx, by, _ = sec.bar_arrays()
+    verts = sec.concrete_vertices()
+    s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
+    ay = s_tface - (bx * gx + by * gy)
+    hx = s_tface - (-st.eps0 / mag)
+    top = int(np.argmax(ay))
+    assert ay[top] > hx                       # the third bar really is above the NA
+
+    ref = crack_width(sec, st, 6.0, fctm=fctm(30.0), bar_diameter=16.0, edition="2023")
+    bs = st.bar_stress.copy()
+    bs[top] = +50_000.0                        # +50 MPa spurious residual (kN/m^2 units)
+    pos = crack_width(sec, dataclasses.replace(st, bar_stress=bs), 6.0,
+                      fctm=fctm(30.0), bar_diameter=16.0, edition="2023")
+    assert pos.hc_ef == pytest.approx(ref.hc_ef)
+    assert pos.rho_p_eff == pytest.approx(ref.rho_p_eff)
+
+
 def test_ec2_2023_and_2004_crack_widths_are_the_same_order():
     # The 2023 refined model gives a crack width in the same range as the 2004 model
     # (a different formula, not a different answer by an order of magnitude).

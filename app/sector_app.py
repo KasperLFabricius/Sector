@@ -1516,7 +1516,8 @@ def _crack_dict(cw):
     return dict(wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm, sigma_s=cw.sigma_s,
                 rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff, hc_ef=cw.hc_ef,
                 phi=cw.phi, cover=cw.cover, gov_bar=cw.gov_bar + 1, coarse=cw.coarse,
-                edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl)
+                edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
+                sr_max_geometric=cw.sr_max_geometric)
 
 
 def run_analysis(inp):
