@@ -790,10 +790,20 @@ class ReportBuilder:
             self._crack_worked_2023(cw, code)
             return
         coarse = bool(cw.get("coarse"))
-        self._formula(
-            "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
-            "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
-            ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)")
+        if cw.get("sr_max_geometric"):
+            # Wide/isolated bars (spacing > 5(c+phi/2)): EC2 assigns the geometric
+            # spacing 1.3(h-x) directly (Eq 7.14), so the (7.11) formula would not
+            # reproduce the reported value.
+            self._formula(
+                "s<sub>r,max</sub> = 1.3&#183;(h - x)",
+                ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.14)",
+                subst="bars not at close centres (spacing &gt; 5(c + phi/2))",
+                result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0),1)} mm")
+        else:
+            self._formula(
+                "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
+                "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
+                ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)")
         self._formula(
             "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
             "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"

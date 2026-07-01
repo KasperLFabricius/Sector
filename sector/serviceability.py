@@ -83,6 +83,7 @@ class CrackWidthResult:
     kw: float = 1.0      # 2023 mean->characteristic factor (9.8); 1.0 for 2004
     k1_r: float = 1.0    # 2023 curvature factor k1/r (9.9); 1.0 for 2004
     kfl: float = 1.0     # 2023 flexural coefficient (9.16/9.17); 1.0 for 2004
+    sr_max_geometric: bool = False  # 2004 wide-spacing: sr_max is Eq (7.14) 1.3(h-x), not (7.11)
 
 
 @dataclass
@@ -334,7 +335,8 @@ def _crack_width(
         neigh = band_tens.copy()
         neigh[i] = False
         nn = float(np.min(np.abs(w_bars[neigh] - w_bars[i]))) if neigh.any() else math.inf
-        if nn * 1000.0 > 5.0 * (c_i + phi / 2.0):
+        geometric = nn * 1000.0 > 5.0 * (c_i + phi / 2.0)
+        if geometric:
             sr_max = 1.3 * (s_tface - s_na) * 1000.0                       # (7.14)
         else:
             sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho    # (7.11)
@@ -343,7 +345,7 @@ def _crack_width(
             best = CrackWidthResult(
                 wk=wk, sr_max=sr_max, esm_ecm=esm_ecm, sigma_s=sigma_s,
                 rho_p_eff=rho, ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, cover=c_i,
-                gov_bar=i, coarse=coarse,
+                gov_bar=i, coarse=coarse, sr_max_geometric=geometric,
             )
     return best
 

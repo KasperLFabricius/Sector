@@ -249,6 +249,7 @@ def test_ec2_2004_wide_spacing_assigns_geometric_spacing():
     s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
     hx = s_tface - (-r.cracked_state.eps0 / mag)               # h - x, m
     assert cw.sr_max == pytest.approx(1.3 * hx * 1000.0, rel=1e-6)
+    assert cw.sr_max_geometric is True
 
 
 def test_ec2_2004_wide_spacing_uses_geometric_even_when_711_smaller():
@@ -272,6 +273,7 @@ def test_ec2_2004_wide_spacing_uses_geometric_even_when_711_smaller():
     hx = s_tface - (-r.cracked_state.eps0 / mag)               # h - x, m
     assert eq711 < 1.3 * hx * 1000.0                           # (7.11) is the smaller value
     assert cw.sr_max == pytest.approx(1.3 * hx * 1000.0, rel=1e-6)   # yet (7.14) is assigned
+    assert cw.sr_max_geometric is True
 
 
 def test_ec2_2004_close_spacing_keeps_full_crack_spacing():
@@ -295,6 +297,7 @@ def test_ec2_2004_close_spacing_keeps_full_crack_spacing():
     hx = s_tface - (-r.cracked_state.eps0 / mag)                # h - x, m
     assert 1.3 * hx * 1000.0 < uncapped                        # cap WOULD bite if applied
     assert cw.sr_max == pytest.approx(uncapped, rel=1e-6)      # but close spacing keeps (7.11)
+    assert cw.sr_max_geometric is False
 
 
 def test_ec2_2023_hc_eff_covers_multiple_tension_layers():
