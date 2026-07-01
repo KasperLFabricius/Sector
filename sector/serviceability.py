@@ -597,6 +597,46 @@ def analyse_cracking(
     )
 
 
+def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
+                      fctm, n_mult=None, prestress_stress=None):
+    """Cracking check under the combined creep (peak instantaneous) state.
+
+    The peak uncracked concrete tension is the long-term action at the long-term
+    modular ratio ``n_l`` superposed with the short-term action at the short-term
+    ratio ``n_s`` -- the effective-modulus treatment used by
+    :func:`sector.elastic.solve_elastic_combined`, so the decision is consistent
+    with the reported Total/RST1 stresses (rather than solving the raw summed load
+    at a single ratio). Returns ``(cracked, lambda_cr, sigma_ct)``: ``sigma_ct`` is
+    the peak concrete tension (MPa) and ``lambda_cr = f_ctm/sigma_ct`` (or the
+    decompression factor with prestress), mirroring :func:`analyse_cracking`.
+    """
+    verts = section.concrete_vertices()
+
+    def _sig(P, Mx, My, n, pre):
+        u = solve_elastic_uncracked(section, P, Mx, My, n, n_mult=n_mult,
+                                    prestress_stress=pre)
+        return (u.eps0 + u.kx * verts[:, 0] + u.ky * verts[:, 1]) / _KPA_PER_MPA
+
+    sig_l = _sig(P_l, Mx_l, My_l, n_l, prestress_stress)   # long total (ext + prestress)
+    sig_s = _sig(P_s, Mx_s, My_s, n_s, None)               # short external increment
+    sigma_ct = float((sig_l + sig_s).max())                # peak tension, MPa
+    if prestress_stress is None:
+        lam = cracking_factor(sigma_ct, fctm)
+    else:
+        # Decompression: only the external actions are factored (the prestress is a
+        # fixed permanent action). Matches analyse_cracking's prestress branch, with
+        # the external part taken as long@n_l + short@n_s.
+        sig_l_ext = _sig(P_l, Mx_l, My_l, n_l, None)
+        sig_pre = sig_l - sig_l_ext                        # prestress alone
+        sig_ext = sig_l_ext + sig_s                        # total external
+        loaded = sig_ext > 1.0e-9
+        lam = (float(np.min((fctm - sig_pre[loaded]) / sig_ext[loaded]))
+               if np.any(loaded) else math.inf)
+    cracked = lam < 1.0
+    lam = max(0.0, lam) if math.isfinite(lam) else lam
+    return cracked, lam, sigma_ct
+
+
 def crack_width(
     section: Section,
     cracked_state: ElasticResult,

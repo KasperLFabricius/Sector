@@ -1572,9 +1572,10 @@ def test_elastic_view_renders_with_sls_subsection():
     assert not at.exception
 
 
-def test_cracking_follows_the_long_term_load():
-    # The SLS checks run on the long-term load: raising it crosses from uncracked
-    # to cracked.
+def test_cracking_follows_the_total_load():
+    # The cracking decision is on the total load. With no short-term load the total
+    # equals the long-term load, so raising the long-term moment crosses from
+    # uncracked to cracked.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
@@ -1584,6 +1585,61 @@ def test_cracking_follows_the_long_term_load():
     at.number_input(key="el_long_Mx").set_value(400.0).run()
     at.button(key="calculate").click().run()
     assert at.session_state["results"]["elastic"]["cracked"] is True
+
+
+def test_short_term_load_triggers_cracking():
+    # A section uncracked under the long-term load alone but cracked under the total
+    # (long + short) load must be reported as cracked, with a crack width computed --
+    # cracking is triggered by the peak load and is irreversible.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(5.0).run()     # uncracked alone
+    at.number_input(key="el_short_Mx").set_value(400.0).run()  # cracks the total
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["cracked"] is True                    # cracked by the short-term peak
+    assert e["lambda_cr"] < 1.0
+    # Both crack widths are reported: the quasi-permanent (long-term) one for the
+    # code limit and the short-term one under the peak.
+    assert e["crack"] is not None and e["crack"]["wk"] > 0.0
+    assert e["crack_short"] is not None and e["crack_short"]["wk"] > 0.0
+
+
+def test_cracked_properties_use_the_governing_load_when_long_term_is_zero():
+    # With no long-term load, the section is cracked only by the short-term peak. The
+    # cracked transformed properties must come from that (governing) cracked state,
+    # not the degenerate zero-long-term solve (which would keep the full section).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(0.0).run()
+    at.number_input(key="el_short_Mx").set_value(400.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["cracked"] is True
+    assert e["props_cr"] is not None
+    assert e["props_cr"]["area"] < e["props_un"]["area"]   # a real cracked section
+
+
+def test_counteracting_short_term_load_keeps_cracked():
+    # If the short-term action counteracts the sustained one so the total is
+    # uncracked, the section is still cracked (the long-term action already cracked
+    # it -- cracking is irreversible), and the long-term crack width is reported.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()    # cracks on its own
+    at.number_input(key="el_short_Mx").set_value(-380.0).run()  # total ~ 20, uncracked
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["cracked"] is True                    # cracked by the long-term action
+    assert e["crack"] is not None and e["crack"]["wk"] > 0.0
 
 
 def test_plain_elastic_unchanged_by_sls_toggle():

@@ -34,7 +34,8 @@ from sector import codes, geometry, kernels, material_presets as mp, templates  
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
-from sector.serviceability import analyse_cracking, crack_width  # noqa: E402
+from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
+                                   crack_width)
 
 # The tool version comes from the sector package (the single source of truth); it
 # shows in the title, the browser tab, the About panel and the report footer.
@@ -1616,6 +1617,14 @@ def run_analysis(inp):
         # (not a slab or a prestressed member) -- dropping the (h-x)/3 hc,ef term.
         dk_na = inp["sls_dk_na"]
         include_hx = (not dk_na) or inp["sls_member"] == "Slab" or bool(inp["tendons"])
+        # Cracking is irreversible and is triggered by the maximum load the section
+        # ever sees, so the section is cracked if EITHER the sustained (long-term) or
+        # the peak (total) action exceeds the cracking stress. The peak check uses
+        # the combined creep state (long @ nl superposed with short @ ns), matching
+        # the reported Total/RST1 stresses; a short-term action that counteracts the
+        # sustained one can leave the peak uncracked while the long-term already
+        # cracked, and vice versa. Report the governing (smallest lambda_cr) of the
+        # two.
         cr_l = analyse_cracking(
             sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
@@ -1623,24 +1632,49 @@ def run_analysis(inp):
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             coarse=inp["sls_coarse"], edition=inp["sls_edition"],
             n_mult=n_mult, prestress_stress=prestress_stress)
+        crk_t, lam_t, sig_t = combined_cracking(
+            sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
+            inp["P_el_s"], inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
+            fctm=inp["sls_fctm"], n_mult=n_mult, prestress_stress=prestress_stress)
+        # Governing case. Its cracked state (for the reported cracked properties) is
+        # the combined creep total state (r.short_term) when the peak strictly
+        # governs, or the long-term cracked state when the sustained action governs.
+        # Ties (e.g. no short-term load, where the peak reduces to the sustained
+        # check) go to the sustained state, so a long-term-only run keeps its nl
+        # cracked properties rather than the instantaneous combined state.
+        if lam_t < cr_l.lambda_cr:
+            cracked, lambda_cr, sigma_ct, gov_state = crk_t, lam_t, sig_t, r.short_term
+        else:
+            cracked, lambda_cr, sigma_ct = (cr_l.cracked, cr_l.lambda_cr,
+                                            cr_l.sigma_ct)
+            gov_state = cr_l.cracked_state
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
         props_cr = (transformed_properties(
-            sec, inp["nl"], eps0=cr_l.cracked_state.eps0, kx=cr_l.cracked_state.kx,
-            ky=cr_l.cracked_state.ky, cracked=True) if cr_l.cracked else None)
+            sec, inp["nl"], eps0=gov_state.eps0, kx=gov_state.kx, ky=gov_state.ky,
+            cracked=True) if cracked else None)
         out["elastic"].update(
-            cracked=cr_l.cracked, lambda_cr=cr_l.lambda_cr, sigma_ct=cr_l.sigma_ct,
-            fctm=cr_l.fctm, show_cw=inp["sls_cw"],
+            cracked=cracked, lambda_cr=lambda_cr, sigma_ct=sigma_ct,
+            fctm=inp["sls_fctm"], show_cw=inp["sls_cw"],
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
         )
         # Crack width is its own opt-in, reported for both load cases once the
-        # (quasi-permanent) section has cracked. The long-term state is the solve
-        # at nl above. The short-term state reuses the combined creep solve `r`:
-        # its instantaneous neutral axis with the displayed total steel stress
+        # section has cracked. The short-term state reuses the combined creep solve
+        # `r`: its instantaneous neutral axis with the displayed total steel stress
         # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
         # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
-        if inp["sls_cw"] and cr_l.cracked:
+        if inp["sls_cw"] and cracked:
+            # Long-term crack width on the cracked section under the quasi-permanent
+            # load (kt = 0.4). Computed directly from the long-term cracked state so
+            # it is reported even when the long-term load alone would not cross the
+            # cracking threshold (the section is cracked by the short-term peak).
+            cw_long = crack_width(sec, cr_l.cracked_state, inp["nl"],
+                                  fctm=inp["sls_fctm"], Es=inp["steel"].Es, kt=0.4,
+                                  bar_diameter=phi, k1=k1_bars,
+                                  k3_cover_dependent=dk_na, include_hx_term=include_hx,
+                                  coarse=inp["sls_coarse"], edition=inp["sls_edition"],
+                                  n_mult=n_mult)
             # Crack width uses the load-induced steel stress, so strip the locked-in
             # tendon prestress back out of the reported total (mild bars unaffected).
             cw_stress = np.asarray(r.bar_stress_total, dtype=float)
@@ -1653,7 +1687,7 @@ def run_analysis(inp):
                                    include_hx_term=include_hx, coarse=inp["sls_coarse"],
                                    edition=inp["sls_edition"], n_mult=n_mult)
             out["elastic"].update(
-                crack=_crack_dict(cr_l.crack), crack_short=_crack_dict(cw_short),
+                crack=_crack_dict(cw_long), crack_short=_crack_dict(cw_short),
                 crack_code=inp["sls_code"],
                 crack_member=(inp["sls_member"] if dk_na else None),
             )
@@ -1908,38 +1942,44 @@ def elastic_view(inp, results):
          "Dif": [round(s, 1) for s in e["dif"]],
          "RST1": [round(s, 1) for s in e["rst1"]]},
         hide_index=True, use_container_width=True, height=35 * (n + 1) + 3)
-    st.caption("Total = long+short; Long = long-term alone; Dif = total - "
-               "long; RST1 = instantaneous response with the long-term "
-               "concrete stresses neutralised.")
+    st.caption(
+        "**Total** = long + short  \n"
+        "**Long** = long-term alone  \n"
+        "**Dif** = total - long  \n"
+        "**RST1** = instantaneous response with the long-term concrete stresses "
+        "neutralised.")
 
     _elastic_sls_section(inp, e)
 
 
 def _elastic_sls_section(inp, e):
     """Serviceability sub-report inside the elastic view: the cracking threshold
-    and transformed section properties (always); tension stiffening and crack
-    width are independent opt-ins. The threshold, properties and tension
-    stiffening are on the long-term load; crack width is reported for both the
-    long-term and the short-term (instantaneous) load."""
+    and transformed section properties (always); crack width is an independent
+    opt-in. The cracking decision is on the *total* (long + short) load -- cracking
+    is triggered by the peak load the section ever sees and is irreversible -- while
+    the crack width is reported for both the long-term (quasi-permanent, the
+    code-limit case) and the short-term (instantaneous) load."""
     if "cracked" not in e:
         return
     show_cw = e.get("show_cw", False)
     st.divider()
     st.markdown("#### Serviceability checks")
     if e["cracked"]:
-        st.warning(f"**Cracked** under the long-term load - the uncracked concrete "
-                   f"tension reaches $f_{{ctm}}$ at a load factor $\\lambda_{{cr}}$ = "
-                   f"{e['lambda_cr']:.3f} (= $M_{{cr}}/M$ for pure bending).")
+        st.warning(f"**Cracked** - the uncracked concrete tension reaches $f_{{ctm}}$ "
+                   f"at a load factor $\\lambda_{{cr}}$ = {e['lambda_cr']:.3f} "
+                   f"(governing of the long-term and total actions; "
+                   f"= $M_{{cr}}/M$ for pure bending).")
     else:
         lam = "infinite" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.2f}"
-        st.success(f"**Uncracked** under the long-term load - peak concrete tension "
-                   f"{e['sigma_ct']:.2f} MPa < $f_{{ctm}}$ {e['fctm']:.2f} MPa "
-                   f"($\\lambda_{{cr}}$ = {lam}).")
+        st.success(f"**Uncracked** - peak concrete tension {e['sigma_ct']:.2f} MPa "
+                   f"< $f_{{ctm}}$ {e['fctm']:.2f} MPa under both the long-term and "
+                   f"the total action ($\\lambda_{{cr}}$ = {lam}).")
 
     st.metric(r"Cracking factor $\lambda_{cr}$",
               "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
-              help="Proportional load factor to first cracking, "
-                   "fctm / sigma_ct,I (= Mcr/M in pure bending). < 1 = cracked.")
+              help="Proportional load factor to first cracking, fctm / sigma_ct,I "
+                   "(= Mcr/M in pure bending), taken as the governing (smaller) of "
+                   "the long-term and total actions. < 1 = cracked.")
 
     pL, pR = st.columns(2)
     with pL:
