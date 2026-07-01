@@ -580,10 +580,14 @@ def manual_blocks() -> list:
        "none is driven past its limit:\n\n"
        "$$\\varphi = \\min\\!\\left(\\frac{\\varepsilon_{cu2}}{c},\\; "
        "\\frac{\\varepsilon_{ud}}{s_{na}-s_{bar,min}},\\; "
+       "\\frac{\\varepsilon_{ud}}{s_{bar,max}-s_{na}},\\; "
        "\\frac{\\varepsilon_{pud}-\\varepsilon_{p,IS}}{s_{na}-s_{cab,min}}\\right),$$\n\n"
-       "the three terms being concrete crushing, rupture of the most tensile mild "
-       "bar and rupture of the most tensile tendon (measured from its locked-in "
-       "strain). Whichever is smallest governs.")
+       "the four terms being concrete crushing, rupture of the most tensile mild "
+       "bar, rupture of the most **compressed** mild bar (only when the bars are "
+       "active in compression and their ultimate strain is below the concrete "
+       "crushing strain -- otherwise the concrete crushes first) and rupture of the "
+       "most tensile tendon (measured from its locked-in strain). Whichever is "
+       "smallest governs.")
     h2("Force resultants and equilibrium")
     md("The concrete compression force is the integral of $\\sigma_c$ over the "
        "compression zone. The parabola is split into its rising region and the "
