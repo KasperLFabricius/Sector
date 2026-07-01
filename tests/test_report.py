@@ -128,6 +128,21 @@ def test_report_dk_na_shows_fine_and_coarse_columns():
     assert "coarse" in txt.lower() and "fine" in txt.lower()   # both systems in the table
 
 
+def test_report_shows_coarse_only_results():
+    # DK NA edge case: the fine (h-x)/3 band has no tension bar but the coarse
+    # centroid-matched band does. The report must still show the coarse widths, not
+    # the "No crack width" message.
+    out = _out()
+    out["elastic"]["crack"] = None
+    out["elastic"]["crack_short"] = None
+    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True)
+    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True)
+    out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "No crack width" not in txt
+    assert "coarse" in txt.lower()
+
+
 def test_report_coarse_worked_shows_half_factor_when_it_governs():
     # When the coarse case has the largest wk it is the worked example, and Eq (7.8)
     # shows the 1/2 factor of the coarse crack system.

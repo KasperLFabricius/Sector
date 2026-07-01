@@ -750,7 +750,7 @@ class ReportBuilder:
             return
         cl, cs = el.get("crack"), el.get("crack_short")
         clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
-        if cl is None and cs is None:
+        if cl is None and cs is None and clc is None and csc is None:
             self._small("No crack width: the section is uncracked, or no bar is in "
                         "tension, under either the long-term or the short-term load.")
             return

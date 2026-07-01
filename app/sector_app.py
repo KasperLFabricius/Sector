@@ -2021,7 +2021,7 @@ def _crack_width_panel(e):
     cl, cs = e.get("crack"), e.get("crack_short")
     clc, csc = e.get("crack_coarse"), e.get("crack_short_coarse")
     st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
-    if cl is None and cs is None:
+    if cl is None and cs is None and clc is None and csc is None:
         st.info("No crack width: uncracked, or no bar in tension, under either "
                 "the long-term or the short-term load.")
         return
