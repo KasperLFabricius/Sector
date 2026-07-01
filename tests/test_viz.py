@@ -281,3 +281,16 @@ def test_prestress_figure_tension_only_labels_inputs():
     for sym in ("f<sub>p0.1k</sub>", "f<sub>pk</sub>", "E<sub>p</sub>",
                 "I<sub>S</sub>", _EPS + "<sub>ut</sub>"):
         assert sym in texts, sym
+
+
+def test_legends_sit_below_the_axis_titles():
+    # The horizontal legend must sit clear below the x-axis title (which has a
+    # small standoff), so the two do not overlap. Regression for the legend text
+    # colliding with the axis label.
+    inter = viz.interaction_figure([100.0, 0.0, -100.0], [0.0, 100.0, 0.0])
+    sect = viz.section_figure([(0.0, 0.0), (0.4, 0.0), (0.4, 0.6), (0.0, 0.6)],
+                              bars=[(0.2, 0.05)], scale=1000.0, unit="mm")
+    for fig in (inter, sect):
+        assert fig.layout.legend.y <= -0.2            # pushed below the axis title
+        assert fig.layout.margin.b >= 90              # room for title + legend
+        assert fig.layout.xaxis.title.standoff == 10  # title kept near the axis

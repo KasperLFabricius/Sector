@@ -74,6 +74,10 @@ def test_calculate_plastic_produces_an_envelope():
     assert "plastic" in res
     assert len(res["plastic"]["mx"]) > 0
     assert res["plastic"]["max_mx"] > 0  # a rectangle with bottom steel has +Mx capacity
+    # Both extremes are reported for each axis (Max and Min), and the min never
+    # exceeds the max.
+    pl = res["plastic"]
+    assert pl["min_mx"] <= pl["max_mx"] and pl["min_my"] <= pl["max_my"]
 
 
 def test_calculate_elastic_produces_bar_stresses():
