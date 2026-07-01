@@ -1608,6 +1608,23 @@ def test_short_term_load_triggers_cracking():
     assert e["crack_short"] is not None and e["crack_short"]["wk"] > 0.0
 
 
+def test_cracked_properties_use_the_governing_load_when_long_term_is_zero():
+    # With no long-term load, the section is cracked only by the short-term peak. The
+    # cracked transformed properties must come from that (governing) cracked state,
+    # not the degenerate zero-long-term solve (which would keep the full section).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(0.0).run()
+    at.number_input(key="el_short_Mx").set_value(400.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["cracked"] is True
+    assert e["props_cr"] is not None
+    assert e["props_cr"]["area"] < e["props_un"]["area"]   # a real cracked section
+
+
 def test_counteracting_short_term_load_keeps_cracked():
     # If the short-term action counteracts the sustained one so the total is
     # uncracked, the section is still cracked (the long-term action already cracked

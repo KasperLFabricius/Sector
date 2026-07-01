@@ -1646,9 +1646,14 @@ def run_analysis(inp):
         cr_gov = cr_t if cr_t.lambda_cr <= cr_l.lambda_cr else cr_l
         cracked = cr_gov.cracked
         props_un = transformed_properties(sec, inp["nl"], cracked=False)
+        # The cracked transformed properties use the governing cracked state's
+        # strain plane (which fibres are in compression). Building them from the
+        # long-term state would keep the full section when the section is cracked
+        # only by the short-term action and the long-term load is (near) zero.
         props_cr = (transformed_properties(
-            sec, inp["nl"], eps0=cr_l.cracked_state.eps0, kx=cr_l.cracked_state.kx,
-            ky=cr_l.cracked_state.ky, cracked=True) if cracked else None)
+            sec, inp["nl"], eps0=cr_gov.cracked_state.eps0,
+            kx=cr_gov.cracked_state.kx, ky=cr_gov.cracked_state.ky, cracked=True)
+            if cracked else None)
         out["elastic"].update(
             cracked=cracked, lambda_cr=cr_gov.lambda_cr, sigma_ct=cr_gov.sigma_ct,
             fctm=cr_gov.fctm, show_cw=inp["sls_cw"],
