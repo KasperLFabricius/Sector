@@ -321,20 +321,23 @@ def _crack_width(
         # EC2 (7.11): maximum crack spacing (cover and phi in mm). Under the DK NA
         # (7.3.4(3)) the cover term coefficient is k3*(25/c)^(2/3) instead of k3.
         k3_i = k3 * (25.0 / c_i) ** (2.0 / 3.0) if k3_cover_dependent and c_i > 0.0 else k3
-        sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
-        # EC2 (7.14): the geometric bound 1.3*(h-x) is the ALTERNATIVE spacing for
-        # bars NOT fixed at close centres. Clause 7.3.4(3) applies (7.11) only where
-        # the bar spacing does not exceed 5(c+phi/2); beyond that the bound governs.
-        # Apply it as a cap only for a bar whose nearest in-band tension neighbour is
-        # farther than 5(c+phi/2), so a closely spaced but shallow tension zone
-        # (bending with axial compression -> small h-x) is not clipped below its real
-        # (7.11) spacing. A lone bar (no neighbour) counts as wide. (h-x) = s_tface -
-        # s_na; widths are in m, cover/phi in mm.
+        # EC2 (7.11) applies where the bonded bars are fixed at close centres, i.e.
+        # the spacing does not exceed 5(c+phi/2) (7.3.4(3)); otherwise (7.14) gives
+        # the crack spacing directly as the geometric estimate 1.3*(h-x). Select the
+        # branch per bar from its nearest in-band tension neighbour along the width
+        # axis, so a closely spaced but shallow tension zone (bending with axial
+        # compression -> small h-x) keeps its real (7.11) spacing, while a wide or
+        # isolated bar takes (7.14) as the assigned value -- not merely a cap, so it
+        # is used even where (7.11) would be smaller (high rho / deep tension zone).
+        # A lone bar (no neighbour) counts as wide. (h-x) = s_tface - s_na; widths in
+        # m, cover/phi in mm.
         neigh = band_tens.copy()
         neigh[i] = False
         nn = float(np.min(np.abs(w_bars[neigh] - w_bars[i]))) if neigh.any() else math.inf
         if nn * 1000.0 > 5.0 * (c_i + phi / 2.0):
-            sr_max = min(sr_max, 1.3 * (s_tface - s_na) * 1000.0)
+            sr_max = 1.3 * (s_tface - s_na) * 1000.0                       # (7.14)
+        else:
+            sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho    # (7.11)
         wk = wk_factor * sr_max * esm_ecm
         if best is None or wk > best.wk:
             best = CrackWidthResult(
@@ -403,7 +406,6 @@ def _crack_width_2023(
     tens = (sigma > 0.0) & (ay < hx)
     if not tens.any():
         return None
-    gov0 = int(np.argmax(np.where(tens, sigma, -np.inf)))   # governing tension bar
 
     def _phi(i):
         if bar_diameter is not None and bar_diameter > 0.0:
@@ -414,11 +416,14 @@ def _crack_width_2023(
     # (phi in mm -> m) is built from the reinforcement nearest the tension face, then
     # extended by the depth spread of the tension bars so a section reinforced in
     # several layers is covered -- the general form of the n-layer +(n-1)*sy term
-    # (which is zero for a single layer). The result is capped at h-x and h/2.
-    phi_gov_m = _phi(gov0) / 1000.0
-    ay_near = float(ay[tens].min())             # bars nearest the tension face
+    # (which is zero for a single layer). The result is capped at h-x and h/2. The
+    # phi terms use the NEAR-FACE layer's diameter (the ay used), not the governing-
+    # stress bar's, so mixed bar sizes / external stress states pick the right bar.
+    near = int(np.where(tens, ay, np.inf).argmin())   # tension bar nearest the face
+    phi_near_m = _phi(near) / 1000.0
+    ay_near = float(ay[near])                    # near-face layer depth
     ay_far = float(ay[tens].max())              # deepest tension bars
-    base = min(ay_near + 5.0 * phi_gov_m, 10.0 * phi_gov_m, 3.5 * ay_near)
+    base = min(ay_near + 5.0 * phi_near_m, 10.0 * phi_near_m, 3.5 * ay_near)
     hc_ef = min(base + (ay_far - ay_near), hx, h / 2.0)
     if hc_ef <= 0.0:
         return None
