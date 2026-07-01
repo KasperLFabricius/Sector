@@ -148,6 +148,28 @@ def test_part_b_documents_the_panels_and_options():
         assert token in text, token
 
 
+def test_latex_to_rl_converts_the_subset():
+    # The PDF converter turns the LaTeX subset into ReportLab markup: Greek and
+    # operators to entities, sub/superscripts to tags, fractions to a/b, and it
+    # leaves no raw LaTeX punctuation behind.
+    out = manual._latex_to_rl(
+        r"\varphi = \min\!\left(\frac{\varepsilon_{cu2}}{c},\; "
+        r"\frac{\varepsilon_{ud}}{s_{na}-s_{bar,min}}\right)^{2}")
+    assert "&#966;" in out and "&#949;" in out            # phi, eps -> entities
+    assert "<sub>cu2</sub>" in out and "<super>2</super>" in out
+    assert "(s<sub>na</sub>-s<sub>bar,min</sub>)" in out  # compound denom parenthesised
+    assert "min(" in out
+    assert "\\" not in out and "{" not in out and "}" not in out  # nothing left over
+
+
+def test_manual_pdf_builds_tables_only():
+    # Build without the Plotly-to-PNG export (no kaleido/browser needed): a valid,
+    # non-trivial PDF over all the content blocks.
+    pdf = manual.build_manual_pdf_bytes(figures=False)
+    assert pdf[:4] == b"%PDF"
+    assert len(pdf) > 8000
+
+
 def test_manual_opens_from_the_sidebar_button():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
