@@ -230,6 +230,47 @@ def test_ec2_2023_kfl_responds_to_n_mult():
     assert base.sigma_s == pytest.approx(mult.sigma_s)           # state fixed -> sigma_s same
 
 
+def test_ec2_2004_wide_spacing_caps_crack_spacing():
+    # A single bar in a wide section (small rho): Eq (7.11) gives a very large crack
+    # spacing, so EC2 (7.14)'s 1.3*(h-x) geometric bound governs instead.
+    from sector.serviceability import _depth_axis
+    sec = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.5, 0.0), (0.5, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.25, 0.05, 314.0)],
+    )
+    r = analyse_cracking(sec, 0.0, 120.0, 0.0, 6.0, fctm=fctm(30.0), bar_diameter=20.0)
+    assert r.cracked
+    cw = r.crack
+    uncapped = 3.4 * cw.cover + 0.8 * 0.5 * 0.425 * cw.phi / cw.rho_p_eff  # Eq (7.11)
+    assert cw.sr_max < uncapped                                # the cap bit
+    gx, gy, mag = _depth_axis(r.cracked_state.kx, r.cracked_state.ky)
+    verts = sec.concrete_vertices()
+    s_tface = float((verts[:, 0] * gx + verts[:, 1] * gy).max())
+    hx = s_tface - (-r.cracked_state.eps0 / mag)               # h - x, m
+    assert cw.sr_max == pytest.approx(1.3 * hx * 1000.0, rel=1e-6)
+
+
+def test_ec2_2023_hc_eff_covers_multiple_tension_layers():
+    # Two tension layers (y = 0.05 and 0.10 m): hc,eff extends past the single-layer
+    # band by the layer spread, per the n-layer form of figure 9.3.
+    two = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.075, 0.05, 491.0), (0.225, 0.05, 491.0),
+                          (0.075, 0.10, 491.0), (0.225, 0.10, 491.0)],
+    )
+    one = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.075, 0.05, 491.0), (0.225, 0.05, 491.0)],
+    )
+    cw2 = analyse_cracking(two, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                           bar_diameter=16.0, edition="2023").crack
+    cw1 = analyse_cracking(one, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+                           bar_diameter=16.0, edition="2023").crack
+    assert cw1.hc_ef == pytest.approx(0.13, abs=1e-3)          # single layer: ay+5phi
+    assert cw2.hc_ef == pytest.approx(0.18, abs=1e-3)          # + 0.05 m layer spread
+    assert cw2.hc_ef > cw1.hc_ef
+
+
 def test_ec2_2023_and_2004_crack_widths_are_the_same_order():
     # The 2023 refined model gives a crack width in the same range as the 2004 model
     # (a different formula, not a different answer by an order of magnitude).

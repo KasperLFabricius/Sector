@@ -320,6 +320,12 @@ def _crack_width(
         # (7.3.4(3)) the cover term coefficient is k3*(25/c)^(2/3) instead of k3.
         k3_i = k3 * (25.0 / c_i) ** (2.0 / 3.0) if k3_cover_dependent and c_i > 0.0 else k3
         sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
+        # EC2 (7.14): where the bars are not fixed at close centres the spacing is
+        # bounded geometrically by 1.3*(h-x). Applying it as a cap reproduces the
+        # two branches -- (7.11) governs at close spacing (the smaller value), the
+        # bound at wide spacing -- so a sparsely reinforced section is not left with
+        # an unbounded (7.11) spacing. (h-x) = s_tface - s_na; convert m -> mm.
+        sr_max = min(sr_max, 1.3 * (s_tface - s_na) * 1000.0)
         wk = wk_factor * sr_max * esm_ecm
         if best is None or wk > best.wk:
             best = CrackWidthResult(
@@ -388,11 +394,17 @@ def _crack_width_2023(
             return float(bar_diameter)
         return math.sqrt(4.0 * float(ba[i]) * 1.0e6 / math.pi)   # m^2 -> mm
 
-    # hc,eff (figure 9.3, single layer, bending): min{ay+5phi, 10phi, 3.5ay, h-x, h/2}
-    # (phi in mm -> m for the geometric terms). The governing tension bar sets it.
+    # hc,eff (figure 9.3, bending): the single-layer band min{ay+5phi, 10phi, 3.5ay}
+    # (phi in mm -> m) is built from the reinforcement nearest the tension face, then
+    # extended by the depth spread of the tension bars so a section reinforced in
+    # several layers is covered -- the general form of the n-layer +(n-1)*sy term
+    # (which is zero for a single layer). The result is capped at h-x and h/2.
     phi_gov_m = _phi(gov0) / 1000.0
-    ay_gov = float(ay[gov0])
-    hc_ef = min(ay_gov + 5.0 * phi_gov_m, 10.0 * phi_gov_m, 3.5 * ay_gov, hx, h / 2.0)
+    ay_tens = ay[sigma > 0.0]
+    ay_near = float(ay_tens.min())              # bars nearest the tension face
+    ay_far = float(ay_tens.max())               # deepest tension bars
+    base = min(ay_near + 5.0 * phi_gov_m, 10.0 * phi_gov_m, 3.5 * ay_near)
+    hc_ef = min(base + (ay_far - ay_near), hx, h / 2.0)
     if hc_ef <= 0.0:
         return None
     c_lo = s_tface - hc_ef
