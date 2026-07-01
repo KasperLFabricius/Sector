@@ -39,3 +39,27 @@ def test_user_data_dir_falls_back_to_home(monkeypatch):
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     assert run_sector._user_data_dir() == pathlib.Path.home() / ".sector"
+
+
+def test_default_port_is_8502_so_it_does_not_clash_with_bricos(monkeypatch):
+    # BriCoS uses Streamlit's default 8501; Sector defaults to 8502 so both can
+    # be open at once. The launcher passes it as --server.port.
+    monkeypatch.delenv("SECTOR_PORT", raising=False)
+    assert run_sector._port() == "8502"
+    argv = run_sector._streamlit_argv("app/sector_app.py", run_sector._port())
+    assert "--server.port=8502" in argv
+    assert argv[:3] == ["streamlit", "run", "app/sector_app.py"]
+
+
+def test_port_is_overridable_via_env(monkeypatch):
+    monkeypatch.setenv("SECTOR_PORT", "8600")
+    assert run_sector._port() == "8600"
+    assert "--server.port=8600" in run_sector._streamlit_argv("x", run_sector._port())
+
+
+def test_dev_streamlit_config_pins_the_same_port():
+    # The dev-run config (streamlit run app/sector_app.py) must pin the same port
+    # as the packaged launcher, so both paths serve on 8502.
+    cfg = pathlib.Path(__file__).resolve().parent.parent / ".streamlit" / "config.toml"
+    assert cfg.is_file()
+    assert "port = 8502" in cfg.read_text(encoding="utf-8")

@@ -1,0 +1,6 @@
+# Sector runs on 8502 so it does not collide with BriCoS (Streamlit's default
+# 8501), letting both apps be open at the same time. The packaged EXE sets the
+# same port explicitly in packaging/run_sector.py (override there with the
+# SECTOR_PORT environment variable).
+[server]
+port = 8502

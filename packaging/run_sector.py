@@ -31,6 +31,26 @@ def _user_data_dir() -> pathlib.Path:
     return (root / "Sector") if base else root
 
 
+# Sector runs on 8502 (Streamlit's default 8501 is used by BriCoS), so both can
+# be open at once. Override with the SECTOR_PORT environment variable.
+_DEFAULT_PORT = "8502"
+
+
+def _port() -> str:
+    return os.environ.get("SECTOR_PORT") or _DEFAULT_PORT
+
+
+def _streamlit_argv(app_path, port) -> list:
+    """The ``streamlit run`` argv the launcher runs (isolated so it is testable)."""
+    return [
+        "streamlit", "run", str(app_path),
+        f"--server.port={port}",
+        "--global.developmentMode=false",
+        "--server.headless=false",          # open the browser on launch
+        "--browser.gatherUsageStats=false",
+    ]
+
+
 def main() -> None:
     app = _bundle_base() / "app" / "sector_app.py"
     data = _user_data_dir()
@@ -43,12 +63,7 @@ def main() -> None:
     os.environ.setdefault("SECTOR_AUTOSAVE_DIR", str(data))
     os.environ.setdefault("NUMBA_CACHE_DIR", str(data / "numba_cache"))
 
-    sys.argv = [
-        "streamlit", "run", str(app),
-        "--global.developmentMode=false",
-        "--server.headless=false",          # open the browser on launch
-        "--browser.gatherUsageStats=false",
-    ]
+    sys.argv = _streamlit_argv(app, _port())
     from streamlit.web import cli as stcli
     sys.exit(stcli.main())
 
