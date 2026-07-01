@@ -602,12 +602,13 @@ def manual_blocks() -> list:
     md("For the service state the section is taken as already cracked: concrete "
        "carries compression only (zero stress where $\\varepsilon\\ge 0$) and the "
        "steel is linear in both directions. The analysis works with a reference "
-       "concrete modulus and the modular ratio $n=E_s/E_c$: a bar contributes a "
-       "transformed area $n\\,A$, and a bar **inside the compression zone** also "
-       "displaces concrete, so its net transformed area there is $(n-1)\\,A$. The "
-       "strain plane $(\\varepsilon_0,k_x,k_y)$ is solved by Newton iteration so "
-       "the transformed-section resultants equal $(N,M_x,M_y)$, updating the "
-       "compression zone until it settles.")
+       "concrete modulus and the modular ratio $n=E_s/E_c$: each bar contributes a "
+       "transformed area $n\\,A$. (The solver can also subtract the concrete a "
+       "compression-zone bar displaces, using $(n-1)\\,A$ there; Sector leaves that "
+       "refinement off, so the reported stresses and section properties use "
+       "$n\\,A$ throughout.) The strain plane $(\\varepsilon_0,k_x,k_y)$ is solved "
+       "by Newton iteration so the transformed-section resultants equal "
+       "$(N,M_x,M_y)$, updating the compression zone until it settles.")
     md("Creep enters through the modular ratio: the long-term state uses "
        "$n_l = E_s/E_{c,eff}$ with $E_{c,eff}=E_c/(1+\\varphi)$, and the "
        "short-term state uses $n_s = E_s/E_c$. The reported total combines the two, "
@@ -675,12 +676,15 @@ def manual_blocks() -> list:
          "chosen edition.")
 
     h1("Equilibrium check")
-    md("Both analyses report whether they converged. The plastic solve balances "
-       "the axial force to a tight residual, $|\\sum F - N|\\le 10^{-6}\\max(1,|N|)$; "
-       "the elastic solve iterates the compression zone until the transformed "
-       "resultants match the applied $(N,M_x,M_y)$. A non-converged state is "
-       "flagged rather than reported as a capacity, so an unreachable axial force "
-       "or an ill-posed section does not produce a silent result.")
+    md("Both analyses carry a convergence flag. The plastic solve balances the "
+       "axial force **at each swept angle** to a tight residual, "
+       "$|\\sum F - N|\\le 10^{-6}\\max(1,|N|)$; an angle whose axial force cannot "
+       "be balanced -- the axial demand exceeds what the section can carry there -- "
+       "is marked not converged. Such a point is still drawn on the envelope (so an "
+       "infeasible or partial sweep is visible rather than hidden), and the "
+       "run records whether every point converged. The elastic solve iterates the "
+       "compression zone until the transformed resultants match the applied "
+       "$(N,M_x,M_y)$.")
 
     # =====================================================================
     # PART D - REFERENCE
