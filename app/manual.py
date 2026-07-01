@@ -346,7 +346,9 @@ def manual_blocks() -> list:
        "yield and ultimate strengths $f_{yk}$ / $f_{tk}$, the ultimate strain "
        "$\\varepsilon_{uk}$, the partial factors and the modulus $E_s$. The "
        "**Active in compression** toggle decides whether the bars carry "
-       "compression: with it off the steel is tension-only.")
+       "compression in the **plastic (ultimate)** law: with it off the steel is "
+       "tension-only there. The cracked-elastic (service) analysis is linear and "
+       "always treats the bars in both directions, regardless of this toggle.")
     fig(fig_beam_steel_law, "The B550 mild-steel law for the rectangular example.")
     call("standard", "The concrete and steel laws follow DS/EN 1992-1-1 3.1.7 and "
          "3.2.7; the ultimate strains follow Table 3.1. Part C derives them in full.")
