@@ -1637,9 +1637,12 @@ def run_analysis(inp):
             inp["P_el_s"], inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
             fctm=inp["sls_fctm"], n_mult=n_mult, prestress_stress=prestress_stress)
         # Governing case. Its cracked state (for the reported cracked properties) is
-        # the combined creep total state (r.short_term) when the peak governs, or the
-        # long-term cracked state when the sustained action governs.
-        if lam_t <= cr_l.lambda_cr:
+        # the combined creep total state (r.short_term) when the peak strictly
+        # governs, or the long-term cracked state when the sustained action governs.
+        # Ties (e.g. no short-term load, where the peak reduces to the sustained
+        # check) go to the sustained state, so a long-term-only run keeps its nl
+        # cracked properties rather than the instantaneous combined state.
+        if lam_t < cr_l.lambda_cr:
             cracked, lambda_cr, sigma_ct, gov_state = crk_t, lam_t, sig_t, r.short_term
         else:
             cracked, lambda_cr, sigma_ct = (cr_l.cracked, cr_l.lambda_cr,
