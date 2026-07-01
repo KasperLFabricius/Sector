@@ -55,17 +55,20 @@ _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
 # Crack-width code edition -> the crack-spacing flags. edition: "2004" (EC2 7.3.4)
 # or "2023" (EC2 9.2.3 refined). dk_na: cover-dependent k3 and the (h-x)/3
-# effective-height term only for slabs/prestressed. coarse: the DK NA coarse crack
-# system (7.3.4(1)) -- the effective area is the band whose centroid matches the
-# tension reinforcement (figure 7.100 NA) and wk is halved.
+# effective-height term only for slabs/prestressed; the DK NA option reports BOTH
+# the fine and the coarse crack system (7.3.4(1)) -- the coarse effective area is
+# the band whose centroid matches the tension reinforcement (figure 7.100 NA) and
+# its wk is halved -- for both the long-term and the short-term load.
 _CRACK_CODES = {
-    "EN 1992-1-1:2005": dict(dk_na=False, coarse=False, edition="2004"),
-    "DS/EN 1992-1-1 + DK NA (fine crack system)": dict(dk_na=True, coarse=False, edition="2004"),
-    "DS/EN 1992-1-1 + DK NA (coarse crack system)": dict(dk_na=True, coarse=True, edition="2004"),
-    "EN 1992-1-1:2023": dict(dk_na=False, coarse=False, edition="2023"),
+    "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
+    "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
+    "EN 1992-1-1:2023": dict(dk_na=False, edition="2023"),
 }
-# Old saved value for the fine DK NA option, renamed when the coarse system was added.
-_CRACK_CODE_ALIASES = {"DS/EN 1992-1-1 + DK NA": "DS/EN 1992-1-1 + DK NA (fine crack system)"}
+# Old saved values for the (now merged) fine/coarse DK NA options.
+_CRACK_CODE_ALIASES = {
+    "DS/EN 1992-1-1 + DK NA (fine crack system)": "DS/EN 1992-1-1 + DK NA",
+    "DS/EN 1992-1-1 + DK NA (coarse crack system)": "DS/EN 1992-1-1 + DK NA",
+}
 
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
 
@@ -1199,22 +1202,23 @@ def build_inputs():
         "Crack-width code", list(_CRACK_CODES), key="sls_code",
         disabled=not (elastic_on and sls_cw),
         help="Code edition for the crack-spacing rules. The DK NA makes k3 cover-"
-             "dependent (k3 = 3.4*(25/c)^(2/3)) and limits the (h-x)/3 effective-"
-             "height term to slabs and prestressed members. The coarse crack system "
-             "(7.3.4(1)) sets the effective area to the band whose centroid matches "
-             "the tension reinforcement (figure 7.100 NA) and halves the crack width. "
+             "dependent (k3 = 3.4*(25/c)^(2/3)), limits the (h-x)/3 effective-height "
+             "term to slabs and prestressed members, and reports BOTH the fine and "
+             "the coarse crack system: the coarse system (7.3.4(1)) sets the "
+             "effective area to the band whose centroid matches the tension "
+             "reinforcement (figure 7.100 NA) and halves the crack width. "
              "EN 1992-1-1:2023 uses the refined model (9.2.3): wk = kw*k1/r*sr,m,cal*"
              "(esm-ecm) with kw = 1.7 and a per-bar curvature factor.")
     sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
-    sls_coarse = _CRACK_CODES[sls_code]["coarse"]
     sls_edition = _CRACK_CODES[sls_code]["edition"]
     sls_member = aset.selectbox(
         "Member type", ["Beam", "Slab"], key="sls_member",
-        disabled=not (elastic_on and sls_cw and sls_dk_na and not sls_coarse),
+        disabled=not (elastic_on and sls_cw and sls_dk_na),
         help="Under the DK NA fine system the (h-x)/3 effective-height term applies "
-             "only to slabs (and prestressed members); for a beam it is dropped. "
-             "Ignored for the base EN 1992-1-1 code and the coarse crack system "
-             "(which uses the centroid-matched effective area, not hc,ef).")
+             "only to slabs (and prestressed members); for a beam it is dropped. It "
+             "affects the fine system only (the coarse system uses the centroid-"
+             "matched effective area, not hc,ef). Ignored for the base EN 1992-1-1 "
+             "code.")
 
     sec = s.expander("Section", expanded=True)
     sec.caption("The section is a set of explicit points (the source of truth). "
@@ -1486,7 +1490,7 @@ def build_inputs():
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
-                sls_k1=sls_k1, sls_dk_na=sls_dk_na, sls_coarse=sls_coarse,
+                sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
                 mode=mode, extent=extent, signature=sig)
 
@@ -1625,12 +1629,15 @@ def run_analysis(inp):
         # sustained one can leave the peak uncracked while the long-term already
         # cracked, and vice versa. Report the governing (smallest lambda_cr) of the
         # two.
+        # cr_l provides the long-term cracked state and the sustained cracking
+        # factor; its own crack width is unused (the crack widths are computed
+        # below per system), so the coarse flag here is immaterial.
         cr_l = analyse_cracking(
             sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
             bar_diameter=phi, k1=k1_bars,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
-            coarse=inp["sls_coarse"], edition=inp["sls_edition"],
+            edition=inp["sls_edition"],
             n_mult=n_mult, prestress_stress=prestress_stress)
         crk_t, lam_t, sig_t = combined_cracking(
             sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
@@ -1665,32 +1672,37 @@ def run_analysis(inp):
         # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
         # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
         if inp["sls_cw"] and cracked:
-            # Long-term crack width on the cracked section under the quasi-permanent
-            # load (kt = 0.4). Computed directly from the long-term cracked state so
-            # it is reported even when the long-term load alone would not cross the
-            # cracking threshold (the section is cracked by the short-term peak).
-            cw_long = crack_width(sec, cr_l.cracked_state, inp["nl"],
-                                  fctm=inp["sls_fctm"], Es=inp["steel"].Es, kt=0.4,
-                                  bar_diameter=phi, k1=k1_bars,
-                                  k3_cover_dependent=dk_na, include_hx_term=include_hx,
-                                  coarse=inp["sls_coarse"], edition=inp["sls_edition"],
-                                  n_mult=n_mult)
             # Crack width uses the load-induced steel stress, so strip the locked-in
             # tendon prestress back out of the reported total (mild bars unaffected).
             cw_stress = np.asarray(r.bar_stress_total, dtype=float)
             if prestress_stress is not None:
                 cw_stress = cw_stress - prestress_stress
             short_state = dataclasses.replace(r.short_term, bar_stress=cw_stress)
-            cw_short = crack_width(sec, short_state, inp["ns"], fctm=inp["sls_fctm"],
-                                   Es=inp["steel"].Es, kt=0.6, bar_diameter=phi,
+
+            def _cw(state, n, kt, coarse):
+                return crack_width(sec, state, n, fctm=inp["sls_fctm"],
+                                   Es=inp["steel"].Es, kt=kt, bar_diameter=phi,
                                    k1=k1_bars, k3_cover_dependent=dk_na,
-                                   include_hx_term=include_hx, coarse=inp["sls_coarse"],
+                                   include_hx_term=include_hx, coarse=coarse,
                                    edition=inp["sls_edition"], n_mult=n_mult)
+
+            # Long-term crack width is on the cracked section under the quasi-permanent
+            # load (kt = 0.4), computed directly from the long-term cracked state so it
+            # is reported even when the long-term load alone would not cross the
+            # cracking threshold. The short-term is the instantaneous total (kt = 0.6).
             out["elastic"].update(
-                crack=_crack_dict(cw_long), crack_short=_crack_dict(cw_short),
+                crack=_crack_dict(_cw(cr_l.cracked_state, inp["nl"], 0.4, False)),
+                crack_short=_crack_dict(_cw(short_state, inp["ns"], 0.6, False)),
                 crack_code=inp["sls_code"],
                 crack_member=(inp["sls_member"] if dk_na else None),
             )
+            # The DK NA reports the coarse crack system alongside the fine one, for
+            # both load cases (four crack widths in total).
+            if dk_na:
+                out["elastic"].update(
+                    crack_coarse=_crack_dict(_cw(cr_l.cracked_state, inp["nl"], 0.4, True)),
+                    crack_short_coarse=_crack_dict(_cw(short_state, inp["ns"], 0.6, True)),
+                )
     return out
 
 
@@ -2003,9 +2015,11 @@ def _elastic_sls_section(inp, e):
 
 def _crack_width_panel(e):
     """Crack width (EC2 7.3.4) for the long-term and short-term load cases, side
-    by side. Each bar's clear cover is taken from the geometry and the bar with
-    the largest wk governs, reported per load case."""
+    by side. The DK NA reports the fine and the coarse crack system (four columns);
+    each bar's clear cover is taken from the geometry and the bar with the largest
+    wk governs, reported per load case."""
     cl, cs = e.get("crack"), e.get("crack_short")
+    clc, csc = e.get("crack_coarse"), e.get("crack_short_coarse")
     st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
     if cl is None and cs is None:
         st.info("No crack width: uncracked, or no bar in tension, under either "
@@ -2024,16 +2038,25 @@ def _crack_width_panel(e):
             return ["-"] * len(keys)
         return [f.format(c[k]) for k, f in zip(keys, fmts)]
 
-    st.dataframe({"Quantity": quants, "Long-term": column(cl),
-                  "Short-term": column(cs)}, hide_index=True,
-                 use_container_width=True)
+    has_coarse = clc is not None or csc is not None
+    if has_coarse:
+        # DK NA: fine and coarse crack systems, each for both load cases.
+        data = {"Quantity": quants, "Long-term (fine)": column(cl),
+                "Short-term (fine)": column(cs), "Long-term (coarse)": column(clc),
+                "Short-term (coarse)": column(csc)}
+    else:
+        data = {"Quantity": quants, "Long-term": column(cl),
+                "Short-term": column(cs)}
+    st.dataframe(data, hide_index=True, use_container_width=True)
     st.caption("Governing (largest-$w_k$) bar per load case; each bar's clear cover "
                "is the distance to the nearest concrete face minus its radius.")
     member = e.get("crack_member")
     if member:
-        st.caption(f"DK NA fine crack system: cover-dependent k3 = 3.4*(25/c)^(2/3); "
-                   f"member type = {member} (the (h-x)/3 effective-height term "
-                   f"applies to slabs and prestressed members).")
+        st.caption(f"DK NA: cover-dependent k3 = 3.4*(25/c)^(2/3), reported for both "
+                   f"the fine and the coarse crack system (7.3.4(1): centroid-matched "
+                   f"effective area, $w_k$ halved). Member type = {member} (the "
+                   f"(h-x)/3 effective-height term applies to slabs and prestressed "
+                   f"members, fine system only).")
 
 
 # ---------------------------------------------------------------------------

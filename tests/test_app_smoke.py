@@ -1425,24 +1425,40 @@ def test_crack_width_reports_both_load_cases():
     assert e["crack"]["cover"] > 0.0       # auto cover from the geometry
 
 
-def test_coarse_crack_system_halves_the_width():
-    # The DK NA coarse crack system (centroid-matched effective area + wk/2) gives a
-    # smaller reported wk than the fine system at the same load.
-    def _elastic(code):
-        at = _fresh()
-        at.run()
-        at.radio(key="mode").set_value("Elastic").run()
-        at.number_input(key="el_long_Mx").set_value(400.0).run()
-        at.checkbox(key="sls_cw").set_value(True).run()
-        at.selectbox(key="sls_code").set_value(code).run()
-        at.button(key="calculate").click().run()
-        assert not at.exception
-        return at.session_state["results"]["elastic"]
-    fine = _elastic("DS/EN 1992-1-1 + DK NA (fine crack system)")
-    coarse = _elastic("DS/EN 1992-1-1 + DK NA (coarse crack system)")
-    assert "coarse crack system" in coarse["crack_code"]
-    assert coarse["crack"]["coarse"] is True and fine["crack"]["coarse"] is False
-    assert coarse["crack"]["wk"] < fine["crack"]["wk"]
+def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
+    # The single DK NA option reports four crack widths: the fine and the coarse
+    # crack system, each for the long-term and the short-term load. The coarse
+    # system (centroid-matched effective area + wk/2) is smaller than the fine one.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()
+    at.number_input(key="el_short_Mx").set_value(150.0).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.selectbox(key="sls_code").set_value("DS/EN 1992-1-1 + DK NA").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    for key in ("crack", "crack_short", "crack_coarse", "crack_short_coarse"):
+        assert e[key] is not None and e[key]["wk"] > 0.0
+    assert e["crack"]["coarse"] is False and e["crack_coarse"]["coarse"] is True
+    assert e["crack_coarse"]["wk"] < e["crack"]["wk"]             # coarse < fine, long-term
+    assert e["crack_short_coarse"]["wk"] < e["crack_short"]["wk"]  # coarse < fine, short-term
+
+
+def test_non_dk_na_reports_no_coarse_columns():
+    # The base EN 1992-1-1 code has no coarse system, so only the two fine columns.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.number_input(key="el_long_Mx").set_value(400.0).run()
+    at.checkbox(key="sls_cw").set_value(True).run()
+    at.selectbox(key="sls_code").set_value("EN 1992-1-1:2005").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["crack"] is not None
+    assert e.get("crack_coarse") is None and e.get("crack_short_coarse") is None
 
 
 def test_ec2_2023_crack_edition_calculates():
@@ -1462,9 +1478,9 @@ def test_ec2_2023_crack_edition_calculates():
 
 
 def test_old_crack_code_alias_targets_a_current_option():
-    # A session saved before the coarse system used the bare DK NA label; the app
-    # migrates it (in build_inputs, before the selectbox reads it) to the fine
-    # option. Verify the alias is dropped from the options and maps to a real one.
+    # A session saved with a since-removed crack-code label (the split fine/coarse
+    # DK NA options) is migrated (in build_inputs, before the selectbox reads it) to
+    # the merged DK NA option. Verify each alias is retired and maps to a live one.
     import sys
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "app"))
     import sector_app
@@ -1537,7 +1553,7 @@ def test_dk_na_crack_edition_narrows_wk():
     at.checkbox(key="sls_cw").set_value(True).run()
     at.button(key="calculate").click().run()
     wk_base = at.session_state["results"]["elastic"]["crack"]["wk"]
-    at.selectbox(key="sls_code").set_value("DS/EN 1992-1-1 + DK NA (fine crack system)").run()
+    at.selectbox(key="sls_code").set_value("DS/EN 1992-1-1 + DK NA").run()
     at.selectbox(key="sls_member").set_value("Slab").run()
     at.button(key="calculate").click().run()
     assert not at.exception
