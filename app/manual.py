@@ -532,22 +532,27 @@ def manual_blocks() -> list:
        "and $n=2$; above C50 they follow Table 3.1: "
        "$\\varepsilon_{c2}=(2.0+0.085(f_{ck}-50)^{0.53})/1000$, "
        "$\\varepsilon_{cu2}=(2.6+35((90-f_{ck})/100)^4)/1000$ and "
-       "$n=1.4+23.4((90-f_{ck})/100)^4$.")
+       "$n=1.4+23.4((90-f_{ck})/100)^4$. These strength-dependent strains apply to "
+       "the 2005 and DK NA editions; the EN 1992-1-1:2023 edition keeps them "
+       "**constant** ($\\varepsilon_{c2}=2.0$, $\\varepsilon_{cu2}=3.5$ per mille, "
+       "$n=2$) for every grade.")
     md("**Worked (beam, C40/50):** $f_{cd}=1.0\\times 40/1.45 = 27.6$ MPa, with "
        "$\\varepsilon_{c2}=2.0$ and $\\varepsilon_{cu2}=3.5$ per mille.")
     fig(fig_beam_concrete_law, "The C40/50 parabola-rectangle law of the beam "
         "example.")
     h2("Mild steel")
-    md("The mild steel is linear to yield and then a plateau (Curve 2) or a mild "
-       "hardening branch to $f_{td}$ at $\\varepsilon_{uk}$ (Curve 1):\n\n"
-       "$$\\sigma_s = \\frac{E_s}{\\gamma_s}\\,\\varepsilon_s\\ \\ "
-       "(|\\varepsilon_s|\\le\\varepsilon_{yd}), \\qquad f_{yd}=f_{yk}/\\gamma_s, "
-       "\\qquad \\varepsilon_{yd}=f_{yk}/E_s.$$\n\n"
-       "The design curve scales the elastic slope to $E_s/\\gamma_s$, so the "
-       "plateau stress $f_{yd}$ is reached at the yield strain "
-       "$\\varepsilon_{yd}=f_{yk}/E_s$ set by the characteristic strength. "
-       "**Worked (B550):** $f_{yd}=550/1.20=458$ MPa, reached at "
-       "$\\varepsilon_{yd}=550/200000=2.75$ per mille.")
+    md("The mild steel is linear to yield and then a plateau or a mild hardening "
+       "branch:\n\n"
+       "$$\\sigma_s = E_{s,d}\\,\\varepsilon_s\\ \\ (|\\varepsilon_s|\\le"
+       "\\varepsilon_{yd}), \\qquad f_{yd}=f_{yk}/\\gamma_s, \\qquad "
+       "\\varepsilon_{yd}=f_{yd}/E_{s,d}.$$\n\n"
+       "The design elastic modulus $E_{s,d}$ depends on the curve. The selectable "
+       "Eurocode presets (Curve 3) keep it unfactored, $E_{s,d}=E_s$, so B550 "
+       "yields at $\\varepsilon_{yd}=f_{yd}/E_s=458/200000\\approx 2.29$ per mille. "
+       "The elastic-perfectly-plastic law used in this worked example (Curve 2) "
+       "factors it, $E_{s,d}=E_s/\\gamma_s$, so the whole curve scales by "
+       "$1/\\gamma_s$ and yield moves to $\\varepsilon_{yd}=f_{yk}/E_s=550/200000="
+       "2.75$ per mille. In both, $f_{yd}=550/1.20=458$ MPa.")
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.")
     h2("Prestressing steel")
     md("A tendon is evaluated at its **total** strain -- the locked-in initial "
