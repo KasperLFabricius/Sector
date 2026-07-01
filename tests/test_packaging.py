@@ -19,7 +19,8 @@ def test_packaging_files_are_in_the_repo():
     # .gitignore *.spec rule would drop (it is negated for this one). On a clean
     # checkout (CI) a missing file is simply absent, so this catches it.
     pkg = pathlib.Path(__file__).resolve().parent.parent / "packaging"
-    for name in ("sector.spec", "run_sector.py", "build.ps1", "README.md"):
+    for name in ("sector.spec", "run_sector.py", "build.ps1", "build.bat",
+                 "README.md"):
         assert (pkg / name).is_file(), f"packaging/{name} missing from the repo"
 
 

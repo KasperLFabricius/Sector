@@ -6,7 +6,11 @@ ONEDIR).
 
 ## Build
 
-From the repository root:
+The easiest way is to **double-click `packaging/build.bat`**. It wraps the
+PowerShell build with an execution-policy bypass (so it works even when running
+`.ps1` files is blocked) and keeps the window open to show the result.
+
+Equivalently, from the repository root:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging/build.ps1
@@ -34,7 +38,8 @@ local URL. A console window stays open to show that URL and any messages.
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
 | `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
-| `build.ps1` | Convenience build script. |
+| `build.ps1` | Convenience build script (installs deps, runs PyInstaller). |
+| `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
 
 ## Runtime notes
 
