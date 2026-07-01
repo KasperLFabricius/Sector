@@ -63,3 +63,23 @@ def test_dev_streamlit_config_pins_the_same_port():
     cfg = pathlib.Path(__file__).resolve().parent.parent / ".streamlit" / "config.toml"
     assert cfg.is_file()
     assert "port = 8502" in cfg.read_text(encoding="utf-8")
+
+
+def _run_app():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    import run_app
+    return run_app
+
+
+def test_root_launcher_defaults_to_8502(monkeypatch):
+    # The README's primary dev command is `python run_app.py`; it must default to
+    # 8502 too, so the common launch path does not clash with BriCoS.
+    monkeypatch.delenv("SECTOR_PORT", raising=False)
+    assert _run_app()._port() == "8502"
+
+
+def test_root_launcher_port_is_overridable(monkeypatch):
+    monkeypatch.setenv("SECTOR_PORT", "8600")
+    assert _run_app()._port() == "8600"
