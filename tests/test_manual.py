@@ -174,6 +174,33 @@ def test_latex_to_rl_converts_the_subset():
     assert "(tendon)" in txt and "texttendon" not in txt and "\\" not in txt
 
 
+def test_display_equation_tolerates_trailing_punctuation():
+    # A display equation with punctuation outside the closing $$ must still render
+    # as centred math (MMath), not fall through to a body paragraph with stray $.
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import Paragraph
+    styles = getSampleStyleSheet()
+    for nm in ("MBody", "MMath"):
+        if nm not in styles.byName:
+            styles.add(ParagraphStyle(name=nm, parent=styles["Normal"]))
+    flow = []
+    manual._render_md_pdf(r"$$w_k = s_{r,max}\,\varepsilon$$.", flow, styles, Paragraph)
+    assert len(flow) == 1
+    assert flow[0].style.name == "MMath"
+    assert "$" not in flow[0].text and flow[0].text.endswith(".")
+
+
+def test_manual_pdf_has_no_stray_dollar_delimiters():
+    # No display equation should leak $ into the PDF (i.e. none fell through the
+    # display-math detection to inline rendering).
+    pytest.importorskip("fitz")
+    import fitz
+    pdf = manual.build_manual_pdf_bytes(figures=False)
+    doc = fitz.open(stream=pdf, filetype="pdf")
+    text = "\n".join(doc[i].get_text() for i in range(doc.page_count))
+    assert "$" not in text
+
+
 def test_manual_pdf_builds_tables_only():
     # Build without the Plotly-to-PNG export (no kaleido/browser needed): a valid,
     # non-trivial PDF over all the content blocks.

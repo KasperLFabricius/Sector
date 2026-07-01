@@ -825,9 +825,13 @@ def _render_md_pdf(text, flow, styles, Paragraph):
         if not s:
             flush()
             continue
-        if s.startswith("$$") and s.endswith("$$"):
+        # A standalone display equation, tolerating trailing sentence punctuation
+        # outside the closing ``$$`` so it still renders as centred math.
+        m_disp = re.match(r"^\$\$(.+)\$\$([.,;:]?)$", s)
+        if m_disp:
             flush()
-            flow.append(Paragraph(_latex_to_rl(s[2:-2].strip()), styles["MMath"]))
+            body = _latex_to_rl(m_disp.group(1).strip()) + m_disp.group(2)
+            flow.append(Paragraph(body, styles["MMath"]))
             continue
         mb = re.match(r"^[-*]\s+(.*)", s)
         mn = re.match(r"^(\d+)\.\s+(.*)", s)
