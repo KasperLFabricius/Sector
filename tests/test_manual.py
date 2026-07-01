@@ -114,9 +114,16 @@ def test_part_c_worked_numbers_match_the_engine():
     c, s = ex["concrete"], ex["steel"]
     assert c.fck / c.gamma_c * c.alpha_cc == pytest.approx(27.6, abs=0.1)   # fcd
     assert s.fytk / s.gamma_y == pytest.approx(458.0, abs=1.0)              # fyd
+    # Curve 2 scales the elastic slope to Es/gamma_y, so the yield strain is
+    # fytk/Es (not fyd/Es): 2.75 per mille for B550, as the manual now states.
+    assert s.fytk / s.Es == pytest.approx(2.75e-3, abs=1e-5)
     sec = manual._section_of(ex)
     r = plastic_capacity_at_angle(sec, c, s, 0.0, 90.0)
     assert r.Mx == pytest.approx(346.0, abs=2.0)                            # capacity
+    # eps_steel is a percentage: -1.89% = 18.9 per mille, past yield (2.75) but
+    # below rupture (50) -- the worked point is tension-controlled, as stated.
+    eps_frac = abs(r.eps_steel) / 100.0
+    assert s.fytk / s.Es < eps_frac < s.eut
     fc = fctm(c.fck)
     editions = {
         "2005": (dict(), 0.188, 236.0),

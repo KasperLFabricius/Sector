@@ -540,11 +540,14 @@ def manual_blocks() -> list:
     h2("Mild steel")
     md("The mild steel is linear to yield and then a plateau (Curve 2) or a mild "
        "hardening branch to $f_{td}$ at $\\varepsilon_{uk}$ (Curve 1):\n\n"
-       "$$\\sigma_s = E_s\\,\\varepsilon_s\\ \\ (|\\varepsilon_s|\\le"
-       "\\varepsilon_{yd}), \\qquad \\varepsilon_{yd}=f_{yd}/E_s, \\qquad "
-       "f_{yd}=f_{yk}/\\gamma_s.$$\n\n"
-       "**Worked (B550):** $f_{yd}=550/1.20=458$ MPa, "
-       "$\\varepsilon_{yd}=458/200000=2.29$ per mille.")
+       "$$\\sigma_s = \\frac{E_s}{\\gamma_s}\\,\\varepsilon_s\\ \\ "
+       "(|\\varepsilon_s|\\le\\varepsilon_{yd}), \\qquad f_{yd}=f_{yk}/\\gamma_s, "
+       "\\qquad \\varepsilon_{yd}=f_{yk}/E_s.$$\n\n"
+       "The design curve scales the elastic slope to $E_s/\\gamma_s$, so the "
+       "plateau stress $f_{yd}$ is reached at the yield strain "
+       "$\\varepsilon_{yd}=f_{yk}/E_s$ set by the characteristic strength. "
+       "**Worked (B550):** $f_{yd}=550/1.20=458$ MPa, reached at "
+       "$\\varepsilon_{yd}=550/200000=2.75$ per mille.")
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.")
     h2("Prestressing steel")
     md("A tendon is evaluated at its **total** strain -- the locked-in initial "
@@ -587,10 +590,11 @@ def manual_blocks() -> list:
     h2("The interaction envelope")
     md("Rotating the neutral-axis angle $V$ and solving at each gives one point on "
        "the $M_x$-$M_y$ envelope; sweeping $0$ to $360$ degrees closes the biaxial "
-       "diagram. **Worked (beam, $N=0$, $V=90$):** the concrete crushes at "
-       "$3.5$ per mille while the bottom bars yield ($\\varepsilon_s=-1.89$ per "
-       "mille), giving $M_{x} = 346$ kNm. The applied $M_x=300$ kNm is then a "
-       "utilisation of $300/346 = 0.87$.")
+       "diagram. **Worked (beam, $N=0$, $V=90$):** the concrete reaches its "
+       "crushing strain ($3.5$ per mille) while the most tensile bars are well past "
+       "yield ($18.9$ per mille, against the $2.75$ per mille yield), so this "
+       "tension-controlled point gives $M_{x} = 346$ kNm. The applied $M_x=300$ "
+       "kNm is then a utilisation of $300/346 = 0.87$.")
     fig(fig_beam_envelope, "The beam envelope with its applied load; each vertex is "
         "one solved neutral-axis angle.")
 
