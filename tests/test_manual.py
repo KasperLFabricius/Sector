@@ -1,0 +1,102 @@
+"""Tests for the in-app user manual (content blocks, worked examples, figures).
+
+The manual authors its content as typed blocks rendered both in the app and (in
+a later step) to a PDF, so the block list and the worked-example models are
+tested directly. The examples are also run through the engine, so a manual
+figure or worked number can never reference a section the solver cannot handle.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import sys
+
+import pytest
+from streamlit.testing.v1 import AppTest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "app"))
+
+import manual  # noqa: E402
+from sector.codes import fctm  # noqa: E402
+from sector.plastic import plastic_capacity_at_angle  # noqa: E402
+from sector.section import Section  # noqa: E402
+from sector.serviceability import analyse_cracking  # noqa: E402
+
+APP = str(ROOT / "app" / "sector_app.py")
+
+
+def _section(ex):
+    return Section.from_polygon(corners=ex["outer"], holes=ex["holes"],
+                                bars_xy_area_mm2=ex["bars"],
+                                tendons_xy_area_mm2=ex["tendons"])
+
+
+@pytest.mark.parametrize("builder", [manual.example_beam, manual.example_circular],
+                         ids=["beam", "circular"])
+def test_worked_example_is_analysable(builder):
+    # Every worked example the manual leans on must build a valid section and run
+    # through both solvers, so a figure or derivation can't reference a section the
+    # engine rejects (e.g. a void that disconnects the concrete).
+    ex = builder()
+    sec = _section(ex)
+    r = plastic_capacity_at_angle(sec, ex["concrete"], ex["steel"], ex["P"], 90.0,
+                                  prestress=ex["prestress"])
+    assert r.converged
+    assert r.Mx > 0.0
+    cr = analyse_cracking(sec, ex["P"], ex["Mx"], ex["My"], 6.0,
+                          fctm=fctm(ex["concrete"].fck), bar_diameter=20.0)
+    assert cr.lambda_cr > 0.0
+
+
+def test_beam_is_mild_only_and_circular_has_void_and_prestress():
+    beam = manual.example_beam()
+    assert beam["prestress"] is None and not beam["tendons"] and not beam["holes"]
+    circ = manual.example_circular()
+    assert circ["prestress"] is not None
+    assert len(circ["holes"]) == 1 and len(circ["tendons"]) > 0 and len(circ["bars"]) > 0
+
+
+@pytest.mark.parametrize("fig", [manual.fig_beam_section, manual.fig_circular_section],
+                         ids=["beam", "circular"])
+def test_section_figures_build(fig):
+    f = fig()
+    assert f is not None
+    assert len(f.data) > 0                      # the drawing has traces
+
+
+def test_manual_blocks_are_wellformed():
+    blocks = manual.manual_blocks()
+    assert len(blocks) > 10
+    kinds = {b[0] for b in blocks}
+    assert {"part", "h1", "md"} <= kinds        # the spine is present
+    for b in blocks:
+        if b[0] == "callout":
+            assert b[1] in manual._CALLOUT      # a known callout kind
+            assert isinstance(b[2], str) and b[2]
+        elif b[0] == "figure":
+            assert callable(b[1])               # figure is a live callable
+            assert isinstance(b[2], str)
+        elif b[0] == "table":
+            headers, rows = b[1], b[2]
+            assert all(len(row) == len(headers) for row in rows)  # rectangular
+
+
+def test_manual_covers_both_examples_and_all_crack_editions():
+    # The reference part documents every crack edition equally; the get-started part
+    # introduces both worked examples.
+    text = "\n".join(b[1] for b in manual.manual_blocks() if b[0] == "md")
+    text += "\n".join(str(b) for b in manual.manual_blocks() if b[0] == "table")
+    for edition in ("2005", "DK NA", "2023"):
+        assert edition in text
+    assert "mild steel" in text.lower() and "prestress" in text.lower()
+
+
+def test_manual_opens_from_the_sidebar_button():
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.run()
+    assert not at.exception
+    at.button(key="open_manual").click().run()
+    assert not at.exception
+    assert at.session_state["_manual_open"] is True
+    assert any("Sector user manual" in m.value for m in at.markdown)
