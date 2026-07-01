@@ -301,10 +301,12 @@ def manual_blocks() -> list:
        "into them.")
     h2("The point tables")
     md("Four editable tables hold the concrete corners, the voids, the bars "
-       "($x$, $y$, area) and the tendons ($x$, $y$, area). Coordinates and areas "
-       "are in millimetres. A void is a closed ring of corners; several voids are "
-       "separated by a blank row. Half-typed rows are ignored until complete, so "
-       "the tables are paste-friendly.")
+       "($x$, $y$, area) and the tendons ($x$, $y$, area). Coordinates are in "
+       "millimetres and the bar and tendon **areas are in square millimetres** "
+       "(the *area (mm2)* column) -- enter 314 for a 20 mm bar, not 20. A void is a "
+       "closed ring of corners; several voids are separated by a blank row. "
+       "Half-typed rows are ignored until complete, so the tables are "
+       "paste-friendly.")
     call("concept", "Everything downstream reads these points. The builder, the "
          "presets and the save file all end up as rows in these four tables, so you "
          "can always edit the geometry by hand.")
@@ -333,7 +335,10 @@ def manual_blocks() -> list:
        "adjusted. The presets carry the partial factors and the curve shape; the "
        "*Preset* dropdown at the top of each material sets them.")
     h2("Concrete")
-    md("The concrete follows the parabola-rectangle law. The inputs are the "
+    md("The concrete stress-strain law is chosen by the *Preset*: **Curve 2 "
+       "(parabola-rectangle)**, the EC2 design law used throughout this manual, or "
+       "**Curve 1 (cubic)**, the legacy cubic curve for normal-strength concrete. "
+       "The inputs are the "
        "characteristic strength $f_{ck}$, the partial factor $\\gamma_c$, the "
        "coefficient $\\alpha_{cc}$, the strain limits $\\varepsilon_{c2}$ and "
        "$\\varepsilon_{cu2}$ with the exponent $n$, the elastic modulus $E_c$ and "
