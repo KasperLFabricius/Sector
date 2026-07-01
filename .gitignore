@@ -31,6 +31,8 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+#   ...but Sector's build spec is hand-written and required to build the package.
+!packaging/sector.spec
 
 # Installer logs
 pip-log.txt
