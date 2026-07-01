@@ -115,15 +115,44 @@ def test_report_wide_spacing_shows_geometric_formula():
     assert "close centres" in txt
 
 
-def test_report_coarse_crack_system_shows_half_factor():
-    # The DK NA coarse crack system halves wk; the report's Eq (7.8) shows the 1/2
-    # factor and the crack-code note flags the centroid-matched effective area.
+def test_report_dk_na_shows_fine_and_coarse_columns():
+    # The DK NA option reports the fine and the coarse crack system side by side,
+    # each for both load cases (four crack-width columns).
     out = _out()
-    out["elastic"]["crack"] = dict(_crack(), coarse=True)
-    out["elastic"]["crack_short"] = dict(_crack(), coarse=True)
-    out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA (coarse crack system)"
+    out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.20)
+    out["elastic"]["crack_short"] = dict(_crack(), coarse=False, wk=0.25)
+    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True, wk=0.10)
+    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True, wk=0.12)
+    out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "coarse crack system" in txt
+    assert "coarse" in txt.lower() and "fine" in txt.lower()   # both systems in the table
+
+
+def test_report_shows_coarse_only_results():
+    # DK NA edge case: the fine (h-x)/3 band has no tension bar but the coarse
+    # centroid-matched band does. The report must still show the coarse widths, not
+    # the "No crack width" message.
+    out = _out()
+    out["elastic"]["crack"] = None
+    out["elastic"]["crack_short"] = None
+    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True)
+    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True)
+    out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "No crack width" not in txt
+    assert "coarse" in txt.lower()
+
+
+def test_report_coarse_worked_shows_half_factor_when_it_governs():
+    # When the coarse case has the largest wk it is the worked example, and Eq (7.8)
+    # shows the 1/2 factor of the coarse crack system.
+    out = _out()
+    out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.10)
+    out["elastic"]["crack_short"] = dict(_crack(), coarse=False, wk=0.10)
+    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True, wk=0.30)
+    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True, wk=0.30)
+    out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert chr(0xBD) in txt            # the 1/2 glyph rendered in Eq (7.8)
 
 

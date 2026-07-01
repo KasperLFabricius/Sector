@@ -465,14 +465,14 @@ def manual_blocks() -> list:
     md("With **Crack width** on, the elastic analysis also computes the crack "
        "width. The bar diameter $\\phi$ (0 = derived from the bar area), the "
        "mild-steel bond coefficient $k_1$ (0.8 ribbed, 1.6 plain), the code edition "
-       "and -- for the DK NA fine system -- the member type are the inputs.")
+       "and -- for the DK NA -- the member type are the inputs.")
     table(["Crack-width code", "What it changes"],
           [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
-           ["DS/EN + DK NA (fine)", "Cover-dependent $k_3$; the $(h-x)/3$ term for slabs / prestressed only"],
-           ["DS/EN + DK NA (coarse)", "Centroid-matched effective area (fig 7.100 NA); $w_k$ halved"],
+           ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
-    call("standard", "All four editions are documented in full in Part C, with the "
-         "worked crack width for the examples.")
+    call("standard", "The DK NA reports the fine and the coarse crack system side "
+         "by side, each for the long-term and short-term load (four crack widths). "
+         "Part C derives every model in full with the worked crack width.")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a long-term modular ratio "
        "$n_l = E_s/E_{c,eff}$ and a short-term $n_s = E_s/E_c$; the long-term value "
@@ -683,9 +683,11 @@ def manual_blocks() -> list:
            ["DS/EN + DK NA (fine)", "206", "0.125", "0.164"],
            ["DS/EN + DK NA (coarse)", "184", "0.100", "0.077"],
            ["EN 1992-1-1:2023", "134", "0.175", "0.186"]])
-    call("standard", "All four editions are selectable in *Analysis & Result "
-         "Settings*; the report writes out the governing worked crack width for the "
-         "chosen edition.")
+    call("standard", "The *Crack-width code* offers three options -- EN 1992-1-1:"
+         "2005, DS/EN 1992-1-1 + DK NA and EN 1992-1-1:2023. The DK NA option "
+         "reports the fine and the coarse system together (all four columns above), "
+         "each for the long-term and short-term load; the report writes out the "
+         "governing worked crack width.")
 
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "

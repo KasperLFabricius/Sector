@@ -749,16 +749,24 @@ class ReportBuilder:
             self._small("Crack width was not requested for this run.")
             return
         cl, cs = el.get("crack"), el.get("crack_short")
-        if cl is None and cs is None:
+        clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
+        if cl is None and cs is None and clc is None and csc is None:
             self._small("No crack width: the section is uncracked, or no bar is in "
                         "tension, under either the long-term or the short-term load.")
             return
-        self._crack_table(cl, cs)
-        # Work the case that actually governs (the larger crack width).
-        gov_case = max((c for c in (cl, cs) if c), key=lambda c: c.get("wk", 0.0))
-        self._crack_worked(gov_case, "long-term" if gov_case is cl else "short-term")
+        self._crack_table(cl, cs, clc, csc)
+        # Work the case that actually governs (the larger crack width) over every
+        # reported load case and crack system.
+        if clc is not None or csc is not None:
+            cases = [(cl, "long-term (fine)"), (cs, "short-term (fine)"),
+                     (clc, "long-term (coarse)"), (csc, "short-term (coarse)")]
+        else:
+            cases = [(cl, "long-term"), (cs, "short-term")]
+        gov_case, gov_which = max(((c, w) for c, w in cases if c),
+                                  key=lambda cw: cw[0].get("wk", 0.0))
+        self._crack_worked(gov_case, gov_which)
 
-    def _crack_table(self, cl, cs):
+    def _crack_table(self, cl, cs, clc=None, csc=None):
         # The full crack-width breakdown for both load cases, matching the view.
         self._h2("Crack width - both load cases")
         # wk, sr_max, phi and cover come from the engine already in mm; hc_ef (m)
@@ -777,11 +785,21 @@ class ReportBuilder:
         def col(c):
             return ["-"] * len(specs) if c is None else \
                 [_fmt(c.get(k, 0.0) * sc, nd) for _, k, nd, sc in specs]
-        lcol, scol = col(cl), col(cs)
-        rows = [["Quantity", "Long-term", "Short-term"]]
+
+        if clc is not None or csc is not None:
+            # DK NA: fine and coarse crack systems, each for both load cases.
+            header = ["Quantity", "Long-term (fine)", "Short-term (fine)",
+                      "Long-term (coarse)", "Short-term (coarse)"]
+            cols = [col(cl), col(cs), col(clc), col(csc)]
+            widths = [66 * mm, 25 * mm, 25 * mm, 25 * mm, 25 * mm]
+        else:
+            header = ["Quantity", "Long-term", "Short-term"]
+            cols = [col(cl), col(cs)]
+            widths = [85 * mm, 38 * mm, 38 * mm]
+        rows = [header]
         for i, spec in enumerate(specs):
-            rows.append([spec[0], lcol[i], scol[i]])
-        self._table(rows, [85 * mm, 38 * mm, 38 * mm])
+            rows.append([spec[0]] + [c[i] for c in cols])
+        self._table(rows, widths)
 
     def _crack_worked(self, cw, which=""):
         if not cw:
