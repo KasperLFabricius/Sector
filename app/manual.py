@@ -856,29 +856,39 @@ def _png_size(png):
     return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
 
 
-def _fig_to_png(fig_callable, timeout=_FIG_EXPORT_TIMEOUT_S):
-    """Render a manual figure to PNG bytes, ``None`` on failure, or the
-    ``_FIG_TIMED_OUT`` sentinel if kaleido does not finish in ``timeout``.
+def _call_with_timeout(fn, timeout):
+    """Run ``fn()`` in a daemon thread, returning its result (``None`` on error)
+    or the ``_FIG_TIMED_OUT`` sentinel if it does not finish within ``timeout``.
 
-    kaleido's export can block indefinitely when its headless-browser server is
-    in a bad state, so it runs in a daemon thread with a join timeout -- the PDF
-    then still completes (with placeholders) instead of hanging the app."""
-    out = {}
+    kaleido's browser export -- both the shared-server startup and each figure
+    render -- can block indefinitely when the headless browser is in a bad state,
+    so it runs off the main thread with a join timeout; the PDF then still
+    completes (with placeholders) instead of hanging the app."""
+    box = {}
 
     def _work():
         try:
-            buf = io.BytesIO()
-            fig_callable().write_image(buf, format="png", scale=2)
-            out["png"] = buf.getvalue()
+            box["v"] = fn()
         except Exception:
-            out["png"] = None
+            box["v"] = None
 
     worker = threading.Thread(target=_work, daemon=True)
     worker.start()
     worker.join(timeout)
     if worker.is_alive():
         return _FIG_TIMED_OUT
-    return out.get("png")
+    return box.get("v")
+
+
+def _fig_to_png(fig_callable, timeout=_FIG_EXPORT_TIMEOUT_S):
+    """Render a manual figure to PNG bytes, ``None`` on failure, or the
+    ``_FIG_TIMED_OUT`` sentinel if kaleido does not finish in ``timeout``."""
+    def _render():
+        buf = io.BytesIO()
+        fig_callable().write_image(buf, format="png", scale=2)
+        return buf.getvalue()
+
+    return _call_with_timeout(_render, timeout)
 
 
 def build_manual_pdf(buffer, figures=True):
@@ -925,12 +935,15 @@ def build_manual_pdf(buffer, figures=True):
         Spacer(1, 0.4 * cm),
     ]
 
-    # One shared kaleido server for all figures (started lazily; tables-only when
-    # kaleido or a browser is unavailable, or when figures are disabled).
-    if figures:
-        report.ensure_image_server()
+    # One shared kaleido server for all figures. Start it behind the same timeout
+    # as the figure renders, so a wedged browser startup cannot hang the build;
+    # if it times out, drop to tables-only. Skipped entirely when figures are off.
     n1 = n2 = 0
     figures_hung = False
+    if figures:
+        if _call_with_timeout(report.ensure_image_server,
+                              _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
+            figures_hung = True
     for block in manual_blocks():
         kind = block[0]
         if kind == "part":

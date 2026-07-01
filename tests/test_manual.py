@@ -201,6 +201,15 @@ def test_manual_pdf_has_no_stray_dollar_delimiters():
     assert "$" not in text
 
 
+def test_call_with_timeout_guards_slow_and_failing_work():
+    # The PDF build runs both the kaleido server startup and each figure render
+    # through this guard, so a wedged browser cannot hang the build.
+    import time
+    assert manual._call_with_timeout(lambda: 42, 5) == 42
+    assert manual._call_with_timeout(lambda: 1 / 0, 5) is None           # error -> None
+    assert manual._call_with_timeout(lambda: time.sleep(2), 0.2) is manual._FIG_TIMED_OUT
+
+
 def test_manual_pdf_builds_tables_only():
     # Build without the Plotly-to-PNG export (no kaleido/browser needed): a valid,
     # non-trivial PDF over all the content blocks.
