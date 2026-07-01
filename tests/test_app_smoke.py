@@ -74,6 +74,23 @@ def test_calculate_plastic_produces_an_envelope():
     assert "plastic" in res
     assert len(res["plastic"]["mx"]) > 0
     assert res["plastic"]["max_mx"] > 0  # a rectangle with bottom steel has +Mx capacity
+    # Both extremes are reported for each axis (Max and Min), and the min never
+    # exceeds the max.
+    pl = res["plastic"]
+    assert pl["min_mx"] <= pl["max_mx"] and pl["min_my"] <= pl["max_my"]
+
+
+def test_plastic_view_tolerates_legacy_results_without_min_fields():
+    # A result payload cached before min_mx/min_my existed (inputs unchanged, so no
+    # recompute) must still render the Plastic Results view: the minima are derived
+    # from the envelope rather than raising a KeyError.
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    at.session_state["results"]["plastic"].pop("min_mx", None)
+    at.session_state["results"]["plastic"].pop("min_my", None)
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    assert not at.exception
 
 
 def test_calculate_elastic_produces_bar_stresses():

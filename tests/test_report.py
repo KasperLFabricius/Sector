@@ -40,7 +40,8 @@ def _crack():
 def _out():
     return {
         "plastic": {"mx": [100.0, 0.0, -100.0, 0.0], "my": [0.0, 100.0, 0.0, -100.0],
-                    "max_mx": 100.0, "max_my": 100.0, "util": 0.8, "closed": True,
+                    "max_mx": 100.0, "max_my": 100.0, "min_mx": -100.0, "min_my": -100.0,
+                    "util": 0.8, "closed": True,
                     "check_util": True, "applied": (80.0, 0.0), "converged": True,
                     "points": [{"V": 0.0, "Mx": 100.0, "My": 0.0, "na_x": 0.0,
                                 "na_y": 0.05, "eps_c": 0.35, "eps_s": 2.0,
@@ -73,6 +74,7 @@ def test_report_mirrors_the_views():
     assert "both load cases" in txt                # full crack-width table
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
     assert "Utilisation check" in txt              # analysis settings documented
+    assert "Max / Min" in txt                      # both extremes for Mx and My
 
 
 def test_report_renders_greek_glyphs():

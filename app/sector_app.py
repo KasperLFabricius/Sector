@@ -1550,7 +1550,7 @@ def run_analysis(inp):
                 if (closed and check_util) else None)
         out["plastic"] = dict(
             mx=mx, my=my,
-            max_mx=max(mx), max_my=max(my),
+            max_mx=max(mx), max_my=max(my), min_mx=min(mx), min_my=min(my),
             util=util, closed=closed, check_util=check_util,
             applied=((inp["Mx_pl"], inp["My_pl"]) if check_util else None),
             converged=all(p.converged for p in pts),
@@ -1777,19 +1777,25 @@ def plastic_view(inp, results):
         return
     p = results["plastic"]
     pts = p["points"]
-    m1, m2, m3 = st.columns(3)
+    # Derive the minima from the envelope if absent, so a result payload cached
+    # before min_mx/min_my existed (matching inputs -> no recompute) still renders.
+    min_mx = p.get("min_mx", min(p["mx"]))
+    min_my = p.get("min_my", min(p["my"]))
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Max $M_x$", f"{p['max_mx']:.0f} kNm")
-    m2.metric("Max $M_y$", f"{p['max_my']:.0f} kNm")
+    m2.metric("Min $M_x$", f"{min_mx:.0f} kNm")
+    m3.metric("Max $M_y$", f"{p['max_my']:.0f} kNm")
+    m4.metric("Min $M_y$", f"{min_my:.0f} kNm")
     if not p.get("check_util", True):
-        m3.metric("Utilisation", "-",
+        m5.metric("Utilisation", "-",
                   help="Capacity-only run: the applied moments are not checked. "
                        "Enable 'Check utilisation against applied moment' to check.")
     elif p["util"] is None:
-        m3.metric("Utilisation", "-",
+        m5.metric("Utilisation", "-",
                   help="Only meaningful for a full 0-360 deg sweep; the current "
                        "sweep is a partial arc.")
     else:
-        m3.metric("Utilisation", f"{p['util']:.2f}",
+        m5.metric("Utilisation", f"{p['util']:.2f}",
                   help="applied / capacity in the load direction")
     st.plotly_chart(
         viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied")),
