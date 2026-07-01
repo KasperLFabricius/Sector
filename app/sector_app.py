@@ -1122,6 +1122,12 @@ def build_inputs():
         st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
         st.caption("Internal engineering tool, Sweco.")
 
+    if s.button("User manual", key="open_manual", use_container_width=True,
+                help="Open the full-width user manual: what Sector computes, the "
+                     "theory it applies, its features, and how to use it."):
+        st.session_state["_manual_open"] = True
+        st.rerun()
+
     # Reserve the Save / Load slot here (near the top) but fill it at the end of
     # build_inputs, once the point tables and inputs exist, so the download
     # captures the live section even on a fresh session.
@@ -1997,9 +2003,14 @@ _apply_pending_project()   # restore an uploaded project before any widget is bu
 # while the builder owns the main area.
 inp = build_inputs()
 
-# The Quick Section builder takes over the main viewport (the BriCoS manual
-# pattern): render it in place of the analysis views while it is open, and stop
-# before they draw. The sidebar stays, so its widget state survives.
+# The Quick Section builder and the user manual each take over the main viewport
+# (the BriCoS manual pattern): render in place of the analysis views while open,
+# and stop before they draw. The sidebar stays, so its widget state survives.
+if st.session_state.get("_manual_open"):
+    import manual                          # lazy: keep the manual off the hot path
+    manual.render_manual_streamlit()
+    st.stop()
+
 if st.session_state.get("_qs_open"):
     _quick_section_viewport()
     st.stop()
