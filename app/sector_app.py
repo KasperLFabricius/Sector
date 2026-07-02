@@ -110,7 +110,7 @@ st.markdown(
 
 _logo = ROOT / "assets" / "logo.png"
 if _logo.exists():
-    st.sidebar.image(str(_logo), use_container_width=True)
+    st.sidebar.image(str(_logo), width="stretch")
 
 st.title(f"Sector v{APP_VERSION}")
 st.caption("Reinforced-concrete cross-section analysis - elastic stresses and plastic capacity")
@@ -234,7 +234,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     a_n = round(_n_f, 3)
     auto_all = st.session_state.get("_auto_all", False)
     if (box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
-                   key="conc_strain_auto", use_container_width=True, disabled=strain_lock,
+                   key="conc_strain_auto", width="stretch", disabled=strain_lock,
                    help="Set eps_c2, eps_cu2 and n for the current grade and edition "
                         "(EC2 Table 3.1, strength-dependent above C50/60; kept constant "
                         "for EN 1992-1-1:2023). Press again after changing fck or preset.")
@@ -268,7 +268,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     fctm_ec = round(codes.fctm(fck), 3)
     st.session_state.setdefault("sls_fctm", fctm_ec)
     if (box.button(f"Auto $f_{{ctm}}$ (EC2: {fctm_ec:.2f} MPa)", key="sls_fctm_auto",
-                   use_container_width=True, disabled=lock_elastic,
+                   width="stretch", disabled=lock_elastic,
                    help="Set fctm = 0.30*fck^(2/3) (EC2 Table 3.1) for the current "
                         "concrete grade. Press again after changing the grade.")
             or (auto_all and not lock_elastic)):
@@ -283,7 +283,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     ecm_gpa = round(codes.ecm(fck) / 1000.0, 1)
     st.session_state.setdefault("conc_Ec", ecm_gpa)
     if (box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
-                   use_container_width=True, disabled=lock_elastic,
+                   width="stretch", disabled=lock_elastic,
                    help="Set Ec = Ecm = 22*(fcm/10)^0.3 GPa (EC2 Table 3.1) for the "
                         "current grade. Press again after changing the grade.")
             or (auto_all and not lock_elastic)):
@@ -733,7 +733,7 @@ def _save_load_panel(parent) -> None:
     box = parent.expander("Save / Load", expanded=False)
     box.download_button("Download project", data=_gather_project(),
                         file_name="sector_section.json", mime="application/json",
-                        use_container_width=True,
+                        width="stretch",
                         help="Save the section, materials, loads and settings to a "
                              "JSON file.")
     _autosave_panel(box)
@@ -778,7 +778,7 @@ def _report_panel(parent):
     # Only flag the request here; the report is built at the end of the run, once
     # build_inputs has rendered every panel (so the materials/loads are complete).
     # Re-running now would abort this run before those panels set their values.
-    if box.button("Generate report", type="primary", use_container_width=True,
+    if box.button("Generate report", type="primary", width="stretch",
                   key="gen_report"):
         st.session_state["_generating_report"] = True
     # A progress placeholder in the panel (filled live during generation, which runs
@@ -792,7 +792,7 @@ def _report_panel(parent):
         name = (st.session_state.get("rep_proj_no") or "section").strip() or "section"
         box.download_button("Download report (PDF)", st.session_state["report_buffer"],
                             file_name=f"Sector_report_{name}.pdf",
-                            mime="application/pdf", use_container_width=True)
+                            mime="application/pdf", width="stretch")
 
 
 def _generate_report(inp):
@@ -1063,9 +1063,9 @@ def _quick_section_viewport():
                "and tendon point tables with what is drawn here; Back discards it "
                "and leaves the current points untouched.")
     bcol, acol, _ = st.columns([1, 1, 3])
-    back = bcol.button("Back", use_container_width=True, key="qs_back")
+    back = bcol.button("Back", width="stretch", key="qs_back")
     apply = acol.button("Apply to point tables", type="primary",
-                        use_container_width=True, key="qs_apply")
+                        width="stretch", key="qs_apply")
 
     form, preview = st.columns([2, 3])
     with form:
@@ -1078,7 +1078,7 @@ def _quick_section_viewport():
             viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
                                title="Preview", show_labels=True, height=560,
                                scale=_MM, unit="mm"),
-            use_container_width=True)
+            width="stretch")
         st.caption(f"{len(outer)} concrete corners, {len(holes)} void(s), "
                    f"{len(bars)} bars, {len(tendons)} tendons.")
 
@@ -1132,7 +1132,7 @@ def build_inputs():
         st.markdown(f"**Sector v{APP_VERSION}**")
         st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
         st.caption("Internal engineering tool, Sweco.")
-        if st.button("User manual", key="open_manual", use_container_width=True,
+        if st.button("User manual", key="open_manual", width="stretch",
                      help="Open the full-width user manual: what Sector computes, "
                           "the theory it applies, its features, and how to use it."):
             # No rerun: build_inputs continues so every panel renders (state kept);
@@ -1156,7 +1156,7 @@ def build_inputs():
     # Recompute every auto-derived value from the current inputs in one click. It
     # sets a flag that each panel's Auto handler honours as it renders later this
     # run; the flag is cleared at the end of build_inputs (one-shot).
-    if aset.button("Auto-calc all derived values", use_container_width=True,
+    if aset.button("Auto-calc all derived values", width="stretch",
                    key="auto_all_btn",
                    help="Recompute all auto values from the current grade and creep: "
                         "the concrete strain limits eps_c2/eps_cu2/n, fctm, Ec, and "
@@ -1231,14 +1231,14 @@ def build_inputs():
     sec.caption("The section is a set of explicit points (the source of truth). "
                 "Use the Quick Section builder to generate a parametric shape and "
                 "write its points here, or edit the point tables directly.")
-    if sec.button("Quick Section builder...", key="open_qs", use_container_width=True,
+    if sec.button("Quick Section builder...", key="open_qs", width="stretch",
                   help="Open a full-width builder: pick a shape, dimensions and "
                        "reinforcement with a live preview, then Apply to fill the "
                        "point tables."):
         st.session_state["_qs_open"] = True
         st.rerun()
     clear_pts = sec.button("Clear Section (empty all points)", key="clear_pts",
-                           use_container_width=True,
+                           width="stretch",
                            help="Remove every concrete corner, the void, and all "
                                 "bars and tendons from the point tables, to start "
                                 "from a blank section.")
@@ -1310,14 +1310,14 @@ def build_inputs():
     void_now = _current_table("hole_base", "ed_hole", _CORNER_COLS)
     n_voids = len(_void_groups(void_now, _CORNER_COLS))
     vc1, vc2 = sec.columns(2)
-    if vc1.button("+ Add void", key="add_void", use_container_width=True,
+    if vc1.button("+ Add void", key="add_void", width="stretch",
                   disabled=n_voids >= _MAX_VOIDS,
                   help=f"Append a blank separator row, so the next corners you enter "
                        f"start a new void (up to {_MAX_VOIDS})."):
         groups = _void_groups(void_now, _CORNER_COLS)
         _reseed_table("hole_base", "ed_hole",
                       _void_table_from_groups(groups, trailing_blank=True))
-    if vc2.button("Remove void", key="rem_void", use_container_width=True,
+    if vc2.button("Remove void", key="rem_void", width="stretch",
                   disabled=n_voids == 0, help="Drop the last void from the table."):
         groups = _void_groups(void_now, _CORNER_COLS)
         _reseed_table("hole_base", "ed_hole", _void_table_from_groups(groups[:-1]))
@@ -1405,7 +1405,7 @@ def build_inputs():
                                    / (conc_Ec * 1000.0))), 1)
     st.session_state.setdefault("nl", _nl_auto)   # default from Ec, phi (EC2)
     if (loads.button(f"Auto $n_l$ ($E_s(1+\\varphi)/E_c$ = {_nl_auto:.1f})", key="nl_auto",
-                     disabled=not elastic_on, use_container_width=True,
+                     disabled=not elastic_on, width="stretch",
                      help="Long-term modular ratio from the concrete Ec, creep-reduced "
                           "by phi (effective-modulus method).")
             or (st.session_state.get("_auto_all", False) and elastic_on)):
@@ -1423,7 +1423,7 @@ def build_inputs():
     _ns_auto = round(min(50.0, max(1.0, steel.Es / (conc_Ec * 1000.0))), 1)
     st.session_state.setdefault("ns", _ns_auto)   # default from Ec (Es/Ec)
     if (loads.button(f"Auto $n_s$ ($E_s/E_c$ = {_ns_auto:.1f})", key="ns_auto",
-                     disabled=not elastic_on, use_container_width=True,
+                     disabled=not elastic_on, width="stretch",
                      help="Short-term (instantaneous) modular ratio from the concrete Ec.")
             or (st.session_state.get("_auto_all", False) and elastic_on)):
         st.session_state["ns"] = _ns_auto
@@ -1492,7 +1492,7 @@ def build_inputs():
     # its rerun cannot drop any sidebar input's widget state.
     if st.session_state.get("_manual_open"):
         if back_slot.button("Back to analysis", type="primary",
-                            use_container_width=True, key="manual_back"):
+                            width="stretch", key="manual_back"):
             st.session_state["_manual_open"] = False
             st.rerun()
     return dict(section=section, void_error=void_error, steel_error=steel_error,
@@ -1782,7 +1782,7 @@ def section_view(inp):
         inp["outer"], inp["holes"], bar_xy, title="Section", tendons=tendon_xy,
         show_labels=True, label_scale=inp["label_scale"],
         label_min_gap=inp["label_min_gap"], height=640, scale=_MM, unit="mm"))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def materials_view(inp):
@@ -1794,12 +1794,12 @@ def materials_view(inp):
     """
     conc, steel, pre = inp["concrete"], inp["steel"], inp["prestress"]
     st.plotly_chart(_memo_fig("concrete", conc, lambda: viz.concrete_curve_figure(conc)),
-                    use_container_width=True)
+                    width="stretch")
     st.plotly_chart(_memo_fig("steel", steel, lambda: viz.steel_curve_figure(steel)),
-                    use_container_width=True)
+                    width="stretch")
     if pre is not None:
         st.plotly_chart(_memo_fig("prestress", pre, lambda: viz.prestress_curve_figure(pre)),
-                        use_container_width=True)
+                        width="stretch")
 
 
 def _fmt(v):
@@ -1859,7 +1859,7 @@ def plastic_view(inp, results):
                   help="applied / capacity in the load direction")
     st.plotly_chart(
         viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied")),
-        use_container_width=True)
+        width="stretch")
 
     default_i = max(range(len(pts)), key=lambda i: pts[i]["Mx"])
     # The sweep length varies with V.min/V.max/V.inc; clamp a stale selection.
@@ -1882,7 +1882,7 @@ def plastic_view(inp, results):
                                title=f"Section at V = {pt['V']:.0f} deg",
                                show_labels=True, label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm"),
-            use_container_width=True)
+            width="stretch")
     with cR:
         lines = [
             f"- **$M_x$ / $M_y$**: {pt['Mx']:.0f} / {pt['My']:.0f} kNm",
@@ -1902,7 +1902,7 @@ def plastic_view(inp, results):
     with st.expander("Full results table (per neutral-axis angle)"):
         # Size the table to all rows so the page scrolls, not the table itself.
         st.dataframe(_plastic_table(pts, bool(inp["tendons"])),
-                     hide_index=True, use_container_width=True,
+                     hide_index=True, width="stretch",
                      height=35 * (len(pts) + 1) + 3)
 
 
@@ -1956,7 +1956,7 @@ def elastic_view(inp, results):
                            label_scale=inp["label_scale"],
                            label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
                            title="Elastic state (green tension, red compression)"),
-        use_container_width=True)
+        width="stretch")
 
     # The per-bar stress table sits below the figure, sized to all rows.
     st.markdown("**Steel stresses (MPa, tension +)**")
@@ -1967,7 +1967,7 @@ def elastic_view(inp, results):
          "Long": [round(s, 1) for s in e["long"]],
          "Dif": [round(s, 1) for s in e["dif"]],
          "RST1": [round(s, 1) for s in e["rst1"]]},
-        hide_index=True, use_container_width=True, height=35 * (n + 1) + 3)
+        hide_index=True, width="stretch", height=35 * (n + 1) + 3)
     st.caption(
         "**Total** = long + short  \n"
         "**Long** = long-term alone  \n"
@@ -2018,7 +2018,7 @@ def _elastic_sls_section(inp, e):
         data = {"Property": rows, "Uncracked": [f"{un[k]:.4g}" for k in keys]}
         if cr is not None:
             data["Cracked"] = [f"{cr[k]:.4g}" for k in keys]
-        st.dataframe(data, hide_index=True, use_container_width=True)
+        st.dataframe(data, hide_index=True, width="stretch")
         st.caption("Transformed ($n_l$-weighted) properties about the section "
                    "centroid; the cracked column drops the concrete in tension. "
                    "Ix resists Mx (bending about the x-axis).")
@@ -2061,7 +2061,7 @@ def _crack_width_panel(e):
     else:
         data = {"Quantity": quants, "Long-term": column(cl),
                 "Short-term": column(cs)}
-    st.dataframe(data, hide_index=True, use_container_width=True)
+    st.dataframe(data, hide_index=True, width="stretch")
     st.caption("Governing (largest-$w_k$) bar per load case; each bar's clear cover "
                "is the distance to the nearest concrete face minus its radius.")
     member = e.get("crack_member")
@@ -2127,7 +2127,7 @@ view = c_view.selectbox("View", VIEWS, key="view",
 # Nudge the unlabelled button down so it lines up with the selectbox input.
 c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
 calc = c_calc.button("Calculate", type="primary", key="calculate",
-                     use_container_width=True,
+                     width="stretch",
                      help="Run the selected analysis for the current inputs.")
 
 if calc:
