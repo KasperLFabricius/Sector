@@ -375,8 +375,9 @@ def manual_blocks() -> list:
            ["Plastic Results", "The M-M envelope and the utilisation (on Calculate)"],
            ["Elastic Results", "The cracked-section stresses and crack width (on Calculate)"]])
     call("tip", "*Auto-calc all derived values* (in Analysis & Result Settings) "
-         "recomputes every auto quantity from the current grade and creep at once: "
-         "the concrete strain limits, $f_{ctm}$, $E_c$ and the modular ratios.")
+         "recomputes every auto quantity from the current grade at once: the concrete "
+         "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
+         "$E_s$, $E_p$ and creep automatically.")
 
     h1("Defining the section")
     md("A section is a set of explicit points in millimetres -- the concrete "
@@ -474,10 +475,13 @@ def manual_blocks() -> list:
          "by side, each for the long-term and short-term load (four crack widths). "
          "Part C derives every model in full with the worked crack width.")
     h2("Modular ratios and creep")
-    md("The cracked-elastic analysis uses a long-term modular ratio "
-       "$n_l = E_s/E_{c,eff}$ and a short-term $n_s = E_s/E_c$; the long-term value "
-       "carries creep through the coefficient $\\varphi$. Both have *Auto* buttons "
-       "that derive them from $E_c$ and $\\varphi$.")
+    md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
+       "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
+       "effective modulus $E_{c,eff} = E_c/(1+\\varphi)$. These ratios are **not "
+       "entered** -- they are derived from the elastic moduli and the creep "
+       "coefficient $\\varphi$. Mild steel and prestress are **independent**, "
+       "because $E_s \\neq E_p$: mild steel uses $n = E_s/E_c$ and tendons "
+       "$n = E_p/E_c$. Both pairs are reported in the Loads panel and in the report.")
 
     h1("Loads")
     md("The plastic check uses one action set (axial force $N$, positive in "
@@ -624,7 +628,11 @@ def manual_blocks() -> list:
     md("Creep enters through the modular ratio: the long-term state uses "
        "$n_l = E_s/E_{c,eff}$ with $E_{c,eff}=E_c/(1+\\varphi)$, and the "
        "short-term state uses $n_s = E_s/E_c$. The reported total combines the two, "
-       "so both load duration and creep are captured.")
+       "so both load duration and creep are captured. Prestressing tendons carry "
+       "their **own** modular ratio $n_p = E_p/E_c$ (creep-reduced the same way), "
+       "independent of the mild-steel ratio because $E_p \\neq E_s$; the solver "
+       "applies it per bar. None of these ratios is entered -- they are all derived "
+       "from the moduli $E_c$, $E_s$, $E_p$ and the creep coefficient $\\varphi$.")
     fig(fig_beam_cracked, "The beam's cracked (Stage II) state under the service "
         "moment: the compression zone (shaded) above the neutral axis.")
 
@@ -782,8 +790,8 @@ _LATEX_CMD = {
     r"\varphi": "&#966;", r"\alpha": "&#945;", r"\rho": "&#961;",
     r"\lambda": "&#955;", r"\phi": "&#966;", r"\eta": "&#951;",
     r"\Delta": "&#916;", r"\le": "&#8804;", r"\ge": "&#8805;",
-    r"\times": "&#215;", r"\cdot": "&#183;", r"\approx": "&#8776;",
-    r"\pm": "&#177;", r"\sum": "&#931;",
+    r"\neq": "&#8800;", r"\times": "&#215;", r"\cdot": "&#183;",
+    r"\approx": "&#8776;", r"\pm": "&#177;", r"\sum": "&#931;",
 }
 
 

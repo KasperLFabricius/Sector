@@ -1099,6 +1099,25 @@ def _quick_section_viewport():
         st.rerun()
 
 
+def _modular_ratio_readout(box, ns, nl, ns_p, nl_p, *, has_tendons):
+    """Report the derived short/long-term modular ratios (mild + prestress).
+
+    n_l and n_s are no longer entered but computed from the elastic moduli and the
+    creep coefficient, so the values actually used are shown here (and in the PDF
+    report). Mild steel and prestress get their own ratios because Es != Ep; the
+    prestress row is shown only when the section has tendons.
+    """
+    # Plain-text cells (no LaTeX): KaTeX does not render reliably inside a markdown
+    # table cell, so keep the maths in the intro line and the table simply readable.
+    box.markdown(r"**Modular ratios** (derived from $E_c$, $E_s$, $E_p$, $\varphi$)")
+    rows = ["| Steel | Short-term n_s | Long-term n_l |",
+            "|:--|--:|--:|",
+            f"| Mild (Es/Ec) | {ns:.1f} | {nl:.1f} |"]
+    if has_tendons:
+        rows.append(f"| Prestress (Ep/Ec) | {ns_p:.1f} | {nl_p:.1f} |")
+    box.markdown("\n".join(rows))
+
+
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
     loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
@@ -1158,9 +1177,10 @@ def build_inputs():
     # run; the flag is cleared at the end of build_inputs (one-shot).
     if aset.button("Auto-calc all derived values", width="stretch",
                    key="auto_all_btn",
-                   help="Recompute all auto values from the current grade and creep: "
-                        "the concrete strain limits eps_c2/eps_cu2/n, fctm, Ec, and "
-                        "the modular ratios n_l and n_s."):
+                   help="Recompute all auto values from the current grade: the "
+                        "concrete strain limits eps_c2/eps_cu2/n, fctm and Ec. The "
+                        "modular ratios n_l/n_s follow from Ec, Es, Ep and creep "
+                        "automatically."):
         st.session_state["_auto_all"] = True
 
     aset.markdown("**Neutral-axis sweep (plastic)**")
@@ -1388,9 +1408,11 @@ def build_inputs():
 
     loads.divider()
     loads.markdown("**Elastic stresses (long + short term)**")
-    loads.caption("Long-term and short-term load with their own modular ratios "
-                  "(the creep analysis). For a simple check leave the short-term "
-                  "load at zero and set both ratios equal.")
+    loads.caption("A sustained (long-term) and an instantaneous (short-term) action, "
+                  "each carried at its own modular ratio so creep is explicit. For an "
+                  "instantaneous-only check put the load in the short-term set and "
+                  "leave the long-term at zero; set the creep coefficient to zero to "
+                  "drop creep for a single load case.")
     loads.markdown("_Long-term_")
     P_el_l, Mx_el_l, My_el_l = _load_set(
         "el_long", "Sustained external axial force (long-term). A tendon's prestress "
@@ -1399,38 +1421,25 @@ def build_inputs():
         "Sustained moment (long-term).", elastic_on)
     phi_creep = loads.number_input(r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0, 3.0,
                                    0.1, key="el_phi", disabled=not elastic_on,
-                                   help="Final creep coefficient for the long-term "
-                                        "modular ratio n_l = Es*(1+phi)/Ec.")
-    _nl_auto = round(min(50.0, max(1.0, steel.Es * (1.0 + phi_creep)
-                                   / (conc_Ec * 1000.0))), 1)
-    st.session_state.setdefault("nl", _nl_auto)   # default from Ec, phi (EC2)
-    if (loads.button(f"Auto $n_l$ ($E_s(1+\\varphi)/E_c$ = {_nl_auto:.1f})", key="nl_auto",
-                     disabled=not elastic_on, width="stretch",
-                     help="Long-term modular ratio from the concrete Ec, creep-reduced "
-                          "by phi (effective-modulus method).")
-            or (st.session_state.get("_auto_all", False) and elastic_on)):
-        st.session_state["nl"] = _nl_auto
-    nl = loads.number_input(r"Long-term modular ratio $n_l = E_s/E_{c,eff}$", 1.0, 50.0,
-                            step=0.5, key="nl", disabled=not elastic_on,
-                            help="Modular ratio for the sustained load (creep-reduced "
-                                 "concrete stiffness, so larger than the short-term "
-                                 "ratio). Use Auto to derive it from Ec and phi.")
+                                   help="Final creep coefficient. The long-term modular "
+                                        "ratios use the effective modulus "
+                                        "Ec,eff = Ec/(1+phi).")
     loads.markdown("_Short-term_")
     P_el_s, Mx_el_s, My_el_s = _load_set(
         "el_short", "Instantaneous (variable) external axial force (prestress is "
         "applied automatically from the tendon initial strain).",
         "Instantaneous (variable) moment.", elastic_on, mx_default=0.0)
-    _ns_auto = round(min(50.0, max(1.0, steel.Es / (conc_Ec * 1000.0))), 1)
-    st.session_state.setdefault("ns", _ns_auto)   # default from Ec (Es/Ec)
-    if (loads.button(f"Auto $n_s$ ($E_s/E_c$ = {_ns_auto:.1f})", key="ns_auto",
-                     disabled=not elastic_on, width="stretch",
-                     help="Short-term (instantaneous) modular ratio from the concrete Ec.")
-            or (st.session_state.get("_auto_all", False) and elastic_on)):
-        st.session_state["ns"] = _ns_auto
-    ns = loads.number_input(r"Short-term modular ratio $n_s = E_s/E_c$", 1.0, 50.0,
-                            step=0.5, key="ns", disabled=not elastic_on,
-                            help="Modular ratio for the instantaneous load. Use Auto "
-                                 "to derive it from Ec.")
+    # The modular ratios are derived from the elastic moduli, not entered: mild steel
+    # uses n = Es/Ec and prestress n = Ep/Ec (independent ratios, since Es != Ep), each
+    # creep-reduced to E/Ec,eff = E(1+phi)/Ec for the sustained (long-term) state. The
+    # scalar nl/ns handed to the solver are the mild-steel ratios; the tendons carry
+    # their own ratio per bar (the Ep/Es multiplier), so both pairs are reported below.
+    ec_mpa = max(conc_Ec, 1e-6) * 1000.0
+    ns = steel.Es / ec_mpa
+    nl = steel.Es * (1.0 + phi_creep) / ec_mpa
+    ns_p = prestress.Es / ec_mpa
+    nl_p = prestress.Es * (1.0 + phi_creep) / ec_mpa
+    _modular_ratio_readout(loads, ns, nl, ns_p, nl_p, has_tendons=bool(tendons))
 
     section = (Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                     tendons_xy_area_mm2=tendons, holes=holes)
@@ -1482,7 +1491,10 @@ def build_inputs():
             "pre_IS", "pre_fytk", "pre_futk", "pre_eut", "pre_gamma_y",
             "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
             "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
-            "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
+            "el_short_P", "el_short_Mx", "el_short_My",
+            # n_l/n_s are derived from Ec and creep, so the ratios enter the staleness
+            # signature through their inputs (editing either marks results stale).
+            "conc_Ec", "el_phi",
             "v_min", "v_max", "v_inc", "mode", "pl_check_util",
             "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))
@@ -1503,6 +1515,7 @@ def build_inputs():
                 v_min=v_min, v_max=v_max, v_inc=v_inc,
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
+                el_phi=phi_creep, conc_Ec=conc_Ec,
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
@@ -1918,6 +1931,16 @@ def elastic_view(inp, results):
               help=f"at concrete corner {e['max_conc_point'] + 1}")
     m2.metric("Max steel tension", f"{e['max_steel']:.1f} MPa",
               help=f"in bar {e['max_steel_bar']}")
+
+    # Modular ratios are derived (not entered); report the values actually used. Mild
+    # steel and prestress differ (Es != Ep), so both pairs are shown when tendons exist.
+    _nl, _ns = inp["nl"], inp["ns"]
+    ratio_txt = (f"Modular ratios ($E_s/E_c$, $E_p/E_c$; creep-reduced for long-term): "
+                 f"mild $n_s$ = {_ns:.1f}, $n_l$ = {_nl:.1f}")
+    if inp["tendons"] and inp.get("prestress") is not None:
+        _r = inp["prestress"].Es / inp["steel"].Es
+        ratio_txt += f"; prestress $n_s$ = {_ns * _r:.1f}, $n_l$ = {_nl * _r:.1f}"
+    st.caption(ratio_txt)
 
     # The tendon prestress is applied automatically from the initial strain, so N
     # is the external force only; show the equivalent prestress action that was added.

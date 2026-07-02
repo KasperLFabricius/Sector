@@ -44,9 +44,10 @@ SCALAR_KEYS = [
     # Prestressing steel.
     "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
     "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
-    # Loads.
+    # Loads. The modular ratios n_l/n_s are derived from Ec, Es, Ep and the creep
+    # coefficient (el_phi), so they are not persisted -- they follow from the moduli.
     "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My", "el_phi",
-    "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
+    "el_short_P", "el_short_Mx", "el_short_My",
     # Analysis & result settings.
     "mode", "v_min", "v_max", "v_inc", "pl_check_util",
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
