@@ -1105,6 +1105,13 @@ def build_inputs():
     Section, Material Parameters, Loads."""
     s = st.sidebar
 
+    # When the manual is open it takes over the main area; a "Back to analysis"
+    # button at the top of the sidebar (below the logo) exits it without scrolling
+    # the manual. Reserve its slot here but fill it at the END of build_inputs, so
+    # every sidebar panel renders first -- their widget state survives -- before the
+    # button reruns, and so it reflects an "open manual" click made on this run.
+    back_slot = s.container()
+
     with s.expander("About", expanded=False):
         st.markdown("### Sector")
         st.caption("Reinforced-concrete and prestressed cross-section analysis.")
@@ -1125,12 +1132,12 @@ def build_inputs():
         st.markdown(f"**Sector v{APP_VERSION}**")
         st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
         st.caption("Internal engineering tool, Sweco.")
-
-    if s.button("User manual", key="open_manual", use_container_width=True,
-                help="Open the full-width user manual: what Sector computes, the "
-                     "theory it applies, its features, and how to use it."):
-        st.session_state["_manual_open"] = True
-        st.rerun()
+        if st.button("User manual", key="open_manual", use_container_width=True,
+                     help="Open the full-width user manual: what Sector computes, "
+                          "the theory it applies, its features, and how to use it."):
+            # No rerun: build_inputs continues so every panel renders (state kept);
+            # the reserved back_slot below shows the Back button on this same run.
+            st.session_state["_manual_open"] = True
 
     # Reserve the Save / Load slot here (near the top) but fill it at the end of
     # build_inputs, once the point tables and inputs exist, so the download
@@ -1481,6 +1488,13 @@ def build_inputs():
             "sls_code", "sls_member"))
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
+    # Fill the reserved Back-to-analysis slot now that every panel has rendered, so
+    # its rerun cannot drop any sidebar input's widget state.
+    if st.session_state.get("_manual_open"):
+        if back_slot.button("Back to analysis", type="primary",
+                            use_container_width=True, key="manual_back"):
+            st.session_state["_manual_open"] = False
+            st.rerun()
     return dict(section=section, void_error=void_error, steel_error=steel_error,
                 concrete=concrete, steel=steel,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
