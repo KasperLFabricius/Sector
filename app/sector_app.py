@@ -1409,8 +1409,10 @@ def build_inputs():
     loads.divider()
     loads.markdown("**Elastic stresses (long + short term)**")
     loads.caption("A sustained (long-term) and an instantaneous (short-term) action, "
-                  "each carried at its own modular ratio so creep is explicit. For a "
-                  "purely instantaneous check leave the short-term load at zero.")
+                  "each carried at its own modular ratio so creep is explicit. For an "
+                  "instantaneous-only check put the load in the short-term set and "
+                  "leave the long-term at zero; set the creep coefficient to zero to "
+                  "drop creep for a single load case.")
     loads.markdown("_Long-term_")
     P_el_l, Mx_el_l, My_el_l = _load_set(
         "el_long", "Sustained external axial force (long-term). A tendon's prestress "
@@ -1489,7 +1491,10 @@ def build_inputs():
             "pre_IS", "pre_fytk", "pre_futk", "pre_eut", "pre_gamma_y",
             "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
             "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
-            "nl", "el_short_P", "el_short_Mx", "el_short_My", "ns",
+            "el_short_P", "el_short_Mx", "el_short_My",
+            # n_l/n_s are derived from Ec and creep, so the ratios enter the staleness
+            # signature through their inputs (editing either marks results stale).
+            "conc_Ec", "el_phi",
             "v_min", "v_max", "v_inc", "mode", "pl_check_util",
             "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))

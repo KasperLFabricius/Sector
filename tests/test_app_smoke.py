@@ -1719,6 +1719,22 @@ def test_prestress_gets_its_own_derived_modular_ratio():
     assert "| Prestress (Ep/Ec) | 5.0 | 5.0 |" in md
 
 
+def test_editing_ec_or_creep_marks_elastic_results_stale():
+    # n_l/n_s are derived from Ec and creep, so editing either after Calculate must
+    # mark the elastic results stale (the ratios enter the signature via their inputs).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.selectbox(key="view").set_value("Elastic Results").run()
+    at.button(key="calculate").click().run()
+    assert not any("press Calculate" in w.value for w in at.warning)   # fresh, not stale
+    at.number_input(key="conc_Ec").set_value(20.0).run()              # changes n_s and n_l
+    assert any("press Calculate" in w.value for w in at.warning)      # now stale
+    at.button(key="calculate").click().run()
+    at.number_input(key="el_phi").set_value(1.0).run()               # changes n_l (creep)
+    assert any("press Calculate" in w.value for w in at.warning)
+
+
 def test_crack_width_auto_cover_circular_section():
     # No cover input: the crack width takes each bar's clear cover from the
     # geometry. A 100 mm ring cover (to centres) on a circular section gives a
