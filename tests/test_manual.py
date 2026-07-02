@@ -233,3 +233,16 @@ def test_manual_opens_from_about_and_closes_from_the_sidebar():
     at.button(key="manual_back").click().run()
     assert not at.exception
     assert at.session_state["_manual_open"] is False
+
+
+def test_opening_and_closing_the_manual_keeps_sidebar_inputs():
+    # Opening the manual and closing it via the sidebar Back must not drop the
+    # user's sidebar inputs (build_inputs always renders the panels, so their
+    # widget state survives the rerun).
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.run()
+    at.number_input(key="conc_fck").set_value(55.0).run()   # a non-default input
+    at.button(key="open_manual").click().run()
+    at.button(key="manual_back").click().run()
+    assert not at.exception
+    assert at.session_state["conc_fck"] == 55.0             # preserved across open/close
