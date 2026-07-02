@@ -173,6 +173,10 @@ def test_latex_to_rl_converts_the_subset():
     txt = manual._latex_to_rl(r"\varepsilon_c(\text{tendon})")
     assert "(tendon)" in txt and "texttendon" not in txt and "\\" not in txt
 
+    # The modular-ratio prose uses \neq (Es != Ep); it must render as the glyph.
+    ne = manual._latex_to_rl(r"E_s \neq E_p")
+    assert "&#8800;" in ne and "\\" not in ne
+
 
 def test_display_equation_tolerates_trailing_punctuation():
     # A display equation with punctuation outside the closing $$ must still render

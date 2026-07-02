@@ -520,10 +520,25 @@ class ReportBuilder:
                          "applied moment checked" if checked else "capacity only"])
         if "elastic" in self.out:
             el = self.out["elastic"]
-            rows.append(["Long-term modular ratio n<sub>l</sub> = E<sub>s</sub>/E<sub>c,eff</sub>",
-                         _fmt(inp.get("nl"), 1)])
-            rows.append(["Short-term modular ratio n<sub>s</sub> = E<sub>s</sub>/E<sub>c</sub>",
-                         _fmt(inp.get("ns"), 1)])
+            # Modular ratios are derived from the elastic moduli and creep, not entered;
+            # document the inputs (Ec, phi) and the derived mild + prestress ratios.
+            if inp.get("conc_Ec") is not None:
+                rows.append(["Concrete elastic modulus E<sub>c</sub>",
+                             f"{_fmt(inp.get('conc_Ec'), 1)} GPa"])
+            if inp.get("el_phi") is not None:
+                rows.append(["Creep coefficient &#966; (long-term)",
+                             _fmt(inp.get("el_phi"), 2)])
+            ns_v, nl_v = inp.get("ns"), inp.get("nl")
+            rows.append(["Mild modular ratio n<sub>s</sub>=E<sub>s</sub>/E<sub>c</sub> "
+                         "(short) / n<sub>l</sub>=E<sub>s</sub>/E<sub>c,eff</sub> (long)",
+                         f"{_fmt(ns_v, 1)} / {_fmt(nl_v, 1)}"])
+            pre, stl = inp.get("prestress"), inp.get("steel")
+            if (inp.get("tendons") and pre is not None and getattr(pre, "Es", 0)
+                    and getattr(stl, "Es", 0) and ns_v is not None and nl_v is not None):
+                r = pre.Es / stl.Es
+                rows.append(["Prestress modular ratio n<sub>s</sub>=E<sub>p</sub>/E<sub>c</sub> "
+                             "(short) / n<sub>l</sub>=E<sub>p</sub>/E<sub>c,eff</sub> (long)",
+                             f"{_fmt(ns_v * r, 1)} / {_fmt(nl_v * r, 1)}"])
             rows.append(["Mean tensile strength f<sub>ctm</sub>",
                          f"{_fmt(inp.get('sls_fctm'),2)} MPa"])
             rows.append(["Crack width checked", "yes" if inp.get("sls_cw") else "no"])
@@ -556,7 +571,12 @@ class ReportBuilder:
         self._p("<b>Cracked-section elastic stresses.</b> Transformed section "
                 "(reinforcement weighted by the modular ratio), concrete tension "
                 "ignored once cracked; long-term and short-term actions are "
-                "carried at their own modular ratios so creep is explicit.")
+                "carried at their own modular ratios so creep is explicit. The ratios "
+                "are derived from the moduli, not entered: mild steel uses "
+                "n = E<sub>s</sub>/E<sub>c</sub> and tendons n = E<sub>p</sub>/E<sub>c</sub> "
+                "(independent, since E<sub>s</sub> &#8800; E<sub>p</sub>), each "
+                "creep-reduced to E/E<sub>c,eff</sub> with E<sub>c,eff</sub> = "
+                "E<sub>c</sub>/(1+&#966;) for the long-term state.")
         self._p("<b>Serviceability.</b> The cracking threshold compares the Stage-I "
                 "extreme tensile stress with f<sub>ct,eff</sub>; crack width follows "
                 "&#167;7.3.4 (worked below).")

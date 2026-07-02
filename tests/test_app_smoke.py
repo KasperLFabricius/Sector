@@ -48,7 +48,7 @@ def test_live_curve_figures_are_memoised():
     at.run()
     at.selectbox(key="view").set_value("Stress-Strain diagrams").run()
     conc_id = id(at.session_state["_fig_cache"]["concrete"][1])
-    at.number_input(key="nl").set_value(7.0).run()         # unrelated to the concrete law
+    at.number_input(key="el_phi").set_value(2.0).run()     # unrelated to the concrete law
     assert id(at.session_state["_fig_cache"]["concrete"][1]) == conc_id     # reused
     at.number_input(key="conc_fck").set_value(45.0).run()  # changes the concrete law
     assert id(at.session_state["_fig_cache"]["concrete"][1]) != conc_id     # rebuilt
@@ -128,7 +128,7 @@ def test_short_term_load_and_ratio_change_the_combined_result():
     at.button(key="calculate").click().run()
     base = list(at.session_state["results"]["elastic"]["total"])
     at.number_input(key="el_short_Mx").set_value(80.0).run()  # add a short-term moment
-    at.number_input(key="ns").set_value(6.0).run()            # short-term stiffer
+    at.number_input(key="conc_Ec").set_value(25.0).run()      # softer concrete -> larger n_s/n_l
     at.button(key="calculate").click().run()
     assert not at.exception
     assert at.session_state["results"]["elastic"]["total"] != base
@@ -952,18 +952,18 @@ def test_auto_calc_all_updates_every_derived_value():
     at.run()
     at.radio(key="mode").set_value("Both").run()
     at.number_input(key="conc_fck").set_value(70.0).run()    # high grade -> Table 3.1
+    at.button(key="conc_Ec_auto").click().run()              # the EC2 secant Ec for C70
+    ec70 = at.session_state["conc_Ec"]
     # Manually push the auto values off their derived values.
     at.number_input(key="conc_eps_cu2").set_value(5.0).run()
-    at.number_input(key="nl").set_value(8.0).run()
+    at.number_input(key="conc_Ec").set_value(20.0).run()     # Ec drives the modular ratios
     at.button(key="auto_all_btn").click().run()
     assert not at.exception
     # eps_cu2 back to the Table 3.1 value for C70 (~2.66 permille), not 5.0.
     assert at.session_state["conc_eps_cu2"] == pytest.approx(2.66, abs=0.05)
-    # n_l back to the Ec/creep-derived ratio (not 8.0); n_l = (1+phi)*n_s, phi=3.
-    nl = at.session_state["nl"]
-    ns = at.session_state["ns"]
-    assert nl == pytest.approx(4.0 * ns, rel=0.05)
-    assert nl != pytest.approx(8.0)
+    # Ec back to the EC2 secant modulus (not 20.0); the modular ratios follow from it.
+    assert at.session_state["conc_Ec"] == pytest.approx(ec70, abs=0.05)
+    assert at.session_state["conc_Ec"] != pytest.approx(20.0)
 
 
 def test_auto_calc_all_respects_2023_constant_strains():
@@ -1191,7 +1191,7 @@ def test_inputs_carry_help_tooltips():
     # Inputs across the panels expose hover help (the "?" tooltip).
     at = _fresh()
     at.run()
-    for key in ("conc_fck", "mild_fytk", "mild_eut", "pl_P", "pl_Mx", "nl", "view"):
+    for key in ("conc_fck", "mild_fytk", "mild_eut", "pl_P", "pl_Mx", "el_phi", "view"):
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
@@ -1498,8 +1498,7 @@ def test_short_term_crack_uses_combined_creep_state():
     at.radio(key="mode").set_value("Elastic").run()
     at.number_input(key="el_long_Mx").set_value(300.0).run()
     at.number_input(key="el_short_Mx").set_value(150.0).run()
-    at.number_input(key="nl").set_value(15.0).run()
-    at.number_input(key="ns").set_value(6.0).run()      # creep: ns != nl
+    at.number_input(key="el_phi").set_value(2.0).run()  # creep: n_l = (1+phi)*n_s != n_s
     at.checkbox(key="sls_cw").set_value(True).run()
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -1685,34 +1684,39 @@ def test_fctm_auto_button_tracks_grade():
     assert at.number_input(key="sls_fctm").value == pytest.approx(4.07, abs=0.05)
 
 
-def test_modular_ratios_auto_from_ec():
-    # The Auto buttons derive the modular ratios from the concrete Ec: n_s = Es/Ec
-    # (~6 for a normal grade) and n_l = Es*(1+phi)/Ec, i.e. (1+phi)*n_s = 4*n_s
-    # with the default creep coefficient phi = 3.
+def test_modular_ratios_are_derived_from_moduli():
+    # n_l/n_s are no longer entered: the number inputs and Auto buttons are gone. The
+    # loads panel reports the derived ratios instead -- n_s = Es/Ec and, with creep,
+    # n_l = (1+phi)*n_s. Here Es/Ec = 200000/40000 = 5.0 and n_l = (1+2)*5 = 15.0.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.button(key="conc_Ec_auto").click().run()      # Ec = Ecm for the grade
-    at.button(key="ns_auto").click().run()
-    at.button(key="nl_auto").click().run()
-    assert not at.exception
-    ns = at.number_input(key="ns").value
-    nl = at.number_input(key="nl").value
-    assert 3.5 < ns < 12.0                            # short-term Es/Ec
-    assert nl == pytest.approx(4.0 * ns, rel=0.05)    # n_l = (1+phi)*n_s, phi = 3
+    keys = {w.key for w in at.number_input} | {b.key for b in at.button}
+    assert "nl" not in keys and "ns" not in keys              # inputs removed
+    assert "nl_auto" not in keys and "ns_auto" not in keys    # Auto buttons removed
+    at.radio(key="mode").set_value("Both").run()
+    at.number_input(key="mild_Es").set_value(200000.0).run()
+    at.number_input(key="conc_Ec").set_value(40.0).run()      # Es/Ec = 5.0
+    at.number_input(key="el_phi").set_value(2.0).run()        # n_l = (1+2)*5 = 15.0
+    md = "\n".join(m.value for m in at.markdown)
+    assert "Modular ratios" in md
+    assert "| Mild (Es/Ec) | 5.0 | 15.0 |" in md
 
 
-def test_modular_ratios_default_from_ec_without_buttons():
-    # The defaults are now the Ec-derived ratios (not a fixed 15): on first load,
-    # without pressing any Auto button, n_s ~ Es/Ec and n_l = (1+phi)*n_s, phi = 3.
+def test_prestress_gets_its_own_derived_modular_ratio():
+    # Prestress and mild steel have independent ratios because Es != Ep. With a
+    # tendon in the section the loads panel adds a prestress row n = Ep/Ec alongside
+    # the mild row; Ep = 195000, Ec = 39000 -> Ep/Ec = 5.0, and phi = 0 -> n_l = n_s.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    ns = at.number_input(key="ns").value
-    nl = at.number_input(key="nl").value
-    assert 3.5 < ns < 12.0
-    assert ns != pytest.approx(15.0)                  # not the old fixed default
-    assert nl == pytest.approx(4.0 * ns, rel=0.05)
+    at.radio(key="mode").set_value("Both").run()
+    _open_qs(at)
+    at.number_input(key="tnd_n").set_value(3).run()           # add tendons
+    _apply_qs(at)
+    at.number_input(key="pre_Es").set_value(195000.0).run()   # Ep
+    at.number_input(key="conc_Ec").set_value(39.0).run()      # Ep/Ec = 5.0
+    at.number_input(key="el_phi").set_value(0.0).run()        # no creep: n_l = n_s
+    md = "\n".join(m.value for m in at.markdown)
+    assert "| Prestress (Ep/Ec) | 5.0 | 5.0 |" in md
 
 
 def test_crack_width_auto_cover_circular_section():
