@@ -1055,7 +1055,7 @@ def render_manual_streamlit():
     reachable without scrolling the manual.
     """
     c_gen, c_dl, _ = st.columns([1, 1, 4])
-    if c_gen.button("Generate PDF", use_container_width=True, key="manual_gen_pdf"):
+    if c_gen.button("Generate PDF", width="stretch", key="manual_gen_pdf"):
         with st.spinner("Building the PDF manual..."):
             try:
                 st.session_state["manual_pdf"] = build_manual_pdf_bytes()
@@ -1065,7 +1065,7 @@ def render_manual_streamlit():
     if st.session_state.get("manual_pdf"):
         c_dl.download_button("Download PDF", st.session_state["manual_pdf"],
                              file_name="Sector_User_Manual.pdf",
-                             mime="application/pdf", use_container_width=True,
+                             mime="application/pdf", width="stretch",
                              key="manual_dl_pdf")
 
     st.markdown("# Sector user manual")
@@ -1096,7 +1096,7 @@ def render_manual_streamlit():
                 st.markdown(f"{icon} **{title}** -- {block[2]}")
         elif kind == "figure":
             try:
-                st.plotly_chart(block[1](), use_container_width=True)
+                st.plotly_chart(block[1](), width="stretch")
             except Exception as e:                       # a broken figure must not
                 st.caption(f"[figure unavailable: {e}]")  # break the whole manual
             st.caption(block[2])
