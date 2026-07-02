@@ -218,11 +218,18 @@ def test_manual_pdf_builds_tables_only():
     assert len(pdf) > 8000
 
 
-def test_manual_opens_from_the_sidebar_button():
+def test_manual_opens_from_about_and_closes_from_the_sidebar():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     assert not at.exception
+    # The "User manual" button lives in the About expander; opening it takes over
+    # the main area.
     at.button(key="open_manual").click().run()
     assert not at.exception
     assert at.session_state["_manual_open"] is True
     assert any("Sector user manual" in m.value for m in at.markdown)
+    # The "Back to analysis" button is in the sidebar (reachable without scrolling
+    # the manual); clicking it exits the manual.
+    at.button(key="manual_back").click().run()
+    assert not at.exception
+    assert at.session_state["_manual_open"] is False

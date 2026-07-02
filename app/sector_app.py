@@ -1105,6 +1105,16 @@ def build_inputs():
     Section, Material Parameters, Loads."""
     s = st.sidebar
 
+    # When the manual is open it takes over the main area; a "Back to analysis"
+    # button at the top of the sidebar (below the logo) exits it without scrolling
+    # the manual. The sidebar panels are still built below so their widget state
+    # survives, but the manual owns the main area (the flow stops before the views).
+    if st.session_state.get("_manual_open"):
+        if s.button("Back to analysis", type="primary", use_container_width=True,
+                    key="manual_back"):
+            st.session_state["_manual_open"] = False
+            st.rerun()
+
     with s.expander("About", expanded=False):
         st.markdown("### Sector")
         st.caption("Reinforced-concrete and prestressed cross-section analysis.")
@@ -1125,12 +1135,11 @@ def build_inputs():
         st.markdown(f"**Sector v{APP_VERSION}**")
         st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
         st.caption("Internal engineering tool, Sweco.")
-
-    if s.button("User manual", key="open_manual", use_container_width=True,
-                help="Open the full-width user manual: what Sector computes, the "
-                     "theory it applies, its features, and how to use it."):
-        st.session_state["_manual_open"] = True
-        st.rerun()
+        if st.button("User manual", key="open_manual", use_container_width=True,
+                     help="Open the full-width user manual: what Sector computes, "
+                          "the theory it applies, its features, and how to use it."):
+            st.session_state["_manual_open"] = True
+            st.rerun()
 
     # Reserve the Save / Load slot here (near the top) but fill it at the end of
     # build_inputs, once the point tables and inputs exist, so the download

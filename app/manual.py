@@ -633,9 +633,22 @@ def manual_blocks() -> list:
     md("The uncracked (Stage I) peak concrete tensile stress $\\sigma_{ct,I}$ "
        "scales with the load, so the load factor to first cracking is "
        "$\\lambda_{cr}=f_{ctm}/\\sigma_{ct,I}$; $\\lambda_{cr}\\ge 1$ means the "
-       "section has not cracked. **Worked (beam, $M_x=150$ kNm service):** "
+       "section has not cracked. **Worked (beam, $M_x=150$ kNm):** "
        "$\\lambda_{cr}=0.49<1$, so the section is cracked and the Stage II stresses "
        "govern ($\\sigma_s=204$ MPa at the bottom bars).")
+    call("concept", "Cracking is **irreversible** and is triggered by the largest "
+         "load the section ever sees, so Sector decides cracked/uncracked from the "
+         "**governing** of the sustained (long-term) and the peak (total = long + "
+         "short) action -- not the sustained part alone. A section that only cracks "
+         "under a large short-term load is therefore still treated as cracked "
+         "(with a quasi-permanent crack width to check); one only cracked by the "
+         "sustained load stays cracked even if a counteracting short-term action "
+         "relieves the total. The peak check uses the same combined-creep "
+         "superposition (long at $n_l$ + short at $n_s$) as the reported stresses.")
+    call("standard", "EN 1992-1-1 7.4.3(3): a member is treated as uncracked only "
+         "if it is not expected to be loaded above the cracking stress anywhere -- "
+         "i.e. at the peak load. The crack-width *limit*, in contrast, is a "
+         "quasi-permanent (long-term) check.")
     h2("Crack width - EN 1992-1-1:2005")
     md("$$w_k = s_{r,max}\\,(\\varepsilon_{sm}-\\varepsilon_{cm}),\\qquad "
        "\\varepsilon_{sm}-\\varepsilon_{cm} = \\max\\!\\left(\\frac{\\sigma_s - "
@@ -664,6 +677,9 @@ def manual_blocks() -> list:
        "reinforcement's centroid (figure 7.100 NA; for a rectangle the $2(h-d)$ "
        "band), and **halves** the crack width. **Worked:** the band is $0.100$ m "
        "high and $w_k=0.077$ mm.")
+    call("tip", "The single *DS/EN 1992-1-1 + DK NA* option reports the fine and the "
+         "coarse system side by side, each for the long-term and the short-term "
+         "load -- four crack widths -- so you can read both without re-running.")
     h2("EN 1992-1-1:2023 refined model")
     md("The 2023 edition uses a refined model (9.2.3):\n\n"
        "$$w_k = k_w\\,\\frac{k_1}{r}\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-"
@@ -1034,12 +1050,11 @@ def render_manual_streamlit():
     """Render the manual in place of the analysis layout (viewport takeover).
 
     Mirrors the Quick Section builder: a session flag (``_manual_open``) makes the
-    app render this instead of the normal views. A *Back* button closes it.
+    app render this instead of the normal views. Exiting is via the *Back to
+    analysis* button in the sidebar (rendered by ``build_inputs``), so it is
+    reachable without scrolling the manual.
     """
-    c_back, c_gen, c_dl, _ = st.columns([1, 1, 1, 3])
-    if c_back.button("Back", use_container_width=True, key="manual_back"):
-        st.session_state["_manual_open"] = False
-        st.rerun()
+    c_gen, c_dl, _ = st.columns([1, 1, 4])
     if c_gen.button("Generate PDF", use_container_width=True, key="manual_gen_pdf"):
         with st.spinner("Building the PDF manual..."):
             try:
