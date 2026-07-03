@@ -1118,6 +1118,33 @@ def _modular_ratio_readout(box, ns, nl, ns_p, nl_p, *, has_tendons):
     box.markdown("\n".join(rows))
 
 
+# Result-staleness signature keys, split so an input change recomputes only the
+# affected analysis on the next Calculate. Shared keys affect both analyses
+# (materials + mode); the per-analysis buckets hold keys that touch only that one.
+# Anything that could affect both stays shared, so a reused result is never stale.
+# n_l/n_s are derived from conc_Ec and el_phi, so those enter the elastic signature.
+_SHARED_SIG_KEYS = (
+    "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
+    "conc_eps_c2", "conc_eps_cu2", "conc_n",
+    "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
+    "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
+    "mild_ey0t", "mild_ey0c", "mild_Es", "mild_active_comp",
+    "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut", "pre_gamma_y",
+    "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
+    "mode",
+)
+_PLASTIC_SIG_KEYS = (
+    "pl_P", "pl_Mx", "pl_My", "v_min", "v_max", "v_inc",
+    "pl_check_util", "pl_interaction", "pl_int_axis",
+)
+_ELASTIC_SIG_KEYS = (
+    "el_long_P", "el_long_Mx", "el_long_My",
+    "el_short_P", "el_short_Mx", "el_short_My",
+    "conc_Ec", "el_phi",
+    "sls_cw", "sls_fctm", "sls_phi", "sls_bond", "sls_code", "sls_member",
+)
+
+
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
     loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
@@ -1491,24 +1518,14 @@ def build_inputs():
     # they only prefill on demand.
     geom_sig = (tuple(outer), tuple(bars), tuple(tendons),
                 tuple(tuple(r) for r in holes))
-    sig = geom_sig + tuple(st.session_state.get(k) for k in
-           ("conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
-            "conc_eps_c2", "conc_eps_cu2", "conc_n",
-            "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
-            "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
-            "mild_ey0t", "mild_ey0c", "mild_Es", "mild_active_comp",
-            "pre_preset",
-            "pre_IS", "pre_fytk", "pre_futk", "pre_eut", "pre_gamma_y",
-            "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
-            "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My",
-            "el_short_P", "el_short_Mx", "el_short_My",
-            # n_l/n_s are derived from Ec and creep, so the ratios enter the staleness
-            # signature through their inputs (editing either marks results stale).
-            "conc_Ec", "el_phi",
-            "v_min", "v_max", "v_inc", "mode", "pl_check_util",
-            "pl_interaction", "pl_int_axis",
-            "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
-            "sls_code", "sls_member"))
+    # Split the signature so a change to only the plastic (or only the elastic)
+    # inputs recomputes just that analysis; the shared part (geometry, materials,
+    # mode) forces both. The overall signature is the pair, so any change is stale.
+    _get = lambda keys: tuple(st.session_state.get(k) for k in keys)
+    shared_sig = geom_sig + _get(_SHARED_SIG_KEYS)
+    plastic_sig = shared_sig + _get(_PLASTIC_SIG_KEYS)
+    elastic_sig = shared_sig + _get(_ELASTIC_SIG_KEYS)
+    sig = plastic_sig + elastic_sig
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
     # Fill the reserved Back-to-analysis slot now that every panel has rendered, so
@@ -1531,7 +1548,8 @@ def build_inputs():
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
-                mode=mode, extent=extent, signature=sig)
+                mode=mode, extent=extent, signature=sig,
+                plastic_sig=plastic_sig, elastic_sig=elastic_sig)
 
 
 # ---------------------------------------------------------------------------
@@ -1570,11 +1588,21 @@ def _crack_dict(cw):
                 sr_max_geometric=cw.sr_max_geometric)
 
 
-def run_analysis(inp):
+def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
+    """Run the selected analyses for ``inp`` and return the results payload.
+
+    ``reuse_plastic`` / ``reuse_elastic`` let the caller pass a previously computed
+    plastic / elastic sub-result whose inputs are unchanged (its split signature
+    matches); that analysis is then skipped and the cached result reused, so a Both
+    run that only touched the elastic (or only the plastic) inputs recomputes just
+    the affected half.
+    """
     out = {}
     if inp["section"] is None or inp.get("void_error") or inp.get("steel_error"):
         return out                          # invalid section -> nothing to run
-    if inp["mode"] in ("Plastic", "Both"):
+    if inp["mode"] in ("Plastic", "Both") and reuse_plastic is not None:
+        out["plastic"] = reuse_plastic
+    elif inp["mode"] in ("Plastic", "Both"):
         vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
         # Prestress enters the analysis only when the section actually has tendons.
         pre = inp["prestress"] if inp["tendons"] else None
@@ -1620,7 +1648,9 @@ def run_analysis(inp):
                 applied=(inp["P_pl"], inp["Mx_pl"] if about_x else inp["My_pl"]),
                 converged=all(q.converged for q in loop),
             )
-    if inp["mode"] in ("Elastic", "Both"):
+    if inp["mode"] in ("Elastic", "Both") and reuse_elastic is not None:
+        out["elastic"] = reuse_elastic
+    elif inp["mode"] in ("Elastic", "Both"):
         # Tendons are folded into the bar set for the elastic run. Each tendon uses
         # its own modular ratio (Ep/Ec, via the multiplier Ep/Es) and carries the
         # locked-in prestress Ep*IS, applied as a force so the user's N is the
@@ -2230,8 +2260,21 @@ calc = c_calc.button("Calculate", type="primary", key="calculate",
                      help="Run the selected analysis for the current inputs.")
 
 if calc:
-    st.session_state["results"] = run_analysis(inp)
+    # Reuse a previously computed half whose split signature is unchanged, so a Both
+    # run that only touched the elastic (or only the plastic) inputs recomputes just
+    # the affected analysis instead of both.
+    prev = st.session_state.get("results") or {}
+    reuse_plastic = (prev.get("plastic")
+                     if st.session_state.get("result_plastic_sig") == inp["plastic_sig"]
+                     else None)
+    reuse_elastic = (prev.get("elastic")
+                     if st.session_state.get("result_elastic_sig") == inp["elastic_sig"]
+                     else None)
+    st.session_state["results"] = run_analysis(
+        inp, reuse_plastic=reuse_plastic, reuse_elastic=reuse_elastic)
     st.session_state["result_sig"] = inp["signature"]
+    st.session_state["result_plastic_sig"] = inp["plastic_sig"]
+    st.session_state["result_elastic_sig"] = inp["elastic_sig"]
 
 _generate_report(inp)   # builds the PDF when the Report panel's Generate was pressed
 
