@@ -203,6 +203,17 @@ def test_tables_only_report_does_not_start_the_image_server(monkeypatch):
     assert calls["n"] == 0
 
 
+def test_report_includes_the_nm_interaction_when_present():
+    # An opt-in N-M interaction payload adds a titled section to the plastic part.
+    out = _out()
+    out["plastic"]["interaction"] = dict(
+        axis="x", N=[-500.0, 0.0, 1500.0, 4000.0], M=[80.0, 300.0, 340.0, 0.0],
+        applied=(200.0, 100.0), converged=True)
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "interaction" in txt.lower()
+    assert "squash" in txt.lower()
+
+
 def test_report_handles_plastic_only():
     out = {"plastic": _out()["plastic"]}
     pdf = sector_report.build_report({}, _inp(), out, figures=False)

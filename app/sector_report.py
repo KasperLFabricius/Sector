@@ -606,6 +606,20 @@ class ReportBuilder:
         else:
             rows.append(["Utilisation", "open arc (no closed envelope)"])
         self._table(rows, [90 * mm, 60 * mm])
+        # N-M interaction diagram (opt-in): the capacity boundary at a fixed bending
+        # axis, from pure tension to the squash load.
+        nm = pl.get("interaction")
+        if nm:
+            mlab = "M<sub>x</sub>" if nm["axis"] == "x" else "M<sub>y</sub>"
+            self._h2(f"Axial-moment (N-{mlab}) interaction")
+            self._fig(viz.interaction_nm_figure(
+                nm["N"], nm["M"], axis=nm["axis"],
+                applied=nm.get("applied") if pl.get("check_util", True) else None,
+                title=f"N-{'Mx' if nm['axis'] == 'x' else 'My'} interaction"), 130, 95)
+            self._small(f"Capacity boundary about the {nm['axis']}-axis, from pure "
+                        "tension to the squash load (concrete carries compression only, "
+                        "so the tension end is reinforcement-controlled). The marked "
+                        "point is the applied plastic action.")
         # Per-angle results table -- the full column set, matching the result view.
         self._h2("Capacity over the neutral-axis sweep")
         cable = bool(self.inp.get("tendons"))
