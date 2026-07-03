@@ -305,6 +305,54 @@ def test_builder_does_not_touch_points_until_applied():
     assert at.session_state["results"]["plastic"]["max_mx"] > base_mx  # deeper -> stronger
 
 
+def test_qs_interleave_places_a_second_bar_size_at_the_midpoints():
+    import sector_app
+    from sector.templates import bar_area
+    row = [(-0.15, -0.25, bar_area(20)), (-0.05, -0.25, bar_area(20)),
+           (0.05, -0.25, bar_area(20)), (0.15, -0.25, bar_area(20))]
+    out = sector_app._qs_interleave(row, "16")
+    xs = sorted(x for x, _y, _a in out)
+    assert xs == pytest.approx([-0.10, 0.0, 0.10])              # 3 gap midpoints
+    assert all(y == pytest.approx(-0.25) for _x, y, _a in out)  # same layer
+    assert all(a == pytest.approx(bar_area(16)) for *_xy, a in out)  # the second size
+
+
+def test_quick_section_interleaves_a_second_bar_size():
+    # The Quick Section can place a second bar size interleaved at the midpoints of a
+    # face row, so a section carries e.g. Y20/100 and Y16 in the same bottom layer.
+    at = _fresh()
+    at.run()
+    # A plain apply (no interleave) -> a single bar size at the bottom face.
+    _open_qs(at)
+    _apply_qs(at)
+    plain = len(at.session_state["bars_base"])
+    # With a bottom interleave -> more bars, and two distinct bar sizes present.
+    _open_qs(at)
+    at.selectbox(key="bot_off_d").set_value("16").run()
+    _apply_qs(at)
+    bars = at.session_state["bars_base"]
+    areas = {round(float(a), 1) for a in bars["area (mm2)"]}
+    assert len(bars) > plain                               # extra interleaved bars added
+    assert len(areas) >= 2                                 # two bar sizes now present
+
+
+def test_quick_section_interleave_skips_the_box_girder_void():
+    # A box girder bottom layer that rises into the hollow is split across the two
+    # walls; interleaving its midpoints would drop a bar into the void. The
+    # interleaved bars are filtered to the concrete, so the section stays valid.
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.number_input(key="bot_layers").set_value(2).run()
+    at.number_input(key="layer_s").set_value(300.0).run()  # 2nd layer rises into the hollow
+    at.selectbox(key="bot_off_d").set_value("16").run()
+    _apply_qs(at)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]        # no bar in the void -> valid section
+
+
 def test_quick_section_builder_places_bars_by_spacing():
     # The builder opens full-width, places slab bars at a target spacing, and Apply
     # writes the generated points into the tables (which then analyse).
