@@ -60,7 +60,8 @@ def test_about_panel_shows_version_and_author():
     at.run()
     blob = " | ".join(m.value for m in at.markdown) + \
         " | ".join(c.value for c in at.caption)
-    assert "0.20" in blob and "v0.20" in (at.title[0].value if at.title else "")
+    from sector import __version__ as version   # single source; no per-bump edit
+    assert version in blob and f"v{version}" in (at.title[0].value if at.title else "")
     assert "Kasper Lindskov Fabricius" in blob
     assert "Kasper.LindskovFabricius@sweco.dk" in blob
 
@@ -1717,6 +1718,27 @@ def test_prestress_gets_its_own_derived_modular_ratio():
     at.number_input(key="el_phi").set_value(0.0).run()        # no creep: n_l = n_s
     md = "\n".join(m.value for m in at.markdown)
     assert "| Prestress (Ep/Ec) | 5.0 | 5.0 |" in md
+
+
+def test_transformed_area_uses_the_tendon_modular_ratio():
+    # The reported transformed section properties must weight tendons at Ep/Es
+    # (n_mult), like the elastic and cracking solves -- so changing Ep moves the
+    # reported transformed area. Without n_mult the tendons would take the mild
+    # ratio and Ep would have no effect on the properties.
+    def _area(pre_es):
+        at = _fresh()
+        at.run()
+        at.radio(key="mode").set_value("Elastic").run()
+        _open_qs(at)
+        at.number_input(key="tnd_n").set_value(3).run()          # add tendons
+        _apply_qs(at)
+        at.number_input(key="pre_Es").set_value(pre_es).run()
+        at.button(key="calculate").click().run()
+        return at.session_state["results"]["elastic"]["props_un"]["area"]
+
+    a_soft, a_stiff = _area(160000.0), _area(200000.0)
+    assert a_stiff != pytest.approx(a_soft, rel=1e-6)   # Ep changes the transformed area
+    assert a_stiff > a_soft                              # stiffer tendons -> larger area
 
 
 def test_editing_ec_or_creep_marks_elastic_results_stale():
