@@ -841,7 +841,7 @@ _QS_WIDGET_KEYS = (
     "shape", "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "wall_mm",
     "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
     "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
-    "bot_layers", "top_layers", "layer_s",
+    "bot_layers", "top_layers", "layer_s", "bot_off_d", "top_off_d",
     "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm", "tnd_layers", "tnd_layer_s",
 )
 
@@ -864,6 +864,26 @@ def _qs_mirror_settings():
     for k in _QS_WIDGET_KEYS:
         if k in st.session_state:
             st.session_state["qsv_" + k] = st.session_state[k]
+
+
+def _qs_interleave(face_group, diameter_mm):
+    """A second bar size at the midpoints between a face group's bars.
+
+    Groups the given bars by y-level and places one bar of ``diameter_mm`` at each
+    gap midpoint, so a face row of one size is interleaved with another (e.g. a
+    Y20/100 row with Y16 bars sitting between them -- two sizes in the same layer
+    without overlapping). Midpoints always sit between existing bars, so the
+    interleaved bars stay inside the concrete. Each stacked layer is interleaved.
+    """
+    a = templates.bar_area(float(diameter_mm))
+    by_y = {}
+    for x, y, _area in face_group:
+        by_y.setdefault(round(float(y), 9), []).append(float(x))
+    out = []
+    for y, xs in by_y.items():
+        xs.sort()
+        out.extend((0.5 * (xs[i] + xs[i + 1]), y, a) for i in range(len(xs) - 1))
+    return out
 
 
 def _default_quick_section():
@@ -987,6 +1007,16 @@ def _quick_section_geometry(box):
             disabled=int(nl_bot) == 1 and int(nl_top) == 1,
             help="Vertical centre-to-centre distance between stacked bar layers "
                  "(used only when a face has more than one layer).") / 1000.0
+        # Optional second bar size, interleaved at the midpoints of each face row --
+        # e.g. a Y20/100 row with Y16 bars between them (two sizes in one layer).
+        _off = ["none"] + [str(d) for d in templates.BAR_DIAMETERS]
+        o1, o2 = box.columns(2)
+        bot_off_d = o1.selectbox("Bottom interleave dia (mm)", _off, key="bot_off_d",
+                                 help="Place a second bar size at the midpoints of the "
+                                      "bottom row(s) (none = off).")
+        top_off_d = o2.selectbox("Top interleave dia (mm)", _off, key="top_off_d",
+                                 help="Place a second bar size at the midpoints of the "
+                                      "top row(s) (none = off).")
         # A T-section's top face is the flange (width width_b); a top layer pushed
         # below the flange must fit the narrower web (width b) or it would fall
         # outside the concrete. The bottom layers stay in the web (b) and only ever
@@ -1003,21 +1033,26 @@ def _quick_section_geometry(box):
         if shape == "Box girder":
             # A box girder's rows split into the side walls once they rise into the
             # hollow, so multi-layer reinforcement keeps its count in the webs.
-            bars = templates.merge_bars(
-                templates.box_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
-                                     b, h, wall, cov, int(nb_bot),
-                                     templates.bar_area(rd_bot)),
-                templates.box_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
-                                     b, h, wall, cov, int(nb_top),
-                                     templates.bar_area(rd_top)))
+            bot_group = templates.box_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
+                                             b, h, wall, cov, int(nb_bot),
+                                             templates.bar_area(rd_bot))
+            top_group = templates.box_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
+                                             b, h, wall, cov, int(nb_top),
+                                             templates.bar_area(rd_top))
         else:
-            bars = templates.merge_bars(
-                templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
-                                     -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot,
-                                     n_at=n_at_bot),
-                templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
-                                     -width_b / 2 + cov, width_b / 2 - cov,
-                                     int(nb_top), rd_top, span_at=top_span_at, n_at=n_at_top))
+            bot_group = templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
+                                             -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot,
+                                             n_at=n_at_bot)
+            top_group = templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
+                                             -width_b / 2 + cov, width_b / 2 - cov,
+                                             int(nb_top), rd_top, span_at=top_span_at,
+                                             n_at=n_at_top)
+        groups = [bot_group, top_group]
+        if bot_off_d != "none":
+            groups.append(_qs_interleave(bot_group, bot_off_d))
+        if top_off_d != "none":
+            groups.append(_qs_interleave(top_group, top_off_d))
+        bars = templates.merge_bars(*groups)
 
     box.markdown("**Prestressing tendons**")
     nt = box.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",
