@@ -225,6 +225,40 @@ def test_plastic_and_elastic_use_independent_loads():
     assert res2["elastic"]["total"] != stress0         # elastic changed
 
 
+def test_recalculate_reuses_the_unchanged_analysis_half():
+    # The staleness signature is split, so a Both-mode Calculate recomputes only the
+    # half whose inputs changed and reuses the other (same result object).
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    at.button(key="calculate").click().run()
+    pl1 = at.session_state["results"]["plastic"]
+    el1 = at.session_state["results"]["elastic"]
+
+    # Elastic-only change -> plastic reused (identity), elastic recomputed.
+    at.number_input(key="el_short_Mx").set_value(123.0).run()
+    at.button(key="calculate").click().run()
+    res = at.session_state["results"]
+    assert res["plastic"] is pl1
+    assert res["elastic"] is not el1
+    el2 = res["elastic"]
+
+    # Plastic-only change (sweep increment) -> elastic reused, plastic recomputed.
+    at.number_input(key="v_inc").set_value(30.0).run()
+    at.button(key="calculate").click().run()
+    res = at.session_state["results"]
+    assert res["elastic"] is el2
+    assert res["plastic"] is not pl1
+
+    # Shared change (concrete grade) -> both recomputed.
+    pl3 = res["plastic"]
+    at.number_input(key="conc_fck").set_value(40.0).run()
+    at.button(key="calculate").click().run()
+    res = at.session_state["results"]
+    assert res["plastic"] is not pl3
+    assert res["elastic"] is not el2
+
+
 def test_load_sets_survive_a_mode_switch():
     # Both sets stay mounted (inactive one disabled), so values are not lost when
     # toggling modes hides them for a few reruns.
