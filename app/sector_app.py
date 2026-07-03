@@ -1682,10 +1682,13 @@ def run_analysis(inp):
             cracked, lambda_cr, sigma_ct = (cr_l.cracked, cr_l.lambda_cr,
                                             cr_l.sigma_ct)
             gov_state = cr_l.cracked_state
-        props_un = transformed_properties(sec, inp["nl"], cracked=False)
+        # Reinforcement enters the transformed properties at n*A, or n*(Ep/Es)*A per
+        # tendon via n_mult -- the same per-bar modular ratio the elastic and cracking
+        # solves use, so the reported section properties are consistent with them.
+        props_un = transformed_properties(sec, inp["nl"], cracked=False, n_mult=n_mult)
         props_cr = (transformed_properties(
             sec, inp["nl"], eps0=gov_state.eps0, kx=gov_state.kx, ky=gov_state.ky,
-            cracked=True) if cracked else None)
+            cracked=True, n_mult=n_mult) if cracked else None)
         out["elastic"].update(
             cracked=cracked, lambda_cr=lambda_cr, sigma_ct=sigma_ct,
             fctm=inp["sls_fctm"], show_cw=inp["sls_cw"],
