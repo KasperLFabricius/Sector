@@ -1646,19 +1646,21 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         out["plastic"] = reuse_plastic
     elif inp["mode"] in ("Plastic", "Both"):
         vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
+        # A full 360 deg turn returns to the start, so the last angle (v_max) repeats
+        # the first (v_min) exactly. Sweep only up to the angle before it -- the
+        # envelope closes itself -- so that duplicate point is neither computed nor
+        # reported. The closed-envelope flag still reflects the full turn.
+        closed = (vhi - vlo) >= 360.0 - 1e-6
+        sweep_hi = vhi - vstep if closed else vhi
         # Prestress enters the analysis only when the section actually has tendons.
         pre = inp["prestress"] if inp["tendons"] else None
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            inp["P_pl"], vlo, vhi, vstep, prestress=pre)
+                            inp["P_pl"], vlo, sweep_hi, vstep, prestress=pre)
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
-        # Utilisation interpolates the capacity in the applied direction, which is
-        # only a closed envelope when the sweep spans the full 360 deg. A partial
-        # sweep is an open arc, so report no utilisation rather than a wrap-around
-        # interpolation between the arc endpoints.
-        closed = (vhi - vlo) >= 360.0 - 1e-6
-        # Utilisation is only reported when the user asks to check it; otherwise this
-        # is a capacity-only run (the applied moments are ignored and locked).
+        # Utilisation is a closed-envelope check (a partial arc has no wrap-around), and
+        # only reported when the user asks to check it; otherwise this is a capacity-only
+        # run (the applied moments are ignored and locked).
         check_util = inp.get("check_util", True)
         util = (_radial_util(mx, my, inp["Mx_pl"], inp["My_pl"])
                 if (closed and check_util) else None)

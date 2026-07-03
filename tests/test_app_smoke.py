@@ -146,6 +146,29 @@ def test_plastic_sweep_increment_changes_point_count():
     assert len(at.session_state["results"]["plastic"]["points"]) > n_default
 
 
+def test_full_sweep_drops_the_duplicate_360_point():
+    # A full 360 deg turn's last angle repeats the first, so the sweep stops one step
+    # short (the envelope closes itself). The 360 deg row is neither computed nor
+    # reported, but the result is still a closed envelope (utilisation available).
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()            # default 0-360, 15 deg
+    vs = [p["V"] for p in at.session_state["results"]["plastic"]["points"]]
+    assert vs[0] == 0.0 and vs[-1] == 345.0             # stops before the wrap-around
+    assert 360.0 not in vs                              # the duplicate of 0 deg is gone
+    assert at.session_state["results"]["plastic"]["util"] is not None   # still closed
+
+
+def test_partial_sweep_keeps_its_end_angle():
+    # A partial arc is not a full turn, so both endpoints are distinct and kept.
+    at = _fresh()
+    at.run()
+    at.number_input(key="v_max").set_value(180.0).run()
+    at.button(key="calculate").click().run()
+    vs = [p["V"] for p in at.session_state["results"]["plastic"]["points"]]
+    assert vs[-1] == 180.0
+
+
 def test_plastic_sweep_stays_within_requested_bounds():
     # A V.inc that does not divide V.max - V.min must still land exactly on both
     # ends, with no swept angle outside [V.min, V.max].
