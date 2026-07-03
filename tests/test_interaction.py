@@ -96,3 +96,15 @@ def test_interaction_handles_a_prestressed_section():
     N = [p.axial for p in pts]
     assert N[0] < N[-1]                                 # spans a real axial range
     assert all(p.converged for p in pts[2:-2])          # interior points converge
+
+
+def test_interaction_reaches_the_true_axial_limits_with_prestress():
+    # Tendons yield far above the mild bars, so the tension probe must use the
+    # prestress design stress -- otherwise the diagram stops short of the true
+    # tension capacity. Both ends must reach the clamped extremes of a direct solve.
+    sec, c, s, pre = _circular()
+    true_Nt = plastic_capacity_at_angle(sec, c, s, -1.0e7, 90.0, prestress=pre).axial
+    true_Nc = plastic_capacity_at_angle(sec, c, s, +1.0e7, 90.0, prestress=pre).axial
+    pts = solve_interaction(sec, c, s, 90.0, prestress=pre, n_points=8)
+    assert pts[0].axial == pytest.approx(true_Nt, abs=1.0)    # tension limit reached
+    assert pts[-1].axial == pytest.approx(true_Nc, abs=1.0)   # squash reached

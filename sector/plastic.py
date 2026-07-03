@@ -447,14 +447,18 @@ def solve_interaction(
                                          prestress=prestress, n_bands=n_bands)
 
     # Axial extremes: probe just past the range (a squash / tension over-estimate)
-    # and read back the clamped equilibrium, so the diagram spans the true range.
+    # and read back the clamped equilibrium, so the diagram spans the true range. The
+    # steel force uses each material's own design stress -- tendons yield far above the
+    # mild bars, so folding their area in at the mild stress would leave the probe
+    # inside the true tension range and the diagram short of the tension limit.
     Ac = sum(_poly_moments(r.tolist()).area for r in section.integration_rings())
-    As = float(section.bar_arrays()[2].sum())
+    fy = abs(steel.stress(steel.eut * 0.99, design=True))    # mild design stress, MPa
+    steel_force = fy * float(section.bar_arrays()[2].sum())  # MN.m^-2 * m^2 = MN
     if prestress is not None:
-        As += float(section.tendon_arrays()[2].sum())
-    fy = abs(steel.stress(steel.eut * 0.99, design=True))    # design plateau stress, MPa
-    squash = (concrete.fcd * Ac + fy * As) * _MN_TO_KN       # kN, an upper bound on N_c
-    tension = fy * As * _MN_TO_KN                             # kN, |N_t| upper bound
+        fp = abs(prestress.stress(prestress.rupture_strain * 0.99, design=True))
+        steel_force += fp * float(section.tendon_arrays()[2].sum())
+    squash = (concrete.fcd * Ac + steel_force) * _MN_TO_KN   # kN, an upper bound on N_c
+    tension = steel_force * _MN_TO_KN                         # kN, |N_t| upper bound
     N_c = _cap(1.5 * squash + 1.0).axial
     N_t = _cap(-1.5 * tension - 1.0).axial
 

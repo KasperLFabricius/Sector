@@ -540,7 +540,11 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     hover = ("M = %{x:.1f} kNm<br>N = %{y:.1f} kN<extra></extra>")
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=Ms, y=list(N), mode="lines", fill="toself",
+    # Close the polyline (repeat the first vertex) so the boundary is drawn all the
+    # way round, not just filled: without this the outline has a gap between the two
+    # tension apexes.
+    Ns = list(N)
+    fig.add_trace(go.Scatter(x=Ms + Ms[:1], y=Ns + Ns[:1], mode="lines", fill="toself",
                              line=dict(color=ENVELOPE, width=2), name="capacity",
                              fillcolor="rgba(31,119,180,0.08)", hovertemplate=hover))
     if applied is not None:
