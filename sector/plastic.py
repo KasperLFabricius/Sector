@@ -223,6 +223,59 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
     return comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy, min_eps, min_eps_cable
 
 
+@dataclass
+class _SectionPrep:
+    """Angle-independent per-section arrays reused across a neutral-axis sweep."""
+
+    bx: np.ndarray
+    by: np.ndarray
+    ba: np.ndarray
+    tx: np.ndarray
+    ty: np.ndarray
+    ta: np.ndarray
+    verts: np.ndarray
+    rings: "list | None"
+    ring_xy: "np.ndarray | None"
+    ring_starts: "np.ndarray | None"
+    buf_a: "np.ndarray | None"
+    buf_b: "np.ndarray | None"
+
+
+def _prep_section(section: Section, prestress: "Prestress | None") -> _SectionPrep:
+    """Build the angle-independent plastic-solver prep for ``section``.
+
+    The oriented rings, the bar/tendon arrays, the concrete vertices and (on the
+    compiled path) the stacked ring vertices plus clip scratch buffers do not depend
+    on the neutral-axis angle. A sweep builds them once here and reuses them for
+    every angle; only the depth projection ``s = x*dx + y*dy`` is re-formed per angle.
+    The pure-Python ring point-lists are built only when the kernel is unavailable --
+    the compiled path never reads them.
+    """
+    int_rings = section.integration_rings()
+    bx, by, ba = section.bar_arrays()
+    if prestress is not None:
+        tx, ty, ta = section.tendon_arrays()
+    else:
+        _empty = np.empty(0)
+        tx = ty = ta = _empty
+    verts = section.concrete_vertices()
+    if _USE_KERNEL:
+        ring_xy = np.ascontiguousarray(np.vstack(int_rings), dtype=np.float64)
+        ring_starts = np.zeros(len(int_rings) + 1, dtype=np.int64)
+        for k, r in enumerate(int_rings):
+            ring_starts[k + 1] = ring_starts[k] + len(r)
+        cap = 4 * max(len(r) for r in int_rings) + 16  # generous clip headroom
+        buf_a = np.empty((cap, 2))
+        buf_b = np.empty((cap, 2))
+        rings = None
+    else:
+        ring_xy = ring_starts = buf_a = buf_b = None
+        rings = [r.tolist() for r in int_rings]
+    return _SectionPrep(bx=bx, by=by, ba=ba, tx=tx, ty=ty, ta=ta, verts=verts,
+                        rings=rings, ring_xy=ring_xy, ring_starts=ring_starts,
+                        buf_a=buf_a, buf_b=buf_b)
+
+
 def plastic_capacity_at_angle(
     section: Section,
     concrete: Concrete,
@@ -233,6 +286,7 @@ def plastic_capacity_at_angle(
     prestress: "Prestress | None" = None,
     n_bands: int = 80,
     max_iter: int = 100,
+    prep: "_SectionPrep | None" = None,
 ) -> PlasticPoint:
     """Ultimate capacity for axial force ``P`` (kN) at neutral-axis angle ``V``.
 
@@ -245,36 +299,22 @@ def plastic_capacity_at_angle(
     V = math.radians(V_deg)
     dx, dy = math.cos(V), math.sin(V)
 
-    # Precompute the angle-independent geometry once: the oriented concrete rings
-    # as plain point lists, the bar/tendon arrays, and their depth projections
-    # ``s = x*dx + y*dy`` (constant for the sweep). The bisection then only reduces
-    # these arrays, rather than rebuilding tuples and re-projecting every step.
-    int_rings = section.integration_rings()
-    rings = [r.tolist() for r in int_rings]
-    bx, by, ba = section.bar_arrays()
+    # The oriented rings, reinforcement arrays and kernel scratch buffers do not
+    # depend on the angle, so a sweep builds them once (``prep``) and passes them in;
+    # a standalone call builds them here. Only the depth projection ``s = x*dx + y*dy``
+    # changes with the angle, formed per angle below so the bisection just reduces it.
+    if prep is None:
+        prep = _prep_section(section, prestress)
+    bx, by, ba = prep.bx, prep.by, prep.ba
+    tx, ty, ta = prep.tx, prep.ty, prep.ta
     bar_data = (bx, by, ba, bx * dx + by * dy)
-    if prestress is not None:
-        tx, ty, ta = section.tendon_arrays()
-        tendon_data = (tx, ty, ta, tx * dx + ty * dy)
-    else:
-        _empty = np.empty(0)
-        tendon_data = (_empty, _empty, _empty, _empty)
+    tendon_data = (tx, ty, ta, tx * dx + ty * dy)
     s_bars, s_tendons = bar_data[3], tendon_data[3]
+    rings = prep.rings
+    ring_xy, ring_starts = prep.ring_xy, prep.ring_starts
+    buf_a, buf_b = prep.buf_a, prep.buf_b
 
-    # For the compiled path, also stack the rings into flat arrays once and
-    # allocate clip scratch buffers sized for the largest ring.
-    if _USE_KERNEL:
-        ring_xy = np.ascontiguousarray(np.vstack(int_rings), dtype=np.float64)
-        ring_starts = np.zeros(len(int_rings) + 1, dtype=np.int64)
-        for k, r in enumerate(int_rings):
-            ring_starts[k + 1] = ring_starts[k] + len(r)
-        cap = 4 * max(len(r) for r in int_rings) + 16  # generous clip headroom
-        buf_a = np.empty((cap, 2))
-        buf_b = np.empty((cap, 2))
-    else:
-        ring_xy = ring_starts = buf_a = buf_b = None
-
-    verts = section.concrete_vertices()
+    verts = prep.verts
     s = verts[:, 0] * dx + verts[:, 1] * dy
     s_max = float(s.max())
     s_min = float(s.min())
@@ -402,6 +442,7 @@ def solve_plastic(
     Returns one :class:`PlasticPoint` per angle, the biaxial capacity envelope
     for the axial force ``P``.
     """
+    prep = _prep_section(section, prestress)   # angle-independent, built once
     points = []
     # Step count from the increment, guarding against floating-point drift.
     n = int(round((v_max - v_min) / v_inc)) if v_inc else 0
@@ -409,7 +450,7 @@ def solve_plastic(
         v = v_min + i * v_inc
         points.append(
             plastic_capacity_at_angle(section, concrete, steel, P, v,
-                                      prestress=prestress, n_bands=n_bands)
+                                      prestress=prestress, n_bands=n_bands, prep=prep)
         )
     return points
 
@@ -442,9 +483,10 @@ def solve_interaction(
     diagram -- the ``+M`` side for this ``V``; call again at ``V + 180`` for the
     ``-M`` side. Returns ``InteractionPoint``s ordered from tension to compression.
     """
+    prep = _prep_section(section, prestress)   # angle-independent, built once
     def _cap(P):
         return plastic_capacity_at_angle(section, concrete, steel, P, V_deg,
-                                         prestress=prestress, n_bands=n_bands)
+                                         prestress=prestress, n_bands=n_bands, prep=prep)
 
     # Axial extremes: probe just past the range (a squash / tension over-estimate)
     # and read back the clamped equilibrium, so the diagram spans the true range. The

@@ -166,3 +166,17 @@ def test_unreachable_axial_is_flagged_not_converged():
     sec = _rect_with_top_and_bottom_bars()
     assert not plastic_capacity_at_angle(sec, _C30, _B500, 1.0e6, 90.0).converged
     assert plastic_capacity_at_angle(sec, _C30, _B500, 0.0, 90.0).converged
+
+
+def test_shared_prep_matches_standalone_solve():
+    # solve_plastic builds the angle-independent prep once and reuses it across the
+    # sweep (and shares the kernel scratch buffers). Each swept point must be bit-for-
+    # bit identical to a standalone plastic_capacity_at_angle (prep=None) at the same
+    # angle -- the hoist is a pure speed-up, not a change of result.
+    section, concrete, steel = fundamentsbjaelke()
+    swept = solve_plastic(section, concrete, steel, 150.0, 0.0, 360.0, 12.0)
+    for p in swept:
+        d = plastic_capacity_at_angle(section, concrete, steel, 150.0, p.V)
+        assert p.Mx == d.Mx and p.My == d.My and p.axial == d.axial
+        assert p.compression_force == d.compression_force
+        assert p.curvature == d.curvature and p.lever_arm == d.lever_arm
