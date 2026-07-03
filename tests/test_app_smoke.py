@@ -60,7 +60,7 @@ def test_about_panel_shows_version_and_author():
     at.run()
     blob = " | ".join(m.value for m in at.markdown) + \
         " | ".join(c.value for c in at.caption)
-    assert "0.2.0" in blob and "v0.2.0" in (at.title[0].value if at.title else "")
+    assert "0.20" in blob and "v0.20" in (at.title[0].value if at.title else "")
     assert "Kasper Lindskov Fabricius" in blob
     assert "Kasper.LindskovFabricius@sweco.dk" in blob
 
