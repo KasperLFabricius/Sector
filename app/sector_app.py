@@ -32,7 +32,7 @@ from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, geometry, kernels, material_presets as mp, templates  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
-from sector.plastic import solve_plastic  # noqa: E402
+from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
 from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
                                    crack_width)
@@ -1200,6 +1200,16 @@ def build_inputs():
         help="On: the applied plastic Mx/My are checked against the capacity envelope "
              "(utilisation). Off: report the capacity only -- the applied Mx/My are "
              "ignored and locked.")
+    interaction = aset.checkbox(
+        "N-M interaction diagram", value=False, key="pl_interaction",
+        disabled=not plastic_on,
+        help="Trace the axial-moment (N-M) capacity curve at a fixed bending axis, "
+             "from pure tension to the squash load. Shown in the N-M Interaction "
+             "view. Adds a short extra sweep to Calculate.")
+    int_axis = aset.radio(
+        "N-M bending axis", ["About x (Mx)", "About y (My)"], key="pl_int_axis",
+        horizontal=True, disabled=not (plastic_on and interaction),
+        help="About x plots Mx vs N (horizontal neutral axis); about y plots My vs N.")
 
     aset.markdown("**Serviceability (elastic SLS)**")
     aset.caption("Extra cracked-section checks in the Elastic view.")
@@ -1496,6 +1506,7 @@ def build_inputs():
             # signature through their inputs (editing either marks results stale).
             "conc_Ec", "el_phi",
             "v_min", "v_max", "v_inc", "mode", "pl_check_util",
+            "pl_interaction", "pl_int_axis",
             "sls_cw", "sls_fctm", "sls_phi", "sls_bond",
             "sls_code", "sls_member"))
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
@@ -1512,6 +1523,7 @@ def build_inputs():
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 check_util=check_util,
+                interaction=interaction, int_axis=int_axis,
                 v_min=v_min, v_max=v_max, v_inc=v_inc,
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
@@ -1592,6 +1604,22 @@ def run_analysis(inp):
                          comp_force=p.compression_force, lever=p.lever_arm,
                          dx=p.dx, dy=p.dy) for p in pts],
         )
+        # Opt-in N-M interaction diagram at a fixed bending axis. Trace the +M branch
+        # (neutral-axis angle V) and the -M branch (V+180) from pure tension to the
+        # squash load, then join them into one closed capacity boundary.
+        if inp.get("interaction"):
+            about_x = str(inp.get("int_axis", "About x (Mx)")).startswith("About x")
+            v_pos = 90.0 if about_x else 0.0
+            m_of = (lambda q: q.Mx) if about_x else (lambda q: q.My)
+            branch = lambda v: solve_interaction(inp["section"], inp["concrete"],
+                                                 inp["steel"], v, prestress=pre)
+            loop = branch(v_pos) + list(reversed(branch(v_pos + 180.0)))
+            out["plastic"]["interaction"] = dict(
+                axis=("x" if about_x else "y"),
+                N=[q.axial for q in loop], M=[m_of(q) for q in loop],
+                applied=(inp["P_pl"], inp["Mx_pl"] if about_x else inp["My_pl"]),
+                converged=all(q.converged for q in loop),
+            )
     if inp["mode"] in ("Elastic", "Both"):
         # Tendons are folded into the bar set for the elastic run. Each tendon uses
         # its own modular ratio (Ep/Ec, via the multiplier Ep/Es) and carries the
@@ -1772,7 +1800,8 @@ def _radial_util(mx, my, ax, ay):
 # result views need a Calculate.
 # ---------------------------------------------------------------------------
 
-VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results"]
+VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results",
+         "N-M Interaction"]
 
 
 def _memo_fig(name, sig, build):
@@ -1935,6 +1964,35 @@ def plastic_view(inp, results):
         st.dataframe(_plastic_table(pts, bool(inp["tendons"])),
                      hide_index=True, width="stretch",
                      height=35 * (len(pts) + 1) + 3)
+
+
+def interaction_view(inp, results):
+    """Axial-moment (N-M) interaction diagram at a fixed bending axis."""
+    if not inp.get("interaction"):
+        st.info("Enable 'N-M interaction diagram' in Analysis & Result Settings, "
+                "then run a Plastic or Both analysis and press Calculate.")
+        return
+    if not results or "plastic" not in results or "interaction" not in results["plastic"]:
+        st.info("Run a Plastic or Both analysis, then press Calculate.")
+        return
+    d = results["plastic"]["interaction"]
+    axis = d["axis"]
+    mlabel = "M_x" if axis == "x" else "M_y"
+    N, M = d["N"], d["M"]
+    m1, m2, m3 = st.columns(3)
+    m1.metric(f"Max ${mlabel}$", f"{max(M):.1f} kNm",
+              help="Peak moment capacity (near the balanced point).")
+    m2.metric("Squash load $N_c$", f"{max(N):.0f} kN")
+    m3.metric("Tension limit $N_t$", f"{min(N):.0f} kN")
+    st.plotly_chart(
+        viz.interaction_nm_figure(N, M, axis=axis,
+                                  applied=d.get("applied") if inp.get("check_util") else None,
+                                  title=f"N-{mlabel} interaction"),
+        width="stretch")
+    st.caption(f"Capacity boundary about the {axis}-axis, from pure tension to the "
+               "squash load. The marked point is the applied plastic "
+               f"($N$, ${mlabel}$); inside the curve is safe. Concrete carries "
+               "compression only, so the tension end is reinforcement-controlled.")
 
 
 def elastic_view(inp, results):
@@ -2179,7 +2237,7 @@ _generate_report(inp)   # builds the PDF when the Report panel's Generate was pr
 
 results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
-if stale and view in ("Plastic Results", "Elastic Results"):
+if stale and view in ("Plastic Results", "Elastic Results", "N-M Interaction"):
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
 for _section_err in (inp.get("void_error"), inp.get("steel_error")):
@@ -2192,5 +2250,7 @@ elif view == "Stress-Strain diagrams":
     materials_view(inp)
 elif view == "Plastic Results":
     plastic_view(inp, results)
+elif view == "N-M Interaction":
+    interaction_view(inp, results)
 else:
     elastic_view(inp, results)

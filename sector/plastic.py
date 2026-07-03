@@ -46,6 +46,7 @@ class PlasticPoint:
     V: float                  # neutral-axis angle from the Y axis, degrees
     Mx: float                 # capacity moment about X, kNm
     My: float                 # capacity moment about Y, kNm
+    axial: float              # achieved net axial force N, kN (compression +)
     U: float                  # angle of the resultant load from the X axis, deg
     R: float                  # distance origin -> resultant load, m
     na_x_intercept: float     # neutral axis intercept with X axis, m
@@ -367,6 +368,7 @@ def plastic_capacity_at_angle(
         V=V_deg,
         Mx=Mx,
         My=My,
+        axial=comp_F + ten_F,
         U=U,
         R=R,
         na_x_intercept=x_int,
@@ -410,3 +412,60 @@ def solve_plastic(
                                       prestress=prestress, n_bands=n_bands)
         )
     return points
+
+
+@dataclass
+class InteractionPoint:
+    """One point on the N-M interaction diagram at a fixed neutral-axis angle."""
+
+    axial: float              # net axial force N, kN (compression +)
+    Mx: float                 # capacity moment about X, kNm
+    My: float                 # capacity moment about Y, kNm
+    converged: bool
+
+
+def solve_interaction(
+    section: Section,
+    concrete: Concrete,
+    steel: MildSteel,
+    V_deg: float,
+    *,
+    prestress: "Prestress | None" = None,
+    n_points: int = 32,
+    n_bands: int = 80,
+) -> list[InteractionPoint]:
+    """Trace the N-M interaction boundary at neutral-axis angle ``V_deg``.
+
+    The ultimate axial capacity runs from pure tension (all steel yielding, ``N_t``)
+    to the squash load (``N_c``). Sampling the axial force uniformly across
+    ``[N_t, N_c]`` and taking the ultimate moment at each traces one boundary of the
+    diagram -- the ``+M`` side for this ``V``; call again at ``V + 180`` for the
+    ``-M`` side. Returns ``InteractionPoint``s ordered from tension to compression.
+    """
+    def _cap(P):
+        return plastic_capacity_at_angle(section, concrete, steel, P, V_deg,
+                                         prestress=prestress, n_bands=n_bands)
+
+    # Axial extremes: probe just past the range (a squash / tension over-estimate)
+    # and read back the clamped equilibrium, so the diagram spans the true range. The
+    # steel force uses each material's own design stress -- tendons yield far above the
+    # mild bars, so folding their area in at the mild stress would leave the probe
+    # inside the true tension range and the diagram short of the tension limit.
+    Ac = sum(_poly_moments(r.tolist()).area for r in section.integration_rings())
+    fy = abs(steel.stress(steel.eut * 0.99, design=True))    # mild design stress, MPa
+    steel_force = fy * float(section.bar_arrays()[2].sum())  # MN.m^-2 * m^2 = MN
+    if prestress is not None:
+        fp = abs(prestress.stress(prestress.rupture_strain * 0.99, design=True))
+        steel_force += fp * float(section.tendon_arrays()[2].sum())
+    squash = (concrete.fcd * Ac + steel_force) * _MN_TO_KN   # kN, an upper bound on N_c
+    tension = steel_force * _MN_TO_KN                         # kN, |N_t| upper bound
+    N_c = _cap(1.5 * squash + 1.0).axial
+    N_t = _cap(-1.5 * tension - 1.0).axial
+
+    pts = []
+    for i in range(n_points + 1):
+        P = N_t + (N_c - N_t) * (i / n_points)
+        p = _cap(P)
+        pts.append(InteractionPoint(axial=p.axial, Mx=p.Mx, My=p.My,
+                                    converged=p.converged))
+    return pts

@@ -526,6 +526,43 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
     return fig
 
 
+def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction"):
+    """Axial-moment (N-M) capacity diagram: N vertical, M horizontal.
+
+    ``N`` (kN, compression positive) and ``M`` (kNm, about ``axis``) trace the closed
+    capacity boundary -- the ``+M`` branch from pure tension to the squash load then
+    the ``-M`` branch back. ``applied`` is ``(N, M)`` and marked on the diagram.
+    """
+    mlabel = "M_x" if axis == "x" else "M_y"
+    scale = max((abs(v) for v in list(N) + list(M)), default=1.0) or 1.0
+    snap = lambda v: 0.0 if abs(v) <= scale * 1e-4 else v
+    Ms = [snap(v) for v in M]
+    hover = ("M = %{x:.1f} kNm<br>N = %{y:.1f} kN<extra></extra>")
+
+    fig = go.Figure()
+    # Close the polyline (repeat the first vertex) so the boundary is drawn all the
+    # way round, not just filled: without this the outline has a gap between the two
+    # tension apexes.
+    Ns = list(N)
+    fig.add_trace(go.Scatter(x=Ms + Ms[:1], y=Ns + Ns[:1], mode="lines", fill="toself",
+                             line=dict(color=ENVELOPE, width=2), name="capacity",
+                             fillcolor="rgba(31,119,180,0.08)", hovertemplate=hover))
+    if applied is not None:
+        fig.add_trace(go.Scatter(x=[snap(applied[1])], y=[applied[0]], mode="markers",
+                                 marker=dict(size=11, color=LOAD_POINT, symbol="x"),
+                                 name="applied", hovertemplate=hover))
+    fig.update_layout(
+        title=title, template="plotly_white", height=460,
+        margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
+        xaxis=dict(title=dict(text=f"{mlabel.replace('_', '')} (kNm)", standoff=10),
+                   zeroline=True),
+        yaxis=dict(title="N (kN, compression +)", zeroline=True),
+        legend=dict(orientation="h", yanchor="top", y=_legend_y(460), x=0.5,
+                    xanchor="center"),
+    )
+    return fig
+
+
 def na_endpoints(x_int, y_int, extent):
     """Two points spanning the neutral axis from its axis intercepts.
 

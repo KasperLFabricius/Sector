@@ -28,7 +28,13 @@ from .geometry import (
     signed_area,
 )
 from .materials import Concrete, MildSteel, Prestress
-from .plastic import PlasticPoint, plastic_capacity_at_angle, solve_plastic
+from .plastic import (
+    InteractionPoint,
+    PlasticPoint,
+    plastic_capacity_at_angle,
+    solve_interaction,
+    solve_plastic,
+)
 from .section import Bar, Section
 
 __all__ = [
@@ -50,9 +56,11 @@ __all__ = [
     "PlasticPoint",
     "plastic_capacity_at_angle",
     "solve_plastic",
+    "InteractionPoint",
+    "solve_interaction",
 ]
 
 # The single source of truth for the Sector version (the app imports this as
 # APP_VERSION). Pre-1.0 internal scheme: 0.XX, bumped by 0.01 per change while the
 # tool is still evolving toward a production 1.0.
-__version__ = "0.21"
+__version__ = "0.22"

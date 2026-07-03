@@ -174,6 +174,26 @@ def test_full_sweep_reports_utilisation():
     assert at.session_state["results"]["plastic"]["util"] is not None
 
 
+def test_nm_interaction_is_opt_in_and_renders():
+    at = _fresh()
+    at.run()
+    # Off by default: the N-M view prompts to enable it, and no interaction is computed.
+    at.selectbox(key="view").set_value("N-M Interaction").run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "interaction" not in at.session_state["results"]["plastic"]
+    assert any("N-M interaction" in m.value for m in at.info)
+    # Enable it -> Calculate traces the diagram and the view renders it.
+    at.checkbox(key="pl_interaction").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    d = at.session_state["results"]["plastic"]["interaction"]
+    assert d["axis"] == "x" and len(d["N"]) == len(d["M"]) > 10
+    assert min(d["N"]) < 0.0 < max(d["N"])              # tension to squash
+    assert not any("Enable 'N-M interaction" in m.value for m in at.info)  # view rendered
+    assert any("Squash load" in mt.label for mt in at.metric)              # its metrics show
+
+
 def test_both_mode_runs_elastic_and_plastic():
     at = _fresh()
     at.run()
