@@ -336,6 +336,23 @@ def test_quick_section_interleaves_a_second_bar_size():
     assert len(areas) >= 2                                 # two bar sizes now present
 
 
+def test_quick_section_interleave_skips_the_box_girder_void():
+    # A box girder bottom layer that rises into the hollow is split across the two
+    # walls; interleaving its midpoints would drop a bar into the void. The
+    # interleaved bars are filtered to the concrete, so the section stays valid.
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.number_input(key="bot_layers").set_value(2).run()
+    at.number_input(key="layer_s").set_value(300.0).run()  # 2nd layer rises into the hollow
+    at.selectbox(key="bot_off_d").set_value("16").run()
+    _apply_qs(at)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]        # no bar in the void -> valid section
+
+
 def test_quick_section_builder_places_bars_by_spacing():
     # The builder opens full-width, places slab bars at a target spacing, and Apply
     # writes the generated points into the tables (which then analyse).

@@ -1048,10 +1048,17 @@ def _quick_section_geometry(box):
                                              int(nb_top), rd_top, span_at=top_span_at,
                                              n_at=n_at_top)
         groups = [bot_group, top_group]
-        if bot_off_d != "none":
-            groups.append(_qs_interleave(bot_group, bot_off_d))
-        if top_off_d != "none":
-            groups.append(_qs_interleave(top_group, top_off_d))
+        for grp, off_d in ((bot_group, bot_off_d), (top_group, top_off_d)):
+            if off_d == "none":
+                continue
+            inter = _qs_interleave(grp, off_d)
+            # A row split across a void (a box girder's hollow) leaves a gap whose
+            # midpoint would fall in the void; keep only interleaved bars in concrete.
+            if inter and holes:
+                ok = geometry.points_inside_concrete(
+                    [(x, y) for x, y, _a in inter], outer, holes)
+                inter = [p for p, good in zip(inter, ok) if good]
+            groups.append(inter)
         bars = templates.merge_bars(*groups)
 
     box.markdown("**Prestressing tendons**")
