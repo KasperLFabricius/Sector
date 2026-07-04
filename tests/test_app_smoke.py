@@ -7,12 +7,16 @@ for each analysis mode, and assert it produces results without error.
 from __future__ import annotations
 
 import pathlib
+import sys
 
 import pytest
 
 from streamlit.testing.v1 import AppTest
 
-APP = str(pathlib.Path(__file__).resolve().parent.parent / "app" / "sector_app.py")
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
+
+APP = str(ROOT / "app" / "sector_app.py")
 
 
 def _fresh():
@@ -67,11 +71,14 @@ def test_persisted_settings_use_the_seeded_number_helper():
     # Widgets whose key is restored from a saved project/session (a value= / index=
     # alongside the externally-set key trips the warning) go through a seeded helper,
     # so the bare `key="<name>"` form no longer appears for them.
+    # (The Quick Section dimension inputs -- b_mm/h_mm etc. -- keep value=; they have
+    # shape-varying defaults that a plain setdefault cannot re-apply on a shape
+    # switch, so they need a separate shape-default prefill and are not covered here.)
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
                 "label_scale", "label_min_gap",                # seeded number inputs
                 "pl_check_util", "pl_interaction", "sls_cw",    # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
-                "ring_d", "bot_d", "top_d"):
+                "ring_d", "bot_d", "top_d"):                    # QS diameter selects
         assert f'key="{key}"' not in src, key
 
 
