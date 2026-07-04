@@ -107,6 +107,16 @@ def test_every_figure_block_builds():
             assert b[1]() is not None, b[2]
 
 
+def test_manual_figures_render_with_a_unique_key():
+    # Each st.plotly_chart in the manual renderer must pass a per-block key, so two
+    # structurally-similar figures never collide on an auto-generated element id
+    # (Streamlit raises that as a duplicate-id error once other charts exist).
+    import inspect
+    src = inspect.getsource(manual.render_manual_streamlit)
+    assert src.count("st.plotly_chart(") == 1
+    assert 'key=f"manual_fig_{i}"' in src
+
+
 def test_part_c_worked_numbers_match_the_engine():
     # The Part C derivations quote worked numbers for the beam example. Recompute
     # them so the prose cannot silently drift from the solver.
