@@ -62,9 +62,16 @@ def test_persisted_settings_use_the_seeded_number_helper():
     import inspect
     import sector_app
     src = inspect.getsource(sector_app)
-    assert "def _seeded_number(" in src
+    for helper in ("_seeded_number", "_seeded_checkbox", "_seeded_selectbox"):
+        assert f"def {helper}(" in src
+    # Widgets whose key is restored from a saved project/session (a value= / index=
+    # alongside the externally-set key trips the warning) go through a seeded helper,
+    # so the bare `key="<name>"` form no longer appears for them.
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
-                "label_scale", "label_min_gap"):
+                "label_scale", "label_min_gap",                # seeded number inputs
+                "pl_check_util", "pl_interaction", "sls_cw",    # seeded checkboxes
+                "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
+                "ring_d", "bot_d", "top_d"):
         assert f'key="{key}"' not in src, key
 
 

@@ -158,6 +158,22 @@ def _seeded_number(box, label, lo, hi, default, step, key, **kw):
     return box.number_input(label, lo, hi, step=step, key=key, **kw)
 
 
+def _seeded_checkbox(box, label, default, key, **kw):
+    """A checkbox whose default is seeded into session state rather than passed as
+    ``value=`` -- same reason as :func:`_seeded_number`: a loaded project writes the
+    key before the widget is built, and a ``value=`` alongside it trips the warning."""
+    st.session_state.setdefault(key, default)
+    return box.checkbox(label, key=key, **kw)
+
+
+def _seeded_selectbox(box, label, options, default, key, **kw):
+    """A selectbox whose default is seeded into session state rather than passed as
+    ``index=`` -- same reason as :func:`_seeded_number`. ``default`` must be one of
+    ``options``."""
+    st.session_state.setdefault(key, default)
+    return box.selectbox(label, options, key=key, **kw)
+
+
 def _safe_build(box, builder, curve, vals, **extra):
     """Build a material from the flat parameter set, surviving degenerate input.
 
@@ -207,8 +223,8 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     box.markdown("**Concrete**")
     presets = mp.CONCRETE_PRESETS
     labels = list(presets)
-    preset = box.selectbox("Preset", labels, index=labels.index(_DEFAULT_PRESET),
-                           key="conc_preset", help=_PRESET_HELP)
+    preset = _seeded_selectbox(box, "Preset", labels, _DEFAULT_PRESET,
+                               "conc_preset", help=_PRESET_HELP)
     _prefill("conc", preset, presets)
     curve = presets[preset]["curve"]
     fck = _number(box, "conc", "fck", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
@@ -323,8 +339,8 @@ def mild_panel(box, locked=False):
     box.markdown("**Mild steel**")
     presets = mp.MILD_PRESETS
     labels = list(presets)
-    preset = box.selectbox("Preset", labels, index=labels.index(_DEFAULT_PRESET),
-                           key="mild_preset", help=_PRESET_HELP)
+    preset = _seeded_selectbox(box, "Preset", labels, _DEFAULT_PRESET,
+                               "mild_preset", help=_PRESET_HELP)
     # Selecting a preset whose compression yield is active (fyck > 0) turns the
     # "Active in compression" toggle on, so the preset's compression is not
     # silently dropped. (Checked before _prefill, which updates the change marker.)
@@ -371,8 +387,8 @@ def prestress_panel(box, locked=False):
     box.markdown("**Prestressing steel**")
     presets = mp.PRESTRESS_PRESETS
     labels = list(presets)
-    preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
-                           key="pre_preset", help=_PRESET_HELP)
+    preset = _seeded_selectbox(box, "Preset", labels, "EN 1992-1-1:2005",
+                               "pre_preset", help=_PRESET_HELP)
     _prefill("pre", preset, presets)
     curve = presets[preset]["curve"]
     vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP,
@@ -966,8 +982,9 @@ def _quick_section_geometry(box):
     if shape == "Circular":
         nb = box.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n",
                               help="Number of bars evenly spaced around the perimeter.")
-        rd = box.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4,
-                           key="ring_d", help="Diameter of each reinforcement bar.")
+        rd = _seeded_selectbox(box, "Bar diameter (mm)", templates.BAR_DIAMETERS,
+                               templates.BAR_DIAMETERS[4], "ring_d",
+                               help="Diameter of each reinforcement bar.")
         cov = box.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="ring_c_mm",
                                help="Distance from the section face to the bar centres.") / 1000.0
         bars = templates.bar_ring(0.0, 0.0, templates.ring_radius(dia, cov), int(nb), rd)
@@ -984,10 +1001,12 @@ def _quick_section_geometry(box):
         c1, c2 = box.columns(2)
         c1.markdown("**Bottom**")
         c2.markdown("**Top**")
-        rd_bot = c1.selectbox("Bottom dia (mm)", templates.BAR_DIAMETERS, index=4,
-                              key="bot_d", help="Bottom bar diameter (mm).")
-        rd_top = c2.selectbox("Top dia (mm)", templates.BAR_DIAMETERS, index=4,
-                              key="top_d", help="Top bar diameter (mm).")
+        rd_bot = _seeded_selectbox(c1, "Bottom dia (mm)", templates.BAR_DIAMETERS,
+                                   templates.BAR_DIAMETERS[4], "bot_d",
+                                   help="Bottom bar diameter (mm).")
+        rd_top = _seeded_selectbox(c2, "Top dia (mm)", templates.BAR_DIAMETERS,
+                                   templates.BAR_DIAMETERS[4], "top_d",
+                                   help="Top bar diameter (mm).")
         n_at_bot = n_at_top = None     # by-number: a fixed count per layer
         if by_spacing:
             s_bot = c1.number_input("Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
@@ -1265,14 +1284,14 @@ def build_inputs():
                            "v_inc", disabled=not plastic_on,
                            help="Angular step between swept neutral-axis angles; "
                                 "a finer step gives a smoother M-M envelope.")
-    check_util = aset.checkbox(
-        "Check utilisation against applied moment", value=True, key="pl_check_util",
+    check_util = _seeded_checkbox(
+        aset, "Check utilisation against applied moment", True, "pl_check_util",
         disabled=not plastic_on,
         help="On: the applied plastic Mx/My are checked against the capacity envelope "
              "(utilisation). Off: report the capacity only -- the applied Mx/My are "
              "ignored and locked.")
-    interaction = aset.checkbox(
-        "N-M interaction diagram", value=False, key="pl_interaction",
+    interaction = _seeded_checkbox(
+        aset, "N-M interaction diagram", False, "pl_interaction",
         disabled=not plastic_on,
         help="Trace the axial-moment (N-M) capacity curve at a fixed bending axis, "
              "from pure tension to the squash load. Shown in the N-M Interaction "
@@ -1284,11 +1303,11 @@ def build_inputs():
 
     aset.markdown("**Serviceability (elastic SLS)**")
     aset.caption("Extra cracked-section checks in the Elastic view.")
-    sls_cw = aset.checkbox("Crack width", value=False, key="sls_cw",
-                           disabled=not elastic_on,
-                           help="Report the EC2 crack width wk for both the long-term "
-                                "and the short-term (instantaneous) load. Each bar's "
-                                "clear cover is taken from the geometry.")
+    sls_cw = _seeded_checkbox(aset, "Crack width", False, "sls_cw",
+                              disabled=not elastic_on,
+                              help="Report the EC2 crack width wk for both the long-term "
+                                   "and the short-term (instantaneous) load. Each bar's "
+                                   "clear cover is taken from the geometry.")
     sls_phi = _seeded_number(aset, r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0,
                              60.0, 0.0, 1.0, "sls_phi",
                              disabled=not (elastic_on and sls_cw),
