@@ -32,7 +32,7 @@ def _inp():
 def _crack():
     # Units as returned by CrackWidthResult: wk/sr_max/phi/cover in mm; hc_ef in m;
     # ac_eff in m^2; esm_ecm dimensionless.
-    return {"wk": 0.2, "sr_max": 235.0, "esm_ecm": 8.4e-4, "sigma_s": 200.0,
+    return {"wk": 0.213, "sr_max": 235.0, "esm_ecm": 8.4e-4, "sigma_s": 215.0,
             "rho_p_eff": 0.04, "ac_eff": 0.0125, "hc_ef": 0.125, "phi": 16.0,
             "cover": 40.0, "gov_bar": 1}
 
@@ -89,8 +89,8 @@ def test_report_crack_width_uses_millimetres_not_metres():
     # wk/sr_max/phi/cover are already in mm; the report must not multiply by 1000.
     txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
     assert "235.0" in txt and "235000" not in txt     # sr_max stays mm
-    assert "0.200" in txt                              # wk in mm, not 200
-    assert "200.000" not in txt                        # wk not 1000x
+    assert "0.213" in txt                              # wk in mm (0.213 mm)
+    assert "213.000" not in txt                        # wk not 1000x (would be 213 mm)
 
 
 def test_report_crack_worked_uses_the_governing_case():
