@@ -205,29 +205,42 @@ def fig_sign_convention():
 
 
 def fig_strain_plane():
-    """Schematic of the ultimate strain plane: linear strain across the depth, the
-    extreme concrete fibre at eps_cu and the neutral axis where strain is zero."""
+    """Schematic of the ultimate strain plane: strain is linear across the depth (a
+    single straight line), zero at the neutral axis, compression (+) above it and
+    tension (-) below. The section is drawn on the left; the strain diagram, sharing
+    the same depth axis, on the right against a vertical zero-strain reference."""
     fig = _schematic()
-    # Section depth as a vertical bar from bottom (tension) to top (compression).
-    fig.add_shape(type="rect", x0=-0.15, y0=0.0, x1=0.15, y1=1.0,
+    y_na = 0.62
+    # Section: a slim depth bar (top edge = compression face, bottom = tension face).
+    fig.add_shape(type="rect", x0=-0.9, y0=0.0, x1=-0.6, y1=1.0,
                   line=dict(color="#888", width=1.5), fillcolor="#f2f2f2")
-    # Strain profile: eps = 0 at the NA (y = 0.7 here), +eps_cu at the top fibre,
-    # -eps_s at the bottom bar. Drawn to the right of the section.
-    y_na = 0.7
-    fig.add_trace(go.Scatter(
-        x=[0.15, 1.2], y=[y_na, 1.0], mode="lines",
-        line=dict(color="#378ADD", width=2)))                 # compression side
-    fig.add_trace(go.Scatter(
-        x=[0.15, -0.6], y=[y_na, 0.0], mode="lines",
-        line=dict(color="#D85A30", width=2)))                 # tension side
-    fig.add_shape(type="line", x0=0.15, y0=y_na, x1=1.2, y1=y_na,
+    # Zero-strain reference (vertical) and the neutral axis (horizontal) crossing
+    # where the strain is zero; the NA line is carried across the section too.
+    fig.add_shape(type="line", x0=0.0, y0=0.0, x1=0.0, y1=1.0,
                   line=dict(color="#bbb", width=1, dash="dot"))
-    fig.add_annotation(x=1.2, y=1.0, text="eps_cu (crushing)", showarrow=False,
-                       xshift=40, font=dict(size=11))
-    fig.add_annotation(x=-0.6, y=0.0, text="eps_s (steel)", showarrow=False,
-                       xshift=-30, font=dict(size=11))
-    fig.add_annotation(x=1.2, y=y_na, text="neutral axis (eps = 0)",
-                       showarrow=False, xshift=55, font=dict(size=11))
+    fig.add_shape(type="line", x0=-0.9, y0=y_na, x1=0.6, y1=y_na,
+                  line=dict(color="#bbb", width=1, dash="dot"))
+    # The strain: ONE straight line through (0, y_na). Right of the zero line above
+    # the NA (compression, +), left of it below (tension, -). x is linear in depth,
+    # so x_bot is set to make the line pass through zero exactly at the NA.
+    x_top = 0.46
+    x_bot = -x_top * y_na / (1.0 - y_na)
+    # Shade the compression and tension wedges (between the zero line and the strain
+    # line) so the two sides of the neutral axis read at a glance.
+    fig.add_trace(go.Scatter(x=[0.0, 0.0, x_top], y=[y_na, 1.0, 1.0],
+                             fill="toself", mode="none",
+                             fillcolor="rgba(55,138,221,0.18)"))
+    fig.add_trace(go.Scatter(x=[0.0, 0.0, x_bot], y=[y_na, 0.0, 0.0],
+                             fill="toself", mode="none",
+                             fillcolor="rgba(216,90,48,0.16)"))
+    fig.add_trace(go.Scatter(x=[x_bot, x_top], y=[0.0, 1.0], mode="lines",
+                             line=dict(color="#333", width=2)))
+    fig.add_annotation(x=x_top, y=1.0, text="eps_cu (compression +)",
+                       showarrow=False, xshift=54, font=dict(size=11))
+    fig.add_annotation(x=x_bot, y=0.0, text="eps_s (tension -)",
+                       showarrow=False, xshift=-42, font=dict(size=11))
+    fig.add_annotation(x=0.0, y=y_na, text="neutral axis (eps = 0)",
+                       showarrow=False, xshift=58, yshift=10, font=dict(size=11))
     return fig
 
 
@@ -534,15 +547,17 @@ def manual_blocks() -> list:
        "\\varepsilon_{c2}), \\qquad \\sigma_c = f_{cd}\\quad(\\varepsilon_{c2}\\le"
        "\\varepsilon_c\\le\\varepsilon_{cu2}),$$\n\n"
        "with $f_{cd} = \\alpha_{cc}\\,f_{ck}/\\gamma_c$ and zero stress beyond "
-       "$\\varepsilon_{cu2}$ (crushed). For $f_{ck}\\le 50$ MPa the strain limits "
-       "are $\\varepsilon_{c2}=2.0$ per mille, $\\varepsilon_{cu2}=3.5$ per mille "
-       "and $n=2$; above C50 they follow Table 3.1: "
+       "$\\varepsilon_{cu2}$ (crushed).\n\n"
+       "For $f_{ck}\\le 50$ MPa the strain limits are $\\varepsilon_{c2}=2.0$ per "
+       "mille, $\\varepsilon_{cu2}=3.5$ per mille and $n=2$.\n\n"
+       "Above C50 they follow Table 3.1: "
        "$\\varepsilon_{c2}=(2.0+0.085(f_{ck}-50)^{0.53})/1000$, "
        "$\\varepsilon_{cu2}=(2.6+35((90-f_{ck})/100)^4)/1000$ and "
        "$n=1.4+23.4((90-f_{ck})/100)^4$. These strength-dependent strains apply to "
-       "the 2005 and DK NA editions; the EN 1992-1-1:2023 edition keeps them "
-       "**constant** ($\\varepsilon_{c2}=2.0$, $\\varepsilon_{cu2}=3.5$ per mille, "
-       "$n=2$) for every grade.")
+       "the 2005 and DK NA editions.\n\n"
+       "The EN 1992-1-1:2023 edition instead keeps them **constant** "
+       "($\\varepsilon_{c2}=2.0$, $\\varepsilon_{cu2}=3.5$ per mille, $n=2$) for "
+       "every grade.")
     md("**Worked (beam, C40/50):** $f_{cd}=1.0\\times 40/1.45 = 27.6$ MPa, with "
        "$\\varepsilon_{c2}=2.0$ and $\\varepsilon_{cu2}=3.5$ per mille.")
     fig(fig_beam_concrete_law, "The C40/50 parabola-rectangle law of the beam "
@@ -553,13 +568,15 @@ def manual_blocks() -> list:
        "$$\\sigma_s = E_{s,d}\\,\\varepsilon_s\\ \\ (|\\varepsilon_s|\\le"
        "\\varepsilon_{yd}), \\qquad f_{yd}=f_{yk}/\\gamma_s, \\qquad "
        "\\varepsilon_{yd}=f_{yd}/E_{s,d}.$$\n\n"
-       "The design elastic modulus $E_{s,d}$ depends on the curve. The selectable "
-       "Eurocode presets (Curve 3) keep it unfactored, $E_{s,d}=E_s$, so B550 "
-       "yields at $\\varepsilon_{yd}=f_{yd}/E_s=458/200000\\approx 2.29$ per mille. "
+       "The design elastic modulus $E_{s,d}$ depends on the curve.\n\n"
+       "The selectable Eurocode presets (Curve 3) keep it unfactored, "
+       "$E_{s,d}=E_s$, so B550 yields at "
+       "$\\varepsilon_{yd}=f_{yd}/E_s=458/200000\\approx 2.29$ per mille.\n\n"
        "The elastic-perfectly-plastic law used in this worked example (Curve 2) "
        "factors it, $E_{s,d}=E_s/\\gamma_s$, so the whole curve scales by "
        "$1/\\gamma_s$ and yield moves to $\\varepsilon_{yd}=f_{yk}/E_s=550/200000="
-       "2.75$ per mille. In both, $f_{yd}=550/1.20=458$ MPa.")
+       "2.75$ per mille.\n\n"
+       "In both, $f_{yd}=550/1.20=458$ MPa.")
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.")
     h2("Prestressing steel")
     md("A tendon is evaluated at its **total** strain -- the locked-in initial "
@@ -580,8 +597,9 @@ def manual_blocks() -> list:
        "curvature and $s_{na}$ the neutral-axis depth. At ultimate the extreme "
        "compression fibre reaches the concrete crushing strain "
        "$\\varepsilon_{cu2}$; the compression depth is $c = s_{max}-s_{na}$.")
-    fig(fig_strain_plane, "The ultimate strain plane: linear across the depth, the "
-        "top fibre at crushing and the neutral axis where the strain is zero.")
+    fig(fig_strain_plane, "The ultimate strain plane: one straight line -- zero at "
+        "the neutral axis, compression (+) above it and tension (-) below, the top "
+        "fibre at the crushing strain.")
     h2("The governing curvature")
     md("The curvature is scaled until the **first** material limit is reached, so "
        "none is driven past its limit:\n\n"
@@ -1081,7 +1099,7 @@ def render_manual_streamlit():
                "to use it.")
 
     n1 = n2 = 0
-    for block in manual_blocks():
+    for i, block in enumerate(manual_blocks()):
         kind = block[0]
         if kind == "part":
             st.divider()
@@ -1104,7 +1122,10 @@ def render_manual_streamlit():
                 st.markdown(f"{icon} **{title}** -- {block[2]}")
         elif kind == "figure":
             try:
-                st.plotly_chart(block[1](), width="stretch")
+                # A unique key per block: two structurally-similar figures would
+                # otherwise share an auto-generated element id and Streamlit raises a
+                # duplicate-id error (seen once other charts exist, e.g. after Calculate).
+                st.plotly_chart(block[1](), width="stretch", key=f"manual_fig_{i}")
             except Exception as e:                       # a broken figure must not
                 st.caption(f"[figure unavailable: {e}]")  # break the whole manual
             st.caption(block[2])
