@@ -145,6 +145,19 @@ def _number(box, prefix, field, meta, help_map=None, disabled=False):
                             help=(help_map or {}).get(field), disabled=disabled)
 
 
+def _seeded_number(box, label, lo, hi, default, step, key, **kw):
+    """A number_input whose initial value is seeded into session state rather than
+    passed as ``value=``.
+
+    A loaded project (or an autosave restore) writes the widget key before the widget
+    is created; a widget that also passes ``value=`` then trips Streamlit's "created
+    with a default value but also had its value set via the Session State API"
+    warning. Seeding via ``setdefault`` (a no-op once the key exists) and omitting
+    ``value=`` avoids it while keeping the same default on a fresh session."""
+    st.session_state.setdefault(key, default)
+    return box.number_input(label, lo, hi, step=step, key=key, **kw)
+
+
 def _safe_build(box, builder, curve, vals, **extra):
     """Build a material from the flat parameter set, surviving degenerate input.
 
@@ -1242,16 +1255,16 @@ def build_inputs():
     elastic_on = mode in ("Elastic", "Both")
 
     aset.markdown("**Neutral-axis sweep (plastic)**")
-    v_min = aset.number_input(r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
-                              key="v_min", disabled=not plastic_on,
-                              help="First neutral-axis rotation angle of the plastic sweep.")
-    v_max = aset.number_input(r"End angle $V_{max}$ (deg)", 0.0, 360.0, 360.0, 5.0,
-                              key="v_max", disabled=not plastic_on,
-                              help="Last neutral-axis rotation angle of the plastic sweep.")
-    v_inc = aset.number_input(r"Increment $V_{inc}$ (deg)", 1.0, 90.0, 15.0, 1.0,
-                              key="v_inc", disabled=not plastic_on,
-                              help="Angular step between swept neutral-axis angles; "
-                                   "a finer step gives a smoother M-M envelope.")
+    v_min = _seeded_number(aset, r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
+                           "v_min", disabled=not plastic_on,
+                           help="First neutral-axis rotation angle of the plastic sweep.")
+    v_max = _seeded_number(aset, r"End angle $V_{max}$ (deg)", 0.0, 360.0, 360.0, 5.0,
+                           "v_max", disabled=not plastic_on,
+                           help="Last neutral-axis rotation angle of the plastic sweep.")
+    v_inc = _seeded_number(aset, r"Increment $V_{inc}$ (deg)", 1.0, 90.0, 15.0, 1.0,
+                           "v_inc", disabled=not plastic_on,
+                           help="Angular step between swept neutral-axis angles; "
+                                "a finer step gives a smoother M-M envelope.")
     check_util = aset.checkbox(
         "Check utilisation against applied moment", value=True, key="pl_check_util",
         disabled=not plastic_on,
@@ -1276,11 +1289,11 @@ def build_inputs():
                            help="Report the EC2 crack width wk for both the long-term "
                                 "and the short-term (instantaneous) load. Each bar's "
                                 "clear cover is taken from the geometry.")
-    sls_phi = aset.number_input(r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0, 60.0,
-                                0.0, 1.0, key="sls_phi",
-                                disabled=not (elastic_on and sls_cw),
-                                help="Governing bar diameter for the crack spacing "
-                                     "sr,max; 0 derives it from each bar's area.")
+    sls_phi = _seeded_number(aset, r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0,
+                             60.0, 0.0, 1.0, "sls_phi",
+                             disabled=not (elastic_on and sls_cw),
+                             help="Governing bar diameter for the crack spacing "
+                                  "sr,max; 0 derives it from each bar's area.")
     # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
     sls_bond = aset.selectbox(
@@ -1455,17 +1468,17 @@ def build_inputs():
         # ``moments_active`` lets the moments lock independently of the axial force
         # (the plastic capacity-only mode keeps N but disables the applied moments).
         moments_active = active if moments_active is None else moments_active
-        P = loads.number_input(r"Axial force $N$ (kN, + = compression)", -50000.0,
-                               50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help,
-                               disabled=not active)
-        Mx = loads.number_input(r"Applied $M_x$ (kNm)", -100000.0, 100000.0, mx_default,
-                                10.0, key=f"{prefix}_Mx", disabled=not moments_active,
-                                help=f"{m_help} Bending moment about the x-axis "
-                                     "(its stress varies with y).")
-        My = loads.number_input(r"Applied $M_y$ (kNm)", -100000.0, 100000.0, 0.0, 10.0,
-                                key=f"{prefix}_My", disabled=not moments_active,
-                                help="Bending moment about the y-axis (its stress "
-                                     "varies with x); biaxial bending.")
+        P = _seeded_number(loads, r"Axial force $N$ (kN, + = compression)", -50000.0,
+                           50000.0, 0.0, 50.0, f"{prefix}_P", help=n_help,
+                           disabled=not active)
+        Mx = _seeded_number(loads, r"Applied $M_x$ (kNm)", -100000.0, 100000.0,
+                            mx_default, 10.0, f"{prefix}_Mx", disabled=not moments_active,
+                            help=f"{m_help} Bending moment about the x-axis "
+                                 "(its stress varies with y).")
+        My = _seeded_number(loads, r"Applied $M_y$ (kNm)", -100000.0, 100000.0, 0.0,
+                            10.0, f"{prefix}_My", disabled=not moments_active,
+                            help="Bending moment about the y-axis (its stress "
+                                 "varies with x); biaxial bending.")
         return P, Mx, My
 
     loads.markdown("**Plastic capacity**")
@@ -1487,11 +1500,11 @@ def build_inputs():
         "is applied automatically from its initial strain, so N is the external "
         "force only -- as in the plastic solver; do not add the prestress force here.",
         "Sustained moment (long-term).", elastic_on)
-    phi_creep = loads.number_input(r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0, 3.0,
-                                   0.1, key="el_phi", disabled=not elastic_on,
-                                   help="Final creep coefficient. The long-term modular "
-                                        "ratios use the effective modulus "
-                                        "Ec,eff = Ec/(1+phi).")
+    phi_creep = _seeded_number(loads, r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0,
+                               3.0, 0.1, "el_phi", disabled=not elastic_on,
+                               help="Final creep coefficient. The long-term modular "
+                                    "ratios use the effective modulus "
+                                    "Ec,eff = Ec/(1+phi).")
     loads.markdown("_Short-term_")
     P_el_s, Mx_el_s, My_el_s = _load_set(
         "el_short", "Instantaneous (variable) external axial force (prestress is "
@@ -2271,12 +2284,12 @@ _maybe_autosave()
 # are not part of the result-staleness signature.
 st.markdown("**Plot labels**")
 lc1, lc2 = st.columns(2)
-inp["label_scale"] = lc1.number_input(
-    "Label size", 0.5, 3.0, 1.0, 0.1, key="label_scale",
+inp["label_scale"] = _seeded_number(
+    lc1, "Label size", 0.5, 3.0, 1.0, 0.1, "label_scale",
     help="Scales the corner / bar / tendon number labels on the section "
          "drawings.")
-inp["label_min_gap"] = lc2.number_input(
-    "Label spacing (hide threshold)", 0.0, 0.5, 0.04, 0.01, key="label_min_gap",
+inp["label_min_gap"] = _seeded_number(
+    lc2, "Label spacing (hide threshold)", 0.0, 0.5, 0.04, 0.01, "label_min_gap",
     help="Labels closer together than this fraction of the section size are "
          "hidden to avoid overlap. Lower shows more (0 shows every label); "
          "raise it for dense outlines like a circular section.")

@@ -54,6 +54,35 @@ def test_live_curve_figures_are_memoised():
     assert id(at.session_state["_fig_cache"]["concrete"][1]) != conc_id     # rebuilt
 
 
+def test_persisted_settings_use_the_seeded_number_helper():
+    # These inputs are saved (SCALAR_KEYS), so loading a project writes their key
+    # before the widget is created; passing value= too trips Streamlit's "default
+    # value and Session State" warning. They must go through _seeded_number
+    # (setdefault + no value=), so the bare `key="<name>"` form no longer appears.
+    import inspect
+    import sector_app
+    src = inspect.getsource(sector_app)
+    assert "def _seeded_number(" in src
+    for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
+                "label_scale", "label_min_gap"):
+        assert f'key="{key}"' not in src, key
+
+
+def test_loading_a_project_applies_a_seeded_setting(tmp_path):
+    # A loaded project writes v_min before the sweep widget renders; the seeded input
+    # must adopt it without error (the setdefault is then a no-op).
+    import project_io
+    at = _fresh()
+    at.run()
+    scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
+               if k in at.session_state}
+    scalars["v_min"] = 45.0
+    at.session_state["_pending_project"] = project_io.dump_project({}, scalars)
+    at.run()
+    assert not at.exception
+    assert at.session_state["v_min"] == 45.0
+
+
 def test_about_panel_shows_version_and_author():
     # The About panel carries the single-source version plus the author/email block.
     at = _fresh()
