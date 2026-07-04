@@ -259,8 +259,8 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n)
     note = "  (alpha_cc tracks fck via eta_cc)" if auto is not None else ""
-    box.caption(f"curve {curve},  $f_{{cd}}$ = {concrete.fcd:.1f} MPa,  "
-                f"$\\varepsilon_{{cu2}}$ = {concrete.eps_cu2 * 1000.0:.2f} permille{note}")
+    box.caption(f"curve {curve},  $f_{{cd}}$ = {concrete.fcd:.3f} MPa,  "
+                f"$\\varepsilon_{{cu2}}$ = {concrete.eps_cu2 * 1000.0:.3f} permille{note}")
 
     # Mean tensile strength fctm feeds the serviceability cracking check. It lives
     # with the concrete (not the loads); the Auto button refreshes it from the
@@ -338,7 +338,7 @@ def mild_panel(box, locked=False):
     steel = _safe_build(box, mp.build_mild, curve, vals,
                         active_in_compression=active_comp)
     comp = "active" if active_comp else "tension-only"
-    box.caption(f"$f_{{yd}}$ = {steel.fytk / vals['gamma_y']:.0f} MPa,  "
+    box.caption(f"$f_{{yd}}$ = {steel.fytk / vals['gamma_y']:.3f} MPa,  "
                 f"$E_s$ = {vals['Es'] / 1000.0:.0f} GPa,  compression {comp}")
     return steel
 
@@ -369,10 +369,10 @@ def prestress_panel(box, locked=False):
     pre = _safe_build(box, mp.build_prestress, curve, vals)
     if curve in (1, 2, 3, 4, 5):
         box.caption(f"built-in curve {curve} (fixed shape); only the prestrain "
-                    f"IS = {vals['IS']:.1f} permille applies")
+                    f"IS = {vals['IS']:.3f} permille applies")
     else:
-        box.caption(f"IS = {vals['IS']:.1f} permille,  "
-                    f"fpd = {vals['fytk'] / vals['gamma_y']:.0f} MPa,  "
+        box.caption(f"IS = {vals['IS']:.3f} permille,  "
+                    f"fpd = {vals['fytk'] / vals['gamma_y']:.3f} MPa,  "
                     f"Ep = {vals['Es'] / 1000.0:.0f} GPa")
     return pre
 
@@ -1154,9 +1154,9 @@ def _modular_ratio_readout(box, ns, nl, ns_p, nl_p, *, has_tendons):
     box.markdown(r"**Modular ratios** (derived from $E_c$, $E_s$, $E_p$, $\varphi$)")
     rows = ["| Steel | Short-term n_s | Long-term n_l |",
             "|:--|--:|--:|",
-            f"| Mild (Es/Ec) | {ns:.1f} | {nl:.1f} |"]
+            f"| Mild (Es/Ec) | {ns:.3f} | {nl:.3f} |"]
     if has_tendons:
-        rows.append(f"| Prestress (Ep/Ec) | {ns_p:.1f} | {nl_p:.1f} |")
+        rows.append(f"| Prestress (Ep/Ec) | {ns_p:.3f} | {nl_p:.3f} |")
     box.markdown("\n".join(rows))
 
 
@@ -1240,17 +1240,6 @@ def build_inputs():
                            "for the applied loads. Both: run the two.")
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
-
-    # Recompute every auto-derived value from the current inputs in one click. It
-    # sets a flag that each panel's Auto handler honours as it renders later this
-    # run; the flag is cleared at the end of build_inputs (one-shot).
-    if aset.button("Auto-calc all derived values", width="stretch",
-                   key="auto_all_btn",
-                   help="Recompute all auto values from the current grade: the "
-                        "concrete strain limits eps_c2/eps_cu2/n, fctm and Ec. The "
-                        "modular ratios n_l/n_s follow from Ec, Es, Ep and creep "
-                        "automatically."):
-        st.session_state["_auto_all"] = True
 
     aset.markdown("**Neutral-axis sweep (plastic)**")
     v_min = aset.number_input(r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
@@ -1945,20 +1934,20 @@ def _plastic_table(pts, cable):
     """Per-angle results table, one row per neutral-axis angle."""
     cols = {
         "V (deg)": [round(pt["V"], 1) for pt in pts],
-        "Mx (kNm)": [round(pt["Mx"], 1) for pt in pts],
-        "My (kNm)": [round(pt["My"], 1) for pt in pts],
+        "Mx (kNm)": [round(pt["Mx"], 3) for pt in pts],
+        "My (kNm)": [round(pt["My"], 3) for pt in pts],
         "NA x (mm)": [_fmt(pt["na_x"] * _MM) for pt in pts],
         "NA y (mm)": [_fmt(pt["na_y"] * _MM) for pt in pts],
-        f"{_EPS}c (%)": [round(pt["eps_c"], 2) for pt in pts],
-        f"{_EPS}s (%)": [round(pt["eps_s"], 2) for pt in pts],
+        f"{_EPS}c (%)": [round(pt["eps_c"], 3) for pt in pts],
+        f"{_EPS}s (%)": [round(pt["eps_s"], 3) for pt in pts],
         f"{_KAPPA} (1/m)": [round(pt["kappa"], 4) for pt in pts],
-        "Comp (kN)": [round(pt["comp_force"], 0) for pt in pts],
-        "L (mm)": [round(pt["lever"] * _MM, 1) for pt in pts],
-        "Dx (mm)": [round(pt["dx"] * _MM, 1) for pt in pts],
-        "Dy (mm)": [round(pt["dy"] * _MM, 1) for pt in pts],
+        "Comp (kN)": [round(pt["comp_force"], 3) for pt in pts],
+        "L (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
+        "Dx (mm)": [round(pt["dx"] * _MM, 3) for pt in pts],
+        "Dy (mm)": [round(pt["dy"] * _MM, 3) for pt in pts],
     }
     if cable:
-        cols[f"{_EPS}cable (%)"] = [round(pt["eps_cable"], 2) for pt in pts]
+        cols[f"{_EPS}cable (%)"] = [round(pt["eps_cable"], 3) for pt in pts]
     return cols
 
 
@@ -1976,10 +1965,10 @@ def plastic_view(inp, results):
     min_mx = p.get("min_mx", min(p["mx"]))
     min_my = p.get("min_my", min(p["my"]))
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Max $M_x$", f"{p['max_mx']:.0f} kNm")
-    m2.metric("Min $M_x$", f"{min_mx:.0f} kNm")
-    m3.metric("Max $M_y$", f"{p['max_my']:.0f} kNm")
-    m4.metric("Min $M_y$", f"{min_my:.0f} kNm")
+    m1.metric("Max $M_x$", f"{p['max_mx']:.3f} kNm")
+    m2.metric("Min $M_x$", f"{min_mx:.3f} kNm")
+    m3.metric("Max $M_y$", f"{p['max_my']:.3f} kNm")
+    m4.metric("Min $M_y$", f"{min_my:.3f} kNm")
     if not p.get("check_util", True):
         m5.metric("Utilisation", "-",
                   help="Capacity-only run: the applied moments are not checked. "
@@ -1989,7 +1978,7 @@ def plastic_view(inp, results):
                   help="Only meaningful for a full 0-360 deg sweep; the current "
                        "sweep is a partial arc.")
     else:
-        m5.metric("Utilisation", f"{p['util']:.2f}",
+        m5.metric("Utilisation", f"{p['util']:.3f}",
                   help="applied / capacity in the load direction")
     st.plotly_chart(
         viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied")),
@@ -2019,18 +2008,18 @@ def plastic_view(inp, results):
             width="stretch")
     with cR:
         lines = [
-            f"- **$M_x$ / $M_y$**: {pt['Mx']:.0f} / {pt['My']:.0f} kNm",
+            f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
             f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
-            f"- **Compression force**: {pt['comp_force']:.0f} kN",
-            f"- **Lever arm $L$**: {pt['lever'] * _MM:.0f} mm  "
-            f"($D_x$ {pt['dx'] * _MM:.0f}, $D_y$ {pt['dy'] * _MM:.0f})",
-            f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.2f} %",
-            f"- **Steel strain $\\varepsilon_s$**: {pt['eps_s']:.2f} %",
+            f"- **Compression force**: {pt['comp_force']:.3f} kN",
+            f"- **Lever arm $L$**: {pt['lever'] * _MM:.3f} mm  "
+            f"($D_x$ {pt['dx'] * _MM:.3f}, $D_y$ {pt['dy'] * _MM:.3f})",
+            f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.3f} %",
+            f"- **Steel strain $\\varepsilon_s$**: {pt['eps_s']:.3f} %",
             f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
             f"y {_fmt(pt['na_y'] * _MM)} mm",
         ]
         if inp["tendons"]:
-            lines.insert(6, f"- **Tendon strain $\\varepsilon_p$**: {pt['eps_cable']:.2f} %")
+            lines.insert(6, f"- **Tendon strain $\\varepsilon_p$**: {pt['eps_cable']:.3f} %")
         st.markdown("\n".join(lines))
 
     with st.expander("Full results table (per neutral-axis angle)"):
@@ -2054,10 +2043,10 @@ def interaction_view(inp, results):
     mlabel = "M_x" if axis == "x" else "M_y"
     N, M = d["N"], d["M"]
     m1, m2, m3 = st.columns(3)
-    m1.metric(f"Max ${mlabel}$", f"{max(M):.1f} kNm",
+    m1.metric(f"Max ${mlabel}$", f"{max(M):.3f} kNm",
               help="Peak moment capacity (near the balanced point).")
-    m2.metric("Squash load $N_c$", f"{max(N):.0f} kN")
-    m3.metric("Tension limit $N_t$", f"{min(N):.0f} kN")
+    m2.metric("Squash load $N_c$", f"{max(N):.3f} kN")
+    m3.metric("Tension limit $N_t$", f"{min(N):.3f} kN")
     st.plotly_chart(
         viz.interaction_nm_figure(N, M, axis=axis,
                                   applied=d.get("applied") if inp.get("check_util") else None,
@@ -2077,19 +2066,19 @@ def elastic_view(inp, results):
         return
     e = results["elastic"]
     m1, m2 = st.columns(2)
-    m1.metric("Max concrete compression", f"{e['max_conc']:.1f} MPa",
+    m1.metric("Max concrete compression", f"{e['max_conc']:.3f} MPa",
               help=f"at concrete corner {e['max_conc_point'] + 1}")
-    m2.metric("Max steel tension", f"{e['max_steel']:.1f} MPa",
+    m2.metric("Max steel tension", f"{e['max_steel']:.3f} MPa",
               help=f"in bar {e['max_steel_bar']}")
 
     # Modular ratios are derived (not entered); report the values actually used. Mild
     # steel and prestress differ (Es != Ep), so both pairs are shown when tendons exist.
     _nl, _ns = inp["nl"], inp["ns"]
     ratio_txt = (f"Modular ratios ($E_s/E_c$, $E_p/E_c$; creep-reduced for long-term): "
-                 f"mild $n_s$ = {_ns:.1f}, $n_l$ = {_nl:.1f}")
+                 f"mild $n_s$ = {_ns:.3f}, $n_l$ = {_nl:.3f}")
     if inp["tendons"] and inp.get("prestress") is not None:
         _r = inp["prestress"].Es / inp["steel"].Es
-        ratio_txt += f"; prestress $n_s$ = {_ns * _r:.1f}, $n_l$ = {_nl * _r:.1f}"
+        ratio_txt += f"; prestress $n_s$ = {_ns * _r:.3f}, $n_l$ = {_nl * _r:.3f}"
     st.caption(ratio_txt)
 
     # The tendon prestress is applied automatically from the initial strain, so N
@@ -2097,7 +2086,7 @@ def elastic_view(inp, results):
     ps = e.get("prestress")
     if ps is not None:
         st.caption(f"Applied tendon prestress (from the initial strain): "
-                   f"N = {ps[0]:.0f} kN, $M_x$ = {ps[1]:.0f} kNm, $M_y$ = {ps[2]:.0f} kNm "
+                   f"N = {ps[0]:.3f} kN, $M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm "
                    f"(compression positive; this is added to the external N/M).")
 
     # The neutral axis and the compression/tension zones only make sense when the
@@ -2136,10 +2125,10 @@ def elastic_view(inp, results):
     n = len(e["total"])
     st.dataframe(
         {"Bar": list(range(1, n + 1)),
-         "Total": [round(s, 1) for s in e["total"]],
-         "Long": [round(s, 1) for s in e["long"]],
-         "Dif": [round(s, 1) for s in e["dif"]],
-         "RST1": [round(s, 1) for s in e["rst1"]]},
+         "Total": [round(s, 3) for s in e["total"]],
+         "Long": [round(s, 3) for s in e["long"]],
+         "Dif": [round(s, 3) for s in e["dif"]],
+         "RST1": [round(s, 3) for s in e["rst1"]]},
         hide_index=True, width="stretch", height=35 * (n + 1) + 3)
     st.caption(
         "**Total** = long + short  \n"
@@ -2169,9 +2158,9 @@ def _elastic_sls_section(inp, e):
                    f"(governing of the long-term and total actions; "
                    f"= $M_{{cr}}/M$ for pure bending).")
     else:
-        lam = "infinite" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.2f}"
-        st.success(f"**Uncracked** - peak concrete tension {e['sigma_ct']:.2f} MPa "
-                   f"< $f_{{ctm}}$ {e['fctm']:.2f} MPa under both the long-term and "
+        lam = "infinite" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}"
+        st.success(f"**Uncracked** - peak concrete tension {e['sigma_ct']:.3f} MPa "
+                   f"< $f_{{ctm}}$ {e['fctm']:.3f} MPa under both the long-term and "
                    f"the total action ($\\lambda_{{cr}}$ = {lam}).")
 
     st.metric(r"Cracking factor $\lambda_{cr}$",
@@ -2217,8 +2206,8 @@ def _crack_width_panel(e):
               f"bar dia {_PHI} (mm)", "gov. bar"]
     keys = ["wk", "sr_max", "esm_ecm", "sigma_s", "rho_p_eff", "hc_ef", "cover",
             "phi", "gov_bar"]
-    fmts = ["{:.3f}", "{:.1f}", "{:.3e}", "{:.1f}", "{:.4f}", "{:.3f}", "{:.1f}",
-            "{:.1f}", "{:d}"]
+    fmts = ["{:.3f}", "{:.3f}", "{:.3e}", "{:.3f}", "{:.4f}", "{:.3f}", "{:.3f}",
+            "{:.3f}", "{:d}"]
 
     def column(c):
         if c is None:
@@ -2297,8 +2286,17 @@ view = c_view.selectbox("View", VIEWS, key="view",
                         help="What to show in the main area. Section and "
                              "Stress-Strain diagrams update live; the result "
                              "views need a Calculate.")
-# Nudge the unlabelled button down so it lines up with the selectbox input.
+# Nudge the buttons down so they line up with the selectbox input.
 c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
+# Auto-calc sits directly above Calculate. It runs before build_inputs on the next
+# run, so it sets the one-shot flag and reruns immediately (build_inputs is already
+# rendered this run, so applying it here would be too late).
+if c_calc.button("Auto-calc all derived values", key="auto_all_btn", width="stretch",
+                 help="Recompute all auto values from the current grade: the concrete "
+                      "strain limits eps_c2/eps_cu2/n, fctm and Ec. The modular ratios "
+                      "n_l/n_s follow from Ec, Es, Ep and creep automatically."):
+    st.session_state["_auto_all"] = True
+    st.rerun()
 calc = c_calc.button("Calculate", type="primary", key="calculate",
                      width="stretch",
                      help="Run the selected analysis for the current inputs.")

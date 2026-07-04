@@ -200,7 +200,7 @@ def _fig_png(fig, w_px, h_px):
         return None
 
 
-def _fmt(v, nd=2):
+def _fmt(v, nd=3):
     if v is None:
         return "-"
     if isinstance(v, float) and not math.isfinite(v):
@@ -404,50 +404,50 @@ class ReportBuilder:
         if corners:
             rows = [["#", "x (mm)", "y (mm)"]]
             for i, p in enumerate(corners, 1):
-                rows.append([i, _fmt(p[0] * _MM, 1), _fmt(p[1] * _MM, 1)])
+                rows.append([i, _fmt(p[0] * _MM, 3), _fmt(p[1] * _MM, 3)])
             self._h2("Concrete corners")
             self._table(rows, [15 * mm, 40 * mm, 40 * mm])
         holes = inp.get("holes", [])
         for hi, ring in enumerate(holes, 1):
             rows = [["#", "x (mm)", "y (mm)"]]
             for i, p in enumerate(ring, 1):
-                rows.append([i, _fmt(p[0] * _MM, 1), _fmt(p[1] * _MM, 1)])
+                rows.append([i, _fmt(p[0] * _MM, 3), _fmt(p[1] * _MM, 3)])
             self._h2(f"Void {hi}")
             self._table(rows, [15 * mm, 40 * mm, 40 * mm])
         bars = inp.get("bars", [])
         if bars:
             rows = [["#", "x (mm)", "y (mm)", "Area (mm<super>2</super>)"]]
             for i, b in enumerate(bars, 1):
-                rows.append([i, _fmt(b[0] * _MM, 1), _fmt(b[1] * _MM, 1),
-                             _fmt(b[2] * 1e6, 0)])
+                rows.append([i, _fmt(b[0] * _MM, 3), _fmt(b[1] * _MM, 3),
+                             _fmt(b[2] * 1e6, 3)])
             self._h2("Reinforcing bars")
             self._table(rows, [15 * mm, 35 * mm, 35 * mm, 40 * mm])
         tendons = inp.get("tendons", [])
         if tendons:
             rows = [["#", "x (mm)", "y (mm)", "Area (mm<super>2</super>)"]]
             for i, t in enumerate(tendons, 1):
-                rows.append([i, _fmt(t[0] * _MM, 1), _fmt(t[1] * _MM, 1),
-                             _fmt(t[2] * 1e6, 0)])
+                rows.append([i, _fmt(t[0] * _MM, 3), _fmt(t[1] * _MM, 3),
+                             _fmt(t[2] * 1e6, 3)])
             self._h2("Tendons")
             self._table(rows, [15 * mm, 35 * mm, 35 * mm, 40 * mm])
 
     def _concrete_block(self):
         c = self.inp["concrete"]
         rows = [["Parameter", "Symbol", "Value"],
-                ["Characteristic strength", "f<sub>ck</sub>", f"{_fmt(c.fck,1)} MPa"],
-                ["Partial factor", "gamma<sub>c</sub>", _fmt(c.gamma_c, 2)],
+                ["Characteristic strength", "f<sub>ck</sub>", f"{_fmt(c.fck, 3)} MPa"],
+                ["Partial factor", "gamma<sub>c</sub>", _fmt(c.gamma_c, 3)],
                 ["Design coefficient", "alpha<sub>cc</sub>", _fmt(c.alpha_cc, 3)],
                 ["Curve", "-", "parabola-rectangle" if c.curve == 2 else "cubic"],
-                ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000,2)} permille"],
-                ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000,2)} permille"],
-                ["Exponent", "n", _fmt(c.n, 2)],
-                ["Design strength", "f<sub>cd</sub>", f"{_fmt(c.fcd,2)} MPa"]]
+                ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} permille"],
+                ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} permille"],
+                ["Exponent", "n", _fmt(c.n, 3)],
+                ["Design strength", "f<sub>cd</sub>", f"{_fmt(c.fcd, 3)} MPa"]]
         self._table(rows, [60 * mm, 35 * mm, 50 * mm])
         self._formula(
             "f<sub>cd</sub> = alpha<sub>cc</sub> &#183; f<sub>ck</sub> / gamma<sub>c</sub>",
             ref="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
-            subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck,1)} / {_fmt(c.gamma_c,2)}",
-            result=f"= {_fmt(c.fcd,2)} MPa")
+            subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
+            result=f"= {_fmt(c.fcd, 3)} MPa")
         if c.curve == 2:
             self._formula(
                 "sigma<sub>c</sub> = f<sub>cd</sub> &#183; [1 - (1 - eps<sub>c</sub>/"
@@ -461,28 +461,28 @@ class ReportBuilder:
         st = self.inp["steel"]
         fyd = st.fytk / st.gamma_y if st.gamma_y else st.fytk
         rows = [["Parameter", "Symbol", "Value"],
-                ["Yield strength", "f<sub>ytk</sub>", f"{_fmt(st.fytk,1)} MPa"],
-                ["Compression yield", "f<sub>yck</sub>", f"{_fmt(st.fyck,1)} MPa"],
-                ["Ultimate strength", "f<sub>utk</sub>", f"{_fmt(st.futk,1)} MPa"],
-                ["Rupture strain", "eps<sub>ut</sub>", f"{_fmt(st.eut*1000,1)} permille"],
+                ["Yield strength", "f<sub>ytk</sub>", f"{_fmt(st.fytk, 3)} MPa"],
+                ["Compression yield", "f<sub>yck</sub>", f"{_fmt(st.fyck, 3)} MPa"],
+                ["Ultimate strength", "f<sub>utk</sub>", f"{_fmt(st.futk, 3)} MPa"],
+                ["Rupture strain", "eps<sub>ut</sub>", f"{_fmt(st.eut*1000, 3)} permille"],
                 ["Elastic modulus", "E<sub>s</sub>", f"{_fmt(st.Es/1000,0)} GPa"],
-                ["Partial factor", "gamma<sub>s</sub>", _fmt(st.gamma_y, 2)],
+                ["Partial factor", "gamma<sub>s</sub>", _fmt(st.gamma_y, 3)],
                 ["Active in compression", "-", "yes" if st.active_in_compression else "no"],
-                ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd,1)} MPa"]]
+                ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]]
         self._table(rows, [60 * mm, 35 * mm, 50 * mm])
         self._formula("f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>s</sub>",
                       ref="DS/EN 1992-1-1 &#167;3.2.7",
-                      subst=f"= {_fmt(st.fytk,1)} / {_fmt(st.gamma_y,2)}",
-                      result=f"= {_fmt(fyd,1)} MPa")
+                      subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
+                      result=f"= {_fmt(fyd, 3)} MPa")
         if self.figures:
             self._fig(viz.steel_curve_figure(st), 130, 80)
 
     def _prestress_block(self):
         p = self.inp["prestress"]
         rows = [["Parameter", "Value"],
-                ["Initial prestrain IS", f"{_fmt(getattr(p,'IS',0.0)*1000,2)} permille"],
-                ["Elastic modulus E<sub>p</sub>", f"{_fmt(getattr(p,'Es',0.0)/1000,0)} GPa"],
-                ["Rupture strain", f"{_fmt(getattr(p,'rupture_strain',0.0)*1000,1)} permille"]]
+                ["Initial prestrain IS", f"{_fmt(getattr(p,'IS',0.0)*1000, 3)} permille"],
+                ["Elastic modulus E<sub>p</sub>", f"{_fmt(getattr(p,'Es',0.0)/1000, 3)} GPa"],
+                ["Rupture strain", f"{_fmt(getattr(p,'rupture_strain',0.0)*1000, 3)} permille"]]
         self._table(rows, [80 * mm, 60 * mm])
         if self.figures and p is not None:
             self._fig(viz.prestress_curve_figure(p), 130, 80)
@@ -495,14 +495,14 @@ class ReportBuilder:
             # axial force (which defines the envelope) is listed.
             cap_only = not self.out["plastic"].get("check_util", True)
             label = "Plastic (axial, capacity only)" if cap_only else "Plastic (applied)"
-            mx = "-" if cap_only else _fmt(inp.get("Mx_pl"), 1)
-            my = "-" if cap_only else _fmt(inp.get("My_pl"), 1)
-            rows.append([label, _fmt(inp.get("P_pl"), 1), mx, my])
+            mx = "-" if cap_only else _fmt(inp.get("Mx_pl"), 3)
+            my = "-" if cap_only else _fmt(inp.get("My_pl"), 3)
+            rows.append([label, _fmt(inp.get("P_pl"), 3), mx, my])
         if "elastic" in self.out:
-            rows.append(["Elastic long-term", _fmt(inp.get("P_el_l"), 1),
-                         _fmt(inp.get("Mx_el_l"), 1), _fmt(inp.get("My_el_l"), 1)])
-            rows.append(["Elastic short-term", _fmt(inp.get("P_el_s"), 1),
-                         _fmt(inp.get("Mx_el_s"), 1), _fmt(inp.get("My_el_s"), 1)])
+            rows.append(["Elastic long-term", _fmt(inp.get("P_el_l"), 3),
+                         _fmt(inp.get("Mx_el_l"), 3), _fmt(inp.get("My_el_l"), 3)])
+            rows.append(["Elastic short-term", _fmt(inp.get("P_el_s"), 3),
+                         _fmt(inp.get("Mx_el_s"), 3), _fmt(inp.get("My_el_s"), 3)])
         self._table(rows, [55 * mm, 35 * mm, 38 * mm, 38 * mm])
 
     def _settings_block(self):
@@ -524,23 +524,23 @@ class ReportBuilder:
             # document the inputs (Ec, phi) and the derived mild + prestress ratios.
             if inp.get("conc_Ec") is not None:
                 rows.append(["Concrete elastic modulus E<sub>c</sub>",
-                             f"{_fmt(inp.get('conc_Ec'), 1)} GPa"])
+                             f"{_fmt(inp.get('conc_Ec'), 3)} GPa"])
             if inp.get("el_phi") is not None:
                 rows.append(["Creep coefficient &#966; (long-term)",
-                             _fmt(inp.get("el_phi"), 2)])
+                             _fmt(inp.get("el_phi"), 3)])
             ns_v, nl_v = inp.get("ns"), inp.get("nl")
             rows.append(["Mild modular ratio n<sub>s</sub>=E<sub>s</sub>/E<sub>c</sub> "
                          "(short) / n<sub>l</sub>=E<sub>s</sub>/E<sub>c,eff</sub> (long)",
-                         f"{_fmt(ns_v, 1)} / {_fmt(nl_v, 1)}"])
+                         f"{_fmt(ns_v, 3)} / {_fmt(nl_v, 3)}"])
             pre, stl = inp.get("prestress"), inp.get("steel")
             if (inp.get("tendons") and pre is not None and getattr(pre, "Es", 0)
                     and getattr(stl, "Es", 0) and ns_v is not None and nl_v is not None):
                 r = pre.Es / stl.Es
                 rows.append(["Prestress modular ratio n<sub>s</sub>=E<sub>p</sub>/E<sub>c</sub> "
                              "(short) / n<sub>l</sub>=E<sub>p</sub>/E<sub>c,eff</sub> (long)",
-                             f"{_fmt(ns_v * r, 1)} / {_fmt(nl_v * r, 1)}"])
+                             f"{_fmt(ns_v * r, 3)} / {_fmt(nl_v * r, 3)}"])
             rows.append(["Mean tensile strength f<sub>ctm</sub>",
-                         f"{_fmt(inp.get('sls_fctm'),2)} MPa"])
+                         f"{_fmt(inp.get('sls_fctm'), 3)} MPa"])
             rows.append(["Crack width checked", "yes" if inp.get("sls_cw") else "no"])
             if inp.get("sls_cw"):
                 rows.append(["Crack-width code", str(el.get("crack_code", "-"))])
@@ -548,9 +548,9 @@ class ReportBuilder:
                     rows.append(["Member type", str(el["crack_member"])])
                 dia = inp.get("sls_phi") or 0.0
                 rows.append(["Crack-width bar diameter",
-                             "auto (from geometry)" if not dia else f"{_fmt(dia,1)} mm"])
+                             "auto (from geometry)" if not dia else f"{_fmt(dia, 3)} mm"])
                 rows.append(["Mild-steel bond coefficient k<sub>1</sub>",
-                             _fmt(inp.get("sls_k1"), 2)])
+                             _fmt(inp.get("sls_k1"), 3)])
         self._table(rows, [110 * mm, 55 * mm])
 
     def _theory(self):
@@ -592,17 +592,17 @@ class ReportBuilder:
             pl["mx"], pl["my"], applied=applied, title="M-M interaction"), 130, 100)
         rows = [["Quantity", "Value"],
                 ["Max / Min M<sub>x</sub> capacity",
-                 f"{_fmt(pl['max_mx'],1)} / {_fmt(pl.get('min_mx', min(pl['mx'])),1)} kNm"],
+                 f"{_fmt(pl['max_mx'], 3)} / {_fmt(pl.get('min_mx', min(pl['mx'])),1)} kNm"],
                 ["Max / Min M<sub>y</sub> capacity",
-                 f"{_fmt(pl['max_my'],1)} / {_fmt(pl.get('min_my', min(pl['my'])),1)} kNm"]]
+                 f"{_fmt(pl['max_my'], 3)} / {_fmt(pl.get('min_my', min(pl['my'])),1)} kNm"]]
         if not pl.get("check_util", True):
             rows.append(["Utilisation", "not checked (capacity only)"])
         elif pl.get("util") is not None:
             if applied is not None:
                 rows.append(["Applied M<sub>x</sub>, M<sub>y</sub>",
-                             f"{_fmt(applied[0],1)}, {_fmt(applied[1],1)} kNm"])
+                             f"{_fmt(applied[0], 3)}, {_fmt(applied[1], 3)} kNm"])
             rows.append(["Utilisation (applied direction)",
-                         f"{_fmt(pl['util']*100,1)} %"])
+                         f"{_fmt(pl['util']*100, 3)} %"])
         else:
             rows.append(["Utilisation", "open arc (no closed envelope)"])
         self._table(rows, [90 * mm, 60 * mm])
@@ -629,13 +629,13 @@ class ReportBuilder:
             head.append("eps<sub>p</sub>")
         rows = [head]
         for p in pl["points"]:
-            row = [_fmt(p["V"], 0), _fmt(p["Mx"], 1), _fmt(p["My"], 1),
-                   _fmt(p["na_x"] * _MM, 0), _fmt(p["na_y"] * _MM, 0),
-                   _fmt(p["eps_c"], 2), _fmt(p["eps_s"], 2), _fmt(p["kappa"], 4),
-                   _fmt(p["comp_force"], 0), _fmt(p["lever"] * _MM, 0),
-                   _fmt(p["dx"] * _MM, 0), _fmt(p["dy"] * _MM, 0)]
+            row = [_fmt(p["V"], 0), _fmt(p["Mx"], 3), _fmt(p["My"], 3),
+                   _fmt(p["na_x"] * _MM, 3), _fmt(p["na_y"] * _MM, 3),
+                   _fmt(p["eps_c"], 3), _fmt(p["eps_s"], 3), _fmt(p["kappa"], 4),
+                   _fmt(p["comp_force"], 3), _fmt(p["lever"] * _MM, 3),
+                   _fmt(p["dx"] * _MM, 3), _fmt(p["dy"] * _MM, 3)]
             if cable:
-                row.append(_fmt(p["eps_cable"], 2))
+                row.append(_fmt(p["eps_cable"], 3))
             rows.append(row)
         ncol = len(head)
         self._table(rows, [170 * mm / ncol] * ncol, font=6.5, keep=False)
@@ -655,21 +655,21 @@ class ReportBuilder:
                 f"the strain plane to that limit.")
         rows = [["Quantity", "Symbol", "Value"],
                 ["NA intercepts", "x<sub>na</sub>, y<sub>na</sub>",
-                 f"{_fmt(gov['na_x']*_MM,0)}, {_fmt(gov['na_y']*_MM,0)} mm"],
-                ["Extreme concrete strain", "eps<sub>c</sub>", f"{_fmt(gov['eps_c'],2)} %"],
-                ["Most-tensile bar strain", "eps<sub>s</sub>", f"{_fmt(gov['eps_s'],2)} %"],
+                 f"{_fmt(gov['na_x']*_MM, 3)}, {_fmt(gov['na_y']*_MM, 3)} mm"],
+                ["Extreme concrete strain", "eps<sub>c</sub>", f"{_fmt(gov['eps_c'], 3)} %"],
+                ["Most-tensile bar strain", "eps<sub>s</sub>", f"{_fmt(gov['eps_s'], 3)} %"],
                 ["Curvature", "kappa", f"{_fmt(gov['kappa'],4)} 1/m"],
-                ["Concrete compression resultant", "F<sub>c</sub>", f"{_fmt(Fc,1)} kN"],
-                ["Internal lever arm", "L", f"{_fmt(gov['lever']*_MM,0)} mm"],
+                ["Concrete compression resultant", "F<sub>c</sub>", f"{_fmt(Fc, 3)} kN"],
+                ["Internal lever arm", "L", f"{_fmt(gov['lever']*_MM, 3)} mm"],
                 ["Lever components", "d<sub>x</sub>, d<sub>y</sub>",
-                 f"{_fmt(gov['dx']*_MM,0)}, {_fmt(gov['dy']*_MM,0)} mm"],
+                 f"{_fmt(gov['dx']*_MM, 3)}, {_fmt(gov['dy']*_MM, 3)} mm"],
                 ["Capacity", "M<sub>x</sub>, M<sub>y</sub>",
-                 f"{_fmt(gov['Mx'],1)}, {_fmt(gov['My'],1)} kNm"]]
+                 f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
         self._h2("Axial equilibrium check")
         self._formula("F<sub>c</sub> - T = N",
-                      subst=f"{_fmt(Fc,1)} - {_fmt(T,1)} = {_fmt(Fc-T,1)} kN",
-                      result=f"applied N = {_fmt(P,1)} kN  (residual "
+                      subst=f"{_fmt(Fc, 3)} - {_fmt(T, 3)} = {_fmt(Fc-T, 3)} kN",
+                      result=f"applied N = {_fmt(P, 3)} kN  (residual "
                              f"{_fmt(abs(Fc - T - P),3)} kN)")
         self._small("The tension resultant T = F<sub>c</sub> - N balances the "
                     "section; the moments above are the resultants about the origin.")
@@ -693,14 +693,14 @@ class ReportBuilder:
         state = "cracked" if el.get("cracked") else "uncracked"
         self._p(f"The section is <b>{state}</b> (governing of the long-term and "
                 f"total actions). Neutral-axis intercepts: "
-                f"x<sub>na</sub> = {_fmt(el['na_x']*_MM,0)} mm, "
-                f"y<sub>na</sub> = {_fmt(el['na_y']*_MM,0)} mm.")
+                f"x<sub>na</sub> = {_fmt(el['na_x']*_MM, 3)} mm, "
+                f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm.")
         ps = el.get("prestress")
         if ps is not None:
             self._p(f"The tendon prestress is applied from its initial strain (so N "
                     f"is the external force only): equivalent prestress action "
-                    f"N = {_fmt(ps[0],0)} kN, M<sub>x</sub> = {_fmt(ps[1],0)} kNm, "
-                    f"M<sub>y</sub> = {_fmt(ps[2],0)} kNm (compression positive).")
+                    f"N = {_fmt(ps[0], 3)} kN, M<sub>x</sub> = {_fmt(ps[1], 3)} kNm, "
+                    f"M<sub>y</sub> = {_fmt(ps[2], 3)} kNm (compression positive).")
         # Elastic state diagram (bars coloured by stress sign, compression zone).
         if self.figures and el.get("max_conc", 0.0) > 0.0:
             hp = viz.elastic_halfplane(el["na_x"], el["na_y"],
@@ -747,15 +747,15 @@ class ReportBuilder:
         total = el.get("total", [])
         rows = [["Bar", "TOTAL", "LONG", "DIF", "RST1"]]
         for i in range(len(total)):
-            rows.append([i + 1, _fmt(total[i], 1), _fmt(el["long"][i], 1),
-                         _fmt(el["dif"][i], 1), _fmt(el["rst1"][i], 1)])
+            rows.append([i + 1, _fmt(total[i], 3), _fmt(el["long"][i], 3),
+                         _fmt(el["dif"][i], 3), _fmt(el["rst1"][i], 3)])
         if len(total):
             w = 150 * mm / 5
             self._table(rows, [w] * 5, font=8, keep=False)
         rows = [["Quantity", "Value"],
-                ["Max concrete compression", f"{_fmt(el.get('max_conc'),2)} MPa "
+                ["Max concrete compression", f"{_fmt(el.get('max_conc'), 3)} MPa "
                  f"(point {el.get('max_conc_point','-')})"],
-                ["Max reinforcement tension", f"{_fmt(el.get('max_steel'),1)} MPa "
+                ["Max reinforcement tension", f"{_fmt(el.get('max_steel'), 3)} MPa "
                  f"(bar {el.get('max_steel_bar','-')})"]]
         self._table(rows, [70 * mm, 90 * mm])
         self._p("Stresses are the transformed-section result, sigma = "
@@ -772,8 +772,8 @@ class ReportBuilder:
         self._formula("lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
                       ref="Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
                           "(DS/EN 1992-1-1 &#167;7.1)",
-                      subst=f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'),2)} MPa,  "
-                            f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'),2)} MPa",
+                      subst=f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
+                            f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa",
                       result=f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
                              f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)")
         self._small("Governing of the long-term and total (long + short) actions: "
@@ -841,7 +841,7 @@ class ReportBuilder:
         self._h2(f"Crack width worked - governing case ({which})" if which
                  else "Crack width worked (governing bar)")
         self._small(f"Governing bar (largest w<sub>k</sub>): bar "
-                    f"{cw.get('gov_bar','-')}; clear cover c = {_fmt(cw.get('cover',0),1)} mm.")
+                    f"{cw.get('gov_bar','-')}; clear cover c = {_fmt(cw.get('cover',0), 3)} mm.")
         code = self.out["elastic"].get("crack_code")
         if cw.get("edition") == "2023":
             self._crack_worked_2023(cw, code)
@@ -855,7 +855,7 @@ class ReportBuilder:
                 "s<sub>r,max</sub> = 1.3&#183;(h - x)",
                 ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.14)",
                 subst="bars not at close centres (spacing &gt; 5(c + phi/2))",
-                result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0),1)} mm")
+                result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
         else:
             self._formula(
                 "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
@@ -874,7 +874,7 @@ class ReportBuilder:
              "(eps<sub>sm</sub> - eps<sub>cm</sub>)"),
             ref="DS/EN 1992-1-1 DK NA &#167;7.3.4(1), Eq (7.8)" if coarse else "Eq (7.8)",
             subst=("= &#189; &#183; " if coarse else "= ")
-                  + f"{_fmt(cw.get('sr_max',0),1)} mm &#183; "
+                  + f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                     f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
         if code:
@@ -899,7 +899,7 @@ class ReportBuilder:
             "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
             ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
             subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
-                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0),1)} mm")
+                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
         self._formula(
             "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
             "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
@@ -910,8 +910,8 @@ class ReportBuilder:
             "w<sub>k,cal</sub> = k<sub>w</sub>&#183;k<sub>1/r</sub>&#183;"
             "s<sub>r,m,cal</sub>&#183;(eps<sub>sm</sub> - eps<sub>cm</sub>)",
             ref="Eq (9.8)",
-            subst=f"= {_fmt(cw.get('kw',1.7),2)} &#183; {_fmt(cw.get('k1_r',1),3)} &#183; "
-                  f"{_fmt(cw.get('sr_max',0),1)} mm &#183; "
+            subst=f"= {_fmt(cw.get('kw',1.7), 3)} &#183; {_fmt(cw.get('k1_r',1),3)} &#183; "
+                  f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
         if code:

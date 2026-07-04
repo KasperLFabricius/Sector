@@ -1825,7 +1825,7 @@ def test_modular_ratios_are_derived_from_moduli():
     at.number_input(key="el_phi").set_value(2.0).run()        # n_l = (1+2)*5 = 15.0
     md = "\n".join(m.value for m in at.markdown)
     assert "Modular ratios" in md
-    assert "| Mild (Es/Ec) | 5.0 | 15.0 |" in md
+    assert "| Mild (Es/Ec) | 5.000 | 15.000 |" in md
 
 
 def test_prestress_gets_its_own_derived_modular_ratio():
@@ -1842,7 +1842,7 @@ def test_prestress_gets_its_own_derived_modular_ratio():
     at.number_input(key="conc_Ec").set_value(39.0).run()      # Ep/Ec = 5.0
     at.number_input(key="el_phi").set_value(0.0).run()        # no creep: n_l = n_s
     md = "\n".join(m.value for m in at.markdown)
-    assert "| Prestress (Ep/Ec) | 5.0 | 5.0 |" in md
+    assert "| Prestress (Ep/Ec) | 5.000 | 5.000 |" in md
 
 
 def test_transformed_area_uses_the_tendon_modular_ratio():
