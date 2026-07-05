@@ -486,10 +486,11 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
 
     Drawn to match the section's orientation: ``Mx`` is bending *about* the
     x-axis (its stress varies with y), so it is the **vertical** axis here, and
-    ``My`` (about the y-axis) is the **horizontal** axis. A section that is strong
-    about x then gives a tall envelope, consistent with the section drawing,
-    rather than a wide one. ``applied`` is given as ``(Mx, My)`` and placed
-    accordingly.
+    ``My`` (about the y-axis) is the **horizontal** axis. Each axis autoscales to
+    the envelope so it fills the plot (the axes are not tied to a common scale, so
+    read the numbers rather than the aspect -- otherwise a section strong about one
+    axis would show its weak-axis envelope as a thin sliver). ``applied`` is given
+    as ``(Mx, My)`` and placed accordingly.
     """
     # Snap the floating-point noise at the apexes to zero: a pure-Mx (or pure-My)
     # point should sit on the axis, but the solver leaves a tiny residual that the
@@ -517,8 +518,7 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text="My - about the y-axis (kNm)", standoff=10),
                    zeroline=True),
-        yaxis=dict(title="Mx - about the x-axis (kNm)", scaleanchor="x",
-                   scaleratio=1, zeroline=True),
+        yaxis=dict(title="Mx - about the x-axis (kNm)", zeroline=True),
         # Below the plot and below the x-axis title, clear of the plotly modebar.
         legend=dict(orientation="h", yanchor="top", y=_legend_y(440), x=0.5,
                     xanchor="center"),

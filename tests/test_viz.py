@@ -255,8 +255,8 @@ def test_interaction_figure_snaps_apex_noise_to_zero():
 
 
 def test_interaction_figure_plots_mx_vertical_my_horizontal():
-    # Mx is bending *about* the x-axis, so it is the vertical plot axis and My
-    # the horizontal one -- a tall (strong-about-x) section gives a tall envelope.
+    # Mx is bending *about* the x-axis, so it is the vertical plot axis and My the
+    # horizontal one.
     mx = [100.0, 0.0, -100.0, 0.0]
     my = [0.0, 30.0, 0.0, -30.0]
     fig = viz.interaction_figure(mx, my, applied=(80.0, 20.0))
@@ -268,6 +268,16 @@ def test_interaction_figure_plots_mx_vertical_my_horizontal():
     assert list(applied.y) == [80.0]       # applied Mx
     assert "about the x-axis" in fig.layout.yaxis.title.text
     assert "about the y-axis" in fig.layout.xaxis.title.text
+
+
+def test_interaction_figure_axes_autoscale_to_the_envelope():
+    # Each axis fits its own data (no common-scale lock), so a section strong about
+    # one axis does not show the other axis's envelope as a thin sliver forced by the
+    # aspect ratio. Both axes are left on autorange.
+    fig = viz.interaction_figure([560.0, 0.0, -560.0, 0.0], [0.0, 90.0, 0.0, -90.0])
+    assert fig.layout.yaxis.scaleanchor is None      # not tied to the x scale
+    assert fig.layout.xaxis.range is None             # x autoscales to My data
+    assert fig.layout.yaxis.range is None             # y autoscales to Mx data
 
 
 def test_prestress_figure_tension_only_labels_inputs():
