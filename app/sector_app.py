@@ -1525,7 +1525,7 @@ def build_inputs():
         # ``moments_active`` lets the moments lock independently of the axial force
         # (the plastic capacity-only mode keeps N but disables the applied moments).
         moments_active = active if moments_active is None else moments_active
-        P = _seeded_number(loads, r"Axial force $N$ (kN, + = compression)", -50000.0,
+        P = _seeded_number(loads, r"Axial force $N$ (kN, + = tension)", -50000.0,
                            50000.0, 0.0, 50.0, f"{prefix}_P", help=n_help,
                            disabled=not active)
         Mx = _seeded_number(loads, r"Applied $M_x$ (kNm)", -100000.0, 100000.0,
@@ -1713,8 +1713,10 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         sweep_hi = vhi - vstep if closed else vhi
         # Prestress enters the analysis only when the section actually has tendons.
         pre = inp["prestress"] if inp["tendons"] else None
+        # The user enters N tension-positive; the solver is compression-positive, so
+        # negate at the boundary (the engine and its verification are unchanged).
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            inp["P_pl"], vlo, sweep_hi, vstep, prestress=pre)
+                            -inp["P_pl"], vlo, sweep_hi, vstep, prestress=pre)
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
         # Utilisation is a closed-envelope check (a partial arc has no wrap-around), and
@@ -1745,17 +1747,23 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                                                  inp["steel"], v, prestress=pre)
             loop_x = branch(90.0) + list(reversed(branch(270.0)))
             loop_y = branch(0.0) + list(reversed(branch(180.0)))
+            # The solver reports the axial compression-positive; negate it so the
+            # diagram and the applied point are both tension-positive (matching N).
             out["plastic"]["interaction"] = dict(
-                x=dict(N=[q.axial for q in loop_x], M=[q.Mx for q in loop_x],
+                x=dict(N=[-q.axial for q in loop_x], M=[q.Mx for q in loop_x],
                        applied=(inp["P_pl"], inp["Mx_pl"]),
                        converged=all(q.converged for q in loop_x)),
-                y=dict(N=[q.axial for q in loop_y], M=[q.My for q in loop_y],
+                y=dict(N=[-q.axial for q in loop_y], M=[q.My for q in loop_y],
                        applied=(inp["P_pl"], inp["My_pl"]),
                        converged=all(q.converged for q in loop_y)),
             )
     if inp["mode"] in ("Elastic", "Both") and reuse_elastic is not None:
         out["elastic"] = reuse_elastic
     elif inp["mode"] in ("Elastic", "Both"):
+        # The user enters N tension-positive; the elastic solver takes it
+        # compression-positive, so negate it once here and pass the compression form
+        # to every elastic call (main solve and the two cracking checks).
+        p_el_l, p_el_s = -inp["P_el_l"], -inp["P_el_s"]
         # Tendons are folded into the bar set for the elastic run. Each tendon uses
         # its own modular ratio (Ep/Ec, via the multiplier Ep/Es) and carries the
         # locked-in prestress Ep*IS, applied as a force so the user's N is the
@@ -1777,8 +1785,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 f = prestress_stress * ba           # kN per tendon
                 pre_resultant = (float(f.sum()), float((f * by).sum()),
                                  float((f * bx).sum()))   # N, Mx, My (kN, kNm)
-        r = solve_elastic_combined(sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"],
-                                   inp["nl"], inp["P_el_s"], inp["Mx_el_s"],
+        r = solve_elastic_combined(sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"],
+                                   inp["nl"], p_el_s, inp["Mx_el_s"],
                                    inp["My_el_s"], inp["ns"],
                                    n_mult=n_mult, prestress_stress=prestress_stress)
         mpa = lambda arr: [s / 1000.0 for s in arr]  # kN/m2 -> MPa
@@ -1823,15 +1831,15 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # factor; its own crack width is unused (the crack widths are computed
         # below per system), so the coarse flag here is immaterial.
         cr_l = analyse_cracking(
-            sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
+            sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
             bar_diameter=phi, k1=k1_bars,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             edition=inp["sls_edition"],
             n_mult=n_mult, prestress_stress=prestress_stress)
         crk_t, lam_t, sig_t = combined_cracking(
-            sec, inp["P_el_l"], inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
-            inp["P_el_s"], inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
+            sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
+            p_el_s, inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
             fctm=inp["sls_fctm"], n_mult=n_mult, prestress_stress=prestress_stress)
         # Governing case. Its cracked state (for the reported cracked properties) is
         # the combined creep total state (r.short_term) when the peak strictly
@@ -2125,10 +2133,12 @@ def interaction_view(inp, results):
     dx, dy = d["x"], d["y"]
     # The pure-axial extremes (squash load, tension limit) are the same for either
     # bending axis; take them across both boundaries so the metrics are consistent.
+    # N is tension-positive, so the squash (compression) load is the minimum and the
+    # tension limit the maximum.
     all_N = list(dx["N"]) + list(dy["N"])
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Squash load $N_c$", f"{max(all_N):.3f} kN")
-    m2.metric("Tension limit $N_t$", f"{min(all_N):.3f} kN")
+    m1.metric("Squash load $N_c$", f"{min(all_N):.3f} kN")
+    m2.metric("Tension limit $N_t$", f"{max(all_N):.3f} kN")
     m3.metric("Max $M_x$", f"{max(dx['M']):.3f} kNm")
     m4.metric("Max $M_y$", f"{max(dy['M']):.3f} kNm")
     show_applied = inp.get("check_util")
@@ -2177,9 +2187,11 @@ def elastic_view(inp, results):
     # is the external force only; show the equivalent prestress action that was added.
     ps = e.get("prestress")
     if ps is not None:
+        # ps[0] is the tendon tension resultant; the prestress precompresses the
+        # section, so as an axial action (tension-positive) it is a compression.
         st.caption(f"Applied tendon prestress (from the initial strain): "
-                   f"N = {ps[0]:.3f} kN, $M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm "
-                   f"(compression positive; this is added to the external N/M).")
+                   f"N = {-ps[0]:.3f} kN, $M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm "
+                   f"(N tension-positive; this equivalent action is added to the external N/M).")
 
     # The neutral axis and the compression/tension zones only make sense when the
     # concrete actually carries compression; a fully tensile case has none.

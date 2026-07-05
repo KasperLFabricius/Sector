@@ -70,6 +70,30 @@ def test_gpa_moduli_load_unchanged():
     assert scalars["pre_Es"] == pytest.approx(195.0)
 
 
+def test_legacy_axial_force_is_flipped_to_tension_positive():
+    # N is now tension-positive; a version-1 file stored it compression-positive, so
+    # loading it negates the axial values (moments unchanged) to keep the physical
+    # loads. A 1500 kN compression (old +1500) loads as -1500 kN.
+    import json
+    text = json.dumps({"format": project_io.FORMAT, "version": 1, "tables": {},
+                       "scalars": {"pl_P": 1500.0, "pl_Mx": 200.0,
+                                   "el_long_P": -800.0, "el_short_P": 0.0}})
+    _, scalars = project_io.parse_project(text)
+    assert scalars["pl_P"] == pytest.approx(-1500.0)
+    assert scalars["el_long_P"] == pytest.approx(800.0)
+    assert scalars["el_short_P"] == pytest.approx(0.0)
+    assert scalars["pl_Mx"] == pytest.approx(200.0)         # moments are unchanged
+
+
+def test_current_axial_force_loads_unchanged():
+    # A current (version-2) file is already tension-positive, so it must not be
+    # re-negated on load.
+    text = project_io.dump_project({}, {"pl_P": -1500.0, "el_long_P": 800.0})
+    _, scalars = project_io.parse_project(text)
+    assert scalars["pl_P"] == pytest.approx(-1500.0)
+    assert scalars["el_long_P"] == pytest.approx(800.0)
+
+
 def test_dump_handles_numpy_scalars():
     text = project_io.dump_project({}, {"conc_fck": np.float64(42.0),
                                         "mild_active_comp": np.bool_(True)})

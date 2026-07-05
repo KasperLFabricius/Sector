@@ -18,7 +18,7 @@ import math
 import pandas as pd
 
 FORMAT = "sector-project"
-VERSION = 1
+VERSION = 2   # v2: axial force N is tension-positive (v1 stored it compression-positive)
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -155,4 +155,12 @@ def parse_project(text: str):
         val = scalars.get(key)
         if isinstance(val, (int, float)) and val >= 1000.0:
             scalars[key] = val / 1000.0
+    # The axial force N is now tension-positive; files written before that (version
+    # < 2) stored it compression-positive, so negate their axial values to preserve
+    # the physical loads. Moments are unchanged.
+    if data.get("version", 1) < 2:
+        for key in ("pl_P", "el_long_P", "el_short_P"):
+            val = scalars.get(key)
+            if isinstance(val, (int, float)):
+                scalars[key] = -val
     return tables, scalars
