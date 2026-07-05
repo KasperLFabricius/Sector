@@ -254,10 +254,15 @@ def test_nm_interaction_is_opt_in_and_renders():
     at.button(key="calculate").click().run()
     assert not at.exception
     d = at.session_state["results"]["plastic"]["interaction"]
-    assert d["axis"] == "x" and len(d["N"]) == len(d["M"]) > 10
-    assert min(d["N"]) < 0.0 < max(d["N"])              # tension to squash
+    # Both bending axes are traced now (the either/or radio is gone); each is its own
+    # closed N-M boundary running from pure tension to the squash load.
+    for axis in ("x", "y"):
+        assert len(d[axis]["N"]) == len(d[axis]["M"]) > 10
+        assert min(d[axis]["N"]) < 0.0 < max(d[axis]["N"])   # tension to squash
     assert not any("Enable 'N-M interaction" in m.value for m in at.info)  # view rendered
-    assert any("Squash load" in mt.label for mt in at.metric)              # its metrics show
+    labels = [mt.label for mt in at.metric]
+    assert any("Squash load" in lbl for lbl in labels)       # axial metrics show
+    assert any("M_x" in lbl for lbl in labels) and any("M_y" in lbl for lbl in labels)
 
 
 def test_both_mode_runs_elastic_and_plastic():
