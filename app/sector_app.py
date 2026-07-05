@@ -747,6 +747,10 @@ def _apply_pending_project() -> None:
         st.session_state["conc_alpha_fck"] = scalars["conc_fck"]
     for ed in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
         st.session_state.pop(ed, None)
+    # Forget the Quick Section builder's last shape so the loaded qsv_ dimensions are
+    # not mistaken for an in-builder shape switch: the next builder open takes the
+    # first-call branch (records the loaded shape, no re-seed) and keeps b/h as saved.
+    st.session_state.pop("qs_shape_prev", None)
     st.session_state["pts_init"] = True   # do not re-seed the tables from a template
     if st.session_state.pop("_autosave_restoring", False):
         st.session_state["_project_msg"] = ("success", "Restored your last autosaved session.")
@@ -863,6 +867,36 @@ def _generate_report(inp):
 
 _QS_SHAPES = ["Rectangle", "Slab strip", "T-section", "Box girder", "Circular"]
 
+# b_mm and h_mm are reused across shapes with different meanings and defaults (a
+# 400x600 rectangle, an 800x1000 box, a 300 mm slab thickness). Switching shape must
+# re-seed them to the new shape's default -- a plain setdefault would keep the
+# previous shape's value. The other dimension keys are unique to one shape, so their
+# own setdefault default is enough. Mirrors the material-preset prefill.
+_QS_SHARED_DIMS = {
+    "Rectangle":  {"b_mm": 400.0, "h_mm": 600.0},
+    "Slab strip": {"h_mm": 300.0},
+    "Box girder": {"b_mm": 800.0, "h_mm": 1000.0},
+}
+
+
+def _qs_shape_prefill(shape):
+    """Seed the shared dimension keys with the current shape's defaults when the shape
+    selection changes, so the dimension widgets can be created without ``value=``
+    (avoiding the "default value + Session State API" warning) while a shape switch
+    still resets b/h to that shape's default.
+
+    The very first call in a session only records the shape -- it does not re-seed --
+    so a project or autosave restored before the builder is first opened keeps its
+    own b/h (the restore is not a shape change). A genuine in-builder shape switch
+    (``qs_shape_prev`` already set) still re-seeds."""
+    if "qs_shape_prev" not in st.session_state:
+        st.session_state["qs_shape_prev"] = shape
+        return
+    if st.session_state["qs_shape_prev"] != shape:
+        for k, v in _QS_SHARED_DIMS.get(shape, {}).items():
+            st.session_state[k] = v
+        st.session_state["qs_shape_prev"] = shape
+
 # The builder's own widget keys. Streamlit drops a widget's key from session state
 # on any run where the widget is not rendered, so while the builder is closed these
 # would be lost (resetting the builder to defaults on reopen, and dropping them
@@ -939,56 +973,62 @@ def _quick_section_geometry(box):
     """
     shape = box.selectbox("Shape", _QS_SHAPES, key="shape",
                           help="Outline of the concrete cross-section to analyse.")
+    _qs_shape_prefill(shape)   # re-seed b/h on a shape change (see the prefill note)
     holes = []
     if shape == "Rectangle":
-        b = box.number_input(r"Width $b$ (mm)", 50.0, 10000.0, 400.0, 10.0, key="b_mm",
-                             help="Overall section width.") / 1000.0
-        h = box.number_input(r"Height $h$ (mm)", 50.0, 10000.0, 600.0, 10.0, key="h_mm",
-                             help="Overall section height (depth).") / 1000.0
+        b = _seeded_number(box, r"Width $b$ (mm)", 50.0, 10000.0, 400.0, 10.0, "b_mm",
+                           help="Overall section width.") / 1000.0
+        h = _seeded_number(box, r"Height $h$ (mm)", 50.0, 10000.0, 600.0, 10.0, "h_mm",
+                           help="Overall section height (depth).") / 1000.0
         outer = templates.rectangle(b, h)
         width_b = b
     elif shape == "Slab strip":
-        h = box.number_input(r"Thickness $h$ (mm)", 50.0, 3000.0, 300.0, 10.0, key="h_mm",
-                             help="Slab thickness; the strip is analysed per 1 m width.") / 1000.0
+        h = _seeded_number(box, r"Thickness $h$ (mm)", 50.0, 3000.0, 300.0, 10.0, "h_mm",
+                           help="Slab thickness; the strip is analysed per 1 m width.") / 1000.0
         b = width_b = 1.0
         outer = templates.slab_strip(h)
     elif shape == "T-section":
-        bf = box.number_input(r"Flange width $b_f$ (mm)", 100.0, 12000.0, 1200.0, 10.0, key="bf_mm",
-                              help="Width of the (top) flange.") / 1000.0
-        hf = box.number_input(r"Flange thickness $h_f$ (mm)", 50.0, 2000.0, 200.0, 10.0, key="hf_mm",
-                              help="Thickness of the flange.") / 1000.0
-        bw = box.number_input(r"Web width $b_w$ (mm)", 50.0, 4000.0, 300.0, 10.0, key="bw_mm",
-                              help="Width of the web.") / 1000.0
-        hw = box.number_input(r"Web depth $h_w$ (mm)", 100.0, 6000.0, 600.0, 10.0, key="hw_mm",
-                              help="Depth of the web below the flange.") / 1000.0
+        bf = _seeded_number(box, r"Flange width $b_f$ (mm)", 100.0, 12000.0, 1200.0, 10.0, "bf_mm",
+                            help="Width of the (top) flange.") / 1000.0
+        hf = _seeded_number(box, r"Flange thickness $h_f$ (mm)", 50.0, 2000.0, 200.0, 10.0, "hf_mm",
+                            help="Thickness of the flange.") / 1000.0
+        bw = _seeded_number(box, r"Web width $b_w$ (mm)", 50.0, 4000.0, 300.0, 10.0, "bw_mm",
+                            help="Width of the web.") / 1000.0
+        hw = _seeded_number(box, r"Web depth $h_w$ (mm)", 100.0, 6000.0, 600.0, 10.0, "hw_mm",
+                            help="Depth of the web below the flange.") / 1000.0
         outer = templates.t_section(bf, hf, bw, hw)
         b, h, width_b = bw, hf + hw, bf
     elif shape == "Box girder":
-        b = box.number_input(r"Width $b$ (mm)", 200.0, 12000.0, 800.0, 10.0, key="b_mm",
-                             help="Overall outer width of the box.") / 1000.0
-        h = box.number_input(r"Height $h$ (mm)", 200.0, 12000.0, 1000.0, 10.0, key="h_mm",
-                             help="Overall outer height of the box.") / 1000.0
+        b = _seeded_number(box, r"Width $b$ (mm)", 200.0, 12000.0, 800.0, 10.0, "b_mm",
+                           help="Overall outer width of the box.") / 1000.0
+        h = _seeded_number(box, r"Height $h$ (mm)", 200.0, 12000.0, 1000.0, 10.0, "h_mm",
+                           help="Overall outer height of the box.") / 1000.0
         max_wall = round((min(b, h) / 2 - 0.01) * 1000.0, 0)
-        wall = box.number_input("Wall thickness (mm)", 20.0, max_wall,
-                                min(200.0, max_wall), 10.0, key="wall_mm",
+        # wall_mm has a dimension-dependent maximum, so clamp the seeded value into
+        # range before the widget (a wider box left a wall that the narrower one can
+        # no longer accept would otherwise error).
+        st.session_state.setdefault("wall_mm", min(200.0, max_wall))
+        st.session_state["wall_mm"] = min(float(st.session_state["wall_mm"]), max_wall)
+        wall = box.number_input("Wall thickness (mm)", 20.0, max_wall, step=10.0,
+                                key="wall_mm",
                                 help="Thickness of the box walls (uniform).") / 1000.0
         outer, holes = templates.box(b, h, wall)
         width_b = b
     else:  # Circular
-        dia = box.number_input("Diameter (mm)", 100.0, 6000.0, 600.0, 10.0, key="dia_mm",
-                               help="Outer diameter of the circular section.") / 1000.0
+        dia = _seeded_number(box, "Diameter (mm)", 100.0, 6000.0, 600.0, 10.0, "dia_mm",
+                             help="Outer diameter of the circular section.") / 1000.0
         outer = templates.circular(dia)
         b = h = width_b = dia
 
     box.markdown("**Reinforcement**")
     if shape == "Circular":
-        nb = box.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n",
-                              help="Number of bars evenly spaced around the perimeter.")
+        nb = _seeded_number(box, "Perimeter bars", 0, 200, 8, 1, "ring_n",
+                            help="Number of bars evenly spaced around the perimeter.")
         rd = _seeded_selectbox(box, "Bar diameter (mm)", templates.BAR_DIAMETERS,
                                templates.BAR_DIAMETERS[4], "ring_d",
                                help="Diameter of each reinforcement bar.")
-        cov = box.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="ring_c_mm",
-                               help="Distance from the section face to the bar centres.") / 1000.0
+        cov = _seeded_number(box, "Cover (mm)", 0.0, 500.0, 50.0, 5.0, "ring_c_mm",
+                             help="Distance from the section face to the bar centres.") / 1000.0
         bars = templates.bar_ring(0.0, 0.0, templates.ring_radius(dia, cov), int(nb), rd)
     else:
         by_spacing = box.radio(
@@ -997,8 +1037,8 @@ def _quick_section_geometry(box):
             help="Place each row as a fixed bar count, or at a target centre-to-"
                  "centre spacing (slab phi @ s); the count is then derived from the "
                  "face width.") == "By spacing"
-        cov = box.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="cover_mm",
-                               help="Distance from the top/bottom face to the bar centres.") / 1000.0
+        cov = _seeded_number(box, "Cover (mm)", 0.0, 500.0, 50.0, 5.0, "cover_mm",
+                             help="Distance from the top/bottom face to the bar centres.") / 1000.0
         bot_w, top_w = b - 2.0 * cov, width_b - 2.0 * cov
         c1, c2 = box.columns(2)
         c1.markdown("**Bottom**")
@@ -1011,10 +1051,10 @@ def _quick_section_geometry(box):
                                    help="Top bar diameter (mm).")
         n_at_bot = n_at_top = None     # by-number: a fixed count per layer
         if by_spacing:
-            s_bot = c1.number_input("Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
-                                    key="bot_s", help="Target centre-to-centre spacing.") / 1000.0
-            s_top = c2.number_input("Top spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
-                                    key="top_s", help="Target centre-to-centre spacing.") / 1000.0
+            s_bot = _seeded_number(c1, "Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
+                                   "bot_s", help="Target centre-to-centre spacing.") / 1000.0
+            s_top = _seeded_number(c2, "Top spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
+                                   "top_s", help="Target centre-to-centre spacing.") / 1000.0
             nb_bot = templates.count_for_spacing(bot_w, s_bot)
             nb_top = templates.count_for_spacing(top_w, s_top)
             c1.caption(f"-> {nb_bot} bars")
@@ -1028,16 +1068,16 @@ def _quick_section_geometry(box):
             def n_at_top(xs, xe):
                 return templates.count_for_spacing(xe - xs, s_top)
         else:
-            nb_bot = c1.number_input("Bottom bars", 0, 100, 6, 1, key="bot_n",
-                                     help="Number of bars in each bottom layer.")
-            nb_top = c2.number_input("Top bars", 0, 100, 2, 1, key="top_n",
-                                     help="Number of bars in each top layer.")
-        nl_bot = c1.number_input("Bottom layers", 1, 10, 1, 1, key="bot_layers",
-                                 help="Number of stacked bar rows at the bottom face.")
-        nl_top = c2.number_input("Top layers", 1, 10, 1, 1, key="top_layers",
-                                 help="Number of stacked bar rows at the top face.")
-        layer_s = box.number_input(
-            "Layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, key="layer_s",
+            nb_bot = _seeded_number(c1, "Bottom bars", 0, 100, 6, 1, "bot_n",
+                                    help="Number of bars in each bottom layer.")
+            nb_top = _seeded_number(c2, "Top bars", 0, 100, 2, 1, "top_n",
+                                    help="Number of bars in each top layer.")
+        nl_bot = _seeded_number(c1, "Bottom layers", 1, 10, 1, 1, "bot_layers",
+                                help="Number of stacked bar rows at the bottom face.")
+        nl_top = _seeded_number(c2, "Top layers", 1, 10, 1, 1, "top_layers",
+                                help="Number of stacked bar rows at the top face.")
+        layer_s = _seeded_number(
+            box, "Layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, "layer_s",
             disabled=int(nl_bot) == 1 and int(nl_top) == 1,
             help="Vertical centre-to-centre distance between stacked bar layers "
                  "(used only when a face has more than one layer).") / 1000.0
@@ -1096,19 +1136,19 @@ def _quick_section_geometry(box):
         bars = templates.merge_bars(*groups)
 
     box.markdown("**Prestressing tendons**")
-    nt = box.number_input("Tendons", 0, 200, 0, 1, key="tnd_n",
-                          help="Number of tendons the Quick Section places (0 = none). "
-                               "Tendons can also be entered directly in the points table.")
-    a_t = box.number_input("Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, key="tnd_a",
-                           help="Cross-sectional area of a single tendon.")
-    cov_p = box.number_input("Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, key="tnd_c_mm",
-                             help="Distance from the bottom face (or the circular "
-                                  "ring) to the tendons.") / 1000.0
-    nl_t = box.number_input("Tendon layers", 1, 10, 1, 1, key="tnd_layers",
-                            help="Number of stacked tendon rows from the bottom face "
-                                 "(ignored for a circular ring).")
-    ls_t = box.number_input(
-        "Tendon layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, key="tnd_layer_s",
+    nt = _seeded_number(box, "Tendons", 0, 200, 0, 1, "tnd_n",
+                        help="Number of tendons the Quick Section places (0 = none). "
+                             "Tendons can also be entered directly in the points table.")
+    a_t = _seeded_number(box, "Area per tendon (mm2)", 1.0, 50000.0, 150.0, 10.0, "tnd_a",
+                         help="Cross-sectional area of a single tendon.")
+    cov_p = _seeded_number(box, "Tendon cover (mm)", 0.0, 2000.0, 100.0, 10.0, "tnd_c_mm",
+                           help="Distance from the bottom face (or the circular "
+                                "ring) to the tendons.") / 1000.0
+    nl_t = _seeded_number(box, "Tendon layers", 1, 10, 1, 1, "tnd_layers",
+                          help="Number of stacked tendon rows from the bottom face "
+                               "(ignored for a circular ring).")
+    ls_t = _seeded_number(
+        box, "Tendon layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, "tnd_layer_s",
         disabled=int(nl_t) == 1,
         help="Vertical centre-to-centre distance between stacked tendon rows.") / 1000.0
     tendons = []

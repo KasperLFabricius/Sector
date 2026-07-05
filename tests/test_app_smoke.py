@@ -70,16 +70,112 @@ def test_persisted_settings_use_the_seeded_number_helper():
         assert f"def {helper}(" in src
     # Widgets whose key is restored from a saved project/session (a value= / index=
     # alongside the externally-set key trips the warning) go through a seeded helper,
-    # so the bare `key="<name>"` form no longer appears for them.
-    # (The Quick Section dimension inputs -- b_mm/h_mm etc. -- keep value=; they have
-    # shape-varying defaults that a plain setdefault cannot re-apply on a shape
-    # switch, so they need a separate shape-default prefill and are not covered here.)
+    # so the bare `key="<name>"` form no longer appears for them. The Quick Section
+    # dimension inputs are included now: their shared shape-varying keys (b_mm/h_mm)
+    # are re-seeded on a shape switch by _qs_shape_prefill, so they no longer need
+    # value=. (wall_mm keeps key= -- it has a dimension-dependent max, so it seeds and
+    # clamps by hand -- but still passes no value=, so it does not warn.)
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
                 "label_scale", "label_min_gap",                # seeded number inputs
                 "pl_check_util", "pl_interaction", "sls_cw",    # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
-                "ring_d", "bot_d", "top_d"):                    # QS diameter selects
+                "ring_d", "bot_d", "top_d",                     # QS diameter selects
+                "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "dia_mm",  # QS dims
+                "ring_n", "ring_c_mm", "cover_mm", "bot_s", "top_s", "bot_n",  # QS rebar
+                "top_n", "bot_layers", "top_layers", "layer_s",
+                "tnd_n", "tnd_a", "tnd_c_mm", "tnd_layers", "tnd_layer_s"):    # QS tendons
         assert f'key="{key}"' not in src, key
+
+
+def test_quick_section_shape_switch_reseeds_shared_dimensions():
+    # b_mm/h_mm are shared across shapes; switching shape must reset them to the new
+    # shape's default (the seeded inputs rely on _qs_shape_prefill for this, since a
+    # plain setdefault would keep the previous shape's value).
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    assert (at.session_state["b_mm"], at.session_state["h_mm"]) == (400.0, 600.0)
+    at.selectbox(key="shape").set_value("Box girder").run()
+    assert (at.session_state["b_mm"], at.session_state["h_mm"]) == (800.0, 1000.0)
+    at.selectbox(key="shape").set_value("Slab strip").run()
+    assert at.session_state["h_mm"] == 300.0                # slab thickness default
+    at.selectbox(key="shape").set_value("Rectangle").run()
+    assert (at.session_state["b_mm"], at.session_state["h_mm"]) == (400.0, 600.0)
+
+
+def test_quick_section_reopen_preserves_edited_dimension():
+    # A custom dimension survives closing and reopening the builder (the durable qsv_
+    # copy restores it), and the seeded input adopts it without a warning/error -- the
+    # case that used to trip the "default value + Session State" warning.
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.number_input(key="b_mm").set_value(850.0).run()
+    at.button(key="qs_back").click().run()                  # close (mirror to qsv_)
+    _open_qs(at)                                            # reopen (restore)
+    assert not at.exception
+    assert at.session_state["shape"] == "Box girder"
+    assert at.session_state["b_mm"] == 850.0               # custom value kept
+
+
+def test_quick_section_dimensions_survive_a_project_restore():
+    # A project saved with a custom dimension must keep it when loaded into a FRESH
+    # session and the builder is first opened: qs_shape_prev is absent on that first
+    # open, so the shape prefill must treat it as "no change" rather than mistaking
+    # the restore for a shape switch and resetting b/h to the shape defaults.
+    import project_io
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.number_input(key="b_mm").set_value(850.0).run()
+    at.button(key="qs_back").click().run()
+    scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
+               if k in at.session_state}
+    text = project_io.dump_project({}, scalars)
+
+    at2 = _fresh()
+    at2.run()
+    at2.session_state["_pending_project"] = text
+    at2.run()
+    _open_qs(at2)
+    assert not at2.exception
+    assert at2.session_state["shape"] == "Box girder"
+    assert at2.session_state["b_mm"] == 850.0            # restored dimension kept
+    # A real shape switch after the restore still re-seeds to the new default.
+    at2.selectbox(key="shape").set_value("Rectangle").run()
+    assert at2.session_state["b_mm"] == 400.0
+
+
+def test_quick_section_dimensions_survive_a_midsession_project_load():
+    # Loading a project after the builder has already been used in this session must
+    # also keep the loaded dimension: the earlier use leaves qs_shape_prev set, so the
+    # load clears it (else the loaded shape would look like an in-builder switch and
+    # the dimension would be re-seeded to the shape default).
+    import project_io
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.number_input(key="b_mm").set_value(850.0).run()
+    at.button(key="qs_back").click().run()
+    scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
+               if k in at.session_state}
+    text = project_io.dump_project({}, scalars)
+
+    at2 = _fresh()
+    at2.run()
+    _open_qs(at2)                                        # use the builder first...
+    at2.button(key="qs_back").click().run()             # (sets qs_shape_prev)
+    at2.session_state["_pending_project"] = text        # ...then load the project
+    at2.run()
+    _open_qs(at2)
+    assert not at2.exception
+    assert at2.session_state["shape"] == "Box girder"
+    assert at2.session_state["b_mm"] == 850.0           # loaded dimension kept
+    at2.selectbox(key="shape").set_value("Rectangle").run()
+    assert at2.session_state["b_mm"] == 400.0           # a later switch still re-seeds
 
 
 def test_loading_a_project_applies_a_seeded_setting(tmp_path):
