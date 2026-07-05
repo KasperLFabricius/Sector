@@ -1146,8 +1146,8 @@ def _quick_section_viewport():
         outer, holes, bars, tendons = _quick_section_geometry(st)
     _qs_mirror_settings()   # keep the durable copy current with what is shown
     with preview:
-        bar_xy = [(x, y) for x, y, _ in bars]
-        tendon_xy = [(x, y) for x, y, _ in tendons]
+        bar_xy = [(x, y, a) for x, y, a in bars]
+        tendon_xy = [(x, y, a) for x, y, a in tendons]
         st.plotly_chart(
             viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
                                title="Preview", show_labels=True, height=560,
@@ -1929,8 +1929,8 @@ def section_view(inp):
         st.info("The section has no concrete outline yet -- add at least 3 corners "
                 "in the Section panel, or press Load Quick Section. Any reinforcement "
                 "you have added is still drawn below.")
-    bar_xy = [(b[0], b[1]) for b in inp["bars"]]
-    tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
+    bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
+    tendon_xy = [(t[0], t[1], t[2]) for t in inp["tendons"]]
     sig = (inp["outer"], inp["holes"], bar_xy, tendon_xy,
            inp["label_scale"], inp["label_min_gap"])
     fig = _memo_fig("section", sig, lambda: viz.section_figure(
@@ -2138,8 +2138,8 @@ def elastic_view(inp, results):
     # as circles), each coloured by its stress sign -- consistent with the other
     # views. The stress list runs bars first, then tendons.
     nb = len(inp["bars"])
-    bar_xy = [(b[0], b[1]) for b in inp["bars"]]
-    tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
+    bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
+    tendon_xy = [(t[0], t[1], t[2]) for t in inp["tendons"]]
     sign = lambda s: viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
     bar_colors = [sign(s) for s in e["total"][:nb]]
     tendon_colors = [sign(s) for s in e["total"][nb:]]

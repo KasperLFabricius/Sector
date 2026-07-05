@@ -399,6 +399,26 @@ def _legend_y(height: float) -> float:
     return -_LEGEND_GAP_PX / plot_h
 
 
+def _point_hover(points, first_number, kind, unit):
+    """Per-point hover strings ``'Kind N<br>x, y[<br>area]'`` for the section drawing.
+
+    Numbering continues from ``first_number`` so it matches the drawn labels and the
+    result tables (bars 1..n, tendons n+1.., concrete corners 1..). Coordinates are
+    the already-scaled display values, shown in ``unit`` (0 decimals for mm, 3 for
+    m). A reinforcement ``area`` (a 3rd tuple element, always in mm2) is shown when
+    present; concrete corners are 2-tuples and carry none.
+    """
+    dec = 3 if unit == "m" else 0
+    lines = []
+    for i, p in enumerate(points):
+        s = (f"{kind} {first_number + i}<br>"
+             f"x = {p[0]:.{dec}f} {unit}, y = {p[1]:.{dec}f} {unit}")
+        if len(p) > 2 and p[2] is not None:
+            s += f"<br>area = {p[2]:.0f} mm<sup>2</sup>"
+        lines.append(s)
+    return lines
+
+
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
@@ -443,6 +463,17 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         fig.add_trace(go.Scatter(x=hx, y=hy, fill="toself", mode="lines",
                                  fillcolor="white", line=dict(color=CONCRETE_LINE, dash="dot"),
                                  hoverinfo="skip", showlegend=False))
+    # Invisible hover targets on the concrete corners (outer ring then holes, the
+    # numbering used for the corner labels and the peak-stress "corner N"): the fill
+    # polygons skip hover, so these markers report each corner's coordinates without
+    # drawing anything over the outline.
+    corner_verts = [v for ring in [outer, *(holes or [])] for v in ring]
+    if corner_verts:
+        fig.add_trace(go.Scatter(
+            x=[v[0] for v in corner_verts], y=[v[1] for v in corner_verts],
+            mode="markers", marker=dict(size=12, color="rgba(0,0,0,0)"),
+            customdata=_point_hover(corner_verts, 1, "Corner", unit),
+            hovertemplate="%{customdata}<extra></extra>", showlegend=False))
     if bars:
         bx = [b[0] for b in bars]
         by = [b[1] for b in bars]
@@ -450,7 +481,9 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         fig.add_trace(go.Scatter(x=bx, y=by, mode="markers", name="reinforcing bar",
                                  marker=dict(size=9, symbol="circle", color=colors,
                                              line=dict(color="white", width=1)),
-                                 hoverinfo="skip", showlegend=True))
+                                 customdata=_point_hover(bars, 1, "Bar", unit),
+                                 hovertemplate="%{customdata}<extra></extra>",
+                                 showlegend=True))
     if tendons:
         tx = [t[0] for t in tendons]
         ty = [t[1] for t in tendons]
@@ -458,7 +491,9 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         fig.add_trace(go.Scatter(x=tx, y=ty, mode="markers", name="tendon",
                                  marker=dict(size=11, symbol="diamond", color=colors,
                                              line=dict(color="white", width=1)),
-                                 hoverinfo="skip", showlegend=True))
+                                 customdata=_point_hover(tendons, len(bars) + 1, "Tendon", unit),
+                                 hovertemplate="%{customdata}<extra></extra>",
+                                 showlegend=True))
     if na_line:
         x0, y0, x1, y1 = na_line
         fig.add_trace(go.Scatter(x=[x0, x1], y=[y0, y1], mode="lines",
