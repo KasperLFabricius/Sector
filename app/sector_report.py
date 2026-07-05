@@ -358,8 +358,9 @@ class ReportBuilder:
                 "<b>M<sub>x</sub></b> bends about the x-axis (stress varies with y) "
                 "and is drawn on the vertical axis of the interaction diagram; "
                 "<b>M<sub>y</sub></b> bends about the y-axis.")
-        self._p("Axial force <b>N</b> is positive in compression. Concrete carries "
-                "compression only (no tension). Strains are plane (Bernoulli).")
+        self._p("Axial force <b>N</b> is positive in tension (compression negative), "
+                "so its sign agrees with the stresses. Concrete carries compression "
+                "only (no tension). Strains are plane (Bernoulli).")
         rows = [["Quantity", "Unit"],
                 ["Coordinates, neutral-axis intercepts, lever arm", "mm"],
                 ["Axial force N", "kN"],
@@ -648,9 +649,9 @@ class ReportBuilder:
 
     def _plastic_worked(self, pl):
         gov = max(pl["points"], key=lambda p: math.hypot(p["Mx"], p["My"]))
-        P = self.inp.get("P_pl", 0.0) or 0.0
-        Fc = gov["comp_force"]
-        T = Fc - P
+        P = self.inp.get("P_pl", 0.0) or 0.0   # applied axial, tension-positive
+        Fc = gov["comp_force"]                  # concrete compression resultant (positive)
+        T = Fc + P                              # tension resultant (solver: Fc - T = -N)
         self._h2("Governing case worked (peak resultant moment)")
         self._p(f"Neutral-axis angle V = {_fmt(gov['V'],0)} deg. The extreme "
                 f"concrete fibre is at the ultimate strain; the curvature scales "
@@ -669,12 +670,13 @@ class ReportBuilder:
                  f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
         self._h2("Axial equilibrium check")
-        self._formula("F<sub>c</sub> - T = N",
-                      subst=f"{_fmt(Fc, 3)} - {_fmt(T, 3)} = {_fmt(Fc-T, 3)} kN",
+        self._formula("T - F<sub>c</sub> = N",
+                      subst=f"{_fmt(T, 3)} - {_fmt(Fc, 3)} = {_fmt(T-Fc, 3)} kN",
                       result=f"applied N = {_fmt(P, 3)} kN  (residual "
-                             f"{_fmt(abs(Fc - T - P),3)} kN)")
-        self._small("The tension resultant T = F<sub>c</sub> - N balances the "
-                    "section; the moments above are the resultants about the origin.")
+                             f"{_fmt(abs(T - Fc - P),3)} kN)")
+        self._small("The tension resultant T = F<sub>c</sub> + N balances the "
+                    "section (N tension-positive); the moments above are the "
+                    "resultants about the origin.")
         # Section state at the governing angle (neutral axis + compression zone).
         if self.figures:
             inp = self.inp
@@ -699,10 +701,12 @@ class ReportBuilder:
                 f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm.")
         ps = el.get("prestress")
         if ps is not None:
+            # ps[0] is the tendon tension resultant; the prestress precompresses the
+            # section, so as an axial action (tension-positive) it is a compression.
             self._p(f"The tendon prestress is applied from its initial strain (so N "
                     f"is the external force only): equivalent prestress action "
-                    f"N = {_fmt(ps[0], 3)} kN, M<sub>x</sub> = {_fmt(ps[1], 3)} kNm, "
-                    f"M<sub>y</sub> = {_fmt(ps[2], 3)} kNm (compression positive).")
+                    f"N = {_fmt(-ps[0], 3)} kN, M<sub>x</sub> = {_fmt(ps[1], 3)} kNm, "
+                    f"M<sub>y</sub> = {_fmt(ps[2], 3)} kNm (N tension-positive).")
         # Elastic state diagram (bars coloured by stress sign, compression zone).
         if self.figures and el.get("max_conc", 0.0) > 0.0:
             hp = viz.elastic_halfplane(el["na_x"], el["na_y"],
@@ -745,7 +749,7 @@ class ReportBuilder:
         self._h2("Reinforcement stresses (creep decomposition)")
         self._small("TOTAL = long + short at the section state; LONG = long-term "
                     "part; DIF = short-term difference; RST1 = restraint. "
-                    "Compression positive.")
+                    "Tension positive.")
         total = el.get("total", [])
         rows = [["Bar", "TOTAL", "LONG", "DIF", "RST1"]]
         for i in range(len(total)):

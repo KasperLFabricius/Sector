@@ -564,7 +564,7 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
 def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction"):
     """Axial-moment (N-M) capacity diagram: N vertical, M horizontal.
 
-    ``N`` (kN, compression positive) and ``M`` (kNm, about ``axis``) trace the closed
+    ``N`` (kN, tension positive) and ``M`` (kNm, about ``axis``) trace the closed
     capacity boundary -- the ``+M`` branch from pure tension to the squash load then
     the ``-M`` branch back. ``applied`` is ``(N, M)`` and marked on the diagram.
     """
@@ -591,7 +591,7 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text=f"{mlabel.replace('_', '')} (kNm)", standoff=10),
                    zeroline=True),
-        yaxis=dict(title="N (kN, compression +)", zeroline=True),
+        yaxis=dict(title="N (kN, tension +)", zeroline=True),
         legend=dict(orientation="h", yanchor="top", y=_legend_y(460), x=0.5,
                     xanchor="center"),
     )

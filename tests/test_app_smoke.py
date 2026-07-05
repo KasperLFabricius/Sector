@@ -361,6 +361,39 @@ def test_nm_interaction_is_opt_in_and_renders():
     assert any("M_x" in lbl for lbl in labels) and any("M_y" in lbl for lbl in labels)
 
 
+def test_axial_force_is_tension_positive():
+    # N is entered tension-positive: a compression (negative N) raises the flexural
+    # capacity relative to pure bending, a tension (positive N) lowers it. This is the
+    # boundary flip -- the solver stays compression-positive, so the physics is the
+    # same, only the input sign changes.
+    def max_mx(P):
+        at = _fresh()
+        at.run()
+        at.number_input(key="pl_P").set_value(P).run()
+        at.button(key="calculate").click().run()
+        return at.session_state["results"]["plastic"]["max_mx"]
+
+    assert max_mx(-2000.0) > max_mx(0.0) > max_mx(2000.0)   # compression > 0 > tension
+
+
+def test_nm_squash_is_negative_and_tension_limit_positive():
+    # With N tension-positive the squash (pure compression) load is the minimum N and
+    # the tension limit the maximum -- the opposite ends of the boundary.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="pl_interaction").set_value(True).run()
+    at.button(key="calculate").click().run()
+    d = at.session_state["results"]["plastic"]["interaction"]
+    all_n = list(d["x"]["N"]) + list(d["y"]["N"])
+    assert min(all_n) < 0.0            # squash load is a compression (negative)
+    assert max(all_n) > 0.0            # tension limit is a tension (positive)
+    at.selectbox(key="view").set_value("N-M Interaction").run()
+    squash = next(m for m in at.metric if "Squash" in m.label)
+    tens = next(m for m in at.metric if "Tension limit" in m.label)
+    assert float(squash.value.split()[0]) < 0.0
+    assert float(tens.value.split()[0]) > 0.0
+
+
 def test_both_mode_runs_elastic_and_plastic():
     at = _fresh()
     at.run()
@@ -1562,7 +1595,7 @@ def test_elastic_fully_tensile_case_renders_without_phantom_zone():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_P").set_value(-5000.0).run()  # large tension
+    at.number_input(key="el_long_P").set_value(5000.0).run()   # large tension (+ = tension)
     at.number_input(key="el_long_Mx").set_value(0.0).run()
     at.button(key="calculate").click().run()
     at.selectbox(key="view").set_value("Elastic Results").run()

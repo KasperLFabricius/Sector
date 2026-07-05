@@ -195,7 +195,7 @@ def fig_sign_convention():
                        arrowhead=2, axref="x", ayref="y")
     fig.add_annotation(x=0, y=2.1, ax=0, ay=0, text="y", showarrow=True,
                        arrowhead=2, axref="x", ayref="y")
-    fig.add_annotation(x=0, y=0, text="N (+ = compression, out of page)",
+    fig.add_annotation(x=0, y=0, text="N (+ = tension, out of page)",
                        showarrow=False, yshift=-2, font=dict(size=11))
     fig.add_annotation(x=1.5, y=1.7, text="Mx about x, My about y",
                        showarrow=False, font=dict(size=11))
@@ -498,7 +498,7 @@ def manual_blocks() -> list:
 
     h1("Loads")
     md("The plastic check uses one action set (axial force $N$, positive in "
-       "compression, and moments $M_x$ / $M_y$). The elastic check uses a long-term "
+       "tension, and moments $M_x$ / $M_y$). The elastic check uses a long-term "
        "and a short-term set, so creep and load duration are captured. The crack "
        "width is evaluated for both.")
     table(["Load set", "Feeds"],
@@ -525,18 +525,19 @@ def manual_blocks() -> list:
 
     h1("Conventions and sign convention")
     md("Coordinates are in metres, taken about the section origin. The axial force "
-       "$N$ is positive in **compression** (kN); the moments $M_x$ and $M_y$ act "
+       "$N$ is positive in **tension** (compression negative, kN), so its sign agrees "
+       "with the stresses; the moments $M_x$ and $M_y$ act "
        "about the $x$ and $y$ axes (kNm). Along any straining direction a **depth "
        "coordinate** $s$ is the projection of a point onto the strain gradient; the "
        "neutral axis is a line $s = s_{na}$, and in the plastic sweep its "
        "orientation is the angle $V$ measured from the $y$ axis.")
     fig(fig_sign_convention, "Axes and the positive senses of the axial force, the "
         "moments and the neutral-axis angle.")
-    call("concept", "Two sign conventions coexist. The plastic solver works "
-         "**compression-positive** (the compression zone has strain $> 0$), while "
-         "the material laws are written **tension-positive**; the sign is converted "
-         "at the boundary between them. You only see the reported values, which "
-         "follow the axis conventions above.")
+    call("concept", "The reported axial force $N$ and all stresses are "
+         "**tension-positive**. Internally the plastic solver works "
+         "**compression-positive** (the compression zone has strain $> 0$); the sign "
+         "is converted at the boundary, so you only enter and read tension-positive "
+         "values.")
 
     h1("Material laws")
     h2("Concrete (parabola-rectangle)")
@@ -779,7 +780,7 @@ def manual_blocks() -> list:
 
     h1("Glossary")
     table(["Symbol / term", "Meaning"],
-          [["$N$ or $P$", "Axial force (compression positive)"],
+          [["$N$ or $P$", "Axial force (tension positive)"],
            ["$M_x$, $M_y$", "Bending moments about the x and y axes"],
            ["$V$", "Neutral-axis angle in the plastic sweep"],
            ["$f_{ck}$, $f_{cd}$", "Characteristic / design concrete strength"],
