@@ -674,3 +674,26 @@ def compression_zones(outer, halfplane):
     if len(tens) >= 3:
         zones.append((tens.tolist(), TENS_ZONE_FILL, "tension side"))
     return zones or None
+
+
+def halfplane_bar_colors(points, halfplane, kappa=0.0, prestrain=0.0):
+    """Colour reinforcement by tension/compression at a plastic neutral-axis state.
+
+    ``halfplane`` is the compression half-plane ``(a, b, c)`` from
+    :func:`plastic_halfplane` (``a*x + b*y + c >= 0`` is the compression side, with
+    ``(a, b)`` unit-norm so ``a*x + b*y + c`` is the signed distance ``d`` from the
+    neutral axis). The section strain at a point (compression positive) is
+    ``kappa*d``, so a bar's net strain (tension positive) is ``prestrain - kappa*d``.
+    A non-negative net strain is tension (green), the rest compression (red) --
+    matching the elastic view's stress-sign colouring.
+
+    Mild bars pass ``prestrain = 0`` (their colour is just the neutral-axis side);
+    tendons pass their locked-in prestrain ``IS`` so a tendon on the compression
+    side still reads as tension when the prestrain dominates. ``points`` are given
+    in the same (metre) units as the half-plane. Returns ``None`` for no half-plane.
+    """
+    if halfplane is None:
+        return None
+    a, b, c = halfplane
+    return [BAR_TENSION if prestrain - kappa * (a * p[0] + b * p[1] + c) >= 0.0
+            else BAR_COMPRESSION for p in points]

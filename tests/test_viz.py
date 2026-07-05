@@ -264,6 +264,29 @@ def test_section_figure_shades_zones():
     assert any(t.name == "compression zone" for t in fills)
 
 
+def test_halfplane_bar_colors_mild_follows_the_neutral_axis_side():
+    # NA at y = 0 with the compression side y > 0 (a*x + b*y + c = y). Mild bars
+    # have no prestrain, so their colour is just which side of the NA they sit on;
+    # a bar on the axis reads as tension (matching the elastic view's >= 0 rule).
+    hp = (0.0, 1.0, 0.0)
+    colors = viz.halfplane_bar_colors([(0.0, 0.1), (0.0, -0.1), (0.0, 0.0)], hp, kappa=1.0)
+    assert colors == [viz.BAR_COMPRESSION, viz.BAR_TENSION, viz.BAR_TENSION]
+
+
+def test_halfplane_bar_colors_tendon_prestrain_keeps_tension_on_compression_side():
+    # A tendon just inside the compression side (d = 0.004) whose locked-in prestrain
+    # (IS = 0.006) exceeds the section compression strain is still in net tension; a
+    # mild bar at the same point, with no prestrain, reads as compression.
+    hp = (0.0, 1.0, 0.0)
+    pt = [(0.0, 0.004)]
+    assert viz.halfplane_bar_colors(pt, hp, kappa=1.0, prestrain=0.006) == [viz.BAR_TENSION]
+    assert viz.halfplane_bar_colors(pt, hp, kappa=1.0) == [viz.BAR_COMPRESSION]
+
+
+def test_halfplane_bar_colors_no_halfplane_returns_none():
+    assert viz.halfplane_bar_colors([(0.0, 0.0)], None) is None
+
+
 def test_hard_cutoff_renders_as_a_true_vertical():
     # Concrete crushes at eps_cu2 = 3.5 permille: the drop to zero must be drawn
     # vertical (two trace points at the same strain), not sloped across samples.
