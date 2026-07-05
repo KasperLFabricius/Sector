@@ -145,6 +145,35 @@ def _number(box, prefix, field, meta, help_map=None, disabled=False):
                             help=(help_map or {}).get(field), disabled=disabled)
 
 
+def _seeded_number(box, label, lo, hi, default, step, key, **kw):
+    """A number_input whose initial value is seeded into session state rather than
+    passed as ``value=``.
+
+    A loaded project (or an autosave restore) writes the widget key before the widget
+    is created; a widget that also passes ``value=`` then trips Streamlit's "created
+    with a default value but also had its value set via the Session State API"
+    warning. Seeding via ``setdefault`` (a no-op once the key exists) and omitting
+    ``value=`` avoids it while keeping the same default on a fresh session."""
+    st.session_state.setdefault(key, default)
+    return box.number_input(label, lo, hi, step=step, key=key, **kw)
+
+
+def _seeded_checkbox(box, label, default, key, **kw):
+    """A checkbox whose default is seeded into session state rather than passed as
+    ``value=`` -- same reason as :func:`_seeded_number`: a loaded project writes the
+    key before the widget is built, and a ``value=`` alongside it trips the warning."""
+    st.session_state.setdefault(key, default)
+    return box.checkbox(label, key=key, **kw)
+
+
+def _seeded_selectbox(box, label, options, default, key, **kw):
+    """A selectbox whose default is seeded into session state rather than passed as
+    ``index=`` -- same reason as :func:`_seeded_number`. ``default`` must be one of
+    ``options``."""
+    st.session_state.setdefault(key, default)
+    return box.selectbox(label, options, key=key, **kw)
+
+
 def _safe_build(box, builder, curve, vals, **extra):
     """Build a material from the flat parameter set, surviving degenerate input.
 
@@ -194,8 +223,8 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     box.markdown("**Concrete**")
     presets = mp.CONCRETE_PRESETS
     labels = list(presets)
-    preset = box.selectbox("Preset", labels, index=labels.index(_DEFAULT_PRESET),
-                           key="conc_preset", help=_PRESET_HELP)
+    preset = _seeded_selectbox(box, "Preset", labels, _DEFAULT_PRESET,
+                               "conc_preset", help=_PRESET_HELP)
     _prefill("conc", preset, presets)
     curve = presets[preset]["curve"]
     fck = _number(box, "conc", "fck", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
@@ -310,8 +339,8 @@ def mild_panel(box, locked=False):
     box.markdown("**Mild steel**")
     presets = mp.MILD_PRESETS
     labels = list(presets)
-    preset = box.selectbox("Preset", labels, index=labels.index(_DEFAULT_PRESET),
-                           key="mild_preset", help=_PRESET_HELP)
+    preset = _seeded_selectbox(box, "Preset", labels, _DEFAULT_PRESET,
+                               "mild_preset", help=_PRESET_HELP)
     # Selecting a preset whose compression yield is active (fyck > 0) turns the
     # "Active in compression" toggle on, so the preset's compression is not
     # silently dropped. (Checked before _prefill, which updates the change marker.)
@@ -358,8 +387,8 @@ def prestress_panel(box, locked=False):
     box.markdown("**Prestressing steel**")
     presets = mp.PRESTRESS_PRESETS
     labels = list(presets)
-    preset = box.selectbox("Preset", labels, index=labels.index("EN 1992-1-1:2005"),
-                           key="pre_preset", help=_PRESET_HELP)
+    preset = _seeded_selectbox(box, "Preset", labels, "EN 1992-1-1:2005",
+                               "pre_preset", help=_PRESET_HELP)
     _prefill("pre", preset, presets)
     curve = presets[preset]["curve"]
     vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP,
@@ -953,8 +982,9 @@ def _quick_section_geometry(box):
     if shape == "Circular":
         nb = box.number_input("Perimeter bars", 0, 200, 8, 1, key="ring_n",
                               help="Number of bars evenly spaced around the perimeter.")
-        rd = box.selectbox("Bar diameter (mm)", templates.BAR_DIAMETERS, index=4,
-                           key="ring_d", help="Diameter of each reinforcement bar.")
+        rd = _seeded_selectbox(box, "Bar diameter (mm)", templates.BAR_DIAMETERS,
+                               templates.BAR_DIAMETERS[4], "ring_d",
+                               help="Diameter of each reinforcement bar.")
         cov = box.number_input("Cover (mm)", 0.0, 500.0, 50.0, 5.0, key="ring_c_mm",
                                help="Distance from the section face to the bar centres.") / 1000.0
         bars = templates.bar_ring(0.0, 0.0, templates.ring_radius(dia, cov), int(nb), rd)
@@ -971,10 +1001,12 @@ def _quick_section_geometry(box):
         c1, c2 = box.columns(2)
         c1.markdown("**Bottom**")
         c2.markdown("**Top**")
-        rd_bot = c1.selectbox("Bottom dia (mm)", templates.BAR_DIAMETERS, index=4,
-                              key="bot_d", help="Bottom bar diameter (mm).")
-        rd_top = c2.selectbox("Top dia (mm)", templates.BAR_DIAMETERS, index=4,
-                              key="top_d", help="Top bar diameter (mm).")
+        rd_bot = _seeded_selectbox(c1, "Bottom dia (mm)", templates.BAR_DIAMETERS,
+                                   templates.BAR_DIAMETERS[4], "bot_d",
+                                   help="Bottom bar diameter (mm).")
+        rd_top = _seeded_selectbox(c2, "Top dia (mm)", templates.BAR_DIAMETERS,
+                                   templates.BAR_DIAMETERS[4], "top_d",
+                                   help="Top bar diameter (mm).")
         n_at_bot = n_at_top = None     # by-number: a fixed count per layer
         if by_spacing:
             s_bot = c1.number_input("Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
@@ -1242,24 +1274,24 @@ def build_inputs():
     elastic_on = mode in ("Elastic", "Both")
 
     aset.markdown("**Neutral-axis sweep (plastic)**")
-    v_min = aset.number_input(r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
-                              key="v_min", disabled=not plastic_on,
-                              help="First neutral-axis rotation angle of the plastic sweep.")
-    v_max = aset.number_input(r"End angle $V_{max}$ (deg)", 0.0, 360.0, 360.0, 5.0,
-                              key="v_max", disabled=not plastic_on,
-                              help="Last neutral-axis rotation angle of the plastic sweep.")
-    v_inc = aset.number_input(r"Increment $V_{inc}$ (deg)", 1.0, 90.0, 15.0, 1.0,
-                              key="v_inc", disabled=not plastic_on,
-                              help="Angular step between swept neutral-axis angles; "
-                                   "a finer step gives a smoother M-M envelope.")
-    check_util = aset.checkbox(
-        "Check utilisation against applied moment", value=True, key="pl_check_util",
+    v_min = _seeded_number(aset, r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
+                           "v_min", disabled=not plastic_on,
+                           help="First neutral-axis rotation angle of the plastic sweep.")
+    v_max = _seeded_number(aset, r"End angle $V_{max}$ (deg)", 0.0, 360.0, 360.0, 5.0,
+                           "v_max", disabled=not plastic_on,
+                           help="Last neutral-axis rotation angle of the plastic sweep.")
+    v_inc = _seeded_number(aset, r"Increment $V_{inc}$ (deg)", 1.0, 90.0, 15.0, 1.0,
+                           "v_inc", disabled=not plastic_on,
+                           help="Angular step between swept neutral-axis angles; "
+                                "a finer step gives a smoother M-M envelope.")
+    check_util = _seeded_checkbox(
+        aset, "Check utilisation against applied moment", True, "pl_check_util",
         disabled=not plastic_on,
         help="On: the applied plastic Mx/My are checked against the capacity envelope "
              "(utilisation). Off: report the capacity only -- the applied Mx/My are "
              "ignored and locked.")
-    interaction = aset.checkbox(
-        "N-M interaction diagram", value=False, key="pl_interaction",
+    interaction = _seeded_checkbox(
+        aset, "N-M interaction diagram", False, "pl_interaction",
         disabled=not plastic_on,
         help="Trace the axial-moment (N-M) capacity curve at a fixed bending axis, "
              "from pure tension to the squash load. Shown in the N-M Interaction "
@@ -1271,16 +1303,16 @@ def build_inputs():
 
     aset.markdown("**Serviceability (elastic SLS)**")
     aset.caption("Extra cracked-section checks in the Elastic view.")
-    sls_cw = aset.checkbox("Crack width", value=False, key="sls_cw",
-                           disabled=not elastic_on,
-                           help="Report the EC2 crack width wk for both the long-term "
-                                "and the short-term (instantaneous) load. Each bar's "
-                                "clear cover is taken from the geometry.")
-    sls_phi = aset.number_input(r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0, 60.0,
-                                0.0, 1.0, key="sls_phi",
-                                disabled=not (elastic_on and sls_cw),
-                                help="Governing bar diameter for the crack spacing "
-                                     "sr,max; 0 derives it from each bar's area.")
+    sls_cw = _seeded_checkbox(aset, "Crack width", False, "sls_cw",
+                              disabled=not elastic_on,
+                              help="Report the EC2 crack width wk for both the long-term "
+                                   "and the short-term (instantaneous) load. Each bar's "
+                                   "clear cover is taken from the geometry.")
+    sls_phi = _seeded_number(aset, r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0,
+                             60.0, 0.0, 1.0, "sls_phi",
+                             disabled=not (elastic_on and sls_cw),
+                             help="Governing bar diameter for the crack spacing "
+                                  "sr,max; 0 derives it from each bar's area.")
     # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
     sls_bond = aset.selectbox(
@@ -1455,17 +1487,17 @@ def build_inputs():
         # ``moments_active`` lets the moments lock independently of the axial force
         # (the plastic capacity-only mode keeps N but disables the applied moments).
         moments_active = active if moments_active is None else moments_active
-        P = loads.number_input(r"Axial force $N$ (kN, + = compression)", -50000.0,
-                               50000.0, 0.0, 50.0, key=f"{prefix}_P", help=n_help,
-                               disabled=not active)
-        Mx = loads.number_input(r"Applied $M_x$ (kNm)", -100000.0, 100000.0, mx_default,
-                                10.0, key=f"{prefix}_Mx", disabled=not moments_active,
-                                help=f"{m_help} Bending moment about the x-axis "
-                                     "(its stress varies with y).")
-        My = loads.number_input(r"Applied $M_y$ (kNm)", -100000.0, 100000.0, 0.0, 10.0,
-                                key=f"{prefix}_My", disabled=not moments_active,
-                                help="Bending moment about the y-axis (its stress "
-                                     "varies with x); biaxial bending.")
+        P = _seeded_number(loads, r"Axial force $N$ (kN, + = compression)", -50000.0,
+                           50000.0, 0.0, 50.0, f"{prefix}_P", help=n_help,
+                           disabled=not active)
+        Mx = _seeded_number(loads, r"Applied $M_x$ (kNm)", -100000.0, 100000.0,
+                            mx_default, 10.0, f"{prefix}_Mx", disabled=not moments_active,
+                            help=f"{m_help} Bending moment about the x-axis "
+                                 "(its stress varies with y).")
+        My = _seeded_number(loads, r"Applied $M_y$ (kNm)", -100000.0, 100000.0, 0.0,
+                            10.0, f"{prefix}_My", disabled=not moments_active,
+                            help="Bending moment about the y-axis (its stress "
+                                 "varies with x); biaxial bending.")
         return P, Mx, My
 
     loads.markdown("**Plastic capacity**")
@@ -1487,11 +1519,11 @@ def build_inputs():
         "is applied automatically from its initial strain, so N is the external "
         "force only -- as in the plastic solver; do not add the prestress force here.",
         "Sustained moment (long-term).", elastic_on)
-    phi_creep = loads.number_input(r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0, 3.0,
-                                   0.1, key="el_phi", disabled=not elastic_on,
-                                   help="Final creep coefficient. The long-term modular "
-                                        "ratios use the effective modulus "
-                                        "Ec,eff = Ec/(1+phi).")
+    phi_creep = _seeded_number(loads, r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0,
+                               3.0, 0.1, "el_phi", disabled=not elastic_on,
+                               help="Final creep coefficient. The long-term modular "
+                                    "ratios use the effective modulus "
+                                    "Ec,eff = Ec/(1+phi).")
     loads.markdown("_Short-term_")
     P_el_s, Mx_el_s, My_el_s = _load_set(
         "el_short", "Instantaneous (variable) external axial force (prestress is "
@@ -2271,12 +2303,12 @@ _maybe_autosave()
 # are not part of the result-staleness signature.
 st.markdown("**Plot labels**")
 lc1, lc2 = st.columns(2)
-inp["label_scale"] = lc1.number_input(
-    "Label size", 0.5, 3.0, 1.0, 0.1, key="label_scale",
+inp["label_scale"] = _seeded_number(
+    lc1, "Label size", 0.5, 3.0, 1.0, 0.1, "label_scale",
     help="Scales the corner / bar / tendon number labels on the section "
          "drawings.")
-inp["label_min_gap"] = lc2.number_input(
-    "Label spacing (hide threshold)", 0.0, 0.5, 0.04, 0.01, key="label_min_gap",
+inp["label_min_gap"] = _seeded_number(
+    lc2, "Label spacing (hide threshold)", 0.0, 0.5, 0.04, 0.01, "label_min_gap",
     help="Labels closer together than this fraction of the section size are "
          "hidden to avoid overlap. Lower shows more (0 shows every label); "
          "raise it for dense outlines like a circular section.")

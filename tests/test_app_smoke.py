@@ -7,12 +7,16 @@ for each analysis mode, and assert it produces results without error.
 from __future__ import annotations
 
 import pathlib
+import sys
 
 import pytest
 
 from streamlit.testing.v1 import AppTest
 
-APP = str(pathlib.Path(__file__).resolve().parent.parent / "app" / "sector_app.py")
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
+
+APP = str(ROOT / "app" / "sector_app.py")
 
 
 def _fresh():
@@ -52,6 +56,45 @@ def test_live_curve_figures_are_memoised():
     assert id(at.session_state["_fig_cache"]["concrete"][1]) == conc_id     # reused
     at.number_input(key="conc_fck").set_value(45.0).run()  # changes the concrete law
     assert id(at.session_state["_fig_cache"]["concrete"][1]) != conc_id     # rebuilt
+
+
+def test_persisted_settings_use_the_seeded_number_helper():
+    # These inputs are saved (SCALAR_KEYS), so loading a project writes their key
+    # before the widget is created; passing value= too trips Streamlit's "default
+    # value and Session State" warning. They must go through _seeded_number
+    # (setdefault + no value=), so the bare `key="<name>"` form no longer appears.
+    import inspect
+    import sector_app
+    src = inspect.getsource(sector_app)
+    for helper in ("_seeded_number", "_seeded_checkbox", "_seeded_selectbox"):
+        assert f"def {helper}(" in src
+    # Widgets whose key is restored from a saved project/session (a value= / index=
+    # alongside the externally-set key trips the warning) go through a seeded helper,
+    # so the bare `key="<name>"` form no longer appears for them.
+    # (The Quick Section dimension inputs -- b_mm/h_mm etc. -- keep value=; they have
+    # shape-varying defaults that a plain setdefault cannot re-apply on a shape
+    # switch, so they need a separate shape-default prefill and are not covered here.)
+    for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
+                "label_scale", "label_min_gap",                # seeded number inputs
+                "pl_check_util", "pl_interaction", "sls_cw",    # seeded checkboxes
+                "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
+                "ring_d", "bot_d", "top_d"):                    # QS diameter selects
+        assert f'key="{key}"' not in src, key
+
+
+def test_loading_a_project_applies_a_seeded_setting(tmp_path):
+    # A loaded project writes v_min before the sweep widget renders; the seeded input
+    # must adopt it without error (the setdefault is then a no-op).
+    import project_io
+    at = _fresh()
+    at.run()
+    scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
+               if k in at.session_state}
+    scalars["v_min"] = 45.0
+    at.session_state["_pending_project"] = project_io.dump_project({}, scalars)
+    at.run()
+    assert not at.exception
+    assert at.session_state["v_min"] == 45.0
 
 
 def test_about_panel_shows_version_and_author():
