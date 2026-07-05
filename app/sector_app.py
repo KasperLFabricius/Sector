@@ -201,7 +201,9 @@ def _clamp_eut(box, vals, fields):
     second yield, reached at ``ey0t + fytk/Es``. Only applies when the active
     curve uses ``fytk`` and ``eut``. Strain fields here are in per-mille."""
     if "eut" in fields and "fytk" in fields and vals.get("Es", 0.0) > 0.0:
-        ey = vals["fytk"] / vals["Es"] * 1000.0   # yield strain in per-mille
+        # Es is in GPa here (the panel unit), so fytk[MPa] / Es[GPa] is already the
+        # yield strain in per-mille (= fytk[MPa] / Es[MPa] * 1000).
+        ey = vals["fytk"] / vals["Es"]
         if "ey0t" in fields:
             ey += vals.get("ey0t", 0.0)           # second-yield (total) strain
         if vals["eut"] < ey:
@@ -368,7 +370,7 @@ def mild_panel(box, locked=False):
                         active_in_compression=active_comp)
     comp = "active" if active_comp else "tension-only"
     box.caption(f"$f_{{yd}}$ = {steel.fytk / vals['gamma_y']:.3f} MPa,  "
-                f"$E_s$ = {vals['Es'] / 1000.0:.0f} GPa,  compression {comp}")
+                f"$E_s$ = {vals['Es']:.0f} GPa,  compression {comp}")
     return steel
 
 
@@ -402,7 +404,7 @@ def prestress_panel(box, locked=False):
     else:
         box.caption(f"IS = {vals['IS']:.3f} permille,  "
                     f"fpd = {vals['fytk'] / vals['gamma_y']:.3f} MPa,  "
-                    f"Ep = {vals['Es'] / 1000.0:.0f} GPa")
+                    f"Ep = {vals['Es']:.0f} GPa")
     return pre
 
 

@@ -138,7 +138,7 @@ def strength_dependent_alpha_cc(preset, fck):
 # first yield), symmetric in tension and compression. The flat-compression shapes
 # rely on futk = fytk (so the compression branch hardens to -fyck = flat), not on
 # a special ey0c value.
-_ES = 200000.0   # default steel strain modulus, MPa
+_ES = 200.0   # default steel elastic modulus (panel unit GPa; 200 GPa = 200000 MPa)
 
 
 def _mild_presets():
@@ -197,7 +197,7 @@ MILD_FIELD_META = {
     "k": (r"$k$ ($f_1 / f_{ytk}$)", 0.0, 1.0, 0.01),
     "ey0t": (r"$\varepsilon_{0t}$ (permille)", 0.0, 1000.0, 0.1),
     "ey0c": (r"$\varepsilon_{0c}$ (permille)", 0.0, 1000.0, 0.1),
-    "Es": (r"$E_s$ (MPa)", 1000.0, 500000.0, 1000.0),
+    "Es": (r"$E_s$ (GPa)", 1.0, 500.0, 1.0),
 }
 
 MILD_HELP = {
@@ -237,6 +237,8 @@ def build_mild(curve, *, active_in_compression=True, **fields) -> MildSteel:
     """
     curve = int(curve)
     used = {f: float(fields[f]) for f in MILD_FIELDS_BY_CURVE[curve] if f in fields}
+    if "Es" in used:
+        used["Es"] *= 1000.0   # panel unit GPa -> the material law's MPa
     return MildSteel(curve=curve, active_in_compression=bool(active_in_compression),
                      **_to_fractions(used))
 
@@ -267,11 +269,11 @@ def _prestress_presets():
     # the prestressing modulus Ep entered directly -- 195 GPa for the 2005
     # editions and the DK NA, 200 GPa for 2023 (fpd = fp0,1k/gamma_s).
     for label, code in codes.CODES.items():
-        ep_mpa = 200000.0 if code.key == "EC2-2023" else 195000.0
+        ep_gpa = 200.0 if code.key == "EC2-2023" else 195.0
         presets[label] = {
             "curve": 7, "IS": 0.0, "fytk": 1640.0, "futk": 1860.0, "eut": 35.0,
             "k": 1.0, "ey0t": 0.0, "gamma_y": code.gamma_s,
-            "gamma_u": code.gamma_s, "gamma_E": 1.0, "Es": ep_mpa}
+            "gamma_u": code.gamma_s, "gamma_E": 1.0, "Es": ep_gpa}
     return presets
 
 
@@ -287,7 +289,7 @@ PRESTRESS_FIELD_META = {
     "gamma_E": (r"$\gamma_E$", 0.5, 2.0, 0.01),
     "k": (r"$k$ ($f_1 / f_{p0.1k}$)", 0.0, 1.0, 0.01),
     "ey0t": (r"$\varepsilon_{0t}$ (permille)", 0.0, 1000.0, 0.1),
-    "Es": (r"$E_p$ (MPa)", 1000.0, 500000.0, 1000.0),
+    "Es": (r"$E_p$ (GPa)", 1.0, 500.0, 1.0),
 }
 
 PRESTRESS_HELP = {
@@ -321,4 +323,6 @@ def build_prestress(curve, **fields) -> Prestress:
     """
     curve = int(curve)
     used = {f: float(fields[f]) for f in PRESTRESS_FIELDS_BY_CURVE[curve] if f in fields}
+    if "Es" in used:
+        used["Es"] *= 1000.0   # panel unit GPa -> the material law's MPa
     return Prestress(curve=curve, **_to_fractions(used))
