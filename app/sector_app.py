@@ -1209,7 +1209,7 @@ _SHARED_SIG_KEYS = (
 )
 _PLASTIC_SIG_KEYS = (
     "pl_P", "pl_Mx", "pl_My", "v_min", "v_max", "v_inc",
-    "pl_check_util", "pl_interaction", "pl_int_axis",
+    "pl_check_util", "pl_interaction",
 )
 _ELASTIC_SIG_KEYS = (
     "el_long_P", "el_long_Mx", "el_long_My",
@@ -1291,15 +1291,11 @@ def build_inputs():
              "(utilisation). Off: report the capacity only -- the applied Mx/My are "
              "ignored and locked.")
     interaction = _seeded_checkbox(
-        aset, "N-M interaction diagram", False, "pl_interaction",
+        aset, "N-M interaction diagrams", False, "pl_interaction",
         disabled=not plastic_on,
-        help="Trace the axial-moment (N-M) capacity curve at a fixed bending axis, "
-             "from pure tension to the squash load. Shown in the N-M Interaction "
-             "view. Adds a short extra sweep to Calculate.")
-    int_axis = aset.radio(
-        "N-M bending axis", ["About x (Mx)", "About y (My)"], key="pl_int_axis",
-        horizontal=True, disabled=not (plastic_on and interaction),
-        help="About x plots Mx vs N (horizontal neutral axis); about y plots My vs N.")
+        help="Trace the axial-moment (N-M) capacity curves about both bending axes "
+             "(N-Mx and N-My), from pure tension to the squash load. Shown in the "
+             "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
     aset.markdown("**Serviceability (elastic SLS)**")
     aset.caption("Extra cracked-section checks in the Elastic view.")
@@ -1603,7 +1599,7 @@ def build_inputs():
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 check_util=check_util,
-                interaction=interaction, int_axis=int_axis,
+                interaction=interaction,
                 v_min=v_min, v_max=v_max, v_inc=v_inc,
                 P_el_l=P_el_l, Mx_el_l=Mx_el_l, My_el_l=My_el_l, nl=nl,
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
@@ -1697,21 +1693,23 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                          comp_force=p.compression_force, lever=p.lever_arm,
                          dx=p.dx, dy=p.dy) for p in pts],
         )
-        # Opt-in N-M interaction diagram at a fixed bending axis. Trace the +M branch
-        # (neutral-axis angle V) and the -M branch (V+180) from pure tension to the
-        # squash load, then join them into one closed capacity boundary.
+        # Opt-in N-M interaction diagrams, one about each bending axis. For each axis
+        # trace the +M branch (neutral-axis angle V) and the -M branch (V+180) from
+        # pure tension to the squash load, then join them into one closed capacity
+        # boundary. About x uses a horizontal neutral axis (V = 90/270, Mx varies);
+        # about y a vertical one (V = 0/180, My varies).
         if inp.get("interaction"):
-            about_x = str(inp.get("int_axis", "About x (Mx)")).startswith("About x")
-            v_pos = 90.0 if about_x else 0.0
-            m_of = (lambda q: q.Mx) if about_x else (lambda q: q.My)
             branch = lambda v: solve_interaction(inp["section"], inp["concrete"],
                                                  inp["steel"], v, prestress=pre)
-            loop = branch(v_pos) + list(reversed(branch(v_pos + 180.0)))
+            loop_x = branch(90.0) + list(reversed(branch(270.0)))
+            loop_y = branch(0.0) + list(reversed(branch(180.0)))
             out["plastic"]["interaction"] = dict(
-                axis=("x" if about_x else "y"),
-                N=[q.axial for q in loop], M=[m_of(q) for q in loop],
-                applied=(inp["P_pl"], inp["Mx_pl"] if about_x else inp["My_pl"]),
-                converged=all(q.converged for q in loop),
+                x=dict(N=[q.axial for q in loop_x], M=[q.Mx for q in loop_x],
+                       applied=(inp["P_pl"], inp["Mx_pl"]),
+                       converged=all(q.converged for q in loop_x)),
+                y=dict(N=[q.axial for q in loop_y], M=[q.My for q in loop_y],
+                       applied=(inp["P_pl"], inp["My_pl"]),
+                       converged=all(q.converged for q in loop_y)),
             )
     if inp["mode"] in ("Elastic", "Both") and reuse_elastic is not None:
         out["elastic"] = reuse_elastic
@@ -2062,32 +2060,41 @@ def plastic_view(inp, results):
 
 
 def interaction_view(inp, results):
-    """Axial-moment (N-M) interaction diagram at a fixed bending axis."""
+    """Axial-moment (N-M) interaction diagrams about both bending axes."""
     if not inp.get("interaction"):
-        st.info("Enable 'N-M interaction diagram' in Analysis & Result Settings, "
+        st.info("Enable 'N-M interaction diagrams' in Analysis & Result Settings, "
                 "then run a Plastic or Both analysis and press Calculate.")
         return
     if not results or "plastic" not in results or "interaction" not in results["plastic"]:
         st.info("Run a Plastic or Both analysis, then press Calculate.")
         return
     d = results["plastic"]["interaction"]
-    axis = d["axis"]
-    mlabel = "M_x" if axis == "x" else "M_y"
-    N, M = d["N"], d["M"]
-    m1, m2, m3 = st.columns(3)
-    m1.metric(f"Max ${mlabel}$", f"{max(M):.3f} kNm",
-              help="Peak moment capacity (near the balanced point).")
-    m2.metric("Squash load $N_c$", f"{max(N):.3f} kN")
-    m3.metric("Tension limit $N_t$", f"{min(N):.3f} kN")
-    st.plotly_chart(
-        viz.interaction_nm_figure(N, M, axis=axis,
-                                  applied=d.get("applied") if inp.get("check_util") else None,
-                                  title=f"N-{mlabel} interaction"),
-        width="stretch")
-    st.caption(f"Capacity boundary about the {axis}-axis, from pure tension to the "
-               "squash load. The marked point is the applied plastic "
-               f"($N$, ${mlabel}$); inside the curve is safe. Concrete carries "
-               "compression only, so the tension end is reinforcement-controlled.")
+    dx, dy = d["x"], d["y"]
+    # The pure-axial extremes (squash load, tension limit) are the same for either
+    # bending axis; take them across both boundaries so the metrics are consistent.
+    all_N = list(dx["N"]) + list(dy["N"])
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Squash load $N_c$", f"{max(all_N):.3f} kN")
+    m2.metric("Tension limit $N_t$", f"{min(all_N):.3f} kN")
+    m3.metric("Max $M_x$", f"{max(dx['M']):.3f} kNm")
+    m4.metric("Max $M_y$", f"{max(dy['M']):.3f} kNm")
+    show_applied = inp.get("check_util")
+    cL, cR = st.columns(2)
+    with cL:
+        st.plotly_chart(viz.interaction_nm_figure(
+            dx["N"], dx["M"], axis="x",
+            applied=dx.get("applied") if show_applied else None,
+            title="N-Mx interaction"), width="stretch")
+    with cR:
+        st.plotly_chart(viz.interaction_nm_figure(
+            dy["N"], dy["M"], axis="y",
+            applied=dy.get("applied") if show_applied else None,
+            title="N-My interaction"), width="stretch")
+    st.caption("Capacity boundary about each axis, from pure tension to the squash "
+               "load. The marked point is the applied plastic action ($N$, $M$); "
+               "inside the curve is safe. Concrete carries compression only, so the "
+               "tension end is reinforcement-controlled. Hover any point for its "
+               "$N$ and $M$.")
 
 
 def elastic_view(inp, results):
