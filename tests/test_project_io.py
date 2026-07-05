@@ -52,6 +52,24 @@ def test_unknown_scalar_keys_are_dropped():
     assert scalars == {"conc_fck": 30.0}
 
 
+def test_legacy_mpa_moduli_are_rescaled_to_gpa():
+    # Files written before the GPa switch stored the steel moduli in MPa; loading one
+    # rescales them, so a 200000 MPa modulus reads as 200 GPa.
+    text = project_io.dump_project({}, {"mild_Es": 200000.0, "pre_Es": 195000.0})
+    _, scalars = project_io.parse_project(text)
+    assert scalars["mild_Es"] == pytest.approx(200.0)
+    assert scalars["pre_Es"] == pytest.approx(195.0)
+
+
+def test_gpa_moduli_load_unchanged():
+    # A modern file already stores GPa (a few hundred at most), so loading is a no-op
+    # -- the rescale must not fire twice.
+    text = project_io.dump_project({}, {"mild_Es": 200.0, "pre_Es": 195.0})
+    _, scalars = project_io.parse_project(text)
+    assert scalars["mild_Es"] == pytest.approx(200.0)
+    assert scalars["pre_Es"] == pytest.approx(195.0)
+
+
 def test_dump_handles_numpy_scalars():
     text = project_io.dump_project({}, {"conc_fck": np.float64(42.0),
                                         "mild_active_comp": np.bool_(True)})

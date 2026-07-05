@@ -146,4 +146,13 @@ def parse_project(text: str):
         raise ValueError("malformed 'tables' or 'scalars' section")
     tables = {k: _obj_to_table(raw_tables[k]) for k in TABLE_KEYS if k in raw_tables}
     scalars = {k: v for k, v in raw_scalars.items() if k in SCALAR_KEYS}
+    # The steel moduli are now entered in GPa; files written before that stored them
+    # in MPa. A real modulus in GPa is at most a few hundred, so a value of 1000 or
+    # more is unambiguously a legacy MPa figure -- rescale it so old projects load
+    # correctly. (New files store GPa, well below the threshold, so re-loading them
+    # is a no-op.)
+    for key in ("mild_Es", "pre_Es"):
+        val = scalars.get(key)
+        if isinstance(val, (int, float)) and val >= 1000.0:
+            scalars[key] = val / 1000.0
     return tables, scalars

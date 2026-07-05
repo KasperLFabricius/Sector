@@ -1189,7 +1189,7 @@ def test_es_field_present_and_editable():
     at.run()
     keys = {ni.key for ni in at.number_input}
     assert "mild_Es" in keys and "pre_Es" in keys
-    at.number_input(key="mild_Es").set_value(210000.0).run()
+    at.number_input(key="mild_Es").set_value(210.0).run()   # GPa
     assert not at.exception
     at.button(key="calculate").click().run()
     assert not at.exception
@@ -1861,15 +1861,16 @@ def test_fctm_auto_button_tracks_grade():
 def test_modular_ratios_are_derived_from_moduli():
     # n_l/n_s are no longer entered: the number inputs and Auto buttons are gone. The
     # loads panel reports the derived ratios instead -- n_s = Es/Ec and, with creep,
-    # n_l = (1+phi)*n_s. Here Es/Ec = 200000/40000 = 5.0 and n_l = (1+2)*5 = 15.0.
+    # n_l = (1+phi)*n_s. Es and Ec are entered in GPa; here Es/Ec = 200/40 = 5.0 and
+    # n_l = (1+2)*5 = 15.0.
     at = _fresh()
     at.run()
     keys = {w.key for w in at.number_input} | {b.key for b in at.button}
     assert "nl" not in keys and "ns" not in keys              # inputs removed
     assert "nl_auto" not in keys and "ns_auto" not in keys    # Auto buttons removed
     at.radio(key="mode").set_value("Both").run()
-    at.number_input(key="mild_Es").set_value(200000.0).run()
-    at.number_input(key="conc_Ec").set_value(40.0).run()      # Es/Ec = 5.0
+    at.number_input(key="mild_Es").set_value(200.0).run()     # GPa
+    at.number_input(key="conc_Ec").set_value(40.0).run()      # GPa; Es/Ec = 5.0
     at.number_input(key="el_phi").set_value(2.0).run()        # n_l = (1+2)*5 = 15.0
     md = "\n".join(m.value for m in at.markdown)
     assert "Modular ratios" in md
@@ -1879,15 +1880,16 @@ def test_modular_ratios_are_derived_from_moduli():
 def test_prestress_gets_its_own_derived_modular_ratio():
     # Prestress and mild steel have independent ratios because Es != Ep. With a
     # tendon in the section the loads panel adds a prestress row n = Ep/Ec alongside
-    # the mild row; Ep = 195000, Ec = 39000 -> Ep/Ec = 5.0, and phi = 0 -> n_l = n_s.
+    # the mild row; Ep and Ec are in GPa: Ep = 195, Ec = 39 -> Ep/Ec = 5.0, and
+    # phi = 0 -> n_l = n_s.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Both").run()
     _open_qs(at)
     at.number_input(key="tnd_n").set_value(3).run()           # add tendons
     _apply_qs(at)
-    at.number_input(key="pre_Es").set_value(195000.0).run()   # Ep
-    at.number_input(key="conc_Ec").set_value(39.0).run()      # Ep/Ec = 5.0
+    at.number_input(key="pre_Es").set_value(195.0).run()      # Ep (GPa)
+    at.number_input(key="conc_Ec").set_value(39.0).run()      # GPa; Ep/Ec = 5.0
     at.number_input(key="el_phi").set_value(0.0).run()        # no creep: n_l = n_s
     md = "\n".join(m.value for m in at.markdown)
     assert "| Prestress (Ep/Ec) | 5.000 | 5.000 |" in md
@@ -1909,7 +1911,7 @@ def test_transformed_area_uses_the_tendon_modular_ratio():
         at.button(key="calculate").click().run()
         return at.session_state["results"]["elastic"]["props_un"]["area"]
 
-    a_soft, a_stiff = _area(160000.0), _area(200000.0)
+    a_soft, a_stiff = _area(160.0), _area(200.0)        # Ep in GPa
     assert a_stiff != pytest.approx(a_soft, rel=1e-6)   # Ep changes the transformed area
     assert a_stiff > a_soft                              # stiffer tendons -> larger area
 

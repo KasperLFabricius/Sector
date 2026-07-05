@@ -46,6 +46,20 @@ def test_mild_eurocode_presets_have_unfactored_modulus():
         assert s.stress(0.02, design=True) == pytest.approx(p["fytk"] / code.gamma_s)
 
 
+def test_modulus_fields_are_labelled_in_gpa():
+    # The steel moduli are entered in GPa (the natural unit); the material law works
+    # in MPa, so build_mild/build_prestress convert.
+    assert "GPa" in mp.MILD_FIELD_META["Es"][0]
+    assert "GPa" in mp.PRESTRESS_FIELD_META["Es"][0]
+
+
+def test_build_mild_converts_gpa_modulus_to_mpa():
+    # The panel enters Es in GPa; build_mild converts to the MPa the material law
+    # uses, so a 200 GPa input yields a 200000 MPa modulus.
+    s = mp.build_mild(**mp.MILD_PRESETS["Curve 2 (elastic-perfectly-plastic)"])
+    assert s.Es == pytest.approx(200000.0)
+
+
 def test_build_mild_uses_only_fields_for_the_curve():
     # Curve 2 ignores the hardening/second-yield fields even if supplied.
     s = mp.build_mild(curve=2, fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.15,
@@ -108,12 +122,14 @@ def test_parametric_prestress_presets_use_the_general_law():
 
 
 def test_eurocode_prestress_presets_set_Ep_directly():
-    # Ep is now the direct input (gamma_E = 1), 195/200 GPa by edition.
+    # Ep is now the direct input (gamma_E = 1), 195/200 GPa by edition. The preset
+    # value is in the panel unit (GPa); build_prestress converts it to the law's MPa.
     for label, code in codes.CODES.items():
         p = mp.PRESTRESS_PRESETS[label]
         assert p["gamma_E"] == pytest.approx(1.0)
-        expected = 200000.0 if code.key == "EC2-2023" else 195000.0
+        expected = 200.0 if code.key == "EC2-2023" else 195.0
         assert p["Es"] == pytest.approx(expected)
+        assert mp.build_prestress(**p).Es == pytest.approx(expected * 1000.0)
 
 
 def test_every_field_has_help_text():
