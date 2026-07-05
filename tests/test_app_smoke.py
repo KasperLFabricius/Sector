@@ -148,6 +148,36 @@ def test_quick_section_dimensions_survive_a_project_restore():
     assert at2.session_state["b_mm"] == 400.0
 
 
+def test_quick_section_dimensions_survive_a_midsession_project_load():
+    # Loading a project after the builder has already been used in this session must
+    # also keep the loaded dimension: the earlier use leaves qs_shape_prev set, so the
+    # load clears it (else the loaded shape would look like an in-builder switch and
+    # the dimension would be re-seeded to the shape default).
+    import project_io
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.number_input(key="b_mm").set_value(850.0).run()
+    at.button(key="qs_back").click().run()
+    scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
+               if k in at.session_state}
+    text = project_io.dump_project({}, scalars)
+
+    at2 = _fresh()
+    at2.run()
+    _open_qs(at2)                                        # use the builder first...
+    at2.button(key="qs_back").click().run()             # (sets qs_shape_prev)
+    at2.session_state["_pending_project"] = text        # ...then load the project
+    at2.run()
+    _open_qs(at2)
+    assert not at2.exception
+    assert at2.session_state["shape"] == "Box girder"
+    assert at2.session_state["b_mm"] == 850.0           # loaded dimension kept
+    at2.selectbox(key="shape").set_value("Rectangle").run()
+    assert at2.session_state["b_mm"] == 400.0           # a later switch still re-seeds
+
+
 def test_loading_a_project_applies_a_seeded_setting(tmp_path):
     # A loaded project writes v_min before the sweep widget renders; the seeded input
     # must adopt it without error (the setdefault is then a no-op).

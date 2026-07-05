@@ -747,6 +747,10 @@ def _apply_pending_project() -> None:
         st.session_state["conc_alpha_fck"] = scalars["conc_fck"]
     for ed in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
         st.session_state.pop(ed, None)
+    # Forget the Quick Section builder's last shape so the loaded qsv_ dimensions are
+    # not mistaken for an in-builder shape switch: the next builder open takes the
+    # first-call branch (records the loaded shape, no re-seed) and keeps b/h as saved.
+    st.session_state.pop("qs_shape_prev", None)
     st.session_state["pts_init"] = True   # do not re-seed the tables from a template
     if st.session_state.pop("_autosave_restoring", False):
         st.session_state["_project_msg"] = ("success", "Restored your last autosaved session.")
