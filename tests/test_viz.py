@@ -152,6 +152,52 @@ def test_section_figure_numbers_rebar_and_corners():
     assert any(list(t.text) == ["1", "2", "3", "4"] for t in texts)
 
 
+def _corner_hover(fig):
+    # The invisible corner hover trace: a markers trace whose fill is transparent.
+    return next(t for t in fig.data
+                if getattr(t, "mode", None) == "markers"
+                and getattr(t.marker, "color", None) == "rgba(0,0,0,0)")
+
+
+def test_section_hover_reports_corner_coordinates():
+    # Concrete corners get invisible hover targets (transparent markers) that report
+    # the corner number and its coordinates in the display unit, without drawing
+    # anything over the outline; corners carry no area.
+    outer = [(0.0, 0.0), (0.4, 0.0), (0.4, 0.6), (0.0, 0.6)]
+    corner = _corner_hover(viz.section_figure(outer, scale=1000.0, unit="mm"))
+    assert list(corner.x) == [0.0, 400.0, 400.0, 0.0]        # drawn in mm
+    texts = [str(c) for c in corner.customdata]
+    assert any("Corner 1" in t and "x = 0 mm" in t and "y = 0 mm" in t for t in texts)
+    assert any("Corner 2" in t for t in texts)
+    assert all("area" not in t for t in texts)
+
+
+def test_section_hover_reports_bar_and_tendon_coords_area_and_number():
+    # Bars and tendons report their coordinates, area (mm2) and continuous number
+    # (bars first, tendons after) so hover matches the labels and the result tables.
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    bars = [(-0.1, -0.25, 314.0), (0.1, -0.25, 314.0)]       # x, y in m; area in mm2
+    tendons = [(0.0, 0.27, 150.0)]
+    fig = viz.section_figure(outer, bars=bars, tendons=tendons, scale=1000.0, unit="mm")
+    bar = next(t for t in fig.data if getattr(t, "name", None) == "reinforcing bar")
+    tendon = next(t for t in fig.data if getattr(t, "name", None) == "tendon")
+    b0 = str(bar.customdata[0])
+    assert "Bar 1" in b0 and "x = -100 mm" in b0 and "y = -250 mm" in b0
+    assert "area = 314 mm" in b0
+    # Tendon numbering continues after the two bars.
+    t0 = str(tendon.customdata[0])
+    assert "Tendon 3" in t0 and "area = 150 mm" in t0
+
+
+def test_section_hover_bars_without_area_omit_it():
+    # A bar given as a plain (x, y) point (no area column) still hovers, just without
+    # the area line -- the callers in the manual pass 2-tuples.
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(outer, bars=[(0.0, 0.0)])
+    bar = next(t for t in fig.data if getattr(t, "name", None) == "reinforcing bar")
+    assert "area" not in str(bar.customdata[0])
+
+
 def _corner_count(fig):
     texts = [t for t in fig.data if getattr(t, "mode", None) == "text"]
     return len(max(texts, key=lambda t: len(t.text)).text) if texts else 0
