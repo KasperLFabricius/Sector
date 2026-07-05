@@ -2027,12 +2027,23 @@ def plastic_view(inp, results):
     na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"])
     cL, cR = st.columns([3, 2])
     with cL:
-        bar_xy = [(b[0], b[1]) for b in inp["bars"]]
-        tendon_xy = [(t[0], t[1]) for t in inp["tendons"]]
+        bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
+        tendon_xy = [(t[0], t[1], t[2]) for t in inp["tendons"]]
+        # Colour the steel by its tension/compression state at this neutral-axis
+        # angle, like the elastic view. Mild bars follow the side of the neutral
+        # axis; tendons carry their locked-in prestrain so one on the compression
+        # side still reads as tension. Points are in metres (the half-plane units).
+        pre_IS = inp["prestress"].IS if inp["prestress"] is not None else 0.0
+        bar_colors = viz.halfplane_bar_colors(inp["bars"], hp, kappa=pt["kappa"])
+        tendon_colors = viz.halfplane_bar_colors(inp["tendons"], hp, kappa=pt["kappa"],
+                                                 prestrain=pre_IS)
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
-                               tendons=tendon_xy, zones=viz.compression_zones(inp["outer"], hp),
-                               title=f"Section at V = {pt['V']:.0f} deg",
+                               bar_colors=bar_colors, tendons=tendon_xy,
+                               tendon_colors=tendon_colors,
+                               zones=viz.compression_zones(inp["outer"], hp),
+                               title=f"Section at V = {pt['V']:.0f} deg "
+                                     "(green tension, red compression)",
                                show_labels=True, label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm"),
             width="stretch")
