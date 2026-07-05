@@ -879,8 +879,16 @@ def _qs_shape_prefill(shape):
     """Seed the shared dimension keys with the current shape's defaults when the shape
     selection changes, so the dimension widgets can be created without ``value=``
     (avoiding the "default value + Session State API" warning) while a shape switch
-    still resets b/h to that shape's default."""
-    if st.session_state.get("qs_shape_prev") != shape:
+    still resets b/h to that shape's default.
+
+    The very first call in a session only records the shape -- it does not re-seed --
+    so a project or autosave restored before the builder is first opened keeps its
+    own b/h (the restore is not a shape change). A genuine in-builder shape switch
+    (``qs_shape_prev`` already set) still re-seeds."""
+    if "qs_shape_prev" not in st.session_state:
+        st.session_state["qs_shape_prev"] = shape
+        return
+    if st.session_state["qs_shape_prev"] != shape:
         for k, v in _QS_SHARED_DIMS.get(shape, {}).items():
             st.session_state[k] = v
         st.session_state["qs_shape_prev"] = shape

@@ -119,6 +119,35 @@ def test_quick_section_reopen_preserves_edited_dimension():
     assert at.session_state["b_mm"] == 850.0               # custom value kept
 
 
+def test_quick_section_dimensions_survive_a_project_restore():
+    # A project saved with a custom dimension must keep it when loaded into a FRESH
+    # session and the builder is first opened: qs_shape_prev is absent on that first
+    # open, so the shape prefill must treat it as "no change" rather than mistaking
+    # the restore for a shape switch and resetting b/h to the shape defaults.
+    import project_io
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.number_input(key="b_mm").set_value(850.0).run()
+    at.button(key="qs_back").click().run()
+    scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
+               if k in at.session_state}
+    text = project_io.dump_project({}, scalars)
+
+    at2 = _fresh()
+    at2.run()
+    at2.session_state["_pending_project"] = text
+    at2.run()
+    _open_qs(at2)
+    assert not at2.exception
+    assert at2.session_state["shape"] == "Box girder"
+    assert at2.session_state["b_mm"] == 850.0            # restored dimension kept
+    # A real shape switch after the restore still re-seeds to the new default.
+    at2.selectbox(key="shape").set_value("Rectangle").run()
+    assert at2.session_state["b_mm"] == 400.0
+
+
 def test_loading_a_project_applies_a_seeded_setting(tmp_path):
     # A loaded project writes v_min before the sweep widget renders; the seeded input
     # must adopt it without error (the setdefault is then a no-op).
