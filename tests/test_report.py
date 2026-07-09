@@ -303,6 +303,27 @@ def test_report_includes_shear_section():
     assert "Utilisation" in txt
 
 
+def _shear_out_2023():
+    return {"res": {"vrd_c": 85.4, "tau_rdc": 0.575, "tau_basic": 0.575,
+                    "tau_min": 0.538, "rho_l": 0.00893, "z": 495.0, "ddg": 32.0,
+                    "fyd": 434.8, "gamma_v": 1.40, "model": "2023", "valid": True},
+            "v_ed": 50.0, "util": 50.0 / 85.4, "axis": "x", "tension_low": True,
+            "bw": 300.0, "bw_auto": 300.0, "bw_user": False, "d": 550.0,
+            "asl": 1473.0, "ac": 0.18, "fck": 35.0, "n_ed": 0.0,
+            "method": "DS/EN 1992-1-1:2023", "model_2023": True, "ddg": 32.0,
+            "fyd_flex": 434.8}
+
+
+def test_report_shear_2023_section():
+    out = _out()
+    out["shear"] = _shear_out_2023()
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "8.27" in txt and "8.20" in txt          # the 2023 clauses
+    assert "8.2.2" in txt                            # the 2023 section reference
+    assert "85.4" in txt                             # VRd,c
+    assert "d" in txt and "dg" in txt                # ddg appears
+
+
 def test_report_shear_flags_exceeded():
     out = _out()
     sh = _shear_out()

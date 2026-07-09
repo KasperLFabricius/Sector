@@ -42,6 +42,42 @@ def test_shear_vmin_recommended_vs_dk_na():
     assert codes.EC2_2005_DKNA.shear_vmin(k, fck) > codes.EC2_2005.shear_vmin(k, fck)
 
 
+# -- EN 1992-1-1:2023 strain-based tau_Rd,c (sec. 8.2.2) ---------------------
+
+def test_shear_ddg_size_parameter():
+    # ddg = 16 + Dlower <= 40 for fck <= 60; scaled by (60/fck)^2 above C60.
+    assert codes.EC2_2023.shear_ddg(35.0, 16.0) == pytest.approx(32.0)
+    assert codes.EC2_2023.shear_ddg(35.0, 32.0) == pytest.approx(40.0)   # capped
+    assert codes.EC2_2023.shear_ddg(80.0, 32.0) == pytest.approx(16.0 + 32.0 * (60/80)**2)
+
+
+def test_vrd_c_2023_hand_calc():
+    # 300x600 (d=550, z=495), C35, ddg=32, fyd=500/1.15. gamma_v=1.40.
+    code = codes.EC2_2023
+    res = shear.vrd_c_2023(35.0, code, bw_mm=300.0, d_mm=550.0, asl_mm2=1473.0,
+                           fyd_mpa=500.0 / 1.15, ddg_mm=32.0)
+    assert res["valid"] and res["model"] == "2023"
+    gv = 1.40
+    rho = 1473.0 / (300.0 * 550.0)
+    tau_basic = (0.66 / gv) * (100.0 * rho * 35.0 * 32.0 / 550.0) ** (1.0 / 3.0)
+    tau_min = (11.0 / gv) * math.sqrt(35.0 / (500.0 / 1.15) * 32.0 / 550.0)
+    assert res["tau_basic"] == pytest.approx(tau_basic)
+    assert res["tau_min"] == pytest.approx(tau_min)
+    assert res["tau_rdc"] == pytest.approx(max(tau_basic, tau_min))
+    assert res["vrd_c"] == pytest.approx(max(tau_basic, tau_min) * 300.0 * 495.0 / 1000.0)
+    assert res["vrd_c"] == pytest.approx(85.4, abs=0.3)
+
+
+def test_vrd_c_dispatches_on_shear_model():
+    # The generic vrd_c routes the 2023 edition to the strain-based branch.
+    res = shear.vrd_c(35.0, codes.EC2_2023, 300.0, 550.0, 1473.0, 0.0, 0.18,
+                      fyd_mpa=500.0 / 1.15, ddg_mm=32.0)
+    assert res.get("model") == "2023"
+    res5 = shear.vrd_c(35.0, codes.EC2_2005_DKNA, 300.0, 550.0, 1473.0, 0.0, 0.18)
+    assert "model" not in res5 or res5.get("model") != "2023"
+    assert res5["vrd_c"] != pytest.approx(res["vrd_c"])   # different models
+
+
 # -- the resistance formula (hand-calc anchor) ------------------------------
 
 def test_vrd_c_hand_calc_dk_na():
@@ -391,6 +427,35 @@ def test_app_shear_links_flag_out_of_code_bounds():
     at.selectbox(key="view").set_value("Shear").run()
     assert not at.exception
     assert any("outside the code range" in w.value for w in at.warning)
+
+
+def test_app_shear_2023_method_uses_tau_rdc():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
+    at.number_input(key="shear_V").set_value(50.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    sh = at.session_state["results"]["shear"]
+    assert sh["model_2023"]
+    assert sh["ddg"] == pytest.approx(32.0)             # default Dlower = 16
+    assert sh["res"]["tau_rdc"] > 0.0 and sh["res"]["vrd_c"] > 0.0
+    at.selectbox(key="view").set_value("Shear").run()
+    assert not at.exception
+
+
+def test_app_shear_2023_skips_links_with_a_note():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert "links" not in at.session_state["results"]["shear"]   # not for 2023
+    at.selectbox(key="view").set_value("Shear").run()
+    assert any("8.2.3" in m.value for m in at.info)
 
 
 def test_app_shear_is_saved_and_restored():

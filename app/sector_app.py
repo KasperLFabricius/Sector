@@ -52,6 +52,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 _EPS, _SIGMA, _RHO, _PHI = chr(0x3B5), chr(0x3C3), chr(0x3C1), chr(0x3C6)
 _KAPPA = chr(0x3BA)
 _THETA, _NU, _ALPHA, _DELTA = chr(0x3B8), chr(0x3BD), chr(0x3B1), chr(0x394)
+_TAU = chr(0x3C4)
 
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
@@ -73,10 +74,12 @@ _CRACK_CODE_ALIASES = {
     "DS/EN 1992-1-1 + DK NA (coarse crack system)": "DS/EN 1992-1-1 + DK NA",
 }
 
-# Shear methods for a member without shear reinforcement (VRd,c). Only the 2005
-# variable-strut family applies here; the strain-based EN 1992-1-1:2023 method is a
-# later phase. Default is the DK NA:2024 edition (the house default material code).
+# Shear methods for a member without shear reinforcement. The 2005 variable-strut
+# family drives the with-links truss, the torsion tube and the combined lock; the
+# strain-based EN 1992-1-1:2023 tau_Rd,c (sec. 8.2.2) is offered for the shear check
+# without links. Default is the DK NA:2024 edition (the house default material code).
 _SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
+_SHEAR_METHODS = dict(_SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
 # Shear direction -> the bending axis passed to the engine ("x" = vertical shear,
 # stress varies with y; "y" = horizontal shear, stress varies with x).
 _SHEAR_AXES = {
@@ -1304,6 +1307,7 @@ _ELASTIC_SIG_KEYS = (
 # and plastic parts of the signature.
 _SHEAR_SIG_KEYS = (
     "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
+    "shear_dlower",
     "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_cot_min", "shear_cot_max",
     "torsion_on", "torsion_method", "torsion_T", "torsion_stirrup_dia",
@@ -1471,12 +1475,21 @@ def build_inputs():
              "designed shear reinforcement (VEd > VRd,c) are covered in a later "
              "addition.")
     shear_method = _seeded_selectbox(
-        aset, "Shear method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
+        aset, "Shear method", list(_SHEAR_METHODS), codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
-        help="Code edition for the shear rules. The DK NA:2024 raises the lower "
-             "bound to v_min = (0.051/gamma_c)*k^1.5*sqrt(fck); CRd,c = 0.18/gamma_c "
-             "and k1 = 0.15 are the recommended values in both. The strain-based "
-             "EN 1992-1-1:2023 method is added in a later phase.")
+        help="Code edition for the shear rules. The 2005 family uses VRd,c "
+             "(6.2.2(1); the DK NA:2024 raises v_min). EN 1992-1-1:2023 uses the "
+             "strain-based tau_Rd,c (8.2.2) with the aggregate size ddg -- for a "
+             "member without links; its with-links strain method is a follow-up.")
+    _eff_shear_method = combined_method if combined_on else shear_method
+    _shear_2023 = (_SHEAR_METHODS.get(_eff_shear_method) is not None
+                   and getattr(_SHEAR_METHODS[_eff_shear_method], "shear_model",
+                               "2005") == "2023")
+    shear_dlower = _seeded_number(
+        aset, "Aggregate size Dlower (mm)", 4.0, 40.0, 16.0, 1.0, "shear_dlower",
+        disabled=not (shear_on and _shear_2023),
+        help="Lower sieve size of the coarsest aggregate (2023 method only): "
+             "ddg = 16 + Dlower (<= 40 mm) for fck <= 60 (8.2.1(4)).")
     if combined_on:
         aset.caption(f"Shear method set by Combined: {combined_method}")
     shear_axis = _seeded_selectbox(
@@ -1871,7 +1884,7 @@ def build_inputs():
                 shear_method=(combined_method if combined_on else shear_method),
                 shear_axis=_SHEAR_AXES[shear_axis],
                 shear_tension=_SHEAR_TENSION[shear_tension],
-                shear_V=shear_V, shear_bw=shear_bw,
+                shear_V=shear_V, shear_bw=shear_bw, shear_dlower=shear_dlower,
                 shear_links=shear_links, shear_link_legs=shear_link_legs,
                 shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
                 shear_fywk=shear_fywk, shear_cot_min=shear_cot_min,
@@ -2208,7 +2221,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     # reuse). The axial term uses the plastic (ULS) axial force N (tension-positive),
     # converted to the code's compression-positive sigma_cp at the boundary.
     if inp.get("shear_on"):
-        code = _SHEAR_CODES.get(inp["shear_method"], codes.EC2_2005_DKNA)
+        code = _SHEAR_METHODS.get(inp["shear_method"], codes.EC2_2005_DKNA)
+        model_2023 = getattr(code, "shear_model", "2005") == "2023"
         axis, tension_low = inp["shear_axis"], inp["shear_tension"]
         ac, cx, cy = _gross_area_centroid(inp["outer"], inp["holes"])
         centroid_coord = cy if axis == "x" else cx
@@ -2218,18 +2232,25 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         bw_auto = shear.min_web_width(inp["outer"], inp["holes"], axis)
         bw = inp["shear_bw"] if inp["shear_bw"] > 0.0 else bw_auto
         fck = inp["concrete"].fck
-        res = shear.vrd_c(fck, code, bw, d, asl, -inp["P_pl"], ac)
+        # The 2023 tau_Rd,c uses the flexural-reinforcement design yield and the
+        # aggregate size ddg; the 2005 VRd,c ignores both.
+        fyd_flex = abs(inp["steel"].stress(0.05, design=True))
+        ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
+        res = shear.vrd_c(fck, code, bw, d, asl, -inp["P_pl"], ac,
+                          fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0))
         v_ed = inp["shear_V"]
         util = (v_ed / res["vrd_c"]) if res["vrd_c"] > 0.0 else math.inf
         out["shear"] = dict(res=res, v_ed=v_ed, util=util, axis=axis,
                             tension_low=tension_low, bw=bw, bw_auto=bw_auto,
                             bw_user=bool(inp["shear_bw"] > 0.0), d=d, asl=asl,
                             ac=ac, fck=fck, n_ed=inp["P_pl"],
-                            method=inp["shear_method"])
-        # Shear reinforcement (vertical links): the variable-strut VRd = min(VRd,s,
-        # VRd,max) with theta auto-optimised in the cot(theta) band (sec. 6.2.3). The
-        # bounds may be widened past the code limits (a warning, not an error).
-        if inp.get("shear_links"):
+                            method=inp["shear_method"], model_2023=model_2023,
+                            ddg=ddg, fyd_flex=fyd_flex)
+        # Shear reinforcement (vertical links): the 2005 variable-strut VRd =
+        # min(VRd,s, VRd,max) with theta auto-optimised in the cot(theta) band (sec.
+        # 6.2.3). Not offered for the 2023 method here -- its with-links strain-based
+        # truss (8.2.3) is a follow-up; a note is shown in the view instead.
+        if inp.get("shear_links") and not model_2023:
             cot_min = min(inp["shear_cot_min"], inp["shear_cot_max"])
             cot_max = max(inp["shear_cot_min"], inp["shear_cot_max"])
             asw = inp["shear_link_legs"] * templates.bar_area(inp["shear_link_dia"])
@@ -2910,23 +2931,47 @@ def shear_view(inp, results):
     bw_note = ("user input" if sh["bw_user"]
                else f"auto = min solid width {sh['bw_auto']:.1f} mm")
     st.markdown("**Derived quantities**")
-    st.dataframe(
-        {"Quantity": ["Effective depth d", "Web width bw", "Tension reinf. Asl",
-                      f"Reinf. ratio {_RHO}l", "Size factor k",
-                      f"Axial stress {_SIGMA}cp", "Concrete area Ac",
-                      "CRd,c", "vmin", "fcd"],
-         "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
-                   f"{sh['asl']:.1f} mm2", f"{res['rho_l']:.4f} ({chr(0x2264)} 0.02)",
-                   f"{res['k']:.3f} ({chr(0x2264)} 2.0)",
-                   f"{res['sigma_cp']:.3f} MPa ({chr(0x2264)} 0.2 fcd)",
-                   f"{sh['ac'] * 1e6:.0f} mm2", f"{res['crd_c']:.4f}",
-                   f"{res['vmin']:.3f} MPa", f"{res['fcd']:.2f} MPa"]},
-        hide_index=True, width="stretch")
-    st.caption(
-        "VRd,c = max[ CRd,c*k*(100*" + _RHO + "l*fck)^(1/3) + k1*" + _SIGMA +
-        "cp , vmin + k1*" + _SIGMA + "cp ] * bw * d, with k1 = "
-        f"{res['k1']:.2f}. Asl is the tension reinforcement on the chosen face, "
-        "assumed fully anchored (>= lbd + d) beyond the section.")
+    if sh.get("model_2023"):
+        st.dataframe(
+            {"Quantity": ["Effective depth d", "Web width bw", "Lever arm z",
+                          "Tension reinf. Asl", f"Reinf. ratio {_RHO}l",
+                          "Aggregate ddg", f"{_TAU}Rd,c", f"{_TAU}Rd,c,min",
+                          "Flexural fyd", "gamma_v"],
+             "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
+                       f"{res['z']:.1f} mm (0.9 d)", f"{sh['asl']:.1f} mm2",
+                       f"{res['rho_l']:.4f}", f"{res['ddg']:.1f} mm",
+                       f"{res['tau_rdc']:.3f} MPa", f"{res['tau_min']:.3f} MPa",
+                       f"{res['fyd']:.1f} MPa", f"{res['gamma_v']:.2f}"]},
+            hide_index=True, width="stretch")
+        st.caption(
+            _TAU + "Rd,c = max[ (0.66/gamma_v)*(100*" + _RHO + "l*fck*ddg/d)^(1/3) , "
+            + _TAU + "Rd,c,min ] (EN 1992-1-1:2023, 8.27); VRd,c = " + _TAU +
+            "Rd,c*bw*z, z = 0.9d. ddg = 16 + Dlower (<= 40 mm). Asl is the tension "
+            "reinforcement on the chosen face, assumed fully anchored beyond d.")
+    else:
+        st.dataframe(
+            {"Quantity": ["Effective depth d", "Web width bw", "Tension reinf. Asl",
+                          f"Reinf. ratio {_RHO}l", "Size factor k",
+                          f"Axial stress {_SIGMA}cp", "Concrete area Ac",
+                          "CRd,c", "vmin", "fcd"],
+             "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
+                       f"{sh['asl']:.1f} mm2",
+                       f"{res['rho_l']:.4f} ({chr(0x2264)} 0.02)",
+                       f"{res['k']:.3f} ({chr(0x2264)} 2.0)",
+                       f"{res['sigma_cp']:.3f} MPa ({chr(0x2264)} 0.2 fcd)",
+                       f"{sh['ac'] * 1e6:.0f} mm2", f"{res['crd_c']:.4f}",
+                       f"{res['vmin']:.3f} MPa", f"{res['fcd']:.2f} MPa"]},
+            hide_index=True, width="stretch")
+        st.caption(
+            "VRd,c = max[ CRd,c*k*(100*" + _RHO + "l*fck)^(1/3) + k1*" + _SIGMA +
+            "cp , vmin + k1*" + _SIGMA + "cp ] * bw * d, with k1 = "
+            f"{res['k1']:.2f}. Asl is the tension reinforcement on the chosen face, "
+            "assumed fully anchored (>= lbd + d) beyond the section.")
+
+    if sh.get("model_2023") and inp.get("shear_links"):
+        st.info("The 2023 method's strain-based check for members WITH shear "
+                "reinforcement (8.2.3) is not yet implemented; only tau_Rd,c is "
+                "shown. Select a 2005 edition for a links check.")
 
     # Shear reinforcement (links): the governing check when present.
     links = sh.get("links")

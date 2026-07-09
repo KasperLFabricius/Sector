@@ -56,6 +56,7 @@ SCALAR_KEYS = [
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     # Shear (VRd,c without links, and the variable-strut VRd with links).
     "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
+    "shear_dlower",
     "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_cot_min", "shear_cot_max",
     # Torsion (thin-walled tube, TRd).
