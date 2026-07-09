@@ -111,13 +111,16 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
     tef = tef_auto
     tef_capped = False
     if hollow:
-        # Real wall thickness ~ concrete area / centre-line perimeter (exact for a
-        # thin rectangular box); the code caps tef at the real thickness for a hollow
-        # section. Use a first-pass centre-line perimeter at tef_auto.
-        conc_area = A - sum(abs(geometry.signed_area(h)) for h in holes)
-        ring0 = offset_polygon_inward(outer, 0.5 * tef_auto)
-        uk0 = _perimeter(ring0) if ring0 else u
-        wall = conc_area / uk0 if uk0 > 0.0 else tef_auto
+        # EC2 caps tef at the real wall thickness for a hollow section. Measure it
+        # directly as the minimum gap between the outer outline and any void: the
+        # closest approach of two convex polygons is a vertex of one to an edge of the
+        # other, so check every void vertex against the outer edges and every outer
+        # vertex against each void's edges (distance_to_boundary is point-to-edge).
+        walls = []
+        for h in holes:
+            walls += [geometry.distance_to_boundary(p[0], p[1], [outer]) for p in h]
+            walls += [geometry.distance_to_boundary(p[0], p[1], [h]) for p in outer]
+        wall = min(walls) if walls else tef_auto
         if wall < tef:
             tef, tef_capped = wall, True
     tef_user = tef_override > 0.0

@@ -42,14 +42,25 @@ def test_tube_tef_override():
 
 
 def test_tube_hollow_caps_tef_at_the_wall():
-    # A thin box: outer 0.6 x 0.6, a 0.4 x 0.4 void -> ~0.1 m walls. A/u = 0.36/2.4 =
-    # 0.15 m, but the real wall is ~0.1 m, so tef is capped below the solid A/u value.
+    # A thin box: outer 0.6 x 0.6, a 0.4 x 0.4 void -> 0.1 m walls. A/u = 0.36/2.4 =
+    # 0.15 m, but the real wall is 0.1 m, so tef is capped to the actual wall.
     outer = _rect(0.6, 0.6)
     hole = [(0.1, 0.1), (0.5, 0.1), (0.5, 0.5), (0.1, 0.5)]
     t = torsion.tube_properties(outer, [hole])
     assert t["hollow"] and t["tef_capped"]
-    assert t["tef"] < t["tef_auto"]
-    assert t["tef"] == pytest.approx(100.0, abs=15.0)   # ~ the 100 mm wall
+    assert t["tef_auto"] == pytest.approx(150.0)
+    assert t["tef"] == pytest.approx(100.0)             # the actual 100 mm wall
+
+
+def test_tube_thin_box_wall_is_not_overestimated():
+    # Codex P1: a 1.0 x 1.0 box with a centered 0.9 x 0.9 void has 50 mm walls; the
+    # cap must be the real wall, not the ~63 mm the concrete-area/perimeter estimate
+    # gave (which inflated TRd,max / TRd,c by ~20%).
+    outer = _rect(1.0, 1.0)
+    hole = [(0.05, 0.05), (0.95, 0.05), (0.95, 0.95), (0.05, 0.95)]
+    t = torsion.tube_properties(outer, [hole])
+    assert t["tef_auto"] == pytest.approx(250.0)        # A/u = 1.0/4.0
+    assert t["tef"] == pytest.approx(50.0)              # the actual 50 mm wall
 
 
 def test_tube_rejects_too_large_tef_override():
