@@ -83,7 +83,12 @@ def offset_polygon_inward(ring: Sequence, dist: float):
     for j in range(n):
         v = _line_intersect(lines[(j - 1) % n], lines[j])
         if v is None:
-            return None
+            # The two offset lines are parallel: the original edges are collinear (an
+            # extra vertex on a straight edge). The offset of that shared vertex is the
+            # vertex itself moved inward along the common edge normal.
+            px, py = pts[j]
+            _ox, _oy, ux, uy = lines[j]
+            v = (px - uy * dist, py + ux * dist)     # inward (left) normal offset
         out.append(v)
     return out
 

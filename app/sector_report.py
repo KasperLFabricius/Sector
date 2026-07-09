@@ -924,7 +924,8 @@ class ReportBuilder:
             ref="EN 1992-1-1 (6.30)",
             subst=f"2 &#183; {_fmt(t['nu'], 3)} &#183; {_fmt(t['alpha_cw'], 3)} &#183; "
                   f"{_fmt(t['fcd'], 2)} &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; sincos({_fmt(t['cot'], 3)})",
+                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; "
+                  f"sincos({_fmt(t['cot'], 3)}) &#183; 1000",
             result=f"T<sub>Rd,max</sub> = {_fmt(t['trd_max'], 3)} kN.m")
         self._formula(
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
@@ -934,7 +935,8 @@ class ReportBuilder:
             "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
             ref="cracking (tau = f<sub>ctd</sub>)",
             subst=f"2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; {_fmt(t['fctd'], 3)}",
+                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; {_fmt(t['fctd'], 3)} "
+                  "&#183; 1000",
             result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN.m")
         util = t["util"]
         util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
@@ -949,9 +951,12 @@ class ReportBuilder:
             ref="EN 1992-1-1 (6.28)",
             subst=f"{_fmt(t['t_ed'], 3)} &#183; {_fmt(tube['uk'], 4)} &#183; "
                   f"{_fmt(t['cot'], 3)} / (2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(t['fyd_long'], 1)})",
+                  f"{_fmt(t['fyd_long'], 1)}) &#183; 1000",
             result=f"sum A<sub>sl</sub> = {_fmt(t['asl_req'], 0)} mm<sup>2</sup> "
                    "(in addition to the bending steel)")
+        self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "
+                    "MN.m to kN.m (resistances) and m<sup>2</sup> to mm<sup>2</sup> "
+                    "(A<sub>sl</sub>).")
         inter = t.get("interaction")
         if inter is not None:
             self._h2("Combined shear + torsion (concrete crushing)")

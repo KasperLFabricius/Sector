@@ -89,6 +89,16 @@ def test_offset_polygon_inward_square():
     assert abs(geometry.signed_area(ring)) == pytest.approx(0.64)   # 0.8 x 0.8
 
 
+def test_tube_tolerates_collinear_outline_vertices():
+    # Codex P2: an extra vertex on a straight edge must not collapse the offset (which
+    # would drop to the coarse linear estimate). The tube matches the clean rectangle.
+    clean = torsion.tube_properties(_rect(0.3, 0.6), None)
+    withpt = torsion.tube_properties(
+        [(0.0, 0.0), (0.15, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)], None)  # mid-edge pt
+    assert withpt["Ak"] == pytest.approx(clean["Ak"])
+    assert withpt["uk"] == pytest.approx(clean["uk"])
+
+
 # -- resistances (hand-calc anchor) -----------------------------------------
 
 def _tube():
@@ -98,6 +108,14 @@ def _tube():
 def test_torsion_nu_edition_dependent():
     assert codes.EC2_2005.torsion_nu(35.0) == pytest.approx(0.6 * (1 - 35.0 / 250.0))
     assert codes.EC2_2005_DKNA.torsion_nu(35.0) == pytest.approx(0.7 * (0.7 - 35.0 / 200.0))
+
+
+def test_torsion_nu_applies_the_dk_nu_v_floor_above_c50():
+    # Codex P2: nu_t = 0.7 * nu_v with nu_v floored at 0.45, so above C50 the floor
+    # carries through (0.7*0.45 = 0.315), not the un-floored 0.7*(0.7 - fck/200).
+    assert codes.EC2_2005_DKNA.shear_nu1(60.0) == pytest.approx(0.45)   # nu_v floored
+    assert codes.EC2_2005_DKNA.torsion_nu(60.0) == pytest.approx(0.7 * 0.45)
+    assert codes.EC2_2005_DKNA.torsion_nu(60.0) > 0.7 * (0.7 - 60.0 / 200.0)
 
 
 def test_trd_s_and_trd_max_meet_at_the_optimum():
