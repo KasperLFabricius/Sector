@@ -154,6 +154,32 @@ class DesignCode:
     eta_cc_ref: Optional[float] = None
     k_tc: float = 1.0
     const_strains: bool = False
+    # Shear (EN 1992-1-1:2005 sec. 6.2.2 members without shear reinforcement). The
+    # ``shear_model`` selects the resistance formula; "2005" is the variable-strut
+    # family (2005 + DK NA), "2023" the strain-based sec. 8.2 (added later). CRd,c and
+    # k1 are the recommended values (the DK NA keeps them); the DK NA changes only
+    # v_min: the recommended v_min = 0.035*k^1.5*sqrt(fck), the DK NA:2024
+    # v_min = (0.051/gamma_c)*k^1.5*sqrt(fck), selected by ``shear_vmin_over_gamma_c``.
+    shear_model: str = "2005"
+    shear_crd_c: float = 0.18
+    shear_k1: float = 0.15
+    shear_vmin_coeff: float = 0.035
+    shear_vmin_over_gamma_c: bool = False
+
+    def shear_crd_c_over_gamma(self) -> float:
+        """``C_Rd,c = 0.18 / gamma_c`` -- the VRd,c coefficient (2005 sec. 6.2.2(1))."""
+        return self.shear_crd_c / self.gamma_c
+
+    def shear_vmin(self, k: float, fck: float) -> float:
+        """``v_min`` (MPa) for shear resistance without links, sec. 6.2.2(1).
+
+        Recommended ``0.035*k^1.5*sqrt(fck)``; the DK NA:2024 uses
+        ``(0.051/gamma_c)*k^1.5*sqrt(fck)`` (``shear_vmin_over_gamma_c``).
+        """
+        coeff = self.shear_vmin_coeff
+        if self.shear_vmin_over_gamma_c:
+            coeff = coeff / self.gamma_c
+        return coeff * k ** 1.5 * math.sqrt(fck)
 
     def concrete_factor(self, fck: float) -> float:
         """Effective coefficient on the design concrete strength for ``fck``."""
@@ -222,6 +248,9 @@ EC2_2005_DKNA = DesignCode(
     gamma_c=1.45,
     gamma_s=1.20,
     alpha_cc=1.0,
+    # DK NA:2024 sec. 6.2.2(1): v_min = (0.051/gamma_c)*k^1.5*sqrt(fck).
+    shear_vmin_coeff=0.051,
+    shear_vmin_over_gamma_c=True,
 )
 
 # DS/EN 1992-1-1:2023: gamma_c = 1.5, gamma_s = 1.15, with the strength-dependent
@@ -235,6 +264,7 @@ EC2_2023 = DesignCode(
     eta_cc_ref=40.0,
     k_tc=1.0,
     const_strains=True,   # the 2023 ultimate parabola keeps constant strains
+    shear_model="2023",   # strain-based sec. 8.2 (implemented later)
 )
 
 # Registry of selectable codes, keyed by their display label.

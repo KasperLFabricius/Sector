@@ -313,6 +313,10 @@ class ReportBuilder:
             self.flow.append(PageBreak())
             self._elastic()
             self._cracking()
+        if "shear" in self.out:
+            self._tick(0.88, "Shear resistance...")
+            self.flow.append(PageBreak())
+            self._shear()
         self._appendix()
         self._tick(0.92, "Writing PDF...")
         footer = f"Sector {self.version}  -  Sweco".strip()
@@ -722,6 +726,79 @@ class ReportBuilder:
                 inp.get("outer", []), inp.get("holes", []), bar_xy, na_line=na,
                 tendons=ten_xy, zones=zones, show_labels=True, scale=_MM, unit="mm",
                 title=f"Compression zone at V = {_fmt(gov['V'],0)} deg"), 150, 100)
+
+    def _shear(self):
+        sh = self.out["shear"]
+        res = sh["res"]
+        self._h1("Shear resistance without shear reinforcement")
+        axis = ("vertical shear (bending about x)" if sh["axis"] == "x"
+                else "horizontal shear (bending about y)")
+        face = "bottom / left" if sh["tension_low"] else "top / right"
+        self._p(f"Design shear resistance V<sub>Rd,c</sub> of a member not requiring "
+                f"shear reinforcement (EN 1992-1-1 sec. 6.2.2(1)), method "
+                f"<b>{sh['method']}</b>. {axis[0].upper() + axis[1:]}, with the "
+                f"tension reinforcement on the {face} face.")
+        if not res["valid"]:
+            self._small("Warning: V<sub>Rd,c</sub> is zero -- no tension "
+                        "reinforcement on the chosen face, or a zero effective depth "
+                        "/ web width.")
+        bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
+        fck = sh["fck"]
+        k1 = res["k1"]
+        rows = [["Quantity", "Symbol", "Value"],
+                ["Effective depth", "d", f"{_fmt(sh['d'], 1)} mm"],
+                ["Web width", "b<sub>w</sub>", f"{_fmt(sh['bw'], 1)} mm ({bw_src})"],
+                ["Tension reinforcement", "A<sub>sl</sub>",
+                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
+                ["Reinforcement ratio", "rho<sub>l</sub>",
+                 f"{_fmt(res['rho_l'], 4)} (&#8804; 0.02)"],
+                ["Size factor", "k", f"{_fmt(res['k'], 3)} (&#8804; 2.0)"],
+                ["Concrete area", "A<sub>c</sub>",
+                 f"{_fmt(sh['ac'] * 1e6, 0)} mm<sup>2</sup>"],
+                ["Axial force (ULS)", "N", f"{_fmt(sh['n_ed'], 3)} kN (tension +)"],
+                ["Axial stress", "sigma<sub>cp</sub>",
+                 f"{_fmt(res['sigma_cp'], 3)} MPa (&#8804; 0.2 f<sub>cd</sub>)"],
+                ["Design concrete strength", "f<sub>cd</sub>",
+                 f"{_fmt(res['fcd'], 2)} MPa"],
+                ["Coefficient", "C<sub>Rd,c</sub>", f"{_fmt(res['crd_c'], 4)}"],
+                ["Coefficient", "k<sub>1</sub>", f"{_fmt(k1, 2)}"],
+                ["Lower-bound stress", "v<sub>min</sub>",
+                 f"{_fmt(res['vmin'], 3)} MPa"]]
+        self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        self._h2("Resistance")
+        self._formula(
+            "V<sub>Rd,c</sub> = [C<sub>Rd,c</sub> k (100 rho<sub>l</sub> "
+            "f<sub>ck</sub>)<sup>1/3</sup> + k<sub>1</sub> sigma<sub>cp</sub>] "
+            "b<sub>w</sub> d",
+            ref="EN 1992-1-1 (6.2.a)",
+            subst=f"[{_fmt(res['crd_c'], 4)} &#183; {_fmt(res['k'], 3)} &#183; (100 "
+                  f"&#183; {_fmt(res['rho_l'], 4)} &#183; {_fmt(fck, 0)})<sup>1/3</sup> "
+                  f"+ {_fmt(k1, 2)} &#183; {_fmt(res['sigma_cp'], 3)}] &#183; "
+                  f"{_fmt(sh['bw'], 1)} &#183; {_fmt(sh['d'], 1)}",
+            result=f"basic stress = {_fmt(res['v_basic'], 3)} MPa")
+        self._formula(
+            "V<sub>Rd,c,min</sub> = (v<sub>min</sub> + k<sub>1</sub> "
+            "sigma<sub>cp</sub>) b<sub>w</sub> d",
+            ref="EN 1992-1-1 (6.2.b)",
+            subst=f"({_fmt(res['vmin'], 3)} + {_fmt(k1, 2)} &#183; "
+                  f"{_fmt(res['sigma_cp'], 3)}) &#183; {_fmt(sh['bw'], 1)} &#183; "
+                  f"{_fmt(sh['d'], 1)}",
+            result=f"floor stress = {_fmt(res['v_floor'], 3)} MPa")
+        self._formula(
+            "V<sub>Rd,c</sub> = max(basic, floor) &#183; b<sub>w</sub> &#183; d",
+            result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
+        util = sh["util"]
+        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
+        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        self._h2("Utilisation")
+        self._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
+                      subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
+                      result=f"{util_txt}  ({verdict})")
+        self._small("A<sub>sl</sub> is the tension reinforcement on the chosen face, "
+                    "assumed fully anchored (&#8805; l<sub>bd</sub> + d) beyond the "
+                    "section. sigma<sub>cp</sub> uses the plastic (ULS) axial force. "
+                    "A section with V<sub>Ed</sub> &gt; V<sub>Rd,c</sub> requires "
+                    "designed shear reinforcement.")
 
     def _elastic(self):
         el = self.out["elastic"]

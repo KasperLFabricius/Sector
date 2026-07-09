@@ -54,6 +54,8 @@ SCALAR_KEYS = [
     "mode", "v_min", "v_max", "v_inc", "pl_check_util",
     "pl_interaction",
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
+    # Shear (members without shear reinforcement, VRd,c).
+    "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
     "label_scale", "label_min_gap",
     # Report metadata.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev", "rep_author",

@@ -30,7 +30,7 @@ import project_io  # noqa: E402
 import viz  # noqa: E402
 from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import codes, geometry, kernels, material_presets as mp, templates  # noqa: E402
+from sector import codes, geometry, kernels, material_presets as mp, shear, templates  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
@@ -69,6 +69,19 @@ _CRACK_CODE_ALIASES = {
     "DS/EN 1992-1-1 + DK NA (fine crack system)": "DS/EN 1992-1-1 + DK NA",
     "DS/EN 1992-1-1 + DK NA (coarse crack system)": "DS/EN 1992-1-1 + DK NA",
 }
+
+# Shear methods for a member without shear reinforcement (VRd,c). Only the 2005
+# variable-strut family applies here; the strain-based EN 1992-1-1:2023 method is a
+# later phase. Default is the DK NA:2024 edition (the house default material code).
+_SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
+# Shear direction -> the bending axis passed to the engine ("x" = vertical shear,
+# stress varies with y; "y" = horizontal shear, stress varies with x).
+_SHEAR_AXES = {
+    "Vertical shear (bending about x)": "x",
+    "Horizontal shear (bending about y)": "y",
+}
+# Tension face -> tension_low (True when the tension face is the low-coordinate side).
+_SHEAR_TENSION = {"Bottom / left face": True, "Top / right face": False}
 
 st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
 
@@ -1281,6 +1294,14 @@ _ELASTIC_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_cw", "sls_fctm", "sls_phi", "sls_bond", "sls_code", "sls_member",
 )
+# Shear inputs. Folded into the overall signature (not the plastic/elastic split)
+# so a shear-only change marks the results stale without forcing the bending
+# analyses to recompute; the shear resistance itself is cheap and recomputed on
+# every Calculate. Its geometry/fck/axial dependencies already sit in the shared
+# and plastic parts of the signature.
+_SHEAR_SIG_KEYS = (
+    "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
+)
 
 
 def build_inputs():
@@ -1406,6 +1427,44 @@ def build_inputs():
              "affects the fine system only (the coarse system uses the centroid-"
              "matched effective area, not hc,ef). Ignored for the base EN 1992-1-1 "
              "code.")
+
+    aset.markdown("**Shear without shear reinforcement (VRd,c)**")
+    aset.caption("Design shear resistance of a member not requiring shear "
+                 "reinforcement (EN 1992-1-1 sec. 6.2.2). A ULS check of the applied "
+                 "shear VEd; the axial term uses the plastic (ULS) axial force N.")
+    shear_on = _seeded_checkbox(
+        aset, "Check shear capacity", False, "shear_on",
+        help="Compute VRd,c and the utilisation VEd/VRd,c. Members that need "
+             "designed shear reinforcement (VEd > VRd,c) are covered in a later "
+             "addition.")
+    shear_method = _seeded_selectbox(
+        aset, "Shear method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
+        key="shear_method", disabled=not shear_on,
+        help="Code edition for the shear rules. The DK NA:2024 raises the lower "
+             "bound to v_min = (0.051/gamma_c)*k^1.5*sqrt(fck); CRd,c = 0.18/gamma_c "
+             "and k1 = 0.15 are the recommended values in both. The strain-based "
+             "EN 1992-1-1:2023 method is added in a later phase.")
+    shear_axis = _seeded_selectbox(
+        aset, "Shear direction", list(_SHEAR_AXES),
+        next(iter(_SHEAR_AXES)), key="shear_axis", disabled=not shear_on,
+        help="The plane the shear acts in. Vertical shear (bending about x) uses "
+             "the section depth in y; horizontal shear (about y) uses the width in "
+             "x. Sector derives the effective depth d and the web width from this.")
+    shear_tension = _seeded_selectbox(
+        aset, "Tension face", list(_SHEAR_TENSION), next(iter(_SHEAR_TENSION)),
+        key="shear_tension", disabled=not shear_on,
+        help="Which face carries tension under the accompanying bending. The "
+             "tension reinforcement Asl is the longitudinal bars on that side of "
+             "the section centroid, and d is measured from the opposite fibre.")
+    shear_V = _seeded_number(
+        aset, r"Applied shear $V_{Ed}$ (kN)", 0.0, 100000.0, 0.0, 10.0, "shear_V",
+        disabled=not shear_on, help="Design shear force at the section (magnitude).")
+    shear_bw = _seeded_number(
+        aset, r"Web width $b_w$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0, "shear_bw",
+        disabled=not shear_on,
+        help="Smallest web width in the tension zone. 0 derives it from the outline "
+             "(minimum solid width over the effective depth); enter a value for a "
+             "curved section, where the automatic width is unreliable.")
 
     sec = s.expander("Section", expanded=True)
     sec.caption("The section is a set of explicit points (the source of truth). "
@@ -1648,7 +1707,7 @@ def build_inputs():
     shared_sig = geom_sig + _get(_SHARED_SIG_KEYS)
     plastic_sig = shared_sig + _get(_PLASTIC_SIG_KEYS)
     elastic_sig = shared_sig + _get(_ELASTIC_SIG_KEYS)
-    sig = plastic_sig + elastic_sig
+    sig = plastic_sig + elastic_sig + _get(_SHEAR_SIG_KEYS)
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
     # Fill the reserved Back-to-analysis slot now that every panel has rendered, so
@@ -1671,6 +1730,10 @@ def build_inputs():
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
+                shear_on=shear_on, shear_method=shear_method,
+                shear_axis=_SHEAR_AXES[shear_axis],
+                shear_tension=_SHEAR_TENSION[shear_tension],
+                shear_V=shear_V, shear_bw=shear_bw,
                 mode=mode, extent=extent, signature=sig,
                 plastic_sig=plastic_sig, elastic_sig=elastic_sig)
 
@@ -1709,6 +1772,30 @@ def _crack_dict(cw):
                 phi=cw.phi, cover=cw.cover, gov_bar=cw.gov_bar + 1, coarse=cw.coarse,
                 edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
                 sr_max_geometric=cw.sr_max_geometric)
+
+
+def _gross_area_centroid(outer, holes):
+    """Net concrete area (m2) and its centroid ``(cx, cy)`` in metres: the outline
+    minus the voids, from the exact polygon moments. Orientation-independent -- the
+    centroid ``sx/area`` is unchanged by a sign flip and each area is taken positive.
+    Returns ``(0, 0, 0)`` for a degenerate section."""
+    mo = geometry.area_moments(outer)
+    a = abs(mo.area)
+    if a <= 0.0:
+        return 0.0, 0.0, 0.0
+    cx, cy = mo.sx / mo.area, mo.sy / mo.area
+    area, mx, my = a, cx * a, cy * a
+    for h in holes or []:
+        mh = geometry.area_moments(h)
+        ah = abs(mh.area)
+        if ah <= 0.0:
+            continue
+        area -= ah
+        mx -= (mh.sx / mh.area) * ah
+        my -= (mh.sy / mh.area) * ah
+    if area <= 0.0:
+        return a, cx, cy
+    return area, mx / area, my / area
 
 
 def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
@@ -1932,6 +2019,29 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     crack_coarse=_crack_dict(_cw(cr_l.cracked_state, inp["nl"], 0.4, True)),
                     crack_short_coarse=_crack_dict(_cw(short_state, inp["ns"], 0.6, True)),
                 )
+    # Shear resistance without shear reinforcement (VRd,c). An independent ULS check,
+    # recomputed on every Calculate whenever enabled (cheap; no plastic/elastic
+    # reuse). The axial term uses the plastic (ULS) axial force N (tension-positive),
+    # converted to the code's compression-positive sigma_cp at the boundary.
+    if inp.get("shear_on"):
+        code = _SHEAR_CODES.get(inp["shear_method"], codes.EC2_2005_DKNA)
+        axis, tension_low = inp["shear_axis"], inp["shear_tension"]
+        ac, cx, cy = _gross_area_centroid(inp["outer"], inp["holes"])
+        centroid_coord = cy if axis == "x" else cx
+        asl, cg = shear.tension_reinforcement(inp["bars"], axis, tension_low,
+                                              centroid_coord)
+        d = shear.effective_depth(inp["outer"], axis, tension_low, cg)
+        bw_auto = shear.min_web_width(inp["outer"], inp["holes"], axis)
+        bw = inp["shear_bw"] if inp["shear_bw"] > 0.0 else bw_auto
+        fck = inp["concrete"].fck
+        res = shear.vrd_c(fck, code, bw, d, asl, -inp["P_pl"], ac)
+        v_ed = inp["shear_V"]
+        util = (v_ed / res["vrd_c"]) if res["vrd_c"] > 0.0 else math.inf
+        out["shear"] = dict(res=res, v_ed=v_ed, util=util, axis=axis,
+                            tension_low=tension_low, bw=bw, bw_auto=bw_auto,
+                            bw_user=bool(inp["shear_bw"] > 0.0), d=d, asl=asl,
+                            ac=ac, fck=fck, n_ed=inp["P_pl"],
+                            method=inp["shear_method"])
     return out
 
 
@@ -1987,7 +2097,7 @@ def _radial_util(mx, my, ax, ay):
 # ---------------------------------------------------------------------------
 
 VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results",
-         "N-M Interaction"]
+         "N-M Interaction", "Shear"]
 
 
 def _memo_fig(name, sig, build):
@@ -2438,6 +2548,63 @@ def _crack_width_panel(e):
                    f"members, fine system only).")
 
 
+def shear_view(inp, results):
+    """Shear resistance without shear reinforcement (VRd,c) and the utilisation.
+
+    Reports the resistance, the derived geometry (effective depth, web width,
+    tension reinforcement) and the intermediate quantities of EN 1992-1-1 sec.
+    6.2.2(1), then the utilisation VEd/VRd,c.
+    """
+    if not results or "shear" not in results:
+        if not inp.get("shear_on"):
+            st.info("Enable 'Check shear capacity' in Analysis & Result Settings, "
+                    "then press Calculate.")
+        else:
+            st.info("Press Calculate to run the shear check.")
+        return
+    sh = results["shear"]
+    res = sh["res"]
+    axis_lbl = ("Vertical (bending about x)" if sh["axis"] == "x"
+                else "Horizontal (bending about y)")
+    face_lbl = "bottom / left" if sh["tension_low"] else "top / right"
+    if not res["valid"]:
+        st.warning("VRd,c is zero -- there is no tension reinforcement on the chosen "
+                   "face, or the derived effective depth / web width is zero. Add "
+                   "tension bars on that face and check the geometry (or enter bw).")
+    util = sh["util"]
+    ok = math.isfinite(util) and util <= 1.0
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Applied VEd", f"{sh['v_ed']:.3f} kN")
+    m2.metric("Resistance VRd,c", f"{res['vrd_c']:.3f} kN")
+    util_txt = "inf" if not math.isfinite(util) else f"{util * 100:.1f} %"
+    m3.metric("Utilisation VEd/VRd,c", util_txt, delta=("OK" if ok else "Over limit"),
+              delta_color=("normal" if ok else "inverse"))
+    st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
+               f"{sh['method']}. The axial term uses the plastic (ULS) axial force "
+               f"N = {sh['n_ed']:.1f} kN (tension-positive).")
+
+    bw_note = ("user input" if sh["bw_user"]
+               else f"auto = min solid width {sh['bw_auto']:.1f} mm")
+    st.markdown("**Derived quantities**")
+    st.dataframe(
+        {"Quantity": ["Effective depth d", "Web width bw", "Tension reinf. Asl",
+                      f"Reinf. ratio {_RHO}l", "Size factor k",
+                      f"Axial stress {_SIGMA}cp", "Concrete area Ac",
+                      "CRd,c", "vmin", "fcd"],
+         "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
+                   f"{sh['asl']:.1f} mm2", f"{res['rho_l']:.4f} ({chr(0x2264)} 0.02)",
+                   f"{res['k']:.3f} ({chr(0x2264)} 2.0)",
+                   f"{res['sigma_cp']:.3f} MPa ({chr(0x2264)} 0.2 fcd)",
+                   f"{sh['ac'] * 1e6:.0f} mm2", f"{res['crd_c']:.4f}",
+                   f"{res['vmin']:.3f} MPa", f"{res['fcd']:.2f} MPa"]},
+        hide_index=True, width="stretch")
+    st.caption(
+        "VRd,c = max[ CRd,c*k*(100*" + _RHO + "l*fck)^(1/3) + k1*" + _SIGMA +
+        "cp , vmin + k1*" + _SIGMA + "cp ] * bw * d, with k1 = "
+        f"{res['k1']:.2f}. Asl is the tension reinforcement on the chosen face, "
+        "assumed fully anchored (>= lbd + d) beyond the section.")
+
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
@@ -2530,7 +2697,7 @@ _generate_report(inp)   # builds the PDF when the Report panel's Generate was pr
 
 results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
-if stale and view in ("Plastic Results", "Elastic Results", "N-M Interaction"):
+if stale and view in ("Plastic Results", "Elastic Results", "N-M Interaction", "Shear"):
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
 for _section_err in (inp.get("void_error"), inp.get("steel_error")):
@@ -2545,5 +2712,7 @@ elif view == "Plastic Results":
     plastic_view(inp, results)
 elif view == "N-M Interaction":
     interaction_view(inp, results)
+elif view == "Shear":
+    shear_view(inp, results)
 else:
     elastic_view(inp, results)
