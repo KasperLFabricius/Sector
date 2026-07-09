@@ -208,6 +208,13 @@ def _fmt(v, nd=3):
     return f"{v:.{nd}f}"
 
 
+def _pct(x):
+    """A utilisation fraction as a percentage string, or 'inf' when unbounded."""
+    if x is None or (isinstance(x, float) and not math.isfinite(x)):
+        return "inf"
+    return f"{x * 100:.1f} %"
+
+
 class ReportBuilder:
     """Builds the PDF into ``buffer`` from ``meta``, ``inp`` and ``out``."""
 
@@ -321,6 +328,10 @@ class ReportBuilder:
             self._tick(0.9, "Torsion resistance...")
             self.flow.append(PageBreak())
             self._torsion()
+        if self.out.get("combined", {}).get("valid"):
+            self._tick(0.93, "Combined M-V-T...")
+            self.flow.append(PageBreak())
+            self._combined()
         self._appendix()
         self._tick(0.92, "Writing PDF...")
         footer = f"Sector {self.version}  -  Sweco".strip()
@@ -872,6 +883,47 @@ class ReportBuilder:
                     f"&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
                     f"{_fmt(links['delta_ftd'], 1)} kN (6.18) that the tension "
                     f"reinforcement must also carry.")
+
+    def _combined(self):
+        c = self.out["combined"]
+        self._h1("Combined bending + shear + torsion (M-V-T)")
+        self._p("The three checks tied together under the shared edition <b>"
+                + str(c["method"]) + "</b>. The bending utilisation is the plastic "
+                "M-M envelope at the applied N; the shear and torsion utilisations "
+                "are the stand-alone checks.")
+        rows = [["Action", "Utilisation"],
+                ["Bending M", _pct(c["r_m"])],
+                ["Shear V", _pct(c["r_v"])],
+                ["Torsion T", _pct(c["r_t"])]]
+        self._table(rows, [90 * mm, 60 * mm])
+        self._h2("DK NA 6.3.2(6): sum(SEd/SRd) &#8804; 1")
+        verdict = "OK" if c["dkna_ok"] else "EXCEEDED"
+        if c["m_v_independent"]:
+            expr = "max(r<sub>M</sub> + r<sub>T</sub>, r<sub>V</sub> + r<sub>T</sub>)"
+            note = ("M and V checked separately (shear longitudinal steel provided); "
+                    "N is folded into the bending utilisation.")
+        else:
+            expr = "r<sub>M</sub> + r<sub>V</sub> + r<sub>T</sub>"
+            note = "each action alone; N folded into the bending utilisation."
+        self._formula(expr, subst=note,
+                      result=f"sum(SEd/SRd) = {_pct(c['dkna_sum'])}  ({verdict})")
+        cr = c.get("crushing")
+        if cr is not None:
+            self._h2("Concrete crushing (6.29)")
+            val = cr["value"]
+            vv = "OK" if (math.isfinite(val) and val <= 1.0) else "EXCEEDED"
+            self._formula(
+                "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
+                ref="EN 1992-1-1 (6.29)",
+                subst=f"{_fmt(cr['t_ed'], 3)}/{_fmt(cr['trd_max'], 3)} + "
+                      f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}",
+                result=f"{_pct(val)}  ({vv})")
+            self._small(f"At a common strut cot theta = {_fmt(cr['cot'], 2)} "
+                        f"({_fmt(cr['theta_deg'], 1)} deg).")
+        self._small(f"Additional longitudinal steel: torsion sum A<sub>sl</sub> = "
+                    f"{_fmt(c['asl_torsion'], 0)} mm<sup>2</sup> round the perimeter "
+                    f"(6.28); shear &#916;F<sub>td</sub> = {_fmt(c['delta_ftd'], 1)} "
+                    "kN on the tension chord (6.18) -- both beyond the bending steel.")
 
     def _torsion(self):
         t = self.out["torsion"]

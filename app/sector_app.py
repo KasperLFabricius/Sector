@@ -30,8 +30,8 @@ import project_io  # noqa: E402
 import viz  # noqa: E402
 from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import (codes, geometry, kernels, material_presets as mp,  # noqa: E402
-                    shear, templates, torsion)
+from sector import (codes, combined, geometry, kernels,  # noqa: E402
+                    material_presets as mp, shear, templates, torsion)
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import (plastic_capacity_at_angle, solve_interaction,  # noqa: E402
                             solve_plastic)
@@ -1309,6 +1309,7 @@ _SHEAR_SIG_KEYS = (
     "torsion_on", "torsion_method", "torsion_T", "torsion_stirrup_dia",
     "torsion_stirrup_s", "torsion_fywk", "torsion_fyk_long", "torsion_tef",
     "torsion_cot_min", "torsion_cot_max",
+    "combined_on", "combined_method", "combined_mv_independent",
 )
 
 
@@ -1436,6 +1437,28 @@ def build_inputs():
              "matched effective area, not hc,ef). Ignored for the base EN 1992-1-1 "
              "code.")
 
+    aset.markdown("**Combined M-V-T interaction**")
+    aset.caption("Tie the bending (plastic M), shear (V) and torsion (T) checks "
+                 "together under one consistent code edition (6.3.2). Enable Plastic "
+                 "(or Both), the shear check and the torsion check as well.")
+    combined_on = _seeded_checkbox(
+        aset, "Check combined M-V-T", False, "combined_on",
+        help="Evaluate the shear+torsion crushing interaction (6.29) and the DK NA "
+             "sum(SEd/SRd) <= 1 rule (6.3.2(6)) across the plastic, shear and torsion "
+             "results. While on, the shear and torsion method selectors are locked to "
+             "the shared edition below.")
+    combined_method = _seeded_selectbox(
+        aset, "Combined edition (shared)", list(_SHEAR_CODES),
+        codes.EC2_2005_DKNA.label, key="combined_method", disabled=not combined_on,
+        help="The single code edition used for the shear and torsion checks while "
+             "Combined is on (their own method selectors are locked to this).")
+    combined_mv_independent = _seeded_checkbox(
+        aset, "Shear longitudinal steel provided (M & V separate)", False,
+        "combined_mv_independent", disabled=not combined_on,
+        help="DK NA 6.3.2(6): when the longitudinal steel for shear (beyond bending) "
+             "is present, M and V are not summed in sum(SEd/SRd) -- two independent "
+             "checks (M+T and V+T) are made and the governing one taken.")
+
     aset.markdown("**Shear without shear reinforcement (VRd,c)**")
     aset.caption("Design shear resistance of a member not requiring shear "
                  "reinforcement (EN 1992-1-1 sec. 6.2.2). A ULS check of the applied "
@@ -1449,11 +1472,13 @@ def build_inputs():
              "addition.")
     shear_method = _seeded_selectbox(
         aset, "Shear method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
-        key="shear_method", disabled=not shear_on,
+        key="shear_method", disabled=(not shear_on) or combined_on,
         help="Code edition for the shear rules. The DK NA:2024 raises the lower "
              "bound to v_min = (0.051/gamma_c)*k^1.5*sqrt(fck); CRd,c = 0.18/gamma_c "
              "and k1 = 0.15 are the recommended values in both. The strain-based "
              "EN 1992-1-1:2023 method is added in a later phase.")
+    if combined_on:
+        aset.caption(f"Shear method set by Combined: {combined_method}")
     shear_axis = _seeded_selectbox(
         aset, "Shear direction", list(_SHEAR_AXES),
         next(iter(_SHEAR_AXES)), key="shear_axis", disabled=not shear_on,
@@ -1526,10 +1551,12 @@ def build_inputs():
              "(6.29) when links are also defined.")
     torsion_method = _seeded_selectbox(
         aset, "Torsion method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
-        key="torsion_method", disabled=not torsion_on,
+        key="torsion_method", disabled=(not torsion_on) or combined_on,
         help="Code edition for the torsion rules. The DK NA:2024 uses its plasticity "
              "pure-torsion strut factor nu_t = 0.7*(0.7 - fck/200) (5.104 NA) in "
              "place of the recommended nu = 0.6*(1 - fck/250).")
+    if combined_on:
+        aset.caption(f"Torsion method set by Combined: {combined_method}")
     torsion_T = _seeded_number(
         aset, r"Applied torsion $T_{Ed}$ (kNm)", 0.0, 100000.0, 0.0, 5.0, "torsion_T",
         disabled=not torsion_on, help="Design torsional moment at the section.")
@@ -1840,7 +1867,8 @@ def build_inputs():
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
-                shear_on=shear_on, shear_method=shear_method,
+                shear_on=shear_on,
+                shear_method=(combined_method if combined_on else shear_method),
                 shear_axis=_SHEAR_AXES[shear_axis],
                 shear_tension=_SHEAR_TENSION[shear_tension],
                 shear_V=shear_V, shear_bw=shear_bw,
@@ -1848,11 +1876,14 @@ def build_inputs():
                 shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
                 shear_fywk=shear_fywk, shear_cot_min=shear_cot_min,
                 shear_cot_max=shear_cot_max,
-                torsion_on=torsion_on, torsion_method=torsion_method,
+                torsion_on=torsion_on,
+                torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_T=torsion_T, torsion_stirrup_dia=torsion_stirrup_dia,
                 torsion_stirrup_s=torsion_stirrup_s, torsion_fywk=torsion_fywk,
                 torsion_fyk_long=torsion_fyk_long, torsion_tef=torsion_tef,
                 torsion_cot_min=torsion_cot_min, torsion_cot_max=torsion_cot_max,
+                combined_on=combined_on, combined_method=combined_method,
+                combined_mv_independent=combined_mv_independent,
                 mode=mode, extent=extent, signature=sig,
                 plastic_sig=plastic_sig, elastic_sig=elastic_sig)
 
@@ -2306,6 +2337,35 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 cot=cot_c, theta_deg=math.degrees(math.atan(1.0 / cot_c)),
                 trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed, v_ed=v_ed_c,
                 value=inter)
+
+    # Combined bending + shear + torsion (M-V-T), sec. 6.3.2. Ties the three checks
+    # together: the concrete-crushing interaction (6.29, from the torsion block) and
+    # the DK NA sum(SEd/SRd) <= 1 rule (6.3.2(6)). Requires the plastic utilisation
+    # (M, at the applied N), the shear utilisation (V) and the torsion utilisation (T).
+    if inp.get("combined_on"):
+        pl = out.get("plastic")
+        sh = out.get("shear")
+        to = out.get("torsion")
+        r_m = pl.get("util") if pl else None
+        have_m = r_m is not None
+        have_v = sh is not None and sh["res"]["valid"]
+        have_t = to is not None and to["valid"]
+        if have_m and have_v and have_t:
+            sl = sh.get("links")
+            r_v = sl["util"] if sl is not None else sh["util"]
+            r_t = to["util"]
+            indep = bool(inp["combined_mv_independent"])
+            dk_sum = combined.dkna_sum(r_m, r_v, r_t, m_v_independent=indep)
+            out["combined"] = dict(
+                valid=True, method=inp["combined_method"], r_m=r_m, r_v=r_v, r_t=r_t,
+                m_v_independent=indep, dkna_sum=dk_sum, dkna_ok=dk_sum <= 1.0 + 1e-9,
+                crushing=to.get("interaction"),
+                asl_torsion=to["asl_req"],
+                delta_ftd=(sl["delta_ftd"] if sl is not None else 0.0),
+                links=sl is not None)
+        else:
+            out["combined"] = dict(valid=False, have_m=have_m, have_v=have_v,
+                                   have_t=have_t, method=inp["combined_method"])
     return out
 
 
@@ -2361,7 +2421,7 @@ def _radial_util(mx, my, ax, ay):
 # ---------------------------------------------------------------------------
 
 VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results",
-         "N-M Interaction", "Shear", "Torsion"]
+         "N-M Interaction", "Shear", "Torsion", "M-V-T Interaction"]
 
 
 def _memo_fig(name, sig, build):
@@ -3002,6 +3062,85 @@ def torsion_view(inp, results):
             "differ from the stand-alone values above.")
 
 
+def _pct(x):
+    """A utilisation as a percentage string, or 'inf' when unbounded."""
+    return "inf" if (x is None or not math.isfinite(x)) else f"{x * 100:.1f} %"
+
+
+def combined_view(inp, results):
+    """Combined M-V-T interaction: the concrete-crushing (6.29) and DK NA
+    sum(SEd/SRd) checks across the plastic (M), shear (V) and torsion (T) results."""
+    if not results or "combined" not in results:
+        if not inp.get("combined_on"):
+            st.info("Enable 'Check combined M-V-T' in Analysis & Result Settings "
+                    "(with Plastic, the shear check and the torsion check), then "
+                    "press Calculate.")
+        else:
+            st.info("Press Calculate to run the combined check.")
+        return
+    c = results["combined"]
+    if not c["valid"]:
+        missing = []
+        if not c.get("have_m"):
+            missing.append("plastic bending (M) with a utilisation "
+                           "(enable Plastic and 'Check utilisation')")
+        if not c.get("have_v"):
+            missing.append("a valid shear check (V)")
+        if not c.get("have_t"):
+            missing.append("a valid torsion check (T)")
+        st.warning("The combined check needs all three actions. Missing: "
+                   + "; ".join(missing) + ".")
+        return
+    st.caption(f"Shared code edition: {c['method']}.")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Bending M", _pct(c["r_m"]))
+    m2.metric("Shear V", _pct(c["r_v"]))
+    m3.metric("Torsion T", _pct(c["r_t"]))
+    st.caption("Each is the action's utilisation acting alone (M is the plastic M-M "
+               "envelope at the applied N; V and T the shear and torsion checks).")
+
+    st.divider()
+    st.markdown("**DK NA 6.3.2(6): " + chr(0x03A3) + "(SEd/SRd) <= 1**")
+    ok = c["dkna_ok"]
+    d1, d2 = st.columns([1, 2])
+    d1.metric(chr(0x03A3) + "(SEd/SRd)", _pct(c["dkna_sum"]),
+              delta=("OK" if ok else "Over limit"),
+              delta_color=("normal" if ok else "inverse"))
+    if c["m_v_independent"]:
+        d2.caption("M and V are checked separately (shear longitudinal steel "
+                   "provided): sum = max(M+T, V+T). N is folded into the bending "
+                   "utilisation.")
+    else:
+        d2.caption("sum = M + V + T (each alone; N folded into the bending "
+                   "utilisation). Turn on 'M & V separate' if the shear longitudinal "
+                   "steel beyond bending is provided (then sum = max(M+T, V+T)).")
+
+    cr = c.get("crushing")
+    if cr is not None:
+        st.divider()
+        st.markdown("**Concrete crushing (6.29): TEd/TRd,max + VEd/VRd,max <= 1**")
+        val = cr["value"]
+        ok_c = math.isfinite(val) and val <= 1.0
+        cc1, cc2 = st.columns([1, 2])
+        cc1.metric("Sum", _pct(val), delta=("OK" if ok_c else "Over limit"),
+                   delta_color=("normal" if ok_c else "inverse"))
+        cc2.caption(f"At a common strut cot {_THETA} = {cr['cot']:.2f} "
+                    f"({cr['theta_deg']:.1f} deg). TRd,max = {cr['trd_max']:.1f} kNm, "
+                    f"VRd,max = {cr['vrd_max']:.1f} kN.")
+        st.plotly_chart(viz.vt_interaction_figure(
+            cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"]), width="stretch")
+    else:
+        st.caption("The shear+torsion crushing interaction (6.29) needs shear links "
+                   "(for VRd,max); enable them in the shear block.")
+
+    st.divider()
+    st.markdown("**Longitudinal reinforcement demand (additional)**")
+    st.caption(f"Torsion needs {chr(0x03A3)}Asl = {c['asl_torsion']:.0f} mm2 "
+               "distributed round the tube perimeter (6.28); the shear adds "
+               f"{_DELTA}Ftd = {c['delta_ftd']:.1f} kN on the tension chord (6.18). "
+               "Both are in ADDITION to the bending reinforcement.")
+
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
@@ -3095,7 +3234,7 @@ _generate_report(inp)   # builds the PDF when the Report panel's Generate was pr
 results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
 if stale and view in ("Plastic Results", "Elastic Results", "N-M Interaction",
-                      "Shear", "Torsion"):
+                      "Shear", "Torsion", "M-V-T Interaction"):
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
 for _section_err in (inp.get("void_error"), inp.get("steel_error")):
@@ -3114,5 +3253,7 @@ elif view == "Shear":
     shear_view(inp, results)
 elif view == "Torsion":
     torsion_view(inp, results)
+elif view == "M-V-T Interaction":
+    combined_view(inp, results)
 else:
     elastic_view(inp, results)

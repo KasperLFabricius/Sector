@@ -62,6 +62,8 @@ SCALAR_KEYS = [
     "torsion_on", "torsion_method", "torsion_T", "torsion_stirrup_dia",
     "torsion_stirrup_s", "torsion_fywk", "torsion_fyk_long", "torsion_tef",
     "torsion_cot_min", "torsion_cot_max",
+    # Combined M-V-T interaction.
+    "combined_on", "combined_method", "combined_mv_independent",
     "label_scale", "label_min_gap",
     # Report metadata.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev", "rep_author",

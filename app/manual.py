@@ -539,6 +539,19 @@ def manual_blocks() -> list:
          "$\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA). When shear links are also "
          "defined, the combined concrete-crushing check "
          "$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\leq 1$ (6.29) is added.")
+    h2("Combined M-V-T interaction")
+    md("With **Check combined M-V-T** on, Sector ties the bending (plastic $M$), "
+       "shear ($V$) and torsion ($T$) checks together under **one shared code "
+       "edition** (the per-check method selectors are then locked to it). It reports "
+       "the concrete-crushing interaction (6.29) and the DK NA "
+       "$\\sum(S_{Ed}/S_{Rd}) \\leq 1$ rule (6.3.2(6)), and lists the additional "
+       "longitudinal steel that shear and torsion demand. All three checks (Plastic, "
+       "Shear, Torsion) must be enabled.")
+    call("standard", "DK NA 6.3.2(6): $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ sums each "
+         "action's utilisation (the axial $N$ is folded into the bending term). If "
+         "the longitudinal steel for shear beyond bending is provided, tick **M & V "
+         "separate** -- then $M$ and $V$ are not summed together but checked in two "
+         "independent investigations, $\\max(M+T,\\,V+T)$.")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
@@ -579,6 +592,10 @@ def manual_blocks() -> list:
        "cracking $T_{Rd,c}$ and the utilisation, plus the derived tube ($A$, $u$, "
        "$t_{ef}$, $A_k$, $u_k$) and the required $\\sum A_{sl}$. When shear links "
        "are also defined it adds the combined shear+torsion crushing check.")
+    h2("M-V-T Interaction results")
+    md("The **M-V-T Interaction** view shows the $M$, $V$ and $T$ utilisations, the "
+       "DK NA $\\sum(S_{Ed}/S_{Rd})$ sum, the concrete-crushing interaction with a "
+       "$V$-$T$ envelope diagram, and the additional longitudinal steel demand.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -914,6 +931,25 @@ def manual_blocks() -> list:
        "$\\cot\\theta = 1.75$ the stirrups and struts meet at "
        "$T_{Rd} \\approx 76.4$ kN.m, with $T_{Rd,c} \\approx 31$ kN.m.")
 
+    h1("Combined M-V-T interaction")
+    md("Bending, shear and torsion act together, so their checks are tied together "
+       "under one code edition (6.3.2). Two interactions apply. The concrete web "
+       "struts carry both shear and torsion, limited by\n\n"
+       "$$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\le 1 \\quad(6.29),$$\n\n"
+       "checked at a common strut angle near 45 degrees. The DK NA:2024 (6.3.2(6)) "
+       "adds a general rule over the acting sectional forces,\n\n"
+       "$$\\sum (S_{Ed}/S_{Rd}) \\le 1,$$\n\n"
+       "each $S_{Rd}$ being the resistance to that force acting alone. Sector takes "
+       "the bending utilisation from the plastic $M$-$M$ envelope at the applied "
+       "$N$ (so $N$ is folded in), the shear from $V_{Ed}/V_{Rd}$ and the torsion "
+       "from $T_{Ed}/T_{Rd}$.")
+    call("standard", "DK NA 6.3.2(6): if the longitudinal reinforcement provided for "
+         "shear (beyond bending) is present, $M$ and $V$ are **not** summed at the "
+         "same time -- two independent checks are made and the governing "
+         "$\\max(M+T,\\,V+T)$ taken. Torsion also needs its longitudinal steel "
+         "$\\sum A_{sl}$ round the perimeter and the shear its $\\Delta F_{td}$ on "
+         "the tension chord, both beyond the bending reinforcement.")
+
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "
        "axial force **at each swept angle** to a tight residual, "
@@ -944,7 +980,8 @@ def manual_blocks() -> list:
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
            ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"],
            ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"],
-           ["Torsion (thin-walled tube)", "DS/EN 1992-1-1 6.3 + DK NA 5.6.1(3)P / 6.3.2(6)"]])
+           ["Torsion (thin-walled tube)", "DS/EN 1992-1-1 6.3 + DK NA 5.6.1(3)P / 6.3.2(6)"],
+           ["Combined M-V-T", "DS/EN 1992-1-1 6.3.2(4) + DK NA 6.3.2(6)"]])
 
     h1("Key assumptions & limitations")
     md("- **One plane section.** Plane sections remain plane; the strain field is "
