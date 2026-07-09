@@ -191,6 +191,18 @@ class DesignCode:
             return max(0.7 - fck / 200.0, 0.45)
         return 0.6 * (1.0 - fck / 250.0)
 
+    def torsion_nu(self, fck: float) -> float:
+        """Concrete-strut effectiveness factor ``nu`` for torsion (TRd,max, 6.30).
+
+        Recommended ``nu = 0.6*(1 - fck/250)`` (via 6.2.2(6)); the DK NA:2024 uses its
+        plasticity pure-torsion factor ``nu_t = 0.7*(0.7 - fck/200)`` (5.104 NA), a
+        further 0.7 reduction on the pure-shear ``nu_v`` for the circulatory shear
+        flow of torsion.
+        """
+        if self.shear_nu_v:
+            return 0.7 * (0.7 - fck / 200.0)
+        return 0.6 * (1.0 - fck / 250.0)
+
     def shear_alpha_cw(self, sigma_cp: float, fcd: float) -> float:
         """Compression-chord coefficient ``alpha_cw`` (6.11N).
 

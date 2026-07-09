@@ -317,6 +317,44 @@ def test_report_without_shear_omits_the_section():
     assert "Shear resistance" not in txt
 
 
+def _torsion_out(interaction=False):
+    tube = {"A": 0.18, "u": 1.8, "tef": 100.0, "Ak": 0.1, "uk": 1.4,
+            "tef_auto": 100.0, "tef_capped": False, "tef_user": False,
+            "hollow": False, "valid": True}
+    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4, "trd_c": 31.0,
+           "cot": 1.751, "theta_deg": 29.7, "util": 40.0 / 76.4, "asl_req": 1176.0,
+           "t_ed": 40.0, "fcd": 24.14, "fywd": 416.67, "fyd_long": 416.67,
+           "nu": 0.3675, "alpha_cw": 1.0, "fctd": 1.55, "asw_t": 78.5,
+           "asw_over_s": 0.5236, "dia": 10.0, "s": 150.0, "cot_min": 1.0,
+           "cot_max": 2.5, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+           "governs": "stirrups (TRd,s)", "valid": True, "cot_limit_lo": 1.0,
+           "cot_limit_hi": 2.5, "out_of_limits": False}
+    if interaction:
+        out["interaction"] = dict(cot=1.0, theta_deg=45.0, trd_max=88.7,
+                                  vrd_max=650.0, t_ed=40.0, v_ed=150.0,
+                                  value=40.0 / 88.7 + 150.0 / 650.0)
+    return out
+
+
+def test_report_includes_torsion_section():
+    out = _out()
+    out["torsion"] = _torsion_out()
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Torsion" in txt
+    assert "6.30" in txt and "6.28" in txt          # the clause formulae
+    assert "76.4" in txt                            # TRd
+    assert chr(0x3B8) in txt                        # theta glyph rendered
+    assert "1176" in txt                            # required Asl
+
+
+def test_report_torsion_shows_combined_interaction():
+    out = _out()
+    out["torsion"] = _torsion_out(interaction=True)
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "6.29" in txt                            # the combined crushing clause
+    assert "Combined shear" in txt
+
+
 def _links_out():
     return {"res": {"vrd_s": 540.0, "vrd_max": 648.9, "vrd": 540.0, "cot": 2.5,
                     "theta_deg": 21.8, "z": 495.0, "fywd": 416.67, "nu1": 0.525,

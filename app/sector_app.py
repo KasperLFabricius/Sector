@@ -30,7 +30,8 @@ import project_io  # noqa: E402
 import viz  # noqa: E402
 from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import codes, geometry, kernels, material_presets as mp, shear, templates  # noqa: E402
+from sector import (codes, geometry, kernels, material_presets as mp,  # noqa: E402
+                    shear, templates, torsion)
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import (plastic_capacity_at_angle, solve_interaction,  # noqa: E402
                             solve_plastic)
@@ -1305,6 +1306,9 @@ _SHEAR_SIG_KEYS = (
     "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
     "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_cot_min", "shear_cot_max",
+    "torsion_on", "torsion_method", "torsion_T", "torsion_stirrup_dia",
+    "torsion_stirrup_s", "torsion_fywk", "torsion_fyk_long", "torsion_tef",
+    "torsion_cot_min", "torsion_cot_max",
 )
 
 
@@ -1509,6 +1513,60 @@ def build_inputs():
         help="Upper bound for the auto-optimised strut angle (cot(theta) = 2.5 is the "
              "code maximum; 1.0 corresponds to a 45-degree strut). Sector picks the "
              "angle in [min, max] that maximises VRd = min(VRd,s, VRd,max).")
+
+    aset.markdown("**Torsion (TRd, thin-walled tube)**")
+    aset.caption("Torsion resistance from the thin-walled tube idealisation "
+                 "(EN 1992-1-1 sec. 6.3): closed stirrups TRd,s, strut crushing "
+                 "TRd,max, cracking TRd,c, and the required longitudinal steel. The "
+                 "tube (A, u, tef, Ak, uk) is derived from the outline.")
+    torsion_on = _seeded_checkbox(
+        aset, "Check torsion capacity", False, "torsion_on",
+        help="Compute the torsion resistance TRd = min(TRd,s, TRd,max) and the "
+             "utilisation TEd/TRd, plus the combined shear+torsion crushing check "
+             "(6.29) when links are also defined.")
+    torsion_method = _seeded_selectbox(
+        aset, "Torsion method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
+        key="torsion_method", disabled=not torsion_on,
+        help="Code edition for the torsion rules. The DK NA:2024 uses its plasticity "
+             "pure-torsion strut factor nu_t = 0.7*(0.7 - fck/200) (5.104 NA) in "
+             "place of the recommended nu = 0.6*(1 - fck/250).")
+    torsion_T = _seeded_number(
+        aset, r"Applied torsion $T_{Ed}$ (kNm)", 0.0, 100000.0, 0.0, 5.0, "torsion_T",
+        disabled=not torsion_on, help="Design torsional moment at the section.")
+    _tors = torsion_on
+    torsion_stirrup_dia = _seeded_number(
+        aset, "Closed stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0,
+        "torsion_stirrup_dia", disabled=not _tors,
+        help="Diameter of the closed stirrup forming the torsion tube (one leg area "
+             "Asw = pi/4*dia^2 carries the circulatory shear flow).")
+    torsion_stirrup_s = _seeded_number(
+        aset, "Closed stirrup spacing s (mm)", 10.0, 2000.0, 150.0, 10.0,
+        "torsion_stirrup_s", disabled=not _tors, help="Longitudinal spacing of the "
+        "closed stirrups.")
+    torsion_fywk = _seeded_number(
+        aset, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0,
+        "torsion_fywk", disabled=not _tors,
+        help="Characteristic yield of the closed stirrups (design value fywk/gamma_s).")
+    torsion_fyk_long = _seeded_number(
+        aset, r"Longitudinal yield $f_{yk}$ (MPa)", 100.0, 900.0, 500.0, 10.0,
+        "torsion_fyk_long", disabled=not _tors,
+        help="Characteristic yield of the longitudinal torsion reinforcement, used "
+             "for the required area sum Asl (6.28).")
+    torsion_tef = _seeded_number(
+        aset, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
+        "torsion_tef", disabled=not _tors,
+        help="Effective wall thickness of the tube. 0 derives it as A/u (capped at "
+             "the real wall for a hollow section); enter a value to override.")
+    torsion_cot_min = _seeded_number(
+        aset, r"Strut $\cot\theta$ min (torsion)", 0.5, 5.0, 1.0, 0.1,
+        "torsion_cot_min", disabled=not _tors,
+        help="Lower bound for the auto-optimised torsion strut angle (code range "
+             "1..2.5; outside is warned, not blocked).")
+    torsion_cot_max = _seeded_number(
+        aset, r"Strut $\cot\theta$ max (torsion)", 0.5, 5.0, 2.5, 0.1,
+        "torsion_cot_max", disabled=not _tors,
+        help="Upper bound for the auto-optimised torsion strut angle. Sector picks "
+             "the angle in [min, max] that maximises TRd = min(TRd,s, TRd,max).")
 
     sec = s.expander("Section", expanded=True)
     sec.caption("The section is a set of explicit points (the source of truth). "
@@ -1789,6 +1847,11 @@ def build_inputs():
                 shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
                 shear_fywk=shear_fywk, shear_cot_min=shear_cot_min,
                 shear_cot_max=shear_cot_max,
+                torsion_on=torsion_on, torsion_method=torsion_method,
+                torsion_T=torsion_T, torsion_stirrup_dia=torsion_stirrup_dia,
+                torsion_stirrup_s=torsion_stirrup_s, torsion_fywk=torsion_fywk,
+                torsion_fyk_long=torsion_fyk_long, torsion_tef=torsion_tef,
+                torsion_cot_min=torsion_cot_min, torsion_cot_max=torsion_cot_max,
                 mode=mode, extent=extent, signature=sig,
                 plastic_sig=plastic_sig, elastic_sig=elastic_sig)
 
@@ -2160,6 +2223,76 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                            out_of_limits=bool(cot_min < lo - 1e-9
                                               or cot_max > hi + 1e-9),
                            required=bool(v_ed > res["vrd_c"])))
+
+    # Torsion (thin-walled tube, sec. 6.3). An independent ULS check: the tube
+    # (A, u, tef, Ak, uk) is derived from the outline, the closed stirrups give
+    # TRd,s and the struts TRd,max at the auto-optimised angle, plus the required
+    # longitudinal steel. When shear links are also present the combined V+T
+    # concrete-crushing check (6.29) is evaluated at a common strut angle.
+    if inp.get("torsion_on") and inp["section"] is not None:
+        tcode = _SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
+        fck = inp["concrete"].fck
+        fcd = tcode.concrete_factor(fck) * fck / tcode.gamma_c
+        tac, _tcx, _tcy = _gross_area_centroid(inp["outer"], inp["holes"])
+        sigma_cp = -inp["P_pl"] / tac / 1000.0 if tac > 0.0 else 0.0   # compression +
+        alpha_cw = tcode.shear_alpha_cw(sigma_cp, fcd)
+        tube = torsion.tube_properties(inp["outer"], inp["holes"],
+                                       tef_override=inp["torsion_tef"])
+        fywd_t = inp["torsion_fywk"] / tcode.gamma_s
+        fyd_long = inp["torsion_fyk_long"] / tcode.gamma_s
+        asw_t = templates.bar_area(inp["torsion_stirrup_dia"])
+        asw_over_s_t = (asw_t / inp["torsion_stirrup_s"]
+                        if inp["torsion_stirrup_s"] > 0.0 else 0.0)
+        tcot_min = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
+        tcot_max = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
+        nu_t = tcode.torsion_nu(fck)
+        # Optimum torsion strut angle (same crossover form as shear): a = (Asw/s)*fywd,
+        # b = nu_t*alpha_cw*fcd*tef (tef in mm).
+        a_t = asw_over_s_t * fywd_t
+        b_t = nu_t * alpha_cw * fcd * tube["tef"]
+        cot_t = (shear.optimum_cot_theta(a_t, b_t, tcot_min, tcot_max)
+                 if a_t > 0.0 else max(tcot_min, 1.0))
+        trds = torsion.trd_s(tube["Ak"], fywd_t, asw_over_s_t, cot_t)
+        trdmax = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"], alpha_cw, cot_t)
+        trd = min(trds, trdmax) if asw_over_s_t > 0.0 else trdmax
+        governs_t = "stirrups (TRd,s)" if (asw_over_s_t > 0.0 and trds <= trdmax) \
+            else "crushing (TRd,max)"
+        fctd = 0.7 * codes.fctm(fck) / tcode.gamma_c        # fctk,0.05 / gamma_c
+        trdc = torsion.trd_c(fctd, tube["Ak"], tube["tef"])
+        t_ed = inp["torsion_T"]
+        util_t = (t_ed / trd) if trd > 0.0 else math.inf
+        asl_req = torsion.asl_required(t_ed, tube["uk"], tube["Ak"], fyd_long, cot_t)
+        lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
+        out["torsion"] = dict(
+            tube=tube, trd_s=trds, trd_max=trdmax, trd=trd, trd_c=trdc, cot=cot_t,
+            theta_deg=math.degrees(math.atan(1.0 / cot_t)) if cot_t > 0 else 0.0,
+            util=util_t, asl_req=asl_req, t_ed=t_ed, fcd=fcd, fywd=fywd_t,
+            fyd_long=fyd_long, nu=nu_t, alpha_cw=alpha_cw, fctd=fctd,
+            asw_t=asw_t, asw_over_s=asw_over_s_t, dia=inp["torsion_stirrup_dia"],
+            s=inp["torsion_stirrup_s"], cot_min=tcot_min, cot_max=tcot_max,
+            method=inp["torsion_method"], governs=governs_t, valid=tube["valid"],
+            cot_limit_lo=lo_t, cot_limit_hi=hi_t,
+            out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9))
+        # Combined shear+torsion concrete crushing (6.29): TEd/TRd,max + VEd/VRd,max
+        # <= 1, at a common strut angle. Both TRd,max and VRd,max peak at cot = 1
+        # (theta = 45 deg), so the least-conservative common angle is cot = 1 clamped
+        # to the band. Only when the shear check (with links) is also active.
+        sh_links = out.get("shear", {}).get("links")
+        if sh_links is not None and sh_links["res"]["valid"] and tube["valid"]:
+            cot_c = min(max(1.0, tcot_min), tcot_max)
+            trdmax_c = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"],
+                                       alpha_cw, cot_c)
+            sh = out["shear"]
+            vlk = shear.vrd_links(fck, tcode, sh["bw"], sh["d"], sh_links["asw_over_s"],
+                                  sh_links["fywk"], -inp["P_pl"], sh["ac"],
+                                  cot_c, cot_c)
+            v_ed_c = sh["v_ed"]
+            inter = ((t_ed / trdmax_c if trdmax_c > 0 else math.inf)
+                     + (v_ed_c / vlk["vrd_max"] if vlk["vrd_max"] > 0 else math.inf))
+            out["torsion"]["interaction"] = dict(
+                cot=cot_c, theta_deg=math.degrees(math.atan(1.0 / cot_c)),
+                trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed, v_ed=v_ed_c,
+                value=inter)
     return out
 
 
@@ -2215,7 +2348,7 @@ def _radial_util(mx, my, ax, ay):
 # ---------------------------------------------------------------------------
 
 VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results",
-         "N-M Interaction", "Shear"]
+         "N-M Interaction", "Shear", "Torsion"]
 
 
 def _memo_fig(name, sig, build):
@@ -2771,6 +2904,84 @@ def shear_view(inp, results):
             " is the extra longitudinal tension the bottom steel must also carry.")
 
 
+def torsion_view(inp, results):
+    """Torsion resistance from the thin-walled tube (TRd,s / TRd,max / TRd,c), the
+    required longitudinal steel, and the combined shear+torsion crushing check."""
+    if not results or "torsion" not in results:
+        if not inp.get("torsion_on"):
+            st.info("Enable 'Check torsion capacity' in Analysis & Result Settings, "
+                    "then press Calculate.")
+        else:
+            st.info("Press Calculate to run the torsion check.")
+        return
+    t = results["torsion"]
+    tube = t["tube"]
+    if not t["valid"]:
+        st.warning("The torsion tube could not be formed from the outline (a "
+                   "degenerate or too-thin section). Enter a wall thickness tef to "
+                   "override, or check the geometry.")
+        return
+    if t["out_of_limits"]:
+        st.warning(f"The strut bounds (cot {_THETA} in [{t['cot_min']:.2f}, "
+                   f"{t['cot_max']:.2f}]) fall outside the code range "
+                   f"[{t['cot_limit_lo']:.1f}, {t['cot_limit_hi']:.1f}] "
+                   "(6.7N / 6.7a NA). The value is still computed.")
+    util = t["util"]
+    ok = math.isfinite(util) and util <= 1.0
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Applied TEd", f"{t['t_ed']:.3f} kNm")
+    m2.metric("TRd = min", f"{t['trd']:.3f} kNm", help=f"governed by {t['governs']}")
+    m3.metric("Cracking TRd,c", f"{t['trd_c']:.3f} kNm")
+    util_txt = "inf" if not math.isfinite(util) else f"{util * 100:.1f} %"
+    m4.metric("Utilisation TEd/TRd", util_txt, delta=("OK" if ok else "Over limit"),
+              delta_color=("normal" if ok else "inverse"))
+    st.caption(f"{t['theta_deg']:.1f} deg strut (cot {_THETA} = {t['cot']:.3f}, "
+               f"auto-optimised). Method: {t['method']}. TRd,s = {t['trd_s']:.3f} kNm, "
+               f"TRd,max = {t['trd_max']:.3f} kNm.")
+
+    tef_note = ("user input" if tube["tef_user"]
+                else ("auto A/u, capped at the wall" if tube["tef_capped"]
+                      else "auto = A/u"))
+    st.markdown("**Tube idealisation and torsion quantities**")
+    st.dataframe(
+        {"Quantity": ["Gross area A", "Outer perimeter u", "Wall thickness tef",
+                      "Enclosed area Ak", "Centre-line perimeter uk",
+                      f"Strut factor {_NU}", f"Chord factor {_ALPHA}cw",
+                      "Required long. steel " + chr(0x03A3) + "Asl"],
+         "Value": [f"{tube['A'] * 1e6:.0f} mm2", f"{tube['u'] * 1e3:.0f} mm",
+                   f"{tube['tef']:.1f} mm ({tef_note})", f"{tube['Ak'] * 1e6:.0f} mm2",
+                   f"{tube['uk'] * 1e3:.0f} mm", f"{t['nu']:.3f}",
+                   f"{t['alpha_cw']:.3f}", f"{t['asl_req']:.0f} mm2"]},
+        hide_index=True, width="stretch")
+    st.caption(
+        "TRd,s = (Asw/s)*2*Ak*fywd*cot" + _THETA + " (from 6.28); TRd,max = 2*" + _NU +
+        "*" + _ALPHA + "cw*fcd*Ak*tef*sin" + _THETA + "*cos" + _THETA + " (6.30); "
+        "TRd,c = 2*Ak*tef*fctd. The required longitudinal steel " + chr(0x03A3) +
+        "Asl = TEd*uk*cot" + _THETA + "/(2*Ak*fyd) (6.28) is in ADDITION to the "
+        "bending reinforcement on the tension side.")
+
+    inter = t.get("interaction")
+    if inter is not None:
+        st.divider()
+        st.markdown("**Combined shear + torsion (concrete crushing, 6.29)**")
+        val = inter["value"]
+        ok_i = math.isfinite(val) and val <= 1.0
+        i1, i2, i3 = st.columns(3)
+        i1.metric("TEd / TRd,max", f"{(inter['t_ed']/inter['trd_max']*100):.1f} %"
+                  if inter["trd_max"] > 0 else "inf")
+        i2.metric("VEd / VRd,max", f"{(inter['v_ed']/inter['vrd_max']*100):.1f} %"
+                  if inter["vrd_max"] > 0 else "inf")
+        val_txt = "inf" if not math.isfinite(val) else f"{val * 100:.1f} %"
+        i3.metric("Sum (<= 100%)", val_txt, delta=("OK" if ok_i else "Over limit"),
+                  delta_color=("normal" if ok_i else "inverse"))
+        st.caption(
+            "TEd/TRd,max + VEd/VRd,max <= 1 (6.29), evaluated at a common strut angle "
+            f"cot {_THETA} = {inter['cot']:.2f} ({inter['theta_deg']:.1f} deg) -- both "
+            "TRd,max and VRd,max peak near 45 deg, so this is the least-conservative "
+            "shared angle. TRd,max and VRd,max here are at that common angle, so they "
+            "differ from the stand-alone values above.")
+
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
@@ -2863,7 +3074,8 @@ _generate_report(inp)   # builds the PDF when the Report panel's Generate was pr
 
 results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
-if stale and view in ("Plastic Results", "Elastic Results", "N-M Interaction", "Shear"):
+if stale and view in ("Plastic Results", "Elastic Results", "N-M Interaction",
+                      "Shear", "Torsion"):
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
 for _section_err in (inp.get("void_error"), inp.get("steel_error")):
@@ -2880,5 +3092,7 @@ elif view == "N-M Interaction":
     interaction_view(inp, results)
 elif view == "Shear":
     shear_view(inp, results)
+elif view == "Torsion":
+    torsion_view(inp, results)
 else:
     elastic_view(inp, results)

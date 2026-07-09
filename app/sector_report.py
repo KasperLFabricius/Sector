@@ -314,9 +314,13 @@ class ReportBuilder:
             self._elastic()
             self._cracking()
         if "shear" in self.out:
-            self._tick(0.88, "Shear resistance...")
+            self._tick(0.86, "Shear resistance...")
             self.flow.append(PageBreak())
             self._shear()
+        if "torsion" in self.out:
+            self._tick(0.9, "Torsion resistance...")
+            self.flow.append(PageBreak())
+            self._torsion()
         self._appendix()
         self._tick(0.92, "Writing PDF...")
         footer = f"Sector {self.version}  -  Sweco".strip()
@@ -868,6 +872,97 @@ class ReportBuilder:
                     f"&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
                     f"{_fmt(links['delta_ftd'], 1)} kN (6.18) that the tension "
                     f"reinforcement must also carry.")
+
+    def _torsion(self):
+        t = self.out["torsion"]
+        tube = t["tube"]
+        self._h1("Torsion (thin-walled tube)")
+        self._p("Torsion resistance from the thin-walled closed-tube idealisation "
+                "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
+                "tube is derived from the outline; the closed stirrups and the "
+                "concrete struts give the resistance at the auto-optimised strut "
+                "angle.")
+        if not t["valid"]:
+            self._small("Warning: the tube could not be formed (a degenerate or "
+                        "too-thin section).")
+            return
+        if t["out_of_limits"]:
+            self._small("Note: the strut bounds cot theta in "
+                        f"[{_fmt(t['cot_min'], 2)}, {_fmt(t['cot_max'], 2)}] fall "
+                        "outside the code range 1..2.5 (6.7N / 6.7a NA).")
+        tef_src = ("user input" if tube["tef_user"]
+                   else ("A/u, capped at the wall" if tube["tef_capped"] else "A/u"))
+        rows = [["Quantity", "Symbol", "Value"],
+                ["Gross area (incl. hollow)", "A", f"{_fmt(tube['A'] * 1e6, 0)} mm<sup>2</sup>"],
+                ["Outer perimeter", "u", f"{_fmt(tube['u'] * 1e3, 0)} mm"],
+                ["Wall thickness", "t<sub>ef</sub>",
+                 f"{_fmt(tube['tef'], 1)} mm ({tef_src})"],
+                ["Enclosed area", "A<sub>k</sub>", f"{_fmt(tube['Ak'] * 1e6, 0)} mm<sup>2</sup>"],
+                ["Centre-line perimeter", "u<sub>k</sub>", f"{_fmt(tube['uk'] * 1e3, 0)} mm"],
+                ["Strut angle", "theta",
+                 f"{_fmt(t['theta_deg'], 1)} deg (cot theta = {_fmt(t['cot'], 3)})"],
+                ["Strut factor", "nu", f"{_fmt(t['nu'], 3)}"],
+                ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(t['alpha_cw'], 3)}"],
+                ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
+        self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        self._h2("Resistances")
+        self._formula(
+            "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
+            "cot theta",
+            ref="from EN 1992-1-1 (6.28)",
+            subst=f"{_fmt(t['asw_over_s'], 4)} &#183; 2 &#183; {_fmt(tube['Ak'], 4)} "
+                  f"&#183; {_fmt(t['fywd'], 1)} &#183; {_fmt(t['cot'], 3)}",
+            result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN.m")
+        self._formula(
+            "T<sub>Rd,max</sub> = 2 nu alpha<sub>cw</sub> f<sub>cd</sub> "
+            "A<sub>k</sub> t<sub>ef</sub> sin theta cos theta",
+            ref="EN 1992-1-1 (6.30)",
+            subst=f"2 &#183; {_fmt(t['nu'], 3)} &#183; {_fmt(t['alpha_cw'], 3)} &#183; "
+                  f"{_fmt(t['fcd'], 2)} &#183; {_fmt(tube['Ak'], 4)} &#183; "
+                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; sincos({_fmt(t['cot'], 3)})",
+            result=f"T<sub>Rd,max</sub> = {_fmt(t['trd_max'], 3)} kN.m")
+        self._formula(
+            "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
+            result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN.m "
+                   f"(governed by {t['governs']})")
+        self._formula(
+            "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
+            ref="cracking (tau = f<sub>ctd</sub>)",
+            subst=f"2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
+                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; {_fmt(t['fctd'], 3)}",
+            result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN.m")
+        util = t["util"]
+        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
+        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        self._h2("Utilisation and longitudinal steel")
+        self._formula("T<sub>Ed</sub> / T<sub>Rd</sub>",
+                      subst=f"{_fmt(t['t_ed'], 3)} / {_fmt(t['trd'], 3)}",
+                      result=f"{util_txt}  ({verdict})")
+        self._formula(
+            "sum A<sub>sl</sub> = T<sub>Ed</sub> u<sub>k</sub> cot theta / "
+            "(2 A<sub>k</sub> f<sub>yd</sub>)",
+            ref="EN 1992-1-1 (6.28)",
+            subst=f"{_fmt(t['t_ed'], 3)} &#183; {_fmt(tube['uk'], 4)} &#183; "
+                  f"{_fmt(t['cot'], 3)} / (2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
+                  f"{_fmt(t['fyd_long'], 1)})",
+            result=f"sum A<sub>sl</sub> = {_fmt(t['asl_req'], 0)} mm<sup>2</sup> "
+                   "(in addition to the bending steel)")
+        inter = t.get("interaction")
+        if inter is not None:
+            self._h2("Combined shear + torsion (concrete crushing)")
+            val = inter["value"]
+            val_txt = "inf" if not math.isfinite(val) else f"{_fmt(val * 100, 1)} %"
+            verdict_i = "OK" if (math.isfinite(val) and val <= 1.0) else "EXCEEDED"
+            self._formula(
+                "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
+                ref="EN 1992-1-1 (6.29)",
+                subst=f"{_fmt(inter['t_ed'], 3)}/{_fmt(inter['trd_max'], 3)} + "
+                      f"{_fmt(inter['v_ed'], 3)}/{_fmt(inter['vrd_max'], 3)}",
+                result=f"{val_txt}  ({verdict_i})")
+            self._small(f"Evaluated at the common strut angle cot theta = "
+                        f"{_fmt(inter['cot'], 2)} ({_fmt(inter['theta_deg'], 1)} deg); "
+                        "T<sub>Rd,max</sub> and V<sub>Rd,max</sub> here are at that "
+                        "shared angle.")
 
     def _elastic(self):
         el = self.out["elastic"]
