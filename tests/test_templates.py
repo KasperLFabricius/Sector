@@ -127,6 +127,22 @@ def test_bar_layers_n_at_recomputes_count_per_row():
     assert len(by_y[0.10]) < len(by_y[0.35])
 
 
+def test_bar_layers_n_extra_sets_the_upper_layer_count():
+    # The first layer keeps n_per; the stacked layers above it take n_extra, so an
+    # upper layer can hold a different bar count than the main row.
+    bars = templates.bar_layers(-0.25, 1.0, 3, 0.06, -0.15, 0.15, 6, 16, n_extra=3)
+    by_y = {}
+    for x, y, _a in bars:
+        by_y.setdefault(round(y, 6), []).append(x)
+    ys = sorted(by_y)
+    assert len(by_y[ys[0]]) == 6            # first (bottom) layer -> n_per
+    assert len(by_y[ys[1]]) == 3            # upper layers -> n_extra
+    assert len(by_y[ys[2]]) == 3
+    # Without n_extra every layer keeps n_per (unchanged behaviour).
+    same = templates.bar_layers(-0.25, 1.0, 2, 0.06, -0.15, 0.15, 6, 16)
+    assert sum(1 for _ in same) == 12
+
+
 def test_bar_layers_direction_moves_top_rows_down():
     # direction = -1 (top face): later layers move toward the section interior (down).
     y0, ls = 0.27, 0.05

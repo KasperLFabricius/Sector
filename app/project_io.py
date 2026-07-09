@@ -30,9 +30,11 @@ SCALAR_KEYS = [
     # generated points into the tables, which are saved separately).
     "qsv_shape", "qsv_b_mm", "qsv_h_mm", "qsv_bf_mm", "qsv_hf_mm", "qsv_bw_mm",
     "qsv_hw_mm", "qsv_wall_mm", "qsv_dia_mm", "qsv_ring_n", "qsv_ring_d",
-    "qsv_ring_c_mm", "qsv_qs_rebar_mode", "qsv_bot_n", "qsv_bot_d", "qsv_bot_s",
-    "qsv_top_n", "qsv_top_d", "qsv_top_s", "qsv_bot_layers", "qsv_top_layers",
-    "qsv_layer_s", "qsv_bot_off_d", "qsv_top_off_d", "qsv_cover_mm", "qsv_tnd_n",
+    "qsv_ring_c_mm", "qsv_qs_rebar_mode", "qsv_qs_cover_to_edge",
+    "qsv_bot_n", "qsv_bot_d", "qsv_bot_s",
+    "qsv_top_n", "qsv_top_d", "qsv_top_s", "qsv_bot_c_mm", "qsv_top_c_mm",
+    "qsv_bot_n2", "qsv_top_n2", "qsv_bot_layers", "qsv_top_layers",
+    "qsv_layer_s", "qsv_bot_off_d", "qsv_top_off_d", "qsv_tnd_n",
     "qsv_tnd_a", "qsv_tnd_c_mm", "qsv_tnd_layers", "qsv_tnd_layer_s",
     # Concrete.
     "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
@@ -163,4 +165,15 @@ def parse_project(text: str):
             val = scalars.get(key)
             if isinstance(val, (int, float)):
                 scalars[key] = -val
+    # Quick Section rebar rework (v0.42): the interleave diameters became numeric
+    # (0 = off; previously "none" or a string diameter), and the single cover split
+    # into a separate top and bottom cover.
+    for key in ("qsv_bot_off_d", "qsv_top_off_d"):
+        val = scalars.get(key)
+        if isinstance(val, str):
+            scalars[key] = 0.0 if val == "none" else float(val)
+    old_cover = raw_scalars.get("qsv_cover_mm")      # single cover -> both faces
+    if isinstance(old_cover, (int, float)):
+        scalars.setdefault("qsv_bot_c_mm", float(old_cover))
+        scalars.setdefault("qsv_top_c_mm", float(old_cover))
     return tables, scalars

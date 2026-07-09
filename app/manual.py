@@ -415,7 +415,10 @@ def manual_blocks() -> list:
        "parametric shape with a live preview, then *Apply* writes its points into "
        "the tables (or *Back* leaves them untouched). Reinforcement can be given by "
        "a bar count or by a spacing, in one or several layers, and tendons as a "
-       "ring or in layers.")
+       "ring or in layers. The bottom and top faces take their own cover and bar "
+       "diameter (entered directly in mm), a stacked upper layer can hold a "
+       "different bar count than the main row, and a toggle measures the cover to "
+       "the bar edge instead of its centre.")
     table(["Shape", "Produces"],
           [["Rectangle", "A solid rectangle b x h"],
            ["Slab strip", "A 1 m-wide strip of a given thickness"],

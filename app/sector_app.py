@@ -904,10 +904,11 @@ def _qs_shape_prefill(shape):
 # renders and restores them when it opens; project_io persists the durable copies.
 _QS_WIDGET_KEYS = (
     "shape", "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "wall_mm",
-    "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode",
+    "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode", "qs_cover_to_edge",
     "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
+    "bot_c_mm", "top_c_mm", "bot_n2", "top_n2",
     "bot_layers", "top_layers", "layer_s", "bot_off_d", "top_off_d",
-    "cover_mm", "tnd_n", "tnd_a", "tnd_c_mm", "tnd_layers", "tnd_layer_s",
+    "tnd_n", "tnd_a", "tnd_c_mm", "tnd_layers", "tnd_layer_s",
 )
 
 
@@ -1021,15 +1022,22 @@ def _quick_section_geometry(box):
         b = h = width_b = dia
 
     box.markdown("**Reinforcement**")
+    # Cover can be measured to the near edge of the bars rather than to their centres
+    # -- the centre then sits a bar radius deeper. Applied to the mild bars (bottom /
+    # top rows and the circular ring); tendons keep a centre cover.
+    cover_to_edge = _seeded_checkbox(
+        box, "Cover to bar edge (else to bar centre)", False, "qs_cover_to_edge",
+        help="Measure the cover to the near surface of the bars, not their centres.")
+    _edge = lambda cov, dia_mm: cov + (dia_mm / 2000.0 if cover_to_edge else 0.0)
     if shape == "Circular":
         nb = _seeded_number(box, "Perimeter bars", 0, 200, 8, 1, "ring_n",
                             help="Number of bars evenly spaced around the perimeter.")
-        rd = _seeded_selectbox(box, "Bar diameter (mm)", templates.BAR_DIAMETERS,
-                               templates.BAR_DIAMETERS[4], "ring_d",
-                               help="Diameter of each reinforcement bar.")
+        rd = _seeded_number(box, "Bar diameter (mm)", 1.0, 100.0, 20.0, 1.0, "ring_d",
+                            help="Diameter of each reinforcement bar.")
         cov = _seeded_number(box, "Cover (mm)", 0.0, 500.0, 50.0, 5.0, "ring_c_mm",
-                             help="Distance from the section face to the bar centres.") / 1000.0
-        bars = templates.bar_ring(0.0, 0.0, templates.ring_radius(dia, cov), int(nb), rd)
+                             help="Cover from the section face to the bars.") / 1000.0
+        bars = templates.bar_ring(0.0, 0.0,
+                                  templates.ring_radius(dia, _edge(cov, rd)), int(nb), rd)
     else:
         by_spacing = box.radio(
             "Bar placement", ["By number", "By spacing"], horizontal=True,
@@ -1037,18 +1045,20 @@ def _quick_section_geometry(box):
             help="Place each row as a fixed bar count, or at a target centre-to-"
                  "centre spacing (slab phi @ s); the count is then derived from the "
                  "face width.") == "By spacing"
-        cov = _seeded_number(box, "Cover (mm)", 0.0, 500.0, 50.0, 5.0, "cover_mm",
-                             help="Distance from the top/bottom face to the bar centres.") / 1000.0
-        bot_w, top_w = b - 2.0 * cov, width_b - 2.0 * cov
         c1, c2 = box.columns(2)
         c1.markdown("**Bottom**")
         c2.markdown("**Top**")
-        rd_bot = _seeded_selectbox(c1, "Bottom dia (mm)", templates.BAR_DIAMETERS,
-                                   templates.BAR_DIAMETERS[4], "bot_d",
-                                   help="Bottom bar diameter (mm).")
-        rd_top = _seeded_selectbox(c2, "Top dia (mm)", templates.BAR_DIAMETERS,
-                                   templates.BAR_DIAMETERS[4], "top_d",
-                                   help="Top bar diameter (mm).")
+        rd_bot = _seeded_number(c1, "Bottom dia (mm)", 1.0, 100.0, 20.0, 1.0, "bot_d",
+                                help="Bottom bar diameter (mm).")
+        rd_top = _seeded_number(c2, "Top dia (mm)", 1.0, 100.0, 20.0, 1.0, "top_d",
+                                help="Top bar diameter (mm).")
+        bot_cov = _seeded_number(c1, "Bottom cover (mm)", 0.0, 500.0, 50.0, 5.0, "bot_c_mm",
+                                 help="Cover at the bottom face.") / 1000.0
+        top_cov = _seeded_number(c2, "Top cover (mm)", 0.0, 500.0, 50.0, 5.0, "top_c_mm",
+                                 help="Cover at the top face.") / 1000.0
+        # Bar-centre covers (add a radius when the cover is measured to the bar edge).
+        bot_e, top_e = _edge(bot_cov, rd_bot), _edge(top_cov, rd_top)
+        bot_w, top_w = b - 2.0 * bot_e, width_b - 2.0 * top_e
         n_at_bot = n_at_top = None     # by-number: a fixed count per layer
         if by_spacing:
             s_bot = _seeded_number(c1, "Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
@@ -1069,28 +1079,40 @@ def _quick_section_geometry(box):
                 return templates.count_for_spacing(xe - xs, s_top)
         else:
             nb_bot = _seeded_number(c1, "Bottom bars", 0, 100, 6, 1, "bot_n",
-                                    help="Number of bars in each bottom layer.")
+                                    help="Number of bars in the first bottom layer.")
             nb_top = _seeded_number(c2, "Top bars", 0, 100, 2, 1, "top_n",
-                                    help="Number of bars in each top layer.")
+                                    help="Number of bars in the first top layer.")
         nl_bot = _seeded_number(c1, "Bottom layers", 1, 10, 1, 1, "bot_layers",
                                 help="Number of stacked bar rows at the bottom face.")
         nl_top = _seeded_number(c2, "Top layers", 1, 10, 1, 1, "top_layers",
                                 help="Number of stacked bar rows at the top face.")
+        # By number, the stacked (upper) layers can hold a different count than the
+        # first row. By spacing, each row's count follows its own span, so it is off.
+        bot_n2 = _seeded_number(c1, "Bottom upper-layer bars", 0, 100, 6, 1, "bot_n2",
+                                disabled=by_spacing or int(nl_bot) <= 1,
+                                help="Bars in each bottom layer above the first.")
+        top_n2 = _seeded_number(c2, "Top upper-layer bars", 0, 100, 2, 1, "top_n2",
+                                disabled=by_spacing or int(nl_top) <= 1,
+                                help="Bars in each top layer above the first.")
+        ne_bot = int(bot_n2) if (not by_spacing and int(nl_bot) > 1) else None
+        ne_top = int(top_n2) if (not by_spacing and int(nl_top) > 1) else None
         layer_s = _seeded_number(
             box, "Layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, "layer_s",
             disabled=int(nl_bot) == 1 and int(nl_top) == 1,
             help="Vertical centre-to-centre distance between stacked bar layers "
                  "(used only when a face has more than one layer).") / 1000.0
-        # Optional second bar size, interleaved at the midpoints of each face row --
-        # e.g. a Y20/100 row with Y16 bars between them (two sizes in one layer).
-        _off = ["none"] + [str(d) for d in templates.BAR_DIAMETERS]
+        # Optional second bar size, interleaved at the midpoints of each face row
+        # (0 = off) -- e.g. a Y20/100 row with Y16 bars between them (two sizes in one
+        # layer).
         o1, o2 = box.columns(2)
-        bot_off_d = o1.selectbox("Bottom interleave dia (mm)", _off, key="bot_off_d",
-                                 help="Place a second bar size at the midpoints of the "
-                                      "bottom row(s) (none = off).")
-        top_off_d = o2.selectbox("Top interleave dia (mm)", _off, key="top_off_d",
-                                 help="Place a second bar size at the midpoints of the "
-                                      "top row(s) (none = off).")
+        bot_off_d = _seeded_number(o1, "Bottom interleave dia (mm, 0 = off)", 0.0, 100.0,
+                                   0.0, 1.0, "bot_off_d",
+                                   help="Second bar size at the midpoints of the bottom "
+                                        "row(s); 0 = off.")
+        top_off_d = _seeded_number(o2, "Top interleave dia (mm, 0 = off)", 0.0, 100.0,
+                                   0.0, 1.0, "top_off_d",
+                                   help="Second bar size at the midpoints of the top "
+                                        "row(s); 0 = off.")
         # A T-section's top face is the flange (width width_b); a top layer pushed
         # below the flange must fit the narrower web (width b) or it would fall
         # outside the concrete. The bottom layers stay in the web (b) and only ever
@@ -1101,29 +1123,29 @@ def _quick_section_geometry(box):
 
             def top_span_at(y):
                 if y >= flange_y:                 # within the flange
-                    return -width_b / 2 + cov, width_b / 2 - cov
-                return -b / 2 + cov, b / 2 - cov  # below the flange -> the web
+                    return -width_b / 2 + top_e, width_b / 2 - top_e
+                return -b / 2 + top_e, b / 2 - top_e  # below the flange -> the web
 
         if shape == "Box girder":
             # A box girder's rows split into the side walls once they rise into the
             # hollow, so multi-layer reinforcement keeps its count in the webs.
-            bot_group = templates.box_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
-                                             b, h, wall, cov, int(nb_bot),
-                                             templates.bar_area(rd_bot))
-            top_group = templates.box_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
-                                             b, h, wall, cov, int(nb_top),
-                                             templates.bar_area(rd_top))
+            bot_group = templates.box_layers(-h / 2 + bot_e, 1.0, int(nl_bot), layer_s,
+                                             b, h, wall, bot_e, int(nb_bot),
+                                             templates.bar_area(rd_bot), n_extra=ne_bot)
+            top_group = templates.box_layers(h / 2 - top_e, -1.0, int(nl_top), layer_s,
+                                             b, h, wall, top_e, int(nb_top),
+                                             templates.bar_area(rd_top), n_extra=ne_top)
         else:
-            bot_group = templates.bar_layers(-h / 2 + cov, 1.0, int(nl_bot), layer_s,
-                                             -b / 2 + cov, b / 2 - cov, int(nb_bot), rd_bot,
-                                             n_at=n_at_bot)
-            top_group = templates.bar_layers(h / 2 - cov, -1.0, int(nl_top), layer_s,
-                                             -width_b / 2 + cov, width_b / 2 - cov,
+            bot_group = templates.bar_layers(-h / 2 + bot_e, 1.0, int(nl_bot), layer_s,
+                                             -b / 2 + bot_e, b / 2 - bot_e, int(nb_bot),
+                                             rd_bot, n_at=n_at_bot, n_extra=ne_bot)
+            top_group = templates.bar_layers(h / 2 - top_e, -1.0, int(nl_top), layer_s,
+                                             -width_b / 2 + top_e, width_b / 2 - top_e,
                                              int(nb_top), rd_top, span_at=top_span_at,
-                                             n_at=n_at_top)
+                                             n_at=n_at_top, n_extra=ne_top)
         groups = [bot_group, top_group]
         for grp, off_d in ((bot_group, bot_off_d), (top_group, top_off_d)):
-            if off_d == "none":
+            if off_d <= 0.0:
                 continue
             inter = _qs_interleave(grp, off_d)
             # A row split across a void (a box girder's hollow) leaves a gap whose
