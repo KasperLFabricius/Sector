@@ -648,11 +648,22 @@ class ReportBuilder:
         self._plastic_worked(pl)
 
     def _plastic_worked(self, pl):
-        gov = max(pl["points"], key=lambda p: math.hypot(p["Mx"], p["My"]))
+        # Show the state relevant to the check: when a utilisation was computed, the
+        # angle governing the applied load's direction (so the worked strain plane and
+        # equilibrium describe the section under that load); for a capacity-only run
+        # there is no applied direction, so fall back to the strongest envelope point.
+        gov_i = pl.get("util_gov")
+        pts = pl["points"]
+        if gov_i is not None and 0 <= gov_i < len(pts):
+            gov = pts[gov_i]
+            heading = "Governing case worked (utilisation direction)"
+        else:
+            gov = max(pts, key=lambda p: math.hypot(p["Mx"], p["My"]))
+            heading = "Governing case worked (peak resultant moment)"
         P = self.inp.get("P_pl", 0.0) or 0.0   # applied axial, tension-positive
         Fc = gov["comp_force"]                  # concrete compression resultant (positive)
         T = Fc + P                              # tension resultant (solver: Fc - T = -N)
-        self._h2("Governing case worked (peak resultant moment)")
+        self._h2(heading)
         self._p(f"Neutral-axis angle V = {_fmt(gov['V'],0)} deg. The extreme "
                 f"concrete fibre is at the ultimate strain; the curvature scales "
                 f"the strain plane to that limit.")

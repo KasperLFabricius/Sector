@@ -1723,12 +1723,14 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # only reported when the user asks to check it; otherwise this is a capacity-only
         # run (the applied moments are ignored and locked).
         check_util = inp.get("check_util", True)
-        util = (_radial_util(mx, my, inp["Mx_pl"], inp["My_pl"])
-                if (closed and check_util) else None)
+        if closed and check_util:
+            util, util_gov = _radial_util(mx, my, inp["Mx_pl"], inp["My_pl"])
+        else:
+            util, util_gov = None, None
         out["plastic"] = dict(
             mx=mx, my=my,
             max_mx=max(mx), max_my=max(my), min_mx=min(mx), min_my=min(my),
-            util=util, closed=closed, check_util=check_util,
+            util=util, util_gov=util_gov, closed=closed, check_util=check_util,
             applied=((inp["Mx_pl"], inp["My_pl"]) if check_util else None),
             converged=all(p.converged for p in pts),
             points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
@@ -1916,10 +1918,15 @@ def _radial_util(mx, my, ax, ay):
     crosses that polygon. Measuring against the drawn chords (not a radial
     interpolation of the vertex radii, which bulges outside the chords) keeps the
     check on the conservative side and consistent with the plotted envelope.
+
+    Returns ``(utilisation, gov)`` where ``gov`` is the index of the swept point
+    that governs -- the endpoint of the crossed chord nearest the crossing, i.e. the
+    section state in the applied load's direction -- or ``None`` when there is no
+    applied direction (zero moment) or the ray misses the envelope.
     """
     a_rad = float(np.hypot(ax, ay))
     if a_rad < 1e-9:
-        return 0.0
+        return 0.0, None
     ux, uy = ax / a_rad, ay / a_rad                 # applied load ray direction
     px, py = np.asarray(mx, dtype=float), np.asarray(my, dtype=float)
     ex, ey = np.roll(px, -1) - px, np.roll(py, -1) - py   # edge vectors (polygon closed)
@@ -1931,9 +1938,19 @@ def _radial_util(mx, my, ax, ay):
         s = (uy * px - ux * py) / D                 # edge parameter
     hit = (np.abs(D) > 1e-12) & (s >= -1e-9) & (s <= 1.0 + 1e-9) & (t > 1e-9)
     if not hit.any():
-        return math.inf                             # ray misses the envelope
-    cap = float(t[hit].min())                       # nearest forward boundary crossing
-    return a_rad / cap
+        return math.inf, None                       # ray misses the envelope
+    idx = np.nonzero(hit)[0]
+    edge = int(idx[np.argmin(t[idx])])              # nearest forward boundary crossing
+    cap = float(t[edge])
+    # The governing swept state is the endpoint of that chord nearest the crossing --
+    # the computed neutral-axis angle closest to the applied load's direction.
+    n = len(px)
+    cx, cy = ux * cap, uy * cap
+    nxt = (edge + 1) % n
+    d0 = math.hypot(float(px[edge]) - cx, float(py[edge]) - cy)
+    d1 = math.hypot(float(px[nxt]) - cx, float(py[nxt]) - cy)
+    gov = edge if d0 <= d1 else nxt
+    return a_rad / cap, gov
 
 
 # ---------------------------------------------------------------------------
@@ -2064,7 +2081,12 @@ def plastic_view(inp, results):
         viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied")),
         width="stretch")
 
-    default_i = max(range(len(pts)), key=lambda i: pts[i]["Mx"])
+    # Default to the utilisation-governing angle (the state in the applied load's
+    # direction) when a utilisation was checked; otherwise show the strongest-about-x
+    # state, which is a sensible landmark for a capacity-only run.
+    gov_i = p.get("util_gov")
+    default_i = (gov_i if gov_i is not None and gov_i < len(pts)
+                 else max(range(len(pts)), key=lambda i: pts[i]["Mx"]))
     # The sweep length varies with V.min/V.max/V.inc; clamp a stale selection.
     if st.session_state.get("pl_state", 0) >= len(pts):
         st.session_state["pl_state"] = default_i
