@@ -122,8 +122,8 @@ def bar_row(y: float, x_start: float, x_end: float, n: int, diameter_mm: float):
 
 def bar_layers(y_face: float, direction: float, n_layers: int, layer_spacing: float,
                x_start: float, x_end: float, n_per: int, diameter_mm: float,
-               span_at=None, n_at=None):
-    """Stack ``n_layers`` identical rows of ``n_per`` bars.
+               span_at=None, n_at=None, n_extra=None):
+    """Stack ``n_layers`` rows of bars.
 
     The first row sits at ``y_face`` (the cover line at a face) and each further
     layer is ``layer_spacing`` deeper into the section: ``direction`` is ``+1`` for
@@ -133,13 +133,20 @@ def bar_layers(y_face: float, direction: float, n_layers: int, layer_spacing: fl
     step (e.g. a T-section top row narrowing to the web below the flange).
     ``n_at(x_start, x_end) -> int`` overrides the bar count from the (possibly
     narrowed) span, so a row placed by spacing keeps the target spacing on its own
-    width instead of reusing a count sized for a wider row.
+    width instead of reusing a count sized for a wider row. ``n_extra``, when given,
+    is the bar count for the stacked layers above the first (the first keeps
+    ``n_per``), so an upper layer can hold a different count than the main row.
     """
     rows = []
     for j in range(max(0, int(n_layers))):
         y = y_face + direction * j * layer_spacing
         xs, xe = span_at(y) if span_at is not None else (x_start, x_end)
-        n = int(n_at(xs, xe)) if n_at is not None else n_per
+        if n_at is not None:
+            n = int(n_at(xs, xe))
+        elif j > 0 and n_extra is not None:
+            n = int(n_extra)
+        else:
+            n = n_per
         rows.extend(bar_row(y, xs, xe, n, diameter_mm))
     return rows
 
@@ -230,14 +237,17 @@ def box_row_xs(y: float, b: float, h: float, wall: float, cover: float, n: int):
 
 def box_layers(y_face: float, direction: float, n_layers: int, layer_spacing: float,
                b: float, h: float, wall: float, cover: float, n_per: int,
-               area_mm2: float):
-    """Stack ``n_layers`` rows of ``n_per`` points for a box girder, each row placed
-    by :func:`box_row_xs` (full width in a wall, split into the side walls in the
-    hollow). ``area_mm2`` is the per-point area (a bar or tendon area)."""
+               area_mm2: float, n_extra=None):
+    """Stack ``n_layers`` rows of points for a box girder, each row placed by
+    :func:`box_row_xs` (full width in a wall, split into the side walls in the
+    hollow). ``area_mm2`` is the per-point area (a bar or tendon area). ``n_extra``,
+    when given, is the point count for the layers above the first (which keeps
+    ``n_per``)."""
     rows = []
     for j in range(max(0, int(n_layers))):
         y = y_face + direction * j * layer_spacing
-        rows.extend((x, y, area_mm2) for x in box_row_xs(y, b, h, wall, cover, int(n_per)))
+        n = int(n_extra) if (j > 0 and n_extra is not None) else int(n_per)
+        rows.extend((x, y, area_mm2) for x in box_row_xs(y, b, h, wall, cover, n))
     return rows
 
 

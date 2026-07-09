@@ -94,6 +94,22 @@ def test_current_axial_force_loads_unchanged():
     assert scalars["el_long_P"] == pytest.approx(800.0)
 
 
+def test_legacy_quick_section_rebar_settings_migrate():
+    # Before the QS rebar rework the interleave diameter was a string ("none"/"16")
+    # and there was one shared cover; loading such a file converts the interleave to a
+    # number (0 = off) and splits the single cover into a top and bottom cover.
+    import json
+    text = json.dumps({"format": project_io.FORMAT, "version": 2, "tables": {},
+                       "scalars": {"qsv_cover_mm": 45.0, "qsv_bot_off_d": "none",
+                                   "qsv_top_off_d": "16"}})
+    _, scalars = project_io.parse_project(text)
+    assert scalars["qsv_bot_off_d"] == pytest.approx(0.0)     # "none" -> off
+    assert scalars["qsv_top_off_d"] == pytest.approx(16.0)    # "16" -> 16 mm
+    assert scalars["qsv_bot_c_mm"] == pytest.approx(45.0)     # single cover -> both faces
+    assert scalars["qsv_top_c_mm"] == pytest.approx(45.0)
+    assert "qsv_cover_mm" not in scalars                      # the old key is gone
+
+
 def test_dump_handles_numpy_scalars():
     text = project_io.dump_project({}, {"conc_fck": np.float64(42.0),
                                         "mild_active_comp": np.bool_(True)})

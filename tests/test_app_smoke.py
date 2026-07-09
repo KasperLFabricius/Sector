@@ -79,10 +79,12 @@ def test_persisted_settings_use_the_seeded_number_helper():
                 "label_scale", "label_min_gap",                # seeded number inputs
                 "pl_check_util", "pl_interaction", "sls_cw",    # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
-                "ring_d", "bot_d", "top_d",                     # QS diameter selects
+                "ring_d", "bot_d", "top_d",                     # QS diameter inputs
+                "qs_cover_to_edge", "bot_off_d", "top_off_d",   # QS toggle + interleave
                 "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "dia_mm",  # QS dims
-                "ring_n", "ring_c_mm", "cover_mm", "bot_s", "top_s", "bot_n",  # QS rebar
-                "top_n", "bot_layers", "top_layers", "layer_s",
+                "ring_n", "ring_c_mm", "bot_c_mm", "top_c_mm",  # QS rebar covers
+                "bot_s", "top_s", "bot_n", "top_n", "bot_n2", "top_n2",
+                "bot_layers", "top_layers", "layer_s",
                 "tnd_n", "tnd_a", "tnd_c_mm", "tnd_layers", "tnd_layer_s"):    # QS tendons
         assert f'key="{key}"' not in src, key
 
@@ -622,7 +624,7 @@ def test_quick_section_interleaves_a_second_bar_size():
     plain = len(at.session_state["bars_base"])
     # With a bottom interleave -> more bars, and two distinct bar sizes present.
     _open_qs(at)
-    at.selectbox(key="bot_off_d").set_value("16").run()
+    at.number_input(key="bot_off_d").set_value(16.0).run()   # 0 = off; a diameter enables it
     _apply_qs(at)
     bars = at.session_state["bars_base"]
     areas = {round(float(a), 1) for a in bars["area (mm2)"]}
@@ -640,11 +642,57 @@ def test_quick_section_interleave_skips_the_box_girder_void():
     at.selectbox(key="shape").set_value("Box girder").run()
     at.number_input(key="bot_layers").set_value(2).run()
     at.number_input(key="layer_s").set_value(300.0).run()  # 2nd layer rises into the hollow
-    at.selectbox(key="bot_off_d").set_value("16").run()
+    at.number_input(key="bot_off_d").set_value(16.0).run()
     _apply_qs(at)
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]        # no bar in the void -> valid section
+
+
+def test_quick_section_separate_top_bottom_cover_and_manual_diameter():
+    # Separate top/bottom covers place each face row at its own cover, and the bar
+    # diameter is a direct mm input (a Y25 bar is 491 mm2).
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.number_input(key="bot_c_mm").set_value(40.0).run()
+    at.number_input(key="top_c_mm").set_value(60.0).run()
+    at.number_input(key="bot_d").set_value(25.0).run()
+    _apply_qs(at)
+    b = at.session_state["bars_base"]
+    ys = sorted(round(float(y), 3) for y in b["y (mm)"])
+    assert min(ys) == pytest.approx(-260.0)                # -300 + 40 bottom cover
+    assert max(ys) == pytest.approx(240.0)                 # 300 - 60 top cover
+    assert round(float(b["area (mm2)"].iloc[0])) == 491    # Y25 area
+
+
+def test_quick_section_cover_to_edge_shifts_bars_by_a_radius():
+    # With cover measured to the bar edge, the bar centres sit a radius deeper than the
+    # cover line (a Y25 bar at 40 mm edge cover -> centre at 40 + 12.5 = 52.5 mm).
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.checkbox(key="qs_cover_to_edge").set_value(True).run()
+    at.number_input(key="bot_c_mm").set_value(40.0).run()
+    at.number_input(key="bot_d").set_value(25.0).run()
+    _apply_qs(at)
+    yb = min(round(float(y), 2) for y in at.session_state["bars_base"]["y (mm)"])
+    assert yb == pytest.approx(-247.5)                     # -300 + 40 + 12.5 radius
+
+
+def test_quick_section_separate_upper_layer_bar_count():
+    # A stacked bottom face can hold a different bar count in the upper layer than the
+    # main row (6 in the first, 3 above).
+    at = _fresh()
+    at.run()
+    _open_qs(at)
+    at.number_input(key="bot_n").set_value(6).run()
+    at.number_input(key="bot_layers").set_value(2).run()
+    at.number_input(key="bot_n2").set_value(3).run()
+    _apply_qs(at)
+    from collections import Counter
+    counts = Counter(round(float(y), 3) for y in at.session_state["bars_base"]["y (mm)"])
+    assert sorted(counts.values(), reverse=True)[:2] == [6, 3]
 
 
 def test_quick_section_builder_places_bars_by_spacing():
@@ -1595,7 +1643,7 @@ def test_inputs_carry_help_tooltips():
     assert at.radio(key="mode").help
     # The Quick Section builder inputs carry help too.
     _open_qs(at)
-    for key in ("shape", "b_mm", "h_mm", "cover_mm"):
+    for key in ("shape", "b_mm", "h_mm", "bot_c_mm", "top_c_mm"):
         w = _widget(at.number_input, key) or _widget(at.selectbox, key)
         assert w is not None and w.help, key
 
