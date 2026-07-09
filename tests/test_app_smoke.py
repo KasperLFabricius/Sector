@@ -452,6 +452,22 @@ def test_plastic_table_splits_steel_strain_when_active_in_compression():
     assert not any(",t (%)" in c for c in tension)          # the single column is eps_s
 
 
+def test_plastic_view_tolerates_a_pre_split_payload():
+    # A plastic payload cached before the steel-strain split (no eps_s_comp) -- e.g. a
+    # reused result across a code update -- must not crash the view even with active-
+    # in-compression steel (the default); it degrades to the single strain instead of
+    # raising a KeyError.
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    res = at.session_state["results"]
+    for p in res["plastic"]["points"]:
+        p.pop("eps_s_comp", None)             # simulate a pre-v0.40 reused payload
+    at.session_state["results"] = res
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    assert not at.exception
+
+
 def test_both_mode_runs_elastic_and_plastic():
     at = _fresh()
     at.run()
