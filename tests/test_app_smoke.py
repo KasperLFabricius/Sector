@@ -420,6 +420,21 @@ def test_plastic_view_defaults_to_the_governing_rotation_each_calculate():
     assert at.session_state["pl_state"] == other
 
 
+def test_plastic_strains_are_reported_tension_positive():
+    # Strains follow the tension-positive convention (like N and the stresses): a
+    # crushing concrete strain reads negative and a tensile bar strain positive, even
+    # though the solver computes them compression-positive internally.
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(200.0).run()   # sagging bending, N = 0
+    at.number_input(key="pl_My").set_value(0.0).run()
+    at.button(key="calculate").click().run()
+    res = at.session_state["results"]["plastic"]
+    pt = res["points"][res["util_gov"]]
+    assert pt["eps_c"] < 0.0     # concrete crushing -> compression -> negative
+    assert pt["eps_s"] > 0.0     # most tensile bar -> tension -> positive
+
+
 def test_both_mode_runs_elastic_and_plastic():
     at = _fresh()
     at.run()

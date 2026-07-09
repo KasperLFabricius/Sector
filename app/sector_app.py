@@ -1733,9 +1733,12 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             util=util, util_gov=util_gov, closed=closed, check_util=check_util,
             applied=((inp["Mx_pl"], inp["My_pl"]) if check_util else None),
             converged=all(p.converged for p in pts),
+            # The solver reports strains compression-positive (its internal
+            # convention); negate them so the displayed strains are tension-positive,
+            # agreeing with N and the stresses (concrete crushing then reads negative).
             points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
-                         na_y=p.na_y_intercept, eps_c=p.eps_concrete,
-                         eps_s=p.eps_steel, eps_cable=p.eps_cable, kappa=p.curvature,
+                         na_y=p.na_y_intercept, eps_c=-p.eps_concrete,
+                         eps_s=-p.eps_steel, eps_cable=-p.eps_cable, kappa=p.curvature,
                          comp_force=p.compression_force, lever=p.lever_arm,
                          dx=p.dx, dy=p.dy) for p in pts],
         )
@@ -2134,6 +2137,9 @@ def plastic_view(inp, results):
         if inp["tendons"]:
             lines.insert(6, f"- **Tendon strain $\\varepsilon_p$**: {pt['eps_cable']:.3f} %")
         st.markdown("\n".join(lines))
+        st.caption("Strains are tension-positive (compression negative), agreeing "
+                   "with N and the stresses -- so a crushing concrete strain reads "
+                   "negative.")
 
     with st.expander("Full results table (per neutral-axis angle)"):
         # Size the table to all rows so the page scrolls, not the table itself.

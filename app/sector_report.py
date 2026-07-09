@@ -359,8 +359,9 @@ class ReportBuilder:
                 "and is drawn on the vertical axis of the interaction diagram; "
                 "<b>M<sub>y</sub></b> bends about the y-axis.")
         self._p("Axial force <b>N</b> is positive in tension (compression negative), "
-                "so its sign agrees with the stresses. Concrete carries compression "
-                "only (no tension). Strains are plane (Bernoulli).")
+                "so its sign agrees with the stresses and strains -- a crushing "
+                "concrete strain reads negative. Concrete carries compression only "
+                "(no tension). Strains are plane (Bernoulli).")
         rows = [["Quantity", "Unit"],
                 ["Coordinates, neutral-axis intercepts, lever arm", "mm"],
                 ["Axial force N", "kN"],

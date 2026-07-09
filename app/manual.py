@@ -206,9 +206,10 @@ def fig_sign_convention():
 
 def fig_strain_plane():
     """Schematic of the ultimate strain plane: strain is linear across the depth (a
-    single straight line), zero at the neutral axis, compression (+) above it and
-    tension (-) below. The section is drawn on the left; the strain diagram, sharing
-    the same depth axis, on the right against a vertical zero-strain reference."""
+    single straight line), zero at the neutral axis. Tension-positive: compression
+    above the NA reads negative, tension below reads positive. The section is drawn on
+    the left; the strain diagram, sharing the same depth axis, on the right against a
+    vertical zero-strain reference."""
     fig = _schematic()
     y_na = 0.62
     # Section: a slim depth bar (top edge = compression face, bottom = tension face).
@@ -220,10 +221,11 @@ def fig_strain_plane():
                   line=dict(color="#bbb", width=1, dash="dot"))
     fig.add_shape(type="line", x0=-0.9, y0=y_na, x1=0.6, y1=y_na,
                   line=dict(color="#bbb", width=1, dash="dot"))
-    # The strain: ONE straight line through (0, y_na). Right of the zero line above
-    # the NA (compression, +), left of it below (tension, -). x is linear in depth,
-    # so x_bot is set to make the line pass through zero exactly at the NA.
-    x_top = 0.46
+    # The strain: ONE straight line through (0, y_na). Tension-positive, so the
+    # compression above the NA is left of the zero line (negative) and the tension
+    # below is right of it (positive). x is linear in depth, so x_bot is set to make
+    # the line pass through zero exactly at the NA.
+    x_top = -0.46
     x_bot = -x_top * y_na / (1.0 - y_na)
     # Shade the compression and tension wedges (between the zero line and the strain
     # line) so the two sides of the neutral axis read at a glance.
@@ -235,10 +237,10 @@ def fig_strain_plane():
                              fillcolor="rgba(216,90,48,0.16)"))
     fig.add_trace(go.Scatter(x=[x_bot, x_top], y=[0.0, 1.0], mode="lines",
                              line=dict(color="#333", width=2)))
-    fig.add_annotation(x=x_top, y=1.0, text="eps_cu (compression +)",
-                       showarrow=False, xshift=54, font=dict(size=11))
-    fig.add_annotation(x=x_bot, y=0.0, text="eps_s (tension -)",
-                       showarrow=False, xshift=-42, font=dict(size=11))
+    fig.add_annotation(x=x_top, y=1.0, text="eps_cu (compression -)",
+                       showarrow=False, xshift=-54, font=dict(size=11))
+    fig.add_annotation(x=x_bot, y=0.0, text="eps_s (tension +)",
+                       showarrow=False, xshift=42, font=dict(size=11))
     fig.add_annotation(x=0.0, y=y_na, text="neutral axis (eps = 0)",
                        showarrow=False, xshift=58, yshift=10, font=dict(size=11))
     return fig
@@ -526,18 +528,20 @@ def manual_blocks() -> list:
     h1("Conventions and sign convention")
     md("Coordinates are in metres, taken about the section origin. The axial force "
        "$N$ is positive in **tension** (compression negative, kN), so its sign agrees "
-       "with the stresses; the moments $M_x$ and $M_y$ act "
+       "with the stresses and strains -- a crushing concrete strain reads negative; "
+       "the moments $M_x$ and $M_y$ act "
        "about the $x$ and $y$ axes (kNm). Along any straining direction a **depth "
        "coordinate** $s$ is the projection of a point onto the strain gradient; the "
        "neutral axis is a line $s = s_{na}$, and in the plastic sweep its "
        "orientation is the angle $V$ measured from the $y$ axis.")
     fig(fig_sign_convention, "Axes and the positive senses of the axial force, the "
         "moments and the neutral-axis angle.")
-    call("concept", "The reported axial force $N$ and all stresses are "
-         "**tension-positive**. Internally the plastic solver works "
+    call("concept", "The reported axial force $N$, the stresses and the strains are "
+         "all **tension-positive**. Internally the plastic solver works "
          "**compression-positive** (the compression zone has strain $> 0$); the sign "
          "is converted at the boundary, so you only enter and read tension-positive "
-         "values.")
+         "values. The concrete strain limits $\\varepsilon_{c2}$ / $\\varepsilon_{cu2}$ "
+         "are still entered as positive compression magnitudes (as in EC2).")
 
     h1("Material laws")
     h2("Concrete (parabola-rectangle)")
@@ -598,9 +602,11 @@ def manual_blocks() -> list:
        "curvature and $s_{na}$ the neutral-axis depth. At ultimate the extreme "
        "compression fibre reaches the concrete crushing strain "
        "$\\varepsilon_{cu2}$; the compression depth is $c = s_{max}-s_{na}$.")
-    fig(fig_strain_plane, "The ultimate strain plane: one straight line -- zero at "
-        "the neutral axis, compression (+) above it and tension (-) below, the top "
-        "fibre at the crushing strain.")
+    fig(fig_strain_plane, "The ultimate strain plane (reported tension-positive "
+        "convention): one straight line -- zero at the neutral axis, compression "
+        "(negative) above it and tension (positive) below, the top fibre at the "
+        "crushing strain. The internal solver formula above is compression-positive; "
+        "the reported strains negate it.")
     h2("The governing curvature")
     md("The curvature is scaled until the **first** material limit is reached, so "
        "none is driven past its limit:\n\n"
