@@ -1738,7 +1738,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             # agreeing with N and the stresses (concrete crushing then reads negative).
             points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
                          na_y=p.na_y_intercept, eps_c=-p.eps_concrete,
-                         eps_s=-p.eps_steel, eps_cable=-p.eps_cable, kappa=p.curvature,
+                         eps_s=-p.eps_steel, eps_s_comp=-p.eps_steel_comp,
+                         eps_cable=-p.eps_cable, kappa=p.curvature,
                          comp_force=p.compression_force, lever=p.lever_arm,
                          dx=p.dx, dy=p.dy) for p in pts],
         )
@@ -2030,8 +2031,14 @@ def _fmt(v):
     return "inf" if not math.isfinite(v) else f"{v:.3f}"
 
 
-def _plastic_table(pts, cable):
-    """Per-angle results table, one row per neutral-axis angle."""
+def _plastic_table(pts, cable, steel_comp=False):
+    """Per-angle results table, one row per neutral-axis angle. ``steel_comp`` splits
+    the steel-strain column into a tensile and a compression column (only meaningful
+    when the mild steel is active in compression)."""
+    eps_s_cols = ({f"{_EPS}s,t (%)": [round(pt["eps_s"], 3) for pt in pts],
+                   f"{_EPS}s,c (%)": [round(pt["eps_s_comp"], 3) for pt in pts]}
+                  if steel_comp else
+                  {f"{_EPS}s (%)": [round(pt["eps_s"], 3) for pt in pts]})
     cols = {
         "V (deg)": [round(pt["V"], 1) for pt in pts],
         "Mx (kNm)": [round(pt["Mx"], 3) for pt in pts],
@@ -2039,7 +2046,7 @@ def _plastic_table(pts, cable):
         "NA x (mm)": [_fmt(pt["na_x"] * _MM) for pt in pts],
         "NA y (mm)": [_fmt(pt["na_y"] * _MM) for pt in pts],
         f"{_EPS}c (%)": [round(pt["eps_c"], 3) for pt in pts],
-        f"{_EPS}s (%)": [round(pt["eps_s"], 3) for pt in pts],
+        **eps_s_cols,
         f"{_KAPPA} (1/m)": [round(pt["kappa"], 4) for pt in pts],
         "Comp (kN)": [round(pt["comp_force"], 3) for pt in pts],
         "L (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
@@ -2123,6 +2130,12 @@ def plastic_view(inp, results):
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm"),
             width="stretch")
     with cR:
+        # Split the bar strain into its tensile and compression extreme only when
+        # there are mild bars that are active in compression (a tendon-only section has
+        # no mild bar to compress). Also guard on the field being present so a pre-v0.40
+        # reused payload (which lacks eps_s_comp) degrades to the single strain.
+        active_comp = (inp["steel"].active_in_compression and bool(inp["bars"])
+                       and "eps_s_comp" in pt)
         lines = [
             f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
             f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
@@ -2130,12 +2143,18 @@ def plastic_view(inp, results):
             f"- **Lever arm $L$**: {pt['lever'] * _MM:.3f} mm  "
             f"($D_x$ {pt['dx'] * _MM:.3f}, $D_y$ {pt['dy'] * _MM:.3f})",
             f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.3f} %",
-            f"- **Steel strain $\\varepsilon_s$**: {pt['eps_s']:.3f} %",
-            f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
-            f"y {_fmt(pt['na_y'] * _MM)} mm",
         ]
+        if active_comp:
+            lines.append(f"- **Steel strain, tension $\\varepsilon_{{s,t}}$**: "
+                         f"{pt['eps_s']:.3f} %")
+            lines.append(f"- **Steel strain, compression $\\varepsilon_{{s,c}}$**: "
+                         f"{pt['eps_s_comp']:.3f} %")
+        else:
+            lines.append(f"- **Steel strain $\\varepsilon_s$**: {pt['eps_s']:.3f} %")
         if inp["tendons"]:
-            lines.insert(6, f"- **Tendon strain $\\varepsilon_p$**: {pt['eps_cable']:.3f} %")
+            lines.append(f"- **Tendon strain $\\varepsilon_p$**: {pt['eps_cable']:.3f} %")
+        lines.append(f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
+                     f"y {_fmt(pt['na_y'] * _MM)} mm")
         st.markdown("\n".join(lines))
         st.caption("Strains are tension-positive (compression negative), agreeing "
                    "with N and the stresses -- so a crushing concrete strain reads "
@@ -2143,7 +2162,9 @@ def plastic_view(inp, results):
 
     with st.expander("Full results table (per neutral-axis angle)"):
         # Size the table to all rows so the page scrolls, not the table itself.
-        st.dataframe(_plastic_table(pts, bool(inp["tendons"])),
+        steel_comp = (inp["steel"].active_in_compression and bool(inp["bars"])
+                      and bool(pts) and "eps_s_comp" in pts[0])
+        st.dataframe(_plastic_table(pts, bool(inp["tendons"]), steel_comp),
                      hide_index=True, width="stretch",
                      height=35 * (len(pts) + 1) + 3)
 

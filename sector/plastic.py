@@ -53,6 +53,7 @@ class PlasticPoint:
     na_y_intercept: float     # neutral axis intercept with Y axis, m
     eps_concrete: float       # extreme concrete strain, % (compression +)
     eps_steel: float          # extreme (most tensile) mild-steel strain, %
+    eps_steel_comp: float     # extreme (most compressed) mild-steel strain, % (comp +)
     eps_cable: float          # extreme (most tensile) tendon strain, % (incl. IS)
     curvature: float          # 1/m
     # The compression force and lever arm are diagnostic. They match the handcalc
@@ -124,8 +125,9 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
     """Force resultants for a trial compression depth ``c`` (s-units).
 
     Returns compression and tension force totals and their first moments, in kN
-    and kNm, plus the most tensile mild-steel and tendon strains
-    (compression-positive %). The neutral axis is at ``s = s_max - c`` and the
+    and kNm, plus the extreme mild-steel strains (most tensile ``min_eps`` and most
+    compressed ``max_eps``) and the most tensile tendon strain (compression-positive
+    fractions). The neutral axis is at ``s = s_max - c`` and the
     curvature is ``phi`` (the governing ultimate curvature). ``rings`` are the
     oriented concrete rings as ``(x, y)`` point lists; ``bar_data`` /
     ``tendon_data`` are ``(x, y, area, s)`` arrays (``s = x*dx + y*dy`` the depth
@@ -187,10 +189,11 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
 
     # -- reinforcement (point areas, both signs) --
     bx, by, ba, s_bars = bar_data
-    min_eps = 0.0
+    min_eps = max_eps = 0.0
     if bx.size:
         eps_b = kappa * (s_bars - s_na)                     # compression positive
         min_eps = float(eps_b.min())                        # most tensile bar strain
+        max_eps = float(eps_b.max())                        # most compressed bar strain
         # The material law is a branchy scalar; evaluate it per bar, then form the
         # forces and split compression / tension with array reductions.
         sig_b = np.array([-steel.stress(-e, design=True) for e in eps_b])  # comp +, MPa
@@ -220,7 +223,8 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
         ten_Fx += float((ft[~comp] * tx[~comp]).sum())
         ten_Fy += float((ft[~comp] * ty[~comp]).sum())
 
-    return comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy, min_eps, min_eps_cable
+    return (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
+            min_eps, max_eps, min_eps_cable)
 
 
 @dataclass
@@ -366,7 +370,7 @@ def plastic_capacity_at_angle(
     phi = _governing_curvature(steel, prestress, s_max, c, s_bars, s_tendons,
                                concrete.eps_cu2)
     (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
-     min_eps, min_eps_cable) = _accumulate(
+     min_eps, max_eps, min_eps_cable) = _accumulate(
         concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
         rings, bar_data, tendon_data, ring_xy, ring_starts, buf_a, buf_b
     )
@@ -415,6 +419,7 @@ def plastic_capacity_at_angle(
         na_y_intercept=y_int,
         eps_concrete=eps_concrete * 100.0,
         eps_steel=min_eps * 100.0,
+        eps_steel_comp=max_eps * 100.0,
         eps_cable=min_eps_cable * 100.0,
         curvature=kappa,
         compression_force=comp_F,

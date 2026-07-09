@@ -627,17 +627,28 @@ class ReportBuilder:
         # Per-angle results table -- the full column set, matching the result view.
         self._h2("Capacity over the neutral-axis sweep")
         cable = bool(self.inp.get("tendons"))
-        head = ["V", "M<sub>x</sub>", "M<sub>y</sub>", "NA x", "NA y", "eps<sub>c</sub>",
-                "eps<sub>s</sub>", "kappa", "Comp", "L", "D<sub>x</sub>", "D<sub>y</sub>"]
+        # Split the bar-strain column into the most tensile and the most compressed
+        # bar only when there are mild bars active in compression (a tendon-only
+        # section has none). Guard on the field so an older payload does not raise.
+        comp = (bool(self.inp.get("bars"))
+                and bool(getattr(self.inp.get("steel"), "active_in_compression", False))
+                and bool(pl["points"]) and "eps_s_comp" in pl["points"][0])
+        eps_s_head = ["eps<sub>s,t</sub>", "eps<sub>s,c</sub>"] if comp else ["eps<sub>s</sub>"]
+        head = (["V", "M<sub>x</sub>", "M<sub>y</sub>", "NA x", "NA y", "eps<sub>c</sub>"]
+                + eps_s_head
+                + ["kappa", "Comp", "L", "D<sub>x</sub>", "D<sub>y</sub>"])
         if cable:
             head.append("eps<sub>p</sub>")
         rows = [head]
         for p in pl["points"]:
-            row = [_fmt(p["V"], 0), _fmt(p["Mx"], 3), _fmt(p["My"], 3),
-                   _fmt(p["na_x"] * _MM, 3), _fmt(p["na_y"] * _MM, 3),
-                   _fmt(p["eps_c"], 3), _fmt(p["eps_s"], 3), _fmt(p["kappa"], 4),
-                   _fmt(p["comp_force"], 3), _fmt(p["lever"] * _MM, 3),
-                   _fmt(p["dx"] * _MM, 3), _fmt(p["dy"] * _MM, 3)]
+            eps_s_vals = ([_fmt(p["eps_s"], 3), _fmt(p["eps_s_comp"], 3)] if comp
+                          else [_fmt(p["eps_s"], 3)])
+            row = ([_fmt(p["V"], 0), _fmt(p["Mx"], 3), _fmt(p["My"], 3),
+                    _fmt(p["na_x"] * _MM, 3), _fmt(p["na_y"] * _MM, 3), _fmt(p["eps_c"], 3)]
+                   + eps_s_vals
+                   + [_fmt(p["kappa"], 4), _fmt(p["comp_force"], 3),
+                      _fmt(p["lever"] * _MM, 3), _fmt(p["dx"] * _MM, 3),
+                      _fmt(p["dy"] * _MM, 3)])
             if cable:
                 row.append(_fmt(p["eps_cable"], 3))
             rows.append(row)
@@ -668,11 +679,20 @@ class ReportBuilder:
         self._p(f"Neutral-axis angle V = {_fmt(gov['V'],0)} deg. The extreme "
                 f"concrete fibre is at the ultimate strain; the curvature scales "
                 f"the strain plane to that limit.")
+        comp = (bool(self.inp.get("bars"))
+                and bool(getattr(self.inp.get("steel"), "active_in_compression", False))
+                and "eps_s_comp" in gov)
+        steel_rows = ([["Most-tensile bar strain", "eps<sub>s,t</sub>",
+                        f"{_fmt(gov['eps_s'], 3)} %"],
+                       ["Most-compressed bar strain", "eps<sub>s,c</sub>",
+                        f"{_fmt(gov['eps_s_comp'], 3)} %"]] if comp else
+                      [["Most-tensile bar strain", "eps<sub>s</sub>",
+                        f"{_fmt(gov['eps_s'], 3)} %"]])
         rows = [["Quantity", "Symbol", "Value"],
                 ["NA intercepts", "x<sub>na</sub>, y<sub>na</sub>",
                  f"{_fmt(gov['na_x']*_MM, 3)}, {_fmt(gov['na_y']*_MM, 3)} mm"],
                 ["Extreme concrete strain", "eps<sub>c</sub>", f"{_fmt(gov['eps_c'], 3)} %"],
-                ["Most-tensile bar strain", "eps<sub>s</sub>", f"{_fmt(gov['eps_s'], 3)} %"],
+                *steel_rows,
                 ["Curvature", "kappa", f"{_fmt(gov['kappa'],4)} 1/m"],
                 ["Concrete compression resultant", "F<sub>c</sub>", f"{_fmt(Fc, 3)} kN"],
                 ["Internal lever arm", "L", f"{_fmt(gov['lever']*_MM, 3)} mm"],

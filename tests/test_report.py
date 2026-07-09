@@ -45,8 +45,9 @@ def _out():
                     "check_util": True, "applied": (80.0, 0.0), "converged": True,
                     "points": [{"V": 0.0, "Mx": 100.0, "My": 0.0, "na_x": 0.0,
                                 "na_y": 0.05, "eps_c": 0.35, "eps_s": 2.0,
-                                "eps_cable": 0.0, "kappa": 0.02, "comp_force": 300.0,
-                                "lever": 0.2, "dx": 0.0, "dy": 0.2}]},
+                                "eps_s_comp": -0.1, "eps_cable": 0.0, "kappa": 0.02,
+                                "comp_force": 300.0, "lever": 0.2, "dx": 0.0,
+                                "dy": 0.2}]},
         "elastic": {"total": [150.0], "long": [120.0], "dif": [30.0], "rst1": [0.0],
                     "max_conc": 12.0, "max_conc_xy": (0.0, 0.15), "max_conc_point": 3,
                     "na_x": 0.0, "na_y": 0.04, "max_steel": 150.0, "max_steel_bar": 1,
@@ -268,6 +269,8 @@ def test_report_omits_unused_material_sections():
     txt2 = _pdf_text(sector_report.build_report({}, inp2, _out(), figures=False))
     assert "Initial prestrain" in txt2
     assert "Design yield" not in txt2
+    # No mild bars -> no compression bar-strain split (would be a spurious eps_s,c row).
+    assert "Most-compressed bar" not in txt2
 
 
 def test_report_handles_uncracked_section():

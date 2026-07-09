@@ -435,6 +435,39 @@ def test_plastic_strains_are_reported_tension_positive():
     assert pt["eps_s"] > 0.0     # most tensile bar -> tension -> positive
 
 
+def test_plastic_table_splits_steel_strain_when_active_in_compression():
+    # With the mild steel active in compression the per-angle table reports both the
+    # tensile and the compression bar-strain extreme (eps_s,t / eps_s,c); tension-only
+    # keeps a single eps_s column.
+    from sector_app import _plastic_table
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    pts = at.session_state["results"]["plastic"]["points"]
+    assert "eps_s_comp" in pts[0]
+    active = _plastic_table(pts, False, True)
+    assert any(",t (%)" in c for c in active) and any(",c (%)" in c for c in active)
+    tension = _plastic_table(pts, False, False)
+    assert not any(",c (%)" in c for c in tension)          # no compression column
+    assert not any(",t (%)" in c for c in tension)          # the single column is eps_s
+
+
+def test_plastic_view_tolerates_a_pre_split_payload():
+    # A plastic payload cached before the steel-strain split (no eps_s_comp) -- e.g. a
+    # reused result across a code update -- must not crash the view even with active-
+    # in-compression steel (the default); it degrades to the single strain instead of
+    # raising a KeyError.
+    at = _fresh()
+    at.run()
+    at.button(key="calculate").click().run()
+    res = at.session_state["results"]
+    for p in res["plastic"]["points"]:
+        p.pop("eps_s_comp", None)             # simulate a pre-v0.40 reused payload
+    at.session_state["results"] = res
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    assert not at.exception
+
+
 def test_both_mode_runs_elastic_and_plastic():
     at = _fresh()
     at.run()

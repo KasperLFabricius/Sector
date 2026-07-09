@@ -620,6 +620,12 @@ def manual_blocks() -> list:
        "crushing strain -- otherwise the concrete crushes first) and rupture of the "
        "most tensile tendon (measured from its locked-in strain). Whichever is "
        "smallest governs.")
+    call("tip", "The reported mild-steel strain is split into its two governing "
+         "extremes: the most **tensile** bar strain $\\varepsilon_{s,t}$ and, when "
+         "the bars are active in compression, the most **compressed** bar strain "
+         "$\\varepsilon_{s,c}$ (tension-positive, so it reads negative). With the "
+         "bars tension-only, the compression side carries no stress and only "
+         "$\\varepsilon_s$ is shown.")
     h2("Force resultants and equilibrium")
     md("The concrete compression force is the integral of $\\sigma_c$ over the "
        "compression zone. The parabola is split into its rising region and the "
