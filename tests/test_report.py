@@ -281,3 +281,37 @@ def test_report_handles_uncracked_section():
     out["elastic"]["props_cr"] = None
     pdf = sector_report.build_report({}, _inp(), out, figures=False)
     assert pdf[:4] == b"%PDF"
+
+
+def _shear_out():
+    return {"res": {"vrd_c": 103.4, "k": 1.603, "rho_l": 0.0089, "sigma_cp": 0.0,
+                    "fcd": 24.14, "v_basic": 0.627, "v_floor": 0.535, "crd_c": 0.1241,
+                    "vmin": 0.535, "k1": 0.15, "valid": True},
+            "v_ed": 80.0, "util": 80.0 / 103.4, "axis": "x", "tension_low": True,
+            "bw": 300.0, "bw_auto": 300.0, "bw_user": False, "d": 550.0,
+            "asl": 1473.0, "ac": 0.18, "fck": 35.0, "n_ed": 0.0,
+            "method": "DS/EN 1992-1-1:2005 + DK NA:2024"}
+
+
+def test_report_includes_shear_section():
+    out = _out()
+    out["shear"] = _shear_out()
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Shear resistance" in txt          # the section heading
+    assert "6.2.2" in txt                     # the clause reference
+    assert "103.4" in txt                     # the VRd,c value
+    assert "Utilisation" in txt
+
+
+def test_report_shear_flags_exceeded():
+    out = _out()
+    sh = _shear_out()
+    sh["v_ed"], sh["util"] = 200.0, 200.0 / 103.4
+    out["shear"] = sh
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "EXCEEDED" in txt
+
+
+def test_report_without_shear_omits_the_section():
+    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    assert "Shear resistance" not in txt

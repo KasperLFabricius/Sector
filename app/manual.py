@@ -388,7 +388,8 @@ def manual_blocks() -> list:
           [["Section", "The concrete outline, voids and reinforcement (live)"],
            ["Stress-Strain diagrams", "The concrete, mild-steel and tendon laws (live)"],
            ["Plastic Results", "The M-M envelope and the utilisation (on Calculate)"],
-           ["Elastic Results", "The cracked-section stresses and crack width (on Calculate)"]])
+           ["Elastic Results", "The cracked-section stresses and crack width (on Calculate)"],
+           ["Shear", "The shear resistance $V_{Rd,c}$ and the utilisation (on Calculate)"]])
     call("tip", "*Auto-calc all derived values* (in Analysis & Result Settings) "
          "recomputes every auto quantity from the current grade at once: the concrete "
          "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
@@ -492,6 +493,25 @@ def manual_blocks() -> list:
     call("standard", "The DK NA reports the fine and the coarse crack system side "
          "by side, each for the long-term and short-term load (four crack widths). "
          "Part C derives every model in full with the worked crack width.")
+    h2("Shear (VRd,c, no shear reinforcement)")
+    md("With **Check shear capacity** on, Sector computes the design shear "
+       "resistance $V_{Rd,c}$ of a member **not** requiring shear reinforcement "
+       "(EN 1992-1-1 6.2.2) and the utilisation $V_{Ed}/V_{Rd,c}$. The inputs are "
+       "the applied shear $V_{Ed}$, the shear direction (vertical, bending about "
+       "$x$; or horizontal, about $y$), the tension face, the method edition, and "
+       "the web width $b_w$ (0 = derived). The effective depth $d$, the tension "
+       "reinforcement $A_{sl}$ and, when $b_w = 0$, the web width are all derived "
+       "from the geometry; the axial term uses the plastic (ULS) axial force $N$.")
+    table(["Shear method", "What it sets"],
+          [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
+            "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],
+           ["DS/EN 1992-1-1:2005 + DK NA:2024", "As 2005 but the raised "
+            "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"]])
+    call("limit", "$A_{sl}$ is taken as the longitudinal bars on the tension face, "
+         "**assumed fully anchored** ($\\geq l_{bd} + d$) beyond the section -- an "
+         "anchorage that cannot be known at section level, so it is the user's "
+         "responsibility. A member with $V_{Ed} > V_{Rd,c}$ needs designed shear "
+         "reinforcement (a later addition).")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
@@ -522,6 +542,11 @@ def manual_blocks() -> list:
        "short-term and total states, with the peak concrete compression and the "
        "neutral-axis position. When cracking is checked the section properties "
        "(uncracked and cracked) and the crack width follow.")
+    h2("Shear results")
+    md("The **Shear** view reports the applied $V_{Ed}$, the resistance "
+       "$V_{Rd,c}$ and the utilisation, then the derived quantities ($d$, $b_w$, "
+       "$A_{sl}$, $\\rho_l$, $k$, $\\sigma_{cp}$, $A_c$) and the code coefficients "
+       "used. The web width shows whether it was entered or derived.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -747,6 +772,40 @@ def manual_blocks() -> list:
          "each for the long-term and short-term load; the report writes out the "
          "governing worked crack width.")
 
+    h1("Shear resistance without shear reinforcement")
+    md("The design shear resistance of a member not requiring shear reinforcement "
+       "(EN 1992-1-1 6.2.2(1)) is\n\n"
+       "$$V_{Rd,c} = \\Big[C_{Rd,c}\\,k\\,(100\\,\\rho_l\\,f_{ck})^{1/3} + "
+       "k_1\\,\\sigma_{cp}\\Big]\\,b_w\\,d \\quad(6.2\\text{a}),$$\n\n"
+       "with a lower bound\n\n"
+       "$$V_{Rd,c} = (v_{min} + k_1\\,\\sigma_{cp})\\,b_w\\,d \\quad(6.2\\text{b}),$$\n\n"
+       "where $k = 1 + \\sqrt{200/d} \\le 2$ ($d$ in mm), "
+       "$\\rho_l = A_{sl}/(b_w\\,d) \\le 0.02$ is the tension-reinforcement ratio, "
+       "and $\\sigma_{cp} = N_{Ed}/A_c < 0.2\\,f_{cd}$ is the axial stress "
+       "(compression positive). The edition supplies $C_{Rd,c} = 0.18/\\gamma_c$, "
+       "$k_1 = 0.15$ and $v_{min}$: the recommended "
+       "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$, or the DK NA:2024 "
+       "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$.")
+    md("Sector derives the geometry from the section for the chosen shear "
+       "direction: the effective depth $d$ is the distance from the extreme "
+       "compression fibre (opposite the tension face) to the centroid of the "
+       "tension bars; $b_w$, when not entered, is the smallest solid width sampled "
+       "over the middle 80% of the depth (the web of a rectangular / T / box "
+       "section -- a curved outline should have $b_w$ entered by hand). $\\sigma_{cp}$ "
+       "uses the plastic (ULS) axial force $N$; since Sector's $N$ is "
+       "tension-positive it is negated to the code's compression-positive "
+       "convention, exactly as the axial-force flip elsewhere.")
+    call("limit", "$A_{sl}$ is the longitudinal tension reinforcement, **assumed "
+         "fully anchored** ($\\geq l_{bd} + d$) beyond the section. This anchorage "
+         "cannot be checked at section level, so it is the engineer's "
+         "responsibility. Bonded tendons are not counted toward $\\rho_l$ "
+         "automatically.")
+    md("**Worked** (300 x 600 mm rectangle, C35, DK NA:2024, "
+       "$A_{sl} = 1473$ mm$^2$, $d = 550$ mm, $b_w = 300$ mm, $N = 0$): "
+       "$k = 1.603$, $\\rho_l = 0.00893$, $C_{Rd,c} = 0.124$, the basic term "
+       "$0.627$ MPa exceeds $v_{min} = 0.535$ MPa, so "
+       "$V_{Rd,c} = 0.627 \\cdot 300 \\cdot 550 = 103.4$ kN.")
+
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "
        "axial force **at each swept angle** to a tight residual, "
@@ -774,7 +833,8 @@ def manual_blocks() -> list:
            ["Prestressing steel law", "DS/EN 1992-1-1 3.3.6"],
            ["Cracking and crack width (2005)", "DS/EN 1992-1-1 7.3"],
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
-           ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"]])
+           ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
+           ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"]])
 
     h1("Key assumptions & limitations")
     md("- **One plane section.** Plane sections remain plane; the strain field is "
