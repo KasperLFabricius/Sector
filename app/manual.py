@@ -905,8 +905,9 @@ def manual_blocks() -> list:
          "factor: recommended $\\nu = 0.6(1 - f_{ck}/250)$ (via 6.2.2(6)), or the "
          "DK NA:2024 pure-torsion $\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA) -- "
          "a further 0.7 on $\\nu_v$ for the circulatory shear flow. Only solid and "
-         "single-void (box) sections are idealised automatically; enter $t_{ef}$ by "
-         "hand for a curved or multi-cell outline.")
+         "single-cell (box) sections are idealised automatically; a multi-cell "
+         "section (two or more voids) is rejected (6.3.2(1) needs sub-division), and "
+         "a curved outline should have $t_{ef}$ entered by hand.")
     md("**Worked** (300 x 600 mm rectangle, C35, DK NA:2024, closed $\\phi$10 "
        "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, $t_{ef} = 100$ mm, "
        "$A_k = 0.1$ m$^2$, $u_k = 1.4$ m, $\\nu_t = 0.368$. At the optimum "

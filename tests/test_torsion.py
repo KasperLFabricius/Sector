@@ -71,6 +71,17 @@ def test_tube_rejects_too_large_tef_override():
     assert t["Ak"] == 0.0
 
 
+def test_tube_multi_cell_is_invalid():
+    # Codex P2: two or more voids -> the single-tube idealisation does not model the
+    # internal webs, so it is rejected rather than reporting an unconservative TRd.
+    outer = _rect(1.0, 1.0)
+    h1 = [(0.1, 0.1), (0.4, 0.1), (0.4, 0.9), (0.1, 0.9)]
+    h2 = [(0.6, 0.1), (0.9, 0.1), (0.9, 0.9), (0.6, 0.9)]
+    t = torsion.tube_properties(outer, [h1, h2])
+    assert not t["valid"]
+    assert "multi-cell" in (t.get("reason") or "")
+
+
 def test_offset_polygon_inward_square():
     ring = torsion.offset_polygon_inward([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
                                           (0.0, 1.0)], 0.1)
@@ -216,6 +227,43 @@ def test_combined_vrdmax_uses_shear_method_not_torsion():
     b = inter(codes.EC2_2005.label)
     assert a["vrd_max"] == pytest.approx(b["vrd_max"])   # shear-driven, unchanged
     assert a["trd_max"] != pytest.approx(b["trd_max"])   # torsion-driven, changed
+
+
+def test_app_torsion_only_axial_input_enabled():
+    # Codex P2: in an Elastic-only torsion check the plastic axial input still drives
+    # alpha_cw, so it must be enabled (not disabled) when only torsion is on, and a
+    # compression axial force must raise TRd,max.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(30.0).run()
+    assert not at.number_input(key="pl_P").disabled
+    at.button(key="calculate").click().run()
+    base = at.session_state["results"]["torsion"]["trd_max"]
+    at.number_input(key="pl_P").set_value(-1500.0).run()   # compression (N tension +)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["alpha_cw"] > 1.0                              # compression -> alpha_cw up
+    assert t["trd_max"] > base
+
+
+def test_app_torsion_multi_void_rejected():
+    import pandas as pd
+    at = _fresh()
+    at.run()
+    # two separate triangular voids in the default rectangle (blank-row separated)
+    at.session_state["hole_base"] = pd.DataFrame({
+        "x (mm)": [-100.0, -40.0, -70.0, None, 40.0, 100.0, 70.0],
+        "y (mm)": [-50.0, -50.0, 50.0, None, -50.0, -50.0, 50.0]})
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(20.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert not at.session_state["results"]["torsion"]["valid"]
+    at.selectbox(key="view").set_value("Torsion").run()
+    assert any("multi-cell" in w.value for w in at.warning)
 
 
 def test_app_torsion_is_saved_and_restored():

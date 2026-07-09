@@ -883,8 +883,13 @@ class ReportBuilder:
                 "concrete struts give the resistance at the auto-optimised strut "
                 "angle.")
         if not t["valid"]:
-            self._small("Warning: the tube could not be formed (a degenerate or "
-                        "too-thin section).")
+            if t.get("reason") == "multi-cell (2+ voids)":
+                self._small("Torsion not evaluated: a multi-cell section (two or "
+                            "more voids) needs sub-division into separate tubes "
+                            "(6.3.2(1)); the single-tube idealisation is not applied.")
+            else:
+                self._small("Warning: the tube could not be formed (a degenerate or "
+                            "too-thin section).")
             return
         if t["out_of_limits"]:
             self._small("Note: the strut bounds cot theta in "

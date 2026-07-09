@@ -1722,17 +1722,18 @@ def build_inputs():
         return P, Mx, My
 
     loads.markdown("**Plastic capacity**")
-    # The plastic axial force N is also the ULS axial used by the shear check's
-    # sigma_cp, so its input stays enabled whenever the shear check is on -- even in
-    # Elastic-only mode, where the rest of the plastic set is disabled -- so the user
-    # can always enter the axial force the shear result depends on. The moments stay
-    # gated on the plastic analysis (they feed only the envelope utilisation).
+    # The plastic axial force N is also the ULS axial used by the shear and torsion
+    # checks (their sigma_cp / alpha_cw), so its input stays enabled whenever any of
+    # those checks is on -- even in Elastic-only mode, where the rest of the plastic
+    # set is disabled -- so the user can always enter the axial force the result
+    # depends on. The moments stay gated on the plastic analysis (envelope only).
     P_pl, Mx_pl, My_pl = _load_set(
         "pl", "Axial force for the plastic M-M capacity envelope; also the ULS axial "
-        "force N used by the shear check (sigma_cp). Enabled whenever a plastic or "
-        "shear check is active.",
+        "force N used by the shear and torsion checks (sigma_cp / alpha_cw). Enabled "
+        "whenever a plastic, shear or torsion check is active.",
         "Applied moment checked against the plastic envelope (utilisation).",
-        plastic_on or shear_on, moments_active=plastic_on and check_util)
+        plastic_on or shear_on or torsion_on,
+        moments_active=plastic_on and check_util)
 
     loads.divider()
     loads.markdown("**Elastic stresses (long + short term)**")
@@ -2271,7 +2272,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             asw_t=asw_t, asw_over_s=asw_over_s_t, dia=inp["torsion_stirrup_dia"],
             s=inp["torsion_stirrup_s"], cot_min=tcot_min, cot_max=tcot_max,
             method=inp["torsion_method"], governs=governs_t, valid=tube["valid"],
-            cot_limit_lo=lo_t, cot_limit_hi=hi_t,
+            reason=tube.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
             out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9))
         # Combined shear+torsion concrete crushing (6.29): TEd/TRd,max + VEd/VRd,max
         # <= 1, at a common strut angle. Both TRd,max and VRd,max peak at cot = 1
@@ -2929,9 +2930,16 @@ def torsion_view(inp, results):
     t = results["torsion"]
     tube = t["tube"]
     if not t["valid"]:
-        st.warning("The torsion tube could not be formed from the outline (a "
-                   "degenerate or too-thin section). Enter a wall thickness tef to "
-                   "override, or check the geometry.")
+        if t.get("reason") == "multi-cell (2+ voids)":
+            st.warning("Torsion is not available for a multi-cell section (two or "
+                       "more voids): the thin-walled single-tube idealisation does "
+                       "not model the internal webs, so its TRd would be "
+                       "unconservative (EN 1992-1-1 6.3.2(1) requires sub-dividing "
+                       "into separate tubes). Use a solid or single-cell outline.")
+        else:
+            st.warning("The torsion tube could not be formed from the outline (a "
+                       "degenerate or too-thin section). Enter a wall thickness tef "
+                       "to override, or check the geometry.")
         return
     if t["out_of_limits"]:
         st.warning(f"The strut bounds (cot {_THETA} in [{t['cot_min']:.2f}, "

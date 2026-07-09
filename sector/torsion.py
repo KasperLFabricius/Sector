@@ -100,12 +100,22 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
     """
     if not outer or len(outer) < 3:
         return dict(A=0.0, u=0.0, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,
-                    tef_capped=False, tef_user=False, valid=False)
+                    tef_capped=False, tef_user=False, hollow=bool(holes),
+                    valid=False, reason="no outline")
+    # The single-tube idealisation models a solid section or a single-cell hollow box;
+    # a multi-cell section (two or more voids) needs sub-division into separate tubes
+    # (6.3.2(1)), which is not implemented, so reject it rather than report an
+    # unconservative single-tube TRd.
+    if holes and len(holes) > 1:
+        return dict(A=0.0, u=0.0, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,
+                    tef_capped=False, tef_user=False, hollow=True,
+                    valid=False, reason="multi-cell (2+ voids)")
     A = abs(geometry.signed_area(outer))            # outer area incl. hollow, m2
     u = _perimeter(outer)                            # outer perimeter, m
     if A <= 0.0 or u <= 0.0:
         return dict(A=A, u=u, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,
-                    tef_capped=False, tef_user=False, valid=False)
+                    tef_capped=False, tef_user=False, hollow=bool(holes),
+                    valid=False, reason="degenerate outline")
     tef_auto = A / u                                 # m
     hollow = bool(holes)
     tef = tef_auto
@@ -140,7 +150,8 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
         Ak = max(A - u * 0.5 * tef, 0.0)             # 0 when the wall eats the section
         uk = u * math.sqrt(Ak / A) if A > 0.0 else 0.0
     return dict(A=A, u=u, tef=tef * 1000.0, Ak=Ak, uk=uk, tef_auto=tef_auto * 1000.0,
-                tef_capped=tef_capped, tef_user=tef_user, hollow=hollow, valid=Ak > 0.0)
+                tef_capped=tef_capped, tef_user=tef_user, hollow=hollow,
+                valid=Ak > 0.0, reason=None if Ak > 0.0 else "wall exceeds section")
 
 
 def trd_s(ak_m2: float, fywd: float, asw_over_s: float, cot: float) -> float:
