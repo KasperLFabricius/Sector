@@ -2233,8 +2233,12 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         bw = inp["shear_bw"] if inp["shear_bw"] > 0.0 else bw_auto
         fck = inp["concrete"].fck
         # The 2023 tau_Rd,c uses the flexural-reinforcement design yield and the
-        # aggregate size ddg; the 2005 VRd,c ignores both.
-        fyd_flex = abs(inp["steel"].stress(0.05, design=True))
+        # aggregate size ddg; the 2005 VRd,c ignores both. Take fyd from the yield
+        # parameters (fytk/gamma_y) rather than sampling stress() at a fixed strain,
+        # which a hardening or low-rupture-strain law would misread.
+        _steel = inp["steel"]
+        fyd_flex = (_steel.fytk / _steel.gamma_y if getattr(_steel, "gamma_y", 0.0) > 0.0
+                    else _steel.fytk)
         ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
         res = shear.vrd_c(fck, code, bw, d, asl, -inp["P_pl"], ac,
                           fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0))

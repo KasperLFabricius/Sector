@@ -145,9 +145,9 @@ def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
     strain-based method for members *with* shear reinforcement (8.2.3) is separate.
     """
     if d_mm <= 0.0 or bw_mm <= 0.0 or fyd_mpa <= 0.0:
-        return dict(vrd_c=0.0, tau_rdc=0.0, tau_min=0.0, rho_l=0.0, z=0.9 * d_mm,
-                    ddg=ddg_mm, fyd=fyd_mpa, gamma_v=code.shear_gamma_v,
-                    model="2023", valid=False)
+        return dict(vrd_c=0.0, tau_rdc=0.0, tau_basic=0.0, tau_min=0.0, rho_l=0.0,
+                    z=0.9 * d_mm, ddg=ddg_mm, fyd=fyd_mpa,
+                    gamma_v=code.shear_gamma_v, model="2023", valid=False)
     gv = code.shear_gamma_v
     rho_l = asl_mm2 / (bw_mm * d_mm)
     z = 0.9 * d_mm

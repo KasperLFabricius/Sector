@@ -68,6 +68,17 @@ def test_vrd_c_2023_hand_calc():
     assert res["vrd_c"] == pytest.approx(85.4, abs=0.3)
 
 
+def test_vrd_c_2023_invalid_keeps_all_keys():
+    # Codex P2: an invalid 2023 result (zero depth) must still carry every reporting
+    # key (incl. tau_basic) so the report does not KeyError.
+    res = shear.vrd_c_2023(35.0, codes.EC2_2023, bw_mm=300.0, d_mm=0.0,
+                           asl_mm2=1473.0, fyd_mpa=434.8, ddg_mm=32.0)
+    assert not res["valid"]
+    for k in ("vrd_c", "tau_rdc", "tau_basic", "tau_min", "rho_l", "z", "ddg",
+              "fyd", "gamma_v", "model"):
+        assert k in res
+
+
 def test_vrd_c_dispatches_on_shear_model():
     # The generic vrd_c routes the 2023 edition to the strain-based branch.
     res = shear.vrd_c(35.0, codes.EC2_2023, 300.0, 550.0, 1473.0, 0.0, 0.18,
@@ -443,6 +454,21 @@ def test_app_shear_2023_method_uses_tau_rdc():
     assert sh["res"]["tau_rdc"] > 0.0 and sh["res"]["vrd_c"] > 0.0
     at.selectbox(key="view").set_value("Shear").run()
     assert not at.exception
+
+
+def test_app_shear_2023_fyd_from_yield_parameters():
+    # Codex P2: fyd is fytk/gamma_y of the mild steel, not stress() sampled at a
+    # fixed strain (which a hardening / low-rupture law would misread).
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
+    at.button(key="calculate").click().run()
+    sh = at.session_state["results"]["shear"]
+    fytk = at.session_state["mild_fytk"]
+    gy = at.session_state["mild_gamma_y"]
+    assert sh["fyd_flex"] == pytest.approx(fytk / gy)
+    assert sh["res"]["fyd"] == pytest.approx(fytk / gy)
 
 
 def test_app_shear_2023_skips_links_with_a_note():

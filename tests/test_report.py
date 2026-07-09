@@ -324,6 +324,18 @@ def test_report_shear_2023_section():
     assert "d" in txt and "dg" in txt                # ddg appears
 
 
+def test_report_shear_2023_invalid_is_reportable():
+    # Codex P2: an invalid 2023 result (from the engine) must render without a KeyError.
+    from sector import codes as _codes, shear as _shear
+    res = _shear.vrd_c_2023(35.0, _codes.EC2_2023, 300.0, 0.0, 1473.0, 434.8, 32.0)
+    out = _out()
+    sh = _shear_out_2023()
+    sh["res"] = res
+    out["shear"] = sh
+    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    assert pdf[:4] == b"%PDF"
+
+
 def test_report_shear_flags_exceeded():
     out = _out()
     sh = _shear_out()
