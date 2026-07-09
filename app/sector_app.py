@@ -1431,7 +1431,9 @@ def build_inputs():
     aset.markdown("**Shear without shear reinforcement (VRd,c)**")
     aset.caption("Design shear resistance of a member not requiring shear "
                  "reinforcement (EN 1992-1-1 sec. 6.2.2). A ULS check of the applied "
-                 "shear VEd; the axial term uses the plastic (ULS) axial force N.")
+                 "shear VEd; the axial term uses the ULS axial force N from the "
+                 "Plastic capacity load set (its N input stays enabled here even in "
+                 "Elastic-only mode).")
     shear_on = _seeded_checkbox(
         aset, "Check shear capacity", False, "shear_on",
         help="Compute VRd,c and the utilisation VEd/VRd,c. Members that need "
@@ -1620,10 +1622,17 @@ def build_inputs():
         return P, Mx, My
 
     loads.markdown("**Plastic capacity**")
+    # The plastic axial force N is also the ULS axial used by the shear check's
+    # sigma_cp, so its input stays enabled whenever the shear check is on -- even in
+    # Elastic-only mode, where the rest of the plastic set is disabled -- so the user
+    # can always enter the axial force the shear result depends on. The moments stay
+    # gated on the plastic analysis (they feed only the envelope utilisation).
     P_pl, Mx_pl, My_pl = _load_set(
-        "pl", "Axial force for which the plastic M-M capacity envelope is computed.",
+        "pl", "Axial force for the plastic M-M capacity envelope; also the ULS axial "
+        "force N used by the shear check (sigma_cp). Enabled whenever a plastic or "
+        "shear check is active.",
         "Applied moment checked against the plastic envelope (utilisation).",
-        plastic_on, moments_active=plastic_on and check_util)
+        plastic_on or shear_on, moments_active=plastic_on and check_util)
 
     loads.divider()
     loads.markdown("**Elastic stresses (long + short term)**")

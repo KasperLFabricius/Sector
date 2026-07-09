@@ -206,6 +206,28 @@ def test_app_shear_view_renders_and_shows_utilisation():
     assert any("VRd,c" in lbl or "Resistance" in lbl for lbl in labels)
 
 
+def test_app_shear_axial_input_enabled_in_elastic_mode():
+    # Codex P2: in Elastic-only mode the shear sigma_cp still uses the plastic axial
+    # force, so that input must stay enabled when the shear check is on (else the user
+    # cannot enter the ULS axial the result depends on). A compression axial (negative
+    # N, tension-positive) must raise VRd,c through sigma_cp.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    assert not at.number_input(key="pl_P").disabled        # axial input available
+    at.number_input(key="shear_V").set_value(50.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    base = at.session_state["results"]["shear"]["res"]["vrd_c"]
+    at.number_input(key="pl_P").set_value(-400.0).run()    # compression (N tension +)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    comp = at.session_state["results"]["shear"]["res"]
+    assert comp["sigma_cp"] > 0.0                          # compression -> positive sigma_cp
+    assert comp["vrd_c"] > base                            # ...raises VRd,c
+
+
 def test_app_shear_is_saved_and_restored():
     # The shear inputs are persisted (SCALAR_KEYS); a project round trip keeps them.
     import project_io
