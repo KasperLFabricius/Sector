@@ -52,6 +52,14 @@ def test_tube_hollow_caps_tef_at_the_wall():
     assert t["tef"] == pytest.approx(100.0, abs=15.0)   # ~ the 100 mm wall
 
 
+def test_tube_rejects_too_large_tef_override():
+    # A tef larger than the section can support inverts the inward offset; it must be
+    # rejected (not accepted via abs() as a spurious Ak), leaving an invalid tube.
+    t = torsion.tube_properties(_rect(0.3, 0.6), None, tef_override=400.0)
+    assert not t["valid"]
+    assert t["Ak"] == 0.0
+
+
 def test_offset_polygon_inward_square():
     ring = torsion.offset_polygon_inward([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
                                           (0.0, 1.0)], 0.1)
@@ -175,6 +183,28 @@ def test_app_combined_shear_torsion_interaction():
     assert inter["value"] == pytest.approx(
         inter["t_ed"] / inter["trd_max"] + inter["v_ed"] / inter["vrd_max"])
     assert inter["cot"] == pytest.approx(1.0)       # common crushing angle at 45 deg
+
+
+def test_combined_vrdmax_uses_shear_method_not_torsion():
+    # The combined VRd,max must follow the SHEAR method and lever arm, not the torsion
+    # code / 0.9d. Changing only the torsion method moves TRd,max but leaves VRd,max.
+    def inter(torsion_method):
+        at = _fresh()
+        at.run()
+        at.checkbox(key="shear_on").set_value(True).run()
+        at.checkbox(key="shear_links").set_value(True).run()
+        at.number_input(key="shear_V").set_value(150.0).run()
+        at.checkbox(key="torsion_on").set_value(True).run()
+        at.number_input(key="torsion_T").set_value(40.0).run()
+        at.selectbox(key="torsion_method").set_value(torsion_method).run()
+        at.button(key="calculate").click().run()
+        assert not at.exception
+        return at.session_state["results"]["torsion"]["interaction"]
+
+    a = inter(codes.EC2_2005_DKNA.label)
+    b = inter(codes.EC2_2005.label)
+    assert a["vrd_max"] == pytest.approx(b["vrd_max"])   # shear-driven, unchanged
+    assert a["trd_max"] != pytest.approx(b["trd_max"])   # torsion-driven, changed
 
 
 def test_app_torsion_is_saved_and_restored():

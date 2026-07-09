@@ -2279,13 +2279,25 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # to the band. Only when the shear check (with links) is also active.
         sh_links = out.get("shear", {}).get("links")
         if sh_links is not None and sh_links["res"]["valid"] and tube["valid"]:
-            cot_c = min(max(1.0, tcot_min), tcot_max)
+            # Common strut angle for the crushing check: cot = 1 (where both TRd,max
+            # and VRd,max peak), clamped to the INTERSECTION of the shear and torsion
+            # cot bounds so it is admissible for both.
+            s_lo = min(inp["shear_cot_min"], inp["shear_cot_max"])
+            s_hi = max(inp["shear_cot_min"], inp["shear_cot_max"])
+            lo_b, hi_b = max(tcot_min, s_lo), min(tcot_max, s_hi)
+            hi_b = max(hi_b, lo_b)
+            cot_c = min(max(1.0, lo_b), hi_b)
             trdmax_c = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"],
                                        alpha_cw, cot_c)
+            # VRd,max reuses the SHEAR method and the same lever arm z as the
+            # stand-alone shear check (not the torsion code / 0.9d), just re-evaluated
+            # at the common angle cot_c.
+            scode = _SHEAR_CODES.get(inp["shear_method"], codes.EC2_2005_DKNA)
             sh = out["shear"]
-            vlk = shear.vrd_links(fck, tcode, sh["bw"], sh["d"], sh_links["asw_over_s"],
-                                  sh_links["fywk"], -inp["P_pl"], sh["ac"],
-                                  cot_c, cot_c)
+            vlk = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
+                                  sh_links["asw_over_s"], sh_links["fywk"],
+                                  -inp["P_pl"], sh["ac"], cot_c, cot_c,
+                                  z_mm=sh_links["res"]["z"])
             v_ed_c = sh["v_ed"]
             inter = ((t_ed / trdmax_c if trdmax_c > 0 else math.inf)
                      + (v_ed_c / vlk["vrd_max"] if vlk["vrd_max"] > 0 else math.inf))

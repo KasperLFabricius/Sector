@@ -123,13 +123,18 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
     tef_user = tef_override > 0.0
     if tef_user:
         tef = tef_override / 1000.0                  # mm -> m
-    # Centre-line polygon: the outer outline offset inward by tef/2.
+    # Centre-line polygon: the outer outline offset inward by tef/2. The input is made
+    # CCW inside offset_polygon_inward, so a valid inward offset stays CCW with a
+    # *positive* signed area strictly smaller than A and a shorter perimeter. When tef
+    # exceeds the section inradius the miter offset flips outside / self-intersects and
+    # its signed area goes non-positive or its perimeter grows -- reject it (do NOT take
+    # abs(), which would accept the inverted polygon) and fall back to a linear estimate.
     ring = offset_polygon_inward(outer, 0.5 * tef)
-    if ring and geometry.signed_area(_ensure_ccw(ring)) > 0.0:
-        Ak = abs(geometry.signed_area(ring))
-        uk = _perimeter(ring)
+    a_ring = geometry.signed_area(ring) if ring else 0.0
+    if ring and 0.0 < a_ring < A and _perimeter(ring) < u:
+        Ak, uk = a_ring, _perimeter(ring)
     else:                                            # degenerate offset -> linear est.
-        Ak = max(A - u * 0.5 * tef, 0.0)
+        Ak = max(A - u * 0.5 * tef, 0.0)             # 0 when the wall eats the section
         uk = u * math.sqrt(Ak / A) if A > 0.0 else 0.0
     return dict(A=A, u=u, tef=tef * 1000.0, Ak=Ak, uk=uk, tef_auto=tef_auto * 1000.0,
                 tef_capped=tef_capped, tef_user=tef_user, hollow=hollow, valid=Ak > 0.0)
