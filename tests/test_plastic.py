@@ -72,6 +72,16 @@ def test_fundamentsbjaelke_matches_handcalc(case):
         assert r.na_y_intercept == pytest.approx(y_int, abs=0.002)
 
 
+def test_eps_steel_comp_is_the_most_compressed_bar_strain():
+    # The solver reports both mild-steel strain extremes (compression-positive): the
+    # most tensile (eps_steel) and the most compressed (eps_steel_comp). At V = 90 the
+    # top and bottom bars strain differently, so the two extremes differ.
+    section, concrete, steel = fundamentsbjaelke()
+    r = plastic_capacity_at_angle(section, concrete, steel, 0.0, 90.0)
+    assert r.eps_steel_comp >= r.eps_steel          # max >= min, by definition
+    assert r.eps_steel_comp != r.eps_steel          # a distinct extreme, not a copy
+
+
 def test_solve_plastic_sweep_returns_all_angles():
     section, concrete, steel = fundamentsbjaelke()
     pts = solve_plastic(section, concrete, steel, 0.0, 0.0, 360.0, 90.0)
