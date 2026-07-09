@@ -524,6 +524,21 @@ def manual_blocks() -> list:
          "factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 NA) rather "
          "than the recommended $\\nu = 0.6(1 - f_{ck}/250)$. Bounds outside the "
          "code range are accepted but **warned**, not blocked.")
+    h2("Torsion (TRd, thin-walled tube)")
+    md("With **Check torsion capacity** on, Sector idealises the section as a "
+       "thin-walled closed tube (6.3) and reports the closed-stirrup resistance "
+       "$T_{Rd,s}$, the strut-crushing $T_{Rd,max}$, the cracking $T_{Rd,c}$, the "
+       "utilisation $T_{Ed}/T_{Rd}$ and the required longitudinal steel "
+       "$\\sum A_{sl}$. The inputs are the applied torsion $T_{Ed}$, the closed "
+       "stirrup (diameter, spacing, yield), the longitudinal-steel yield, an "
+       "optional wall-thickness override $t_{ef}$ (0 = auto), and the strut-angle "
+       "bounds. The tube $A$, $u$, $t_{ef}$, $A_k$ and $u_k$ are derived from the "
+       "outline.")
+    call("standard", "$T_{Rd,max}$ uses the code torsion strut factor: recommended "
+         "$\\nu = 0.6(1 - f_{ck}/250)$, or the DK NA:2024 pure-torsion "
+         "$\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA). When shear links are also "
+         "defined, the combined concrete-crushing check "
+         "$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\leq 1$ (6.29) is added.")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
@@ -559,6 +574,11 @@ def manual_blocks() -> list:
        "$V_{Rd,c}$ and the utilisation, then the derived quantities ($d$, $b_w$, "
        "$A_{sl}$, $\\rho_l$, $k$, $\\sigma_{cp}$, $A_c$) and the code coefficients "
        "used. The web width shows whether it was entered or derived.")
+    h2("Torsion results")
+    md("The **Torsion** view reports $T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd}$, the "
+       "cracking $T_{Rd,c}$ and the utilisation, plus the derived tube ($A$, $u$, "
+       "$t_{ef}$, $A_k$, $u_k$) and the required $\\sum A_{sl}$. When shear links "
+       "are also defined it adds the combined shear+torsion crushing check.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -858,6 +878,42 @@ def manual_blocks() -> list:
        "$V_{Rd} = 540$ kN. In the app the section's own (slightly smaller) plastic "
        "lever arm is used in place of $0.9d$.")
 
+    h1("Torsion (thin-walled tube)")
+    md("A section resisting torsion is idealised as a thin-walled closed tube "
+       "(6.3.2(1)): the torque is carried by a constant shear flow round the walls. "
+       "The effective wall thickness is $t_{ef} = A/u$ ($A$ the area within the "
+       "outer perimeter including any hollow, $u$ that perimeter), capped at the "
+       "real wall for a hollow section. The centre-line is the outline offset "
+       "inward by $t_{ef}/2$; $A_k$ is the area it encloses and $u_k$ its "
+       "perimeter. The resistances (at the strut angle $\\theta$) are\n\n"
+       "$$T_{Rd,s} = \\frac{A_{sw}}{s}\\,2A_k\\,f_{ywd}\\,\\cot\\theta, \\qquad "
+       "T_{Rd,max} = 2\\,\\nu\\,\\alpha_{cw}\\,f_{cd}\\,A_k\\,t_{ef}\\,"
+       "\\sin\\theta\\cos\\theta \\quad(6.30),$$\n\n"
+       "with $T_{Rd} = \\min(T_{Rd,s}, T_{Rd,max})$. The torsion also needs "
+       "longitudinal steel $\\sum A_{sl} = T_{Ed}\\,u_k\\,\\cot\\theta/(2A_k\\,"
+       "f_{yd})$ (6.28), **in addition** to the bending reinforcement on the "
+       "tension side, and the cracking torque is $T_{Rd,c} = 2A_k\\,t_{ef}\\,"
+       "f_{ctd}$ ($\\tau = f_{ctd}$).")
+    md("As for shear, $T_{Rd,s}$ rises with $\\cot\\theta$ and $T_{Rd,max}$ peaks "
+       "at 45 degrees, so $T_{Rd} = \\min$ is largest at the crossover, which "
+       "Sector auto-optimises within the $\\cot\\theta$ bounds. When shear and "
+       "torsion act together the concrete struts carry both, limited by\n\n"
+       "$$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\le 1 \\quad(6.29),$$\n\n"
+       "checked at a common strut angle (the least-conservative shared angle, "
+       "near 45 degrees, where both crushing resistances peak).")
+    call("standard", "The strut factor $\\nu$ is the code torsion effectiveness "
+         "factor: recommended $\\nu = 0.6(1 - f_{ck}/250)$ (via 6.2.2(6)), or the "
+         "DK NA:2024 pure-torsion $\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA) -- "
+         "a further 0.7 on $\\nu_v$ for the circulatory shear flow. Only solid and "
+         "single-cell (box) sections are idealised automatically; a multi-cell "
+         "section (two or more voids) is rejected (6.3.2(1) needs sub-division), and "
+         "a curved outline should have $t_{ef}$ entered by hand.")
+    md("**Worked** (300 x 600 mm rectangle, C35, DK NA:2024, closed $\\phi$10 "
+       "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, $t_{ef} = 100$ mm, "
+       "$A_k = 0.1$ m$^2$, $u_k = 1.4$ m, $\\nu_t = 0.368$. At the optimum "
+       "$\\cot\\theta = 1.75$ the stirrups and struts meet at "
+       "$T_{Rd} \\approx 76.4$ kN.m, with $T_{Rd,c} \\approx 31$ kN.m.")
+
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "
        "axial force **at each swept angle** to a tight residual, "
@@ -887,7 +943,8 @@ def manual_blocks() -> list:
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
            ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"],
-           ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"]])
+           ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"],
+           ["Torsion (thin-walled tube)", "DS/EN 1992-1-1 6.3 + DK NA 5.6.1(3)P / 6.3.2(6)"]])
 
     h1("Key assumptions & limitations")
     md("- **One plane section.** Plane sections remain plane; the strain field is "
