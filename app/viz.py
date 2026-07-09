@@ -399,14 +399,16 @@ def _legend_y(height: float) -> float:
     return -_LEGEND_GAP_PX / plot_h
 
 
-def _point_hover(points, first_number, kind, unit):
-    """Per-point hover strings ``'Kind N<br>x, y[<br>area]'`` for the section drawing.
+def _point_hover(points, first_number, kind, unit, extra=None):
+    """Per-point hover strings ``'Kind N<br>x, y[<br>area][<br>extra]'`` for the
+    section drawing.
 
     Numbering continues from ``first_number`` so it matches the drawn labels and the
     result tables (bars 1..n, tendons n+1.., concrete corners 1..). Coordinates are
     the already-scaled display values, shown in ``unit`` (0 decimals for mm, 3 for
     m). A reinforcement ``area`` (a 3rd tuple element, always in mm2) is shown when
-    present; concrete corners are 2-tuples and carry none.
+    present; concrete corners are 2-tuples and carry none. ``extra`` is an optional
+    per-point string (e.g. a stress/strain read-out) appended on its own line.
     """
     dec = 3 if unit == "m" else 0
     lines = []
@@ -415,6 +417,8 @@ def _point_hover(points, first_number, kind, unit):
              f"x = {p[0]:.{dec}f} {unit}, y = {p[1]:.{dec}f} {unit}")
         if len(p) > 2 and p[2] is not None:
             s += f"<br>area = {p[2]:.0f} mm<sup>2</sup>"
+        if extra is not None and i < len(extra) and extra[i]:
+            s += f"<br>{extra[i]}"
         lines.append(s)
     return lines
 
@@ -422,7 +426,7 @@ def _point_hover(points, first_number, kind, unit):
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
-                   height=440, scale=1.0, unit="m"):
+                   height=440, scale=1.0, unit="m", bar_hover=None, tendon_hover=None):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     Reinforcement is drawn consistently across the views: bars are circles and
@@ -481,7 +485,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         fig.add_trace(go.Scatter(x=bx, y=by, mode="markers", name="reinforcing bar",
                                  marker=dict(size=9, symbol="circle", color=colors,
                                              line=dict(color="white", width=1)),
-                                 customdata=_point_hover(bars, 1, "Bar", unit),
+                                 customdata=_point_hover(bars, 1, "Bar", unit, bar_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
                                  showlegend=True))
     if tendons:
@@ -491,7 +495,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         fig.add_trace(go.Scatter(x=tx, y=ty, mode="markers", name="tendon",
                                  marker=dict(size=11, symbol="diamond", color=colors,
                                              line=dict(color="white", width=1)),
-                                 customdata=_point_hover(tendons, len(bars) + 1, "Tendon", unit),
+                                 customdata=_point_hover(tendons, len(bars) + 1, "Tendon",
+                                                         unit, tendon_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
                                  showlegend=True))
     if na_line:
