@@ -2443,6 +2443,11 @@ if calc:
     st.session_state["result_sig"] = inp["signature"]
     st.session_state["result_plastic_sig"] = inp["plastic_sig"]
     st.session_state["result_elastic_sig"] = inp["elastic_sig"]
+    # Re-default the Plastic view's neutral-axis state to this result's governing
+    # angle (the sticky selectbox key would otherwise keep the previously shown
+    # rotation, e.g. 90 deg, after the load -- and its governing angle -- changed).
+    # The user can still pick another rotation until the next Calculate.
+    st.session_state.pop("pl_state", None)
 
 _generate_report(inp)   # builds the PDF when the Report panel's Generate was pressed
 
