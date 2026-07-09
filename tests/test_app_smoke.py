@@ -468,6 +468,26 @@ def test_plastic_view_tolerates_a_pre_split_payload():
     assert not at.exception
 
 
+def test_plastic_bar_hover_reports_stress_strain_per_bar_and_varies_with_rotation():
+    # The plastic section hover reports each bar's design stress and strain at the
+    # selected rotation (tension-positive): a bar on the tension side reads a positive
+    # strain, one on the compression side negative, and the values change with the
+    # curvature (rotation).
+    from sector_app import _plastic_bar_hover
+    from sector.materials import MildSteel
+    steel = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, gamma_y=1.15,
+                      gamma_u=1.15, curve=3, Es=200000.0, ey0c=2.25)
+    hp = (0.0, 1.0, 0.0)                      # NA at y = 0, compression side y > 0
+    bars = [(0.0, -0.1), (0.0, 0.1)]          # tension bar (y<0), compression bar (y>0)
+    h = _plastic_bar_hover(bars, hp, kappa=0.05, material=steel)
+    assert "MPa" in h[0]
+    assert "= 0.500 %" in h[0]                # tension bar: +0.5 %
+    assert "= -0.500 %" in h[1]               # compression bar: -0.5 %
+    h2 = _plastic_bar_hover(bars, hp, kappa=0.10, material=steel)
+    assert h2[1] != h[1]                       # a different rotation -> different values
+    assert _plastic_bar_hover(bars, hp, 0.05, None) is None   # no material -> no hover
+
+
 def test_both_mode_runs_elastic_and_plastic():
     at = _fresh()
     at.run()

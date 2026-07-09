@@ -198,6 +198,23 @@ def test_section_hover_bars_without_area_omit_it():
     assert "area" not in str(bar.customdata[0])
 
 
+def test_section_figure_appends_per_bar_and_tendon_hover():
+    # The plastic view passes per-bar/tendon stress-strain read-outs; section_figure
+    # appends each to that point's hover (on its own line after the coordinates/area).
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(
+        outer, bars=[(-0.1, -0.25, 314.0), (0.1, -0.25, 314.0)],
+        tendons=[(0.0, 0.26, 150.0)], scale=1000.0, unit="mm",
+        bar_hover=["sig = 300 MPa, eps = 0.10 %", "sig = 310 MPa, eps = 0.20 %"],
+        tendon_hover=["sig = 1200 MPa, eps = 5.90 %"])
+    bar = next(t for t in fig.data if getattr(t, "name", None) == "reinforcing bar")
+    tendon = next(t for t in fig.data if getattr(t, "name", None) == "tendon")
+    assert "sig = 300 MPa" in str(bar.customdata[0])
+    assert "eps = 0.20 %" in str(bar.customdata[1])
+    assert "area = 314 mm" in str(bar.customdata[0])       # coords/area still present
+    assert "sig = 1200 MPa" in str(tendon.customdata[0])
+
+
 def _corner_count(fig):
     texts = [t for t in fig.data if getattr(t, "mode", None) == "text"]
     return len(max(texts, key=lambda t: len(t.text)).text) if texts else 0

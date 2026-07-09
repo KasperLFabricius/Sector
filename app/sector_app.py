@@ -2058,6 +2058,26 @@ def _plastic_table(pts, cable, steel_comp=False):
     return cols
 
 
+def _plastic_bar_hover(points, hp, kappa, material, prestrain=0.0):
+    """Per-bar hover strings 'sigma = X MPa, eps = Y %' at a plastic state.
+
+    From the strain plane -- the compression half-plane ``hp`` gives the signed
+    distance ``d`` from the neutral axis, so the section strain is ``kappa*d``
+    (compression positive) -- and the material's design stress. Tension-positive: the
+    net strain is ``prestrain - kappa*d`` (prestrain 0 for mild bars, IS for tendons)
+    and the stress is the design stress at that strain, matching the solver's per-bar
+    integration. ``points`` are in metres (the half-plane units)."""
+    if material is None:
+        return None
+    a, b, c = hp
+    out = []
+    for p in points:
+        eps = prestrain - kappa * (a * p[0] + b * p[1] + c)   # net strain, tension +
+        sig = material.stress(eps, design=True)               # MPa, tension +
+        out.append(f"{_SIGMA} = {sig:.1f} MPa, {_EPS} = {eps * 100.0:.3f} %")
+    return out
+
+
 def plastic_view(inp, results):
     """Plastic capacity: metrics, the M-M envelope, an inspectable neutral-axis
     state (compression zone + section diagnostics), and the full per-angle table
@@ -2119,6 +2139,10 @@ def plastic_view(inp, results):
         bar_colors = viz.halfplane_bar_colors(inp["bars"], hp, kappa=pt["kappa"])
         tendon_colors = viz.halfplane_bar_colors(inp["tendons"], hp, kappa=pt["kappa"],
                                                  prestrain=pre_IS)
+        # Per-bar stress/strain at this rotation, shown on hover (varies with V).
+        bar_hover = _plastic_bar_hover(inp["bars"], hp, pt["kappa"], inp["steel"])
+        tendon_hover = _plastic_bar_hover(inp["tendons"], hp, pt["kappa"],
+                                          inp["prestress"], prestrain=pre_IS)
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
                                bar_colors=bar_colors, tendons=tendon_xy,
@@ -2127,8 +2151,12 @@ def plastic_view(inp, results):
                                title=f"Section at V = {pt['V']:.0f} deg "
                                      "(green tension, red compression)",
                                show_labels=True, label_scale=inp["label_scale"],
-                               label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm"),
+                               label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
+                               bar_hover=bar_hover, tendon_hover=tendon_hover),
             width="stretch")
+        st.caption("Hover a bar or tendon for its design stress and strain at this "
+                   "rotation (tension-positive). The summary reports the extreme "
+                   "tensile and compression strains.")
     with cR:
         # Split the bar strain into its tensile and compression extreme only when
         # there are mild bars that are active in compression (a tendon-only section has
