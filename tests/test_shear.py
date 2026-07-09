@@ -114,6 +114,15 @@ def test_min_web_width_rect_t_box():
     assert shear.min_web_width(box, [hole], "x") == pytest.approx(400.0)
 
 
+def test_min_web_width_catches_a_thin_void_between_grid_levels():
+    # A 2 mm horizontal duct that falls between the old fixed sample levels must still
+    # reduce the derived web width: the vertex-based sampling evaluates at the void's
+    # own levels (Codex P1). 0.4 m wide section, a 0.2 m-wide duct -> 0.2 m web.
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    duct = [(-0.1, 0.105), (0.1, 0.105), (0.1, 0.107), (-0.1, 0.107)]
+    assert shear.min_web_width(outer, [duct], "x") == pytest.approx(200.0)
+
+
 def test_tension_reinforcement_and_effective_depth():
     outer = [(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)]
     bars = [(0.15, 0.05, 1473.0),     # bottom, tension side

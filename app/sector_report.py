@@ -766,26 +766,28 @@ class ReportBuilder:
                  f"{_fmt(res['vmin'], 3)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._h2("Resistance")
+        # The two 6.2.a/6.2.b terms are stresses (MPa); the resistance multiplies the
+        # governing stress by b_w*d (and /1000 for MPa*mm^2 = N -> kN). Keep each
+        # substitution in its own units so the worked calc is dimensionally consistent.
         self._formula(
-            "V<sub>Rd,c</sub> = [C<sub>Rd,c</sub> k (100 rho<sub>l</sub> "
-            "f<sub>ck</sub>)<sup>1/3</sup> + k<sub>1</sub> sigma<sub>cp</sub>] "
-            "b<sub>w</sub> d",
-            ref="EN 1992-1-1 (6.2.a)",
-            subst=f"[{_fmt(res['crd_c'], 4)} &#183; {_fmt(res['k'], 3)} &#183; (100 "
+            "v = C<sub>Rd,c</sub> k (100 rho<sub>l</sub> f<sub>ck</sub>)<sup>1/3</sup> "
+            "+ k<sub>1</sub> sigma<sub>cp</sub>",
+            ref="EN 1992-1-1 (6.2.a), stress",
+            subst=f"{_fmt(res['crd_c'], 4)} &#183; {_fmt(res['k'], 3)} &#183; (100 "
                   f"&#183; {_fmt(res['rho_l'], 4)} &#183; {_fmt(fck, 0)})<sup>1/3</sup> "
-                  f"+ {_fmt(k1, 2)} &#183; {_fmt(res['sigma_cp'], 3)}] &#183; "
-                  f"{_fmt(sh['bw'], 1)} &#183; {_fmt(sh['d'], 1)}",
-            result=f"basic stress = {_fmt(res['v_basic'], 3)} MPa")
+                  f"+ {_fmt(k1, 2)} &#183; {_fmt(res['sigma_cp'], 3)}",
+            result=f"v = {_fmt(res['v_basic'], 3)} MPa")
         self._formula(
-            "V<sub>Rd,c,min</sub> = (v<sub>min</sub> + k<sub>1</sub> "
-            "sigma<sub>cp</sub>) b<sub>w</sub> d",
-            ref="EN 1992-1-1 (6.2.b)",
-            subst=f"({_fmt(res['vmin'], 3)} + {_fmt(k1, 2)} &#183; "
-                  f"{_fmt(res['sigma_cp'], 3)}) &#183; {_fmt(sh['bw'], 1)} &#183; "
-                  f"{_fmt(sh['d'], 1)}",
-            result=f"floor stress = {_fmt(res['v_floor'], 3)} MPa")
+            "v<sub>min,eff</sub> = v<sub>min</sub> + k<sub>1</sub> sigma<sub>cp</sub>",
+            ref="EN 1992-1-1 (6.2.b), lower-bound stress",
+            subst=f"{_fmt(res['vmin'], 3)} + {_fmt(k1, 2)} &#183; "
+                  f"{_fmt(res['sigma_cp'], 3)}",
+            result=f"v<sub>min,eff</sub> = {_fmt(res['v_floor'], 3)} MPa")
         self._formula(
-            "V<sub>Rd,c</sub> = max(basic, floor) &#183; b<sub>w</sub> &#183; d",
+            "V<sub>Rd,c</sub> = max(v, v<sub>min,eff</sub>) &#183; b<sub>w</sub> "
+            "&#183; d",
+            subst=f"max({_fmt(res['v_basic'], 3)}, {_fmt(res['v_floor'], 3)}) &#183; "
+                  f"{_fmt(sh['bw'], 1)} &#183; {_fmt(sh['d'], 1)} / 1000",
             result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
         util = sh["util"]
         util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"

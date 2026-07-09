@@ -91,11 +91,16 @@ def _line_solid_span(ring: Sequence, level: float, axis: str) -> float:
 def min_web_width(outer: Sequence, holes: Optional[Sequence], axis: str) -> float:
     """Smallest solid width perpendicular to the shear (mm).
 
-    Samples the solid width (outline minus voids) across the middle 80% of the
-    section depth -- excluding the extreme fibres, where a curved outline tapers to
-    zero -- and returns the minimum. Correct for the web of rectangular / T / box
-    sections; a circular (or otherwise curved) section should have ``bw`` entered by
-    hand, and the caller echoes the derived value for review.
+    The solid width (outline minus voids) at a scanline is piecewise-linear in the
+    scan level, with breakpoints exactly at the vertices of the outline and the voids
+    (between two consecutive vertex levels every crossing moves linearly, so the total
+    interior width does too). Its minimum over the sampled band is therefore attained
+    at one of those breakpoints, so the width is evaluated at every outline / void
+    vertex level -- not on a fixed grid, which could step over a thin void or notch and
+    overestimate the web width. The band is the middle 80% of the depth, excluding the
+    extreme fibres where a curved outline tapers to zero. Correct for the web of
+    rectangular / T / box sections; a circular (or otherwise curved) section should
+    have ``bw`` entered by hand, and the caller echoes the derived value for review.
     """
     if not len(outer):
         return 0.0
@@ -104,14 +109,27 @@ def min_web_width(outer: Sequence, holes: Optional[Sequence], axis: str) -> floa
     if hi - lo <= 0.0:
         return 0.0
     margin = 0.10 * (hi - lo)
+    band_lo, band_hi = lo + margin, hi - margin
+    # Breakpoints: the band edges plus every outline / void vertex level inside it.
+    levels = {band_lo, band_hi}
+    for ring in [outer, *(holes or [])]:
+        for p in ring:
+            c = _coord(p, axis)
+            if band_lo < c < band_hi:
+                levels.add(c)
+    # Evaluate just either side of each breakpoint (not exactly on it, where the
+    # scanline through a vertex or along a horizontal edge is degenerate); the width
+    # is continuous, so this recovers the breakpoint value and hence the true minimum.
+    eps = 1e-9 * (hi - lo)
     best = math.inf
-    n = 40
-    for j in range(n + 1):
-        level = lo + margin + (hi - lo - 2.0 * margin) * j / n
-        w = _line_solid_span(outer, level, axis)
-        for hole in holes or []:
-            w -= _line_solid_span(hole, level, axis)
-        best = min(best, max(w, 0.0))
+    for level in levels:
+        for lv in (level - eps, level + eps):
+            if not (band_lo - eps <= lv <= band_hi + eps):
+                continue
+            w = _line_solid_span(outer, lv, axis)
+            for hole in holes or []:
+                w -= _line_solid_span(hole, lv, axis)
+            best = min(best, max(w, 0.0))
     return best * 1000.0 if math.isfinite(best) else 0.0
 
 
