@@ -315,3 +315,39 @@ def test_report_shear_flags_exceeded():
 def test_report_without_shear_omits_the_section():
     txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
     assert "Shear resistance" not in txt
+
+
+def _links_out():
+    return {"res": {"vrd_s": 540.0, "vrd_max": 648.9, "vrd": 540.0, "cot": 2.5,
+                    "theta_deg": 21.8, "z": 495.0, "fywd": 416.67, "nu1": 0.525,
+                    "alpha_cw": 1.0, "sigma_cp": 0.0, "fcd": 24.14,
+                    "governs": "stirrups (VRd,s)", "valid": True},
+            "util": 80.0 / 540.0, "asw": 157.08, "asw_over_s": 1.047, "legs": 2.0,
+            "dia": 10.0, "s": 150.0, "fywk": 500.0, "cot_min": 1.0, "cot_max": 2.5,
+            "delta_ftd": 375.0, "cot_limit_lo": 1.0, "cot_limit_hi": 2.5,
+            "z_source": "plastic internal lever arm",
+            "out_of_limits": False, "required": True}
+
+
+def test_report_includes_shear_links_section():
+    out = _out()
+    sh = _shear_out()
+    sh["links"] = _links_out()
+    out["shear"] = sh
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Shear reinforcement (links)" in txt
+    assert "6.8" in txt and "6.9" in txt           # the two clause formulae
+    assert "540" in txt                            # VRd,s / VRd
+    assert "stirrups" in txt                       # governing mechanism
+    assert chr(0x3B8) in txt                       # theta glyph rendered
+
+
+def test_report_shear_links_out_of_limits_note():
+    out = _out()
+    sh = _shear_out()
+    lk = _links_out()
+    lk["cot_max"], lk["out_of_limits"] = 3.0, True
+    sh["links"] = lk
+    out["shear"] = sh
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "outside the code range" in txt

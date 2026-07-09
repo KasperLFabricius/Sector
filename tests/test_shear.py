@@ -98,6 +98,102 @@ def test_vrd_c_zero_depth_is_invalid():
     assert res["vrd_c"] == 0.0
 
 
+# -- shear WITH links (sec. 6.2.3, variable strut) --------------------------
+
+def test_shear_nu1_edition_dependent():
+    # Recommended nu = 0.6(1 - fck/250); DK NA:2024 nu_v = 0.7 - fck/200 >= 0.45.
+    assert codes.EC2_2005.shear_nu1(35.0) == pytest.approx(0.6 * (1 - 35.0 / 250.0))
+    assert codes.EC2_2005_DKNA.shear_nu1(35.0) == pytest.approx(0.525)
+    assert codes.EC2_2005_DKNA.shear_nu1(60.0) == pytest.approx(0.45)   # floor
+
+
+def test_shear_alpha_cw_ranges():
+    code, fcd = codes.EC2_2005, 20.0
+    assert code.shear_alpha_cw(0.0, fcd) == 1.0
+    assert code.shear_alpha_cw(-5.0, fcd) == 1.0                 # tension -> 1
+    assert code.shear_alpha_cw(0.1 * fcd, fcd) == pytest.approx(1.1)
+    assert code.shear_alpha_cw(0.4 * fcd, fcd) == pytest.approx(1.25)
+    assert code.shear_alpha_cw(0.75 * fcd, fcd) == pytest.approx(2.5 * 0.25)
+    assert code.shear_alpha_cw(1.2 * fcd, fcd) == 0.0           # beyond fcd -> crushed
+
+
+def test_vrd_links_hand_calc_dk_na_stirrups_govern():
+    # 300 x 600 (d=550, z=0.9d=495), C35, DK NA, 2-leg 10 mm links at 150 mm,
+    # fywk=500. The crossover cot is above 2.5, so cot clamps to 2.5 and the stirrups
+    # govern: VRd,s ~ 540 kN < VRd,max ~ 649 kN.
+    code = codes.EC2_2005_DKNA
+    asw = 2 * math.pi / 4 * 10.0 ** 2                            # 2 legs, 10 mm
+    res = shear.vrd_links(35.0, code, bw_mm=300.0, d_mm=550.0, asw_over_s=asw / 150.0,
+                          fywk=500.0, n_ed_comp_kn=0.0, ac_m2=0.18,
+                          cot_min=1.0, cot_max=2.5)
+    assert res["valid"]
+    assert res["z"] == pytest.approx(495.0)
+    assert res["nu1"] == pytest.approx(0.525)
+    assert res["fywd"] == pytest.approx(500.0 / 1.20)
+    assert res["alpha_cw"] == pytest.approx(1.0)
+    assert res["cot"] == pytest.approx(2.5)                     # crossover above max
+    assert res["vrd_s"] == pytest.approx(540.0, abs=1.0)
+    assert res["vrd_max"] == pytest.approx(648.9, abs=1.5)
+    assert res["vrd"] == pytest.approx(res["vrd_s"])
+    assert "stirrups" in res["governs"]
+
+
+def test_vrd_links_interior_optimum_balances_stirrups_and_crushing():
+    # Heavy links push the crossover inside the band, where VRd,s = VRd,max and VRd
+    # is maximised at that intermediate angle.
+    code = codes.EC2_2005_DKNA
+    res = shear.vrd_links(35.0, code, 300.0, 550.0, asw_over_s=3.0, fywk=500.0,
+                          n_ed_comp_kn=0.0, ac_m2=0.18, cot_min=1.0, cot_max=2.5)
+    assert 1.0 < res["cot"] < 2.5
+    assert res["vrd_s"] == pytest.approx(res["vrd_max"], rel=1e-3)
+    assert res["vrd"] == pytest.approx(res["vrd_s"], rel=1e-3)
+    assert res["theta_deg"] == pytest.approx(math.degrees(math.atan(1.0 / res["cot"])))
+
+
+def test_vrd_links_axial_compression_raises_vrd_max():
+    # A compression axial force raises alpha_cw (6.11N) and hence VRd,max.
+    code = codes.EC2_2005
+    base = shear.vrd_links(35.0, code, 300.0, 550.0, 3.0, 500.0, 0.0, 0.18, 1.0, 2.5)
+    comp = shear.vrd_links(35.0, code, 300.0, 550.0, 3.0, 500.0, 800.0, 0.18, 1.0, 2.5)
+    assert comp["alpha_cw"] > 1.0
+    assert comp["vrd_max"] > base["vrd_max"]
+
+
+def test_vrd_links_invalid_without_stirrups():
+    res = shear.vrd_links(35.0, codes.EC2_2005_DKNA, 300.0, 550.0, asw_over_s=0.0,
+                          fywk=500.0, n_ed_comp_kn=0.0, ac_m2=0.18,
+                          cot_min=1.0, cot_max=2.5)
+    assert not res["valid"] and res["vrd"] == 0.0
+
+
+def test_optimum_cot_theta_clamps_to_bounds():
+    # a >= b -> crossover below 1, floor at 1; tiny a -> above max, clamp to max.
+    assert shear.optimum_cot_theta(a=100.0, b=50.0, cot_min=1.0, cot_max=2.5) == 1.0
+    assert shear.optimum_cot_theta(a=1.0, b=1e6, cot_min=1.0, cot_max=2.5) == 2.5
+    # Widened UPPER bound is honoured (the UI warns but does not block).
+    assert shear.optimum_cot_theta(1.0, 1e6, 1.0, 3.0) == 3.0
+
+
+def test_optimum_cot_theta_never_below_one_even_with_wide_lower_bound():
+    # Codex P2: below cot(theta) = 1 BOTH VRd,s and VRd,max fall, so the optimum is
+    # never there even when the user widens cot_min below 1. The crossover is floored
+    # at 1 before clamping, so a heavy-link section optimises at 1.0, not the 0.5 floor.
+    assert shear.optimum_cot_theta(a=100.0, b=50.0, cot_min=0.5, cot_max=2.5) == 1.0
+    assert shear.optimum_cot_theta(a=1.0, b=5.0, cot_min=0.5, cot_max=2.5) == pytest.approx(2.0)
+
+
+def test_vrd_links_widened_lower_bound_does_not_reduce_vrd():
+    # Heavy links whose crossover is well below 1: the optimiser picks cot = 1 (not
+    # the widened 0.5 floor), and forcing cot = 0.5 gives a strictly smaller VRd.
+    code = codes.EC2_2005_DKNA
+    wide = shear.vrd_links(35.0, code, 300.0, 550.0, asw_over_s=8.0, fywk=500.0,
+                           n_ed_comp_kn=0.0, ac_m2=0.18, cot_min=0.5, cot_max=2.5)
+    assert wide["cot"] == pytest.approx(1.0)
+    forced = shear.vrd_links(35.0, code, 300.0, 550.0, 8.0, 500.0, 0.0, 0.18, 0.5, 0.5)
+    assert forced["cot"] == pytest.approx(0.5)
+    assert forced["vrd"] < wide["vrd"]
+
+
 # -- geometry derivation helpers --------------------------------------------
 
 def test_min_web_width_rect_t_box():
@@ -235,6 +331,66 @@ def test_app_shear_axial_input_enabled_in_elastic_mode():
     comp = at.session_state["results"]["shear"]["res"]
     assert comp["sigma_cp"] > 0.0                          # compression -> positive sigma_cp
     assert comp["vrd_c"] > base                            # ...raises VRd,c
+
+
+def test_app_shear_links_produce_a_resistance():
+    # Enabling links computes the variable-strut VRd = min(VRd,s, VRd,max) alongside
+    # VRd,c; the default section (bottom bars at d~550, bw~400) gives a positive VRd.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.number_input(key="shear_V").set_value(200.0).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_link_dia").set_value(10.0).run()
+    at.number_input(key="shear_link_s").set_value(150.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["res"]["valid"]
+    assert lk["res"]["vrd"] > 0.0
+    assert lk["res"]["vrd"] == pytest.approx(min(lk["res"]["vrd_s"], lk["res"]["vrd_max"]))
+    assert 1.0 <= lk["res"]["cot"] <= 2.5
+    assert lk["util"] == pytest.approx(200.0 / lk["res"]["vrd"])
+
+
+def test_app_shear_links_use_the_plastic_lever_arm():
+    # z is the internal lever arm the plastic engine computes (compression-tension
+    # resultant separation for bending about the shear axis), not the 0.9d default.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    sh = at.session_state["results"]["shear"]
+    lk = sh["links"]
+    assert lk["z_source"] == "plastic internal lever arm"
+    z, d = lk["res"]["z"], sh["d"]
+    assert 0.6 * d < z < d                    # a real flexural lever arm below d
+
+
+def test_shear_lever_arm_falls_back_without_a_section():
+    from sector_app import _shear_lever_arm
+    z, src = _shear_lever_arm({"section": None}, "x", True, 550.0)
+    assert z == pytest.approx(0.9 * 550.0)
+    assert "fallback" in src
+
+
+def test_app_shear_links_flag_out_of_code_bounds():
+    # Widening cot(theta) past the code limit is allowed but flagged (warning, not
+    # a blocking error) and honoured by the optimiser.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_cot_max").set_value(3.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["out_of_limits"] is True
+    at.selectbox(key="view").set_value("Shear").run()
+    assert not at.exception
+    assert any("outside the code range" in w.value for w in at.warning)
 
 
 def test_app_shear_is_saved_and_restored():

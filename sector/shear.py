@@ -159,3 +159,59 @@ def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
                 k=k, rho_l=rho_l, sigma_cp=sigma_cp, fcd=fcd,
                 v_basic=basic, v_floor=floor, crd_c=crd_c, vmin=vmin,
                 k1=code.shear_k1, valid=True)
+
+
+def optimum_cot_theta(a: float, b: float, cot_min: float, cot_max: float) -> float:
+    """Strut ``cot(theta)`` that maximises ``VRd = min(VRd,s, VRd,max)`` in the band.
+
+    ``VRd,s = a*z*cot`` rises with ``cot(theta)``; ``VRd,max = b*z/(cot + 1/cot)``
+    peaks at ``cot = 1`` (its denominator is minimal there) and falls away on *both*
+    sides. So the unconstrained maximiser of ``VRd = min(...)`` is the crossover
+    ``cot* = sqrt(b/a - 1)`` (where the two branches meet) when that is ``>= 1``, and
+    ``cot = 1`` otherwise -- never below 1, since below it *both* branches fall.
+    (``a = (Asw/s)*fywd``, ``b = alpha_cw*bw*nu1*fcd``; the lever arm ``z`` cancels.)
+    The result is clamped to the user band ``[cot_min, cot_max]``, which may be
+    widened past the code's ``1..2.5`` (the UI warns rather than blocks).
+    """
+    if a <= 0.0:
+        return cot_max
+    cot_star = math.sqrt(max(b / a - 1.0, 0.0))
+    cot_opt = max(cot_star, 1.0)                 # the optimum is never below cot = 1
+    return min(max(cot_opt, cot_min), cot_max)
+
+
+def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
+              fywk: float, n_ed_comp_kn: float, ac_m2: float, cot_min: float,
+              cot_max: float, z_mm: Optional[float] = None) -> dict:
+    """Shear resistance of a member with vertical links, sec. 6.2.3 (variable strut).
+
+    Returns ``VRd,s`` (6.8) and ``VRd,max`` (6.9) at the strut angle ``theta`` that
+    maximises ``VRd = min(VRd,s, VRd,max)`` over ``cot(theta)`` in
+    ``[cot_min, cot_max]``; the resistance is that minimum. ``asw_over_s`` is the link
+    area per unit length (mm2/mm), ``fywk`` the link characteristic yield (MPa),
+    ``n_ed_comp_kn`` the axial force compression-positive (pass ``-N``), and
+    ``ac_m2`` the gross concrete area (for ``sigma_cp``). ``z`` defaults to ``0.9 d``.
+    """
+    z = z_mm if (z_mm and z_mm > 0.0) else 0.9 * d_mm
+    if d_mm <= 0.0 or bw_mm <= 0.0 or asw_over_s <= 0.0 or z <= 0.0:
+        return dict(vrd_s=0.0, vrd_max=0.0, vrd=0.0, cot=0.0, theta_deg=0.0, z=z,
+                    fywd=0.0, nu1=0.0, alpha_cw=0.0, sigma_cp=0.0, fcd=0.0,
+                    asw_over_s=asw_over_s, governs="none", valid=False)
+    fcd = code.concrete_factor(fck) * fck / code.gamma_c                  # MPa
+    fywd = fywk / code.gamma_s                                            # MPa
+    nu1 = code.shear_nu1(fck)
+    # sigma_cp for alpha_cw is the mean axial stress (compression positive), NOT capped
+    # at 0.2 fcd (6.11N spans the full 0..fcd range).
+    sigma_cp = n_ed_comp_kn / ac_m2 / 1000.0 if ac_m2 > 0.0 else 0.0      # MPa
+    alpha_cw = code.shear_alpha_cw(sigma_cp, fcd)
+    a = asw_over_s * fywd                                                 # N/mm
+    b = alpha_cw * bw_mm * nu1 * fcd                                      # N/mm
+    cot = optimum_cot_theta(a, b, cot_min, cot_max)
+    vrd_s = asw_over_s * z * fywd * cot / 1000.0                          # kN
+    vrd_max = alpha_cw * bw_mm * z * nu1 * fcd / (cot + 1.0 / cot) / 1000.0  # kN
+    vrd = min(vrd_s, vrd_max)
+    governs = "stirrups (VRd,s)" if vrd_s <= vrd_max else "crushing (VRd,max)"
+    theta_deg = math.degrees(math.atan(1.0 / cot))
+    return dict(vrd_s=vrd_s, vrd_max=vrd_max, vrd=vrd, cot=cot, theta_deg=theta_deg,
+                z=z, fywd=fywd, nu1=nu1, alpha_cw=alpha_cw, sigma_cp=sigma_cp,
+                fcd=fcd, asw_over_s=asw_over_s, governs=governs, valid=True)

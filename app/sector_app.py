@@ -32,7 +32,8 @@ from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, geometry, kernels, material_presets as mp, shear, templates  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
-from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
+from sector.plastic import (plastic_capacity_at_angle, solve_interaction,  # noqa: E402
+                            solve_plastic)
 from sector.section import Section  # noqa: E402
 from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
                                    crack_width)
@@ -49,6 +50,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # so the source stays ASCII (BMP code points, no surrogate pairs).
 _EPS, _SIGMA, _RHO, _PHI = chr(0x3B5), chr(0x3C3), chr(0x3C1), chr(0x3C6)
 _KAPPA = chr(0x3BA)
+_THETA, _NU, _ALPHA, _DELTA = chr(0x3B8), chr(0x3BD), chr(0x3B1), chr(0x394)
 
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
@@ -1301,6 +1303,8 @@ _ELASTIC_SIG_KEYS = (
 # and plastic parts of the signature.
 _SHEAR_SIG_KEYS = (
     "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
+    "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
+    "shear_cot_min", "shear_cot_max",
 )
 
 
@@ -1467,6 +1471,44 @@ def build_inputs():
         help="Smallest web width in the tension zone. 0 derives it from the outline "
              "(minimum solid width over the effective depth); enter a value for a "
              "curved section, where the automatic width is unreliable.")
+    # Shear reinforcement (vertical links). When present, the member's resistance is
+    # the variable-strut VRd = min(VRd,s, VRd,max) (sec. 6.2.3) rather than VRd,c; the
+    # strut angle theta is auto-optimised within the cot(theta) bounds below.
+    shear_links = _seeded_checkbox(
+        aset, "Shear reinforcement (links) present", False, "shear_links",
+        disabled=not shear_on,
+        help="Add vertical links (stirrups). The resistance becomes the variable-"
+             "strut VRd = min(VRd,s, VRd,max) (EN 1992-1-1 6.2.3); VRd,c is still "
+             "shown to indicate whether links are strictly required.")
+    _links = shear_on and shear_links
+    shear_link_legs = _seeded_number(
+        aset, "Link legs (n)", 1.0, 20.0, 2.0, 1.0, "shear_link_legs",
+        disabled=not _links,
+        help="Number of vertical link legs crossing the shear plane (a closed "
+             "stirrup = 2 legs).")
+    shear_link_dia = _seeded_number(
+        aset, "Link diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
+        disabled=not _links, help="Link bar diameter; the leg area is pi/4*dia^2.")
+    shear_link_s = _seeded_number(
+        aset, "Link spacing s (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
+        disabled=not _links, help="Longitudinal spacing of the links.")
+    shear_fywk = _seeded_number(
+        aset, r"Link yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
+        disabled=not _links,
+        help="Characteristic yield strength of the link steel; the design value is "
+             "fywk / gamma_s of the selected shear method.")
+    shear_cot_min = _seeded_number(
+        aset, r"Strut $\cot\theta$ min", 0.5, 5.0, 1.0, 0.1, "shear_cot_min",
+        disabled=not _links,
+        help="Lower bound for the auto-optimised strut angle. EN 1992-1-1 6.7N (and "
+             "DK NA:2024 6.7a NA) allow 1 <= cot(theta) <= 2.5; a value outside that "
+             "is allowed but warned, not blocked.")
+    shear_cot_max = _seeded_number(
+        aset, r"Strut $\cot\theta$ max", 0.5, 5.0, 2.5, 0.1, "shear_cot_max",
+        disabled=not _links,
+        help="Upper bound for the auto-optimised strut angle (cot(theta) = 2.5 is the "
+             "code maximum; 1.0 corresponds to a 45-degree strut). Sector picks the "
+             "angle in [min, max] that maximises VRd = min(VRd,s, VRd,max).")
 
     sec = s.expander("Section", expanded=True)
     sec.caption("The section is a set of explicit points (the source of truth). "
@@ -1743,6 +1785,10 @@ def build_inputs():
                 shear_axis=_SHEAR_AXES[shear_axis],
                 shear_tension=_SHEAR_TENSION[shear_tension],
                 shear_V=shear_V, shear_bw=shear_bw,
+                shear_links=shear_links, shear_link_legs=shear_link_legs,
+                shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
+                shear_fywk=shear_fywk, shear_cot_min=shear_cot_min,
+                shear_cot_max=shear_cot_max,
                 mode=mode, extent=extent, signature=sig,
                 plastic_sig=plastic_sig, elastic_sig=elastic_sig)
 
@@ -1805,6 +1851,40 @@ def _gross_area_centroid(outer, holes):
     if area <= 0.0:
         return a, cx, cy
     return area, mx / area, my / area
+
+
+# Neutral-axis angle giving bending about the shear axis with the tension face on the
+# chosen side (the plastic solver's convention: V=90 -> +Mx, tension at the bottom;
+# V=0 -> +My, tension on the left). Used to pull the internal lever arm z for shear.
+_SHEAR_LEVER_ANGLE = {("x", True): 90.0, ("x", False): 270.0,
+                      ("y", True): 0.0, ("y", False): 180.0}
+
+
+def _shear_lever_arm(inp, axis, tension_low, d_mm):
+    """Internal lever arm z (mm) for the shear truss and its source label.
+
+    The plastic engine already computes the lever arm between the concrete
+    compression resultant and the steel tension resultant; for shear about the given
+    axis this is the depth-direction component of that lever arm (its y-part for
+    vertical shear, x-part for horizontal). It is evaluated at the ULS axial force and
+    the neutral-axis angle whose bending puts the chosen face in tension. Falls back to
+    the EC2-permitted ``z = 0.9 d`` when the lever arm is degenerate (no tension
+    reinforcement, a non-converged / fully-compressed state, or a solver error).
+    """
+    fallback = (0.9 * d_mm, "0.9 d (fallback)")
+    if inp["section"] is None:
+        return fallback
+    angle = _SHEAR_LEVER_ANGLE[(axis, tension_low)]
+    pre = inp["prestress"] if inp["tendons"] else None
+    try:
+        pt = plastic_capacity_at_angle(inp["section"], inp["concrete"], inp["steel"],
+                                       -inp["P_pl"], angle, prestress=pre)
+    except Exception:
+        return fallback
+    lever = abs(pt.dy) if axis == "x" else abs(pt.dx)   # depth-direction component, m
+    if not pt.converged or lever <= 1e-6:
+        return fallback
+    return lever * 1000.0, "plastic internal lever arm"
 
 
 def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
@@ -2051,6 +2131,35 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                             bw_user=bool(inp["shear_bw"] > 0.0), d=d, asl=asl,
                             ac=ac, fck=fck, n_ed=inp["P_pl"],
                             method=inp["shear_method"])
+        # Shear reinforcement (vertical links): the variable-strut VRd = min(VRd,s,
+        # VRd,max) with theta auto-optimised in the cot(theta) band (sec. 6.2.3). The
+        # bounds may be widened past the code limits (a warning, not an error).
+        if inp.get("shear_links"):
+            cot_min = min(inp["shear_cot_min"], inp["shear_cot_max"])
+            cot_max = max(inp["shear_cot_min"], inp["shear_cot_max"])
+            asw = inp["shear_link_legs"] * templates.bar_area(inp["shear_link_dia"])
+            asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
+            # z is the internal lever arm actually computed by the plastic engine (the
+            # separation of the concrete compression resultant and the steel tension
+            # resultant) for bending about the shear axis with the chosen tension face,
+            # at the ULS axial force -- not the 0.9d approximation. Fall back to 0.9d
+            # only when that lever arm is degenerate (no tension steel / non-converged).
+            z_mm, z_src = _shear_lever_arm(inp, axis, tension_low, d)
+            lk = shear.vrd_links(fck, code, bw, d, asw_over_s, inp["shear_fywk"],
+                                 -inp["P_pl"], ac, cot_min, cot_max, z_mm=z_mm)
+            util_l = (v_ed / lk["vrd"]) if lk["vrd"] > 0.0 else math.inf
+            # delta_Ftd = 0.5*VEd*cot(theta): the extra longitudinal tension from shear.
+            delta_ftd = 0.5 * v_ed * lk["cot"] if lk["valid"] else 0.0
+            lo, hi = code.shear_cot_min_limit, code.shear_cot_max_limit
+            out["shear"].update(
+                links=dict(res=lk, util=util_l, asw=asw, asw_over_s=asw_over_s,
+                           legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
+                           s=inp["shear_link_s"], fywk=inp["shear_fywk"],
+                           cot_min=cot_min, cot_max=cot_max, delta_ftd=delta_ftd,
+                           cot_limit_lo=lo, cot_limit_hi=hi, z_source=z_src,
+                           out_of_limits=bool(cot_min < lo - 1e-9
+                                              or cot_max > hi + 1e-9),
+                           required=bool(v_ed > res["vrd_c"])))
     return out
 
 
@@ -2612,6 +2721,54 @@ def shear_view(inp, results):
         "cp , vmin + k1*" + _SIGMA + "cp ] * bw * d, with k1 = "
         f"{res['k1']:.2f}. Asl is the tension reinforcement on the chosen face, "
         "assumed fully anchored (>= lbd + d) beyond the section.")
+
+    # Shear reinforcement (links): the governing check when present.
+    links = sh.get("links")
+    if links is not None:
+        lk = links["res"]
+        st.divider()
+        st.markdown("**Shear reinforcement (links): VRd = min(VRd,s, VRd,max)**")
+        if not lk["valid"]:
+            st.warning("The link resistance could not be computed -- check the leg "
+                       "count, diameter and spacing (Asw/s must be > 0).")
+        if links["out_of_limits"]:
+            st.warning(f"The strut angle bounds (cot {_THETA} in "
+                       f"[{links['cot_min']:.2f}, {links['cot_max']:.2f}]) fall "
+                       f"outside the code range [{links['cot_limit_lo']:.1f}, "
+                       f"{links['cot_limit_hi']:.1f}] (EN 1992-1-1 6.7N / DK NA 6.7a "
+                       "NA). The value is still computed, but check it is justified.")
+        req_txt = ("links are required (VEd > VRd,c)" if links["required"]
+                   else "links are not strictly required (VEd <= VRd,c); minimum "
+                        "reinforcement rules still apply")
+        st.caption(f"For this VEd, {req_txt}.")
+        util_l = links["util"]
+        ok_l = math.isfinite(util_l) and util_l <= 1.0
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("VRd,s", f"{lk['vrd_s']:.3f} kN")
+        c2.metric("VRd,max", f"{lk['vrd_max']:.3f} kN")
+        c3.metric("VRd = min", f"{lk['vrd']:.3f} kN", help=f"governed by {lk['governs']}")
+        ul_txt = "inf" if not math.isfinite(util_l) else f"{util_l * 100:.1f} %"
+        c4.metric("Utilisation VEd/VRd", ul_txt,
+                  delta=("OK" if ok_l else "Over limit"),
+                  delta_color=("normal" if ok_l else "inverse"))
+        st.dataframe(
+            {"Quantity": [f"Strut angle {_THETA}", f"cot {_THETA} (auto)",
+                          "Lever arm z", "Link area/spacing Asw/s", "Design yield fywd",
+                          f"Strut factor {_NU}1", f"Chord factor {_ALPHA}cw",
+                          f"Extra long. tension {_DELTA}Ftd"],
+             "Value": [f"{lk['theta_deg']:.1f} deg", f"{lk['cot']:.3f}",
+                       f"{lk['z']:.1f} mm ({links['z_source']})",
+                       f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
+                       f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
+                       f"{lk['fywd']:.1f} MPa", f"{lk['nu1']:.3f}",
+                       f"{lk['alpha_cw']:.3f}", f"{links['delta_ftd']:.1f} kN"]},
+            hide_index=True, width="stretch")
+        st.caption(
+            "VRd,s = (Asw/s)*z*fywd*cot" + _THETA + " (6.8); VRd,max = " + _ALPHA +
+            "cw*bw*z*" + _NU + "1*fcd/(cot" + _THETA + "+tan" + _THETA + ") (6.9). "
+            "Sector auto-optimises " + _THETA + " within the bounds to maximise "
+            "VRd = min(VRd,s, VRd,max). " + _DELTA + "Ftd = 0.5*VEd*cot" + _THETA +
+            " is the extra longitudinal tension the bottom steel must also carry.")
 
 
 # ---------------------------------------------------------------------------

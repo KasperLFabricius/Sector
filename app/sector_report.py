@@ -73,7 +73,7 @@ _register_fonts()
 # (c.eps_c2) and dict keys (cw.get("phi")) are never touched.
 _GREEK = {"eps": "&#949;", "sigma": "&#963;", "lambda": "&#955;", "alpha": "&#945;",
           "gamma": "&#947;", "kappa": "&#954;", "rho": "&#961;", "phi": "&#966;",
-          "permille": "&#8240;"}
+          "theta": "&#952;", "nu": "&#957;", "permille": "&#8240;"}
 _GREEK_RE = re.compile(r"\b(" + "|".join(_GREEK) + r")\b")
 
 
@@ -801,6 +801,73 @@ class ReportBuilder:
                     "section. sigma<sub>cp</sub> uses the plastic (ULS) axial force. "
                     "A section with V<sub>Ed</sub> &gt; V<sub>Rd,c</sub> requires "
                     "designed shear reinforcement.")
+        if sh.get("links") is not None:
+            self._shear_links(sh)
+
+    def _shear_links(self, sh):
+        links = sh["links"]
+        lk = links["res"]
+        self._h2("Shear reinforcement (links)")
+        req = ("required (V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>)" if links["required"]
+               else "not strictly required (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>); "
+                    "minimum reinforcement rules still apply")
+        self._p(f"With vertical links the resistance is the variable-strut "
+                f"V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>) "
+                f"(EN 1992-1-1 sec. 6.2.3). For this V<sub>Ed</sub>, links are {req}.")
+        if not lk["valid"]:
+            self._small("Warning: the link resistance is zero -- check the leg count, "
+                        "diameter and spacing (A<sub>sw</sub>/s must be &gt; 0).")
+            return
+        if links["out_of_limits"]:
+            self._small(f"Note: the strut bounds cot theta in "
+                        f"[{_fmt(links['cot_min'], 2)}, {_fmt(links['cot_max'], 2)}] "
+                        f"fall outside the code range "
+                        f"[{_fmt(links['cot_limit_lo'], 1)}, "
+                        f"{_fmt(links['cot_limit_hi'], 1)}] (6.7N / 6.7a NA).")
+        rows = [["Quantity", "Symbol", "Value"],
+                ["Links", "n x phi / s",
+                 f"{_fmt(links['legs'], 0)} x {_fmt(links['dia'], 0)} / "
+                 f"{_fmt(links['s'], 0)} mm"],
+                ["Link area / spacing", "A<sub>sw</sub>/s",
+                 f"{_fmt(links['asw'], 1)} / {_fmt(links['s'], 0)} mm<sup>2</sup>/mm"],
+                ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(lk['fywd'], 1)} MPa"],
+                ["Lever arm", "z",
+                 f"{_fmt(lk['z'], 1)} mm ({links.get('z_source', '0.9 d')})"],
+                ["Strut angle", "theta",
+                 f"{_fmt(lk['theta_deg'], 1)} deg (cot theta = {_fmt(lk['cot'], 3)})"],
+                ["Strut factor", "nu<sub>1</sub>", f"{_fmt(lk['nu1'], 3)}"],
+                ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(lk['alpha_cw'], 3)}"]]
+        self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        self._formula(
+            "V<sub>Rd,s</sub> = (A<sub>sw</sub>/s) z f<sub>ywd</sub> cot theta",
+            ref="EN 1992-1-1 (6.8)",
+            subst=f"{_fmt(links['asw_over_s'], 4)} &#183; {_fmt(lk['z'], 1)} &#183; "
+                  f"{_fmt(lk['fywd'], 1)} &#183; {_fmt(lk['cot'], 3)} / 1000",
+            result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN")
+        self._formula(
+            "V<sub>Rd,max</sub> = alpha<sub>cw</sub> b<sub>w</sub> z nu<sub>1</sub> "
+            "f<sub>cd</sub> / (cot theta + tan theta)",
+            ref="EN 1992-1-1 (6.9)",
+            subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
+                  f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
+                  f"{_fmt(lk['fcd'], 2)} / ({_fmt(lk['cot'], 3)} + "
+                  f"{_fmt(1.0 / lk['cot'], 3)}) / 1000",
+            result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
+        self._formula(
+            "V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>)",
+            result=f"V<sub>Rd</sub> = {_fmt(lk['vrd'], 3)} kN "
+                   f"(governed by {lk['governs']})")
+        util = links["util"]
+        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
+        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        self._formula("V<sub>Ed</sub> / V<sub>Rd</sub>",
+                      subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
+                      result=f"{util_txt}  ({verdict})")
+        self._small(f"The strut angle is auto-optimised within the bounds to maximise "
+                    f"V<sub>Rd</sub>. The shear adds a longitudinal tension "
+                    f"&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
+                    f"{_fmt(links['delta_ftd'], 1)} kN (6.18) that the tension "
+                    f"reinforcement must also carry.")
 
     def _elastic(self):
         el = self.out["elastic"]
