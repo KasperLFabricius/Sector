@@ -355,6 +355,40 @@ def test_report_torsion_shows_combined_interaction():
     assert "Combined shear" in txt
 
 
+def _combined_out(mv_independent=False):
+    return {"valid": True, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+            "r_m": 0.6, "r_v": 0.4, "r_t": 0.3, "m_v_independent": mv_independent,
+            "dkna_sum": (max(0.9, 0.7) if mv_independent else 1.3),
+            "dkna_ok": (max(0.9, 0.7) if mv_independent else 1.3) <= 1.0,
+            "crushing": dict(cot=1.0, theta_deg=45.0, trd_max=88.7, vrd_max=650.0,
+                             t_ed=40.0, v_ed=150.0, value=40.0 / 88.7 + 150.0 / 650.0),
+            "asl_torsion": 1176.0, "delta_ftd": 200.0, "links": True}
+
+
+def test_report_includes_combined_section():
+    out = _out()
+    out["combined"] = _combined_out()
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Combined bending" in txt or "M-V-T" in txt
+    assert "6.3.2(6)" in txt                        # the DK NA combined rule
+    assert "EXCEEDED" in txt                        # sum 1.3 > 1
+
+
+def test_report_combined_independent_uses_max_form():
+    out = _out()
+    out["combined"] = _combined_out(mv_independent=True)
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "separately" in txt                      # M & V checked separately
+
+
+def test_report_skips_invalid_combined():
+    out = _out()
+    out["combined"] = {"valid": False, "have_m": True, "have_v": False,
+                       "have_t": False, "method": "x"}
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Combined bending" not in txt
+
+
 def _links_out():
     return {"res": {"vrd_s": 540.0, "vrd_max": 648.9, "vrd": 540.0, "cot": 2.5,
                     "theta_deg": 21.8, "z": 495.0, "fywd": 416.67, "nu1": 0.525,

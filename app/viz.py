@@ -603,6 +603,37 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     return fig
 
 
+def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
+                          title="V-T interaction (crushing)"):
+    """Shear-torsion concrete-crushing envelope (EN 1992-1-1 6.29).
+
+    The limit ``VEd/VRd,max + TEd/TRd,max = 1`` is the straight line from
+    ``(VRd,max, 0)`` to ``(0, TRd,max)``; the safe region is below it. ``V`` is
+    horizontal (kN), ``T`` vertical (kNm); the applied ``(VEd, TEd)`` is marked.
+    """
+    fig = go.Figure()
+    if vrd_max > 0.0 and trd_max > 0.0:
+        fig.add_trace(go.Scatter(
+            x=[vrd_max, 0.0], y=[0.0, trd_max], mode="lines", fill="tozeroy",
+            line=dict(color=ENVELOPE, width=2), name="limit (= 1)",
+            fillcolor="rgba(31,119,180,0.08)",
+            hovertemplate="V = %{x:.1f} kN<br>T = %{y:.1f} kNm<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        x=[v_ed], y=[t_ed], mode="markers",
+        marker=dict(size=11, color=LOAD_POINT, symbol="x"), name="applied",
+        hovertemplate="V_Ed = %{x:.1f} kN<br>T_Ed = %{y:.1f} kNm<extra></extra>"))
+    fig.update_layout(
+        title=title, template="plotly_white", height=460,
+        margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
+        xaxis=dict(title=dict(text="V_Ed (kN)", standoff=10), zeroline=True,
+                   rangemode="tozero"),
+        yaxis=dict(title="T_Ed (kNm)", zeroline=True, rangemode="tozero"),
+        legend=dict(orientation="h", yanchor="top", y=_legend_y(460), x=0.5,
+                    xanchor="center"),
+    )
+    return fig
+
+
 def na_endpoints(x_int, y_int, extent):
     """Two points spanning the neutral axis from its axis intercepts.
 
