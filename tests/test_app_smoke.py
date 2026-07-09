@@ -394,6 +394,32 @@ def test_nm_squash_is_negative_and_tension_limit_positive():
     assert float(tens.value.split()[0]) > 0.0
 
 
+def test_plastic_view_defaults_to_the_governing_rotation_each_calculate():
+    # The Plastic view's neutral-axis state defaults to the utilisation-governing
+    # rotation on every Calculate. The selectbox key persists, so without a reset it
+    # would keep the previously shown rotation after the load (and its governing
+    # angle) changed -- the "always 90 deg" symptom.
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(200.0).run()   # pure Mx -> governs near V=90
+    at.number_input(key="pl_My").set_value(0.0).run()
+    at.button(key="calculate").click().run()
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    res = at.session_state["results"]["plastic"]
+    assert at.session_state["pl_state"] == res["util_gov"]
+    # A biaxial load governs at a different rotation; recalculating must follow it.
+    at.number_input(key="pl_Mx").set_value(150.0).run()
+    at.number_input(key="pl_My").set_value(120.0).run()
+    at.button(key="calculate").click().run()
+    res2 = at.session_state["results"]["plastic"]
+    assert res2["util_gov"] != res["util_gov"]             # the governing angle changed
+    assert at.session_state["pl_state"] == res2["util_gov"]
+    # A manual pick between calculations is retained (only Calculate re-defaults it).
+    other = (res2["util_gov"] + 3) % len(res2["points"])
+    at.selectbox(key="pl_state").set_value(other).run()
+    assert at.session_state["pl_state"] == other
+
+
 def test_both_mode_runs_elastic_and_plastic():
     at = _fresh()
     at.run()
