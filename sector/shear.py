@@ -164,16 +164,20 @@ def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
 def optimum_cot_theta(a: float, b: float, cot_min: float, cot_max: float) -> float:
     """Strut ``cot(theta)`` that maximises ``VRd = min(VRd,s, VRd,max)`` in the band.
 
-    ``VRd,s`` rises with ``cot(theta)`` and ``VRd,max`` falls with it (for
-    ``cot(theta) >= 1``), so the minimum of the two is largest where they cross,
-    ``cot^2 = b/a - 1`` with ``a = (Asw/s)*fywd`` and ``b = alpha_cw*bw*nu1*fcd`` (the
-    lever arm ``z`` cancels). Clamp to ``[cot_min, cot_max]``: outside the crossing
-    one limit governs throughout, so the best allowed angle is the nearer bound.
+    ``VRd,s = a*z*cot`` rises with ``cot(theta)``; ``VRd,max = b*z/(cot + 1/cot)``
+    peaks at ``cot = 1`` (its denominator is minimal there) and falls away on *both*
+    sides. So the unconstrained maximiser of ``VRd = min(...)`` is the crossover
+    ``cot* = sqrt(b/a - 1)`` (where the two branches meet) when that is ``>= 1``, and
+    ``cot = 1`` otherwise -- never below 1, since below it *both* branches fall.
+    (``a = (Asw/s)*fywd``, ``b = alpha_cw*bw*nu1*fcd``; the lever arm ``z`` cancels.)
+    The result is clamped to the user band ``[cot_min, cot_max]``, which may be
+    widened past the code's ``1..2.5`` (the UI warns rather than blocks).
     """
     if a <= 0.0:
         return cot_max
     cot_star = math.sqrt(max(b / a - 1.0, 0.0))
-    return min(max(cot_star, cot_min), cot_max)
+    cot_opt = max(cot_star, 1.0)                 # the optimum is never below cot = 1
+    return min(max(cot_opt, cot_min), cot_max)
 
 
 def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,

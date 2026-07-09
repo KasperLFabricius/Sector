@@ -826,12 +826,18 @@ def manual_blocks() -> list:
        "$$V_{Rd,s} = \\frac{A_{sw}}{s}\\,z\\,f_{ywd}\\,\\cot\\theta \\quad(6.8), "
        "\\qquad V_{Rd,max} = \\frac{\\alpha_{cw}\\,b_w\\,z\\,\\nu_1\\,f_{cd}}"
        "{\\cot\\theta + \\tan\\theta} \\quad(6.9),$$\n\n"
-       "and $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$. Here $z \\approx 0.9d$ is the "
-       "lever arm, $\\nu_1$ the strut effectiveness factor, and $\\alpha_{cw}$ the "
+       "and $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$. Here $z$ is the internal lever "
+       "arm, $\\nu_1$ the strut effectiveness factor, and $\\alpha_{cw}$ the "
        "compression-chord factor (1 for a non-prestressed section, rising with an "
        "axial compression per 6.11N). The shear also adds a longitudinal tension "
        "$\\Delta F_{td} = 0.5\\,V_{Ed}\\,\\cot\\theta$ (6.18) that the bottom steel "
        "must carry on top of the bending force.")
+    call("concept", "Rather than the code's $z \\approx 0.9d$ approximation, Sector "
+         "uses the **internal lever arm the plastic engine already computes** -- the "
+         "separation of the concrete compression resultant and the steel tension "
+         "resultant for bending about the shear axis, at the ULS axial force. It "
+         "falls back to $0.9d$ only when that lever arm is degenerate (no tension "
+         "steel, or a fully compressed / non-converged state).")
     md("$V_{Rd,s}$ rises with $\\cot\\theta$ (a flatter strut engages more links) "
        "while $V_{Rd,max}$ falls with it, so $V_{Rd} = \\min$ is largest where the "
        "two are equal, at $\\cot^2\\theta = b/a - 1$ with $a = (A_{sw}/s)\\,f_{ywd}$ "
@@ -845,11 +851,12 @@ def manual_blocks() -> list:
          "NA), applied to the truss struts by 5.101 NA. Both editions bound "
          "$1 \\leq \\cot\\theta \\leq 2.5$ (6.7N / 6.7a NA).")
     md("**Worked** (same section, C35, DK NA:2024, 2-leg $\\phi$10 links at "
-       "$s = 150$ mm, $f_{ywk} = 500$): $z = 495$ mm, $f_{ywd} = 417$ MPa, "
-       "$\\nu_1 = 0.525$, $A_{sw}/s = 1.047$ mm$^2$/mm. The crossing "
-       "$\\cot\\theta = 2.78$ exceeds the limit, so $\\cot\\theta = 2.5$ and the "
-       "links govern: $V_{Rd,s} = 540$ kN $< V_{Rd,max} = 649$ kN, giving "
-       "$V_{Rd} = 540$ kN.")
+       "$s = 150$ mm, $f_{ywk} = 500$; taking $z = 0.9d = 495$ mm for illustration): "
+       "$f_{ywd} = 417$ MPa, $\\nu_1 = 0.525$, $A_{sw}/s = 1.047$ mm$^2$/mm. The "
+       "crossing $\\cot\\theta = 2.78$ exceeds the limit, so $\\cot\\theta = 2.5$ "
+       "and the links govern: $V_{Rd,s} = 540$ kN $< V_{Rd,max} = 649$ kN, giving "
+       "$V_{Rd} = 540$ kN. In the app the section's own (slightly smaller) plastic "
+       "lever arm is used in place of $0.9d$.")
 
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "

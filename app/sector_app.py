@@ -32,7 +32,8 @@ from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, geometry, kernels, material_presets as mp, shear, templates  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
-from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
+from sector.plastic import (plastic_capacity_at_angle, solve_interaction,  # noqa: E402
+                            solve_plastic)
 from sector.section import Section  # noqa: E402
 from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
                                    crack_width)
@@ -1852,6 +1853,40 @@ def _gross_area_centroid(outer, holes):
     return area, mx / area, my / area
 
 
+# Neutral-axis angle giving bending about the shear axis with the tension face on the
+# chosen side (the plastic solver's convention: V=90 -> +Mx, tension at the bottom;
+# V=0 -> +My, tension on the left). Used to pull the internal lever arm z for shear.
+_SHEAR_LEVER_ANGLE = {("x", True): 90.0, ("x", False): 270.0,
+                      ("y", True): 0.0, ("y", False): 180.0}
+
+
+def _shear_lever_arm(inp, axis, tension_low, d_mm):
+    """Internal lever arm z (mm) for the shear truss and its source label.
+
+    The plastic engine already computes the lever arm between the concrete
+    compression resultant and the steel tension resultant; for shear about the given
+    axis this is the depth-direction component of that lever arm (its y-part for
+    vertical shear, x-part for horizontal). It is evaluated at the ULS axial force and
+    the neutral-axis angle whose bending puts the chosen face in tension. Falls back to
+    the EC2-permitted ``z = 0.9 d`` when the lever arm is degenerate (no tension
+    reinforcement, a non-converged / fully-compressed state, or a solver error).
+    """
+    fallback = (0.9 * d_mm, "0.9 d (fallback)")
+    if inp["section"] is None:
+        return fallback
+    angle = _SHEAR_LEVER_ANGLE[(axis, tension_low)]
+    pre = inp["prestress"] if inp["tendons"] else None
+    try:
+        pt = plastic_capacity_at_angle(inp["section"], inp["concrete"], inp["steel"],
+                                       -inp["P_pl"], angle, prestress=pre)
+    except Exception:
+        return fallback
+    lever = abs(pt.dy) if axis == "x" else abs(pt.dx)   # depth-direction component, m
+    if not pt.converged or lever <= 1e-6:
+        return fallback
+    return lever * 1000.0, "plastic internal lever arm"
+
+
 def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     """Run the selected analyses for ``inp`` and return the results payload.
 
@@ -2104,8 +2139,14 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             cot_max = max(inp["shear_cot_min"], inp["shear_cot_max"])
             asw = inp["shear_link_legs"] * templates.bar_area(inp["shear_link_dia"])
             asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
+            # z is the internal lever arm actually computed by the plastic engine (the
+            # separation of the concrete compression resultant and the steel tension
+            # resultant) for bending about the shear axis with the chosen tension face,
+            # at the ULS axial force -- not the 0.9d approximation. Fall back to 0.9d
+            # only when that lever arm is degenerate (no tension steel / non-converged).
+            z_mm, z_src = _shear_lever_arm(inp, axis, tension_low, d)
             lk = shear.vrd_links(fck, code, bw, d, asw_over_s, inp["shear_fywk"],
-                                 -inp["P_pl"], ac, cot_min, cot_max)
+                                 -inp["P_pl"], ac, cot_min, cot_max, z_mm=z_mm)
             util_l = (v_ed / lk["vrd"]) if lk["vrd"] > 0.0 else math.inf
             # delta_Ftd = 0.5*VEd*cot(theta): the extra longitudinal tension from shear.
             delta_ftd = 0.5 * v_ed * lk["cot"] if lk["valid"] else 0.0
@@ -2115,7 +2156,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                            legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
                            s=inp["shear_link_s"], fywk=inp["shear_fywk"],
                            cot_min=cot_min, cot_max=cot_max, delta_ftd=delta_ftd,
-                           cot_limit_lo=lo, cot_limit_hi=hi,
+                           cot_limit_lo=lo, cot_limit_hi=hi, z_source=z_src,
                            out_of_limits=bool(cot_min < lo - 1e-9
                                               or cot_max > hi + 1e-9),
                            required=bool(v_ed > res["vrd_c"])))
@@ -2716,7 +2757,7 @@ def shear_view(inp, results):
                           f"Strut factor {_NU}1", f"Chord factor {_ALPHA}cw",
                           f"Extra long. tension {_DELTA}Ftd"],
              "Value": [f"{lk['theta_deg']:.1f} deg", f"{lk['cot']:.3f}",
-                       f"{lk['z']:.1f} mm",
+                       f"{lk['z']:.1f} mm ({links['z_source']})",
                        f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
                        f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
                        f"{lk['fywd']:.1f} MPa", f"{lk['nu1']:.3f}",

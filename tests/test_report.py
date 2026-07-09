@@ -325,6 +325,7 @@ def _links_out():
             "util": 80.0 / 540.0, "asw": 157.08, "asw_over_s": 1.047, "legs": 2.0,
             "dia": 10.0, "s": 150.0, "fywk": 500.0, "cot_min": 1.0, "cot_max": 2.5,
             "delta_ftd": 375.0, "cot_limit_lo": 1.0, "cot_limit_hi": 2.5,
+            "z_source": "plastic internal lever arm",
             "out_of_limits": False, "required": True}
 
 
