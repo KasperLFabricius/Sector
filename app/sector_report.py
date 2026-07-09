@@ -73,7 +73,7 @@ _register_fonts()
 # (c.eps_c2) and dict keys (cw.get("phi")) are never touched.
 _GREEK = {"eps": "&#949;", "sigma": "&#963;", "lambda": "&#955;", "alpha": "&#945;",
           "gamma": "&#947;", "kappa": "&#954;", "rho": "&#961;", "phi": "&#966;",
-          "theta": "&#952;", "nu": "&#957;", "permille": "&#8240;"}
+          "theta": "&#952;", "nu": "&#957;", "tau": "&#964;", "permille": "&#8240;"}
 _GREEK_RE = re.compile(r"\b(" + "|".join(_GREEK) + r")\b")
 
 
@@ -742,6 +742,58 @@ class ReportBuilder:
                 tendons=ten_xy, zones=zones, show_labels=True, scale=_MM, unit="mm",
                 title=f"Compression zone at V = {_fmt(gov['V'],0)} deg"), 150, 100)
 
+    def _shear_2023(self, sh, res):
+        """The EN 1992-1-1:2023 strain-based tau_Rd,c body (sec. 8.2.2)."""
+        bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
+        fck = sh["fck"]
+        rows = [["Quantity", "Symbol", "Value"],
+                ["Effective depth", "d", f"{_fmt(sh['d'], 1)} mm"],
+                ["Web width", "b<sub>w</sub>", f"{_fmt(sh['bw'], 1)} mm ({bw_src})"],
+                ["Lever arm", "z", f"{_fmt(res['z'], 1)} mm (0.9 d)"],
+                ["Tension reinforcement", "A<sub>sl</sub>",
+                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
+                ["Reinforcement ratio", "rho<sub>l</sub>", f"{_fmt(res['rho_l'], 4)}"],
+                ["Aggregate size", "d<sub>dg</sub>", f"{_fmt(res['ddg'], 1)} mm"],
+                ["Flexural design yield", "f<sub>yd</sub>",
+                 f"{_fmt(res['fyd'], 1)} MPa"],
+                ["Shear partial factor", "gamma<sub>v</sub>",
+                 f"{_fmt(res['gamma_v'], 2)}"]]
+        self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        self._h2("Resistance")
+        self._formula(
+            "tau<sub>Rd,c</sub> = (0.66/gamma<sub>v</sub>)(100 rho<sub>l</sub> "
+            "f<sub>ck</sub> d<sub>dg</sub>/d)<sup>1/3</sup>",
+            ref="EN 1992-1-1:2023 (8.27), stress",
+            subst=f"(0.66/{_fmt(res['gamma_v'], 2)})(100 &#183; "
+                  f"{_fmt(res['rho_l'], 4)} &#183; {_fmt(fck, 0)} &#183; "
+                  f"{_fmt(res['ddg'], 1)}/{_fmt(sh['d'], 1)})<sup>1/3</sup>",
+            result=f"tau = {_fmt(res['tau_basic'], 3)} MPa")
+        self._formula(
+            "tau<sub>Rd,c,min</sub> = (11/gamma<sub>v</sub>) "
+            "sqrt(f<sub>ck</sub>/f<sub>yd</sub> &#183; d<sub>dg</sub>/d)",
+            ref="EN 1992-1-1:2023 (8.20)",
+            subst=f"(11/{_fmt(res['gamma_v'], 2)}) sqrt({_fmt(fck, 0)}/"
+                  f"{_fmt(res['fyd'], 1)} &#183; {_fmt(res['ddg'], 1)}/"
+                  f"{_fmt(sh['d'], 1)})",
+            result=f"tau<sub>min</sub> = {_fmt(res['tau_min'], 3)} MPa")
+        self._formula(
+            "V<sub>Rd,c</sub> = max(tau<sub>Rd,c</sub>, tau<sub>Rd,c,min</sub>) "
+            "b<sub>w</sub> z",
+            subst=f"max({_fmt(res['tau_rdc'], 3)}, {_fmt(res['tau_min'], 3)}) &#183; "
+                  f"{_fmt(sh['bw'], 1)} &#183; {_fmt(res['z'], 1)} / 1000",
+            result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
+        util = sh["util"]
+        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
+        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        self._h2("Utilisation")
+        self._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
+                      subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
+                      result=f"{util_txt}  ({verdict})")
+        self._small("The 2023 tau<sub>Rd,c</sub> uses the aggregate size d<sub>dg</sub>"
+                    " = 16 + D<sub>lower</sub> and the flexural design yield; it does "
+                    "not use the axial stress. The with-links strain-based method "
+                    "(8.2.3) is a follow-up.")
+
     def _shear(self):
         sh = self.out["shear"]
         res = sh["res"]
@@ -749,14 +801,18 @@ class ReportBuilder:
         axis = ("vertical shear (bending about x)" if sh["axis"] == "x"
                 else "horizontal shear (bending about y)")
         face = "bottom / left" if sh["tension_low"] else "top / right"
+        clause = "8.2.2" if sh.get("model_2023") else "6.2.2(1)"
         self._p(f"Design shear resistance V<sub>Rd,c</sub> of a member not requiring "
-                f"shear reinforcement (EN 1992-1-1 sec. 6.2.2(1)), method "
+                f"shear reinforcement (EN 1992-1-1 sec. {clause}), method "
                 f"<b>{sh['method']}</b>. {axis[0].upper() + axis[1:]}, with the "
                 f"tension reinforcement on the {face} face.")
         if not res["valid"]:
             self._small("Warning: V<sub>Rd,c</sub> is zero -- no tension "
                         "reinforcement on the chosen face, or a zero effective depth "
                         "/ web width.")
+        if sh.get("model_2023"):
+            self._shear_2023(sh, res)
+            return
         bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
         fck = sh["fck"]
         k1 = res["k1"]

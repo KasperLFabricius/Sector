@@ -506,7 +506,15 @@ def manual_blocks() -> list:
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
             "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],
            ["DS/EN 1992-1-1:2005 + DK NA:2024", "As 2005 but the raised "
-            "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"]])
+            "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"],
+           ["DS/EN 1992-1-1:2023", "The strain-based $\\tau_{Rd,c}$ (8.2.2) with the "
+            "aggregate size $d_{dg}$ and $\\gamma_V = 1.40$; members without links"]])
+    call("standard", "The **2023 method** uses "
+         "$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq "
+         "\\tau_{Rd,c,min}$ (8.27), with $d_{dg} = 16 + D_{lower}$ ($\\leq 40$ mm, "
+         "8.2.1(4)) and the flexural design yield $f_{yd}$ -- it does not use the "
+         "axial stress. Its strain-based method for members **with** links (8.2.3) "
+         "is a follow-up; torsion and the combined lock stay on the 2005 family.")
     call("limit", "$A_{sl}$ is taken as the longitudinal bars on the tension face, "
          "**assumed fully anchored** ($\\geq l_{bd} + d$) beyond the section -- an "
          "anchorage that cannot be known at section level, so it is the user's "
@@ -979,6 +987,7 @@ def manual_blocks() -> list:
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
            ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"],
+           ["Shear, strain-based (2023)", "DS/EN 1992-1-1:2023 8.2.2 (tau_Rd,c, ddg)"],
            ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"],
            ["Torsion (thin-walled tube)", "DS/EN 1992-1-1 6.3 + DK NA 5.6.1(3)P / 6.3.2(6)"],
            ["Combined M-V-T", "DS/EN 1992-1-1 6.3.2(4) + DK NA 6.3.2(6)"]])

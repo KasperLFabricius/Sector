@@ -175,6 +175,21 @@ class DesignCode:
     shear_nu_v: bool = False
     shear_cot_min_limit: float = 1.0
     shear_cot_max_limit: float = 2.5
+    # EN 1992-1-1:2023 sec. 8.2.2 (strain-based, members without shear reinforcement):
+    # tau_Rd,c = (0.66/gamma_v)*(100*rho_l*fck*ddg/d)^(1/3) >= tau_Rd,c,min (8.27),
+    # tau_Rd,c,min = (11/gamma_v)*sqrt(fck/fyd*ddg/d) (8.20). gamma_v is the shear
+    # partial factor (Table 4.3: 1.40 recommended); ddg the aggregate size parameter.
+    shear_gamma_v: float = 1.40
+
+    def shear_ddg(self, fck: float, d_lower_mm: float) -> float:
+        """Aggregate size parameter ``ddg`` (mm), sec. 8.2.1(4).
+
+        ``ddg = 16 + Dlower`` (<= 40 mm) for ``fck <= 60``; above C60 the aggregate
+        term is scaled by ``(60/fck)^2``. ``Dlower`` is the lower sieve size of the
+        coarsest aggregate fraction (~16-32 mm), or ``Dmax`` when known.
+        """
+        term = d_lower_mm if fck <= 60.0 else d_lower_mm * (60.0 / fck) ** 2
+        return min(16.0 + term, 40.0)
 
     def shear_crd_c_over_gamma(self) -> float:
         """``C_Rd,c = 0.18 / gamma_c`` -- the VRd,c coefficient (2005 sec. 6.2.2(1))."""
