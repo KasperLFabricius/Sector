@@ -627,9 +627,11 @@ class ReportBuilder:
         # Per-angle results table -- the full column set, matching the result view.
         self._h2("Capacity over the neutral-axis sweep")
         cable = bool(self.inp.get("tendons"))
-        # With the mild steel active in compression, split the bar-strain column into
-        # the most tensile and the most compressed bar (the two governing extremes).
-        comp = (bool(getattr(self.inp.get("steel"), "active_in_compression", False))
+        # Split the bar-strain column into the most tensile and the most compressed
+        # bar only when there are mild bars active in compression (a tendon-only
+        # section has none). Guard on the field so an older payload does not raise.
+        comp = (bool(self.inp.get("bars"))
+                and bool(getattr(self.inp.get("steel"), "active_in_compression", False))
                 and bool(pl["points"]) and "eps_s_comp" in pl["points"][0])
         eps_s_head = ["eps<sub>s,t</sub>", "eps<sub>s,c</sub>"] if comp else ["eps<sub>s</sub>"]
         head = (["V", "M<sub>x</sub>", "M<sub>y</sub>", "NA x", "NA y", "eps<sub>c</sub>"]
@@ -677,7 +679,8 @@ class ReportBuilder:
         self._p(f"Neutral-axis angle V = {_fmt(gov['V'],0)} deg. The extreme "
                 f"concrete fibre is at the ultimate strain; the curvature scales "
                 f"the strain plane to that limit.")
-        comp = (bool(getattr(self.inp.get("steel"), "active_in_compression", False))
+        comp = (bool(self.inp.get("bars"))
+                and bool(getattr(self.inp.get("steel"), "active_in_compression", False))
                 and "eps_s_comp" in gov)
         steel_rows = ([["Most-tensile bar strain", "eps<sub>s,t</sub>",
                         f"{_fmt(gov['eps_s'], 3)} %"],

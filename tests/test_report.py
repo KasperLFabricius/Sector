@@ -269,6 +269,8 @@ def test_report_omits_unused_material_sections():
     txt2 = _pdf_text(sector_report.build_report({}, inp2, _out(), figures=False))
     assert "Initial prestrain" in txt2
     assert "Design yield" not in txt2
+    # No mild bars -> no compression bar-strain split (would be a spurious eps_s,c row).
+    assert "Most-compressed bar" not in txt2
 
 
 def test_report_handles_uncracked_section():

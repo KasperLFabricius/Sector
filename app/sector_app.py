@@ -2130,12 +2130,12 @@ def plastic_view(inp, results):
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm"),
             width="stretch")
     with cR:
-        # When the mild steel is active in compression, report both extremes of the
-        # bar strain (the most tensile and the most compressed bar); otherwise the
-        # compression-side bars carry no stress, so only the tensile extreme is shown.
-        # Guard on the field being present so a pre-v0.40 reused payload (which lacks
-        # eps_s_comp) degrades to the single strain instead of raising.
-        active_comp = inp["steel"].active_in_compression and "eps_s_comp" in pt
+        # Split the bar strain into its tensile and compression extreme only when
+        # there are mild bars that are active in compression (a tendon-only section has
+        # no mild bar to compress). Also guard on the field being present so a pre-v0.40
+        # reused payload (which lacks eps_s_comp) degrades to the single strain.
+        active_comp = (inp["steel"].active_in_compression and bool(inp["bars"])
+                       and "eps_s_comp" in pt)
         lines = [
             f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
             f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
@@ -2162,7 +2162,7 @@ def plastic_view(inp, results):
 
     with st.expander("Full results table (per neutral-axis angle)"):
         # Size the table to all rows so the page scrolls, not the table itself.
-        steel_comp = (inp["steel"].active_in_compression
+        steel_comp = (inp["steel"].active_in_compression and bool(inp["bars"])
                       and bool(pts) and "eps_s_comp" in pts[0])
         st.dataframe(_plastic_table(pts, bool(inp["tendons"]), steel_comp),
                      hide_index=True, width="stretch",
