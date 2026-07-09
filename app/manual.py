@@ -510,8 +510,20 @@ def manual_blocks() -> list:
     call("limit", "$A_{sl}$ is taken as the longitudinal bars on the tension face, "
          "**assumed fully anchored** ($\\geq l_{bd} + d$) beyond the section -- an "
          "anchorage that cannot be known at section level, so it is the user's "
-         "responsibility. A member with $V_{Ed} > V_{Rd,c}$ needs designed shear "
-         "reinforcement (a later addition).")
+         "responsibility.")
+    md("With **Shear reinforcement (links) present** on, the resistance becomes the "
+       "variable-strut $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3) instead of "
+       "$V_{Rd,c}$ (which is still shown, to indicate whether links are strictly "
+       "required). The link inputs are the number of legs, the bar diameter and the "
+       "spacing $s$ (so $A_{sw} = n_{legs}\\,\\pi\\phi^2/4$), the link yield "
+       "$f_{ywk}$, and the strut-angle bounds $\\cot\\theta_{min}$ / "
+       "$\\cot\\theta_{max}$. Sector auto-optimises $\\theta$ within those bounds to "
+       "maximise $V_{Rd}$.")
+    call("standard", "EN 1992-1-1 6.7N (and the DK NA:2024 6.7a NA for class B/C "
+         "steel) allow $1 \\leq \\cot\\theta \\leq 2.5$; the DK NA takes the strut "
+         "factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 NA) rather "
+         "than the recommended $\\nu = 0.6(1 - f_{ck}/250)$. Bounds outside the "
+         "code range are accepted but **warned**, not blocked.")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
@@ -806,6 +818,39 @@ def manual_blocks() -> list:
        "$0.627$ MPa exceeds $v_{min} = 0.535$ MPa, so "
        "$V_{Rd,c} = 0.627 \\cdot 300 \\cdot 550 = 103.4$ kN.")
 
+    h2("Members with shear reinforcement (links)")
+    md("A member with designed vertical links is a truss: the links are the "
+       "tension ties and the concrete web the inclined compression struts at an "
+       "angle $\\theta$ to the axis (6.2.3). The resistance is the smaller of the "
+       "tie yield and the strut crushing,\n\n"
+       "$$V_{Rd,s} = \\frac{A_{sw}}{s}\\,z\\,f_{ywd}\\,\\cot\\theta \\quad(6.8), "
+       "\\qquad V_{Rd,max} = \\frac{\\alpha_{cw}\\,b_w\\,z\\,\\nu_1\\,f_{cd}}"
+       "{\\cot\\theta + \\tan\\theta} \\quad(6.9),$$\n\n"
+       "and $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$. Here $z \\approx 0.9d$ is the "
+       "lever arm, $\\nu_1$ the strut effectiveness factor, and $\\alpha_{cw}$ the "
+       "compression-chord factor (1 for a non-prestressed section, rising with an "
+       "axial compression per 6.11N). The shear also adds a longitudinal tension "
+       "$\\Delta F_{td} = 0.5\\,V_{Ed}\\,\\cot\\theta$ (6.18) that the bottom steel "
+       "must carry on top of the bending force.")
+    md("$V_{Rd,s}$ rises with $\\cot\\theta$ (a flatter strut engages more links) "
+       "while $V_{Rd,max}$ falls with it, so $V_{Rd} = \\min$ is largest where the "
+       "two are equal, at $\\cot^2\\theta = b/a - 1$ with $a = (A_{sw}/s)\\,f_{ywd}$ "
+       "and $b = \\alpha_{cw}\\,b_w\\,\\nu_1\\,f_{cd}$ ($z$ cancels). Sector "
+       "**auto-optimises** $\\theta$: it takes that crossing, clamped to the "
+       "$\\cot\\theta$ bounds -- outside the crossing one limit governs throughout, "
+       "so the best allowed angle is the nearer bound.")
+    call("standard", "The recommended strut factor is $\\nu_1 = \\nu = "
+         "0.6\\,(1 - f_{ck}/250)$ (6.6N); the DK NA:2024 uses its plasticity "
+         "pure-shear factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 "
+         "NA), applied to the truss struts by 5.101 NA. Both editions bound "
+         "$1 \\leq \\cot\\theta \\leq 2.5$ (6.7N / 6.7a NA).")
+    md("**Worked** (same section, C35, DK NA:2024, 2-leg $\\phi$10 links at "
+       "$s = 150$ mm, $f_{ywk} = 500$): $z = 495$ mm, $f_{ywd} = 417$ MPa, "
+       "$\\nu_1 = 0.525$, $A_{sw}/s = 1.047$ mm$^2$/mm. The crossing "
+       "$\\cot\\theta = 2.78$ exceeds the limit, so $\\cot\\theta = 2.5$ and the "
+       "links govern: $V_{Rd,s} = 540$ kN $< V_{Rd,max} = 649$ kN, giving "
+       "$V_{Rd} = 540$ kN.")
+
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "
        "axial force **at each swept angle** to a tight residual, "
@@ -834,7 +879,8 @@ def manual_blocks() -> list:
            ["Cracking and crack width (2005)", "DS/EN 1992-1-1 7.3"],
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
-           ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"]])
+           ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"],
+           ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"]])
 
     h1("Key assumptions & limitations")
     md("- **One plane section.** Plane sections remain plane; the strain field is "

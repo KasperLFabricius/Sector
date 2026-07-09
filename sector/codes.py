@@ -165,10 +165,49 @@ class DesignCode:
     shear_k1: float = 0.15
     shear_vmin_coeff: float = 0.035
     shear_vmin_over_gamma_c: bool = False
+    # Shear WITH links (sec. 6.2.3, variable strut inclination). ``nu1`` is the
+    # strength reduction factor for concrete cracked in shear used in VRd,max: the
+    # recommended nu = 0.6*(1 - fck/250), or -- when ``shear_nu_v`` is set (the
+    # DK NA:2024 plasticity pure-shear factor nu_v, 5.103 NA, applied to the truss
+    # struts by 5.101 NA) -- nu_v = 0.7 - fck/200 >= 0.45. The strut angle is bounded
+    # by cot(theta) in [shear_cot_min_limit, shear_cot_max_limit] (6.7N / 6.7a NA,
+    # both 1..2.5); the user may widen these (with a warning) per the roadmap.
+    shear_nu_v: bool = False
+    shear_cot_min_limit: float = 1.0
+    shear_cot_max_limit: float = 2.5
 
     def shear_crd_c_over_gamma(self) -> float:
         """``C_Rd,c = 0.18 / gamma_c`` -- the VRd,c coefficient (2005 sec. 6.2.2(1))."""
         return self.shear_crd_c / self.gamma_c
+
+    def shear_nu1(self, fck: float) -> float:
+        """Strength reduction factor ``nu1`` for concrete cracked in shear (VRd,max).
+
+        Recommended ``nu = 0.6*(1 - fck/250)`` (6.6N); the DK NA:2024 uses its
+        plasticity pure-shear effectiveness factor ``nu_v = 0.7 - fck/200 >= 0.45``
+        (5.103 NA), which 5.101 NA applies to the truss compression struts.
+        """
+        if self.shear_nu_v:
+            return max(0.7 - fck / 200.0, 0.45)
+        return 0.6 * (1.0 - fck / 250.0)
+
+    def shear_alpha_cw(self, sigma_cp: float, fcd: float) -> float:
+        """Compression-chord coefficient ``alpha_cw`` (6.11N).
+
+        ``sigma_cp`` is the mean concrete compressive stress (compression positive):
+        1 for a non-prestressed / tensile section, rising to 1.25 then falling to 0 as
+        ``sigma_cp`` approaches ``fcd`` (the strut is already near crushing).
+        """
+        if fcd <= 0.0 or sigma_cp <= 0.0:
+            return 1.0
+        r = sigma_cp / fcd
+        if r <= 0.25:
+            return 1.0 + r
+        if r <= 0.5:
+            return 1.25
+        if r < 1.0:
+            return 2.5 * (1.0 - r)
+        return 0.0
 
     def shear_vmin(self, k: float, fck: float) -> float:
         """``v_min`` (MPa) for shear resistance without links, sec. 6.2.2(1).
@@ -251,6 +290,9 @@ EC2_2005_DKNA = DesignCode(
     # DK NA:2024 sec. 6.2.2(1): v_min = (0.051/gamma_c)*k^1.5*sqrt(fck).
     shear_vmin_coeff=0.051,
     shear_vmin_over_gamma_c=True,
+    # DK NA:2024 sec. 6.2.3(3): the truss strut effectiveness factor is the plasticity
+    # pure-shear factor nu_v = 0.7 - fck/200 >= 0.45 (5.103 NA), not the recommended nu.
+    shear_nu_v=True,
 )
 
 # DS/EN 1992-1-1:2023: gamma_c = 1.5, gamma_s = 1.15, with the strength-dependent
