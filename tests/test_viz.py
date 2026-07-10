@@ -414,6 +414,17 @@ def test_tube_figure_draws_outline_centre_line_and_inner_face():
     assert max(centre.x) == pytest.approx(155.0, abs=1.0)
 
 
+def test_tube_figure_accepts_numpy_array_rings():
+    # Codex: the section model stores rings as NumPy arrays; tube_figure must not
+    # truth-test them (`outer or []` raises ValueError on an array).
+    import numpy as np
+    outer = np.array([[-0.2, -0.3], [0.2, -0.3], [0.2, 0.3], [-0.2, 0.3]])
+    holes = [np.array([[-0.05, -0.1], [0.05, -0.1], [0.05, 0.1], [-0.05, 0.1]])]
+    fig = viz.tube_figure(outer, holes=holes, tef_mm=60.0, ak_m2=0.05)
+    outline = next(t for t in fig.data if (t.name or "") == "outline")
+    assert max(outline.x) == pytest.approx(200.0)
+
+
 def test_tube_figure_degrades_without_a_wall():
     # No tef -> just the outline, no offset rings (and no crash).
     outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]

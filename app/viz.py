@@ -644,13 +644,16 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
     """
     from sector import torsion   # local import keeps viz free of a load-order cycle
     fig = go.Figure()
-    outer = list(outer or [])
+    # Guard with ``is None`` rather than a truth test: the section model stores rings
+    # as NumPy arrays, whose truth value is ambiguous (as in section_figure).
+    outer = [] if outer is None else list(outer)
+    holes = [] if holes is None else list(holes)
     if len(outer) >= 3:
         ox, oy = _ring_xy([(p[0] * scale, p[1] * scale) for p in outer])
         fig.add_trace(go.Scatter(x=ox, y=oy, fill="toself", mode="lines",
                                  fillcolor=CONCRETE_FILL, line=dict(color=CONCRETE_LINE),
                                  name="outline", hoverinfo="skip"))
-    for hole in holes or []:
+    for hole in holes:
         hx, hy = _ring_xy([(p[0] * scale, p[1] * scale) for p in hole])
         fig.add_trace(go.Scatter(x=hx, y=hy, fill="toself", mode="lines",
                                  fillcolor="white", line=dict(color=CONCRETE_LINE, dash="dot"),
