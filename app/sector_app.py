@@ -1337,6 +1337,8 @@ def build_inputs():
     mat = s.expander("Material Parameters", expanded=False)
     loads = s.expander("Loads", expanded=True)
     aset = s.expander("Analysis settings", expanded=False)
+    scw = s.expander("Crack width (SLS)", expanded=False)
+    sts = s.expander("Shear, torsion & combined (ULS)", expanded=False)
     report_slot = s.container()
     save_slot = s.container()
     about_slot = s.container()
@@ -1373,21 +1375,20 @@ def build_inputs():
              "(N-Mx and N-My), from pure tension to the squash load. Shown in the "
              "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
-    aset.markdown("**Serviceability (elastic SLS)**")
-    aset.caption("Extra cracked-section checks in the Elastic view.")
-    sls_cw = _seeded_checkbox(aset, "Crack width", False, "sls_cw",
+    scw.caption("Cracked-section serviceability check, reported in the Elastic view.")
+    sls_cw = _seeded_checkbox(scw, "Crack width", False, "sls_cw",
                               disabled=not elastic_on,
                               help="Report the EC2 crack width wk for both the long-term "
                                    "and the short-term (instantaneous) load. Each bar's "
                                    "clear cover is taken from the geometry.")
-    sls_phi = _seeded_number(aset, r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0,
+    sls_phi = _seeded_number(scw, r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0,
                              60.0, 0.0, 1.0, "sls_phi",
                              disabled=not (elastic_on and sls_cw),
                              help="Governing bar diameter for the crack spacing "
                                   "sr,max; 0 derives it from each bar's area.")
     # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
-    sls_bond = aset.selectbox(
+    sls_bond = scw.selectbox(
         "Mild-steel bond (k1)",
         list(_BOND_K1), key="sls_bond", disabled=not (elastic_on and sls_cw),
         help="EC2 7.11 bond coefficient k1 for the crack spacing, applied to the "
@@ -1397,7 +1398,7 @@ def build_inputs():
     # Migrate the pre-coarse-system saved value before the selectbox reads it.
     if st.session_state.get("sls_code") in _CRACK_CODE_ALIASES:
         st.session_state["sls_code"] = _CRACK_CODE_ALIASES[st.session_state["sls_code"]]
-    sls_code = aset.selectbox(
+    sls_code = scw.selectbox(
         "Crack-width code", list(_CRACK_CODES), key="sls_code",
         disabled=not (elastic_on and sls_cw),
         help="Code edition for the crack-spacing rules. The DK NA makes k3 cover-"
@@ -1410,7 +1411,7 @@ def build_inputs():
              "(esm-ecm) with kw = 1.7 and a per-bar curvature factor.")
     sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
     sls_edition = _CRACK_CODES[sls_code]["edition"]
-    sls_member = aset.selectbox(
+    sls_member = scw.selectbox(
         "Member type", ["Beam", "Slab"], key="sls_member",
         disabled=not (elastic_on and sls_cw and sls_dk_na),
         help="Under the DK NA fine system the (h-x)/3 effective-height term applies "
@@ -1419,41 +1420,45 @@ def build_inputs():
              "matched effective area, not hc,ef). Ignored for the base EN 1992-1-1 "
              "code.")
 
-    aset.markdown("**Combined M-V-T interaction**")
-    aset.caption("Tie the bending (plastic M), shear (V) and torsion (T) checks "
+    sts.markdown("**Combined M-V-T interaction**")
+    sts.caption("Tie the bending (plastic M), shear (V) and torsion (T) checks "
                  "together under one consistent code edition (6.3.2). Enable Plastic "
                  "(or Both), the shear check and the torsion check as well.")
     combined_on = _seeded_checkbox(
-        aset, "Check combined M-V-T", False, "combined_on",
+        sts, "Check combined M-V-T", False, "combined_on",
         help="Evaluate the shear+torsion crushing interaction (6.29) and the DK NA "
              "sum(SEd/SRd) <= 1 rule (6.3.2(6)) across the plastic, shear and torsion "
              "results. While on, the shear and torsion method selectors are locked to "
              "the shared edition below.")
     combined_method = _seeded_selectbox(
-        aset, "Combined edition (shared)", list(_SHEAR_CODES),
+        sts, "Combined edition (shared)", list(_SHEAR_CODES),
         codes.EC2_2005_DKNA.label, key="combined_method", disabled=not combined_on,
         help="The single code edition used for the shear and torsion checks while "
              "Combined is on (their own method selectors are locked to this).")
     combined_mv_independent = _seeded_checkbox(
-        aset, "Shear longitudinal steel provided (M & V separate)", False,
+        sts, "Shear longitudinal steel provided (M & V separate)", False,
         "combined_mv_independent", disabled=not combined_on,
         help="DK NA 6.3.2(6): when the longitudinal steel for shear (beyond bending) "
              "is present, M and V are not summed in sum(SEd/SRd) -- two independent "
              "checks (M+T and V+T) are made and the governing one taken.")
+    # Filled at the end of this block (once the shear/torsion toggles below are
+    # known) with any missing combined-check prerequisites -- so the user sees them
+    # here, right under the toggle, instead of only after Calculate.
+    combined_warn = sts.container()
 
-    aset.markdown("**Shear without shear reinforcement (VRd,c)**")
-    aset.caption("Design shear resistance of a member not requiring shear "
+    sts.markdown("**Shear without shear reinforcement (VRd,c)**")
+    sts.caption("Design shear resistance of a member not requiring shear "
                  "reinforcement (EN 1992-1-1 sec. 6.2.2). A ULS check of the applied "
                  "shear VEd; the axial term uses the ULS axial force N from the "
                  "Plastic capacity load set (its N input stays enabled here even in "
                  "Elastic-only mode).")
     shear_on = _seeded_checkbox(
-        aset, "Check shear capacity", False, "shear_on",
+        sts, "Check shear capacity", False, "shear_on",
         help="Compute VRd,c and the utilisation VEd/VRd,c. Members that need "
              "designed shear reinforcement (VEd > VRd,c) are covered in a later "
              "addition.")
     shear_method = _seeded_selectbox(
-        aset, "Shear method", list(_SHEAR_METHODS), codes.EC2_2005_DKNA.label,
+        sts, "Shear method", list(_SHEAR_METHODS), codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
         help="Code edition for the shear rules. The 2005 family uses VRd,c "
              "(6.2.2(1); the DK NA:2024 raises v_min). EN 1992-1-1:2023 uses the "
@@ -1464,27 +1469,27 @@ def build_inputs():
                    and getattr(_SHEAR_METHODS[_eff_shear_method], "shear_model",
                                "2005") == "2023")
     shear_dlower = _seeded_number(
-        aset, "Aggregate size Dlower (mm)", 4.0, 40.0, 16.0, 1.0, "shear_dlower",
+        sts, "Aggregate size Dlower (mm)", 4.0, 40.0, 16.0, 1.0, "shear_dlower",
         disabled=not (shear_on and _shear_2023),
         help="Lower sieve size of the coarsest aggregate (2023 method only): "
              "ddg = 16 + Dlower (<= 40 mm) for fck <= 60 (8.2.1(4)).")
     if combined_on:
-        aset.caption(f"Shear method set by Combined: {combined_method}")
+        sts.caption(f"Shear method set by Combined: {combined_method}")
     shear_axis = _seeded_selectbox(
-        aset, "Shear direction", list(_SHEAR_AXES),
+        sts, "Shear direction", list(_SHEAR_AXES),
         next(iter(_SHEAR_AXES)), key="shear_axis", disabled=not shear_on,
         help="The plane the shear acts in. Vertical shear (bending about x) uses "
              "the section depth in y; horizontal shear (about y) uses the width in "
              "x. Sector derives the effective depth d and the web width from this.")
     shear_tension = _seeded_selectbox(
-        aset, "Tension face", list(_SHEAR_TENSION), next(iter(_SHEAR_TENSION)),
+        sts, "Tension face", list(_SHEAR_TENSION), next(iter(_SHEAR_TENSION)),
         key="shear_tension", disabled=not shear_on,
         help="Which face carries tension under the accompanying bending. The "
              "tension reinforcement Asl is the longitudinal bars on that side of "
              "the section centroid, and d is measured from the opposite fibre.")
-    aset.caption("The applied shear VEd is entered in the Loads panel.")
+    sts.caption("The applied shear VEd is entered in the Loads panel.")
     shear_bw = _seeded_number(
-        aset, r"Web width $b_w$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0, "shear_bw",
+        sts, r"Web width $b_w$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0, "shear_bw",
         disabled=not shear_on,
         help="Smallest web width in the tension zone. 0 derives it from the outline "
              "(minimum solid width over the effective depth); enter a value for a "
@@ -1493,88 +1498,110 @@ def build_inputs():
     # the variable-strut VRd = min(VRd,s, VRd,max) (sec. 6.2.3) rather than VRd,c; the
     # strut angle theta is auto-optimised within the cot(theta) bounds below.
     shear_links = _seeded_checkbox(
-        aset, "Shear reinforcement (links) present", False, "shear_links",
+        sts, "Shear reinforcement (links) present", False, "shear_links",
         disabled=not shear_on,
         help="Add vertical links (stirrups). The resistance becomes the variable-"
              "strut VRd = min(VRd,s, VRd,max) (EN 1992-1-1 6.2.3); VRd,c is still "
              "shown to indicate whether links are strictly required.")
     _links = shear_on and shear_links
     shear_cot_min = _seeded_number(
-        aset, r"Strut $\cot\theta$ min", 0.5, 5.0, 1.0, 0.1, "shear_cot_min",
+        sts, r"Strut $\cot\theta$ min", 0.5, 5.0, 1.0, 0.1, "shear_cot_min",
         disabled=not _links,
         help="Lower bound for the auto-optimised strut angle. EN 1992-1-1 6.7N (and "
              "DK NA:2024 6.7a NA) allow 1 <= cot(theta) <= 2.5; a value outside that "
              "is allowed but warned, not blocked.")
     shear_cot_max = _seeded_number(
-        aset, r"Strut $\cot\theta$ max", 0.5, 5.0, 2.5, 0.1, "shear_cot_max",
+        sts, r"Strut $\cot\theta$ max", 0.5, 5.0, 2.5, 0.1, "shear_cot_max",
         disabled=not _links,
         help="Upper bound for the auto-optimised strut angle (cot(theta) = 2.5 is the "
              "code maximum; 1.0 corresponds to a 45-degree strut). Sector picks the "
              "angle in [min, max] that maximises VRd = min(VRd,s, VRd,max).")
+    if _links and (shear_cot_min < 1.0 - 1e-9 or shear_cot_max > 2.5 + 1e-9):
+        sts.caption("Note: the strut bounds fall outside the code range 1..2.5 "
+                    "(6.7N / 6.7a NA) -- allowed, but check the value is justified.")
 
-    aset.markdown("**Torsion (TRd, thin-walled tube)**")
-    aset.caption("Torsion resistance from the thin-walled tube idealisation "
+    sts.markdown("**Torsion (TRd, thin-walled tube)**")
+    sts.caption("Torsion resistance from the thin-walled tube idealisation "
                  "(EN 1992-1-1 sec. 6.3): closed stirrups TRd,s, strut crushing "
                  "TRd,max, cracking TRd,c, and the required longitudinal steel. The "
                  "tube (A, u, tef, Ak, uk) is derived from the outline.")
     torsion_on = _seeded_checkbox(
-        aset, "Check torsion capacity", False, "torsion_on",
+        sts, "Check torsion capacity", False, "torsion_on",
         help="Compute the torsion resistance TRd = min(TRd,s, TRd,max) and the "
              "utilisation TEd/TRd, plus the combined shear+torsion crushing check "
              "(6.29) when links are also defined.")
     torsion_method = _seeded_selectbox(
-        aset, "Torsion method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
+        sts, "Torsion method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
         key="torsion_method", disabled=(not torsion_on) or combined_on,
         help="Code edition for the torsion rules. The DK NA:2024 uses its plasticity "
              "pure-torsion strut factor nu_t = 0.7*(0.7 - fck/200) (5.104 NA) in "
              "place of the recommended nu = 0.6*(1 - fck/250).")
     if combined_on:
-        aset.caption(f"Torsion method set by Combined: {combined_method}")
-    aset.caption("The applied torsion TEd is entered in the Loads panel.")
+        sts.caption(f"Torsion method set by Combined: {combined_method}")
+    sts.caption("The applied torsion TEd is entered in the Loads panel.")
     _tors = torsion_on
-    aset.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
+    sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
                  "below (one leg carries the shear flow); the required longitudinal "
                  "steel uses the mild-reinforcement design yield.")
     torsion_tef = _seeded_number(
-        aset, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
+        sts, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
         help="Effective wall thickness of the tube. 0 derives it as A/u (capped at "
              "the real wall for a hollow section); enter a value to override.")
     torsion_cot_min = _seeded_number(
-        aset, r"Strut $\cot\theta$ min (torsion)", 0.5, 5.0, 1.0, 0.1,
+        sts, r"Strut $\cot\theta$ min (torsion)", 0.5, 5.0, 1.0, 0.1,
         "torsion_cot_min", disabled=not _tors,
         help="Lower bound for the auto-optimised torsion strut angle (code range "
              "1..2.5; outside is warned, not blocked).")
     torsion_cot_max = _seeded_number(
-        aset, r"Strut $\cot\theta$ max (torsion)", 0.5, 5.0, 2.5, 0.1,
+        sts, r"Strut $\cot\theta$ max (torsion)", 0.5, 5.0, 2.5, 0.1,
         "torsion_cot_max", disabled=not _tors,
         help="Upper bound for the auto-optimised torsion strut angle. Sector picks "
              "the angle in [min, max] that maximises TRd = min(TRd,s, TRd,max).")
+    if _tors and (torsion_cot_min < 1.0 - 1e-9 or torsion_cot_max > 2.5 + 1e-9):
+        sts.caption("Note: the torsion strut bounds fall outside the code range "
+                    "1..2.5 (6.7N / 6.7a NA) -- allowed, but check it is justified.")
 
     # One shared stirrup definition for both the shear links and the torsion tube:
     # physically it is the same closed stirrup, whose vertical legs resist shear and
     # whose closed loop resists torsion. Shear uses n legs; torsion uses one leg.
-    aset.markdown("**Links / stirrups (shear + torsion)**")
+    sts.markdown("**Links / stirrups (shear + torsion)**")
     _stirrups = (shear_on and shear_links) or torsion_on
-    aset.caption("The same closed stirrup carries shear (through its legs) and "
+    sts.caption("The same closed stirrup carries shear (through its legs) and "
                  "torsion (through the closed loop). For torsion the stirrup must be "
                  "closed. Enabled when shear links or the torsion check is on.")
     shear_link_legs = _seeded_number(
-        aset, "Stirrup legs (n, for shear)", 1.0, 20.0, 2.0, 1.0, "shear_link_legs",
+        sts, "Stirrup legs (n, for shear)", 1.0, 20.0, 2.0, 1.0, "shear_link_legs",
         disabled=not _stirrups,
         help="Number of vertical legs crossing the shear plane (a single closed "
              "stirrup = 2 legs). Torsion always uses one leg of the closed loop.")
     shear_link_dia = _seeded_number(
-        aset, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
+        sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
         disabled=not _stirrups, help="Stirrup bar diameter; the leg area is pi/4*dia^2.")
     shear_link_s = _seeded_number(
-        aset, "Stirrup spacing s (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
+        sts, "Stirrup spacing s (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
         disabled=not _stirrups, help="Longitudinal spacing of the stirrups.")
     shear_fywk = _seeded_number(
-        aset, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
+        sts, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
         disabled=not _stirrups,
         help="Characteristic yield strength of the stirrup steel; the design value "
              "is fywk / gamma_s of the selected method.")
+
+    # Pre-flight for the combined check (it needs several things at once): flag what
+    # is missing in the reserved slot right under its toggle, not only after Calculate.
+    if combined_on:
+        missing = []
+        if mode not in ("Plastic", "Both"):
+            missing.append("a Plastic or Both bending analysis")
+        if not check_util:
+            missing.append("'Check utilisation against applied moment'")
+        if not shear_on:
+            missing.append("the shear check")
+        if not torsion_on:
+            missing.append("the torsion check")
+        if missing:
+            combined_warn.warning("Combined M-V-T also needs: " + "; ".join(missing)
+                                  + ". It is not evaluated until all are enabled.")
 
     # (Section / Material / Loads expanders were created at the top; fill them now.)
     sec.caption("The section is a set of explicit points (the source of truth). "
