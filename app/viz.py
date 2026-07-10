@@ -35,6 +35,8 @@ LOAD_POINT = "#c0392b"                        # applied-load marker (red)
 LINK_LINE = "#e08a1e"                         # shear-link ties in the truss schematic
 # Annotation
 GUIDE_LINE = "#b8bdc4"                        # dotted projection guides
+SCHEMATIC_INK = "#2c2c2a"                     # strong schematic lines + labels
+SCHEMATIC_FILL = "rgba(120,130,140,0.10)"    # neutral schematic body fill
 
 # One shared layout template, so every figure matches (and matches the PDF report
 # typography). Registered as "sector" and layered on plotly_white; each figure uses

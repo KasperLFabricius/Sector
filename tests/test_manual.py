@@ -277,3 +277,15 @@ def test_strain_plane_wedges_use_semantic_colours():
     fills = [getattr(t, "fillcolor", None) for t in fig.data]
     assert viz.COMP_ZONE_FILL in fills
     assert viz.TENS_ZONE_FILL in fills
+
+
+def test_strain_plane_labels_use_leader_arrows_not_overlapping_shifts():
+    # v0.57: the strain-endpoint labels are placed with leader arrows in clear
+    # space (they used to overlap the section bar via large xshifts). Guard the
+    # arrow design + the face labels so a regression to overlapping text is caught.
+    fig = manual.fig_strain_plane()
+    anns = fig.layout.annotations
+    assert any(a.showarrow for a in anns)                      # leader-arrow labels
+    texts = " ".join(a.text for a in anns)
+    assert "compression face" in texts and "tension face" in texts
+    assert "neutral axis" in texts
