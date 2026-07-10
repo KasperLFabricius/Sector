@@ -489,3 +489,43 @@ def test_truss_links_use_a_link_colour_not_the_neutral_axis():
     fig = viz.truss_figure(21.8, 495.0, s_mm=150.0)
     ties = [t for t in fig.data if "links" in (getattr(t, "name", "") or "")]
     assert ties and all(t.line.color == viz.LINK_LINE for t in ties)
+
+
+# -- v0.58 (A4): interaction-diagram information upgrade ----------------------
+
+def test_mm_interaction_shows_fill_util_ray_and_angle_hover():
+    mx = [300.0, 0.0, -300.0, 0.0]
+    my = [0.0, 80.0, 0.0, -80.0]
+    angles = [0.0, 90.0, 180.0, 270.0]
+    fig = viz.interaction_figure(mx, my, applied=(150.0, 20.0), angles=angles, util=0.5)
+    names = [getattr(t, "name", "") or "" for t in fig.data]
+    assert "load direction" in names                       # the utilisation ray
+    assert any("capacity (this direction)" in n for n in names)  # the crossing marker
+    cap = next(t for t in fig.data if getattr(t, "name", None) == "capacity")
+    assert cap.fill == "toself"                            # filled envelope
+    assert cap.customdata is not None                      # per-vertex angle hover
+    assert any("util = 0.50" in (a.text or "") for a in fig.layout.annotations)
+
+
+def test_mm_interaction_without_util_has_no_ray():
+    fig = viz.interaction_figure([100.0, 0.0, -100.0], [0.0, 30.0, 0.0],
+                                 applied=(50.0, 10.0))
+    names = [getattr(t, "name", "") or "" for t in fig.data]
+    assert "load direction" not in names
+
+
+def test_nm_interaction_marks_landmarks():
+    N = [400.0, 0.0, -2500.0, 0.0]
+    M = [0.0, 300.0, 0.0, -300.0]
+    fig = viz.interaction_nm_figure(N, M, axis="x")
+    assert any(getattr(t, "name", None) == "landmarks" for t in fig.data)
+    anns = " ".join(a.text for a in fig.layout.annotations)
+    assert "squash" in anns and "tension" in anns and "max Mx" in anns
+
+
+def test_vt_interaction_shows_ray_and_interaction_sum():
+    fig = viz.vt_interaction_figure(650.0, 88.0, 150.0, 40.0)
+    names = [getattr(t, "name", "") or "" for t in fig.data]
+    assert "load direction" in names
+    anns = " ".join(a.text for a in fig.layout.annotations)
+    assert "sum =" in anns and "OK" in anns

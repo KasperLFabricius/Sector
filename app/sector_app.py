@@ -2716,7 +2716,9 @@ def plastic_view(inp, results):
         m5.metric("Utilisation", f"{p['util']:.3f}",
                   help="applied / capacity in the load direction")
     st.plotly_chart(
-        viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied")),
+        viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied"),
+                               angles=[pt["V"] for pt in p["points"]],
+                               util=p.get("util")),
         width="stretch")
 
     # Default to the utilisation-governing angle (the state in the applied load's
