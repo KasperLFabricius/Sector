@@ -998,7 +998,11 @@ class ReportBuilder:
             self._formula(
                 "shear share + torsion share (shared closed stirrup)",
                 subst=f"{_pct(tr['shear_fraction'])} + {_pct(tr['torsion_fraction'])}",
-                result=f"stirrup utilisation = {_pct(tr['governing'])}  ({vv})")
+                result=f"stirrup utilisation = {_pct(tr['u_stirrup'])}")
+            self._formula(
+                "crushing utilisation (both actions, one strut)",
+                result=f"crushing utilisation = {_pct(tr['u_crush'])}")
+            self._p(f"Governing ({tr['governs']}): {_pct(tr['governing'])}  ({vv})")
             self._small(note + f" At the common strut cot theta = {_fmt(tr['cot'], 2)} "
                         f"({_fmt(tr['theta_deg'], 1)} deg) balancing the stirrup "
                         "demand against the crushing.")

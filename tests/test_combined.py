@@ -124,6 +124,12 @@ def test_app_combined_view_renders():
     labels = [m.label for m in at.metric]
     assert any("Bending" in lbl for lbl in labels)
     assert any("SEd/SRd" in lbl for lbl in labels)
+    # The shared-stirrup transverse check reports steel demand and crushing
+    # separately, and the OK/Over verdict rides a mechanism-labelled metric so a
+    # crushing-controlled angle is never mislabelled as stirrup demand (Codex).
+    assert any("Stirrup utilisation" in lbl for lbl in labels)
+    assert any("Crushing utilisation" in lbl for lbl in labels)
+    assert any(lbl.startswith("Governing (") for lbl in labels)
 
 
 def test_app_combined_transverse_shear_credit():
@@ -145,6 +151,10 @@ def test_app_combined_transverse_shear_credit():
     assert tr["shear_fraction"] == pytest.approx(0.0)
     assert tr["torsion_fraction"] > 0.0
     assert tr["governing"] == pytest.approx(tr["torsion_fraction"], rel=1e-6)
+    # governing = max(stirrup, crushing); the label follows whichever controls.
+    assert tr["governing"] == pytest.approx(max(tr["u_stirrup"], tr["u_crush"]))
+    assert tr["governs"] == ("crushing" if tr["u_crush"] > tr["u_stirrup"]
+                             else "stirrups")
 
 
 def test_app_combined_transverse_no_credit_when_shear_high():

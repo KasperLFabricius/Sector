@@ -2438,6 +2438,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                         cot=cot_b, theta_deg=math.degrees(math.atan(1.0 / cot_b)),
                         u_stirrup=u_stir, u_crush=u_crush,
                         governing=max(u_stir, u_crush),
+                        governs=("crushing" if u_crush > u_stir else "stirrups"),
                         ok=bool(max(u_stir, u_crush) <= 1.0 + 1e-9),
                         shear_fraction=sf1 / cot_b if cot_b > 0 else math.inf,
                         torsion_fraction=tf1 / cot_b if cot_b > 0 else math.inf,
@@ -3263,8 +3264,11 @@ def combined_view(inp, results):
         t1, t2, t3 = st.columns(3)
         t1.metric("Shear share", _pct(tr["shear_fraction"]))
         t2.metric("Torsion share", _pct(tr["torsion_fraction"]))
+        t3.metric("Stirrup utilisation", _pct(tr["u_stirrup"]))
         ok_t = tr["ok"]
-        t3.metric("Stirrup utilisation", _pct(tr["governing"]),
+        g1, g2 = st.columns(2)
+        g1.metric("Crushing utilisation", _pct(tr["u_crush"]))
+        g2.metric(f"Governing ({tr['governs']})", _pct(tr["governing"]),
                   delta=("OK" if ok_t else "Over limit"),
                   delta_color=("normal" if ok_t else "inverse"))
         if tr["shear_credited"]:

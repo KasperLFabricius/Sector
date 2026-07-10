@@ -419,13 +419,15 @@ def test_report_combined_transverse_shows_shear_credit():
     out = _out()
     c = _combined_out()
     c["transverse"] = dict(valid=True, cot=2.0, theta_deg=26.6, u_stirrup=0.6,
-                           u_crush=0.4, governing=0.6, ok=True, shear_fraction=0.0,
-                           torsion_fraction=0.6, shear_credited=True,
-                           vrd_c=120.0, v_ed=40.0)
+                           u_crush=0.4, governing=0.6, governs="stirrups", ok=True,
+                           shear_fraction=0.0, torsion_fraction=0.6,
+                           shear_credited=True, vrd_c=120.0, v_ed=40.0)
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Shared stirrup" in txt
     assert "concrete carries the shear" in txt      # the VRd,c credit note
+    assert "crushing utilisation" in txt            # crushing shown separately
+    assert "Governing (stirrups)" in txt            # governing labelled by mechanism
 
 
 def test_report_skips_invalid_combined():
