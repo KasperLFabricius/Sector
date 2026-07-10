@@ -229,12 +229,14 @@ def fig_strain_plane():
     x_bot = -x_top * y_na / (1.0 - y_na)
     # Shade the compression and tension wedges (between the zero line and the strain
     # line) so the two sides of the neutral axis read at a glance.
+    # Match the app-wide semantics: red = compression (top wedge), green = tension
+    # (bottom wedge) -- the strain-plane figure previously had these inverted.
     fig.add_trace(go.Scatter(x=[0.0, 0.0, x_top], y=[y_na, 1.0, 1.0],
                              fill="toself", mode="none",
-                             fillcolor="rgba(55,138,221,0.18)"))
+                             fillcolor=viz.COMP_ZONE_FILL))
     fig.add_trace(go.Scatter(x=[0.0, 0.0, x_bot], y=[y_na, 0.0, 0.0],
                              fill="toself", mode="none",
-                             fillcolor="rgba(216,90,48,0.16)"))
+                             fillcolor=viz.TENS_ZONE_FILL))
     fig.add_trace(go.Scatter(x=[x_bot, x_top], y=[0.0, 1.0], mode="lines",
                              line=dict(color="#333", width=2)))
     fig.add_annotation(x=x_top, y=1.0, text="eps_cu (compression -)",

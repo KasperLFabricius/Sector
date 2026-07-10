@@ -18,6 +18,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import manual  # noqa: E402
+import viz  # noqa: E402
 from sector.codes import fctm  # noqa: E402
 from sector.plastic import plastic_capacity_at_angle  # noqa: E402
 from sector.section import Section  # noqa: E402
@@ -268,3 +269,11 @@ def test_opening_and_closing_the_manual_keeps_sidebar_inputs():
     at.button(key="manual_back").click().run()
     assert not at.exception
     assert at.session_state["conc_fck"] == 55.0             # preserved across open/close
+
+
+def test_strain_plane_wedges_use_semantic_colours():
+    # v0.57: red = compression, green = tension (they were inverted before).
+    fig = manual.fig_strain_plane()
+    fills = [getattr(t, "fillcolor", None) for t in fig.data]
+    assert viz.COMP_ZONE_FILL in fills
+    assert viz.TENS_ZONE_FILL in fills

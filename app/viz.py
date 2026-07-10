@@ -5,23 +5,52 @@ from __future__ import annotations
 import math
 
 import plotly.graph_objects as go
+import plotly.io as pio
 
 from sector import geometry
 
+# --- House palette, grouped by role -------------------------------------------
+# Green = tension, red = compression, everywhere (bars, strain wedges, chords).
+# A hue is reused across figures only where the two roles never share a plot
+# (e.g. the red applied-load marker and a red compression bar).
+# Structure
 CONCRETE_FILL = "rgba(120,130,140,0.18)"
 CONCRETE_LINE = "#5b6770"
-BAR_TENSION = "#1d9e75"
-BAR_COMPRESSION = "#c0392b"
-BAR_NEUTRAL = "#534ab7"
-TENDON = "#0b7285"
-NA_LINE = "#e08a1e"
-COMP_ZONE_FILL = "rgba(192,57,43,0.22)"   # concrete compression zone
-TENS_ZONE_FILL = "rgba(29,158,117,0.12)"  # tension side (no concrete stress)
-ENVELOPE = "#534ab7"
-LOAD_POINT = "#c0392b"
-DESIGN_LINE = "#534ab7"
-CHAR_LINE = "#9aa3ab"
-GUIDE_LINE = "#b8bdc4"
+HOLE_FILL = "white"                         # voids punched from the outline
+# Reinforcement / strain state
+BAR_TENSION = "#1d9e75"                      # green
+BAR_COMPRESSION = "#c0392b"                  # red
+BAR_NEUTRAL = "#534ab7"                      # purple (unstressed / plane marker)
+TENDON = "#0b7285"                           # teal
+COMP_ZONE_FILL = "rgba(192,57,43,0.22)"      # concrete compression zone (red)
+TENS_ZONE_FILL = "rgba(29,158,117,0.12)"     # tension side (green, no concrete stress)
+NA_LINE = "#e08a1e"                          # neutral axis (amber)
+# Material stress-strain curves
+CURVE_CHAR = "#534ab7"                        # characteristic curve + its input markers
+CURVE_DESIGN = "#9aa3ab"                      # partial-factored design curve (grey reference)
+# Results (interaction envelopes / schematics)
+ENVELOPE = "#534ab7"                          # capacity envelope / limit line (purple)
+ENVELOPE_FILL = "rgba(83,74,183,0.08)"        # shaded safe region under the envelope
+LOAD_POINT = "#c0392b"                        # applied-load marker (red)
+LINK_LINE = "#e08a1e"                         # shear-link ties in the truss schematic
+# Annotation
+GUIDE_LINE = "#b8bdc4"                        # dotted projection guides
+
+# One shared layout template, so every figure matches (and matches the PDF report
+# typography). Registered as "sector" and layered on plotly_white; each figure uses
+# ``template=_TEMPLATE`` and only overrides what is genuinely figure-specific
+# (margins, axis titles, legend position).
+_FONT_FAMILY = "DejaVu Sans, Arial, sans-serif"
+_GRID_COLOR = "#e6e8eb"
+_ZERO_COLOR = "#c8ccd0"
+pio.templates["sector"] = go.layout.Template(layout=dict(
+    font=dict(family=_FONT_FAMILY, size=12, color="#2c2c2a"),
+    title=dict(font=dict(size=14)),
+    legend=dict(font=dict(size=11)),
+    xaxis=dict(gridcolor=_GRID_COLOR, zerolinecolor=_ZERO_COLOR),
+    yaxis=dict(gridcolor=_GRID_COLOR, zerolinecolor=_ZERO_COLOR),
+))
+_TEMPLATE = "plotly_white+sector"
 
 # Greek glyphs are written as ASCII escapes so the source stays ASCII (these are
 # Basic-Multilingual-Plane code points, so they never form surrogate pairs).
@@ -115,7 +144,7 @@ def _apply_markers(fig, points, eps_min, eps_max, ymin, ymax):
 
     fig.add_trace(go.Scatter(
         x=[s * 1000.0 for s, _, _, _ in pts], y=[sig for _, sig, _, _ in pts],
-        mode="markers", marker=dict(size=8, color=DESIGN_LINE,
+        mode="markers", marker=dict(size=8, color=CURVE_CHAR,
                                     line=dict(color="white", width=1.5)),
         hoverinfo="skip", showlegend=False))
 
@@ -128,7 +157,7 @@ def _apply_markers(fig, points, eps_min, eps_max, ymin, ymax):
         fig.add_vline(x=x0, line_width=0.8, line_dash="dot", line_color=GUIDE_LINE)
         fig.add_annotation(x=xl, xref="x", y=1.0, yref="paper", yshift=6,
                            yanchor="bottom", showarrow=False, text=_merge_labels(keys),
-                           font=dict(size=12, color=DESIGN_LINE))
+                           font=dict(size=12, color=CURVE_CHAR))
 
     # Stress symbols on the right edge (the numeric stress ticks stay on the
     # left axis), nudged apart so they never overlap one another.
@@ -139,7 +168,7 @@ def _apply_markers(fig, points, eps_min, eps_max, ymin, ymax):
         fig.add_hline(y=y0, line_width=0.8, line_dash="dot", line_color=GUIDE_LINE)
         fig.add_annotation(x=1.0, xref="paper", xshift=6, y=yl, yref="y",
                            xanchor="left", showarrow=False, text=_merge_labels(keys),
-                           font=dict(size=12, color=DESIGN_LINE))
+                           font=dict(size=12, color=CURVE_CHAR))
 
 
 def _slope_label(fig, material):
@@ -162,7 +191,7 @@ def _slope_label(fig, material):
         x=e_mid * 1000.0, y=es * e_mid, ax=-36, ay=-22, showarrow=True,
         arrowhead=0, arrowwidth=0.8, arrowcolor=GUIDE_LINE,
         text="%s = %.0f GPa" % (sym, es / 1000.0),
-        font=dict(size=11, color=DESIGN_LINE))
+        font=dict(size=11, color=CURVE_CHAR))
 
 
 _ORIGIN_EPS = 1.0e-4   # strain within this of zero is the origin, not a cutoff
@@ -249,25 +278,25 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=xd, y=yd, mode="lines", name="design",
-                             line=dict(color=CHAR_LINE, width=1.5, dash="dot")))
+                             line=dict(color=CURVE_DESIGN, width=1.5, dash="dot")))
     fig.add_trace(go.Scatter(x=xc, y=yc, mode="lines", name="characteristic",
-                             line=dict(color=DESIGN_LINE, width=2.5)))
+                             line=dict(color=CURVE_CHAR, width=2.5)))
     # Markers sit on the characteristic curve and are labelled with the input
     # parameters, so editing any input visibly moves a labelled point.
     _apply_markers(fig, material.diagram_markers(design=False), eps_min, eps_max,
                    min(design + char), max(design + char))
     _slope_label(fig, material)
     fig.update_layout(
-        title=dict(text=title, font=dict(size=13), y=0.97),
-        template="plotly_white", height=340,
+        title=dict(text=title, y=0.97),
+        template=_TEMPLATE, height=340,
         margin=dict(l=58, r=54, t=44, b=96),
         xaxis=dict(title=dict(text="Strain " + _EPS + " [" + _PERMILLE + "]",
                               standoff=10),
-                   zeroline=True, zerolinecolor="#c8ccd0", showgrid=True),
+                   zeroline=True, showgrid=True),
         yaxis=dict(title="Stress " + _SIGMA + " [MPa]",
-                   zeroline=True, zerolinecolor="#c8ccd0", showgrid=True),
+                   zeroline=True, showgrid=True),
         legend=dict(orientation="h", yanchor="top", y=-0.34, x=0.5,
-                    xanchor="center", font=dict(size=10)),
+                    xanchor="center"),
     )
     return fig
 
@@ -465,7 +494,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     for hole in holes or []:
         hx, hy = _ring_xy(hole)
         fig.add_trace(go.Scatter(x=hx, y=hy, fill="toself", mode="lines",
-                                 fillcolor="white", line=dict(color=CONCRETE_LINE, dash="dot"),
+                                 fillcolor=HOLE_FILL, line=dict(color=CONCRETE_LINE, dash="dot"),
                                  hoverinfo="skip", showlegend=False))
     # Invisible hover targets on the concrete corners (outer ring then holes, the
     # numbering used for the corner labels and the peak-stress "corner N"): the fill
@@ -507,7 +536,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     if show_labels:
         _add_point_labels(fig, outer, holes, bars, tendons, label_scale, label_min_gap)
     fig.update_layout(
-        title=title, template="plotly_white", height=height,
+        title=title, template=_TEMPLATE, height=height,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text=f"x ({unit})", standoff=10), zeroline=True),
         yaxis=dict(title=f"y ({unit})", scaleanchor="x", scaleratio=1, zeroline=True),
@@ -516,7 +545,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         # (which the above-the-plot position collided with). A height-scaled y keeps
         # a constant gap below the title without spilling past the bottom margin.
         legend=dict(orientation="h", yanchor="top", y=_legend_y(height), x=0.5,
-                    xanchor="center", font=dict(size=10)),
+                    xanchor="center"),
     )
     return fig
 
@@ -554,7 +583,7 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
                                  name="applied", hovertemplate=hover))
     fig.update_layout(
-        title=title, template="plotly_white", height=440,
+        title=title, template=_TEMPLATE, height=440,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text="My - about the y-axis (kNm)", standoff=10),
                    zeroline=True),
@@ -587,13 +616,13 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     Ns = list(N)
     fig.add_trace(go.Scatter(x=Ms + Ms[:1], y=Ns + Ns[:1], mode="lines", fill="toself",
                              line=dict(color=ENVELOPE, width=2), name="capacity",
-                             fillcolor="rgba(31,119,180,0.08)", hovertemplate=hover))
+                             fillcolor=ENVELOPE_FILL, hovertemplate=hover))
     if applied is not None:
         fig.add_trace(go.Scatter(x=[snap(applied[1])], y=[applied[0]], mode="markers",
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
                                  name="applied", hovertemplate=hover))
     fig.update_layout(
-        title=title, template="plotly_white", height=460,
+        title=title, template=_TEMPLATE, height=460,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text=f"{mlabel.replace('_', '')} (kNm)", standoff=10),
                    zeroline=True),
@@ -617,14 +646,14 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
         fig.add_trace(go.Scatter(
             x=[vrd_max, 0.0], y=[0.0, trd_max], mode="lines", fill="tozeroy",
             line=dict(color=ENVELOPE, width=2), name="limit (= 1)",
-            fillcolor="rgba(31,119,180,0.08)",
+            fillcolor=ENVELOPE_FILL,
             hovertemplate="V = %{x:.1f} kN<br>T = %{y:.1f} kNm<extra></extra>"))
     fig.add_trace(go.Scatter(
         x=[v_ed], y=[t_ed], mode="markers",
         marker=dict(size=11, color=LOAD_POINT, symbol="x"), name="applied",
         hovertemplate="V_Ed = %{x:.1f} kN<br>T_Ed = %{y:.1f} kNm<extra></extra>"))
     fig.update_layout(
-        title=title, template="plotly_white", height=460,
+        title=title, template=_TEMPLATE, height=460,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text="V_Ed (kN)", standoff=10), zeroline=True,
                    rangemode="tozero"),
@@ -657,7 +686,7 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
     for hole in holes:
         hx, hy = _ring_xy([(p[0] * scale, p[1] * scale) for p in hole])
         fig.add_trace(go.Scatter(x=hx, y=hy, fill="toself", mode="lines",
-                                 fillcolor="white", line=dict(color=CONCRETE_LINE, dash="dot"),
+                                 fillcolor=HOLE_FILL, line=dict(color=CONCRETE_LINE, dash="dot"),
                                  name="void", hoverinfo="skip", showlegend=False))
     tef_m = (tef_mm or 0.0) / 1000.0
     have_tube = tef_m > 0.0 and len(outer) >= 3
@@ -675,12 +704,12 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
                                  line=dict(color=ENVELOPE, width=2, dash="dash"),
                                  name="wall centre-line" + ak_txt))
     fig.update_layout(
-        title=title, template="plotly_white", height=440,
+        title=title, template=_TEMPLATE, height=440,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text=f"x ({unit})", standoff=10), zeroline=True),
         yaxis=dict(title=f"y ({unit})", scaleanchor="x", scaleratio=1, zeroline=True),
         legend=dict(orientation="h", yanchor="top", y=_legend_y(440), x=0.5,
-                    xanchor="center", font=dict(size=10)),
+                    xanchor="center"),
     )
     return fig
 
@@ -716,17 +745,17 @@ def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
     tie_name = f"links (s = {s_mm:.0f} mm)" if s_mm else "links"
     for k, xv in enumerate(xs):
         fig.add_trace(go.Scatter(x=[xv, xv], y=[0, z], mode="lines",
-                                 line=dict(color=NA_LINE, width=1.5),
+                                 line=dict(color=LINK_LINE, width=1.5),
                                  name=tie_name, showlegend=(k == 0)))
     fig.add_annotation(x=L, y=z / 2.0, text=f"z = {z:.0f} mm", showarrow=False,
                        xanchor="left", font=dict(size=11))
     fig.update_layout(
-        title=title, template="plotly_white", height=320,
+        title=title, template=_TEMPLATE, height=320,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(visible=False),
         yaxis=dict(visible=False, scaleanchor="x", scaleratio=1),
         legend=dict(orientation="h", yanchor="top", y=_legend_y(320), x=0.5,
-                    xanchor="center", font=dict(size=10)),
+                    xanchor="center"),
     )
     return fig
 
