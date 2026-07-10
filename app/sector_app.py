@@ -2337,26 +2337,33 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             s_lo = min(inp["shear_cot_min"], inp["shear_cot_max"])
             s_hi = max(inp["shear_cot_min"], inp["shear_cot_max"])
             lo_b, hi_b = max(tcot_min, s_lo), min(tcot_max, s_hi)
-            hi_b = max(hi_b, lo_b)
-            cot_c = min(max(1.0, lo_b), hi_b)
-            trdmax_c = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"],
-                                       alpha_cw, cot_c)
-            # VRd,max reuses the SHEAR method and the same lever arm z as the
-            # stand-alone shear check (not the torsion code / 0.9d), just re-evaluated
-            # at the common angle cot_c.
-            scode = _SHEAR_CODES.get(inp["shear_method"], codes.EC2_2005_DKNA)
-            sh = out["shear"]
-            vlk = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
-                                  sh_links["asw_over_s"], sh_links["fywk"],
-                                  -inp["P_pl"], sh["ac"], cot_c, cot_c,
-                                  z_mm=sh_links["res"]["z"])
-            v_ed_c = sh["v_ed"]
-            inter = ((t_ed / trdmax_c if trdmax_c > 0 else math.inf)
-                     + (v_ed_c / vlk["vrd_max"] if vlk["vrd_max"] > 0 else math.inf))
-            out["torsion"]["interaction"] = dict(
-                cot=cot_c, theta_deg=math.degrees(math.atan(1.0 / cot_c)),
-                trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed, v_ed=v_ed_c,
-                value=inter)
+            if hi_b < lo_b - 1e-9:
+                # No strut angle is admissible for both shear and torsion, so the
+                # shared-angle crushing check (6.29) is undefined -- flag it.
+                out["torsion"]["interaction"] = dict(
+                    valid=False, reason="no common strut angle",
+                    cot_shear=(s_lo, s_hi), cot_torsion=(tcot_min, tcot_max))
+            else:
+                cot_c = min(max(1.0, lo_b), hi_b)
+                trdmax_c = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"],
+                                           alpha_cw, cot_c)
+                # VRd,max reuses the SHEAR method and the same lever arm z as the
+                # stand-alone shear check (not the torsion code / 0.9d), re-evaluated
+                # at the common angle cot_c.
+                scode = _SHEAR_CODES.get(inp["shear_method"], codes.EC2_2005_DKNA)
+                sh = out["shear"]
+                vlk = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
+                                      sh_links["asw_over_s"], sh_links["fywk"],
+                                      -inp["P_pl"], sh["ac"], cot_c, cot_c,
+                                      z_mm=sh_links["res"]["z"])
+                v_ed_c = sh["v_ed"]
+                inter = ((t_ed / trdmax_c if trdmax_c > 0 else math.inf)
+                         + (v_ed_c / vlk["vrd_max"] if vlk["vrd_max"] > 0 else math.inf))
+                out["torsion"]["interaction"] = dict(
+                    valid=True,
+                    cot=cot_c, theta_deg=math.degrees(math.atan(1.0 / cot_c)),
+                    trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed, v_ed=v_ed_c,
+                    value=inter)
 
     # Combined bending + shear + torsion (M-V-T), sec. 6.3.2. Ties the three checks
     # together: the concrete-crushing interaction (6.29, from the torsion block) and
@@ -2399,33 +2406,42 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 t_lo = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
                 t_hi = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
                 lo_b, hi_b = max(s_lo, t_lo), min(s_hi, t_hi)
-                hi_b = max(hi_b, lo_b)
-                # Utilisation pieces at cot = 1 (they scale as 1/cot for the stirrups
-                # and as cot + 1/cot for the crushing).
-                vlk1 = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
-                                       sl["asw_over_s"], sl["fywk"], -inp["P_pl"],
-                                       sh["ac"], 1.0, 1.0, z_mm=sl["res"]["z"])
-                trd_s1 = torsion.trd_s(to["tube"]["Ak"], to["fywd"],
-                                       to["asw_over_s"], 1.0)
-                trd_max1 = torsion.trd_max(fck, tcode, to["tube"]["Ak"],
-                                           to["tube"]["tef"], to["alpha_cw"], 1.0)
-                shear_credited = v_ed <= vrd_c
-                sf1 = 0.0 if shear_credited else combined.ratio(v_ed, vlk1["vrd_s"])
-                tf1 = combined.ratio(t_ed, trd_s1)
-                s_stirrup = sf1 + tf1                       # U_stirrup at cot = 1
-                c_crush = 0.5 * (combined.ratio(t_ed, trd_max1)
-                                 + combined.ratio(v_ed, vlk1["vrd_max"]))
-                cot_b = combined.combined_strut_theta(s_stirrup, c_crush, lo_b, hi_b)
-                u_stir = s_stirrup / cot_b if cot_b > 0.0 else math.inf
-                u_crush = c_crush * (cot_b + 1.0 / cot_b)
-                out["combined"]["transverse"] = dict(
-                    cot=cot_b, theta_deg=math.degrees(math.atan(1.0 / cot_b)),
-                    u_stirrup=u_stir, u_crush=u_crush,
-                    governing=max(u_stir, u_crush),
-                    ok=bool(max(u_stir, u_crush) <= 1.0 + 1e-9),
-                    shear_fraction=sf1 / cot_b if cot_b > 0 else math.inf,
-                    torsion_fraction=tf1 / cot_b if cot_b > 0 else math.inf,
-                    shear_credited=shear_credited, vrd_c=vrd_c, v_ed=v_ed)
+                if hi_b < lo_b - 1e-9:
+                    # The shear and torsion strut-angle bands do not overlap, so no
+                    # single angle can satisfy both -- the shared-stirrup check is
+                    # undefined. Flag it rather than inventing a common angle.
+                    out["combined"]["transverse"] = dict(
+                        valid=False, reason="no common strut angle",
+                        cot_shear=(s_lo, s_hi), cot_torsion=(t_lo, t_hi))
+                else:
+                    # Utilisation pieces at cot = 1 (they scale as 1/cot for the
+                    # stirrups and as cot + 1/cot for the crushing).
+                    vlk1 = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
+                                           sl["asw_over_s"], sl["fywk"], -inp["P_pl"],
+                                           sh["ac"], 1.0, 1.0, z_mm=sl["res"]["z"])
+                    trd_s1 = torsion.trd_s(to["tube"]["Ak"], to["fywd"],
+                                           to["asw_over_s"], 1.0)
+                    trd_max1 = torsion.trd_max(fck, tcode, to["tube"]["Ak"],
+                                               to["tube"]["tef"], to["alpha_cw"], 1.0)
+                    shear_credited = v_ed <= vrd_c
+                    sf1 = 0.0 if shear_credited else combined.ratio(v_ed, vlk1["vrd_s"])
+                    tf1 = combined.ratio(t_ed, trd_s1)
+                    s_stirrup = sf1 + tf1                   # U_stirrup at cot = 1
+                    c_crush = 0.5 * (combined.ratio(t_ed, trd_max1)
+                                     + combined.ratio(v_ed, vlk1["vrd_max"]))
+                    cot_b = combined.combined_strut_theta(s_stirrup, c_crush,
+                                                          lo_b, hi_b)
+                    u_stir = s_stirrup / cot_b if cot_b > 0.0 else math.inf
+                    u_crush = c_crush * (cot_b + 1.0 / cot_b)
+                    out["combined"]["transverse"] = dict(
+                        valid=True,
+                        cot=cot_b, theta_deg=math.degrees(math.atan(1.0 / cot_b)),
+                        u_stirrup=u_stir, u_crush=u_crush,
+                        governing=max(u_stir, u_crush),
+                        ok=bool(max(u_stir, u_crush) <= 1.0 + 1e-9),
+                        shear_fraction=sf1 / cot_b if cot_b > 0 else math.inf,
+                        torsion_fraction=tf1 / cot_b if cot_b > 0 else math.inf,
+                        shear_credited=shear_credited, vrd_c=vrd_c, v_ed=v_ed)
         else:
             out["combined"] = dict(valid=False, have_m=have_m, have_v=have_v,
                                    have_t=have_t, method=inp["combined_method"])
@@ -3128,7 +3144,11 @@ def torsion_view(inp, results):
         "bending reinforcement on the tension side.")
 
     inter = t.get("interaction")
-    if inter is not None:
+    if inter is not None and not inter.get("valid"):
+        st.divider()
+        st.markdown("**Combined shear + torsion (concrete crushing, 6.29)**")
+        st.warning(_no_common_angle_msg(inter))
+    elif inter is not None:
         st.divider()
         st.markdown("**Combined shear + torsion (concrete crushing, 6.29)**")
         val = inter["value"]
@@ -3152,6 +3172,16 @@ def torsion_view(inp, results):
 def _pct(x):
     """A utilisation as a percentage string, or 'inf' when unbounded."""
     return "inf" if (x is None or not math.isfinite(x)) else f"{x * 100:.1f} %"
+
+
+def _no_common_angle_msg(d):
+    """Message for a combined check whose shear and torsion cot(theta) bands do not
+    overlap, so no single strut angle satisfies both."""
+    cs, ct = d.get("cot_shear", (0, 0)), d.get("cot_torsion", (0, 0))
+    return (f"No common strut angle: the shear cot {_THETA} band "
+            f"[{cs[0]:.2f}, {cs[1]:.2f}] and the torsion band "
+            f"[{ct[0]:.2f}, {ct[1]:.2f}] do not overlap, so no single strut angle "
+            "satisfies both. Align the shear and torsion cot(theta) bounds.")
 
 
 def combined_view(inp, results):
@@ -3203,7 +3233,7 @@ def combined_view(inp, results):
                    "steel beyond bending is provided (then sum = max(M+T, V+T)).")
 
     cr = c.get("crushing")
-    if cr is not None:
+    if cr is not None and cr.get("valid"):
         st.divider()
         st.markdown("**Concrete crushing (6.29): TEd/TRd,max + VEd/VRd,max <= 1**")
         val = cr["value"]
@@ -3216,12 +3246,18 @@ def combined_view(inp, results):
                     f"VRd,max = {cr['vrd_max']:.1f} kN.")
         st.plotly_chart(viz.vt_interaction_figure(
             cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"]), width="stretch")
+    elif cr is not None and not cr.get("valid"):
+        st.warning(_no_common_angle_msg(cr))
     else:
         st.caption("The shear+torsion crushing interaction (6.29) needs shear links "
                    "(for VRd,max); enable them in the shear block.")
 
     tr = c.get("transverse")
-    if tr is not None:
+    if tr is not None and not tr.get("valid"):
+        st.divider()
+        st.markdown("**Shared stirrup: shear + torsion transverse steel**")
+        st.warning(_no_common_angle_msg(tr))
+    elif tr is not None:
         st.divider()
         st.markdown("**Shared stirrup: shear + torsion transverse steel**")
         t1, t2, t3 = st.columns(3)

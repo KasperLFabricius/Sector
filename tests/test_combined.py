@@ -165,6 +165,31 @@ def test_app_combined_transverse_no_credit_when_shear_high():
     assert tr["shear_fraction"] > 0.0
 
 
+def test_app_combined_non_overlapping_cot_bands_are_rejected():
+    # Codex: when the shear and torsion strut-angle bands do not overlap there is no
+    # common angle, so the crushing and shared-stirrup checks are flagged invalid.
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(100.0).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(100.0).run()
+    at.number_input(key="shear_cot_min").set_value(2.0).run()
+    at.number_input(key="shear_cot_max").set_value(2.5).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    at.number_input(key="torsion_cot_min").set_value(0.5).run()
+    at.number_input(key="torsion_cot_max").set_value(1.5).run()
+    at.checkbox(key="combined_on").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    c = at.session_state["results"]["combined"]
+    assert c["transverse"]["valid"] is False
+    assert c["crushing"]["valid"] is False
+    at.selectbox(key="view").set_value("M-V-T Interaction").run()
+    assert any("do not overlap" in w.value for w in at.warning)
+
+
 def test_app_combined_is_saved_and_restored():
     import project_io
     at = _fresh()

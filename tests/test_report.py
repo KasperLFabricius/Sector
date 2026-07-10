@@ -363,7 +363,7 @@ def _torsion_out(interaction=False):
            "governs": "stirrups (TRd,s)", "valid": True, "cot_limit_lo": 1.0,
            "cot_limit_hi": 2.5, "out_of_limits": False}
     if interaction:
-        out["interaction"] = dict(cot=1.0, theta_deg=45.0, trd_max=88.7,
+        out["interaction"] = dict(valid=True, cot=1.0, theta_deg=45.0, trd_max=88.7,
                                   vrd_max=650.0, t_ed=40.0, v_ed=150.0,
                                   value=40.0 / 88.7 + 150.0 / 650.0)
     return out
@@ -393,8 +393,9 @@ def _combined_out(mv_independent=False):
             "r_m": 0.6, "r_v": 0.4, "r_t": 0.3, "m_v_independent": mv_independent,
             "dkna_sum": (max(0.9, 0.7) if mv_independent else 1.3),
             "dkna_ok": (max(0.9, 0.7) if mv_independent else 1.3) <= 1.0,
-            "crushing": dict(cot=1.0, theta_deg=45.0, trd_max=88.7, vrd_max=650.0,
-                             t_ed=40.0, v_ed=150.0, value=40.0 / 88.7 + 150.0 / 650.0),
+            "crushing": dict(valid=True, cot=1.0, theta_deg=45.0, trd_max=88.7,
+                             vrd_max=650.0, t_ed=40.0, v_ed=150.0,
+                             value=40.0 / 88.7 + 150.0 / 650.0),
             "asl_torsion": 1176.0, "delta_ftd": 200.0, "links": True}
 
 
@@ -417,8 +418,8 @@ def test_report_combined_independent_uses_max_form():
 def test_report_combined_transverse_shows_shear_credit():
     out = _out()
     c = _combined_out()
-    c["transverse"] = dict(cot=2.0, theta_deg=26.6, u_stirrup=0.6, u_crush=0.4,
-                           governing=0.6, ok=True, shear_fraction=0.0,
+    c["transverse"] = dict(valid=True, cot=2.0, theta_deg=26.6, u_stirrup=0.6,
+                           u_crush=0.4, governing=0.6, ok=True, shear_fraction=0.0,
                            torsion_fraction=0.6, shear_credited=True,
                            vrd_c=120.0, v_ed=40.0)
     out["combined"] = c
