@@ -575,4 +575,27 @@ def test_fig_png_times_out_instead_of_hanging():
             time.sleep(5.0)
             return b"never"
 
-    assert sector_report._fig_png(_SlowFig(), 100, 100, timeout=0.3) is None
+    png, timed_out = sector_report._fig_png(_SlowFig(), 100, 100, timeout=0.3)
+    assert png is None and timed_out is True
+
+
+def test_report_stops_exporting_after_a_timeout():
+    # Once one figure export times out (worker still alive at the join), the builder
+    # marks _export_hung and skips every later export instead of blocking for each -- so
+    # a figure-rich report degrades to placeholders promptly.
+    import io as _io
+    rb = sector_report.ReportBuilder(_io.BytesIO(), {}, _inp(), _out(), figures=True)
+    calls = {"n": 0}
+
+    def _stub(fig, w, h, **kw):
+        calls["n"] += 1
+        return None, True            # simulate a wedged-browser timeout
+    orig = sector_report._fig_png
+    try:
+        sector_report._fig_png = _stub
+        rb._fig(object())            # first export "times out" -> sets the sentinel
+        assert rb._export_hung is True
+        rb._fig(object())            # second export must be skipped
+    finally:
+        sector_report._fig_png = orig
+    assert calls["n"] == 1           # only the first figure actually tried to export

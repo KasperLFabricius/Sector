@@ -553,7 +553,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
 
 
 def interaction_figure(mx, my, applied=None, angles=None, util=None,
-                       title="M-M interaction"):
+                       closed=True, title="M-M interaction"):
     """Biaxial moment capacity envelope, with an optional applied-load point.
 
     Drawn to match the section's orientation: ``Mx`` is bending *about* the
@@ -576,13 +576,23 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
     my = [snap(v) for v in my]
 
     fig = go.Figure()
-    # My on the horizontal axis, Mx on the vertical -- see the note above. Closed
-    # (repeat the first vertex) and filled to read as an enclosed capacity region.
-    cap = go.Scatter(x=my + my[:1], y=mx + mx[:1], mode="lines", fill="toself",
-                     fillcolor=ENVELOPE_FILL, line=dict(color=ENVELOPE, width=2),
-                     name="capacity")
+    # My on the horizontal axis, Mx on the vertical -- see the note above. A full 360
+    # sweep is a CLOSED envelope: repeat the first vertex and fill it so it reads as an
+    # enclosed capacity region. A partial sweep is an OPEN arc, drawn as a bare line (no
+    # closing chord, no fill) -- filling it would shade a capacity area across the
+    # artificial closing chord that was never computed.
+    if closed:
+        cap = go.Scatter(x=my + my[:1], y=mx + mx[:1], mode="lines", fill="toself",
+                         fillcolor=ENVELOPE_FILL, line=dict(color=ENVELOPE, width=2),
+                         name="capacity")
+        cap_angles = (list(angles) + list(angles[:1])) if angles is not None else None
+    else:
+        cap = go.Scatter(x=list(my), y=list(mx), mode="lines",
+                         line=dict(color=ENVELOPE, width=2),
+                         name="capacity (partial arc)")
+        cap_angles = list(angles) if angles is not None else None
     if angles is not None and len(angles) == len(mx):
-        cap.customdata = list(angles) + list(angles[:1])
+        cap.customdata = cap_angles
         cap.hovertemplate = ("V = %{customdata:.0f} deg<br>My = %{x:.1f} kNm"
                              "<br>Mx = %{y:.1f} kNm<extra></extra>")
     else:
@@ -656,7 +666,11 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     if Ns:
         i_sq = min(range(len(Ns)), key=lambda i: Ns[i])     # min N = squash
         i_te = max(range(len(Ns)), key=lambda i: Ns[i])     # max N = tension limit
-        i_mm = max(range(len(Ms)), key=lambda i: abs(Ms[i]))  # widest = max moment
+        # SIGNED maximum (not abs): the "max Mx/My" label must sit on the positive
+        # branch to match the signed "Max Mx/My" reported in the metrics. On an
+        # asymmetric section the negative branch can have a larger |M|, so abs() would
+        # place the label on the wrong side and contradict the numeric result.
+        i_mm = max(range(len(Ms)), key=lambda i: Ms[i])       # positive max moment
         fig.add_trace(go.Scatter(
             x=[Ms[i_sq], Ms[i_te], Ms[i_mm]], y=[Ns[i_sq], Ns[i_te], Ns[i_mm]],
             mode="markers", marker=dict(size=7, color=ENVELOPE, symbol="diamond"),

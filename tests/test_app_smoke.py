@@ -44,6 +44,29 @@ def test_app_loads_without_error():
     assert "results" not in at.session_state
 
 
+def test_app_migrates_legacy_view_label():
+    # A session that stored the old "M-V-T Interaction" label (renamed since v0.54) must
+    # be migrated to the current option so the combined view still resolves.
+    at = _fresh()
+    at.session_state["view"] = "M-V-T Interaction"   # stale label before any widget
+    at.run()
+    assert not at.exception
+    assert at.session_state["view"] == "M-V-T Combined"
+
+
+def test_app_empty_result_reads_not_calculated():
+    # An invalid/empty section makes run_analysis return {}; the freshness badge must
+    # read "Not calculated yet", not green "Results up to date".
+    at = _fresh()
+    at.run()
+    at.button(key="clear_pts").click().run()      # empty the section -> no valid points
+    at.button(key="calculate").click().run()
+    assert ("results" in at.session_state) and at.session_state["results"] == {}
+    caps = [c.value for c in at.caption]
+    assert any("Not calculated yet" in c for c in caps)
+    assert not any("up to date" in c for c in caps)
+
+
 def test_live_curve_figures_are_memoised():
     # The Stress-Strain curve figures are rebuilt only when a material actually
     # changes -- an unrelated rerun reuses the cached figure (perf: skip the
