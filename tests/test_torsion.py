@@ -284,6 +284,38 @@ def test_app_torsion_multi_void_rejected():
     assert any("multi-cell" in w.value for w in at.warning)
 
 
+def test_app_torsion_uses_the_shared_stirrup():
+    # The torsion tube reads the shared Links/stirrups definition (shear_link_*), not
+    # its own inputs; the stirrup field is enabled for a torsion-only run and a bigger
+    # bar raises TRd,s.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    assert not at.number_input(key="shear_link_dia").disabled   # enabled for torsion
+    at.number_input(key="shear_link_dia").set_value(10.0).run()
+    at.button(key="calculate").click().run()
+    t10 = at.session_state["results"]["torsion"]
+    assert t10["dia"] == pytest.approx(10.0)
+    at.number_input(key="shear_link_dia").set_value(16.0).run()
+    at.button(key="calculate").click().run()
+    t16 = at.session_state["results"]["torsion"]
+    assert t16["dia"] == pytest.approx(16.0)
+    assert t16["trd_s"] > t10["trd_s"]                          # bigger stirrup
+
+
+def test_app_torsion_longitudinal_uses_mild_fyd():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    at.button(key="calculate").click().run()
+    t = at.session_state["results"]["torsion"]
+    fytk = at.session_state["mild_fytk"]
+    gy = at.session_state["mild_gamma_y"]
+    assert t["fyd_long"] == pytest.approx(fytk / gy)
+
+
 def test_app_torsion_is_saved_and_restored():
     import project_io
     at = _fresh()

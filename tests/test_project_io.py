@@ -15,6 +15,65 @@ sys.path.insert(0, str(ROOT / "app"))
 import project_io  # noqa: E402
 
 
+def test_migrate_legacy_torsion_only_stirrup():
+    # v0.48: a torsion-only legacy project's separate stirrup folds into the shared
+    # shear_link_* keys (whose shear_link_* held only unused defaults).
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": True, "shear_links": False,
+                        "torsion_stirrup_dia": 12.0, "torsion_stirrup_s": 120.0,
+                        "torsion_fywk": 550.0, "shear_link_dia": 10.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 12.0
+    assert scalars["shear_link_s"] == 120.0
+    assert scalars["shear_fywk"] == 550.0
+    assert "torsion_stirrup_dia" not in scalars   # obsolete key dropped
+
+
+def test_migrate_keeps_shear_stirrup_when_both_active():
+    # With shear links truly active (shear_on and shear_links), the shear stirrup is
+    # the shared one (two independent stirrups cannot both survive).
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": True, "shear_on": True, "shear_links": True,
+                        "torsion_stirrup_dia": 12.0, "shear_link_dia": 10.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 10.0
+
+
+def test_migrate_when_shear_links_flag_is_stale():
+    # shear_links can be left true after shear_on was turned off; the shear check is
+    # then inactive, so a torsion-only project's stirrup still migrates.
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": True, "shear_on": False, "shear_links": True,
+                        "torsion_stirrup_dia": 12.0, "shear_link_dia": 10.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 12.0   # torsion stirrup migrated
+
+
+def test_migrate_custom_torsion_stirrup_toggled_off_before_save():
+    # A custom torsion stirrup saved with the torsion check off is still preserved
+    # (it would otherwise be lost when the user re-enables torsion after load).
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": False, "shear_on": False, "shear_links": False,
+                        "torsion_stirrup_dia": 14.0, "shear_link_dia": 10.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 14.0
+
+
+def test_migrate_default_torsion_stirrup_does_not_clobber_shear():
+    # A dormant (default) torsion stirrup must not overwrite a custom shear stirrup
+    # when shear happens to be off at save time.
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": False, "shear_on": False, "shear_links": False,
+                        "torsion_stirrup_dia": 10.0, "shear_link_dia": 16.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 16.0   # custom shear kept (torsion is default)
+
+
 def _tables():
     return {
         "corners_base": pd.DataFrame({"x (mm)": [-100.0, 100.0, 100.0, -100.0],

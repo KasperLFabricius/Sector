@@ -537,11 +537,13 @@ def manual_blocks() -> list:
        "thin-walled closed tube (6.3) and reports the closed-stirrup resistance "
        "$T_{Rd,s}$, the strut-crushing $T_{Rd,max}$, the cracking $T_{Rd,c}$, the "
        "utilisation $T_{Ed}/T_{Rd}$ and the required longitudinal steel "
-       "$\\sum A_{sl}$. The inputs are the applied torsion $T_{Ed}$, the closed "
-       "stirrup (diameter, spacing, yield), the longitudinal-steel yield, an "
-       "optional wall-thickness override $t_{ef}$ (0 = auto), and the strut-angle "
-       "bounds. The tube $A$, $u$, $t_{ef}$, $A_k$ and $u_k$ are derived from the "
-       "outline.")
+       "$\\sum A_{sl}$. The inputs are the applied torsion $T_{Ed}$, an optional "
+       "wall-thickness override $t_{ef}$ (0 = auto), and the strut-angle bounds. "
+       "The tube $A$, $u$, $t_{ef}$, $A_k$ and $u_k$ are derived from the outline. "
+       "The **stirrup is the shared closed stirrup** (defined once under Links / "
+       "stirrups, and used by shear too -- one leg of the loop carries the torsion "
+       "shear flow), and the longitudinal steel $\\sum A_{sl}$ uses the section's "
+       "mild-reinforcement design yield.")
     call("standard", "$T_{Rd,max}$ uses the code torsion strut factor: recommended "
          "$\\nu = 0.6(1 - f_{ck}/250)$, or the DK NA:2024 pure-torsion "
          "$\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA). When shear links are also "

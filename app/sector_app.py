@@ -1310,8 +1310,7 @@ _SHEAR_SIG_KEYS = (
     "shear_dlower",
     "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_cot_min", "shear_cot_max",
-    "torsion_on", "torsion_method", "torsion_T", "torsion_stirrup_dia",
-    "torsion_stirrup_s", "torsion_fywk", "torsion_fyk_long", "torsion_tef",
+    "torsion_on", "torsion_method", "torsion_T", "torsion_tef",
     "torsion_cot_min", "torsion_cot_max",
     "combined_on", "combined_method", "combined_mv_independent",
 )
@@ -1523,22 +1522,6 @@ def build_inputs():
              "strut VRd = min(VRd,s, VRd,max) (EN 1992-1-1 6.2.3); VRd,c is still "
              "shown to indicate whether links are strictly required.")
     _links = shear_on and shear_links
-    shear_link_legs = _seeded_number(
-        aset, "Link legs (n)", 1.0, 20.0, 2.0, 1.0, "shear_link_legs",
-        disabled=not _links,
-        help="Number of vertical link legs crossing the shear plane (a closed "
-             "stirrup = 2 legs).")
-    shear_link_dia = _seeded_number(
-        aset, "Link diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
-        disabled=not _links, help="Link bar diameter; the leg area is pi/4*dia^2.")
-    shear_link_s = _seeded_number(
-        aset, "Link spacing s (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
-        disabled=not _links, help="Longitudinal spacing of the links.")
-    shear_fywk = _seeded_number(
-        aset, r"Link yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
-        disabled=not _links,
-        help="Characteristic yield strength of the link steel; the design value is "
-             "fywk / gamma_s of the selected shear method.")
     shear_cot_min = _seeded_number(
         aset, r"Strut $\cot\theta$ min", 0.5, 5.0, 1.0, 0.1, "shear_cot_min",
         disabled=not _links,
@@ -1574,24 +1557,9 @@ def build_inputs():
         aset, r"Applied torsion $T_{Ed}$ (kNm)", 0.0, 100000.0, 0.0, 5.0, "torsion_T",
         disabled=not torsion_on, help="Design torsional moment at the section.")
     _tors = torsion_on
-    torsion_stirrup_dia = _seeded_number(
-        aset, "Closed stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0,
-        "torsion_stirrup_dia", disabled=not _tors,
-        help="Diameter of the closed stirrup forming the torsion tube (one leg area "
-             "Asw = pi/4*dia^2 carries the circulatory shear flow).")
-    torsion_stirrup_s = _seeded_number(
-        aset, "Closed stirrup spacing s (mm)", 10.0, 2000.0, 150.0, 10.0,
-        "torsion_stirrup_s", disabled=not _tors, help="Longitudinal spacing of the "
-        "closed stirrups.")
-    torsion_fywk = _seeded_number(
-        aset, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0,
-        "torsion_fywk", disabled=not _tors,
-        help="Characteristic yield of the closed stirrups (design value fywk/gamma_s).")
-    torsion_fyk_long = _seeded_number(
-        aset, r"Longitudinal yield $f_{yk}$ (MPa)", 100.0, 900.0, 500.0, 10.0,
-        "torsion_fyk_long", disabled=not _tors,
-        help="Characteristic yield of the longitudinal torsion reinforcement, used "
-             "for the required area sum Asl (6.28).")
+    aset.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
+                 "below (one leg carries the shear flow); the required longitudinal "
+                 "steel uses the mild-reinforcement design yield.")
     torsion_tef = _seeded_number(
         aset, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
@@ -1607,6 +1575,31 @@ def build_inputs():
         "torsion_cot_max", disabled=not _tors,
         help="Upper bound for the auto-optimised torsion strut angle. Sector picks "
              "the angle in [min, max] that maximises TRd = min(TRd,s, TRd,max).")
+
+    # One shared stirrup definition for both the shear links and the torsion tube:
+    # physically it is the same closed stirrup, whose vertical legs resist shear and
+    # whose closed loop resists torsion. Shear uses n legs; torsion uses one leg.
+    aset.markdown("**Links / stirrups (shear + torsion)**")
+    _stirrups = (shear_on and shear_links) or torsion_on
+    aset.caption("The same closed stirrup carries shear (through its legs) and "
+                 "torsion (through the closed loop). For torsion the stirrup must be "
+                 "closed. Enabled when shear links or the torsion check is on.")
+    shear_link_legs = _seeded_number(
+        aset, "Stirrup legs (n, for shear)", 1.0, 20.0, 2.0, 1.0, "shear_link_legs",
+        disabled=not _stirrups,
+        help="Number of vertical legs crossing the shear plane (a single closed "
+             "stirrup = 2 legs). Torsion always uses one leg of the closed loop.")
+    shear_link_dia = _seeded_number(
+        aset, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
+        disabled=not _stirrups, help="Stirrup bar diameter; the leg area is pi/4*dia^2.")
+    shear_link_s = _seeded_number(
+        aset, "Stirrup spacing s (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
+        disabled=not _stirrups, help="Longitudinal spacing of the stirrups.")
+    shear_fywk = _seeded_number(
+        aset, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
+        disabled=not _stirrups,
+        help="Characteristic yield strength of the stirrup steel; the design value "
+             "is fywk / gamma_s of the selected method.")
 
     sec = s.expander("Section", expanded=True)
     sec.caption("The section is a set of explicit points (the source of truth). "
@@ -1891,9 +1884,7 @@ def build_inputs():
                 shear_cot_max=shear_cot_max,
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
-                torsion_T=torsion_T, torsion_stirrup_dia=torsion_stirrup_dia,
-                torsion_stirrup_s=torsion_stirrup_s, torsion_fywk=torsion_fywk,
-                torsion_fyk_long=torsion_fyk_long, torsion_tef=torsion_tef,
+                torsion_T=torsion_T, torsion_tef=torsion_tef,
                 torsion_cot_min=torsion_cot_min, torsion_cot_max=torsion_cot_max,
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
@@ -2295,11 +2286,15 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         alpha_cw = tcode.shear_alpha_cw(sigma_cp, fcd)
         tube = torsion.tube_properties(inp["outer"], inp["holes"],
                                        tef_override=inp["torsion_tef"])
-        fywd_t = inp["torsion_fywk"] / tcode.gamma_s
-        fyd_long = inp["torsion_fyk_long"] / tcode.gamma_s
-        asw_t = templates.bar_area(inp["torsion_stirrup_dia"])
-        asw_over_s_t = (asw_t / inp["torsion_stirrup_s"]
-                        if inp["torsion_stirrup_s"] > 0.0 else 0.0)
+        # The torsion tube uses the shared closed stirrup (one leg of the loop) and
+        # the section's own mild-reinforcement design yield for the longitudinal steel.
+        fywd_t = inp["shear_fywk"] / tcode.gamma_s
+        _st = inp["steel"]
+        fyd_long = (_st.fytk / _st.gamma_y if getattr(_st, "gamma_y", 0.0) > 0.0
+                    else _st.fytk)
+        asw_t = templates.bar_area(inp["shear_link_dia"])
+        asw_over_s_t = (asw_t / inp["shear_link_s"]
+                        if inp["shear_link_s"] > 0.0 else 0.0)
         tcot_min = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
         tcot_max = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
         nu_t = tcode.torsion_nu(fck)
@@ -2325,8 +2320,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             theta_deg=math.degrees(math.atan(1.0 / cot_t)) if cot_t > 0 else 0.0,
             util=util_t, asl_req=asl_req, t_ed=t_ed, fcd=fcd, fywd=fywd_t,
             fyd_long=fyd_long, nu=nu_t, alpha_cw=alpha_cw, fctd=fctd,
-            asw_t=asw_t, asw_over_s=asw_over_s_t, dia=inp["torsion_stirrup_dia"],
-            s=inp["torsion_stirrup_s"], cot_min=tcot_min, cot_max=tcot_max,
+            asw_t=asw_t, asw_over_s=asw_over_s_t, dia=inp["shear_link_dia"],
+            s=inp["shear_link_s"], cot_min=tcot_min, cot_max=tcot_max,
             method=inp["torsion_method"], governs=governs_t, valid=tube["valid"],
             reason=tube.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
             out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9))
