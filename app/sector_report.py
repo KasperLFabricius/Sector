@@ -920,6 +920,8 @@ class ReportBuilder:
                 ["Strut factor", "nu<sub>1</sub>", f"{_fmt(lk['nu1'], 3)}"],
                 ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(lk['alpha_cw'], 3)}"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        self._fig(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
+                                   links["dia"], links["s"]), 130, 80)
         self._formula(
             "V<sub>Rd,s</sub> = (A<sub>sw</sub>/s) z f<sub>ywd</sub> cot theta",
             ref="EN 1992-1-1 (6.8)",
@@ -987,6 +989,8 @@ class ReportBuilder:
                 result=f"{_pct(val)}  ({vv})")
             self._small(f"At a common strut cot theta = {_fmt(cr['cot'], 2)} "
                         f"({_fmt(cr['theta_deg'], 1)} deg).")
+            self._fig(viz.vt_interaction_figure(cr["vrd_max"], cr["trd_max"],
+                                                cr["v_ed"], cr["t_ed"]), 120, 100)
         elif cr is not None and not cr.get("valid"):
             self._h2("Concrete crushing (6.29)")
             self._small("Not evaluated: the shear and torsion cot theta bands do not "
@@ -1059,6 +1063,8 @@ class ReportBuilder:
                 ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(t['alpha_cw'], 3)}"],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
+                                  tube["tef"], ak_m2=tube["Ak"]), 120, 100)
         if t.get("n_prestress"):
             self._small("alpha<sub>cw</sub> uses sigma<sub>cp</sub> = "
                         f"{_fmt(t['sigma_cp'], 3)} MPa, which includes the tendon "
@@ -1148,6 +1154,8 @@ class ReportBuilder:
                         f"{_fmt(inter['cot'], 2)} ({_fmt(inter['theta_deg'], 1)} deg); "
                         "T<sub>Rd,max</sub> and V<sub>Rd,max</sub> here are at that "
                         "shared angle.")
+            self._fig(viz.vt_interaction_figure(inter["vrd_max"], inter["trd_max"],
+                                                inter["v_ed"], inter["t_ed"]), 120, 100)
 
     def _elastic(self):
         el = self.out["elastic"]

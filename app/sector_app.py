@@ -3148,6 +3148,8 @@ def shear_view(inp, results):
             "Sector auto-optimises " + _THETA + " within the bounds to maximise "
             "VRd = min(VRd,s, VRd,max). " + _DELTA + "Ftd = 0.5*VEd*cot" + _THETA +
             " is the extra longitudinal tension the bottom steel must also carry.")
+        st.plotly_chart(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
+                                         links["dia"], links["s"]), width="stretch")
 
 
 def torsion_view(inp, results):
@@ -3216,6 +3218,8 @@ def torsion_view(inp, results):
         st.caption(f"{_ALPHA}cw uses {_SIGMA}cp = {t['sigma_cp']:.3f} MPa, which "
                    f"includes the tendon precompression {t['n_prestress']:.1f} kN "
                    "(from the prestress initial strain) as well as the ULS axial N.")
+    st.plotly_chart(viz.tube_figure(inp["outer"], inp.get("holes"), tube["tef"],
+                                    ak_m2=tube["Ak"]), width="stretch")
 
     mr = t.get("min_reinf")
     if mr is not None:

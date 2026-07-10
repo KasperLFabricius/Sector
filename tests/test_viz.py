@@ -394,3 +394,63 @@ def test_legends_sit_below_the_axis_titles():
         offset_px = -fig.layout.legend.y * (h - m.t - m.b)   # px below the plot
         assert 55 <= offset_px <= m.b                 # below the title, within margin
         assert fig.layout.xaxis.title.standoff == 10  # title kept near the axis
+
+
+# -- v0.52 (F4): torsion tube overlay + shear-links truss schematic ----------
+
+def test_tube_figure_draws_outline_centre_line_and_inner_face():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.tube_figure(outer, holes=None, tef_mm=90.0, ak_m2=0.09)
+    names = [getattr(t, "name", "") or "" for t in fig.data]
+    assert any("outline" in n for n in names)
+    assert any("centre-line" in n for n in names)      # tef/2 inward offset
+    assert any("inner wall face" in n for n in names)  # tef inward offset
+    # Drawn in mm (scale 1000): the outline spans -200..200 in x.
+    outline = next(t for t in fig.data if (t.name or "") == "outline")
+    assert max(outline.x) == pytest.approx(200.0)
+    # The centre-line sits inside the outline (offset inward by tef/2 = 45 mm).
+    centre = next(t for t in fig.data if "centre-line" in (t.name or ""))
+    assert max(centre.x) < 200.0
+    assert max(centre.x) == pytest.approx(155.0, abs=1.0)
+
+
+def test_tube_figure_accepts_numpy_array_rings():
+    # Codex: the section model stores rings as NumPy arrays; tube_figure must not
+    # truth-test them (`outer or []` raises ValueError on an array).
+    import numpy as np
+    outer = np.array([[-0.2, -0.3], [0.2, -0.3], [0.2, 0.3], [-0.2, 0.3]])
+    holes = [np.array([[-0.05, -0.1], [0.05, -0.1], [0.05, 0.1], [-0.05, 0.1]])]
+    fig = viz.tube_figure(outer, holes=holes, tef_mm=60.0, ak_m2=0.05)
+    outline = next(t for t in fig.data if (t.name or "") == "outline")
+    assert max(outline.x) == pytest.approx(200.0)
+
+
+def test_tube_figure_degrades_without_a_wall():
+    # No tef -> just the outline, no offset rings (and no crash).
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.tube_figure(outer, tef_mm=0.0)
+    names = [getattr(t, "name", "") or "" for t in fig.data]
+    assert any("outline" in n for n in names)
+    assert not any("centre-line" in n for n in names)
+
+
+def test_truss_figure_strut_angle_and_link_spacing():
+    import math
+    fig = viz.truss_figure(21.8, 495.0, legs=2.0, dia_mm=10.0, s_mm=150.0)
+    names = [getattr(t, "name", "") or "" for t in fig.data]
+    assert any("compression chord" in n for n in names)
+    assert any("tension chord" in n for n in names)
+    assert any("strut" in n for n in names)
+    assert any("links" in n for n in names)
+    # The strut spans one panel (horizontal run z*cot theta, rise z), so its slope
+    # equals tan(theta) -- equal aspect makes the drawn angle read true.
+    strut = next(t for t in fig.data if "strut" in (t.name or ""))
+    dx, dy = strut.x[1] - strut.x[0], strut.y[1] - strut.y[0]
+    assert dy / dx == pytest.approx(math.tan(math.radians(21.8)), rel=1e-3)
+
+
+def test_truss_figure_caps_the_number_of_ties():
+    # A very small spacing must not spray hundreds of traces (drawing cap).
+    fig = viz.truss_figure(21.8, 495.0, s_mm=5.0)
+    ties = [t for t in fig.data if "links" in (getattr(t, "name", "") or "")]
+    assert len(ties) <= 30
