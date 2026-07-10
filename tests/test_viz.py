@@ -433,6 +433,27 @@ def test_tube_figure_degrades_without_a_wall():
     assert not any("centre-line" in n for n in names)
 
 
+def _sub(b, h, tef, ak, ted, trd, util):
+    return dict(tube={"tef": tef, "Ak": ak}, b_mm=b, h_mm=h, stiffness=0.003,
+                t_ed=ted, trd=trd, util=util, governs="stirrups")
+
+
+def test_subtube_figure_draws_each_rectangle_with_walls():
+    subs = [_sub(300, 600, 100.0, 0.10, 24.6, 90.0, 0.27),
+            _sub(1000, 200, 91.0, 0.15, 15.4, 58.5, 0.26)]
+    fig = viz.subtube_figure(subs)
+    # Two rectangle outlines + two wall centre-lines = 4 traces; equal aspect.
+    assert len(fig.data) == 4
+    assert fig.layout.yaxis.scaleanchor == "x"
+    # Four annotations (one label per sub-tube).
+    assert len(fig.layout.annotations) == 2
+
+
+def test_subtube_figure_empty_is_safe():
+    fig = viz.subtube_figure([])
+    assert fig is not None and len(fig.data) == 0
+
+
 def test_truss_figure_strut_angle_and_link_spacing():
     import math
     fig = viz.truss_figure(21.8, 495.0, legs=2.0, dia_mm=10.0, s_mm=150.0)

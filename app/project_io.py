@@ -62,6 +62,10 @@ SCALAR_KEYS = [
     # Torsion (thin-walled tube, TRd). The stirrup is the shared shear_link_* one.
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
     "torsion_cot_min", "torsion_cot_max",
+    # Sub-tube subdivision for compound / T-sections (6.3.1(3)).
+    "torsion_subdivide", "torsion_nsub",
+    "torsion_sub_b0", "torsion_sub_h0", "torsion_sub_b1", "torsion_sub_h1",
+    "torsion_sub_b2", "torsion_sub_h2", "torsion_sub_b3", "torsion_sub_h3",
     # Combined M-V-T interaction.
     "combined_on", "combined_method", "combined_mv_independent",
     "label_scale", "label_min_gap",

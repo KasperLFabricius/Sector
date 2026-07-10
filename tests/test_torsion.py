@@ -105,6 +105,55 @@ def _tube():
     return torsion.tube_properties(_rect(0.3, 0.6), None)
 
 
+# -- sub-tube (compound section) primitives ---------------------------------
+
+def test_rectangle_torsion_constant_square():
+    # Square a x a: C ~ 0.1406 a^4 (the exact St Venant value; the Roark closed-form
+    # used here gives 0.1408, ~0.2% high -- acceptable for a stiffness-share weight).
+    assert torsion.rectangle_torsion_constant(0.4, 0.4) == pytest.approx(
+        0.1406 * 0.4 ** 4, rel=3e-3)
+
+
+def test_rectangle_torsion_constant_thin_tends_to_third():
+    # Thin strip (s << h): C -> h*s^3/3.
+    b, h = 0.02, 1.0
+    assert torsion.rectangle_torsion_constant(b, h) == pytest.approx(
+        h * b ** 3 / 3.0, rel=0.02)
+
+
+def test_rectangle_torsion_constant_is_orientation_independent():
+    assert (torsion.rectangle_torsion_constant(0.3, 0.7)
+            == pytest.approx(torsion.rectangle_torsion_constant(0.7, 0.3)))
+
+
+def test_rectangle_torsion_constant_degenerate_is_zero():
+    assert torsion.rectangle_torsion_constant(0.0, 0.5) == 0.0
+
+
+def test_rectangle_ring_matches_tube_properties():
+    # The centred rectangle ring must give the same tube props as a corner rectangle.
+    ring = torsion.rectangle_ring(0.3, 0.6)
+    t = torsion.tube_properties(ring, None)
+    assert t["A"] == pytest.approx(0.18)
+    assert t["tef"] == pytest.approx(100.0)
+    assert t["Ak"] == pytest.approx(0.1)
+
+
+def test_distribute_by_stiffness_proportional_and_conserves():
+    parts = torsion.distribute_by_stiffness(100.0, [3.0, 1.0])
+    assert parts == [pytest.approx(75.0), pytest.approx(25.0)]
+    assert sum(parts) == pytest.approx(100.0)
+
+
+def test_distribute_by_stiffness_skips_nonpositive():
+    parts = torsion.distribute_by_stiffness(80.0, [0.0, 2.0, 2.0])
+    assert parts == [0.0, pytest.approx(40.0), pytest.approx(40.0)]
+
+
+def test_distribute_by_stiffness_all_zero_is_zeros():
+    assert torsion.distribute_by_stiffness(50.0, [0.0, 0.0]) == [0.0, 0.0]
+
+
 def test_torsion_nu_edition_dependent():
     assert codes.EC2_2005.torsion_nu(35.0) == pytest.approx(0.6 * (1 - 35.0 / 250.0))
     assert codes.EC2_2005_DKNA.torsion_nu(35.0) == pytest.approx(0.7 * (0.7 - 35.0 / 200.0))
@@ -210,6 +259,70 @@ def test_app_torsion_view_renders():
     labels = [m.label for m in at.metric]
     assert any("Utilisation" in lbl for lbl in labels)
     assert any("TRd" in lbl for lbl in labels)
+
+
+def _subdivided(at, b0=300.0, h0=600.0, b1=1000.0, h1=200.0, T=40.0):
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(T).run()
+    at.checkbox(key="torsion_subdivide").set_value(True).run()   # reveals sub-rect inputs
+    at.number_input(key="torsion_sub_b0").set_value(b0).run()
+    at.number_input(key="torsion_sub_h0").set_value(h0).run()
+    at.number_input(key="torsion_sub_b1").set_value(b1).run()
+    at.number_input(key="torsion_sub_h1").set_value(h1).run()
+    return at
+
+
+def test_app_torsion_subdivided_sums_capacities():
+    at = _fresh(); at.run(); _subdivided(at)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["subdivided"] and len(t["subtubes"]) == 2
+    assert t["trd"] == pytest.approx(sum(s["trd"] for s in t["subtubes"]))
+    assert sum(s["t_ed"] for s in t["subtubes"]) == pytest.approx(40.0)   # TEd conserved
+    # P1: TEd is split by stiffness not capacity, so the governing utilisation is the
+    # WORST sub-tube (max TEd_i/TRd_i), never the pooled TEd/sum(TRd_i).
+    assert t["util"] == pytest.approx(max(s["util"] for s in t["subtubes"]))
+    assert t["util"] >= 40.0 / t["trd"] - 1e-9
+    assert t["governing_sub"] == max(range(len(t["subtubes"])),
+                                     key=lambda i: t["subtubes"][i]["util"])
+    assert t["primary"]["t_ed"] == t["subtubes"][0]["t_ed"]              # web is primary
+
+
+def test_app_torsion_subdivided_distributes_by_stiffness():
+    at = _fresh(); at.run(); _subdivided(at)
+    at.button(key="calculate").click().run()
+    t = at.session_state["results"]["torsion"]
+    cw = torsion.rectangle_torsion_constant(0.3, 0.6)
+    cf = torsion.rectangle_torsion_constant(1.0, 0.2)
+    web, flange = t["subtubes"]
+    assert web["t_ed"] / flange["t_ed"] == pytest.approx(cw / cf, rel=1e-6)
+
+
+def test_app_torsion_subdivided_view_renders():
+    at = _fresh(); at.run(); _subdivided(at)
+    at.button(key="calculate").click().run()
+    at.selectbox(key="view").set_value("Torsion").run()
+    assert not at.exception
+    labels = [m.label for m in at.metric]
+    assert any("TRd" in lbl for lbl in labels)
+
+
+def test_app_torsion_subdivided_combined_pairs_web():
+    # The combined V+T crushing must use the WEB sub-tube's torsion SHARE, not full TEd.
+    at = _fresh(); at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(150.0).run()
+    _subdivided(at)
+    at.checkbox(key="combined_on").set_value(True).run()
+    at.number_input(key="pl_Mx").set_value(100.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    to = at.session_state["results"]["torsion"]
+    inter = to["interaction"]
+    assert inter["t_ed"] == pytest.approx(to["subtubes"][0]["t_ed"])     # web share
+    assert inter["t_ed"] < to["t_ed"]                                    # < full TEd
 
 
 def test_app_combined_shear_torsion_interaction():

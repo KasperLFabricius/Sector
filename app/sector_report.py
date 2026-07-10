@@ -1096,6 +1096,79 @@ class ReportBuilder:
                         "kN on the tension chord (6.18) -- both beyond the bending "
                         "steel. Enable shear links for the full utilisation check.")
 
+    def _subtube_section(self, t):
+        """Torsion of a subdivided compound section (EN 1992-1-1 6.3.1(3)-(4))."""
+        subs = t["subtubes"]
+        c_tot = sum(s["stiffness"] for s in subs) or 1.0
+        self._p("Compound section: modelled as component rectangles, each an equivalent "
+                "thin-walled tube. T<sub>Rd</sub> is the SUM of the sub-tube capacities "
+                "(6.3.1(3)) and the applied T<sub>Ed</sub> is split by uncracked "
+                "torsional stiffness C = beta h b<sup>3</sup> (6.3.1(4)). The first "
+                "rectangle (web) carries the shear in the combined V+T checks.")
+        rows = [["Sub-tube", "b x h (mm)", "t<sub>ef</sub>", "A<sub>k</sub> (mm2)",
+                 "share", "T<sub>Ed,i</sub>", "T<sub>Rd,i</sub>", "util", "governs"]]
+        for i, s in enumerate(subs):
+            role = "web" if i == 0 else f"part {i + 1}"
+            ut = ("inf" if not math.isfinite(s["util"])
+                  else f"{_fmt(s['util'] * 100, 0)}%")
+            rows.append([role, f"{_fmt(s['b_mm'], 0)}x{_fmt(s['h_mm'], 0)}",
+                         _fmt(s["tube"]["tef"], 1), _fmt(s["tube"]["Ak"] * 1e6, 0),
+                         f"{_fmt(s['stiffness'] / c_tot * 100, 0)}%",
+                         _fmt(s["t_ed"], 2), _fmt(s["trd"], 2), ut, s["governs"]])
+        self._table(rows, [16 * mm, 22 * mm, 14 * mm, 20 * mm, 13 * mm, 16 * mm,
+                           16 * mm, 12 * mm, 25 * mm])
+        # The torque is split by STIFFNESS, not capacity, so the governing check is the
+        # WORST sub-tube (max util), not TEd / sum(TRd_i).
+        util = t["util"]
+        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
+        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        g = t.get("governing_sub")
+        gov = ("web" if g == 0 else f"part {g + 1}") if g is not None else "-"
+        self._formula(
+            "governing utilisation = max(T<sub>Ed,i</sub> / T<sub>Rd,i</sub>)",
+            ref=f"worst sub-tube: {gov}", result=f"{util_txt}  ({verdict})")
+        self._small("The applied torque is split by stiffness, not capacity, so a "
+                    "sub-tube can be overstressed even while T<sub>Ed</sub> &#8804; sum "
+                    "T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}" + " kN.m; the section "
+                    "passes only when every sub-tube passes. Total longitudinal steel "
+                    "sum A<sub>sl</sub> = " + f"{_fmt(t['asl_req'], 0)}" +
+                    " mm<sup>2</sup> (sum over the sub-tubes), in addition to the "
+                    "bending steel; the combined V+T crushing pairs the shear with the "
+                    "web sub-tube.")
+        self._fig(viz.subtube_figure(subs), 150, 90)
+        self._crushing_interaction(t)
+
+    def _crushing_interaction(self, t):
+        """Combined shear + torsion concrete crushing (6.29), if it was evaluated.
+
+        Shared by the single-tube and the sub-tube torsion reports so a subdivided run
+        with shear links still prints the crushing verdict even when the separate
+        combined M-V-T section is not enabled.
+        """
+        inter = t.get("interaction")
+        if inter is None:
+            return
+        self._h2("Combined shear + torsion (concrete crushing)")
+        if not inter.get("valid"):
+            self._small("Not evaluated: the shear and torsion cot theta bands do not "
+                        "overlap, so no single strut angle satisfies both.")
+            return
+        val = inter["value"]
+        val_txt = "inf" if not math.isfinite(val) else f"{_fmt(val * 100, 1)} %"
+        verdict_i = "OK" if (math.isfinite(val) and val <= 1.0) else "EXCEEDED"
+        self._formula(
+            "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
+            ref="EN 1992-1-1 (6.29)",
+            subst=f"{_fmt(inter['t_ed'], 3)}/{_fmt(inter['trd_max'], 3)} + "
+                  f"{_fmt(inter['v_ed'], 3)}/{_fmt(inter['vrd_max'], 3)}",
+            result=f"{val_txt}  ({verdict_i})")
+        self._small("Evaluated at the common strut angle cot theta = "
+                    f"{_fmt(inter['cot'], 2)} ({_fmt(inter['theta_deg'], 1)} deg); "
+                    "T<sub>Rd,max</sub> and V<sub>Rd,max</sub> here are at that shared "
+                    "angle.")
+        self._fig(viz.vt_interaction_figure(inter["vrd_max"], inter["trd_max"],
+                                            inter["v_ed"], inter["t_ed"]), 120, 100)
+
     def _torsion(self):
         t = self.out["torsion"]
         tube = t["tube"]
@@ -1118,6 +1191,10 @@ class ReportBuilder:
             self._small("Note: the strut bounds cot theta in "
                         f"[{_fmt(t['cot_min'], 2)}, {_fmt(t['cot_max'], 2)}] fall "
                         "outside the code range 1..2.5 (6.7N / 6.7a NA).")
+        if t.get("subdivided"):
+            self._h2("Sub-tubes (compound section, 6.3.1(3))")
+            self._subtube_section(t)
+            return
         tef_src = ("user input" if tube["tef_user"]
                    else ("A/u, capped at the wall" if tube["tef_capped"] else "A/u"))
         rows = [["Quantity", "Symbol", "Value"],
@@ -1208,28 +1285,7 @@ class ReportBuilder:
             self._small("If &#8804; 1, only minimum shear + torsion reinforcement is "
                         "required (no designed stirrups for these actions). "
                         + solid_note)
-        inter = t.get("interaction")
-        if inter is not None and not inter.get("valid"):
-            self._h2("Combined shear + torsion (concrete crushing)")
-            self._small("Not evaluated: the shear and torsion cot theta bands do not "
-                        "overlap, so no single strut angle satisfies both.")
-        elif inter is not None:
-            self._h2("Combined shear + torsion (concrete crushing)")
-            val = inter["value"]
-            val_txt = "inf" if not math.isfinite(val) else f"{_fmt(val * 100, 1)} %"
-            verdict_i = "OK" if (math.isfinite(val) and val <= 1.0) else "EXCEEDED"
-            self._formula(
-                "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
-                ref="EN 1992-1-1 (6.29)",
-                subst=f"{_fmt(inter['t_ed'], 3)}/{_fmt(inter['trd_max'], 3)} + "
-                      f"{_fmt(inter['v_ed'], 3)}/{_fmt(inter['vrd_max'], 3)}",
-                result=f"{val_txt}  ({verdict_i})")
-            self._small(f"Evaluated at the common strut angle cot theta = "
-                        f"{_fmt(inter['cot'], 2)} ({_fmt(inter['theta_deg'], 1)} deg); "
-                        "T<sub>Rd,max</sub> and V<sub>Rd,max</sub> here are at that "
-                        "shared angle.")
-            self._fig(viz.vt_interaction_figure(inter["vrd_max"], inter["trd_max"],
-                                                inter["v_ed"], inter["t_ed"]), 120, 100)
+        self._crushing_interaction(t)
 
     def _elastic(self):
         el = self.out["elastic"]
