@@ -15,6 +15,31 @@ sys.path.insert(0, str(ROOT / "app"))
 import project_io  # noqa: E402
 
 
+def test_migrate_legacy_torsion_only_stirrup():
+    # v0.48: a torsion-only legacy project's separate stirrup folds into the shared
+    # shear_link_* keys (whose shear_link_* held only unused defaults).
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": True, "shear_links": False,
+                        "torsion_stirrup_dia": 12.0, "torsion_stirrup_s": 120.0,
+                        "torsion_fywk": 550.0, "shear_link_dia": 10.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 12.0
+    assert scalars["shear_link_s"] == 120.0
+    assert scalars["shear_fywk"] == 550.0
+    assert "torsion_stirrup_dia" not in scalars   # obsolete key dropped
+
+
+def test_migrate_keeps_shear_stirrup_when_both_present():
+    # With shear links too, the shear stirrup is the shared one (two cannot survive).
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": True, "shear_links": True,
+                        "torsion_stirrup_dia": 12.0, "shear_link_dia": 10.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 10.0
+
+
 def _tables():
     return {
         "corners_base": pd.DataFrame({"x (mm)": [-100.0, 100.0, 100.0, -100.0],
