@@ -64,33 +64,25 @@ def test_longitudinal_check_torsion_uses_half_lever_and_no_cap():
     assert r["m_total"] == pytest.approx(74.0)
 
 
-def test_chord_moment_and_capacity_low_face_agrees_with_moment():
-    # Common case: shear tension on the low face, sagging moment tensions it too.
-    m_ed, m_rd = combined.chord_moment_and_capacity(100.0, True, 400.0, -300.0)
-    assert m_ed == pytest.approx(100.0)
-    assert m_rd == pytest.approx(400.0)          # low-face (max) capacity
+def test_chord_applied_moment_low_face_adds():
+    # Common case: shear tension on the low face, a sagging moment tensions it too.
+    assert combined.chord_applied_moment(100.0, True) == pytest.approx(100.0)
 
 
-def test_chord_moment_and_capacity_high_face_uses_high_capacity():
-    # Codex's scenario: shear tension on the HIGH face (top/right) but the applied
-    # moment is sagging (tensions the LOW face). The moment relieves the high chord, so
-    # its contribution floors at 0, and the capacity is the HIGH-face (|min|) value --
-    # NOT the larger low-face max, which would understate utilisation on asymmetric steel.
-    m_ed, m_rd = combined.chord_moment_and_capacity(100.0, False, 400.0, -300.0)
-    assert m_ed == 0.0                           # relief not credited
-    assert m_rd == pytest.approx(300.0)          # high-face capacity, not 400
+def test_chord_applied_moment_high_face_relief_floors_to_zero():
+    # Codex's scenario: shear tension on the HIGH face but the applied moment is sagging
+    # (tensions the LOW face), so it relieves the high chord -> contribution floors at 0
+    # (the high chord must still carry the shear + torsion tension on its own).
+    assert combined.chord_applied_moment(100.0, False) == 0.0
 
 
-def test_chord_moment_and_capacity_high_face_hogging_adds():
+def test_chord_applied_moment_high_face_hogging_adds():
     # High face with a hogging moment that genuinely tensions it -> full contribution.
-    m_ed, m_rd = combined.chord_moment_and_capacity(-100.0, False, 400.0, -300.0)
-    assert m_ed == pytest.approx(100.0)
-    assert m_rd == pytest.approx(300.0)
+    assert combined.chord_applied_moment(-100.0, False) == pytest.approx(100.0)
 
 
-def test_chord_moment_and_capacity_symmetric():
-    m_ed, m_rd = combined.chord_moment_and_capacity(50.0, True, 250.0, -250.0)
-    assert (m_ed, m_rd) == (pytest.approx(50.0), pytest.approx(250.0))
+def test_chord_applied_moment_low_face_hogging_relief():
+    assert combined.chord_applied_moment(-80.0, True) == 0.0
 
 
 def test_longitudinal_check_zero_capacity_is_inf():
@@ -159,6 +151,10 @@ def test_app_combined_longitudinal_check():
     assert math.isfinite(lg["util"])
     assert not lg["biaxial"]                       # default My_pl = 0 -> uniaxial
     assert lg["off_util"] == pytest.approx(0.0)
+    # MRd is the pure-axis chord capacity (shear-face angle solve), never above the
+    # biaxial M-M sweep extremum about that axis (which can sit at a point with a
+    # companion off-axis moment and overstate the uniaxial chord capacity).
+    assert 0.0 < lg["m_rd"] <= at.session_state["results"]["plastic"]["max_mx"] + 1e-6
 
 
 def test_app_combined_longitudinal_biaxial_flagged():

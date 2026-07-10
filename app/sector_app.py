@@ -2069,6 +2069,30 @@ def _shear_lever_arm(inp, axis, tension_low, d_mm):
     return lever * 1000.0, "plastic internal lever arm"
 
 
+def _shear_face_mrd(inp, axis, tension_low):
+    """Pure-axis bending capacity MRd (kNm) for the shear tension chord.
+
+    Evaluated at the neutral-axis angle whose bending is purely about the shear axis
+    with the chosen face in tension (the same angle as the lever arm), so MRd is the
+    uniaxial chord capacity -- NOT an extremum of the biaxial M-M sweep, whose peak Mx
+    can sit at a point carrying a companion My and so overstate the chord capacity on an
+    asymmetric section. Returns ``(mrd, exact)``; ``exact`` is False when the solve did
+    not converge, so the caller can fall back to the sweep extremum.
+    """
+    if inp["section"] is None:
+        return 0.0, False
+    angle = _SHEAR_LEVER_ANGLE[(axis, tension_low)]
+    pre = inp["prestress"] if inp["tendons"] else None
+    try:
+        pt = plastic_capacity_at_angle(inp["section"], inp["concrete"], inp["steel"],
+                                       -inp["P_pl"], angle, prestress=pre)
+    except Exception:
+        return 0.0, False
+    if not pt.converged:
+        return 0.0, False
+    return (abs(pt.Mx) if axis == "x" else abs(pt.My)), True
+
+
 def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     """Run the selected analyses for ``inp`` and return the results payload.
 
@@ -2524,10 +2548,15 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 # steel act), so MEd and MRd are taken on that face, not on the face the
                 # applied-moment sign implies.
                 m_signed = inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
-                max_m = pl["max_mx"] if l_axis == "x" else pl["max_my"]
-                min_m = pl.get("min_mx" if l_axis == "x" else "min_my", -max_m)
-                m_ed_l, m_rd_l = combined.chord_moment_and_capacity(
-                    m_signed, tlow, max_m, min_m)
+                m_ed_l = combined.chord_applied_moment(m_signed, tlow)
+                # MRd is the pure-axis capacity at the shear-face neutral-axis angle,
+                # not the biaxial-sweep extremum (which can overstate the uniaxial chord
+                # capacity). Fall back to the extremum only if the angle solve fails.
+                m_rd_l, mrd_exact = _shear_face_mrd(inp, l_axis, tlow)
+                if not mrd_exact:
+                    max_m = pl["max_mx"] if l_axis == "x" else pl["max_my"]
+                    min_m = pl.get("min_mx" if l_axis == "x" else "min_my", -max_m)
+                    m_rd_l = max_m if tlow else abs(min_m)
                 ftd_v = sl["delta_ftd"]                            # kN, 0.5*VEd*cot
                 ftd_t = to["asl_req"] * to["fyd_long"] / 1000.0   # mm2*MPa=N -> kN
                 # This chord check is uniaxial (bending in the shear plane). Under
