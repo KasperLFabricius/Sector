@@ -307,7 +307,23 @@ def concrete_curve_figure(concrete, title="Concrete"):
     """Stress-strain diagram for a concrete law (compression is negative)."""
     # Slightly past the ultimate strain on the compression side, a little tension
     # (the default eps_cu2 = 0.0035 gives the usual -0.0042 window).
-    return _curve_figure(concrete, -(concrete.eps_cu2 + 0.0007), 0.0006, title)
+    fig = _curve_figure(concrete, -(concrete.eps_cu2 + 0.0007), 0.0006, title)
+    # Label the DESIGN plateau too: f_ck is marked by the characteristic labels, but
+    # with gamma_c = 1.5 the design plateau sits visibly apart and would otherwise be
+    # the one unnamed line in the figure. Skip it when the curves coincide (gamma 1).
+    try:
+        f_cd = concrete.stress(-concrete.eps_c2, design=True)
+        f_ck = concrete.stress(-concrete.eps_c2, design=False)
+    except Exception:
+        f_cd = f_ck = 0.0
+    if f_cd and abs(f_cd - f_ck) > 0.02 * abs(f_ck or 1.0):
+        fig.add_hline(y=f_cd, line_width=0.8, line_dash="dot",
+                      line_color=GUIDE_LINE)
+        fig.add_annotation(x=1.0, xref="paper", xshift=6, y=f_cd, yref="y",
+                           xanchor="left", showarrow=False,
+                           text="f<sub>cd</sub>",
+                           font=dict(size=12, color=CURVE_DESIGN))
+    return fig
 
 
 def prestress_curve_figure(prestress, title="Prestressing steel"):
@@ -454,6 +470,48 @@ def _point_hover(points, first_number, kind, unit, extra=None):
     return lines
 
 
+_ARROW_UP = chr(0x2191)      # upwards arrow
+_ARROW_RIGHT = chr(0x2192)   # rightwards arrow
+
+
+def _direction_note(fig, lines):
+    """Corner note stating the positive sign convention (with arrow glyphs).
+
+    Pinned to the top-left of the plot area on a translucent backing, so the
+    reader never has to leave the figure to know which PHYSICAL bending a
+    positive axis value means. The interaction envelopes are centred, so the
+    corner is reliably free under the equal-aspect autoscale.
+    """
+    fig.add_annotation(x=0.01, y=0.99, xref="paper", yref="paper",
+                       xanchor="left", yanchor="top", showarrow=False,
+                       align="left", text="<br>".join(lines),
+                       font=dict(size=11, color=SCHEMATIC_INK),
+                       bgcolor="rgba(255,255,255,0.75)")
+
+
+def _marker_sizes(points, base, lo, hi):
+    """Per-point marker sizes (px) scaled by RELATIVE bar diameter.
+
+    Each point is ``(x, y, area)``; the marker diameter scales with ``sqrt(area)``
+    (i.e. the true bar diameter) normalised by the median, so a mixed layout shows
+    which bars are the big ones (an O25 next to an O16 reads ~1.6x wider). ``base``
+    is the size at the median diameter; sizes are clamped to ``[lo, hi]`` so dense
+    layouts stay legible and a single huge tendon cannot dwarf the drawing. A layout
+    of equal areas (or missing areas) degrades to ``base`` for every point.
+    """
+    try:
+        dias = [math.sqrt(max(float(p[2]), 0.0)) for p in points]
+    except (IndexError, TypeError, ValueError):
+        return base
+    finite = sorted(d for d in dias if d > 0.0)
+    if not finite:
+        return base
+    med = finite[len(finite) // 2]
+    if med <= 0.0:
+        return base
+    return [min(max(base * (d / med), lo), hi) if d > 0.0 else base for d in dias]
+
+
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
@@ -514,7 +572,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         by = [b[1] for b in bars]
         colors = bar_colors or [BAR_NEUTRAL] * len(bars)
         fig.add_trace(go.Scatter(x=bx, y=by, mode="markers", name="reinforcing bar",
-                                 marker=dict(size=9, symbol="circle", color=colors,
+                                 marker=dict(size=_marker_sizes(bars, 9.0, 6.5, 14.0),
+                                             symbol="circle", color=colors,
                                              line=dict(color="white", width=1)),
                                  customdata=_point_hover(bars, 1, "Bar", unit, bar_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
@@ -524,7 +583,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         ty = [t[1] for t in tendons]
         colors = tendon_colors or [TENDON] * len(tendons)
         fig.add_trace(go.Scatter(x=tx, y=ty, mode="markers", name="tendon",
-                                 marker=dict(size=11, symbol="diamond", color=colors,
+                                 marker=dict(size=_marker_sizes(tendons, 11.0, 8.0, 16.0),
+                                             symbol="diamond", color=colors,
                                              line=dict(color="white", width=1)),
                                  customdata=_point_hover(tendons, len(bars) + 1, "Tendon",
                                                          unit, tendon_hover),
@@ -625,6 +685,11 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
                                showarrow=True, arrowhead=2, arrowsize=0.7,
                                arrowwidth=1, arrowcolor=GUIDE_LINE, ax=32, ay=26,
                                font=dict(size=11, color=LOAD_POINT))
+    # Which PHYSICAL bending each positive axis half means (the solver's V = 90 /
+    # V = 0 convention): +Mx tensions the bottom face, +My the left face.
+    _direction_note(fig, [
+        _ARROW_UP + " +Mx: tension at the bottom face",
+        _ARROW_RIGHT + " +My: tension at the left face"])
     fig.update_layout(
         title=title, template=_TEMPLATE, height=440,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
@@ -633,6 +698,10 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
         yaxis=dict(title="Mx - about the x-axis (kNm)", zeroline=True,
                    scaleanchor="x", scaleratio=1),
         # Below the plot and below the x-axis title, clear of the plotly modebar.
+        # Forced on: with a single trace (a capacity-only run, or a partial arc)
+        # Plotly hides the legend by default -- losing the "capacity (partial arc)"
+        # cue that tells the reader the drawn line is NOT the full closed envelope.
+        showlegend=True,
         legend=dict(orientation="h", yanchor="top", y=_legend_y(440), x=0.5,
                     xanchor="center"),
     )
@@ -690,6 +759,13 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
         fig.add_trace(go.Scatter(x=[snap(applied[1])], y=[applied[0]], mode="markers",
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
                                  name="applied", hovertemplate=hover))
+    # Which PHYSICAL state each positive axis half means: +Mx tensions the bottom
+    # face / +My the left face (the solver's V = 90 / V = 0 convention), +N is
+    # axial tension.
+    face = "bottom" if axis == "x" else "left"
+    _direction_note(fig, [
+        _ARROW_RIGHT + f" +{mlabel.replace('_', '')}: tension at the {face} face",
+        _ARROW_UP + " +N: axial tension"])
     fig.update_layout(
         title=title, template=_TEMPLATE, height=460,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
@@ -726,6 +802,14 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
                 x=[0.0, v_ed / s], y=[0.0, t_ed / s], mode="lines",
                 line=dict(color=GUIDE_LINE, width=1, dash="dot"),
                 name="load direction", hoverinfo="skip"))
+            # Mark the ray's crossing of the limit line (the capacity in this load
+            # direction), matching the M-M diagram's open-circle capacity marker.
+            fig.add_trace(go.Scatter(
+                x=[v_ed / s], y=[t_ed / s], mode="markers",
+                name="capacity (this direction)",
+                marker=dict(size=11, color=ENVELOPE, symbol="circle-open",
+                            line=dict(width=2)),
+                hovertemplate="V = %{x:.1f} kN<br>T = %{y:.1f} kNm<extra></extra>"))
             ok = s <= 1.0 + 1e-9
             fig.add_annotation(
                 x=v_ed, y=t_ed, ax=30, ay=26, showarrow=True, arrowhead=2,
@@ -735,13 +819,16 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
     fig.add_trace(go.Scatter(
         x=[v_ed], y=[t_ed], mode="markers",
         marker=dict(size=11, color=LOAD_POINT, symbol="x"), name="applied",
-        hovertemplate="V_Ed = %{x:.1f} kN<br>T_Ed = %{y:.1f} kNm<extra></extra>"))
+        hovertemplate="V<sub>Ed</sub> = %{x:.1f} kN<br>T<sub>Ed</sub> = %{y:.1f} "
+                      "kNm<extra></extra>"))
     fig.update_layout(
         title=title, template=_TEMPLATE, height=460,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
-        xaxis=dict(title=dict(text="V_Ed (kN)", standoff=10), zeroline=True,
+        # Subscripted axis titles (V_Ed with a literal underscore is below the house
+        # style; Plotly axis titles accept the same HTML as annotations).
+        xaxis=dict(title=dict(text="V<sub>Ed</sub> (kN)", standoff=10), zeroline=True,
                    rangemode="tozero"),
-        yaxis=dict(title="T_Ed (kNm)", zeroline=True, rangemode="tozero"),
+        yaxis=dict(title="T<sub>Ed</sub> (kNm)", zeroline=True, rangemode="tozero"),
         legend=dict(orientation="h", yanchor="top", y=_legend_y(460), x=0.5,
                     xanchor="center"),
     )
@@ -812,6 +899,9 @@ def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
         fig.update_layout(title=title, template=_TEMPLATE, height=340)
         return fig
     gap = 0.12 * max(max(s["b_mm"], s["h_mm"]) for s in subtubes)
+    # One common label baseline just below the TALLEST rectangle, so the text blocks
+    # align in a row and never overlap their own rectangle's bottom edge.
+    label_y = -max(s["h_mm"] for s in subtubes) / 2.0
     x0 = 0.0
     for i, s in enumerate(subtubes):
         b, h, tef = s["b_mm"], s["h_mm"], s["tube"]["tef"]
@@ -831,7 +921,7 @@ def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
                 hoverinfo="skip", showlegend=False))
         util_txt = "inf" if not math.isfinite(s["util"]) else f"{s['util'] * 100:.0f}%"
         fig.add_annotation(
-            x=x0 + b / 2, y=-h / 2, yshift=-12, showarrow=False,
+            x=x0 + b / 2, y=label_y, yshift=-12, yanchor="top", showarrow=False,
             text=(f"<b>{role}</b><br>{b:.0f} x {h:.0f} mm<br>"
                   f"TEd {s['t_ed']:.1f} / TRd {s['trd']:.1f} kNm<br>util {util_txt}"),
             font=dict(size=11, color=SCHEMATIC_INK), align="center")
@@ -866,7 +956,7 @@ def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
                              name="tension chord"))
     fig.add_trace(go.Scatter(x=[0, panel], y=[0, z], mode="lines",
                              line=dict(color=CONCRETE_LINE, width=7), opacity=0.55,
-                             name=f"strut theta = {theta_deg:.1f} deg"))
+                             name=f"strut {chr(0x3B8)} = {theta_deg:.1f} deg"))
     # Vertical link ties at spacing s (capped so a very small s stays legible).
     step = s_mm if (s_mm and s_mm > 0.0) else (L / 4.0)
     xs, x = [], 0.0
@@ -925,13 +1015,38 @@ def na_endpoints(x_int, y_int, extent):
     return None
 
 
-def na_line_at(a, b, c, extent):
-    """Endpoints of the line ``a*x + b*y + c = 0`` spanning +/- ``extent``.
+def na_line_at(a, b, c, extent, bbox=None):
+    """Endpoints of the line ``a*x + b*y + c = 0`` for drawing.
 
     ``(a, b)`` is the (unit) normal. The line's closest point to the origin is
     ``-c*(a, b)``; the segment runs along the line direction ``(-b, a)``.
+
+    Without ``bbox`` the segment spans ``+/- extent`` about that closest point --
+    which is anchored at the ORIGIN, so for a section drawn away from the origin
+    (e.g. corner-at-(0,0) coordinates) the segment overshoots asymmetrically and
+    the equal-aspect autoscale shrinks the section to fit it. Pass ``bbox``
+    ``(xmin, ymin, xmax, ymax)`` (the section bounds) to clip the line to the box
+    grown by an 8 percent margin instead, so the drawn segment always hugs the
+    section. Falls back to the ``extent`` span if the line misses the box.
     """
     px, py = -c * a, -c * b
+    if bbox is not None:
+        xmin, ymin, xmax, ymax = bbox
+        m = 0.08 * max(xmax - xmin, ymax - ymin, 1e-9)
+        xmin, ymin, xmax, ymax = xmin - m, ymin - m, xmax + m, ymax + m
+        # Clip P(t) = (px - t*b, py + t*a) to the box (slab intersection in t).
+        t_lo, t_hi = -math.inf, math.inf
+        for pos, d, lo, hi in ((px, -b, xmin, xmax), (py, a, ymin, ymax)):
+            if abs(d) < 1e-12:
+                if pos < lo or pos > hi:
+                    t_lo, t_hi = math.inf, -math.inf   # parallel outside the slab
+                    break
+                continue                                # parallel inside: no bound
+            t0, t1 = (lo - pos) / d, (hi - pos) / d
+            t_lo = max(t_lo, min(t0, t1))
+            t_hi = min(t_hi, max(t0, t1))
+        if t_lo < t_hi and math.isfinite(t_lo) and math.isfinite(t_hi):
+            return (px - t_lo * b, py + t_lo * a, px - t_hi * b, py + t_hi * a)
     return (px - extent * b, py + extent * a, px + extent * b, py - extent * a)
 
 

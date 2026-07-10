@@ -109,12 +109,12 @@ def example_circular() -> dict:
 # FIGURES -- live section drawings from the worked examples (reuse app viz)
 # ==========================================================================
 
-def _section_fig(ex: dict, title: str):
-    bar_xy = [(x, y) for x, y, _ in ex["bars"]]
-    tendon_xy = [(x, y) for x, y, _ in ex["tendons"]]
+def _section_fig(ex: dict, title: str, labels=True):
+    # Pass the full (x, y, area) points so the drawing scales markers by relative
+    # bar diameter, matching the app's section views.
     return viz.section_figure(
-        ex["outer"], ex["holes"], bar_xy, tendons=tendon_xy, title=title,
-        show_labels=True, height=460, scale=_MM, unit="mm")
+        ex["outer"], ex["holes"], ex["bars"], tendons=ex["tendons"], title=title,
+        show_labels=labels, height=460, scale=_MM, unit="mm")
 
 
 def fig_beam_section():
@@ -122,7 +122,10 @@ def fig_beam_section():
 
 
 def fig_circular_section():
-    return _section_fig(example_circular(), "Circular hollow section")
+    # Labels OFF: the two 48-gon circles carry ~96 corner numbers that ring the
+    # section and collide with the bar/tendon numbers -- pure noise for an example
+    # figure. The rectangular beam above already demonstrates the numbering.
+    return _section_fig(example_circular(), "Circular hollow section", labels=False)
 
 
 def _section_of(ex: dict) -> Section:
@@ -168,7 +171,11 @@ def fig_beam_cracked():
     hp = viz.elastic_halfplane(st_.na_x_intercept, st_.na_y_intercept,
                                st_.max_concrete_xy)
     zones = viz.compression_zones(ex["outer"], hp)
-    na = viz.na_endpoints(st_.na_x_intercept, st_.na_y_intercept, 1.0)
+    # Clip the NA to the section bounds: an unclipped +/-1 m span forces the axis
+    # range wide and shrinks the section (the NA is the horizontal dashes anyway).
+    xs, ys = [p[0] for p in ex["outer"]], [p[1] for p in ex["outer"]]
+    na = viz.na_line_at(hp[0], hp[1], hp[2], 1.0,
+                        bbox=(min(xs), min(ys), max(xs), max(ys)))
     bar_xy = [(x, y) for x, y, _ in ex["bars"]]
     return viz.section_figure(ex["outer"], ex["holes"], bar_xy, na_line=na,
                               zones=zones, title="Cracked section (Stage II)",

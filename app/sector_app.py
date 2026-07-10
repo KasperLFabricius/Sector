@@ -2072,6 +2072,21 @@ def _prestress_axial(inp):
     return sig_ps * area_m2                             # kN (tendon tension = concrete compression)
 
 
+def _outline_bbox(outer):
+    """Bounding box ``(xmin, ymin, xmax, ymax)`` of the outline, or ``None``.
+
+    Used to clip the drawn neutral-axis segment to the section (viz.na_line_at):
+    unclipped it spans +/- extent about the origin-closest point, which overshoots
+    badly for a section drawn away from the origin.
+    """
+    outer = [] if outer is None else list(outer)
+    if len(outer) < 3:
+        return None
+    xs = [p[0] for p in outer]
+    ys = [p[1] for p in outer]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
 # Neutral-axis angle giving bending about the shear axis with the tension face on the
 # chosen side (the plastic solver's convention: V=90 -> +Mx, tension at the bottom;
 # V=0 -> +My, tension on the left). Used to pull the internal lever arm z for shear.
@@ -2971,7 +2986,8 @@ def plastic_view(inp, results):
                        help="Inspect the section state at one swept neutral-axis angle.")
     pt = pts[sel]
     hp = viz.plastic_halfplane(pt["V"], pt["na_x"], pt["na_y"])
-    na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"])
+    na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"],
+                        bbox=_outline_bbox(inp["outer"]))
     cL, cR = st.columns([3, 2])
     with cL:
         bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
@@ -3126,7 +3142,8 @@ def elastic_view(inp, results):
                    "cracked in tension); no neutral axis is shown.")
 
     hp = viz.elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"]) if has_comp else None
-    na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"]) if hp else None
+    na = (viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"],
+                         bbox=_outline_bbox(inp["outer"])) if hp else None)
     zones = viz.compression_zones(inp["outer"], hp) if hp else None
     # Tendons fold into the bar set for the solve, but are drawn as diamonds (bars
     # as circles), each coloured by its stress sign -- consistent with the other
