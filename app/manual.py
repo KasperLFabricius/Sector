@@ -256,7 +256,9 @@ def fig_sign_convention():
         mode="lines", line=dict(color=viz.NA_LINE, width=1.2), hoverinfo="skip"))
     fig.add_annotation(x=-0.42, y=1.08, text="V", showarrow=False,
                        font=dict(size=12, color=viz.NA_LINE))
-    fig.add_annotation(x=1.55 * math.cos(vr), y=1.55 * math.sin(vr),
+    # Label the line's LOWER-RIGHT end (open space): the upper-left end sits over the
+    # +y axis and the section, so the caption would cross them.
+    fig.add_annotation(x=-1.55 * math.cos(vr), y=-1.55 * math.sin(vr),
                        text="neutral axis (angle V from +y)", showarrow=False,
                        xanchor="left", xshift=6, font=dict(size=11, color=viz.NA_LINE))
     return fig
