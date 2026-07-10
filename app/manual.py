@@ -562,6 +562,12 @@ def manual_blocks() -> list:
          "the longitudinal steel for shear beyond bending is provided, tick **M & V "
          "separate** -- then $M$ and $V$ are not summed together but checked in two "
          "independent investigations, $\\max(M+T,\\,V+T)$.")
+    call("concept", "One closed stirrup does both jobs: the stirrup defined once "
+         "under Links / stirrups carries the shear and the torsion together. The DK "
+         "NA $\\sum(S_{Ed}/S_{Rd})$ rule and the shared-stirrup transverse check both "
+         "draw on it -- their transverse demands add only when $V_{Ed} > V_{Rd,c}$; "
+         "below that the concrete carries the shear and the whole stirrup is free for "
+         "torsion.")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
@@ -966,6 +972,13 @@ def manual_blocks() -> list:
        "stirrup demands add. The added stirrup demand (least at a flat strut) and "
        "the crushing (least at 45 degrees) must both hold at **one** strut angle, so "
        "Sector reports the check at the single angle that balances the two.")
+    call("standard", "Sector optimises the strut angle $\\theta$ **per action**: the "
+         "shear check picks its own $\\theta$ to maximise $V_{Rd}$ and the torsion "
+         "check its own to maximise $T_{Rd}$, so the two need not share one angle. "
+         "This is defensible under DK NA 6.3.2(6), where each $S_{Rd}$ is the "
+         "resistance to that action **acting alone**. Only the concrete-crushing "
+         "interaction (6.29) and the shared-stirrup transverse check use a single "
+         "common $\\theta$, where the two actions load the same web strut at once.")
 
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "

@@ -410,6 +410,19 @@ def test_report_torsion_shows_combined_interaction():
     assert "Combined shear" in txt
 
 
+def test_report_torsion_shows_min_reinf_screen():
+    # F7: the 6.31 minimum-reinforcement screen appears when applicable.
+    out = _out()
+    t = _torsion_out()
+    t["min_reinf"] = dict(applicable=True, value=0.52, ok=True, t_ed=40.0,
+                          trd_c=31.0, v_ed=30.0, vrd_c=136.0, solid=True,
+                          model_2023=False)
+    out["torsion"] = t
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "6.31" in txt                            # the screen clause
+    assert "minimum reinforcement suffices" in txt  # the verdict wording
+
+
 def _combined_out(mv_independent=False):
     return {"valid": True, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
             "r_m": 0.6, "r_v": 0.4, "r_t": 0.3, "m_v_independent": mv_independent,

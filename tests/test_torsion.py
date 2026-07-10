@@ -337,6 +337,55 @@ def test_app_torsion_prestress_raises_alpha_cw():
     assert t["alpha_cw"] > 1.0                          # prestress credit (was 1.0)
 
 
+def test_app_min_reinf_screen_evaluated():
+    # F7: EN 1992-1-1 6.3.2(5) Eq 6.31 screen TEd/TRd,c + VEd/VRd,c <= 1, evaluated
+    # when both the shear and torsion checks are on (needs VRd,c).
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="shear_V").set_value(30.0).run()
+    at.number_input(key="torsion_T").set_value(15.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is True
+    assert mr["value"] == pytest.approx(mr["t_ed"] / mr["trd_c"]
+                                        + mr["v_ed"] / mr["vrd_c"])
+    assert mr["ok"] is (mr["value"] <= 1.0 + 1e-9)
+    assert mr["solid"] is True                          # default section has no void
+    at.selectbox(key="view").set_value("Torsion").run()
+    assert not at.exception
+
+
+def test_app_min_reinf_screen_needs_shear():
+    # Without the shear check there is no VRd,c, so the screen is not applicable.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(15.0).run()
+    at.button(key="calculate").click().run()
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is False
+    at.selectbox(key="view").set_value("Torsion").run()
+    assert not at.exception
+
+
+def test_app_min_reinf_screen_over_limit():
+    # A large VEd + TEd pushes the sum above 1: designed reinforcement is required.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="shear_V").set_value(200.0).run()
+    at.number_input(key="torsion_T").set_value(60.0).run()
+    at.button(key="calculate").click().run()
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is True
+    assert mr["value"] > 1.0
+    assert mr["ok"] is False
+
+
 def test_app_torsion_is_saved_and_restored():
     import project_io
     at = _fresh()

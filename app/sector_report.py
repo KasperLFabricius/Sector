@@ -1111,6 +1111,23 @@ class ReportBuilder:
         self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "
                     "MN.m to kN.m (resistances) and m<sup>2</sup> to mm<sup>2</sup> "
                     "(A<sub>sl</sub>).")
+        mr = t.get("min_reinf")
+        if mr is not None and mr.get("applicable"):
+            self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
+            vv = ("minimum reinforcement suffices" if mr["ok"]
+                  else "designed reinforcement required")
+            self._formula(
+                "T<sub>Ed</sub>/T<sub>Rd,c</sub> + V<sub>Ed</sub>/V<sub>Rd,c</sub>",
+                ref="EN 1992-1-1 (6.31)",
+                subst=f"{_fmt(mr['t_ed'], 3)}/{_fmt(mr['trd_c'], 3)} + "
+                      f"{_fmt(mr['v_ed'], 3)}/{_fmt(mr['vrd_c'], 3)}",
+                result=f"{_fmt(mr['value'], 3)}  ({vv})")
+            solid_note = ("Assumes an approximately solid rectangular section."
+                          if mr["solid"] else "This section has a void: 6.31 is for "
+                          "solid sections, so it does not strictly apply.")
+            self._small("If &#8804; 1, only minimum shear + torsion reinforcement is "
+                        "required (no designed stirrups for these actions). "
+                        + solid_note)
         inter = t.get("interaction")
         if inter is not None and not inter.get("valid"):
             self._h2("Combined shear + torsion (concrete crushing)")

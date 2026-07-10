@@ -158,6 +158,14 @@ def test_part_b_documents_the_panels_and_options():
         assert token in text, token
 
 
+def test_manual_documents_per_action_theta_and_shared_stirrup():
+    # F6-doc: the manual states (a) theta is optimised PER ACTION (shear and torsion
+    # each pick their own), and (b) one closed stirrup serves both checks.
+    text = "\n".join(str(b) for b in manual.manual_blocks())
+    assert "per action" in text                       # note (a)
+    assert "One closed stirrup does both jobs" in text  # note (b)
+
+
 def test_latex_to_rl_converts_the_subset():
     # The PDF converter turns the LaTeX subset into ReportLab markup: Greek and
     # operators to entities, sub/superscripts to tags, fractions to a/b, and it

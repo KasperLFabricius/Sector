@@ -1503,9 +1503,7 @@ def build_inputs():
         help="Which face carries tension under the accompanying bending. The "
              "tension reinforcement Asl is the longitudinal bars on that side of "
              "the section centroid, and d is measured from the opposite fibre.")
-    shear_V = _seeded_number(
-        aset, r"Applied shear $V_{Ed}$ (kN)", 0.0, 100000.0, 0.0, 10.0, "shear_V",
-        disabled=not shear_on, help="Design shear force at the section (magnitude).")
+    aset.caption("The applied shear VEd is entered in the Loads panel.")
     shear_bw = _seeded_number(
         aset, r"Web width $b_w$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0, "shear_bw",
         disabled=not shear_on,
@@ -1553,9 +1551,7 @@ def build_inputs():
              "place of the recommended nu = 0.6*(1 - fck/250).")
     if combined_on:
         aset.caption(f"Torsion method set by Combined: {combined_method}")
-    torsion_T = _seeded_number(
-        aset, r"Applied torsion $T_{Ed}$ (kNm)", 0.0, 100000.0, 0.0, 5.0, "torsion_T",
-        disabled=not torsion_on, help="Design torsional moment at the section.")
+    aset.caption("The applied torsion TEd is entered in the Loads panel.")
     _tors = torsion_on
     aset.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
                  "below (one leg carries the shear flow); the required longitudinal "
@@ -1769,6 +1765,18 @@ def build_inputs():
         "Applied moment checked against the plastic envelope (utilisation).",
         plastic_on or shear_on or torsion_on,
         moments_active=plastic_on and check_util)
+
+    # The applied shear VEd and torsion TEd sit with the other ULS actions here
+    # (enable each check in Analysis & Result Settings to make its input live).
+    loads.markdown("**Shear / torsion (ULS)**")
+    shear_V = _seeded_number(
+        loads, r"Applied shear $V_{Ed}$ (kN)", 0.0, 100000.0, 0.0, 10.0, "shear_V",
+        disabled=not shear_on, help="Design shear force at the section (magnitude). "
+        "Enable 'Check shear capacity' in Analysis & Result Settings.")
+    torsion_T = _seeded_number(
+        loads, r"Applied torsion $T_{Ed}$ (kNm)", 0.0, 100000.0, 0.0, 5.0, "torsion_T",
+        disabled=not torsion_on, help="Design torsional moment at the section. Enable "
+        "'Check torsion capacity' in Analysis & Result Settings.")
 
     loads.divider()
     loads.markdown("**Elastic stresses (long + short term)**")
@@ -2360,6 +2368,23 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             method=inp["torsion_method"], governs=governs_t, valid=tube["valid"],
             reason=tube.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
             out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9))
+        # Minimum-reinforcement screen (EN 1992-1-1 6.3.2(5), Eq 6.31): for an
+        # approximately solid rectangular section, no DESIGNED shear+torsion
+        # reinforcement (only the minimum) is needed if TEd/TRd,c + VEd/VRd,c <= 1.
+        # Both cracking resistances already exist -- this just combines them. Needs
+        # the shear block (VRd,c); applies to solid sections (flag a void).
+        sh_ms = out.get("shear")
+        if sh_ms is None or not sh_ms["res"]["valid"]:
+            out["torsion"]["min_reinf"] = dict(applicable=False, reason="no shear check")
+        elif trdc <= 0.0 or sh_ms["res"]["vrd_c"] <= 0.0:
+            out["torsion"]["min_reinf"] = dict(applicable=False, reason="zero resistance")
+        else:
+            vrd_c_ms, v_ed_ms = sh_ms["res"]["vrd_c"], sh_ms["v_ed"]
+            screen = t_ed / trdc + v_ed_ms / vrd_c_ms
+            out["torsion"]["min_reinf"] = dict(
+                applicable=True, value=screen, ok=bool(screen <= 1.0 + 1e-9),
+                t_ed=t_ed, trd_c=trdc, v_ed=v_ed_ms, vrd_c=vrd_c_ms,
+                solid=bool(not inp["holes"]), model_2023=bool(sh_ms.get("model_2023")))
         # Combined shear+torsion concrete crushing (6.29): TEd/TRd,max + VEd/VRd,max
         # <= 1, at a common strut angle. Both TRd,max and VRd,max peak at cot = 1
         # (theta = 45 deg), so the least-conservative common angle is cot = 1 clamped
@@ -3191,6 +3216,33 @@ def torsion_view(inp, results):
         st.caption(f"{_ALPHA}cw uses {_SIGMA}cp = {t['sigma_cp']:.3f} MPa, which "
                    f"includes the tendon precompression {t['n_prestress']:.1f} kN "
                    "(from the prestress initial strain) as well as the ULS axial N.")
+
+    mr = t.get("min_reinf")
+    if mr is not None:
+        st.divider()
+        st.markdown("**Minimum-reinforcement screen (6.3.2(5), Eq 6.31)**")
+        if not mr.get("applicable"):
+            st.caption("Enable the shear check (VRd,c) as well to evaluate the 6.31 "
+                       "screen TEd/TRd,c + VEd/VRd,c <= 1.")
+        else:
+            val = mr["value"]
+            ok_mr = mr["ok"]
+            s1, s2, s3 = st.columns(3)
+            s1.metric("TEd / TRd,c", f"{mr['t_ed'] / mr['trd_c'] * 100:.1f} %")
+            s2.metric("VEd / VRd,c", f"{mr['v_ed'] / mr['vrd_c'] * 100:.1f} %")
+            s3.metric("Sum (<= 100%)", f"{val * 100:.1f} %",
+                      delta=("minimum reinf. suffices" if ok_mr
+                             else "designed reinf. required"),
+                      delta_color=("normal" if ok_mr else "inverse"))
+            solid_note = ("Assumes an approximately solid rectangular section."
+                          if mr["solid"] else "This section has a void: 6.31 is for "
+                          "solid sections, so it does not strictly apply (a hollow "
+                          "section needs the full shear + torsion check).")
+            ed_note = (" VRd,c here is the 2023 tau_Rd,c, which carries no axial term."
+                       if mr["model_2023"] else "")
+            st.caption("TEd/TRd,c + VEd/VRd,c <= 1 (6.3.2(5), Eq 6.31): if satisfied, "
+                       "only minimum shear + torsion reinforcement is required -- no "
+                       "designed stirrups for these actions. " + solid_note + ed_note)
 
     inter = t.get("interaction")
     if inter is not None and not inter.get("valid"):
