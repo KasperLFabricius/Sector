@@ -1318,51 +1318,28 @@ _SHEAR_SIG_KEYS = (
 
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
-    loads. Panels mirror the BriCoS layout: About, Analysis settings,
-    Section, Material Parameters, Loads."""
+    loads. Panels follow the workflow order: Section, Material Parameters, Loads,
+    Analysis settings, Report, Save/Load, About."""
     s = st.sidebar
 
-    # When the manual is open it takes over the main area; a "Back to analysis"
-    # button at the top of the sidebar (below the logo) exits it without scrolling
-    # the manual. Reserve its slot here but fill it at the END of build_inputs, so
-    # every sidebar panel renders first -- their widget state survives -- before the
-    # button reruns, and so it reflects an "open manual" click made on this run.
+    # The panels are CREATED here in their on-screen order -- the input panels first
+    # (Section, Materials, Loads), then Analysis settings, Report, Save/Load and
+    # About -- but they are FILLED lower down in dependency order: the Analysis
+    # settings compute the bending mode and the check toggles that the Material and
+    # Loads panels gate on, so those two are written after it even though they sit
+    # higher on screen. Streamlit fixes each panel's position when it is created, so
+    # a later write still lands in the right place. The "Back to analysis" slot
+    # (shown only while the manual is open) sits at the very top; About/Report/
+    # Save-Load are filled at the end so the download and report capture the
+    # fully-built inputs.
     back_slot = s.container()
-
-    with s.expander("About", expanded=False):
-        st.markdown("### Sector")
-        st.caption("Reinforced-concrete and prestressed cross-section analysis.")
-        st.markdown(
-            "Sector analyses an arbitrary RC (and optionally prestressed) "
-            "cross-section and reports:\n"
-            "- **Plastic bending capacity** -- the biaxial M-M interaction "
-            "envelope and the load utilisation.\n"
-            "- **Cracked-section elastic stresses** -- concrete and "
-            "reinforcement stresses under the long- and short-term loads.\n"
-            "- **Serviceability checks** -- cracking threshold, section "
-            "properties, and optional tension stiffening and crack width.")
-        st.markdown("**Workflow**")
-        st.caption("Define the section and materials, choose the analyses, then "
-                   "press Calculate. The section drawing and the stress-strain "
-                   "diagrams update live; the result views update on Calculate.")
-        st.divider()
-        st.markdown(f"**Sector v{APP_VERSION}**")
-        st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
-        st.caption("Internal engineering tool, Sweco.")
-        if st.button("User manual", key="open_manual", width="stretch",
-                     help="Open the full-width user manual: what Sector computes, "
-                          "the theory it applies, its features, and how to use it."):
-            # No rerun: build_inputs continues so every panel renders (state kept);
-            # the reserved back_slot below shows the Back button on this same run.
-            st.session_state["_manual_open"] = True
-
-    # Reserve the Save / Load slot here (near the top) but fill it at the end of
-    # build_inputs, once the point tables and inputs exist, so the download
-    # captures the live section even on a fresh session.
-    save_slot = s.container()
-    _report_panel(s)
-
+    sec = s.expander("Section", expanded=True)
+    mat = s.expander("Material Parameters", expanded=False)
+    loads = s.expander("Loads", expanded=True)
     aset = s.expander("Analysis settings", expanded=False)
+    report_slot = s.container()
+    save_slot = s.container()
+    about_slot = s.container()
     mode = aset.radio("Bending analysis", ["Plastic", "Elastic", "Both"], key="mode",
                       help="The bending analysis only -- the shear, torsion and crack "
                            "checks are separate toggles below. Plastic: ultimate "
@@ -1599,7 +1576,7 @@ def build_inputs():
         help="Characteristic yield strength of the stirrup steel; the design value "
              "is fywk / gamma_s of the selected method.")
 
-    sec = s.expander("Section", expanded=True)
+    # (Section / Material / Loads expanders were created at the top; fill them now.)
     sec.caption("The section is a set of explicit points (the source of truth). "
                 "Use the Quick Section builder to generate a parametric shape and "
                 "write its points here, or edit the point tables directly.")
@@ -1712,7 +1689,6 @@ def build_inputs():
     # strain) still matter, so they stay editable.
     lock_mats = mode == "Elastic"
     lock_elastic = mode == "Plastic"   # fctm + Ec are elastic-only inputs
-    mat = s.expander("Material Parameters", expanded=False)
     if lock_mats:
         mat.caption("Elastic-only mode: the stress-strain laws do not affect the "
                     "elastic results and are locked. Only fck (feeds fctm) and the "
@@ -1733,8 +1709,6 @@ def build_inputs():
     # M-M envelope; its moments are the point checked against it. Both sets stay
     # mounted (the inactive one is disabled) so their values survive a mode
     # switch instead of being reset when Streamlit drops unrendered widgets.
-    loads = s.expander("Loads", expanded=True)
-
     def _load_set(prefix, n_help, m_help, active, mx_default=0.0, moments_active=None):
         # ``moments_active`` lets the moments lock independently of the axial force
         # (the plastic capacity-only mode keeps N but disables the applied moments).
@@ -1864,7 +1838,36 @@ def build_inputs():
     elastic_sig = shared_sig + _get(_ELASTIC_SIG_KEYS)
     sig = plastic_sig + elastic_sig + _get(_SHEAR_SIG_KEYS)
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
-    _save_load_panel(save_slot)   # fill the reserved slot now the inputs exist
+    # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
+    # the report and the download capture the fully-built section and loads.
+    _report_panel(report_slot)
+    _save_load_panel(save_slot)
+    with about_slot.expander("About", expanded=False):
+        st.markdown("### Sector")
+        st.caption("Reinforced-concrete and prestressed cross-section analysis.")
+        st.markdown(
+            "Sector analyses an arbitrary RC (and optionally prestressed) "
+            "cross-section and reports:\n"
+            "- **Plastic bending capacity** -- the biaxial M-M interaction "
+            "envelope and the load utilisation.\n"
+            "- **Cracked-section elastic stresses** -- concrete and "
+            "reinforcement stresses under the long- and short-term loads.\n"
+            "- **Serviceability checks** -- cracking threshold, section "
+            "properties, and optional tension stiffening and crack width.")
+        st.markdown("**Workflow**")
+        st.caption("Define the section and materials, choose the analyses, then "
+                   "press Calculate. The section drawing and the stress-strain "
+                   "diagrams update live; the result views update on Calculate.")
+        st.divider()
+        st.markdown(f"**Sector v{APP_VERSION}**")
+        st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
+        st.caption("Internal engineering tool, Sweco.")
+        if st.button("User manual", key="open_manual", width="stretch",
+                     help="Open the full-width user manual: what Sector computes, "
+                          "the theory it applies, its features, and how to use it."):
+            # No rerun: build_inputs continues so every panel renders (state kept);
+            # the reserved back_slot below shows the Back button on this same run.
+            st.session_state["_manual_open"] = True
     # Fill the reserved Back-to-analysis slot now that every panel has rendered, so
     # its rerun cannot drop any sidebar input's widget state.
     if st.session_state.get("_manual_open"):

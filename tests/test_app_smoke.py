@@ -1708,6 +1708,16 @@ def test_applied_moments_default_to_zero():
     assert at.session_state["el_long_Mx"] == 0.0
 
 
+def test_sidebar_panels_follow_the_workflow_order():
+    # v0.56: panels are ordered by the natural workflow -- geometry, then materials,
+    # then loads, then the analysis settings, with Report / Save-Load / About last.
+    at = _fresh()
+    at.run()
+    labels = [ex.label for ex in at.expander]
+    assert labels == ["Section", "Material Parameters", "Loads", "Analysis settings",
+                      "Report", "Save / Load", "About"]
+
+
 def test_combined_view_renamed_to_m_v_t_combined():
     # v0.55: the combined view was renamed "M-V-T Interaction" -> "M-V-T Combined".
     import sector_app
