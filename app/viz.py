@@ -634,6 +634,99 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
     return fig
 
 
+def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
+                title="Torsion tube", scale=1000.0, unit="mm"):
+    """Thin-walled torsion tube (EN 1992-1-1 6.3.2): the concrete outline, the
+    effective wall of thickness ``tef`` and the wall centre-line that encloses the
+    torsion area ``Ak``. Geometry in metres; ``scale`` / ``unit`` draw it in mm by
+    default. The centre-line and inner face reuse the engine's inward offset, so
+    they match the tube the resistance was computed on.
+    """
+    from sector import torsion   # local import keeps viz free of a load-order cycle
+    fig = go.Figure()
+    outer = list(outer or [])
+    if len(outer) >= 3:
+        ox, oy = _ring_xy([(p[0] * scale, p[1] * scale) for p in outer])
+        fig.add_trace(go.Scatter(x=ox, y=oy, fill="toself", mode="lines",
+                                 fillcolor=CONCRETE_FILL, line=dict(color=CONCRETE_LINE),
+                                 name="outline", hoverinfo="skip"))
+    for hole in holes or []:
+        hx, hy = _ring_xy([(p[0] * scale, p[1] * scale) for p in hole])
+        fig.add_trace(go.Scatter(x=hx, y=hy, fill="toself", mode="lines",
+                                 fillcolor="white", line=dict(color=CONCRETE_LINE, dash="dot"),
+                                 name="void", hoverinfo="skip", showlegend=False))
+    tef_m = (tef_mm or 0.0) / 1000.0
+    have_tube = tef_m > 0.0 and len(outer) >= 3
+    centre = torsion.offset_polygon_inward(outer, tef_m / 2.0) if have_tube else None
+    inner = torsion.offset_polygon_inward(outer, tef_m) if have_tube else None
+    if inner:
+        ix, iy = _ring_xy([(p[0] * scale, p[1] * scale) for p in inner])
+        fig.add_trace(go.Scatter(x=ix, y=iy, mode="lines",
+                                 line=dict(color=CONCRETE_LINE, width=1, dash="dot"),
+                                 name=f"inner wall face (tef = {tef_mm:.0f} mm)"))
+    if centre:
+        cx, cy = _ring_xy([(p[0] * scale, p[1] * scale) for p in centre])
+        ak_txt = f" (Ak = {ak_m2 * 1.0e6:,.0f} mm2)" if ak_m2 else ""
+        fig.add_trace(go.Scatter(x=cx, y=cy, mode="lines",
+                                 line=dict(color=ENVELOPE, width=2, dash="dash"),
+                                 name="wall centre-line" + ak_txt))
+    fig.update_layout(
+        title=title, template="plotly_white", height=440,
+        margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
+        xaxis=dict(title=dict(text=f"x ({unit})", standoff=10), zeroline=True),
+        yaxis=dict(title=f"y ({unit})", scaleanchor="x", scaleratio=1, zeroline=True),
+        legend=dict(orientation="h", yanchor="top", y=_legend_y(440), x=0.5,
+                    xanchor="center", font=dict(size=10)),
+    )
+    return fig
+
+
+def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
+                 title="Variable-strut truss"):
+    """Schematic of the variable-angle truss (EN 1992-1-1 6.2.3): the compression
+    chord and the tension chord a lever arm ``z`` apart, an inclined concrete strut
+    at angle ``theta``, and the vertical link ties at spacing ``s``. A schematic
+    (equal aspect so the strut angle reads true), not drawn to section scale.
+    """
+    fig = go.Figure()
+    z = max(z_mm or 0.0, 1.0)
+    th = math.radians(theta_deg) if theta_deg else math.radians(45.0)
+    cot = (1.0 / math.tan(th)) if math.tan(th) > 1.0e-9 else 1.0
+    panel = z * cot                        # horizontal run of one strut
+    L = panel * 1.3                        # a little chord beyond one strut panel
+    fig.add_trace(go.Scatter(x=[0, L], y=[z, z], mode="lines",
+                             line=dict(color=BAR_COMPRESSION, width=3),
+                             name="compression chord"))
+    fig.add_trace(go.Scatter(x=[0, L], y=[0, 0], mode="lines",
+                             line=dict(color=BAR_TENSION, width=3),
+                             name="tension chord"))
+    fig.add_trace(go.Scatter(x=[0, panel], y=[0, z], mode="lines",
+                             line=dict(color=CONCRETE_LINE, width=7), opacity=0.55,
+                             name=f"strut theta = {theta_deg:.1f} deg"))
+    # Vertical link ties at spacing s (capped so a very small s stays legible).
+    step = s_mm if (s_mm and s_mm > 0.0) else (L / 4.0)
+    xs, x = [], 0.0
+    while x <= L + 1.0e-6 and len(xs) < 30:
+        xs.append(x)
+        x += step
+    tie_name = f"links (s = {s_mm:.0f} mm)" if s_mm else "links"
+    for k, xv in enumerate(xs):
+        fig.add_trace(go.Scatter(x=[xv, xv], y=[0, z], mode="lines",
+                                 line=dict(color=NA_LINE, width=1.5),
+                                 name=tie_name, showlegend=(k == 0)))
+    fig.add_annotation(x=L, y=z / 2.0, text=f"z = {z:.0f} mm", showarrow=False,
+                       xanchor="left", font=dict(size=11))
+    fig.update_layout(
+        title=title, template="plotly_white", height=320,
+        margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False, scaleanchor="x", scaleratio=1),
+        legend=dict(orientation="h", yanchor="top", y=_legend_y(320), x=0.5,
+                    xanchor="center", font=dict(size=10)),
+    )
+    return fig
+
+
 def na_endpoints(x_int, y_int, extent):
     """Two points spanning the neutral axis from its axis intercepts.
 

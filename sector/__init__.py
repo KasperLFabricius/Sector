@@ -63,4 +63,4 @@ __all__ = [
 # The single source of truth for the Sector version (the app imports this as
 # APP_VERSION). Pre-1.0 internal scheme: 0.XX, bumped by 0.01 per change while the
 # tool is still evolving toward a production 1.0.
-__version__ = "0.51"
+__version__ = "0.52"
