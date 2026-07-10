@@ -326,7 +326,7 @@ def manual_blocks() -> list:
        "press *Quick Section builder* to generate a parametric shape.\n"
        "2. **Set the materials.** In *Material Parameters* pick or enter the "
        "concrete, mild steel and (if any) prestress.\n"
-       "3. **Choose the analyses.** In *Analysis & Result Settings* pick Plastic, "
+       "3. **Choose the analyses.** In *Analysis settings* pick Plastic, "
        "Elastic or Both, and toggle the crack-width check.\n"
        "4. **Enter the loads.** Give the axial force and moments for the plastic "
        "utilisation and the service combinations.\n"
@@ -380,7 +380,7 @@ def manual_blocks() -> list:
 
     h1("The workspace")
     md("The sidebar holds the input panels (*About*, *Save / Load*, *Report*, "
-       "*Analysis & Result Settings*, *Section*, *Material Parameters*, *Loads*); "
+       "*Analysis settings*, *Section*, *Material Parameters*, *Loads*); "
        "the main area shows the drawings and results, chosen from the **View** "
        "dropdown. The section drawing and the stress-strain diagrams update live; "
        "the plastic and elastic result views recompute on **Calculate**.")
@@ -390,7 +390,7 @@ def manual_blocks() -> list:
            ["Plastic Results", "The M-M envelope and the utilisation (on Calculate)"],
            ["Elastic Results", "The cracked-section stresses and crack width (on Calculate)"],
            ["Shear", "The shear resistance $V_{Rd,c}$ and the utilisation (on Calculate)"]])
-    call("tip", "*Auto-calc all derived values* (in Analysis & Result Settings) "
+    call("tip", "*Auto-calc all derived values* (in Analysis settings) "
          "recomputes every auto quantity from the current grade at once: the concrete "
          "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
          "$E_s$, $E_p$ and creep automatically.")
@@ -608,8 +608,8 @@ def manual_blocks() -> list:
        "cracking $T_{Rd,c}$ and the utilisation, plus the derived tube ($A$, $u$, "
        "$t_{ef}$, $A_k$, $u_k$) and the required $\\sum A_{sl}$. When shear links "
        "are also defined it adds the combined shear+torsion crushing check.")
-    h2("M-V-T Interaction results")
-    md("The **M-V-T Interaction** view shows the $M$, $V$ and $T$ utilisations, the "
+    h2("M-V-T Combined results")
+    md("The **M-V-T Combined** view shows the $M$, $V$ and $T$ utilisations, the "
        "DK NA $\\sum(S_{Ed}/S_{Rd})$ sum, the concrete-crushing interaction with a "
        "$V$-$T$ envelope diagram, and the additional longitudinal steel demand.")
 

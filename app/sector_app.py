@@ -1318,7 +1318,7 @@ _SHEAR_SIG_KEYS = (
 
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
-    loads. Panels mirror the BriCoS layout: About, Analysis & Result Settings,
+    loads. Panels mirror the BriCoS layout: About, Analysis settings,
     Section, Material Parameters, Loads."""
     s = st.sidebar
 
@@ -1362,11 +1362,13 @@ def build_inputs():
     save_slot = s.container()
     _report_panel(s)
 
-    aset = s.expander("Analysis & Result Settings", expanded=False)
-    mode = aset.radio("Analysis", ["Plastic", "Elastic", "Both"], key="mode",
-                      help="Plastic: ultimate bending capacity (M-M envelope). "
-                           "Elastic: cracked-section concrete and bar stresses "
-                           "for the applied loads. Both: run the two.")
+    aset = s.expander("Analysis settings", expanded=False)
+    mode = aset.radio("Bending analysis", ["Plastic", "Elastic", "Both"], key="mode",
+                      help="The bending analysis only -- the shear, torsion and crack "
+                           "checks are separate toggles below. Plastic: ultimate "
+                           "bending capacity (M-M envelope). Elastic: cracked-section "
+                           "concrete and bar stresses for the applied loads. Both: "
+                           "run the two.")
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
 
@@ -1733,7 +1735,7 @@ def build_inputs():
     # switch instead of being reset when Streamlit drops unrendered widgets.
     loads = s.expander("Loads", expanded=True)
 
-    def _load_set(prefix, n_help, m_help, active, mx_default=200.0, moments_active=None):
+    def _load_set(prefix, n_help, m_help, active, mx_default=0.0, moments_active=None):
         # ``moments_active`` lets the moments lock independently of the axial force
         # (the plastic capacity-only mode keeps N but disables the applied moments).
         moments_active = active if moments_active is None else moments_active
@@ -1750,7 +1752,7 @@ def build_inputs():
                                  "varies with x); biaxial bending.")
         return P, Mx, My
 
-    loads.markdown("**Plastic capacity**")
+    loads.markdown("**Bending & axial (ULS)**")
     # The plastic axial force N is also the ULS axial used by the shear and torsion
     # checks (their sigma_cp / alpha_cw), so its input stays enabled whenever any of
     # those checks is on -- even in Elastic-only mode, where the rest of the plastic
@@ -1767,16 +1769,16 @@ def build_inputs():
         moments_active=plastic_on and check_util)
 
     # The applied shear VEd and torsion TEd sit with the other ULS actions here
-    # (enable each check in Analysis & Result Settings to make its input live).
+    # (enable each check in Analysis settings to make its input live).
     loads.markdown("**Shear / torsion (ULS)**")
     shear_V = _seeded_number(
         loads, r"Applied shear $V_{Ed}$ (kN)", 0.0, 100000.0, 0.0, 10.0, "shear_V",
         disabled=not shear_on, help="Design shear force at the section (magnitude). "
-        "Enable 'Check shear capacity' in Analysis & Result Settings.")
+        "Enable 'Check shear capacity' in Analysis settings.")
     torsion_T = _seeded_number(
         loads, r"Applied torsion $T_{Ed}$ (kNm)", 0.0, 100000.0, 0.0, 5.0, "torsion_T",
         disabled=not torsion_on, help="Design torsional moment at the section. Enable "
-        "'Check torsion capacity' in Analysis & Result Settings.")
+        "'Check torsion capacity' in Analysis settings.")
 
     loads.divider()
     loads.markdown("**Elastic stresses (long + short term)**")
@@ -2560,8 +2562,15 @@ def _radial_util(mx, my, ax, ay):
 # result views need a Calculate.
 # ---------------------------------------------------------------------------
 
-VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "Elastic Results",
-         "N-M Interaction", "Shear", "Torsion", "M-V-T Interaction"]
+# View order follows the results workflow: the live input previews first, then the
+# plastic bending results (envelope + its N-M diagram kept adjacent), then elastic,
+# then the shear/torsion/combined checks.
+VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "N-M Interaction",
+         "Elastic Results", "Shear", "Torsion", "M-V-T Combined"]
+# The result views (everything except the two live input previews) -- used for the
+# staleness banner and to know which views need a Calculate.
+_RESULT_VIEWS = tuple(v for v in VIEWS
+                      if v not in ("Section", "Stress-Strain diagrams"))
 
 
 def _memo_fig(name, sig, build):
@@ -2592,8 +2601,8 @@ def section_view(inp):
     """
     if inp["section"] is None:
         st.info("The section has no concrete outline yet -- add at least 3 corners "
-                "in the Section panel, or press Load Quick Section. Any reinforcement "
-                "you have added is still drawn below.")
+                "in the Section panel, or open the Quick Section builder. Any "
+                "reinforcement you have added is still drawn below.")
     bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
     tendon_xy = [(t[0], t[1], t[2]) for t in inp["tendons"]]
     sig = (inp["outer"], inp["holes"], bar_xy, tendon_xy,
@@ -2796,7 +2805,7 @@ def plastic_view(inp, results):
 def interaction_view(inp, results):
     """Axial-moment (N-M) interaction diagrams about both bending axes."""
     if not inp.get("interaction"):
-        st.info("Enable 'N-M interaction diagrams' in Analysis & Result Settings, "
+        st.info("Enable 'N-M interaction diagrams' in Analysis settings, "
                 "then run a Plastic or Both analysis and press Calculate.")
         return
     if not results or "plastic" not in results or "interaction" not in results["plastic"]:
@@ -3021,7 +3030,7 @@ def shear_view(inp, results):
     """
     if not results or "shear" not in results:
         if not inp.get("shear_on"):
-            st.info("Enable 'Check shear capacity' in Analysis & Result Settings, "
+            st.info("Enable 'Check shear capacity' in Analysis settings, "
                     "then press Calculate.")
         else:
             st.info("Press Calculate to run the shear check.")
@@ -3157,7 +3166,7 @@ def torsion_view(inp, results):
     required longitudinal steel, and the combined shear+torsion crushing check."""
     if not results or "torsion" not in results:
         if not inp.get("torsion_on"):
-            st.info("Enable 'Check torsion capacity' in Analysis & Result Settings, "
+            st.info("Enable 'Check torsion capacity' in Analysis settings, "
                     "then press Calculate.")
         else:
             st.info("Press Calculate to run the torsion check.")
@@ -3294,7 +3303,7 @@ def combined_view(inp, results):
     sum(SEd/SRd) checks across the plastic (M), shear (V) and torsion (T) results."""
     if not results or "combined" not in results:
         if not inp.get("combined_on"):
-            st.info("Enable 'Check combined M-V-T' in Analysis & Result Settings "
+            st.info("Enable 'Check combined M-V-T' in Analysis settings "
                     "(with Plastic, the shear check and the torsion check), then "
                     "press Calculate.")
         else:
@@ -3487,8 +3496,7 @@ _generate_report(inp)   # builds the PDF when the Report panel's Generate was pr
 
 results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
-if stale and view in ("Plastic Results", "Elastic Results", "N-M Interaction",
-                      "Shear", "Torsion", "M-V-T Interaction"):
+if stale and view in _RESULT_VIEWS:
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 
 for _section_err in (inp.get("void_error"), inp.get("steel_error")):
@@ -3507,7 +3515,7 @@ elif view == "Shear":
     shear_view(inp, results)
 elif view == "Torsion":
     torsion_view(inp, results)
-elif view == "M-V-T Interaction":
+elif view == "M-V-T Combined":
     combined_view(inp, results)
 else:
     elastic_view(inp, results)

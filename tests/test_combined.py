@@ -111,7 +111,7 @@ def test_app_combined_incomplete_flags_missing():
     at.button(key="calculate").click().run()
     assert not at.exception
     assert not at.session_state["results"]["combined"]["valid"]
-    at.selectbox(key="view").set_value("M-V-T Interaction").run()
+    at.selectbox(key="view").set_value("M-V-T Combined").run()
     assert any("needs all three" in w.value for w in at.warning)
 
 
@@ -119,7 +119,7 @@ def test_app_combined_view_renders():
     at = _fresh()
     at.run()
     _enable_all(at)
-    at.selectbox(key="view").set_value("M-V-T Interaction").run()
+    at.selectbox(key="view").set_value("M-V-T Combined").run()
     assert not at.exception
     labels = [m.label for m in at.metric]
     assert any("Bending" in lbl for lbl in labels)
@@ -196,7 +196,7 @@ def test_app_combined_non_overlapping_cot_bands_are_rejected():
     c = at.session_state["results"]["combined"]
     assert c["transverse"]["valid"] is False
     assert c["crushing"]["valid"] is False
-    at.selectbox(key="view").set_value("M-V-T Interaction").run()
+    at.selectbox(key="view").set_value("M-V-T Combined").run()
     assert any("do not overlap" in w.value for w in at.warning)
 
 
