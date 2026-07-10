@@ -793,6 +793,13 @@ class ReportBuilder:
                     " = 16 + D<sub>lower</sub> and the flexural design yield; it does "
                     "not use the axial stress. The with-links strain-based method "
                     "(8.2.3) is a follow-up.")
+        if sh.get("n2023_tension"):
+            self._small("<b>Warning:</b> this formula carries no axial term, so the "
+                        "net axial TENSION on the section is ignored -- "
+                        "UNCONSERVATIVE, as tension lowers the real shear resistance "
+                        "(8.2.2(4) / 8.2.3, not implemented). Use a 2005 edition "
+                        "(k<sub>1</sub> sigma<sub>cp</sub>) or account for it "
+                        "separately.")
 
     def _shear(self):
         sh = self.out["shear"]
@@ -835,6 +842,9 @@ class ReportBuilder:
                 ["Coefficient", "k<sub>1</sub>", f"{_fmt(k1, 2)}"],
                 ["Lower-bound stress", "v<sub>min</sub>",
                  f"{_fmt(res['vmin'], 3)} MPa"]]
+        if sh.get("n_prestress"):
+            rows.insert(8, ["Tendon precompression", "P<sub>m</sub>",
+                            f"{_fmt(sh['n_prestress'], 3)} kN (compression +)"])
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._h2("Resistance")
         # The two 6.2.a/6.2.b terms are stresses (MPa); the resistance multiplies the
@@ -869,9 +879,10 @@ class ReportBuilder:
                       result=f"{util_txt}  ({verdict})")
         self._small("A<sub>sl</sub> is the tension reinforcement on the chosen face, "
                     "assumed fully anchored (&#8805; l<sub>bd</sub> + d) beyond the "
-                    "section. sigma<sub>cp</sub> uses the plastic (ULS) axial force. "
-                    "A section with V<sub>Ed</sub> &gt; V<sub>Rd,c</sub> requires "
-                    "designed shear reinforcement.")
+                    "section. sigma<sub>cp</sub> uses the plastic (ULS) axial force "
+                    "plus any tendon precompression from the prestress. A section with "
+                    "V<sub>Ed</sub> &gt; V<sub>Rd,c</sub> requires designed shear "
+                    "reinforcement.")
         if sh.get("links") is not None:
             self._shear_links(sh)
 
@@ -1048,6 +1059,11 @@ class ReportBuilder:
                 ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(t['alpha_cw'], 3)}"],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        if t.get("n_prestress"):
+            self._small("alpha<sub>cw</sub> uses sigma<sub>cp</sub> = "
+                        f"{_fmt(t['sigma_cp'], 3)} MPa, which includes the tendon "
+                        f"precompression {_fmt(t['n_prestress'], 3)} kN (from the "
+                        "prestress initial strain) as well as the ULS axial N.")
         self._h2("Resistances")
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "

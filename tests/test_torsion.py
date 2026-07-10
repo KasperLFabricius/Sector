@@ -316,6 +316,27 @@ def test_app_torsion_longitudinal_uses_mild_fyd():
     assert t["fyd_long"] == pytest.approx(fytk / gy)
 
 
+def test_app_torsion_prestress_raises_alpha_cw():
+    # F1: the tendon precompression enters sigma_cp, so alpha_cw rises above 1.0
+    # (EN 1992-1-1 6.11N) and TRd,max (6.30) with it.
+    at = _fresh()
+    at.run()
+    at.session_state["_qs_open"] = True
+    at.run()
+    at.number_input(key="tnd_n").set_value(4).run()
+    at.number_input(key="tnd_a").set_value(1000.0).run()
+    at.button(key="qs_apply").click().run()
+    at.number_input(key="pre_IS").set_value(3.0).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(20.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["n_prestress"] > 0.0
+    assert t["sigma_cp"] > 0.0
+    assert t["alpha_cw"] > 1.0                          # prestress credit (was 1.0)
+
+
 def test_app_torsion_is_saved_and_restored():
     import project_io
     at = _fresh()

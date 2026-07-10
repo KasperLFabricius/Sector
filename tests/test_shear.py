@@ -504,3 +504,95 @@ def test_app_shear_is_saved_and_restored():
     assert at2.session_state["shear_on"] is True
     assert at2.session_state["shear_V"] == 123.0
     assert at2.session_state["shear_axis"] == "Horizontal shear (bending about y)"
+
+
+# -- v0.50: prestress precompression in sigma_cp / alpha_cw (F1) and the 2023
+#    tensile-N warning (F2) -------------------------------------------------
+
+def test_prestress_axial_helper():
+    # _prestress_axial reproduces the elastic solver's locked-in tendon force
+    # sum(Ep*IS*Ap) (concrete compression-positive, kN); zero without prestress.
+    import sector_app
+    from sector import material_presets as mp
+    kw = dict(mp.PRESTRESS_PRESETS["EN 1992-1-1:2005"])
+    kw["IS"] = 5.0                                       # permille -> a real prestrain
+    pre = mp.build_prestress(**kw)
+    assert pre.IS > 0.0
+    tendons = [(0.0, -0.40, 1000.0), (0.10, -0.40, 500.0)]   # 1500 mm2 total
+    expected = pre.Es * pre.IS * 1000.0 * (1500.0 / 1.0e6)   # kN
+    assert expected > 0.0
+    assert sector_app._prestress_axial(
+        {"prestress": pre, "tendons": tendons}) == pytest.approx(expected)
+    # No tendons or no prestress material -> no precompression.
+    assert sector_app._prestress_axial({"prestress": pre, "tendons": []}) == 0.0
+    assert sector_app._prestress_axial({"prestress": None, "tendons": tendons}) == 0.0
+
+
+def _qs_prestressed_shear(pre_is, *, method=None):
+    """A Quick Section rectangle with four tendons and the given prestrain, with
+    the shear check enabled. ``pre_is`` in permille (0 = no precompression)."""
+    at = _fresh()
+    at.run()
+    at.session_state["_qs_open"] = True
+    at.run()
+    at.number_input(key="tnd_n").set_value(4).run()
+    at.number_input(key="tnd_a").set_value(1000.0).run()
+    at.button(key="qs_apply").click().run()
+    at.number_input(key="pre_IS").set_value(pre_is).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    if method is not None:
+        at.selectbox(key="shear_method").set_value(method).run()
+    at.number_input(key="shear_V").set_value(50.0).run()
+    at.button(key="calculate").click().run()
+    return at
+
+
+def test_app_shear_prestress_raises_vrd_c():
+    # F1: the tendon precompression enters sigma_cp, so VRd,c (and its k1*sigma_cp
+    # term) rises versus the same section with no prestrain.
+    at = _qs_prestressed_shear(5.0)
+    assert not at.exception
+    sh = at.session_state["results"]["shear"]
+    assert sh["n_prestress"] > 0.0
+    assert sh["res"]["sigma_cp"] > 0.0
+    vrd_pre = sh["res"]["vrd_c"]
+
+    at0 = _qs_prestressed_shear(0.0)
+    sh0 = at0.session_state["results"]["shear"]
+    assert sh0["n_prestress"] == pytest.approx(0.0)
+    assert sh0["res"]["sigma_cp"] == pytest.approx(0.0)
+    # Same geometry / reinforcement, only the prestress differs -> higher VRd,c.
+    assert vrd_pre > sh0["res"]["vrd_c"] + 1.0
+    # The applied axial N is still the external force only (unchanged by prestress).
+    assert sh["n_ed"] == pytest.approx(sh0["n_ed"])
+
+
+def test_app_shear_2023_ignores_tension_with_warning():
+    # F2: the 2023 tau_Rd,c (8.2.2) has no axial term, so a NET axial tension is
+    # silently ignored (unconservative). Flag it and warn.
+    m2023 = codes.EC2_2023.label
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.selectbox(key="shear_method").set_value(m2023).run()
+    at.number_input(key="shear_V").set_value(50.0).run()
+    at.number_input(key="pl_P").set_value(200.0).run()        # tension +
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    assert at.session_state["results"]["shear"]["n2023_tension"] is True
+    at.selectbox(key="view").set_value("Shear").run()
+    assert any("UNCONSERVATIVE" in w.value for w in at.warning)
+
+    # Net compression -> no warning (2023 ignoring it is conservative).
+    at.number_input(key="pl_P").set_value(-200.0).run()
+    at.button(key="calculate").click().run()
+    assert at.session_state["results"]["shear"]["n2023_tension"] is False
+
+    # A 2005 edition handles tension via k1*sigma_cp, so no warning there.
+    at2 = _fresh()
+    at2.run()
+    at2.checkbox(key="shear_on").set_value(True).run()
+    at2.number_input(key="shear_V").set_value(50.0).run()
+    at2.number_input(key="pl_P").set_value(200.0).run()
+    at2.button(key="calculate").click().run()
+    assert at2.session_state["results"]["shear"]["n2023_tension"] is False

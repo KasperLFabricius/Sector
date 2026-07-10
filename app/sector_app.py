@@ -1761,9 +1761,11 @@ def build_inputs():
     # set is disabled -- so the user can always enter the axial force the result
     # depends on. The moments stay gated on the plastic analysis (envelope only).
     P_pl, Mx_pl, My_pl = _load_set(
-        "pl", "Axial force for the plastic M-M capacity envelope; also the ULS axial "
-        "force N used by the shear and torsion checks (sigma_cp / alpha_cw). Enabled "
-        "whenever a plastic, shear or torsion check is active.",
+        "pl", "External axial force for the plastic M-M capacity envelope; also the "
+        "ULS axial N used by the shear and torsion checks (sigma_cp / alpha_cw). Enter "
+        "the external force only -- any tendon precompression is added automatically "
+        "from the prestress initial strain. Enabled whenever a plastic, shear or "
+        "torsion check is active.",
         "Applied moment checked against the plastic envelope (utilisation).",
         plastic_on or shear_on or torsion_on,
         moments_active=plastic_on and check_util)
@@ -1950,6 +1952,26 @@ def _gross_area_centroid(outer, holes):
     if area <= 0.0:
         return a, cx, cy
     return area, mx / area, my / area
+
+
+def _prestress_axial(inp):
+    """Tendon precompression from the prestress initial strain, in kN (concrete
+    compression-positive), for the shear/torsion sigma_cp and alpha_cw.
+
+    Equals the locked-in tendon force ``sum(Ep*IS*Ap)`` -- the same quantity the
+    elastic solver applies as a force (so the user's N stays the external axial
+    only, EN 1992-1-1 6.2.2(1)/6.2.3(3) include the prestress in sigma_cp). Zero
+    without tendons or a prestress material. Recomputed here rather than read from
+    ``out['elastic']`` because the shear/torsion checks can run with the elastic
+    analysis switched off.
+    """
+    pre = inp.get("prestress")
+    tendons = inp.get("tendons")
+    if pre is None or not tendons:
+        return 0.0
+    sig_ps = pre.Es * pre.IS * 1000.0                  # MPa -> kN/m2 (bar-stress units)
+    area_m2 = sum(t[2] for t in tendons) / 1.0e6       # mm2 -> m2
+    return sig_ps * area_m2                             # kN (tendon tension = concrete compression)
 
 
 # Neutral-axis angle giving bending about the shear axis with the tension face on the
@@ -2207,10 +2229,16 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     crack_coarse=_crack_dict(_cw(cr_l.cracked_state, inp["nl"], 0.4, True)),
                     crack_short_coarse=_crack_dict(_cw(short_state, inp["ns"], 0.6, True)),
                 )
+    # ULS axial for the shear/torsion sigma_cp / alpha_cw (EN 1992-1-1 6.2.2/6.2.3):
+    # the external axial N (tension-positive P_pl, flipped to compression) PLUS the
+    # tendon precompression from the prestress initial strain, so a prestressed member
+    # earns its sigma_cp / alpha_cw credit. Compression-positive, as the engines expect.
+    n_prestress = _prestress_axial(inp)
+    n_ed_comp = -inp["P_pl"] + n_prestress
     # Shear resistance without shear reinforcement (VRd,c). An independent ULS check,
     # recomputed on every Calculate whenever enabled (cheap; no plastic/elastic
-    # reuse). The axial term uses the plastic (ULS) axial force N (tension-positive),
-    # converted to the code's compression-positive sigma_cp at the boundary.
+    # reuse). The axial term uses the plastic (ULS) axial force N (tension-positive)
+    # plus the tendon precompression, as the compression-positive sigma_cp.
     if inp.get("shear_on"):
         code = _SHEAR_METHODS.get(inp["shear_method"], codes.EC2_2005_DKNA)
         model_2023 = getattr(code, "shear_model", "2005") == "2023"
@@ -2231,14 +2259,19 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         fyd_flex = (_steel.fytk / _steel.gamma_y if getattr(_steel, "gamma_y", 0.0) > 0.0
                     else _steel.fytk)
         ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
-        res = shear.vrd_c(fck, code, bw, d, asl, -inp["P_pl"], ac,
+        res = shear.vrd_c(fck, code, bw, d, asl, n_ed_comp, ac,
                           fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0))
         v_ed = inp["shear_V"]
         util = (v_ed / res["vrd_c"]) if res["vrd_c"] > 0.0 else math.inf
+        # F2: the 2023 tau_Rd,c (8.2.2) carries no axial term, so it silently ignores
+        # a net axial TENSION -- unconservative. Flag it for the view/report.
+        n2023_tension = bool(model_2023 and n_ed_comp < -1e-9)
         out["shear"] = dict(res=res, v_ed=v_ed, util=util, axis=axis,
                             tension_low=tension_low, bw=bw, bw_auto=bw_auto,
                             bw_user=bool(inp["shear_bw"] > 0.0), d=d, asl=asl,
                             ac=ac, fck=fck, n_ed=inp["P_pl"],
+                            n_prestress=n_prestress, n_ed_comp=n_ed_comp,
+                            n2023_tension=n2023_tension,
                             method=inp["shear_method"], model_2023=model_2023,
                             ddg=ddg, fyd_flex=fyd_flex)
         # Shear reinforcement (vertical links): the 2005 variable-strut VRd =
@@ -2257,7 +2290,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             # only when that lever arm is degenerate (no tension steel / non-converged).
             z_mm, z_src = _shear_lever_arm(inp, axis, tension_low, d)
             lk = shear.vrd_links(fck, code, bw, d, asw_over_s, inp["shear_fywk"],
-                                 -inp["P_pl"], ac, cot_min, cot_max, z_mm=z_mm)
+                                 n_ed_comp, ac, cot_min, cot_max, z_mm=z_mm)
             util_l = (v_ed / lk["vrd"]) if lk["vrd"] > 0.0 else math.inf
             # delta_Ftd = 0.5*VEd*cot(theta): the extra longitudinal tension from shear.
             delta_ftd = 0.5 * v_ed * lk["cot"] if lk["valid"] else 0.0
@@ -2282,7 +2315,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         fck = inp["concrete"].fck
         fcd = tcode.concrete_factor(fck) * fck / tcode.gamma_c
         tac, _tcx, _tcy = _gross_area_centroid(inp["outer"], inp["holes"])
-        sigma_cp = -inp["P_pl"] / tac / 1000.0 if tac > 0.0 else 0.0   # compression +
+        # sigma_cp = (external N + tendon precompression) / Ac, compression-positive.
+        sigma_cp = n_ed_comp / tac / 1000.0 if tac > 0.0 else 0.0
         alpha_cw = tcode.shear_alpha_cw(sigma_cp, fcd)
         tube = torsion.tube_properties(inp["outer"], inp["holes"],
                                        tef_override=inp["torsion_tef"])
@@ -2320,6 +2354,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             theta_deg=math.degrees(math.atan(1.0 / cot_t)) if cot_t > 0 else 0.0,
             util=util_t, asl_req=asl_req, t_ed=t_ed, fcd=fcd, fywd=fywd_t,
             fyd_long=fyd_long, nu=nu_t, alpha_cw=alpha_cw, fctd=fctd,
+            sigma_cp=sigma_cp, n_prestress=n_prestress,
             asw_t=asw_t, asw_over_s=asw_over_s_t, dia=inp["shear_link_dia"],
             s=inp["shear_link_s"], cot_min=tcot_min, cot_max=tcot_max,
             method=inp["torsion_method"], governs=governs_t, valid=tube["valid"],
@@ -2354,7 +2389,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 sh = out["shear"]
                 vlk = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
                                       sh_links["asw_over_s"], sh_links["fywk"],
-                                      -inp["P_pl"], sh["ac"], cot_c, cot_c,
+                                      n_ed_comp, sh["ac"], cot_c, cot_c,
                                       z_mm=sh_links["res"]["z"])
                 v_ed_c = sh["v_ed"]
                 inter = ((t_ed / trdmax_c if trdmax_c > 0 else math.inf)
@@ -2417,7 +2452,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     # Utilisation pieces at cot = 1 (they scale as 1/cot for the
                     # stirrups and as cot + 1/cot for the crushing).
                     vlk1 = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
-                                           sl["asw_over_s"], sl["fywk"], -inp["P_pl"],
+                                           sl["asw_over_s"], sl["fywk"], n_ed_comp,
                                            sh["ac"], 1.0, 1.0, z_mm=sl["res"]["z"])
                     trd_s1 = torsion.trd_s(to["tube"]["Ak"], to["fywd"],
                                            to["asw_over_s"], 1.0)
@@ -2983,9 +3018,18 @@ def shear_view(inp, results):
     util_txt = "inf" if not math.isfinite(util) else f"{util * 100:.1f} %"
     m3.metric("Utilisation VEd/VRd,c", util_txt, delta=("OK" if ok else "Over limit"),
               delta_color=("normal" if ok else "inverse"))
+    pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
+                "prestress initial strain)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
                f"{sh['method']}. The axial term uses the plastic (ULS) axial force "
-               f"N = {sh['n_ed']:.1f} kN (tension-positive).")
+               f"N = {sh['n_ed']:.1f} kN (tension-positive){pre_note}.")
+    if sh.get("n2023_tension"):
+        st.warning("This 2023 " + _TAU + "Rd,c formula (8.2.2) carries no axial term, "
+                   "so the net axial TENSION on the section is ignored -- an "
+                   "UNCONSERVATIVE result, as tension lowers the real shear "
+                   "resistance (8.2.2(4) / the strain-based 8.2.3, not implemented). "
+                   "Use a 2005 edition, which reduces VRd,c via k1*" + _SIGMA + "cp, "
+                   "or account for the tension separately.")
 
     bw_note = ("user input" if sh["bw_user"]
                else f"auto = min solid width {sh['bw_auto']:.1f} mm")
@@ -3143,6 +3187,10 @@ def torsion_view(inp, results):
         "TRd,c = 2*Ak*tef*fctd. The required longitudinal steel " + chr(0x03A3) +
         "Asl = TEd*uk*cot" + _THETA + "/(2*Ak*fyd) (6.28) is in ADDITION to the "
         "bending reinforcement on the tension side.")
+    if t.get("n_prestress"):
+        st.caption(f"{_ALPHA}cw uses {_SIGMA}cp = {t['sigma_cp']:.3f} MPa, which "
+                   f"includes the tendon precompression {t['n_prestress']:.1f} kN "
+                   "(from the prestress initial strain) as well as the ULS axial N.")
 
     inter = t.get("interaction")
     if inter is not None and not inter.get("valid"):
