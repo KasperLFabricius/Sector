@@ -433,6 +433,76 @@ def test_tube_figure_degrades_without_a_wall():
     assert not any("centre-line" in n for n in names)
 
 
+def test_marker_sizes_scale_with_relative_diameter():
+    # O25 (491) next to O16 (201): the marker diameter ratio must follow the true
+    # bar-diameter ratio sqrt(491/201) ~ 1.56, clamped to the [lo, hi] band.
+    pts = [(0, 0, 491.0), (1, 0, 491.0), (0, 1, 201.0)]
+    sizes = viz._marker_sizes(pts, 9.0, 6.5, 14.0)
+    assert sizes[0] == sizes[1] > sizes[2]
+    # The smaller bar's raw scaled size (9 * sqrt(201/491) ~ 5.8) hits the lo clamp.
+    assert sizes[2] == pytest.approx(6.5)
+    # Within the clamp band the ratio follows the true diameter ratio.
+    in_band = viz._marker_sizes([(0, 0, 400.0), (0, 1, 300.0)], 9.0, 6.5, 14.0)
+    assert in_band[0] / in_band[1] == pytest.approx((400.0 / 300.0) ** 0.5, rel=1e-6)
+    # Equal areas -> everyone at base; missing areas (2-tuples) -> base scalar.
+    assert viz._marker_sizes([(0, 0, 300.0)] * 3, 9.0, 6.5, 14.0) == [9.0] * 3
+    assert viz._marker_sizes([(0, 0), (1, 1)], 9.0, 6.5, 14.0) == 9.0
+
+
+def test_na_line_clipped_to_section_bbox():
+    # A corner-origin section: unclipped, the +/- extent segment (anchored at the
+    # line's closest point to the ORIGIN) overshoots far outside the section.
+    import math as m
+    a, b = m.cos(m.radians(35.0)), m.sin(m.radians(35.0))
+    c = -0.35                                       # NA crosses the upper section
+    x0, y0, x1, y1 = viz.na_line_at(a, b, c, 0.45, bbox=(0.0, 0.0, 0.3, 0.6))
+    for x, y in ((x0, y0), (x1, y1)):               # endpoints inside bbox + 8% margin
+        assert -0.06 <= x <= 0.36 and -0.06 <= y <= 0.66
+    # Without a bbox the old +/- extent behaviour is preserved.
+    ux0, uy0, ux1, uy1 = viz.na_line_at(a, b, c, 0.45)
+    assert m.hypot(ux1 - ux0, uy1 - uy0) == pytest.approx(0.9)
+    # A line that misses the box falls back to the extent span (no empty segment).
+    fx0, fy0, fx1, fy1 = viz.na_line_at(a, b, -5.0, 0.45, bbox=(0.0, 0.0, 0.3, 0.6))
+    assert m.hypot(fx1 - fx0, fy1 - fy0) == pytest.approx(0.9)
+
+
+def test_interaction_figure_legend_always_shown():
+    # A single-trace figure (capacity-only, or a partial arc) must still show the
+    # legend -- it carries the "capacity (partial arc)" cue.
+    fig = viz.interaction_figure([100.0, 0.0], [0.0, 90.0], closed=False)
+    assert fig.layout.showlegend is True
+    assert "partial arc" in fig.data[0].name
+
+
+def test_vt_figure_subscripts_and_capacity_marker():
+    fig = viz.vt_interaction_figure(1319.0, 148.0, 150.0, 40.0)
+    assert "<sub>Ed</sub>" in fig.layout.xaxis.title.text
+    assert "<sub>Ed</sub>" in fig.layout.yaxis.title.text
+    names = [t.name or "" for t in fig.data]
+    assert any("capacity (this direction)" in n for n in names)
+
+
+def test_subtube_labels_share_a_baseline_below_the_tallest():
+    subs = [_sub(300, 600, 100.0, 0.10, 24.6, 90.0, 0.27),
+            _sub(1000, 200, 91.0, 0.15, 15.4, 58.5, 0.26)]
+    fig = viz.subtube_figure(subs)
+    anns = fig.layout.annotations
+    assert len(anns) == 2
+    assert all(a.yanchor == "top" for a in anns)     # text hangs below the anchor
+    assert anns[0].y == anns[1].y == -300.0          # common baseline (tallest h/2)
+
+
+def test_concrete_curve_labels_design_plateau():
+    from sector.materials import Concrete
+    fig = viz.concrete_curve_figure(Concrete(fck=35.0, gamma_c=1.5, curve=2))
+    texts = [a.text or "" for a in fig.layout.annotations]
+    assert any("f<sub>cd</sub>" in t for t in texts)
+    # gamma_c = 1: the curves coincide, so no separate (colliding) f_cd label.
+    fig1 = viz.concrete_curve_figure(Concrete(fck=35.0, gamma_c=1.0, curve=2))
+    texts1 = [a.text or "" for a in fig1.layout.annotations]
+    assert not any("f<sub>cd</sub>" in t for t in texts1)
+
+
 def test_interaction_figure_partial_arc_is_not_filled():
     # A partial sweep is an OPEN arc: draw it as a bare line (no toself fill / no closing
     # vertex), else it shades a capacity region across an artificial closing chord.
