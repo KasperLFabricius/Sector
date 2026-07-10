@@ -62,6 +62,29 @@ def combined_strut_theta(s_stirrup: float, c_crush: float, cot_min: float,
     return min(max(cot_opt, cot_min), hi)
 
 
+def chord_moment_and_capacity(m_signed: float, tension_low: bool,
+                              max_m: float, min_m: float):
+    """Applied moment and bending capacity for the SHEAR tension chord.
+
+    The shear shift, the torsion longitudinal force and the lever arm ``z`` are all
+    defined on the shear tension face -- the ``tension_low`` face (the low-coordinate
+    side when ``True``) -- so the bending moment and capacity used with them must be
+    taken on that same chord, not on the face implied by the applied-moment sign.
+
+    The plastic sign convention tensions the low face under a POSITIVE moment (``+Mx``
+    tensions the bottom, ``+My`` the left), so the moment that ADDS tension to the
+    chosen chord is ``+m_signed`` for the low face and ``-m_signed`` for the high face.
+    A moment of the opposite sense compresses the chord; that relief is not credited
+    (it would understate the steel the chord still needs for shear + torsion), so the
+    contribution floors at zero. The matching pure-bending capacity is ``max_m`` for the
+    low face and ``|min_m|`` for the high face. Returns ``(m_ed, m_rd)``.
+    """
+    m_face = m_signed if tension_low else -m_signed
+    m_ed = max(m_face, 0.0)
+    m_rd = max_m if tension_low else abs(min_m)
+    return m_ed, m_rd
+
+
 def longitudinal_check(m_ed: float, m_rd: float, ftd_v: float, ftd_t: float,
                        z: float) -> dict:
     """Longitudinal-steel utilisation on the tension chord under combined M + V + T.

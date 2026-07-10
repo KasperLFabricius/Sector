@@ -456,6 +456,19 @@ def test_report_combined_longitudinal_check():
     assert "tension chord" in txt
 
 
+def test_report_combined_longitudinal_biaxial_warns():
+    out = _out()
+    c = _combined_out()
+    c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=300.0,
+                             ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
+                             util=105.0 / 300.0, ok=True, capped=False,
+                             tension_low=True, off_util=0.83, biaxial=True)
+    out["combined"] = c
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Biaxial bending" in txt                 # the off-axis warning
+    assert "off-axis chord" in txt
+
+
 def test_report_combined_independent_uses_max_form():
     out = _out()
     out["combined"] = _combined_out(mv_independent=True)

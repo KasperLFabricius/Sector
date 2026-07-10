@@ -64,6 +64,35 @@ def test_longitudinal_check_torsion_uses_half_lever_and_no_cap():
     assert r["m_total"] == pytest.approx(74.0)
 
 
+def test_chord_moment_and_capacity_low_face_agrees_with_moment():
+    # Common case: shear tension on the low face, sagging moment tensions it too.
+    m_ed, m_rd = combined.chord_moment_and_capacity(100.0, True, 400.0, -300.0)
+    assert m_ed == pytest.approx(100.0)
+    assert m_rd == pytest.approx(400.0)          # low-face (max) capacity
+
+
+def test_chord_moment_and_capacity_high_face_uses_high_capacity():
+    # Codex's scenario: shear tension on the HIGH face (top/right) but the applied
+    # moment is sagging (tensions the LOW face). The moment relieves the high chord, so
+    # its contribution floors at 0, and the capacity is the HIGH-face (|min|) value --
+    # NOT the larger low-face max, which would understate utilisation on asymmetric steel.
+    m_ed, m_rd = combined.chord_moment_and_capacity(100.0, False, 400.0, -300.0)
+    assert m_ed == 0.0                           # relief not credited
+    assert m_rd == pytest.approx(300.0)          # high-face capacity, not 400
+
+
+def test_chord_moment_and_capacity_high_face_hogging_adds():
+    # High face with a hogging moment that genuinely tensions it -> full contribution.
+    m_ed, m_rd = combined.chord_moment_and_capacity(-100.0, False, 400.0, -300.0)
+    assert m_ed == pytest.approx(100.0)
+    assert m_rd == pytest.approx(300.0)
+
+
+def test_chord_moment_and_capacity_symmetric():
+    m_ed, m_rd = combined.chord_moment_and_capacity(50.0, True, 250.0, -250.0)
+    assert (m_ed, m_rd) == (pytest.approx(50.0), pytest.approx(250.0))
+
+
 def test_longitudinal_check_zero_capacity_is_inf():
     r = combined.longitudinal_check(10.0, 0.0, 5.0, 5.0, 0.5)
     assert math.isinf(r["util"])
@@ -128,6 +157,19 @@ def test_app_combined_longitudinal_check():
     assert lg["mt"] > 0.0                         # torsion is acting
     assert lg["util"] == pytest.approx(lg["m_total"] / lg["m_rd"])
     assert math.isfinite(lg["util"])
+    assert not lg["biaxial"]                       # default My_pl = 0 -> uniaxial
+    assert lg["off_util"] == pytest.approx(0.0)
+
+
+def test_app_combined_longitudinal_biaxial_flagged():
+    at = _fresh()
+    at.run()
+    _enable_all(at)                                # uniaxial first (My_pl = 0)
+    at.number_input(key="pl_My").set_value(100.0).run()   # add an off-axis moment
+    at.button(key="calculate").click().run()
+    lg = at.session_state["results"]["combined"]["longitudinal"]
+    assert lg["biaxial"]                           # off-axis moment now non-negligible
+    assert lg["off_util"] > 0.05
 
 
 def test_app_combined_mv_independent_uses_max():

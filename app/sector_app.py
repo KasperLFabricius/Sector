@@ -2519,17 +2519,31 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             if sl is not None and sl["res"]["valid"]:
                 z_m = sl["res"]["z"] / 1000.0
                 l_axis = sh["axis"]
+                tlow = sh["tension_low"]
+                # The chord is the SHEAR tension face (where z, delta_Ftd and the torsion
+                # steel act), so MEd and MRd are taken on that face, not on the face the
+                # applied-moment sign implies.
                 m_signed = inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
-                m_ed_l = abs(m_signed)
-                if m_signed >= 0.0:
-                    m_rd_l = pl["max_mx"] if l_axis == "x" else pl["max_my"]
-                else:
-                    m_rd_l = abs(pl.get("min_mx" if l_axis == "x" else "min_my",
-                                        pl["max_mx"] if l_axis == "x" else pl["max_my"]))
+                max_m = pl["max_mx"] if l_axis == "x" else pl["max_my"]
+                min_m = pl.get("min_mx" if l_axis == "x" else "min_my", -max_m)
+                m_ed_l, m_rd_l = combined.chord_moment_and_capacity(
+                    m_signed, tlow, max_m, min_m)
                 ftd_v = sl["delta_ftd"]                            # kN, 0.5*VEd*cot
                 ftd_t = to["asl_req"] * to["fyd_long"] / 1000.0   # mm2*MPa=N -> kN
+                # This chord check is uniaxial (bending in the shear plane). Under
+                # biaxial bending the OTHER-axis chord -- its own bending tension plus
+                # its share of the distributed torsion force -- can govern and is NOT
+                # evaluated here, so measure the off-axis moment's utilisation and flag
+                # the check when it is non-negligible (defer to the sum(SEd/SRd) rule).
+                off_signed = inp["My_pl"] if l_axis == "x" else inp["Mx_pl"]
+                off_max = pl["max_my"] if l_axis == "x" else pl["max_mx"]
+                off_min = pl.get("min_my" if l_axis == "x" else "min_mx", -off_max)
+                off_cap = off_max if off_signed >= 0.0 else abs(off_min)
+                off_util = (abs(off_signed) / off_cap if off_cap > 0.0
+                            else (math.inf if off_signed else 0.0))
                 lchk = combined.longitudinal_check(m_ed_l, m_rd_l, ftd_v, ftd_t, z_m)
-                lchk.update(valid=True, axis=l_axis)
+                lchk.update(valid=True, axis=l_axis, tension_low=tlow,
+                            off_util=off_util, biaxial=bool(off_util > 0.05))
                 out["combined"]["longitudinal"] = lchk
             # Shared-stirrup transverse check: the one closed stirrup carries shear
             # AND torsion, so their demands add. When VEd <= VRd,c the concrete alone
@@ -3487,32 +3501,52 @@ def combined_view(inp, results):
     lg = c.get("longitudinal")
     if lg is not None and lg["valid"]:
         ax_lbl = lg["axis"]
+        face_lbl = "bottom / left" if lg.get("tension_low", True) else "top / right"
+        biaxial = lg.get("biaxial", False)
         ok_l = lg["ok"]
         g1, g2, g3 = st.columns(3)
         g1.metric(f"MEd (about {ax_lbl})", f"{lg['m_ed']:.1f} kNm")
         g2.metric("MEd,total", f"{lg['m_total']:.1f} kNm",
                   help="bending + shear shift + torsion, as an equivalent moment "
                        "on the tension chord")
-        g3.metric("MEd,total/MRd", _pct(lg["util"]),
-                  delta=("OK" if ok_l else "Over limit"),
-                  delta_color=("normal" if ok_l else "inverse"))
+        if biaxial:
+            # Under biaxial bending the off-axis chord may govern (not checked here),
+            # so show the number but withhold the reassuring OK/Over-limit verdict.
+            g3.metric("MEd,total/MRd", _pct(lg["util"]),
+                      help="uniaxial (shear-plane) chord only -- see the warning below")
+        else:
+            g3.metric("MEd,total/MRd", _pct(lg["util"]),
+                      delta=("OK" if ok_l else "Over limit"),
+                      delta_color=("normal" if ok_l else "inverse"))
         st.caption(
-            f"Tension chord about the {ax_lbl}-axis (the shear plane). "
+            f"Tension chord = the shear tension face ({face_lbl}) about the "
+            f"{ax_lbl}-axis; MEd and MRd are taken on that face. "
             f"MEd,total = MEd + {_DELTA}Ftd*z + Ftd,T*z/2 = "
             f"{lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f} "
             f"kNm, vs MRd = {lg['m_rd']:.1f} kNm (pure bending about {ax_lbl} at the "
             f"applied N). Shear shift {_DELTA}Ftd = 0.5*VEd*cot{_THETA} = "
             f"{lg['ftd_v']:.1f} kN (6.18); torsion Ftd,T = TEd*uk*cot{_THETA}/(2Ak) = "
             f"{lg['ftd_t']:.1f} kN, distributed round the perimeter so half acts on "
-            f"this chord (6.28); z = {lg['z']:.3f} m.")
+            f"this chord (6.28); z = {lg['z']:.3f} m. Each contribution uses its own "
+            f"action's optimum strut angle (the DK NA sum-of-ratios rule allows it).")
         if lg["capped"]:
             st.caption("The shear shift is capped so bending + shear does not exceed "
                        "MRd (6.2.3(7): the added tension need not exceed the "
                        "peak-moment tension; a section tool has no beam peak, so MRd "
                        "is used as that cap).")
-        st.caption("Uniaxial along the shear axis; the DK NA " + chr(0x03A3) +
-                   "(SEd/SRd) sum above is a simpler, generally conservative "
-                   "alternative that avoids the shift / lever-arm model.")
+        if biaxial:
+            st.warning(
+                f"Biaxial bending: a moment about the OTHER axis is acting "
+                f"({_pct(lg['off_util'])} of that axis' capacity). This uniaxial chord "
+                "check only inspects the shear-plane chord, so the off-axis chord -- "
+                "its full bending tension plus its share of the distributed torsion "
+                "steel -- may govern and is NOT evaluated here. Rely on the "
+                + chr(0x03A3) + "(SEd/SRd) check above, which uses the full biaxial "
+                "bending utilisation.")
+        else:
+            st.caption("Uniaxial refinement in the shear plane; the DK NA "
+                       + chr(0x03A3) + "(SEd/SRd) sum above uses the full biaxial "
+                       "bending utilisation and remains the primary combined check.")
     else:
         st.caption(f"Torsion needs {chr(0x03A3)}Asl = {c['asl_torsion']:.0f} mm2 "
                    "distributed round the tube perimeter (6.28); the shear adds "

@@ -1044,9 +1044,12 @@ class ReportBuilder:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
             vv = "OK" if lg["ok"] else "EXCEEDED"
             ax = lg["axis"]
+            face = "bottom / left" if lg.get("tension_low", True) else "top / right"
             self._p(
-                f"The tension chord about the {ax}-axis (the shear plane) carries the "
-                "bending tension plus the shear shift &#916;F<sub>td</sub> = "
+                f"The tension chord is the shear tension face ({face}) about the "
+                f"{ax}-axis; M<sub>Ed</sub> and M<sub>Rd</sub> are taken on that face. "
+                "The chord carries the bending tension plus the shear shift "
+                "&#916;F<sub>td</sub> = "
                 "0.5&#183;V<sub>Ed</sub>&#183;cot theta (6.18) and the torsion "
                 "longitudinal force F<sub>td,T</sub> = T<sub>Ed</sub>&#183;u<sub>k</sub>"
                 "&#183;cot theta/(2A<sub>k</sub>) (6.28, distributed round the "
@@ -1062,12 +1065,24 @@ class ReportBuilder:
                       f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
                       f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm")
+            biaxial = lg.get("biaxial", False)
             self._formula(
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
-                result=f"utilisation = {_pct(lg['util'])}  ({vv})")
-            note = ("Uniaxial along the shear axis; the DK NA sum(SEd/SRd) above is a "
-                    "simpler, generally conservative alternative.")
+                result=(f"utilisation = {_pct(lg['util'])}"
+                        + ("  (uniaxial -- see note)" if biaxial else f"  ({vv})")))
+            if biaxial:
+                self._p("Biaxial bending: a moment about the OTHER axis is acting ("
+                        f"{_pct(lg.get('off_util', 0.0))} of that axis' capacity). This "
+                        "uniaxial chord check only inspects the shear-plane chord, so the "
+                        "off-axis chord (its bending tension plus its share of the "
+                        "distributed torsion steel) may govern and is NOT evaluated here "
+                        "-- rely on the sum(SEd/SRd) check above, which uses the full "
+                        "biaxial bending utilisation.")
+            note = ("Each contribution uses its own action's optimum strut angle (the DK "
+                    "NA sum-of-ratios rule allows it). The sum(SEd/SRd) check above uses "
+                    "the full biaxial bending utilisation and remains the primary "
+                    "combined check.")
             if lg["capped"]:
                 note = ("The shear shift is capped so bending + shear does not exceed "
                         "M<sub>Rd</sub> (6.2.3(7): the added tension need not exceed "
