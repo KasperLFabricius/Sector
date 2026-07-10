@@ -529,3 +529,11 @@ def test_vt_interaction_shows_ray_and_interaction_sum():
     assert "load direction" in names
     anns = " ".join(a.text for a in fig.layout.annotations)
     assert "sum =" in anns and "OK" in anns
+
+
+def test_truss_figure_labels_theta_and_z_dimension():
+    # v0.61: the truss shows a theta arc at the strut base and a z dimension arrow.
+    fig = viz.truss_figure(30.0, 495.0, s_mm=150.0)
+    texts = [a.text for a in fig.layout.annotations]
+    assert chr(0x3B8) in texts                                 # theta label at the arc
+    assert any("z =" in (t or "") for t in texts)              # z dimension label

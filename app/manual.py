@@ -186,21 +186,75 @@ def _schematic():
     return fig
 
 
+def _curved_arrow(fig, cx, cy, r, a0, a1, color):
+    """A circular arc from angle a0 to a1 (radians) with an arrowhead at the end,
+    for drawing a moment's rotational sense."""
+    import math
+    ts = [a0 + (a1 - a0) * i / 48.0 for i in range(49)]
+    xs = [cx + r * math.cos(t) for t in ts]
+    ys = [cy + r * math.sin(t) for t in ts]
+    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
+                             line=dict(color=color, width=2.5), hoverinfo="skip"))
+    # Arrowhead: a short straight arrow tangent to the arc at its end point.
+    fig.add_annotation(x=xs[-1], y=ys[-1], ax=xs[-4], ay=ys[-4], axref="x", ayref="y",
+                       showarrow=True, arrowhead=2, arrowsize=1.4, arrowwidth=2.5,
+                       arrowcolor=color, text="")
+
+
 def fig_sign_convention():
-    """Schematic of the axes, the positive senses of N, Mx, My and the angle V."""
+    """Schematic of the centroidal axes and the positive senses of N, Mx, My and
+    the neutral-axis sweep angle V."""
+    import math
     fig = _schematic()
+    ink = viz.SCHEMATIC_INK
+    # The section (a concrete rectangle centred on the centroidal axes).
     fig.add_shape(type="rect", x0=-1.0, y0=-1.4, x1=1.0, y1=1.4,
-                  line=dict(color="#888", width=1.5), fillcolor="#f2f2f2")
-    fig.add_annotation(x=2.1, y=0, ax=0, ay=0, text="x", showarrow=True,
-                       arrowhead=2, axref="x", ayref="y")
-    fig.add_annotation(x=0, y=2.1, ax=0, ay=0, text="y", showarrow=True,
-                       arrowhead=2, axref="x", ayref="y")
-    fig.add_annotation(x=0, y=0, text="N (+ = tension, out of page)",
-                       showarrow=False, yshift=-2, font=dict(size=11))
-    fig.add_annotation(x=1.5, y=1.7, text="Mx about x, My about y",
-                       showarrow=False, font=dict(size=11))
-    fig.add_annotation(x=-1.7, y=0.9, text="V = NA angle from y",
-                       showarrow=False, font=dict(size=11))
+                  line=dict(color=viz.CONCRETE_LINE, width=1.5),
+                  fillcolor=viz.CONCRETE_FILL)
+    # Centroidal x (right) and y (up) axes, arrowheads at the ends.
+    for (hx, hy, lab) in ((2.15, 0.0, "x"), (0.0, 2.25, "y")):
+        fig.add_annotation(x=hx, y=hy, ax=0.0, ay=0.0, axref="x", ayref="y",
+                           showarrow=True, arrowhead=2, arrowwidth=1.5,
+                           arrowcolor=ink, text="")
+        fig.add_annotation(x=hx, y=hy, text=lab, showarrow=False,
+                           xshift=(12 if lab == "x" else 0),
+                           yshift=(0 if lab == "x" else 12),
+                           font=dict(size=13, color=ink))
+    # N is out of the page (tension +): the standard dot-in-circle symbol.
+    fig.add_shape(type="circle", x0=-0.16, y0=-0.16, x1=0.16, y1=0.16,
+                  line=dict(color=viz.BAR_TENSION, width=2))
+    fig.add_trace(go.Scatter(x=[0.0], y=[0.0], mode="markers",
+                             marker=dict(size=6, color=viz.BAR_TENSION),
+                             hoverinfo="skip"))
+    # Lower-right of the centroid, clear of the (lower-left) neutral-axis line.
+    fig.add_annotation(x=0.22, y=-0.32, text="N (+ tension, out of page)",
+                       showarrow=False, xanchor="left", font=dict(size=11, color=ink))
+    # Moments as curved arrows about their axes (right-hand rule, positive sense):
+    # Mx about x on the right, My about y on the top.
+    _curved_arrow(fig, 2.15, 0.0, 0.55, math.radians(55), math.radians(-55),
+                  viz.LOAD_POINT)
+    fig.add_annotation(x=2.7, y=0.0, text="M<sub>x</sub>", showarrow=False,
+                       xanchor="left", font=dict(size=13, color=viz.LOAD_POINT))
+    _curved_arrow(fig, 0.0, 2.25, 0.55, math.radians(35), math.radians(145),
+                  viz.LOAD_POINT)
+    fig.add_annotation(x=0.0, y=2.85, text="M<sub>y</sub>", showarrow=False,
+                       yanchor="bottom", font=dict(size=13, color=viz.LOAD_POINT))
+    # The sweep angle V: a neutral axis at angle V from the +y axis, with an arc.
+    vdeg = 35.0
+    vr = math.radians(90.0 - vdeg)   # measured from +x for the geometry
+    fig.add_shape(type="line", x0=-1.7 * math.cos(vr), y0=-1.7 * math.sin(vr),
+                  x1=1.7 * math.cos(vr), y1=1.7 * math.sin(vr),
+                  line=dict(color=viz.NA_LINE, width=1.5, dash="dash"))
+    ts = [math.radians(90.0) - math.radians(90.0 - vr * 180.0 / math.pi) * i / 20.0
+          for i in range(21)]
+    fig.add_trace(go.Scatter(
+        x=[0.9 * math.cos(t) for t in ts], y=[0.9 * math.sin(t) for t in ts],
+        mode="lines", line=dict(color=viz.NA_LINE, width=1.2), hoverinfo="skip"))
+    fig.add_annotation(x=0.62, y=1.15, text="V", showarrow=False,
+                       font=dict(size=12, color=viz.NA_LINE))
+    fig.add_annotation(x=1.55 * math.cos(vr), y=1.55 * math.sin(vr),
+                       text="neutral axis (angle V from +y)", showarrow=False,
+                       xanchor="left", xshift=6, font=dict(size=10, color=viz.NA_LINE))
     return fig
 
 

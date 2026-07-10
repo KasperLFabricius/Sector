@@ -817,8 +817,25 @@ def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
         fig.add_trace(go.Scatter(x=[xv, xv], y=[0, z], mode="lines",
                                  line=dict(color=LINK_LINE, width=1.5),
                                  name=tie_name, showlegend=(k == 0)))
-    fig.add_annotation(x=L, y=z / 2.0, text=f"z = {z:.0f} mm", showarrow=False,
-                       xanchor="left", font=dict(size=11))
+    # Angle arc at the strut base (between the tension chord and the strut) so the
+    # strut angle theta reads directly off the figure.
+    ar = 0.34 * z
+    t_arc = [th * i / 24.0 for i in range(25)]
+    fig.add_trace(go.Scatter(x=[ar * math.cos(t) for t in t_arc],
+                             y=[ar * math.sin(t) for t in t_arc], mode="lines",
+                             line=dict(color=SCHEMATIC_INK, width=1.2),
+                             hoverinfo="skip", showlegend=False))
+    fig.add_annotation(x=ar * 1.3 * math.cos(th / 2.0), y=ar * 1.3 * math.sin(th / 2.0),
+                       text=chr(0x3B8), showarrow=False,
+                       font=dict(size=13, color=SCHEMATIC_INK))
+    # z as a dimension arrow (double-headed) just right of the panel, not floating text.
+    zx = L * 1.06
+    for y_end, y_in in ((z, z * 0.82), (0.0, z * 0.18)):
+        fig.add_annotation(x=zx, y=y_end, ax=zx, ay=y_in, axref="x", ayref="y",
+                           showarrow=True, arrowhead=2, arrowsize=1.0, arrowwidth=1,
+                           arrowcolor=SCHEMATIC_INK, text="")
+    fig.add_annotation(x=zx, y=z / 2.0, text=f"z = {z:.0f} mm", showarrow=False,
+                       xanchor="left", xshift=7, font=dict(size=11, color=SCHEMATIC_INK))
     fig.update_layout(
         title=title, template=_TEMPLATE, height=320,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),

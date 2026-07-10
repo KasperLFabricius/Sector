@@ -289,3 +289,18 @@ def test_strain_plane_labels_use_leader_arrows_not_overlapping_shifts():
     texts = " ".join(a.text for a in anns)
     assert "compression face" in texts and "tension face" in texts
     assert "neutral axis" in texts
+
+
+def test_sign_convention_figure_has_real_elements():
+    # v0.61: the sign-convention schematic shows the axes, the out-of-page N symbol,
+    # curved moment arrows and the V-angle / neutral-axis (not text-only as before).
+    fig = manual.fig_sign_convention()
+    texts = [a.text for a in fig.layout.annotations]
+    joined = " ".join(t for t in texts if t)
+    assert "x" in texts and "y" in texts                       # axis labels
+    assert any("M<sub>x</sub>" in t for t in texts)             # moment arrows labelled
+    assert any("M<sub>y</sub>" in t for t in texts)
+    assert "tension, out of page" in joined                    # N symbol label
+    assert "neutral axis" in joined                            # V / NA
+    # curved arrows + arc are drawn as line traces (not just annotations)
+    assert sum(1 for tr in fig.data if getattr(tr, "mode", None) == "lines") >= 3
