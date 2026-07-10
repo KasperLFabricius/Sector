@@ -1698,6 +1698,27 @@ def test_results_views_render_after_calculate():
         assert not at.exception, v
 
 
+def test_applied_moments_default_to_zero():
+    # v0.55: no fabricated sample load -- a fresh session starts with zero applied
+    # moments (plastic + long-term elastic), so the first Calculate does not report
+    # a made-up utilisation.
+    at = _fresh()
+    at.run()
+    assert at.session_state["pl_Mx"] == 0.0
+    assert at.session_state["el_long_Mx"] == 0.0
+
+
+def test_combined_view_renamed_to_m_v_t_combined():
+    # v0.55: the combined view was renamed "M-V-T Interaction" -> "M-V-T Combined".
+    import sector_app
+    assert "M-V-T Combined" in sector_app.VIEWS
+    assert "M-V-T Interaction" not in sector_app.VIEWS
+    at = _fresh()
+    at.run()
+    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    assert not at.exception
+
+
 def test_section_view_is_geometry_only():
     # The Section view shows input geometry only -- no neutral axis, no stale
     # notice -- even after a calculation and an input change. Results (incl. the
