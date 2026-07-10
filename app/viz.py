@@ -784,6 +784,53 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
     return fig
 
 
+def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
+    """Component rectangles of a subdivided (compound) torsion section.
+
+    Each sub-tube is drawn at its true ``b x h`` (mm) with its wall centre-line, laid
+    out left to right (the web first), and labelled with its torsion share ``TEd,i`` /
+    capacity ``TRd,i`` and utilisation. A schematic of the decomposition (EN 1992-1-1
+    6.3.1(3)), not the assembled section.
+    """
+    fig = go.Figure()
+    subtubes = list(subtubes or [])
+    if not subtubes:
+        fig.update_layout(title=title, template=_TEMPLATE, height=340)
+        return fig
+    gap = 0.12 * max(max(s["b_mm"], s["h_mm"]) for s in subtubes)
+    x0 = 0.0
+    for i, s in enumerate(subtubes):
+        b, h, tef = s["b_mm"], s["h_mm"], s["tube"]["tef"]
+        role = "web" if i == 0 else f"part {i + 1}"
+        fig.add_trace(go.Scatter(
+            x=[x0, x0 + b, x0 + b, x0, x0], y=[-h / 2, -h / 2, h / 2, h / 2, -h / 2],
+            fill="toself", mode="lines", fillcolor=CONCRETE_FILL,
+            line=dict(color=CONCRETE_LINE, width=2), name=role, hoverinfo="skip",
+            showlegend=False))
+        if 0.0 < tef < min(b, h):            # wall centre-line, inset by tef/2
+            fig.add_trace(go.Scatter(
+                x=[x0 + tef / 2, x0 + b - tef / 2, x0 + b - tef / 2, x0 + tef / 2,
+                   x0 + tef / 2],
+                y=[-h / 2 + tef / 2, -h / 2 + tef / 2, h / 2 - tef / 2, h / 2 - tef / 2,
+                   -h / 2 + tef / 2],
+                mode="lines", line=dict(color=ENVELOPE, width=1.5, dash="dash"),
+                hoverinfo="skip", showlegend=False))
+        util_txt = "inf" if not math.isfinite(s["util"]) else f"{s['util'] * 100:.0f}%"
+        fig.add_annotation(
+            x=x0 + b / 2, y=-h / 2, yshift=-12, showarrow=False,
+            text=(f"<b>{role}</b><br>{b:.0f} x {h:.0f} mm<br>"
+                  f"TEd {s['t_ed']:.1f} / TRd {s['trd']:.1f} kNm<br>util {util_txt}"),
+            font=dict(size=11, color=SCHEMATIC_INK), align="center")
+        x0 += b + gap
+    fig.update_layout(
+        title=title, template=_TEMPLATE, height=380,
+        margin=dict(l=10, r=10, t=40, b=76),
+        xaxis=dict(title="", showticklabels=False, zeroline=False),
+        yaxis=dict(title="mm", scaleanchor="x", scaleratio=1, zeroline=False),
+        showlegend=False)
+    return fig
+
+
 def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
                  title="Variable-strut truss"):
     """Schematic of the variable-angle truss (EN 1992-1-1 6.2.3): the compression

@@ -159,6 +159,46 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
                 valid=Ak > 0.0, reason=None if Ak > 0.0 else "wall exceeds section")
 
 
+def rectangle_torsion_constant(b: float, h: float) -> float:
+    """St. Venant torsion constant of a solid rectangle (length unit ^4).
+
+    ``C = h*s^3 * (1/3 - 0.21*(s/h)*(1 - (s/h)^4/12))`` with ``s`` the short side and
+    ``h`` the long side (the Roark / Timoshenko series approximation): ``C -> h*s^3/3``
+    for a thin rectangle and ``0.141*a^4`` for a square. Used to split the applied torque
+    over the sub-sections of a compound section in proportion to their uncracked
+    torsional stiffness (EN 1992-1-1 6.3.1(4)); the shear modulus is common to every
+    part and cancels in the share.
+    """
+    if b <= 0.0 or h <= 0.0:
+        return 0.0
+    s, lo = (b, h) if b <= h else (h, b)            # short side, long side
+    r = s / lo
+    return lo * s ** 3 * (1.0 / 3.0 - 0.21 * r * (1.0 - r ** 4 / 12.0))
+
+
+def rectangle_ring(b: float, h: float):
+    """A CCW rectangle outline (metres) centred at the origin.
+
+    Position is irrelevant to the tube idealisation (``tef``, ``Ak``, ``uk`` depend only
+    on the shape), so a sub-rectangle is fed to :func:`tube_properties` centred at the
+    origin.
+    """
+    return [(-b / 2.0, -h / 2.0), (b / 2.0, -h / 2.0),
+            (b / 2.0, h / 2.0), (-b / 2.0, h / 2.0)]
+
+
+def distribute_by_stiffness(t_ed: float, constants):
+    """Split ``t_ed`` over sub-sections in proportion to torsional stiffness constants.
+
+    ``TEd_i = t_ed * C_i / sum(C)`` (EN 1992-1-1 6.3.1(4)). A non-positive constant takes
+    no share; if every constant is non-positive the whole torque is returned as zeros.
+    """
+    total = sum(c for c in constants if c > 0.0)
+    if total <= 0.0:
+        return [0.0 for _ in constants]
+    return [t_ed * (c / total) if c > 0.0 else 0.0 for c in constants]
+
+
 def trd_s(ak_m2: float, fywd: float, asw_over_s: float, cot: float) -> float:
     """Torsion resistance governed by the closed stirrups (kN.m).
 
