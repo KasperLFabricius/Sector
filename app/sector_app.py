@@ -1310,7 +1310,7 @@ _SHEAR_SIG_KEYS = (
     "shear_dlower",
     "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_cot_min", "shear_cot_max",
-    "torsion_on", "torsion_method", "torsion_T", "torsion_tef",
+    "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
     "torsion_cot_min", "torsion_cot_max",
     "combined_on", "combined_method", "combined_mv_independent",
 )
@@ -1548,6 +1548,13 @@ def build_inputs():
         "torsion_tef", disabled=not _tors,
         help="Effective wall thickness of the tube. 0 derives it as A/u (capped at "
              "the real wall for a hollow section); enter a value to override.")
+    torsion_nu_v = _seeded_checkbox(
+        sts, r"$\nu_t = \nu_v$ (closed stirrups + distributed long. steel)", False,
+        "torsion_nu_v", disabled=not _tors,
+        help="DK NA Figur 5.100 NA: when every tube wall has closed stirrups round "
+             "the periphery and uniformly distributed longitudinal steel on both "
+             "faces, the torsion strut factor may be raised from nu_t to the "
+             "pure-shear nu_v. Only affects the DK NA edition.")
     torsion_cot_min = _seeded_number(
         sts, r"Strut $\cot\theta$ min (torsion)", 0.5, 5.0, 1.0, 0.1,
         "torsion_cot_min", disabled=not _tors,
@@ -1940,6 +1947,7 @@ def build_inputs():
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_T=torsion_T, torsion_tef=torsion_tef,
+                torsion_nu_v=torsion_nu_v,
                 torsion_cot_min=torsion_cot_min, torsion_cot_max=torsion_cot_max,
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
@@ -2384,7 +2392,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                         if inp["shear_link_s"] > 0.0 else 0.0)
         tcot_min = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
         tcot_max = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
-        nu_t = tcode.torsion_nu(fck)
+        nu_detail = inp["torsion_nu_v"]   # DK NA Fig 5.100 NA: nu_t raised to nu_v
+        nu_t = tcode.torsion_nu(fck, closed_detailing=nu_detail)
         # Optimum torsion strut angle (same crossover form as shear): a = (Asw/s)*fywd,
         # b = nu_t*alpha_cw*fcd*tef (tef in mm).
         a_t = asw_over_s_t * fywd_t
@@ -2392,7 +2401,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         cot_t = (shear.optimum_cot_theta(a_t, b_t, tcot_min, tcot_max)
                  if a_t > 0.0 else max(tcot_min, 1.0))
         trds = torsion.trd_s(tube["Ak"], fywd_t, asw_over_s_t, cot_t)
-        trdmax = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"], alpha_cw, cot_t)
+        trdmax = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"], alpha_cw, cot_t,
+                                 closed_detailing=nu_detail)
         trd = min(trds, trdmax) if asw_over_s_t > 0.0 else trdmax
         governs_t = "stirrups (TRd,s)" if (asw_over_s_t > 0.0 and trds <= trdmax) \
             else "crushing (TRd,max)"
@@ -2407,7 +2417,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             theta_deg=math.degrees(math.atan(1.0 / cot_t)) if cot_t > 0 else 0.0,
             util=util_t, asl_req=asl_req, t_ed=t_ed, fcd=fcd, fywd=fywd_t,
             fyd_long=fyd_long, nu=nu_t, alpha_cw=alpha_cw, fctd=fctd,
-            sigma_cp=sigma_cp, n_prestress=n_prestress,
+            nu_v_detailing=nu_detail, sigma_cp=sigma_cp, n_prestress=n_prestress,
             asw_t=asw_t, asw_over_s=asw_over_s_t, dia=inp["shear_link_dia"],
             s=inp["shear_link_s"], cot_min=tcot_min, cot_max=tcot_max,
             method=inp["torsion_method"], governs=governs_t, valid=tube["valid"],
@@ -2451,7 +2461,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             else:
                 cot_c = min(max(1.0, lo_b), hi_b)
                 trdmax_c = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"],
-                                           alpha_cw, cot_c)
+                                           alpha_cw, cot_c, closed_detailing=nu_detail)
                 # VRd,max reuses the SHEAR method and the same lever arm z as the
                 # stand-alone shear check (not the torsion code / 0.9d), re-evaluated
                 # at the common angle cot_c.
@@ -2527,7 +2537,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     trd_s1 = torsion.trd_s(to["tube"]["Ak"], to["fywd"],
                                            to["asw_over_s"], 1.0)
                     trd_max1 = torsion.trd_max(fck, tcode, to["tube"]["Ak"],
-                                               to["tube"]["tef"], to["alpha_cw"], 1.0)
+                                               to["tube"]["tef"], to["alpha_cw"], 1.0,
+                                               closed_detailing=inp["torsion_nu_v"])
                     shear_credited = v_ed <= vrd_c
                     sf1 = 0.0 if shear_credited else combined.ratio(v_ed, vlk1["vrd_s"])
                     tf1 = combined.ratio(t_ed, trd_s1)
@@ -3272,6 +3283,10 @@ def torsion_view(inp, results):
         st.caption(f"{_ALPHA}cw uses {_SIGMA}cp = {t['sigma_cp']:.3f} MPa, which "
                    f"includes the tendon precompression {t['n_prestress']:.1f} kN "
                    "(from the prestress initial strain) as well as the ULS axial N.")
+    if t.get("nu_v_detailing"):
+        st.caption(f"{_NU} = {_NU}v (raised from {_NU}t) under DK NA Figur 5.100 NA: "
+                   "closed stirrups round the periphery + distributed longitudinal "
+                   "steel on both faces.")
     st.plotly_chart(viz.tube_figure(inp["outer"], inp.get("holes"), tube["tef"],
                                     ak_m2=tube["Ak"]), width="stretch")
 

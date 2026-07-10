@@ -1088,6 +1088,10 @@ class ReportBuilder:
                         f"{_fmt(t['sigma_cp'], 3)} MPa, which includes the tendon "
                         f"precompression {_fmt(t['n_prestress'], 3)} kN (from the "
                         "prestress initial strain) as well as the ULS axial N.")
+        if t.get("nu_v_detailing"):
+            self._small("nu = nu<sub>v</sub> (raised from nu<sub>t</sub>) under DK NA "
+                        "Figur 5.100 NA: closed stirrups round the periphery and "
+                        "distributed longitudinal steel on both faces.")
         self._h2("Resistances")
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "

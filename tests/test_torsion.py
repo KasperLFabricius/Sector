@@ -406,3 +406,36 @@ def test_app_torsion_is_saved_and_restored():
     assert not at2.exception
     assert at2.session_state["torsion_on"] is True
     assert at2.session_state["torsion_T"] == 55.0
+
+
+def test_torsion_nu_v_detailing_allowance():
+    # v0.64 / DK NA Figur 5.100 NA: with closed stirrups + distributed longitudinal
+    # steel the torsion strut factor may be raised from nu_t to nu_v (floored).
+    c = codes.EC2_2005_DKNA
+    assert c.torsion_nu(35.0, closed_detailing=True) == pytest.approx(c.shear_nu1(35.0))
+    assert c.torsion_nu(35.0, closed_detailing=True) > c.torsion_nu(35.0)   # raised
+    # the recommended edition has a single nu; the flag is a no-op there.
+    r = codes.EC2_2005
+    assert r.torsion_nu(35.0, closed_detailing=True) == pytest.approx(r.torsion_nu(35.0))
+
+
+def test_trd_max_respects_closed_detailing():
+    from sector import torsion
+    base = torsion.trd_max(35.0, codes.EC2_2005_DKNA, 0.1, 100.0, 1.0, 1.0)
+    raised = torsion.trd_max(35.0, codes.EC2_2005_DKNA, 0.1, 100.0, 1.0, 1.0,
+                             closed_detailing=True)
+    assert raised > base
+
+
+def test_app_torsion_nu_v_toggle_raises_trd_max():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(30.0).run()
+    at.button(key="calculate").click().run()
+    base = at.session_state["results"]["torsion"]["trd_max"]
+    at.checkbox(key="torsion_nu_v").set_value(True).run()
+    at.button(key="calculate").click().run()
+    t = at.session_state["results"]["torsion"]
+    assert t["nu_v_detailing"] is True
+    assert t["trd_max"] > base

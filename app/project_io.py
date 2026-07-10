@@ -60,7 +60,7 @@ SCALAR_KEYS = [
     "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_cot_min", "shear_cot_max",
     # Torsion (thin-walled tube, TRd). The stirrup is the shared shear_link_* one.
-    "torsion_on", "torsion_method", "torsion_T", "torsion_tef",
+    "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
     "torsion_cot_min", "torsion_cot_max",
     # Combined M-V-T interaction.
     "combined_on", "combined_method", "combined_mv_independent",
