@@ -2484,13 +2484,17 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                    asw_over_s=asw_over_s_t, cot_min=tcot_min, cot_max=tcot_max,
                    nu_detail=nu_detail, fctd=fctd, fyd_long=fyd_long)
         # A compound (T / L / I / flanged) section may be modelled as a set of component
-        # rectangles, each an equivalent thin-walled tube (EN 1992-1-1 6.3.1(3)): TRd is
-        # the sum of the sub-tube capacities and TEd is split by uncracked torsional
-        # stiffness (6.3.1(4)). The FIRST rectangle is the web -- the combined V+T checks
-        # pair the shear with it (`primary`). Without subdivision the single tube from
-        # the outline is used and is itself the primary tube.
+        # rectangles, each an equivalent thin-walled tube (EN 1992-1-1 6.3.1(3)): TEd is
+        # split by uncracked torsional stiffness (6.3.1(4)) and every sub-tube is checked
+        # against its OWN capacity. Because the split is by stiffness, not capacity, a
+        # sub-tube can be overstressed (util_i > 1) even while TEd <= sum(TRd_i), so the
+        # GOVERNING utilisation is the worst sub-tube (max util_i), not TEd/sum(TRd_i) --
+        # sum(TRd_i) is only the theoretical total if the torque could redistribute to
+        # match capacity. The FIRST rectangle is the web -- the combined V+T checks pair
+        # the shear with it (`primary`). Without subdivision the single tube is used.
         subrects = inp.get("torsion_subrects") or []
         subdivide = bool(inp.get("torsion_subdivide") and subrects)
+        governing_sub = None
         if subdivide:
             subtubes, consts = [], []
             for (b_mm, h_mm) in subrects:
@@ -2508,12 +2512,15 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             asl_req = sum(r["asl_req"] for r in sub_res)
             primary = sub_res[0]
             tube_main = primary["tube"]
+            # Governing = the WORST sub-tube (each carries its stiffness-share of TEd).
+            governing_sub = max(range(len(sub_res)), key=lambda i: sub_res[i]["util"])
+            util_t = sub_res[governing_sub]["util"]
         else:
             sub_res = None
             primary = _tube_torsion(tube, t_ed, **_tk)
             trd, asl_req, tube_main, valid = (primary["trd"], primary["asl_req"],
                                               tube, tube["valid"])
-        util_t = (t_ed / trd) if trd > 0.0 else math.inf
+            util_t = (t_ed / trd) if trd > 0.0 else math.inf
         lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
         out["torsion"] = dict(
             tube=tube_main, trd_s=primary["trd_s"], trd_max=primary["trd_max"],
@@ -2527,7 +2534,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             valid=valid, reason=tube_main.get("reason"), cot_limit_lo=lo_t,
             cot_limit_hi=hi_t,
             out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9),
-            subdivided=subdivide, subtubes=sub_res, primary=primary)
+            subdivided=subdivide, subtubes=sub_res, primary=primary,
+            governing_sub=governing_sub)
         # Minimum-reinforcement screen (EN 1992-1-1 6.3.2(5), Eq 6.31): for an
         # approximately solid rectangular section, no DESIGNED shear+torsion
         # reinforcement (only the minimum) is needed if TEd/TRd,c + VEd/VRd,c <= 1.
@@ -3418,8 +3426,9 @@ def torsion_view(inp, results):
         m1, m2, m3 = st.columns(3)
         m1.metric("Applied TEd", f"{t['t_ed']:.3f} kNm")
         m2.metric(chr(0x03A3) + " TRd,i", f"{t['trd']:.3f} kNm",
-                  help="sum of the sub-tube capacities (6.3.1(3))")
-        m3.metric("Utilisation TEd/" + chr(0x03A3) + "TRd", util_txt,
+                  help="theoretical sum of the sub-tube capacities (6.3.1(3)); the "
+                       "pass/fail check is the governing sub-tube, not this sum")
+        m3.metric("Governing util (max TEd_i/TRd_i)", util_txt,
                   delta=("OK" if ok else "Over limit"),
                   delta_color=("normal" if ok else "inverse"))
     else:
@@ -3452,10 +3461,14 @@ def torsion_view(inp, results):
                             else f"{s['util'] * 100:.1f} %") for s in subs],
              "Governs": [s["governs"] for s in subs]},
             hide_index=True, width="stretch")
-        st.caption(f"Total required longitudinal steel {chr(0x03A3)}Asl = "
+        g = t.get("governing_sub")
+        gov_lbl = (("web" if g == 0 else f"part {g + 1}") if g is not None else "-")
+        st.caption(f"Governing sub-tube: {gov_lbl} (worst TEd_i/TRd_i = {util_txt}). "
+                   "Because TEd is split by stiffness, not capacity, the section passes "
+                   "only when EVERY sub-tube passes (max util), not when TEd <= "
+                   f"{chr(0x03A3)}TRd,i. Total longitudinal steel {chr(0x03A3)}Asl = "
                    f"{t['asl_req']:.0f} mm2 (sum over the sub-tubes), in ADDITION to the "
-                   f"bending steel. The section passes when TEd <= {chr(0x03A3)}TRd,i "
-                   "and every sub-tube's own crushing holds.")
+                   "bending steel.")
         st.plotly_chart(viz.subtube_figure(subs), width="stretch")
     else:
         st.caption(f"{t['theta_deg']:.1f} deg strut (cot {_THETA} = {t['cot']:.3f}, "

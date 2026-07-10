@@ -280,7 +280,12 @@ def test_app_torsion_subdivided_sums_capacities():
     assert t["subdivided"] and len(t["subtubes"]) == 2
     assert t["trd"] == pytest.approx(sum(s["trd"] for s in t["subtubes"]))
     assert sum(s["t_ed"] for s in t["subtubes"]) == pytest.approx(40.0)   # TEd conserved
-    assert t["util"] == pytest.approx(40.0 / t["trd"])
+    # P1: TEd is split by stiffness not capacity, so the governing utilisation is the
+    # WORST sub-tube (max TEd_i/TRd_i), never the pooled TEd/sum(TRd_i).
+    assert t["util"] == pytest.approx(max(s["util"] for s in t["subtubes"]))
+    assert t["util"] >= 40.0 / t["trd"] - 1e-9
+    assert t["governing_sub"] == max(range(len(t["subtubes"])),
+                                     key=lambda i: t["subtubes"][i]["util"])
     assert t["primary"]["t_ed"] == t["subtubes"][0]["t_ed"]              # web is primary
 
 

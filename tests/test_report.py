@@ -410,21 +410,25 @@ def _subtube(b, h, tef, ak, c, ted, trd, util, gov):
 
 def test_report_torsion_subdivided():
     out = _out()
-    t = _torsion_out()
+    t = _torsion_out(interaction=True)               # subdivided run with shear links
+    subs = [_subtube(300, 600, 100.0, 0.10, 0.0037, 24.6, 90.0, 24.6 / 90.0,
+                     "stirrups (TRd,s)"),
+            _subtube(1000, 200, 91.0, 0.15, 0.0023, 15.4, 20.0, 15.4 / 20.0,
+                     "crushing (TRd,max)")]
     t["subdivided"] = True
-    t["subtubes"] = [
-        _subtube(300, 600, 100.0, 0.10, 0.0037, 24.6, 90.0, 24.6 / 90.0,
-                 "stirrups (TRd,s)"),
-        _subtube(1000, 200, 91.0, 0.15, 0.0023, 15.4, 58.5, 15.4 / 58.5,
-                 "crushing (TRd,max)")]
-    t["trd"] = 148.5
-    t["util"] = 40.0 / 148.5
+    t["subtubes"] = subs
+    t["trd"] = 110.0
+    # P1: governing = the worst sub-tube (part 2 here), not the pooled TEd/sum(TRd).
+    t["util"] = max(s["util"] for s in subs)
+    t["governing_sub"] = 1
     t["asl_req"] = 1400.0
     out["torsion"] = t
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Sub-tubes" in txt                        # the compound-section heading
     assert "6.3.1(3)" in txt                         # the sub-division clause
     assert "web" in txt
+    assert "governing" in txt                        # P1: governing (max) utilisation
+    assert "6.29" in txt                             # P2: crushing printed in sub-report
 
 
 def test_report_torsion_shows_combined_interaction():
