@@ -1730,6 +1730,17 @@ def build_inputs():
     mat.divider()
     prestress = prestress_panel(mat, locked=lock_mats)
 
+    # Auto-calc all derived material values lives here (with the values it computes),
+    # not next to Calculate -- which it was being mistaken for. It sets a one-shot
+    # flag that concrete_panel applies on the rerun (before this button re-renders).
+    mat.divider()
+    if mat.button("Auto-calc all derived values", key="auto_all_btn", width="stretch",
+                  help="Recompute all auto values from the current grade: the concrete "
+                       "strain limits eps_c2/eps_cu2/n, fctm and Ec. The modular ratios "
+                       "n_l/n_s follow from Ec, Es, Ep and creep automatically."):
+        st.session_state["_auto_all"] = True
+        st.rerun()
+
     # Loads: the plastic and elastic analyses take their own load sets, so a
     # capacity check (e.g. ULS) and a stress check (e.g. SLS) use different
     # actions without overwriting each other. The plastic axial force fixes the
@@ -3482,22 +3493,17 @@ inp["label_min_gap"] = _seeded_number(
          "hidden to avoid overlap. Lower shows more (0 shows every label); "
          "raise it for dense outlines like a circular section.")
 
+# A pending post-Calculate view switch is applied BEFORE the selectbox renders, so
+# the widget picks it up cleanly (setting a widget key after it renders is unsafe).
+if "_switch_view" in st.session_state:
+    st.session_state["view"] = st.session_state.pop("_switch_view")
 c_view, c_calc = st.columns([3, 1])
 view = c_view.selectbox("View", VIEWS, key="view",
                         help="What to show in the main area. Section and "
                              "Stress-Strain diagrams update live; the result "
                              "views need a Calculate.")
-# Nudge the buttons down so they line up with the selectbox input.
+# Nudge the button down so it lines up with the selectbox input.
 c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
-# Auto-calc sits directly above Calculate. It runs before build_inputs on the next
-# run, so it sets the one-shot flag and reruns immediately (build_inputs is already
-# rendered this run, so applying it here would be too late).
-if c_calc.button("Auto-calc all derived values", key="auto_all_btn", width="stretch",
-                 help="Recompute all auto values from the current grade: the concrete "
-                      "strain limits eps_c2/eps_cu2/n, fctm and Ec. The modular ratios "
-                      "n_l/n_s follow from Ec, Es, Ep and creep automatically."):
-    st.session_state["_auto_all"] = True
-    st.rerun()
 calc = c_calc.button("Calculate", type="primary", key="calculate",
                      width="stretch",
                      help="Run the selected analysis for the current inputs.")
@@ -3523,11 +3529,27 @@ if calc:
     # rotation, e.g. 90 deg, after the load -- and its governing angle -- changed).
     # The user can still pick another rotation until the next Calculate.
     st.session_state.pop("pl_state", None)
+    # If the user calculated while on a live input view, take them to the natural
+    # result view so they see the outcome (queue it; applied before the selectbox).
+    if view in ("Section", "Stress-Strain diagrams"):
+        st.session_state["_switch_view"] = ("Plastic Results"
+                                            if inp["mode"] in ("Plastic", "Both")
+                                            else "Elastic Results")
+        st.rerun()
 
 _generate_report(inp)   # builds the PDF when the Report panel's Generate was pressed
 
 results = st.session_state.get("results")
 stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
+# Result freshness, shown under the Calculate button on EVERY view (not just the
+# result views) so the user always knows whether the results reflect the inputs.
+if results is None:
+    c_calc.caption("Not calculated yet")
+elif stale:
+    c_calc.caption(":orange[Inputs changed -- recalculate]")
+else:
+    c_calc.caption(":green[Results up to date]")
+# On a result view, keep the prominent in-view banner as well.
 if stale and view in _RESULT_VIEWS:
     st.warning("Inputs changed since the last calculation - press Calculate to update.")
 

@@ -1720,6 +1720,36 @@ def test_sidebar_panels_follow_the_workflow_order():
                       "Report", "Save / Load", "About"]
 
 
+def test_calculate_from_a_live_view_switches_to_the_result_view():
+    # v0.60: calculating while on Section / Stress-Strain takes the user to the
+    # natural result view so they see the outcome.
+    at = _fresh()
+    at.run()
+    assert at.session_state["view"] == "Section"
+    at.button(key="calculate").click().run()
+    assert at.session_state["view"] == "Plastic Results"
+
+
+def test_calculate_from_a_result_view_stays_put():
+    at = _fresh()
+    at.run()
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    at.button(key="calculate").click().run()
+    assert at.session_state["view"] == "Plastic Results"
+
+
+def test_staleness_badge_reflects_result_state():
+    # v0.60: a freshness badge under Calculate is shown on every view.
+    at = _fresh()
+    at.run()
+    caps = lambda: [c.value for c in at.caption]
+    assert any("Not calculated yet" in c for c in caps())
+    at.button(key="calculate").click().run()
+    assert any("Results up to date" in c for c in caps())
+    at.number_input(key="pl_Mx").set_value(55.0).run()
+    assert any("recalculate" in c for c in caps())
+
+
 def test_combined_preflight_warns_when_prerequisites_missing():
     # v0.59: enabling the combined check while its prerequisites are off warns inline
     # (under its toggle) instead of only after Calculate.
