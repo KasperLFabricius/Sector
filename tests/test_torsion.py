@@ -110,12 +110,16 @@ def test_torsion_nu_edition_dependent():
     assert codes.EC2_2005_DKNA.torsion_nu(35.0) == pytest.approx(0.7 * (0.7 - 35.0 / 200.0))
 
 
-def test_torsion_nu_applies_the_dk_nu_v_floor_above_c50():
-    # Codex P2: nu_t = 0.7 * nu_v with nu_v floored at 0.45, so above C50 the floor
-    # carries through (0.7*0.45 = 0.315), not the un-floored 0.7*(0.7 - fck/200).
+def test_torsion_nu_has_no_floor_above_c50():
+    # DK NA:2024 5.104 NA: nu_t = 0.7*(0.7 - fck/200) with NO lower bound -- the
+    # 0.45 floor of 5.103 NA belongs to nu_v ONLY. Above C50 nu_t keeps falling
+    # (C60: 0.28); carrying the nu_v floor into nu_t (0.7*0.45 = 0.315) would be
+    # unconservative. (User-verified against the DK NA text, p. 33-34.)
     assert codes.EC2_2005_DKNA.shear_nu1(60.0) == pytest.approx(0.45)   # nu_v floored
-    assert codes.EC2_2005_DKNA.torsion_nu(60.0) == pytest.approx(0.7 * 0.45)
-    assert codes.EC2_2005_DKNA.torsion_nu(60.0) > 0.7 * (0.7 - 60.0 / 200.0)
+    assert codes.EC2_2005_DKNA.torsion_nu(60.0) == pytest.approx(0.28)  # unfloored
+    assert codes.EC2_2005_DKNA.torsion_nu(60.0) < 0.7 * 0.45
+    # Very high fck cannot drive nu_t negative.
+    assert codes.EC2_2005_DKNA.torsion_nu(150.0) == 0.0
 
 
 def test_trd_s_and_trd_max_meet_at_the_optimum():

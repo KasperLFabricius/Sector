@@ -937,7 +937,9 @@ def manual_blocks() -> list:
     call("standard", "The strut factor $\\nu$ is the code torsion effectiveness "
          "factor: recommended $\\nu = 0.6(1 - f_{ck}/250)$ (via 6.2.2(6)), or the "
          "DK NA:2024 pure-torsion $\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA) -- "
-         "a further 0.7 on $\\nu_v$ for the circulatory shear flow. Only solid and "
+         "a further 0.7 on the pure-shear expression for the circulatory shear "
+         "flow. Note $\\nu_t$ has NO lower bound: the 0.45 floor of 5.103 NA "
+         "belongs to $\\nu_v$ only, so above C50 $\\nu_t$ keeps falling. Only solid and "
          "single-cell (box) sections are idealised automatically; a multi-cell "
          "section (two or more voids) is rejected (6.3.2(1) needs sub-division), and "
          "a curved outline should have $t_{ef}$ entered by hand.")
