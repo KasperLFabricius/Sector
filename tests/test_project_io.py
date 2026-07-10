@@ -30,14 +30,26 @@ def test_migrate_legacy_torsion_only_stirrup():
     assert "torsion_stirrup_dia" not in scalars   # obsolete key dropped
 
 
-def test_migrate_keeps_shear_stirrup_when_both_present():
-    # With shear links too, the shear stirrup is the shared one (two cannot survive).
+def test_migrate_keeps_shear_stirrup_when_both_active():
+    # With shear links truly active (shear_on and shear_links), the shear stirrup is
+    # the shared one (two independent stirrups cannot both survive).
     import json
     proj = {"format": "sector-project", "version": 2, "tables": {},
-            "scalars": {"torsion_on": True, "shear_links": True,
+            "scalars": {"torsion_on": True, "shear_on": True, "shear_links": True,
                         "torsion_stirrup_dia": 12.0, "shear_link_dia": 10.0}}
     _, scalars = project_io.parse_project(json.dumps(proj))
     assert scalars["shear_link_dia"] == 10.0
+
+
+def test_migrate_when_shear_links_flag_is_stale():
+    # shear_links can be left true after shear_on was turned off; the shear check is
+    # then inactive, so a torsion-only project's stirrup still migrates.
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": True, "shear_on": False, "shear_links": True,
+                        "torsion_stirrup_dia": 12.0, "shear_link_dia": 10.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 12.0   # torsion stirrup migrated
 
 
 def _tables():

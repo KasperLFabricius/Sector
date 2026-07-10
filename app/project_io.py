@@ -187,12 +187,14 @@ def parse_project(text: str):
         scalars.setdefault("qsv_bot_c_mm", float(old_cover))
         scalars.setdefault("qsv_top_c_mm", float(old_cover))
     # v0.48 merged the separate torsion stirrup (torsion_stirrup_dia/_s, torsion_fywk)
-    # into the shared shear_link_* stirrup. A torsion-only legacy project (torsion on,
-    # no shear links) carried its real stirrup in the torsion keys while shear_link_*
-    # held only unused defaults, so fold the torsion values into the shared keys. When
-    # the project also had shear links the shear stirrup is kept as the shared one
-    # (two independent stirrups cannot both survive the merge).
-    if raw_scalars.get("torsion_on") and not raw_scalars.get("shear_links"):
+    # into the shared shear_link_* stirrup. A torsion-only legacy project carried its
+    # real stirrup in the torsion keys while shear_link_* held only unused defaults, so
+    # fold the torsion values into the shared keys. Shear links count as active only
+    # when both shear_on and shear_links are set -- shear_links can be left true from
+    # an earlier session after shear_on was turned off. When shear links are truly
+    # active the shear stirrup is kept (two independent stirrups cannot both survive).
+    _shear_active = bool(raw_scalars.get("shear_on") and raw_scalars.get("shear_links"))
+    if raw_scalars.get("torsion_on") and not _shear_active:
         for old, new in (("torsion_stirrup_dia", "shear_link_dia"),
                          ("torsion_stirrup_s", "shear_link_s"),
                          ("torsion_fywk", "shear_fywk")):
