@@ -187,17 +187,25 @@ def parse_project(text: str):
         scalars.setdefault("qsv_bot_c_mm", float(old_cover))
         scalars.setdefault("qsv_top_c_mm", float(old_cover))
     # v0.48 merged the separate torsion stirrup (torsion_stirrup_dia/_s, torsion_fywk)
-    # into the shared shear_link_* stirrup. A torsion-only legacy project carried its
-    # real stirrup in the torsion keys while shear_link_* held only unused defaults, so
-    # fold the torsion values into the shared keys. Shear links count as active only
-    # when both shear_on and shear_links are set -- shear_links can be left true from
-    # an earlier session after shear_on was turned off. When shear links are truly
-    # active the shear stirrup is kept (two independent stirrups cannot both survive).
+    # into the shared shear_link_* stirrup. Fold a deliberately-configured legacy
+    # torsion stirrup into the shared keys, so a project that used torsion keeps its
+    # stirrup. Conditions:
+    #   * shear links are not active -- both shear_on and shear_links set means the
+    #     shear stirrup is the real one and is kept (two stirrups cannot both survive);
+    #     shear_links alone can be stale after shear_on was turned off;
+    #   * the torsion stirrup was actually customised (differs from the app defaults)
+    #     -- so a dormant default torsion stirrup never overwrites a custom shear one,
+    #     and the migration also fires when the torsion check was toggled off before
+    #     saving (its custom stirrup would otherwise be lost on re-enable).
     _shear_active = bool(raw_scalars.get("shear_on") and raw_scalars.get("shear_links"))
-    if raw_scalars.get("torsion_on") and not _shear_active:
-        for old, new in (("torsion_stirrup_dia", "shear_link_dia"),
-                         ("torsion_stirrup_s", "shear_link_s"),
-                         ("torsion_fywk", "shear_fywk")):
+    _legacy_stirrup = (("torsion_stirrup_dia", "shear_link_dia", 10.0),
+                       ("torsion_stirrup_s", "shear_link_s", 150.0),
+                       ("torsion_fywk", "shear_fywk", 500.0))
+    _customised = any(isinstance(raw_scalars.get(old), (int, float))
+                      and raw_scalars[old] != dflt
+                      for old, _new, dflt in _legacy_stirrup)
+    if _customised and not _shear_active:
+        for old, new, _dflt in _legacy_stirrup:
             val = raw_scalars.get(old)
             if isinstance(val, (int, float)):
                 scalars[new] = float(val)

@@ -52,6 +52,28 @@ def test_migrate_when_shear_links_flag_is_stale():
     assert scalars["shear_link_dia"] == 12.0   # torsion stirrup migrated
 
 
+def test_migrate_custom_torsion_stirrup_toggled_off_before_save():
+    # A custom torsion stirrup saved with the torsion check off is still preserved
+    # (it would otherwise be lost when the user re-enables torsion after load).
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": False, "shear_on": False, "shear_links": False,
+                        "torsion_stirrup_dia": 14.0, "shear_link_dia": 10.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 14.0
+
+
+def test_migrate_default_torsion_stirrup_does_not_clobber_shear():
+    # A dormant (default) torsion stirrup must not overwrite a custom shear stirrup
+    # when shear happens to be off at save time.
+    import json
+    proj = {"format": "sector-project", "version": 2, "tables": {},
+            "scalars": {"torsion_on": False, "shear_on": False, "shear_links": False,
+                        "torsion_stirrup_dia": 10.0, "shear_link_dia": 16.0}}
+    _, scalars = project_io.parse_project(json.dumps(proj))
+    assert scalars["shear_link_dia"] == 16.0   # custom shear kept (torsion is default)
+
+
 def _tables():
     return {
         "corners_base": pd.DataFrame({"x (mm)": [-100.0, 100.0, 100.0, -100.0],
