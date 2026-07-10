@@ -49,14 +49,17 @@ def combined_strut_theta(s_stirrup: float, c_crush: float, cot_min: float,
     ``[cot_min, cot_max]``. ``s_stirrup`` is ``U_stirrup`` at ``cot = 1`` and
     ``c_crush`` is ``U_crush(cot=1)/2``.
     """
-    lo = max(cot_min, 1.0)
-    hi = max(cot_max, lo)
+    hi = max(cot_max, cot_min)          # guard a reversed band
     if s_stirrup <= 0.0:
-        return lo                       # no stirrup demand: crushing is least at 45 deg
-    if c_crush <= 0.0:
-        return hi                       # no crushing demand: the flattest strut
-    cot_star = math.sqrt(max(s_stirrup / c_crush - 1.0, 0.0))
-    return min(max(cot_star, lo), hi)
+        cot_opt = 1.0                   # no stirrup demand: crushing is least at 45 deg
+    elif c_crush <= 0.0:
+        cot_opt = hi                    # no crushing demand: the flattest strut
+    else:
+        # The unconstrained optimum is the crossover, but never below cot = 1 (both
+        # utilisations worsen there). It is then clamped to the user band -- which the
+        # UI may set wholly below 1 (a warned override), so do not force the band up.
+        cot_opt = max(math.sqrt(max(s_stirrup / c_crush - 1.0, 0.0)), 1.0)
+    return min(max(cot_opt, cot_min), hi)
 
 
 def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> float:

@@ -41,6 +41,9 @@ def test_combined_strut_theta():
     assert combined.combined_strut_theta(1.0, 5.0, 1.0, 2.5) == 1.0    # floor at 1
     assert combined.combined_strut_theta(0.0, 1.0, 1.0, 2.5) == 1.0    # no stirrups
     assert combined.combined_strut_theta(5.0, 0.0, 1.0, 2.5) == 2.5    # no crushing
+    # A user band wholly below 1 (a warned override) is respected, not forced up to 1.
+    assert combined.combined_strut_theta(50.0, 1.0, 0.5, 0.8) == pytest.approx(0.8)
+    assert combined.combined_strut_theta(0.0, 1.0, 0.5, 0.8) == pytest.approx(0.8)
 
 
 # -- app integration (AppTest) ----------------------------------------------
