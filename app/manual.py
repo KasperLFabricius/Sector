@@ -254,7 +254,7 @@ def fig_sign_convention():
                        font=dict(size=12, color=viz.NA_LINE))
     fig.add_annotation(x=1.55 * math.cos(vr), y=1.55 * math.sin(vr),
                        text="neutral axis (angle V from +y)", showarrow=False,
-                       xanchor="left", xshift=6, font=dict(size=10, color=viz.NA_LINE))
+                       xanchor="left", xshift=6, font=dict(size=11, color=viz.NA_LINE))
     return fig
 
 

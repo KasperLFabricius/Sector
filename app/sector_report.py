@@ -192,12 +192,29 @@ def _styles():
     return out
 
 
-def _fig_png(fig, w_px, h_px):
-    """Export a Plotly figure to PNG bytes, or ``None`` if export is unavailable."""
-    try:
-        return fig.to_image(format="png", width=w_px, height=h_px, scale=2)
-    except Exception:
-        return None
+_FIG_EXPORT_TIMEOUT_S = 20.0
+
+
+def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
+    """Export a Plotly figure to PNG bytes, or ``None`` if export is unavailable.
+
+    kaleido's headless-browser export can block indefinitely when the browser is
+    in a bad state, so it runs off the main thread with a join timeout -- the
+    report then still completes (with a placeholder for that figure) instead of
+    hanging the app, matching the manual's export guard.
+    """
+    box = {}
+
+    def _work():
+        try:
+            box["v"] = fig.to_image(format="png", width=w_px, height=h_px, scale=2)
+        except Exception:
+            box["v"] = None
+
+    worker = threading.Thread(target=_work, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return None if worker.is_alive() else box.get("v")
 
 
 def _fmt(v, nd=3):
