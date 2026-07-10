@@ -443,6 +443,19 @@ def test_report_includes_combined_section():
     assert "EXCEEDED" in txt                        # sum 1.3 > 1
 
 
+def test_report_combined_longitudinal_check():
+    out = _out()
+    c = _combined_out()
+    c["longitudinal"] = dict(valid=True, axis="x", z=0.54, m_ed=100.0, m_rd=400.0,
+                             ftd_v=200.0, ftd_t=120.0, mv=108.0, mt=32.4,
+                             m_total=240.4, util=240.4 / 400.0, ok=True, capped=False)
+    out["combined"] = c
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Longitudinal reinforcement" in txt
+    assert "6.2.3(7)" in txt                        # the shear-shift cap clause
+    assert "tension chord" in txt
+
+
 def test_report_combined_independent_uses_max_form():
     out = _out()
     out["combined"] = _combined_out(mv_independent=True)

@@ -2505,6 +2505,32 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 asl_torsion=to["asl_req"],
                 delta_ftd=(sl["delta_ftd"] if sl is not None else 0.0),
                 links=sl is not None)
+            # Longitudinal-steel combined check (the appendix's mode 1). The tension
+            # chord about the shear axis carries the bending tension PLUS the shear
+            # shift delta_Ftd = 0.5*VEd*cot (6.18) and the torsion longitudinal force
+            # Ftd,T = TEd*uk*cot/(2*Ak) (distributed round the perimeter, so half acts
+            # on the tension chord); each is turned into an equivalent moment on the
+            # lever arm z and checked against the uniaxial capacity MRd about that axis.
+            # Assumptions (uniaxial along the shear axis; a section tool, not a beam):
+            #  - MRd is the pure-bending capacity about the shear axis at the applied N.
+            #  - the shear shift is capped so bending+shear does not exceed MRd (6.2.3(7)
+            #    caps delta_Ftd at the peak-moment tension; a section lacks the beam's
+            #    peak, so MRd is used -- conservative).
+            if sl is not None and sl["res"]["valid"]:
+                z_m = sl["res"]["z"] / 1000.0
+                l_axis = sh["axis"]
+                m_signed = inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
+                m_ed_l = abs(m_signed)
+                if m_signed >= 0.0:
+                    m_rd_l = pl["max_mx"] if l_axis == "x" else pl["max_my"]
+                else:
+                    m_rd_l = abs(pl.get("min_mx" if l_axis == "x" else "min_my",
+                                        pl["max_mx"] if l_axis == "x" else pl["max_my"]))
+                ftd_v = sl["delta_ftd"]                            # kN, 0.5*VEd*cot
+                ftd_t = to["asl_req"] * to["fyd_long"] / 1000.0   # mm2*MPa=N -> kN
+                lchk = combined.longitudinal_check(m_ed_l, m_rd_l, ftd_v, ftd_t, z_m)
+                lchk.update(valid=True, axis=l_axis)
+                out["combined"]["longitudinal"] = lchk
             # Shared-stirrup transverse check: the one closed stirrup carries shear
             # AND torsion, so their demands add. When VEd <= VRd,c the concrete alone
             # carries the shear (EN 1992-1-1 6.2.1) and the stirrup serves torsion
@@ -3457,11 +3483,42 @@ def combined_view(inp, results):
                    "demand but raises the crushing; both are checked at this one angle.")
 
     st.divider()
-    st.markdown("**Longitudinal reinforcement demand (additional)**")
-    st.caption(f"Torsion needs {chr(0x03A3)}Asl = {c['asl_torsion']:.0f} mm2 "
-               "distributed round the tube perimeter (6.28); the shear adds "
-               f"{_DELTA}Ftd = {c['delta_ftd']:.1f} kN on the tension chord (6.18). "
-               "Both are in ADDITION to the bending reinforcement.")
+    st.markdown("**Longitudinal reinforcement: combined M + V + T tension chord**")
+    lg = c.get("longitudinal")
+    if lg is not None and lg["valid"]:
+        ax_lbl = lg["axis"]
+        ok_l = lg["ok"]
+        g1, g2, g3 = st.columns(3)
+        g1.metric(f"MEd (about {ax_lbl})", f"{lg['m_ed']:.1f} kNm")
+        g2.metric("MEd,total", f"{lg['m_total']:.1f} kNm",
+                  help="bending + shear shift + torsion, as an equivalent moment "
+                       "on the tension chord")
+        g3.metric("MEd,total/MRd", _pct(lg["util"]),
+                  delta=("OK" if ok_l else "Over limit"),
+                  delta_color=("normal" if ok_l else "inverse"))
+        st.caption(
+            f"Tension chord about the {ax_lbl}-axis (the shear plane). "
+            f"MEd,total = MEd + {_DELTA}Ftd*z + Ftd,T*z/2 = "
+            f"{lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f} "
+            f"kNm, vs MRd = {lg['m_rd']:.1f} kNm (pure bending about {ax_lbl} at the "
+            f"applied N). Shear shift {_DELTA}Ftd = 0.5*VEd*cot{_THETA} = "
+            f"{lg['ftd_v']:.1f} kN (6.18); torsion Ftd,T = TEd*uk*cot{_THETA}/(2Ak) = "
+            f"{lg['ftd_t']:.1f} kN, distributed round the perimeter so half acts on "
+            f"this chord (6.28); z = {lg['z']:.3f} m.")
+        if lg["capped"]:
+            st.caption("The shear shift is capped so bending + shear does not exceed "
+                       "MRd (6.2.3(7): the added tension need not exceed the "
+                       "peak-moment tension; a section tool has no beam peak, so MRd "
+                       "is used as that cap).")
+        st.caption("Uniaxial along the shear axis; the DK NA " + chr(0x03A3) +
+                   "(SEd/SRd) sum above is a simpler, generally conservative "
+                   "alternative that avoids the shift / lever-arm model.")
+    else:
+        st.caption(f"Torsion needs {chr(0x03A3)}Asl = {c['asl_torsion']:.0f} mm2 "
+                   "distributed round the tube perimeter (6.28); the shear adds "
+                   f"{_DELTA}Ftd = {c['delta_ftd']:.1f} kN on the tension chord (6.18). "
+                   "Both are in ADDITION to the bending reinforcement. Enable shear "
+                   "links for the full longitudinal-steel utilisation check.")
 
 
 # ---------------------------------------------------------------------------

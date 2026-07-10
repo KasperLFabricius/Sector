@@ -34,6 +34,42 @@ def test_dkna_sum_summed_vs_independent():
     assert combined.dkna_sum(0.3, 0.4, 0.2, m_v_independent=True) == pytest.approx(0.6)
 
 
+def test_longitudinal_check_uncapped():
+    # No cap needed (bending + shear stays well below MRd): a straight sum.
+    #   mv = min(50*0.5, 400-100) = 25; mt = 30*0.5/2 = 7.5; total = 132.5
+    r = combined.longitudinal_check(100.0, 400.0, 50.0, 30.0, 0.5)
+    assert r["mv"] == pytest.approx(25.0)
+    assert r["mt"] == pytest.approx(7.5)          # torsion distributed -> z/2
+    assert r["m_total"] == pytest.approx(132.5)
+    assert r["util"] == pytest.approx(132.5 / 400.0)
+    assert not r["capped"]
+    assert r["ok"]
+
+
+def test_longitudinal_check_shear_shift_capped():
+    # The shear shift wants 200*0.5 = 100 kNm but 6.2.3(7) caps it at MRd - MEd = 20.
+    r = combined.longitudinal_check(100.0, 120.0, 200.0, 0.0, 0.5)
+    assert r["mv"] == pytest.approx(20.0)
+    assert r["capped"]
+    assert r["m_total"] == pytest.approx(120.0)   # exactly MRd -> util 1.0
+    assert r["util"] == pytest.approx(1.0)
+
+
+def test_longitudinal_check_torsion_uses_half_lever_and_no_cap():
+    # Torsion is not subject to the shear cap and acts on z/2 (distributed steel).
+    r = combined.longitudinal_check(50.0, 300.0, 0.0, 80.0, 0.6)
+    assert r["mv"] == 0.0
+    assert r["mt"] == pytest.approx(80.0 * 0.6 / 2.0)
+    assert not r["capped"]
+    assert r["m_total"] == pytest.approx(74.0)
+
+
+def test_longitudinal_check_zero_capacity_is_inf():
+    r = combined.longitudinal_check(10.0, 0.0, 5.0, 5.0, 0.5)
+    assert math.isinf(r["util"])
+    assert not r["ok"]
+
+
 def test_combined_strut_theta():
     # Crossover cot^2 = s/c - 1.
     assert combined.combined_strut_theta(5.0, 1.0, 1.0, 2.5) == pytest.approx(2.0)
@@ -77,6 +113,21 @@ def test_app_combined_assembles_all_three():
     assert c["dkna_sum"] == pytest.approx(c["r_m"] + c["r_v"] + c["r_t"])
     assert c["crushing"] is not None            # shear links present -> crushing check
     assert c["asl_torsion"] > 0.0
+
+
+def test_app_combined_longitudinal_check():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    c = at.session_state["results"]["combined"]
+    lg = c["longitudinal"]                       # links are on, so the check is present
+    assert lg["valid"]
+    assert lg["axis"] in ("x", "y")
+    # MEd,total is the applied moment plus the (non-negative) shear + torsion moments.
+    assert lg["m_total"] == pytest.approx(lg["m_ed"] + lg["mv"] + lg["mt"])
+    assert lg["mt"] > 0.0                         # torsion is acting
+    assert lg["util"] == pytest.approx(lg["m_total"] / lg["m_rd"])
+    assert math.isfinite(lg["util"])
 
 
 def test_app_combined_mv_independent_uses_max():
