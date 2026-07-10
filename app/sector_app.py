@@ -1333,10 +1333,13 @@ def build_inputs():
     # Save-Load are filled at the end so the download and report capture the
     # fully-built inputs.
     back_slot = s.container()
-    sec = s.expander("Section", expanded=True)
-    mat = s.expander("Material Parameters", expanded=False)
-    loads = s.expander("Loads", expanded=True)
-    aset = s.expander("Analysis settings", expanded=False)
+    # The four core input steps are numbered so the workflow order reads at a glance;
+    # the optional check configs and Report / Save / About stay unnumbered.
+    _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
+    sec = s.expander(f"1 {_dot} Section", expanded=True)
+    mat = s.expander(f"2 {_dot} Material Parameters", expanded=False)
+    loads = s.expander(f"3 {_dot} Loads", expanded=True)
+    aset = s.expander(f"4 {_dot} Analysis settings", expanded=False)
     scw = s.expander("Crack width (SLS)", expanded=False)
     sts = s.expander("Shear, torsion & combined (ULS)", expanded=False)
     report_slot = s.container()
@@ -1426,10 +1429,8 @@ def build_inputs():
                  "(or Both), the shear check and the torsion check as well.")
     combined_on = _seeded_checkbox(
         sts, "Check combined M-V-T", False, "combined_on",
-        help="Evaluate the shear+torsion crushing interaction (6.29) and the DK NA "
-             "sum(SEd/SRd) <= 1 rule (6.3.2(6)) across the plastic, shear and torsion "
-             "results. While on, the shear and torsion method selectors are locked to "
-             "the shared edition below.")
+        help="Tie the M, V and T checks together (crushing 6.29 + DK NA sum rule); "
+             "locks their method to the shared edition below. See the manual.")
     combined_method = _seeded_selectbox(
         sts, "Combined edition (shared)", list(_SHEAR_CODES),
         codes.EC2_2005_DKNA.label, key="combined_method", disabled=not combined_on,
@@ -1460,10 +1461,9 @@ def build_inputs():
     shear_method = _seeded_selectbox(
         sts, "Shear method", list(_SHEAR_METHODS), codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
-        help="Code edition for the shear rules. The 2005 family uses VRd,c "
-             "(6.2.2(1); the DK NA:2024 raises v_min). EN 1992-1-1:2023 uses the "
-             "strain-based tau_Rd,c (8.2.2) with the aggregate size ddg -- for a "
-             "member without links; its with-links strain method is a follow-up.")
+        help="Code edition for the shear rules: the 2005 family (VRd,c, 6.2.2(1)) or "
+             "EN 1992-1-1:2023 (strain-based tau_Rd,c, 8.2.2, no links). See the "
+             "manual for the difference.")
     _eff_shear_method = combined_method if combined_on else shear_method
     _shear_2023 = (_SHEAR_METHODS.get(_eff_shear_method) is not None
                    and getattr(_SHEAR_METHODS[_eff_shear_method], "shear_model",
@@ -1590,18 +1590,20 @@ def build_inputs():
     # Pre-flight for the combined check (it needs several things at once): flag what
     # is missing in the reserved slot right under its toggle, not only after Calculate.
     if combined_on:
-        missing = []
-        if mode not in ("Plastic", "Both"):
-            missing.append("a Plastic or Both bending analysis")
-        if not check_util:
-            missing.append("'Check utilisation against applied moment'")
-        if not shear_on:
-            missing.append("the shear check")
-        if not torsion_on:
-            missing.append("the torsion check")
-        if missing:
-            combined_warn.warning("Combined M-V-T also needs: " + "; ".join(missing)
-                                  + ". It is not evaluated until all are enabled.")
+        ok_mark, no_mark = chr(0x2713), chr(0x2717)   # check / cross (BMP, ASCII src)
+        reqs = [
+            (mode in ("Plastic", "Both"), "Plastic / Both bending analysis"),
+            (check_util, "Check utilisation against applied moment"),
+            (shear_on, "Shear check enabled"),
+            (torsion_on, "Torsion check enabled"),
+        ]
+        lines = "  \n".join(f"{ok_mark if met else no_mark} {name}"
+                            for met, name in reqs)
+        if all(met for met, _ in reqs):
+            combined_warn.success("Combined M-V-T requirements met:  \n" + lines)
+        else:
+            combined_warn.warning("Combined M-V-T needs all of these (it is not "
+                                  "evaluated until then):  \n" + lines)
 
     # (Section / Material / Loads expanders were created at the top; fill them now.)
     sec.caption("The section is a set of explicit points (the source of truth). "

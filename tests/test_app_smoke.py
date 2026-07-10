@@ -1715,9 +1715,11 @@ def test_sidebar_panels_follow_the_workflow_order():
     at = _fresh()
     at.run()
     labels = [ex.label for ex in at.expander]
-    assert labels == ["Section", "Material Parameters", "Loads", "Analysis settings",
-                      "Crack width (SLS)", "Shear, torsion & combined (ULS)",
-                      "Report", "Save / Load", "About"]
+    d = chr(0x00B7)   # the step-number middle dot (v0.63)
+    assert labels == [f"1 {d} Section", f"2 {d} Material Parameters", f"3 {d} Loads",
+                      f"4 {d} Analysis settings", "Crack width (SLS)",
+                      "Shear, torsion & combined (ULS)", "Report", "Save / Load",
+                      "About"]
 
 
 def test_calculate_from_a_live_view_switches_to_the_result_view():
@@ -1757,12 +1759,16 @@ def test_combined_preflight_warns_when_prerequisites_missing():
     at.run()
     at.checkbox(key="combined_on").set_value(True).run()      # shear+torsion still off
     warns = [w.value for w in at.warning]
-    assert any("Combined M-V-T also needs" in w for w in warns)
-    assert any("shear check" in w and "torsion check" in w for w in warns)
-    # enabling both clears it
+    cross = chr(0x2717)
+    # v0.63: a requirements checklist -- the missing shear/torsion checks are crossed.
+    assert any("Combined M-V-T needs all of these" in w for w in warns)
+    assert any(f"{cross} Shear check" in w and f"{cross} Torsion check" in w
+               for w in warns)
+    # enabling both clears the warning (now a success checklist instead)
     at.checkbox(key="shear_on").set_value(True).run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    assert not any("Combined M-V-T also needs" in w.value for w in at.warning)
+    assert not any("needs all of these" in w.value for w in at.warning)
+    assert any("requirements met" in s.value for s in at.success)
 
 
 def test_combined_view_renamed_to_m_v_t_combined():
