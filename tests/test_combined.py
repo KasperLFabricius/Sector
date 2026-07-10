@@ -34,6 +34,63 @@ def test_dkna_sum_summed_vs_independent():
     assert combined.dkna_sum(0.3, 0.4, 0.2, m_v_independent=True) == pytest.approx(0.6)
 
 
+def test_longitudinal_check_uncapped():
+    # No cap needed (bending + shear stays well below MRd): a straight sum.
+    #   mv = min(50*0.5, 400-100) = 25; mt = 30*0.5/2 = 7.5; total = 132.5
+    r = combined.longitudinal_check(100.0, 400.0, 50.0, 30.0, 0.5)
+    assert r["mv"] == pytest.approx(25.0)
+    assert r["mt"] == pytest.approx(7.5)          # torsion distributed -> z/2
+    assert r["m_total"] == pytest.approx(132.5)
+    assert r["util"] == pytest.approx(132.5 / 400.0)
+    assert not r["capped"]
+    assert r["ok"]
+
+
+def test_longitudinal_check_shear_shift_capped():
+    # The shear shift wants 200*0.5 = 100 kNm but 6.2.3(7) caps it at MRd - MEd = 20.
+    r = combined.longitudinal_check(100.0, 120.0, 200.0, 0.0, 0.5)
+    assert r["mv"] == pytest.approx(20.0)
+    assert r["capped"]
+    assert r["m_total"] == pytest.approx(120.0)   # exactly MRd -> util 1.0
+    assert r["util"] == pytest.approx(1.0)
+
+
+def test_longitudinal_check_torsion_uses_half_lever_and_no_cap():
+    # Torsion is not subject to the shear cap and acts on z/2 (distributed steel).
+    r = combined.longitudinal_check(50.0, 300.0, 0.0, 80.0, 0.6)
+    assert r["mv"] == 0.0
+    assert r["mt"] == pytest.approx(80.0 * 0.6 / 2.0)
+    assert not r["capped"]
+    assert r["m_total"] == pytest.approx(74.0)
+
+
+def test_chord_applied_moment_low_face_adds():
+    # Common case: shear tension on the low face, a sagging moment tensions it too.
+    assert combined.chord_applied_moment(100.0, True) == pytest.approx(100.0)
+
+
+def test_chord_applied_moment_high_face_relief_floors_to_zero():
+    # Codex's scenario: shear tension on the HIGH face but the applied moment is sagging
+    # (tensions the LOW face), so it relieves the high chord -> contribution floors at 0
+    # (the high chord must still carry the shear + torsion tension on its own).
+    assert combined.chord_applied_moment(100.0, False) == 0.0
+
+
+def test_chord_applied_moment_high_face_hogging_adds():
+    # High face with a hogging moment that genuinely tensions it -> full contribution.
+    assert combined.chord_applied_moment(-100.0, False) == pytest.approx(100.0)
+
+
+def test_chord_applied_moment_low_face_hogging_relief():
+    assert combined.chord_applied_moment(-80.0, True) == 0.0
+
+
+def test_longitudinal_check_zero_capacity_is_inf():
+    r = combined.longitudinal_check(10.0, 0.0, 5.0, 5.0, 0.5)
+    assert math.isinf(r["util"])
+    assert not r["ok"]
+
+
 def test_combined_strut_theta():
     # Crossover cot^2 = s/c - 1.
     assert combined.combined_strut_theta(5.0, 1.0, 1.0, 2.5) == pytest.approx(2.0)
@@ -77,6 +134,38 @@ def test_app_combined_assembles_all_three():
     assert c["dkna_sum"] == pytest.approx(c["r_m"] + c["r_v"] + c["r_t"])
     assert c["crushing"] is not None            # shear links present -> crushing check
     assert c["asl_torsion"] > 0.0
+
+
+def test_app_combined_longitudinal_check():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    c = at.session_state["results"]["combined"]
+    lg = c["longitudinal"]                       # links are on, so the check is present
+    assert lg["valid"]
+    assert lg["axis"] in ("x", "y")
+    # MEd,total is the applied moment plus the (non-negative) shear + torsion moments.
+    assert lg["m_total"] == pytest.approx(lg["m_ed"] + lg["mv"] + lg["mt"])
+    assert lg["mt"] > 0.0                         # torsion is acting
+    assert lg["util"] == pytest.approx(lg["m_total"] / lg["m_rd"])
+    assert math.isfinite(lg["util"])
+    assert not lg["biaxial"]                       # default My_pl = 0 -> uniaxial
+    assert lg["off_util"] == pytest.approx(0.0)
+    # MRd is the pure-axis chord capacity (shear-face angle solve), never above the
+    # biaxial M-M sweep extremum about that axis (which can sit at a point with a
+    # companion off-axis moment and overstate the uniaxial chord capacity).
+    assert 0.0 < lg["m_rd"] <= at.session_state["results"]["plastic"]["max_mx"] + 1e-6
+
+
+def test_app_combined_longitudinal_biaxial_flagged():
+    at = _fresh()
+    at.run()
+    _enable_all(at)                                # uniaxial first (My_pl = 0)
+    at.number_input(key="pl_My").set_value(100.0).run()   # add an off-axis moment
+    at.button(key="calculate").click().run()
+    lg = at.session_state["results"]["combined"]["longitudinal"]
+    assert lg["biaxial"]                           # off-axis moment now non-negligible
+    assert lg["off_util"] > 0.05
 
 
 def test_app_combined_mv_independent_uses_max():

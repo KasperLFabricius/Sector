@@ -62,6 +62,54 @@ def combined_strut_theta(s_stirrup: float, c_crush: float, cot_min: float,
     return min(max(cot_opt, cot_min), hi)
 
 
+def chord_applied_moment(m_signed: float, tension_low: bool) -> float:
+    """Applied moment that ADDS tension to the shear tension chord (kNm).
+
+    The shear shift, the torsion longitudinal force and the lever arm ``z`` are all
+    defined on the shear tension face -- the ``tension_low`` face (the low-coordinate
+    side when ``True``) -- so the bending moment paired with them is the one that
+    tensions THAT chord, not the moment implied by its own sign on the other face.
+
+    The plastic sign convention tensions the low face under a POSITIVE moment (``+Mx``
+    tensions the bottom, ``+My`` the left), so the tensioning moment is ``+m_signed``
+    for the low face and ``-m_signed`` for the high face. A moment of the opposite sense
+    compresses the chord; that relief is not credited (it would understate the steel the
+    chord still needs for shear + torsion), so the contribution floors at zero. The
+    matching capacity ``MRd`` is the pure-axis bending capacity at the shear-face
+    neutral-axis angle, supplied separately by the caller.
+    """
+    m_face = m_signed if tension_low else -m_signed
+    return max(m_face, 0.0)
+
+
+def longitudinal_check(m_ed: float, m_rd: float, ftd_v: float, ftd_t: float,
+                       z: float) -> dict:
+    """Longitudinal-steel utilisation on the tension chord under combined M + V + T.
+
+    The tension chord about the shear axis carries the bending tension plus the shear
+    shift ``delta_Ftd = 0.5*VEd*cot(theta)`` (6.18) and the torsion longitudinal force
+    ``Ftd,T = TEd*uk*cot(theta)/(2*Ak)`` (6.28). Each extra force is turned into an
+    equivalent moment on the lever arm ``z`` and added to the applied moment, then
+    checked against the uniaxial bending capacity ``m_rd`` about that axis::
+
+        MEd,total = MEd + min(delta_Ftd*z, MRd - MEd) + Ftd,T*z/2
+
+    The shear shift is capped so bending + shear does not exceed ``MRd`` -- EN 1992-1-1
+    6.2.3(7) caps ``delta_Ftd`` at the peak-moment tension, and a section check (no beam
+    envelope) uses ``MRd`` as that peak. The torsion force is distributed round the
+    perimeter, so only half of it acts on this one chord (hence ``z/2``). All moments
+    are in the same units (kNm); ``ftd_v``/``ftd_t`` in kN, ``z`` in m.
+    """
+    mv_uncapped = ftd_v * z
+    mv = min(mv_uncapped, max(m_rd - m_ed, 0.0))
+    mt = ftd_t * z / 2.0
+    m_total = m_ed + mv + mt
+    util = ratio(m_total, m_rd)
+    return dict(m_ed=m_ed, m_rd=m_rd, ftd_v=ftd_v, ftd_t=ftd_t, z=z,
+                mv=mv, mt=mt, m_total=m_total, util=util,
+                ok=util <= 1.0 + 1e-9, capped=mv_uncapped > mv + 1e-9)
+
+
 def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> float:
     """DK NA:2024 6.3.2(6) ``sum(SEd/SRd)``, the governing value.
 

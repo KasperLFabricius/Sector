@@ -1039,10 +1039,62 @@ class ReportBuilder:
             self._small(note + f" At the common strut cot theta = {_fmt(tr['cot'], 2)} "
                         f"({_fmt(tr['theta_deg'], 1)} deg) balancing the stirrup "
                         "demand against the crushing.")
-        self._small(f"Additional longitudinal steel: torsion sum A<sub>sl</sub> = "
-                    f"{_fmt(c['asl_torsion'], 0)} mm<sup>2</sup> round the perimeter "
-                    f"(6.28); shear &#916;F<sub>td</sub> = {_fmt(c['delta_ftd'], 1)} "
-                    "kN on the tension chord (6.18) -- both beyond the bending steel.")
+        lg = c.get("longitudinal")
+        if lg is not None and lg["valid"]:
+            self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
+            vv = "OK" if lg["ok"] else "EXCEEDED"
+            ax = lg["axis"]
+            face = "bottom / left" if lg.get("tension_low", True) else "top / right"
+            self._p(
+                f"The tension chord is the shear tension face ({face}) about the "
+                f"{ax}-axis; M<sub>Ed</sub> and M<sub>Rd</sub> are taken on that face. "
+                "The chord carries the bending tension plus the shear shift "
+                "&#916;F<sub>td</sub> = "
+                "0.5&#183;V<sub>Ed</sub>&#183;cot theta (6.18) and the torsion "
+                "longitudinal force F<sub>td,T</sub> = T<sub>Ed</sub>&#183;u<sub>k</sub>"
+                "&#183;cot theta/(2A<sub>k</sub>) (6.28, distributed round the "
+                "perimeter, so half acts on this chord). Each is turned into an "
+                "equivalent moment on the lever arm z and checked against the uniaxial "
+                f"capacity M<sub>Rd</sub> about the {ax}-axis at the applied N.")
+            self._formula(
+                "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>&#183;z + "
+                "F<sub>td,T</sub>&#183;z/2",
+                ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
+                subst=f"{_fmt(lg['m_ed'], 1)} + {_fmt(lg['mv'], 1)} + "
+                      f"{_fmt(lg['mt'], 1)} kNm  (z = {_fmt(lg['z'], 3)} m, "
+                      f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
+                      f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
+                result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm")
+            biaxial = lg.get("biaxial", False)
+            self._formula(
+                "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
+                subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
+                result=(f"utilisation = {_pct(lg['util'])}"
+                        + ("  (uniaxial -- see note)" if biaxial else f"  ({vv})")))
+            if biaxial:
+                self._p("Biaxial bending: a moment about the OTHER axis is acting ("
+                        f"{_pct(lg.get('off_util', 0.0))} of that axis' capacity). This "
+                        "uniaxial chord check only inspects the shear-plane chord, so the "
+                        "off-axis chord (its bending tension plus its share of the "
+                        "distributed torsion steel) may govern and is NOT evaluated here "
+                        "-- rely on the sum(SEd/SRd) check above, which uses the full "
+                        "biaxial bending utilisation.")
+            note = ("Each contribution uses its own action's optimum strut angle (the DK "
+                    "NA sum-of-ratios rule allows it). The sum(SEd/SRd) check above uses "
+                    "the full biaxial bending utilisation and remains the primary "
+                    "combined check.")
+            if lg["capped"]:
+                note = ("The shear shift is capped so bending + shear does not exceed "
+                        "M<sub>Rd</sub> (6.2.3(7): the added tension need not exceed "
+                        "the peak-moment tension; a section tool uses M<sub>Rd</sub> as "
+                        "that cap). ") + note
+            self._small(note)
+        else:
+            self._small(f"Additional longitudinal steel: torsion sum A<sub>sl</sub> = "
+                        f"{_fmt(c['asl_torsion'], 0)} mm<sup>2</sup> round the perimeter "
+                        f"(6.28); shear &#916;F<sub>td</sub> = {_fmt(c['delta_ftd'], 1)} "
+                        "kN on the tension chord (6.18) -- both beyond the bending "
+                        "steel. Enable shear links for the full utilisation check.")
 
     def _torsion(self):
         t = self.out["torsion"]
