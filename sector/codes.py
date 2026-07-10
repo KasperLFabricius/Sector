@@ -210,13 +210,14 @@ class DesignCode:
         """Concrete-strut effectiveness factor ``nu`` for torsion (TRd,max, 6.30).
 
         Recommended ``nu = 0.6*(1 - fck/250)`` (via 6.2.2(6)); the DK NA:2024 uses its
-        plasticity pure-torsion factor ``nu_t = 0.7*nu_v`` (5.104 NA), a further 0.7
-        reduction on the pure-shear ``nu_v`` for the circulatory shear flow of
-        torsion -- applied to the *floored* ``nu_v`` (>= 0.45), so above C50 the floor
-        carries through (``nu_t = 0.7*0.45`` rather than the un-floored value).
+        plasticity pure-torsion factor ``nu_t = 0.7*(0.7 - fck/200)`` (5.104 NA), a
+        further 0.7 reduction on the pure-shear expression for the circulatory shear
+        flow of torsion. The 0.45 lower bound of 5.103 NA belongs to ``nu_v`` ONLY --
+        5.104 NA states no floor for ``nu_t``, so above C50 it keeps falling
+        (C60: 0.28, not the floored 0.7*0.45 = 0.315, which is unconservative).
         """
         if self.shear_nu_v:
-            return 0.7 * self.shear_nu1(fck)          # 0.7 * nu_v (nu_v floored >= 0.45)
+            return max(0.7 * (0.7 - fck / 200.0), 0.0)   # 5.104 NA (no nu_v floor)
         return 0.6 * (1.0 - fck / 250.0)
 
     def shear_alpha_cw(self, sigma_cp: float, fcd: float) -> float:
