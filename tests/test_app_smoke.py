@@ -1709,13 +1709,30 @@ def test_applied_moments_default_to_zero():
 
 
 def test_sidebar_panels_follow_the_workflow_order():
-    # v0.56: panels are ordered by the natural workflow -- geometry, then materials,
-    # then loads, then the analysis settings, with Report / Save-Load / About last.
+    # v0.56/v0.59: panels ordered by the workflow -- geometry, materials, loads, then
+    # the settings (split into Analysis / Crack width / Shear-torsion-combined), with
+    # Report / Save-Load / About last.
     at = _fresh()
     at.run()
     labels = [ex.label for ex in at.expander]
     assert labels == ["Section", "Material Parameters", "Loads", "Analysis settings",
+                      "Crack width (SLS)", "Shear, torsion & combined (ULS)",
                       "Report", "Save / Load", "About"]
+
+
+def test_combined_preflight_warns_when_prerequisites_missing():
+    # v0.59: enabling the combined check while its prerequisites are off warns inline
+    # (under its toggle) instead of only after Calculate.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="combined_on").set_value(True).run()      # shear+torsion still off
+    warns = [w.value for w in at.warning]
+    assert any("Combined M-V-T also needs" in w for w in warns)
+    assert any("shear check" in w and "torsion check" in w for w in warns)
+    # enabling both clears it
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    assert not any("Combined M-V-T also needs" in w.value for w in at.warning)
 
 
 def test_combined_view_renamed_to_m_v_t_combined():
