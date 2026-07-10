@@ -470,6 +470,25 @@ def _point_hover(points, first_number, kind, unit, extra=None):
     return lines
 
 
+_ARROW_UP = chr(0x2191)      # upwards arrow
+_ARROW_RIGHT = chr(0x2192)   # rightwards arrow
+
+
+def _direction_note(fig, lines):
+    """Corner note stating the positive sign convention (with arrow glyphs).
+
+    Pinned to the top-left of the plot area on a translucent backing, so the
+    reader never has to leave the figure to know which PHYSICAL bending a
+    positive axis value means. The interaction envelopes are centred, so the
+    corner is reliably free under the equal-aspect autoscale.
+    """
+    fig.add_annotation(x=0.01, y=0.99, xref="paper", yref="paper",
+                       xanchor="left", yanchor="top", showarrow=False,
+                       align="left", text="<br>".join(lines),
+                       font=dict(size=11, color=SCHEMATIC_INK),
+                       bgcolor="rgba(255,255,255,0.75)")
+
+
 def _marker_sizes(points, base, lo, hi):
     """Per-point marker sizes (px) scaled by RELATIVE bar diameter.
 
@@ -666,6 +685,11 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
                                showarrow=True, arrowhead=2, arrowsize=0.7,
                                arrowwidth=1, arrowcolor=GUIDE_LINE, ax=32, ay=26,
                                font=dict(size=11, color=LOAD_POINT))
+    # Which PHYSICAL bending each positive axis half means (the solver's V = 90 /
+    # V = 0 convention): +Mx tensions the bottom face, +My the left face.
+    _direction_note(fig, [
+        _ARROW_UP + " +Mx: tension at the bottom face",
+        _ARROW_RIGHT + " +My: tension at the left face"])
     fig.update_layout(
         title=title, template=_TEMPLATE, height=440,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
@@ -735,6 +759,13 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
         fig.add_trace(go.Scatter(x=[snap(applied[1])], y=[applied[0]], mode="markers",
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
                                  name="applied", hovertemplate=hover))
+    # Which PHYSICAL state each positive axis half means: +Mx tensions the bottom
+    # face / +My the left face (the solver's V = 90 / V = 0 convention), +N is
+    # axial tension.
+    face = "bottom" if axis == "x" else "left"
+    _direction_note(fig, [
+        _ARROW_RIGHT + f" +{mlabel.replace('_', '')}: tension at the {face} face",
+        _ARROW_UP + " +N: axial tension"])
     fig.update_layout(
         title=title, template=_TEMPLATE, height=460,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),

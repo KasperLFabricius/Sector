@@ -503,6 +503,23 @@ def test_concrete_curve_labels_design_plateau():
     assert not any("f<sub>cd</sub>" in t for t in texts1)
 
 
+def test_interaction_figures_state_positive_bending_direction():
+    # Both interaction diagrams carry a corner note (with arrow glyphs) stating what
+    # PHYSICAL bending a positive value means: +Mx tensions the bottom face, +My the
+    # left face (the solver's V = 90 / V = 0 convention), +N is axial tension.
+    up, right = chr(0x2191), chr(0x2192)
+    mm = viz.interaction_figure([100.0, 0.0, -80.0], [0.0, 90.0, 0.0])
+    txt = " ".join(a.text or "" for a in mm.layout.annotations)
+    assert up + " +Mx: tension at the bottom face" in txt
+    assert right + " +My: tension at the left face" in txt
+    nmx = viz.interaction_nm_figure([0.0, -500.0, 500.0], [200.0, 0.0, 0.0], axis="x")
+    tx = " ".join(a.text or "" for a in nmx.layout.annotations)
+    assert "+Mx: tension at the bottom face" in tx and "+N: axial tension" in tx
+    nmy = viz.interaction_nm_figure([0.0, -500.0, 500.0], [200.0, 0.0, 0.0], axis="y")
+    ty = " ".join(a.text or "" for a in nmy.layout.annotations)
+    assert "+My: tension at the left face" in ty
+
+
 def test_interaction_figure_partial_arc_is_not_filled():
     # A partial sweep is an OPEN arc: draw it as a bare line (no toself fill / no closing
     # vertex), else it shades a capacity region across an artificial closing chord.
