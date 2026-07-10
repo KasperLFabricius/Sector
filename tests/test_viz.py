@@ -356,14 +356,13 @@ def test_interaction_figure_plots_mx_vertical_my_horizontal():
     assert "about the y-axis" in fig.layout.xaxis.title.text
 
 
-def test_interaction_figure_axes_autoscale_to_the_envelope():
-    # Each axis fits its own data (no common-scale lock), so a section strong about
-    # one axis does not show the other axis's envelope as a thin sliver forced by the
-    # aspect ratio. Both axes are left on autorange.
+def test_interaction_figure_uses_equal_aspect_axes():
+    # The M-M envelope is drawn on a common scale (equal aspect), so it keeps its
+    # true shape instead of being stretched to fill the plot (user preference,
+    # v0.54 -- reverts the independent-autoscale of #108).
     fig = viz.interaction_figure([560.0, 0.0, -560.0, 0.0], [0.0, 90.0, 0.0, -90.0])
-    assert fig.layout.yaxis.scaleanchor is None      # not tied to the x scale
-    assert fig.layout.xaxis.range is None             # x autoscales to My data
-    assert fig.layout.yaxis.range is None             # y autoscales to Mx data
+    assert fig.layout.yaxis.scaleanchor == "x"       # Mx tied to the My scale
+    assert fig.layout.yaxis.scaleratio == 1
 
 
 def test_prestress_figure_tension_only_labels_inputs():
