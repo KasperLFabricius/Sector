@@ -959,6 +959,13 @@ def manual_blocks() -> list:
          "$\\max(M+T,\\,V+T)$ taken. Torsion also needs its longitudinal steel "
          "$\\sum A_{sl}$ round the perimeter and the shear its $\\Delta F_{td}$ on "
          "the tension chord, both beyond the bending reinforcement.")
+    md("The **shared closed stirrup** carries both actions, so their transverse "
+       "demands add. When $V_{Ed} \\leq V_{Rd,c}$ the concrete alone carries the "
+       "shear (6.2.1), so the shear takes **no** stirrup and the whole stirrup "
+       "serves torsion; only when $V_{Ed} > V_{Rd,c}$ do the shear and torsion "
+       "stirrup demands add. The added stirrup demand (least at a flat strut) and "
+       "the crushing (least at 45 degrees) must both hold at **one** strut angle, so "
+       "Sector reports the check at the single angle that balances the two.")
 
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "

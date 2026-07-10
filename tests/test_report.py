@@ -414,6 +414,19 @@ def test_report_combined_independent_uses_max_form():
     assert "separately" in txt                      # M & V checked separately
 
 
+def test_report_combined_transverse_shows_shear_credit():
+    out = _out()
+    c = _combined_out()
+    c["transverse"] = dict(cot=2.0, theta_deg=26.6, u_stirrup=0.6, u_crush=0.4,
+                           governing=0.6, ok=True, shear_fraction=0.0,
+                           torsion_fraction=0.6, shear_credited=True,
+                           vrd_c=120.0, v_ed=40.0)
+    out["combined"] = c
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Shared stirrup" in txt
+    assert "concrete carries the shear" in txt      # the VRd,c credit note
+
+
 def test_report_skips_invalid_combined():
     out = _out()
     out["combined"] = {"valid": False, "have_m": True, "have_v": False,

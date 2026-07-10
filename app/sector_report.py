@@ -976,6 +976,24 @@ class ReportBuilder:
                 result=f"{_pct(val)}  ({vv})")
             self._small(f"At a common strut cot theta = {_fmt(cr['cot'], 2)} "
                         f"({_fmt(cr['theta_deg'], 1)} deg).")
+        tr = c.get("transverse")
+        if tr is not None:
+            self._h2("Shared stirrup (shear + torsion transverse steel)")
+            vv = "OK" if tr["ok"] else "EXCEEDED"
+            if tr["shear_credited"]:
+                note = (f"V<sub>Ed</sub> = {_fmt(tr['v_ed'], 1)} &#8804; V<sub>Rd,c</sub>"
+                        f" = {_fmt(tr['vrd_c'], 1)} kN, so the concrete carries the "
+                        "shear (6.2.1) and the whole closed stirrup serves torsion.")
+            else:
+                note = ("V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>: shear and torsion "
+                        "demands add on the shared closed stirrup.")
+            self._formula(
+                "shear share + torsion share (shared closed stirrup)",
+                subst=f"{_pct(tr['shear_fraction'])} + {_pct(tr['torsion_fraction'])}",
+                result=f"stirrup utilisation = {_pct(tr['governing'])}  ({vv})")
+            self._small(note + f" At the common strut cot theta = {_fmt(tr['cot'], 2)} "
+                        f"({_fmt(tr['theta_deg'], 1)} deg) balancing the stirrup "
+                        "demand against the crushing.")
         self._small(f"Additional longitudinal steel: torsion sum A<sub>sl</sub> = "
                     f"{_fmt(c['asl_torsion'], 0)} mm<sup>2</sup> round the perimeter "
                     f"(6.28); shear &#916;F<sub>td</sub> = {_fmt(c['delta_ftd'], 1)} "

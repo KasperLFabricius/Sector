@@ -2383,6 +2383,49 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 asl_torsion=to["asl_req"],
                 delta_ftd=(sl["delta_ftd"] if sl is not None else 0.0),
                 links=sl is not None)
+            # Shared-stirrup transverse check: the one closed stirrup carries shear
+            # AND torsion, so their demands add. When VEd <= VRd,c the concrete alone
+            # carries the shear (EN 1992-1-1 6.2.1) and the stirrup serves torsion
+            # only. The check is at the common strut angle that balances the stirrup
+            # demand against the concrete crushing (both must hold at one angle).
+            if sl is not None and sl["res"]["valid"] and to["asw_over_s"] > 0.0:
+                fck = inp["concrete"].fck
+                scode = _SHEAR_METHODS.get(inp["shear_method"], codes.EC2_2005_DKNA)
+                tcode = _SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
+                v_ed, t_ed = sh["v_ed"], to["t_ed"]
+                vrd_c = sh["res"]["vrd_c"]
+                s_lo = min(inp["shear_cot_min"], inp["shear_cot_max"])
+                s_hi = max(inp["shear_cot_min"], inp["shear_cot_max"])
+                t_lo = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
+                t_hi = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
+                lo_b, hi_b = max(s_lo, t_lo), min(s_hi, t_hi)
+                hi_b = max(hi_b, lo_b)
+                # Utilisation pieces at cot = 1 (they scale as 1/cot for the stirrups
+                # and as cot + 1/cot for the crushing).
+                vlk1 = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
+                                       sl["asw_over_s"], sl["fywk"], -inp["P_pl"],
+                                       sh["ac"], 1.0, 1.0, z_mm=sl["res"]["z"])
+                trd_s1 = torsion.trd_s(to["tube"]["Ak"], to["fywd"],
+                                       to["asw_over_s"], 1.0)
+                trd_max1 = torsion.trd_max(fck, tcode, to["tube"]["Ak"],
+                                           to["tube"]["tef"], to["alpha_cw"], 1.0)
+                shear_credited = v_ed <= vrd_c
+                sf1 = 0.0 if shear_credited else combined.ratio(v_ed, vlk1["vrd_s"])
+                tf1 = combined.ratio(t_ed, trd_s1)
+                s_stirrup = sf1 + tf1                       # U_stirrup at cot = 1
+                c_crush = 0.5 * (combined.ratio(t_ed, trd_max1)
+                                 + combined.ratio(v_ed, vlk1["vrd_max"]))
+                cot_b = combined.combined_strut_theta(s_stirrup, c_crush, lo_b, hi_b)
+                u_stir = s_stirrup / cot_b if cot_b > 0.0 else math.inf
+                u_crush = c_crush * (cot_b + 1.0 / cot_b)
+                out["combined"]["transverse"] = dict(
+                    cot=cot_b, theta_deg=math.degrees(math.atan(1.0 / cot_b)),
+                    u_stirrup=u_stir, u_crush=u_crush,
+                    governing=max(u_stir, u_crush),
+                    ok=bool(max(u_stir, u_crush) <= 1.0 + 1e-9),
+                    shear_fraction=sf1 / cot_b if cot_b > 0 else math.inf,
+                    torsion_fraction=tf1 / cot_b if cot_b > 0 else math.inf,
+                    shear_credited=shear_credited, vrd_c=vrd_c, v_ed=v_ed)
         else:
             out["combined"] = dict(valid=False, have_m=have_m, have_v=have_v,
                                    have_t=have_t, method=inp["combined_method"])
@@ -3176,6 +3219,29 @@ def combined_view(inp, results):
     else:
         st.caption("The shear+torsion crushing interaction (6.29) needs shear links "
                    "(for VRd,max); enable them in the shear block.")
+
+    tr = c.get("transverse")
+    if tr is not None:
+        st.divider()
+        st.markdown("**Shared stirrup: shear + torsion transverse steel**")
+        t1, t2, t3 = st.columns(3)
+        t1.metric("Shear share", _pct(tr["shear_fraction"]))
+        t2.metric("Torsion share", _pct(tr["torsion_fraction"]))
+        ok_t = tr["ok"]
+        t3.metric("Stirrup utilisation", _pct(tr["governing"]),
+                  delta=("OK" if ok_t else "Over limit"),
+                  delta_color=("normal" if ok_t else "inverse"))
+        if tr["shear_credited"]:
+            st.caption(f"The concrete alone carries the shear (VEd = {tr['v_ed']:.1f} "
+                       f"kN <= VRd,c = {tr['vrd_c']:.1f} kN, 6.2.1), so the shear "
+                       "takes NO stirrup -- the whole closed stirrup serves torsion.")
+        else:
+            st.caption(f"VEd > VRd,c, so the stirrup carries both: shear and torsion "
+                       "demands add on the shared closed stirrup.")
+        st.caption(f"At the common strut cot {_THETA} = {tr['cot']:.2f} "
+                   f"({tr['theta_deg']:.1f} deg) that balances the stirrup demand "
+                   "against the concrete crushing. A flatter strut lowers the stirrup "
+                   "demand but raises the crushing; both are checked at this one angle.")
 
     st.divider()
     st.markdown("**Longitudinal reinforcement demand (additional)**")

@@ -36,6 +36,29 @@ def crushing_interaction(t_ed: float, trd_max: float, v_ed: float,
     return ratio(t_ed, trd_max) + ratio(v_ed, vrd_max)
 
 
+def combined_strut_theta(s_stirrup: float, c_crush: float, cot_min: float,
+                         cot_max: float) -> float:
+    """Common strut ``cot(theta)`` for a shared stirrup carrying shear + torsion.
+
+    The transverse-steel utilisation falls with a flatter strut,
+    ``U_stirrup(cot) = s_stirrup / cot`` (both VRd,s and TRd,s scale with ``cot``),
+    while the concrete-crushing utilisation ``U_crush(cot) = c_crush*(cot + 1/cot)``
+    is least at 45 deg and rises away from it. The member is governed by the larger of
+    the two, so the best single angle is their crossover ``cot^2 = s_stirrup/c_crush -
+    1``, floored at ``cot = 1`` (below it both worsen) and clamped to
+    ``[cot_min, cot_max]``. ``s_stirrup`` is ``U_stirrup`` at ``cot = 1`` and
+    ``c_crush`` is ``U_crush(cot=1)/2``.
+    """
+    lo = max(cot_min, 1.0)
+    hi = max(cot_max, lo)
+    if s_stirrup <= 0.0:
+        return lo                       # no stirrup demand: crushing is least at 45 deg
+    if c_crush <= 0.0:
+        return hi                       # no crushing demand: the flattest strut
+    cot_star = math.sqrt(max(s_stirrup / c_crush - 1.0, 0.0))
+    return min(max(cot_star, lo), hi)
+
+
 def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> float:
     """DK NA:2024 6.3.2(6) ``sum(SEd/SRd)``, the governing value.
 
