@@ -433,6 +433,29 @@ def test_tube_figure_degrades_without_a_wall():
     assert not any("centre-line" in n for n in names)
 
 
+def test_interaction_figure_partial_arc_is_not_filled():
+    # A partial sweep is an OPEN arc: draw it as a bare line (no toself fill / no closing
+    # vertex), else it shades a capacity region across an artificial closing chord.
+    mx = [100.0, 80.0, 0.0]
+    my = [0.0, 40.0, 90.0]
+    op = viz.interaction_figure(mx, my, closed=False)
+    assert op.data[0].fill in (None, "none")           # not filled
+    assert len(op.data[0].x) == len(my)                # no repeated closing vertex
+    cl = viz.interaction_figure(mx, my, closed=True)
+    assert cl.data[0].fill == "toself"
+    assert len(cl.data[0].x) == len(my) + 1            # closed (first vertex repeated)
+
+
+def test_interaction_nm_landmark_uses_signed_max():
+    # Asymmetric N-M: the negative-moment branch has the larger |M|, but the "max M"
+    # landmark must sit on the positive branch to match the signed "Max M" metric.
+    N = [0.0, -500.0, 500.0, 0.0]
+    M = [200.0, 0.0, 0.0, -350.0]      # positive max = 200; larger |M| (350) is negative
+    fig = viz.interaction_nm_figure(N, M, axis="x")
+    ann = [a for a in fig.layout.annotations if "max" in (a.text or "").lower()]
+    assert ann and ann[0].x == pytest.approx(200.0)    # positive max, not the -350 apex
+
+
 def _sub(b, h, tef, ak, ted, trd, util):
     return dict(tube={"tef": tef, "Ak": ak}, b_mm=b, h_mm=h, stiffness=0.003,
                 t_ed=ted, trd=trd, util=util, governs="stirrups")

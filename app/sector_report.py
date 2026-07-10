@@ -196,12 +196,13 @@ _FIG_EXPORT_TIMEOUT_S = 20.0
 
 
 def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
-    """Export a Plotly figure to PNG bytes, or ``None`` if export is unavailable.
+    """Export a Plotly figure to PNG bytes off the main thread.
 
-    kaleido's headless-browser export can block indefinitely when the browser is
-    in a bad state, so it runs off the main thread with a join timeout -- the
-    report then still completes (with a placeholder for that figure) instead of
-    hanging the app, matching the manual's export guard.
+    Returns ``(png_bytes, timed_out)``: ``png_bytes`` is the PNG (``None`` when export
+    failed or timed out), and ``timed_out`` is True when the worker was still running
+    at the join timeout. kaleido's headless browser can block indefinitely in a bad
+    state, so a timeout means it is wedged and the caller should STOP retrying -- each
+    further export would block for the full timeout again.
     """
     box = {}
 
@@ -214,7 +215,9 @@ def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
     worker = threading.Thread(target=_work, daemon=True)
     worker.start()
     worker.join(timeout)
-    return None if worker.is_alive() else box.get("v")
+    if worker.is_alive():
+        return None, True
+    return box.get("v"), False
 
 
 def _fmt(v, nd=3):
@@ -247,6 +250,7 @@ class ReportBuilder:
         self.s = _styles()
         self.flow = []
         self._chapter = 0
+        self._export_hung = False   # set once a kaleido export hits the join timeout
 
     def _tick(self, frac, text):
         if self._progress is not None:
@@ -307,10 +311,19 @@ class ReportBuilder:
     def _fig(self, fig, w_mm=150, h_mm=95):
         if not self.figures:
             return
-        png = _fig_png(fig, int(w_mm * 3.78), int(h_mm * 3.78))
+        # Once an export has wedged the browser (a full-timeout hang), stop trying:
+        # every further _fig_png would block for the whole timeout again, so a
+        # figure-rich report could freeze for minutes. Fall straight to placeholders.
+        if self._export_hung:
+            self._small("[figure unavailable: plot export timed out]")
+            return
+        png, timed_out = _fig_png(fig, int(w_mm * 3.78), int(h_mm * 3.78))
+        if timed_out:
+            self._export_hung = True
         if png is None:
             self._small("[figure unavailable: install kaleido and a browser to "
-                        "embed plots]")
+                        "embed plots]" if not timed_out
+                        else "[figure unavailable: plot export timed out]")
             return
         self.flow.append(Image(io.BytesIO(png), width=w_mm * mm, height=h_mm * mm))
         self._gap(4)
@@ -628,7 +641,8 @@ class ReportBuilder:
         applied = pl.get("applied")   # None for a capacity-only run
         self._fig(viz.interaction_figure(
             pl["mx"], pl["my"], applied=applied, title="M-M interaction",
-            angles=[pt["V"] for pt in pl["points"]], util=pl.get("util")), 130, 100)
+            angles=[pt["V"] for pt in pl["points"]], util=pl.get("util"),
+            closed=pl.get("closed", True)), 130, 100)
         rows = [["Quantity", "Value"],
                 ["Max / Min M<sub>x</sub> capacity",
                  f"{_fmt(pl['max_mx'], 3)} / {_fmt(pl.get('min_mx', min(pl['mx'])),1)} kNm"],

@@ -239,9 +239,13 @@ def fig_sign_convention():
                   viz.LOAD_POINT)
     fig.add_annotation(x=0.0, y=2.85, text="M<sub>y</sub>", showarrow=False,
                        yanchor="bottom", font=dict(size=13, color=viz.LOAD_POINT))
-    # The sweep angle V: a neutral axis at angle V from the +y axis, with an arc.
+    # The sweep angle V: a neutral axis at angle V from the +y axis, with an arc. The
+    # solver defines V as the compression-gradient direction (cos V, sin V), so the
+    # neutral axis is PERPENDICULAR to it, at angle (90 + V) from +x (V measured CCW
+    # from +y). Drawing it at 90 - V would mirror the line and teach the wrong sweep
+    # sense for intermediate V (the 0 / 90 deg endpoints coincide either way).
     vdeg = 35.0
-    vr = math.radians(90.0 - vdeg)   # measured from +x for the geometry
+    vr = math.radians(90.0 + vdeg)   # measured from +x for the geometry
     fig.add_shape(type="line", x0=-1.7 * math.cos(vr), y0=-1.7 * math.sin(vr),
                   x1=1.7 * math.cos(vr), y1=1.7 * math.sin(vr),
                   line=dict(color=viz.NA_LINE, width=1.5, dash="dash"))
@@ -250,9 +254,11 @@ def fig_sign_convention():
     fig.add_trace(go.Scatter(
         x=[0.9 * math.cos(t) for t in ts], y=[0.9 * math.sin(t) for t in ts],
         mode="lines", line=dict(color=viz.NA_LINE, width=1.2), hoverinfo="skip"))
-    fig.add_annotation(x=0.62, y=1.15, text="V", showarrow=False,
+    fig.add_annotation(x=-0.42, y=1.08, text="V", showarrow=False,
                        font=dict(size=12, color=viz.NA_LINE))
-    fig.add_annotation(x=1.55 * math.cos(vr), y=1.55 * math.sin(vr),
+    # Label the line's LOWER-RIGHT end (open space): the upper-left end sits over the
+    # +y axis and the section, so the caption would cross them.
+    fig.add_annotation(x=-1.55 * math.cos(vr), y=-1.55 * math.sin(vr),
                        text="neutral axis (angle V from +y)", showarrow=False,
                        xanchor="left", xshift=6, font=dict(size=11, color=viz.NA_LINE))
     return fig

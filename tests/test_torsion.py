@@ -154,6 +154,32 @@ def test_distribute_by_stiffness_all_zero_is_zeros():
     assert torsion.distribute_by_stiffness(50.0, [0.0, 0.0]) == [0.0, 0.0]
 
 
+def test_torsion_nu_closed_detailing_only_changes_dk_na():
+    # The nu_t->nu_v allowance changes nu ONLY on the DK NA edition; the recommended
+    # edition ignores closed_detailing. This underpins gating the display flag.
+    fck = 35.0
+    dk = codes.EC2_2005_DKNA
+    assert (dk.torsion_nu(fck, closed_detailing=True)
+            != dk.torsion_nu(fck, closed_detailing=False))
+    rec = codes.EC2_2005
+    assert (rec.torsion_nu(fck, closed_detailing=True)
+            == rec.torsion_nu(fck, closed_detailing=False))
+
+
+def test_app_nu_v_detailing_flag_gated_to_dk_na():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    at.checkbox(key="torsion_nu_v").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert at.session_state["results"]["torsion"]["nu_v_detailing"] is True   # DK NA
+    at.selectbox(key="torsion_method").set_value(codes.EC2_2005.label).run()
+    at.button(key="calculate").click().run()
+    # Recommended edition: the allowance did not apply, so the flag must be False.
+    assert at.session_state["results"]["torsion"]["nu_v_detailing"] is False
+
+
 def test_torsion_nu_edition_dependent():
     assert codes.EC2_2005.torsion_nu(35.0) == pytest.approx(0.6 * (1 - 35.0 / 250.0))
     assert codes.EC2_2005_DKNA.torsion_nu(35.0) == pytest.approx(0.7 * (0.7 - 35.0 / 200.0))

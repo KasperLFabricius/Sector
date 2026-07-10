@@ -1652,8 +1652,12 @@ def build_inputs():
                   help="Open a full-width builder: pick a shape, dimensions and "
                        "reinforcement with a live preview, then Apply to fill the "
                        "point tables."):
+        # Do NOT st.rerun() here: this button renders partway through build_inputs, so a
+        # rerun would abort the rest of it -- including the deferred Report panel at the
+        # end -- and Streamlit drops the unrendered rep_* widget state, resetting the
+        # Report metadata. Just set the flag; build_inputs finishes (preserving rep_*)
+        # and the _qs_open check after it opens the builder viewport this same run.
         st.session_state["_qs_open"] = True
-        st.rerun()
     clear_pts = sec.button("Clear Section (empty all points)", key="clear_pts",
                            width="stretch",
                            help="Remove every concrete corner, the void, and all "
@@ -2478,6 +2482,13 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         tcot_min = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
         tcot_max = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
         nu_detail = inp["torsion_nu_v"]   # DK NA Fig 5.100 NA: nu_t raised to nu_v
+        # The allowance only actually changes nu on the DK NA edition; the recommended
+        # edition's torsion_nu ignores closed_detailing. Record the DISPLAY flag (which
+        # drives the "nu raised to nu_v" captions) only when nu truly changed, so a
+        # recommended-edition run with the toggle on does not claim an unapplied change.
+        nu_detail_applied = bool(
+            nu_detail and tcode.torsion_nu(fck, closed_detailing=True)
+            != tcode.torsion_nu(fck, closed_detailing=False))
         fctd = 0.7 * codes.fctm(fck) / tcode.gamma_c        # fctk,0.05 / gamma_c
         t_ed = inp["torsion_T"]
         _tk = dict(tcode=tcode, fck=fck, fcd=fcd, alpha_cw=alpha_cw, fywd=fywd_t,
@@ -2527,7 +2538,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             trd=trd, trd_c=primary["trd_c"], cot=primary["cot"],
             theta_deg=primary["theta_deg"], util=util_t, asl_req=asl_req, t_ed=t_ed,
             fcd=fcd, fywd=fywd_t, fyd_long=fyd_long, nu=primary["nu"], alpha_cw=alpha_cw,
-            fctd=fctd, nu_v_detailing=nu_detail, sigma_cp=sigma_cp,
+            fctd=fctd, nu_v_detailing=nu_detail_applied, sigma_cp=sigma_cp,
             n_prestress=n_prestress, asw_t=asw_t, asw_over_s=asw_over_s_t,
             dia=inp["shear_link_dia"], s=inp["shear_link_s"], cot_min=tcot_min,
             cot_max=tcot_max, method=inp["torsion_method"], governs=primary["governs"],
@@ -2942,7 +2953,7 @@ def plastic_view(inp, results):
     st.plotly_chart(
         viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied"),
                                angles=[pt["V"] for pt in p["points"]],
-                               util=p.get("util")),
+                               util=p.get("util"), closed=p.get("closed", True)),
         width="stretch")
 
     # Default to the utilisation-governing angle (the state in the applied load's
@@ -3777,6 +3788,12 @@ inp["label_min_gap"] = _seeded_number(
          "hidden to avoid overlap. Lower shows more (0 shows every label); "
          "raise it for dense outlines like a circular section.")
 
+# Migrate a renamed view label from an older session BEFORE the selectbox renders: a
+# keyed selectbox otherwise keeps returning the stale string, which the dispatch no
+# longer recognises, so the combined view silently falls through to the elastic one.
+_VIEW_ALIASES = {"M-V-T Interaction": "M-V-T Combined"}
+if st.session_state.get("view") in _VIEW_ALIASES:
+    st.session_state["view"] = _VIEW_ALIASES[st.session_state["view"]]
 # A pending post-Calculate view switch is applied BEFORE the selectbox renders, so
 # the widget picks it up cleanly (setting a widget key after it renders is unsafe).
 if "_switch_view" in st.session_state:
@@ -3815,7 +3832,9 @@ if calc:
     st.session_state.pop("pl_state", None)
     # If the user calculated while on a live input view, take them to the natural
     # result view so they see the outcome (queue it; applied before the selectbox).
-    if view in ("Section", "Stress-Strain diagrams"):
+    # Only when a result was actually produced -- an invalid section returns {} and
+    # must NOT navigate the user away to an empty result page.
+    if view in ("Section", "Stress-Strain diagrams") and st.session_state["results"]:
         st.session_state["_switch_view"] = ("Plastic Results"
                                             if inp["mode"] in ("Plastic", "Both")
                                             else "Elastic Results")
@@ -3824,10 +3843,13 @@ if calc:
 _generate_report(inp)   # builds the PDF when the Report panel's Generate was pressed
 
 results = st.session_state.get("results")
-stale = results is not None and st.session_state.get("result_sig") != inp["signature"]
+# An invalid section (a void that disconnects the concrete, steel outside the outline)
+# makes run_analysis return {} -- falsy but not None. Treat that like no result so the
+# badge does not read green "up to date" for a Calculate that produced nothing.
+stale = bool(results) and st.session_state.get("result_sig") != inp["signature"]
 # Result freshness, shown under the Calculate button on EVERY view (not just the
 # result views) so the user always knows whether the results reflect the inputs.
-if results is None:
+if not results:
     c_calc.caption("Not calculated yet")
 elif stale:
     c_calc.caption(":orange[Inputs changed -- recalculate]")
