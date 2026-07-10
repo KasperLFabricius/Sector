@@ -507,3 +507,17 @@ def test_report_shear_links_out_of_limits_note():
     out["shear"] = sh
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "outside the code range" in txt
+
+
+def test_fig_png_times_out_instead_of_hanging():
+    # v0.62: the report's kaleido export runs off the main thread with a join
+    # timeout, so a stuck browser yields a placeholder (None) instead of freezing
+    # report generation -- matching the manual's export guard.
+    import time
+
+    class _SlowFig:
+        def to_image(self, **kw):
+            time.sleep(5.0)
+            return b"never"
+
+    assert sector_report._fig_png(_SlowFig(), 100, 100, timeout=0.3) is None

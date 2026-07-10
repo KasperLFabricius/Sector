@@ -666,12 +666,12 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
         # squash below its apex, tension above its apex, max-moment just left of the
         # right-most apex.
         fig.add_annotation(x=Ms[i_sq], y=Ns[i_sq], text="squash", showarrow=False,
-                           yshift=-11, yanchor="top", font=dict(size=10, color=ENVELOPE))
+                           yshift=-11, yanchor="top", font=dict(size=11, color=ENVELOPE))
         fig.add_annotation(x=Ms[i_te], y=Ns[i_te], text="tension", showarrow=False,
-                           yshift=11, yanchor="bottom", font=dict(size=10, color=ENVELOPE))
+                           yshift=11, yanchor="bottom", font=dict(size=11, color=ENVELOPE))
         fig.add_annotation(x=Ms[i_mm], y=Ns[i_mm], text="max " + mlabel.replace("_", ""),
                            showarrow=False, xshift=-8, xanchor="right",
-                           font=dict(size=10, color=ENVELOPE))
+                           font=dict(size=11, color=ENVELOPE))
     if applied is not None:
         fig.add_trace(go.Scatter(x=[snap(applied[1])], y=[applied[0]], mode="markers",
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
