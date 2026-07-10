@@ -324,6 +324,28 @@ def test_report_shear_2023_section():
     assert "d" in txt and "dg" in txt                # ddg appears
 
 
+def test_report_shear_shows_prestress_precompression():
+    # F1: a prestressed section adds a tendon-precompression row (sigma_cp credit).
+    out = _out()
+    sh = _shear_out()
+    sh["n_prestress"] = 900.0
+    sh["res"]["sigma_cp"] = 4.5
+    out["shear"] = sh
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Tendon precompression" in txt
+    assert "900" in txt
+
+
+def test_report_shear_2023_tension_warning():
+    # F2: the 2023 tau_Rd,c ignores a net axial tension -- warn in the report.
+    out = _out()
+    sh = _shear_out_2023()
+    sh["n2023_tension"] = True
+    out["shear"] = sh
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "UNCONSERVATIVE" in txt
+
+
 def test_report_shear_2023_invalid_is_reportable():
     # Codex P2: an invalid 2023 result (from the engine) must render without a KeyError.
     from sector import codes as _codes, shear as _shear
