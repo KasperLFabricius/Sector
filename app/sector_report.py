@@ -610,7 +610,8 @@ class ReportBuilder:
             self._small("Warning: not all sweep points converged.")
         applied = pl.get("applied")   # None for a capacity-only run
         self._fig(viz.interaction_figure(
-            pl["mx"], pl["my"], applied=applied, title="M-M interaction"), 130, 100)
+            pl["mx"], pl["my"], applied=applied, title="M-M interaction",
+            angles=[pt["V"] for pt in pl["points"]], util=pl.get("util")), 130, 100)
         rows = [["Quantity", "Value"],
                 ["Max / Min M<sub>x</sub> capacity",
                  f"{_fmt(pl['max_mx'], 3)} / {_fmt(pl.get('min_mx', min(pl['mx'])),1)} kNm"],

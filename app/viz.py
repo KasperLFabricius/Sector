@@ -552,16 +552,19 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     return fig
 
 
-def interaction_figure(mx, my, applied=None, title="M-M interaction"):
+def interaction_figure(mx, my, applied=None, angles=None, util=None,
+                       title="M-M interaction"):
     """Biaxial moment capacity envelope, with an optional applied-load point.
 
     Drawn to match the section's orientation: ``Mx`` is bending *about* the
     x-axis (its stress varies with y), so it is the **vertical** axis here, and
     ``My`` (about the y-axis) is the **horizontal** axis. The two axes share a
-    common scale (equal aspect), so the envelope keeps its true shape -- a section
-    stronger about one axis reads as a correspondingly taller (or wider) envelope
-    rather than a stretched-to-fill box. ``applied`` is given as ``(Mx, My)`` and
-    placed accordingly.
+    common scale (equal aspect), so the envelope keeps its true shape. ``applied``
+    is ``(Mx, My)``. ``angles`` (the swept neutral-axis angle at each envelope
+    vertex, aligned with ``mx``/``my``) is shown on hover. When ``util`` (the
+    radial utilisation) is given with ``applied``, a dotted ray from the origin
+    through the applied point marks the capacity in that load direction, so the
+    utilisation reads off the figure.
     """
     # Snap the floating-point noise at the apexes to zero: a pure-Mx (or pure-My)
     # point should sit on the axis, but the solver leaves a tiny residual that the
@@ -571,19 +574,47 @@ def interaction_figure(mx, my, applied=None, title="M-M interaction"):
     snap = lambda v: 0.0 if abs(v) <= scale * 1e-4 else v
     mx = [snap(v) for v in mx]
     my = [snap(v) for v in my]
-    # Round the hover read-out too, so a long float shows as e.g. "388.5 kNm".
-    hover = "My = %{x:.1f} kNm<br>Mx = %{y:.1f} kNm<extra></extra>"
 
     fig = go.Figure()
-    # My on the horizontal axis, Mx on the vertical -- see the note above.
-    fig.add_trace(go.Scatter(x=my + my[:1], y=mx + mx[:1], mode="lines",
-                             line=dict(color=ENVELOPE, width=2), name="capacity",
-                             hovertemplate=hover))
+    # My on the horizontal axis, Mx on the vertical -- see the note above. Closed
+    # (repeat the first vertex) and filled to read as an enclosed capacity region.
+    cap = go.Scatter(x=my + my[:1], y=mx + mx[:1], mode="lines", fill="toself",
+                     fillcolor=ENVELOPE_FILL, line=dict(color=ENVELOPE, width=2),
+                     name="capacity")
+    if angles is not None and len(angles) == len(mx):
+        cap.customdata = list(angles) + list(angles[:1])
+        cap.hovertemplate = ("V = %{customdata:.0f} deg<br>My = %{x:.1f} kNm"
+                             "<br>Mx = %{y:.1f} kNm<extra></extra>")
+    else:
+        cap.hovertemplate = "My = %{x:.1f} kNm<br>Mx = %{y:.1f} kNm<extra></extra>"
+    fig.add_trace(cap)
+
     if applied is not None:
         a_mx, a_my = snap(applied[0]), snap(applied[1])
-        fig.add_trace(go.Scatter(x=[a_my], y=[a_mx], mode="markers",
-                                 marker=dict(size=11, color=LOAD_POINT, symbol="x"),
-                                 name="applied", hovertemplate=hover))
+        # Utilisation ray: origin -> applied -> the envelope crossing in that same
+        # direction (capacity = applied / util). The applied point then sits at the
+        # fraction ``util`` of the way out to the capacity, so the ratio is visual.
+        if util is not None and math.isfinite(util) and util > 1e-9:
+            gx, gy = a_my / util, a_mx / util
+            fig.add_trace(go.Scatter(
+                x=[0.0, gx], y=[0.0, gy], mode="lines",
+                line=dict(color=GUIDE_LINE, width=1, dash="dot"),
+                name="load direction", hoverinfo="skip"))
+            fig.add_trace(go.Scatter(
+                x=[gx], y=[gy], mode="markers", name="capacity (this direction)",
+                marker=dict(size=11, color=ENVELOPE, symbol="circle-open",
+                            line=dict(width=2)),
+                hovertemplate="My = %{x:.1f} kNm<br>Mx = %{y:.1f} kNm<extra></extra>"))
+        fig.add_trace(go.Scatter(
+            x=[a_my], y=[a_mx], mode="markers",
+            marker=dict(size=11, color=LOAD_POINT, symbol="x"), name="applied",
+            hovertemplate="My = %{x:.1f} kNm<br>Mx = %{y:.1f} kNm<extra></extra>"))
+        if util is not None and math.isfinite(util):
+            # Below-right of the applied point, clear of the (up-and-out) load ray.
+            fig.add_annotation(x=a_my, y=a_mx, text=f"util = {util:.2f}",
+                               showarrow=True, arrowhead=2, arrowsize=0.7,
+                               arrowwidth=1, arrowcolor=GUIDE_LINE, ax=32, ay=26,
+                               font=dict(size=11, color=LOAD_POINT))
     fig.update_layout(
         title=title, template=_TEMPLATE, height=440,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
@@ -619,6 +650,28 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     fig.add_trace(go.Scatter(x=Ms + Ms[:1], y=Ns + Ns[:1], mode="lines", fill="toself",
                              line=dict(color=ENVELOPE, width=2), name="capacity",
                              fillcolor=ENVELOPE_FILL, hovertemplate=hover))
+    # Landmark points (derived from the boundary): the squash load (most
+    # compression), the tension limit (most tension) and the max-moment apex. They
+    # make the figure readable on its own.
+    if Ns:
+        i_sq = min(range(len(Ns)), key=lambda i: Ns[i])     # min N = squash
+        i_te = max(range(len(Ns)), key=lambda i: Ns[i])     # max N = tension limit
+        i_mm = max(range(len(Ms)), key=lambda i: abs(Ms[i]))  # widest = max moment
+        fig.add_trace(go.Scatter(
+            x=[Ms[i_sq], Ms[i_te], Ms[i_mm]], y=[Ns[i_sq], Ns[i_te], Ns[i_mm]],
+            mode="markers", marker=dict(size=7, color=ENVELOPE, symbol="diamond"),
+            name="landmarks", hovertemplate=hover))
+        # Short descriptors (the exact values are in the metrics row and on hover),
+        # placed so they never clip the frame in the half-width side-by-side view:
+        # squash below its apex, tension above its apex, max-moment just left of the
+        # right-most apex.
+        fig.add_annotation(x=Ms[i_sq], y=Ns[i_sq], text="squash", showarrow=False,
+                           yshift=-11, yanchor="top", font=dict(size=10, color=ENVELOPE))
+        fig.add_annotation(x=Ms[i_te], y=Ns[i_te], text="tension", showarrow=False,
+                           yshift=11, yanchor="bottom", font=dict(size=10, color=ENVELOPE))
+        fig.add_annotation(x=Ms[i_mm], y=Ns[i_mm], text="max " + mlabel.replace("_", ""),
+                           showarrow=False, xshift=-8, xanchor="right",
+                           font=dict(size=10, color=ENVELOPE))
     if applied is not None:
         fig.add_trace(go.Scatter(x=[snap(applied[1])], y=[applied[0]], mode="markers",
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
@@ -650,6 +703,21 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
             line=dict(color=ENVELOPE, width=2), name="limit (= 1)",
             fillcolor=ENVELOPE_FILL,
             hovertemplate="V = %{x:.1f} kN<br>T = %{y:.1f} kNm<extra></extra>"))
+        # Interaction sum V/VRd,max + T/TRd,max: the applied point sits at that
+        # fraction along the ray from the origin to the limit line, so draw the ray
+        # to the crossing and annotate the sum (<= 1 is safe).
+        s = v_ed / vrd_max + t_ed / trd_max
+        if s > 1e-9:
+            fig.add_trace(go.Scatter(
+                x=[0.0, v_ed / s], y=[0.0, t_ed / s], mode="lines",
+                line=dict(color=GUIDE_LINE, width=1, dash="dot"),
+                name="load direction", hoverinfo="skip"))
+            ok = s <= 1.0 + 1e-9
+            fig.add_annotation(
+                x=v_ed, y=t_ed, ax=30, ay=26, showarrow=True, arrowhead=2,
+                arrowsize=0.7, arrowwidth=1, arrowcolor=GUIDE_LINE,
+                text=f"sum = {s:.2f} ({'OK' if ok else 'over'})",
+                font=dict(size=11, color=(ENVELOPE if ok else LOAD_POINT)))
     fig.add_trace(go.Scatter(
         x=[v_ed], y=[t_ed], mode="markers",
         marker=dict(size=11, color=LOAD_POINT, symbol="x"), name="applied",
