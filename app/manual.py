@@ -211,38 +211,56 @@ def fig_strain_plane():
     the left; the strain diagram, sharing the same depth axis, on the right against a
     vertical zero-strain reference."""
     fig = _schematic()
+    eps = chr(0x3B5)             # epsilon glyph (BMP, surrogate-safe; source stays ASCII)
     y_na = 0.62
-    # Section: a slim depth bar (top edge = compression face, bottom = tension face).
-    fig.add_shape(type="rect", x0=-0.9, y0=0.0, x1=-0.6, y1=1.0,
-                  line=dict(color="#888", width=1.5), fillcolor="#f2f2f2")
-    # Zero-strain reference (vertical) and the neutral axis (horizontal) crossing
-    # where the strain is zero; the NA line is carried across the section too.
+    xb0, xb1 = -1.35, -1.05      # the slim concrete depth bar, well clear of the strains
+    # Section depth bar (top edge = compression face, bottom edge = tension face),
+    # drawn as concrete so it matches the section figures.
+    fig.add_shape(type="rect", x0=xb0, y0=0.0, x1=xb1, y1=1.0,
+                  line=dict(color=viz.CONCRETE_LINE, width=1.5),
+                  fillcolor=viz.CONCRETE_FILL)
+    # The neutral axis (horizontal, carried across the section) and the zero-strain
+    # vertical reference, both where the strain is zero.
+    fig.add_shape(type="line", x0=xb0, y0=y_na, x1=1.0, y1=y_na,
+                  line=dict(color=viz.GUIDE_LINE, width=1, dash="dot"))
     fig.add_shape(type="line", x0=0.0, y0=0.0, x1=0.0, y1=1.0,
-                  line=dict(color="#bbb", width=1, dash="dot"))
-    fig.add_shape(type="line", x0=-0.9, y0=y_na, x1=0.6, y1=y_na,
-                  line=dict(color="#bbb", width=1, dash="dot"))
+                  line=dict(color=viz.GUIDE_LINE, width=1, dash="dot"))
     # The strain: ONE straight line through (0, y_na). Tension-positive, so the
     # compression above the NA is left of the zero line (negative) and the tension
     # below is right of it (positive). x is linear in depth, so x_bot is set to make
     # the line pass through zero exactly at the NA.
-    x_top = -0.46
+    x_top = -0.50
     x_bot = -x_top * y_na / (1.0 - y_na)
-    # Shade the compression and tension wedges (between the zero line and the strain
-    # line) so the two sides of the neutral axis read at a glance.
+    # Shade the wedges between the zero line and the strain line, app-wide semantics:
+    # red = compression (top), green = tension (bottom).
     fig.add_trace(go.Scatter(x=[0.0, 0.0, x_top], y=[y_na, 1.0, 1.0],
-                             fill="toself", mode="none",
-                             fillcolor="rgba(55,138,221,0.18)"))
+                             fill="toself", mode="none", fillcolor=viz.COMP_ZONE_FILL))
     fig.add_trace(go.Scatter(x=[0.0, 0.0, x_bot], y=[y_na, 0.0, 0.0],
-                             fill="toself", mode="none",
-                             fillcolor="rgba(216,90,48,0.16)"))
+                             fill="toself", mode="none", fillcolor=viz.TENS_ZONE_FILL))
     fig.add_trace(go.Scatter(x=[x_bot, x_top], y=[0.0, 1.0], mode="lines",
-                             line=dict(color="#333", width=2)))
-    fig.add_annotation(x=x_top, y=1.0, text="eps_cu (compression -)",
-                       showarrow=False, xshift=-54, font=dict(size=11))
-    fig.add_annotation(x=x_bot, y=0.0, text="eps_s (tension +)",
-                       showarrow=False, xshift=42, font=dict(size=11))
-    fig.add_annotation(x=0.0, y=y_na, text="neutral axis (eps = 0)",
-                       showarrow=False, xshift=58, yshift=10, font=dict(size=11))
+                             line=dict(color=viz.SCHEMATIC_INK, width=2)))
+    # Faces labelled directly above / below the concrete bar (clear of everything).
+    x_bar = 0.5 * (xb0 + xb1)
+    fig.add_annotation(x=x_bar, y=1.0, yshift=13, yanchor="bottom", showarrow=False,
+                       text="compression face", font=dict(size=11, color=viz.CONCRETE_LINE))
+    fig.add_annotation(x=x_bar, y=0.0, yshift=-13, yanchor="top", showarrow=False,
+                       text="tension face", font=dict(size=11, color=viz.CONCRETE_LINE))
+    # Strain endpoints labelled with leader arrows into clear space (up-left for the
+    # compression fibre, down-right for the tension steel), so nothing overlaps.
+    # The faces (on the bar) carry the compression / tension words; the strain
+    # endpoints just carry the signed symbol, placed clear of the face labels.
+    fig.add_annotation(x=x_top, y=1.0, ax=26, ay=-22, showarrow=True, arrowhead=2,
+                       arrowsize=0.8, arrowwidth=1, arrowcolor=viz.GUIDE_LINE,
+                       xanchor="left", text=eps + "<sub>cu</sub> (-)",
+                       font=dict(size=11))
+    fig.add_annotation(x=x_bot, y=0.0, ax=26, ay=22, showarrow=True, arrowhead=2,
+                       arrowsize=0.8, arrowwidth=1, arrowcolor=viz.GUIDE_LINE,
+                       xanchor="left", text=eps + "<sub>s</sub> (+)",
+                       font=dict(size=11))
+    # NA label at the right end of its line, in the right margin (clear of the wedges).
+    fig.add_annotation(x=1.0, y=y_na, xshift=8, xanchor="left", showarrow=False,
+                       text="neutral axis (" + eps + " = 0)", font=dict(size=11))
+    fig.update_layout(margin=dict(l=20, r=125, t=48, b=48))
     return fig
 
 

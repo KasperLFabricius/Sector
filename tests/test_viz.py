@@ -453,3 +453,39 @@ def test_truss_figure_caps_the_number_of_ties():
     fig = viz.truss_figure(21.8, 495.0, s_mm=5.0)
     ties = [t for t in fig.data if "links" in (getattr(t, "name", "") or "")]
     assert len(ties) <= 30
+
+
+# -- v0.57 (A2): house palette + shared layout template ----------------------
+
+def test_material_curve_names_match_their_colours():
+    # The characteristic curve is CURVE_CHAR (purple) and the design curve is
+    # CURVE_DESIGN (grey); the constants used to be swapped, so the names lied.
+    from sector import material_presets as mp
+    st = mp.build_mild(**mp.MILD_PRESETS[list(mp.MILD_PRESETS)[0]])
+    fig = viz.steel_curve_figure(st)
+    char = next(t for t in fig.data if getattr(t, "name", None) == "characteristic")
+    design = next(t for t in fig.data if getattr(t, "name", None) == "design")
+    assert char.line.color == viz.CURVE_CHAR
+    assert design.line.color == viz.CURVE_DESIGN
+
+
+def test_interaction_fills_use_the_house_envelope_fill():
+    # The interaction fills route through ENVELOPE_FILL (purple-tinted to match the
+    # envelope line), not the old off-palette default-plotly blue.
+    nm = viz.interaction_nm_figure([100.0, 0.0, -50.0], [0.0, 80.0, 0.0])
+    assert nm.data[0].fillcolor == viz.ENVELOPE_FILL
+    vt = viz.vt_interaction_figure(600.0, 80.0, 100.0, 30.0)
+    assert any(getattr(t, "fillcolor", None) == viz.ENVELOPE_FILL for t in vt.data)
+
+
+def test_shared_sector_template_is_registered():
+    import plotly.io as pio
+    assert "sector" in pio.templates
+    assert pio.templates["sector"].layout.font.family == viz._FONT_FAMILY
+
+
+def test_truss_links_use_a_link_colour_not_the_neutral_axis():
+    # The stirrup ties get their own LINK_LINE constant instead of reusing NA_LINE.
+    fig = viz.truss_figure(21.8, 495.0, s_mm=150.0)
+    ties = [t for t in fig.data if "links" in (getattr(t, "name", "") or "")]
+    assert ties and all(t.line.color == viz.LINK_LINE for t in ties)
