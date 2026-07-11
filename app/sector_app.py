@@ -2664,6 +2664,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 chord["m_ed"], chord["m_rd"], 0.5 * v_ed_s * c, _ftd_t_at(c),
                 chord["z_m"])["util"])
         if (inp.get("combined_on") and pl is not None and pl.get("util") is not None
+                and math.isfinite(pl["util"])
                 and links_valid and tors_valid and (shear_live or tors_live)):
             _mv_ind = bool(inp["combined_mv_independent"])
 
@@ -2691,7 +2692,11 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             t_ed = tors_ctx["t_ed"]
             subdivide = tors_ctx["subdivide"]
             tk = tors_ctx["_tk"]
-            if cot_star is not None:
+            # Pin to the member angle only when torsion is a LIVE participant. A dead
+            # companion (TEd = 0) does not join the shared-angle objective, so forcing
+            # it to cot_star would report a torsion angle (and TRd) outside the user's
+            # own torsion cot band; leave it at its own resistance-optimum instead.
+            if cot_star is not None and tors_live:
                 tk = dict(tk, cot_min=cot_star, cot_max=cot_star)
             sub_res = [_tube_torsion(tb, te, **tk)
                        for tb, te in zip(tors_ctx["subtubes"], tors_ctx["ted_parts"])]
@@ -2735,12 +2740,15 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9),
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
-                theta_mode=theta_mode_str)
+                theta_mode=(theta_mode_str if tors_live else "resistance"))
 
         # ---- links payload at the member angle ----
         if link_ctx is not None:
             v_ed = link_ctx["v_ed"]
-            if cot_star is not None:
+            # Pin to the member angle only when shear is a LIVE participant; a dead
+            # shear companion (VEd = 0) keeps its own resistance-optimum rather than
+            # being forced to a torsion-driven angle outside its own cot band.
+            if cot_star is not None and shear_live:
                 lk = link_ctx["build"](cot_star, cot_star)
             else:
                 lk = link_ctx["build"](link_ctx["cot_min"], link_ctx["cot_max"])
@@ -2782,7 +2790,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                            out_of_limits=bool(link_ctx["cot_min"] < lo - 1e-9
                                               or link_ctx["cot_max"] > hi + 1e-9),
                            required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
-                           theta_mode=theta_mode_str))
+                           theta_mode=(theta_mode_str if shear_live
+                                       else "resistance")))
 
         # ---- checks that pair shear and torsion, at the member angle ----
         if tors_ctx is not None:
@@ -3681,14 +3690,19 @@ def torsion_view(inp, results):
     if t.get("subdivided"):
         subs = t["subtubes"]
         c_tot = sum(s["stiffness"] for s in subs) or 1.0
+        if t.get("theta_mode") == "utilisation":
+            angle_clause = (f"every sub-tube is at the ONE member strut angle "
+                            f"(6.3.2(2), cot {_THETA} = {t['cot']:.3f}), shared with "
+                            "the shear check and selected to minimise the governing "
+                            "utilisation")
+        else:
+            angle_clause = ("each sub-tube is at its OWN resistance-optimum strut angle "
+                            "(no single member angle applies -- see the cot column)")
         st.caption(f"Compound section (6.3.1(3)): TRd = {chr(0x03A3)} of the sub-tube "
                    f"capacities; TEd is split by uncracked torsional stiffness "
                    f"C = {chr(0x03B2)}*h*b^3 (6.3.1(4)). The first row (web) carries the "
-                   f"shear in the combined V+T checks; every sub-tube is at the ONE "
-                   f"member strut angle (6.3.2(2), cot {_THETA} = {t['cot']:.3f}"
-                   + (", shared with the shear check and selected to minimise the "
-                      "governing utilisation" if t.get("theta_mode") == "utilisation"
-                      else "") + f"). Method: {t['method']}.")
+                   f"shear in the combined V+T checks; {angle_clause}. "
+                   f"Method: {t['method']}.")
         st.markdown("**Sub-tubes (TRd = " + chr(0x03A3) + " TRd,i)**")
         st.dataframe(
             {"Sub-tube": [("web" if i == 0 else f"part {i + 1}")
@@ -3696,6 +3710,7 @@ def torsion_view(inp, results):
              "b x h (mm)": [f"{s['b_mm']:.0f} x {s['h_mm']:.0f}" for s in subs],
              "tef (mm)": [f"{s['tube']['tef']:.1f}" for s in subs],
              "Ak (mm2)": [f"{s['tube']['Ak'] * 1e6:.0f}" for s in subs],
+             f"cot {_THETA}": [f"{s['cot']:.3f}" for s in subs],
              "Stiffness": [f"{s['stiffness'] / c_tot * 100:.1f} %" for s in subs],
              "TEd,i (kNm)": [f"{s['t_ed']:.3f}" for s in subs],
              "TRd,i (kNm)": [f"{s['trd']:.3f}" for s in subs],

@@ -334,6 +334,32 @@ def test_app_torsion_subdivided_view_renders():
     assert any("TRd" in lbl for lbl in labels)
 
 
+def test_app_torsion_subdivided_caption_not_shared_angle_when_disjoint():
+    # v0.69 regression (workflow): in disjoint mode the sub-tubes are each at their
+    # OWN resistance-optimum angle (cot differs per tube because tef differs), so the
+    # compound-section caption must NOT claim a single shared "ONE member strut angle";
+    # the per-tube cot is exposed in the sub-tube table so the numbers are verifiable.
+    at = _fresh(); at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(150.0).run()
+    at.number_input(key="shear_cot_min").set_value(1.0).run()
+    at.number_input(key="shear_cot_max").set_value(1.25).run()   # below the torsion band
+    _subdivided(at, T=40.0)
+    at.number_input(key="torsion_cot_min").set_value(1.35).run()
+    at.number_input(key="torsion_cot_max").set_value(2.5).run()  # disjoint from shear
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["theta_mode"] == "disjoint"
+    cots = [s["cot"] for s in t["subtubes"]]
+    assert abs(cots[0] - cots[1]) > 0.01                         # each at its own angle
+    at.selectbox(key="view").set_value("Torsion").run()
+    caps = " ".join(c.value for c in at.caption)
+    assert "each sub-tube is at its OWN" in caps
+    assert "ONE member strut angle" not in caps
+
+
 def test_app_torsion_subdivided_combined_pairs_web():
     # The combined V+T crushing must use the WEB sub-tube's torsion SHARE, not full TEd.
     at = _fresh(); at.run()

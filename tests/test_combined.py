@@ -363,8 +363,100 @@ def test_app_zero_torsion_does_not_constrain_the_shear_band():
     at.number_input(key="torsion_cot_min").set_value(1.0).run()
     at.number_input(key="torsion_cot_max").set_value(1.2).run()  # narrow band
     at.button(key="calculate").click().run()
-    lk = at.session_state["results"]["shear"]["links"]
+    r = at.session_state["results"]
+    lk = r["shear"]["links"]
     assert lk["res"]["cot"] == pytest.approx(2.5)                # shear band governs
+    # Codex: the dead torsion companion (TEd = 0) must NOT be pinned to the shear
+    # angle -- it stays inside its own [1.0, 1.2] band at its own resistance-optimum,
+    # not reported at cot = 2.5 (which the user excluded for torsion).
+    t = r["torsion"]
+    assert 1.0 - 1e-9 <= t["cot"] <= 1.2 + 1e-9
+    assert t["theta_mode"] == "resistance"
+
+
+def test_app_dead_shear_companion_stays_in_its_own_band():
+    # Mirror of the T=0 case: shear links enabled but VEd = 0 while torsion is live.
+    # The dead links must not be pinned to the torsion-driven angle outside their band.
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(80.0).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(0.0).run()          # enabled, no load
+    at.number_input(key="shear_cot_min").set_value(2.3).run()
+    at.number_input(key="shear_cot_max").set_value(2.5).run()    # narrow, high band
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    at.number_input(key="torsion_cot_min").set_value(1.0).run()
+    at.number_input(key="torsion_cot_max").set_value(1.2).run()
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert 2.3 - 1e-9 <= lk["res"]["cot"] <= 2.5 + 1e-9          # own band, not ~1.1
+    assert lk["theta_mode"] == "resistance"
+
+
+def test_app_infinite_bending_util_does_not_poison_the_member_angle():
+    # Workflow finding: an INFINITE plastic (bending) utilisation -- the applied N/M
+    # ray misses the plastic M-M envelope -- must not poison the strut-angle objective
+    # via the constant DK NA term. Guard mirrors the invalid-tube inf guard: with an
+    # inf r_m the member angle is chosen by the FINITE terms exactly as if the combined
+    # check were off, instead of being pinned to the band edge by the inf.
+    def run(combined):
+        at = _fresh()
+        at.run()
+        at.number_input(key="pl_P").set_value(8000.0).run()      # beyond axial capacity
+        at.number_input(key="pl_Mx").set_value(120.0).run()      # -> ray misses envelope
+        at.checkbox(key="shear_on").set_value(True).run()
+        at.checkbox(key="shear_links").set_value(True).run()
+        at.number_input(key="shear_V").set_value(300.0).run()
+        at.checkbox(key="torsion_on").set_value(True).run()
+        at.number_input(key="torsion_T").set_value(60.0).run()
+        at.checkbox(key="combined_on").set_value(combined).run()
+        at.button(key="calculate").click().run()
+        return at.session_state["results"]
+    r_on = run(True)
+    r_off = run(False)
+    assert not math.isfinite(r_on["plastic"]["util"])            # inf bending util
+    assert not math.isfinite(r_on["combined"]["dkna_sum"])       # verdict still FAIL
+    cot_on = r_on["shear"]["links"]["res"]["cot"]
+    cot_off = r_off["shear"]["links"]["res"]["cot"]
+    assert cot_on == pytest.approx(cot_off)                      # inf did not move the angle
+    assert cot_on > 1.05                                          # NOT pinned to the band edge
+
+
+def test_app_combined_angle_minimises_the_dkna_governing_sum():
+    # v0.69 requirement: theta minimises the LARGEST applicable utilisation. In a
+    # combined M+V+T run the governing utilisation is the DK NA sum(SEd/SRd) (a sum of
+    # ratios, so >= every component), which has a load-dependent INTERIOR optimum.
+    # Pin the strut to fixed cots across the band and confirm the auto-selected angle
+    # beats every one of them -- i.e. the chosen cot actually minimises the governing
+    # combined utilisation, not just some component. A regression that drops the DK NA
+    # objective term would move theta off this minimum and this test would catch it.
+    def dkna(pin=None):
+        at = _fresh()
+        at.run()
+        at.number_input(key="pl_Mx").set_value(150.0).run()
+        at.checkbox(key="shear_on").set_value(True).run()
+        at.checkbox(key="shear_links").set_value(True).run()
+        at.number_input(key="shear_V").set_value(280.0).run()
+        at.checkbox(key="torsion_on").set_value(True).run()
+        at.number_input(key="torsion_T").set_value(100.0).run()
+        at.checkbox(key="combined_on").set_value(True).run()
+        if pin is not None:
+            for k in ("shear_cot_min", "shear_cot_max",
+                      "torsion_cot_min", "torsion_cot_max"):
+                at.number_input(key=k).set_value(pin).run()
+        at.button(key="calculate").click().run()
+        r = at.session_state["results"]
+        return r["shear"]["links"]["res"]["cot"], r["combined"]["dkna_sum"]
+    cot_star, dk_star = dkna()
+    # A load-dependent interior optimum, NOT the pre-v0.69 clamp to the band edge.
+    assert 1.8 < cot_star < 2.4
+    # It beats every fixed strut angle across the band, including the resistance-max
+    # edge cot = 2.5 that the old code always returned.
+    for pin in (1.0, 1.6, 2.0, 2.4, 2.5):
+        _, dk_pin = dkna(pin=pin)
+        assert dk_star < dk_pin, f"cot*={cot_star} dkna*={dk_star} !< pin {pin}: {dk_pin}"
 
 
 def test_app_no_load_with_combined_keeps_resistance_mode():
