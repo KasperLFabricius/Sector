@@ -2910,7 +2910,13 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     # the whole stirrup serves torsion.
                     v_ed, t_ed_w = sh["v_ed"], to["primary"]["t_ed"]
                     vrd_c = sh["res"]["vrd_c"]
-                    cot_b = sl["res"]["cot"]
+                    # Label with the MEMBER angle the shared-stirrup numbers are
+                    # actually evaluated at (cot_c = cot_star): u_crush = interaction
+                    # value and the web torsion share both sit there. sl["res"]["cot"]
+                    # only equals it when shear is a live participant -- with a dead
+                    # shear companion (VEd = 0) the links are de-pinned to their own
+                    # band, so reading their cot here would mislabel the check.
+                    cot_b = inter["cot"] if inter is not None else sl["res"]["cot"]
                     shear_credited = v_ed <= vrd_c
                     sf = (0.0 if shear_credited
                           else combined.ratio(v_ed, sl["res"]["vrd_s"]))

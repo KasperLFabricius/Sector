@@ -459,6 +459,33 @@ def test_app_combined_angle_minimises_the_dkna_governing_sum():
         assert dk_star < dk_pin, f"cot*={cot_star} dkna*={dk_star} !< pin {pin}: {dk_pin}"
 
 
+def test_app_combined_transverse_label_uses_member_angle_when_shear_dead():
+    # Focused review: with VEd = 0 and live torsion the links are de-pinned to their
+    # own band, so the shared-stirrup transverse check must be LABELLED with the member
+    # angle its numbers actually use (the 6.29 interaction cot), not the links' own
+    # resistance-optimum cot -- otherwise the reported angle contradicts the numbers.
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(90.0).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(0.0).run()
+    at.number_input(key="shear_cot_min").set_value(2.3).run()
+    at.number_input(key="shear_cot_max").set_value(2.5).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(60.0).run()
+    at.number_input(key="torsion_cot_min").set_value(1.0).run()
+    at.number_input(key="torsion_cot_max").set_value(1.4).run()
+    at.checkbox(key="combined_on").set_value(True).run()
+    at.button(key="calculate").click().run()
+    r = at.session_state["results"]
+    tv = r["combined"]["transverse"]
+    assert tv["valid"]
+    assert tv["cot"] == pytest.approx(r["torsion"]["interaction"]["cot"])
+    assert tv["cot"] < 1.5                                        # torsion angle, not 2.5
+    assert r["shear"]["links"]["res"]["cot"] == pytest.approx(2.5)  # links de-pinned
+
+
 def test_app_no_load_with_combined_keeps_resistance_mode():
     # Workflow finding: with V = 0 and T = 0 the constant DK NA term must not defeat
     # the documented no-load fallback (capacities at the resistance-max angles).
