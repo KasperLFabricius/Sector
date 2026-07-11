@@ -468,8 +468,14 @@ def test_app_combined_non_overlapping_cot_bands_are_rejected():
     c = at.session_state["results"]["combined"]
     assert c["transverse"]["valid"] is False
     assert c["crushing"]["valid"] is False
+    # Disjoint bands fall back to each action's own resistance angle, so the chord
+    # captions must NOT claim a shared minimising angle (theta_mode drives that).
+    assert at.session_state["results"]["shear"]["links"]["theta_mode"] == "resistance"
+    assert c["longitudinal"]["theta_mode"] == "resistance"
     at.selectbox(key="view").set_value("M-V-T Combined").run()
     assert any("do not overlap" in w.value for w in at.warning)
+    caps = " ".join(cap.value for cap in at.caption)
+    assert "bands do not overlap" in caps and "minimise the governing" not in caps
 
 
 def test_app_combined_is_saved_and_restored():

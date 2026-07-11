@@ -2761,7 +2761,9 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                             tension_low=chord["tension_low"],
                             off_util=chord["off_util"],
                             biaxial=bool(chord["off_util"] > 0.05),
-                            has_torsion=tors_live)
+                            has_torsion=tors_live,
+                            theta_mode=("utilisation" if cot_star is not None
+                                        else "resistance"))
             out["shear"].update(
                 links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
                            asw_over_s=link_ctx["asw_over_s"],
@@ -3597,18 +3599,20 @@ def shear_view(inp, results):
                 g3.metric("MEd,total/MRd", _pct(ch["util"]),
                           delta=("OK" if ch["ok"] else "Over limit"),
                           delta_color=("normal" if ch["ok"] else "inverse"))
+            obj_note = (" This demand is part of the strut-angle objective, so "
+                        + _THETA + " backs off the band edge when the chord would "
+                        "otherwise govern."
+                        if ch.get("theta_mode") == "utilisation" else "")
             st.caption(
                 f"Tension chord = the shear tension face ({face_lbl}). MEd,total = "
                 f"MEd + {_DELTA}Ftd*z + Ftd,T*z/2 = {ch['m_ed']:.1f} + "
                 f"{ch['mv']:.1f} + {ch['mt']:.1f} = {ch['m_total']:.1f} kNm vs "
                 f"MRd = {ch['m_rd']:.1f} kNm (pure bending about {ch['axis']} at "
-                f"the applied N); z = {ch['z']:.3f} m. This demand is part of the "
-                "strut-angle objective, so " + _THETA + " backs off the band edge "
-                "when the chord would otherwise govern.")
+                f"the applied N); z = {ch['z']:.3f} m." + obj_note)
             if ch.get("capped"):
                 st.caption("The shear shift is capped so bending + shear does not "
-                           "exceed MRd (6.2.3(7)); the angle selection uses the "
-                           "uncapped demand.")
+                           "exceed MRd (6.2.3(7)); the strut-angle objective uses "
+                           "this same capped demand.")
             if ch.get("biaxial"):
                 st.warning(
                     f"Biaxial bending: a moment about the OTHER axis is acting "
@@ -3939,9 +3943,13 @@ def combined_view(inp, results):
             f"applied N). Shear shift {_DELTA}Ftd = 0.5*VEd*cot{_THETA} = "
             f"{lg['ftd_v']:.1f} kN (6.18); torsion Ftd,T = TEd*uk*cot{_THETA}/(2Ak) = "
             f"{lg['ftd_t']:.1f} kN, distributed round the perimeter so half acts on "
-            f"this chord (6.28); z = {lg['z']:.3f} m. Both contributions are at the "
-            "ONE member strut angle shared by the shear and torsion checks "
-            "(6.3.2(2)), which is selected to minimise the governing utilisation.")
+            f"this chord (6.28); z = {lg['z']:.3f} m."
+            + (" Both contributions are at the ONE member strut angle shared by the "
+               "shear and torsion checks (6.3.2(2)), selected to minimise the "
+               "governing utilisation." if lg.get("theta_mode") == "utilisation"
+               else " The shear and torsion strut-angle bands do not overlap, so no "
+               "single angle is admissible; each term is at its own action's "
+               "resistance-optimum angle."))
         if lg["capped"]:
             st.caption("The shear shift is capped so bending + shear does not exceed "
                        "MRd (6.2.3(7): the added tension need not exceed the "

@@ -1018,9 +1018,11 @@ class ReportBuilder:
                 result=(f"utilisation = {_pct(ch['util'])}"
                         + ("  (uniaxial -- see note)" if ch.get("biaxial")
                            else f"  ({vv})")))
-            note = (f"Tension chord = the shear tension face ({face}); the chord "
-                    "demand is part of the strut-angle objective (uncapped), so "
-                    "theta backs off the band edge when the chord would govern.")
+            note = f"Tension chord = the shear tension face ({face})."
+            if ch.get("theta_mode") == "utilisation":
+                note += (" This capped demand is part of the strut-angle objective, "
+                         "so theta backs off the band edge when the chord would "
+                         "otherwise govern.")
             if ch.get("biaxial"):
                 note += (" Biaxial bending is acting; the off-axis chord is not "
                          "evaluated here -- rely on the combined sum(SEd/SRd).")
