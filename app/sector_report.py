@@ -1137,10 +1137,16 @@ class ReportBuilder:
                         "distributed torsion steel) may govern and is NOT evaluated here "
                         "-- rely on the sum(SEd/SRd) check above, which uses the full "
                         "biaxial bending utilisation.")
-            note = ("Both contributions are at the ONE member strut angle shared by "
-                    "the shear and torsion checks (6.3.2(2)). The sum(SEd/SRd) check "
-                    "above uses the full biaxial bending utilisation and remains the "
-                    "primary combined check.")
+            if lg.get("theta_mode") == "utilisation":
+                angle_note = ("Both contributions are at the ONE member strut angle "
+                              "shared by the shear and torsion checks (6.3.2(2)), "
+                              "selected to minimise the governing utilisation. ")
+            else:
+                angle_note = ("The shear and torsion strut-angle bands do not overlap, "
+                              "so no single angle is admissible; each term is at its "
+                              "own action's resistance-optimum angle. ")
+            note = (angle_note + "The sum(SEd/SRd) check above uses the full biaxial "
+                    "bending utilisation and remains the primary combined check.")
             if lg["capped"]:
                 note = ("The shear shift is capped so bending + shear does not exceed "
                         "M<sub>Rd</sub> (6.2.3(7): the added tension need not exceed "

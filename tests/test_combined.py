@@ -472,6 +472,8 @@ def test_app_combined_non_overlapping_cot_bands_are_rejected():
     # captions must NOT claim a shared minimising angle (theta_mode drives that).
     assert at.session_state["results"]["shear"]["links"]["theta_mode"] == "resistance"
     assert c["longitudinal"]["theta_mode"] == "resistance"
+    # The chord note is actually rendered in this state, so the report wording matters.
+    assert c["longitudinal"]["valid"] is True
     at.selectbox(key="view").set_value("M-V-T Combined").run()
     assert any("do not overlap" in w.value for w in at.warning)
     caps = " ".join(cap.value for cap in at.caption)

@@ -599,3 +599,45 @@ def test_report_stops_exporting_after_a_timeout():
     finally:
         sector_report._fig_png = orig
     assert calls["n"] == 1           # only the first figure actually tried to export
+
+
+def _combined_longitudinal(theta_mode):
+    # Minimal combined block that renders only the M+V+T tension-chord note. Crushing
+    # and transverse are omitted so the section reduces to the longitudinal paragraph,
+    # whose wording is driven purely by theta_mode.
+    return {
+        "combined": {
+            "method": "EN 1992-1-1:2005",
+            "valid": True,
+            "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
+            "dkna_ok": True, "dkna_sum": 0.90, "m_v_independent": False,
+            "longitudinal": {
+                "valid": True, "ok": True, "axis": "x", "tension_low": True,
+                "m_ed": 100.0, "m_rd": 200.0, "mv": 20.0, "mt": 10.0,
+                "ftd_v": 40.0, "ftd_t": 15.0, "z": 0.25, "m_total": 130.0,
+                "util": 0.65, "biaxial": False, "capped": False,
+                "theta_mode": theta_mode,
+            },
+        }
+    }
+
+
+def test_report_disjoint_longitudinal_note_avoids_a_shared_angle():
+    # theta_mode == "resistance" is the disjoint-band fallback (no admissible common
+    # angle). The PDF must NOT claim the shear and torsion terms share one member
+    # angle, or generated reports would contradict the on-screen disjoint warning.
+    txt = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _combined_longitudinal("resistance"), figures=False)).split())
+    assert "do not overlap" in txt
+    assert "resistance-optimum angle" in txt
+    assert "minimise the governing utilisation" not in txt
+    assert "ONE member strut angle shared" not in txt
+
+
+def test_report_shared_longitudinal_note_states_the_common_angle():
+    # theta_mode == "utilisation" is the normal case: one admissible member angle.
+    txt = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _combined_longitudinal("utilisation"), figures=False)).split())
+    assert "ONE member strut angle shared" in txt
+    assert "minimise the governing utilisation" in txt
+    assert "do not overlap" not in txt
