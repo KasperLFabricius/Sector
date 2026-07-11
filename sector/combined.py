@@ -36,30 +36,32 @@ def crushing_interaction(t_ed: float, trd_max: float, v_ed: float,
     return ratio(t_ed, trd_max) + ratio(v_ed, vrd_max)
 
 
-def combined_strut_theta(s_stirrup: float, c_crush: float, cot_min: float,
-                         cot_max: float) -> float:
-    """Common strut ``cot(theta)`` for a shared stirrup carrying shear + torsion.
+def governing_strut_cot(utils, cot_min: float, cot_max: float, n: int = 1501):
+    """The strut ``cot(theta)`` minimising the GOVERNING utilisation in the band.
 
-    The transverse-steel utilisation falls with a flatter strut,
-    ``U_stirrup(cot) = s_stirrup / cot`` (both VRd,s and TRd,s scale with ``cot``),
-    while the concrete-crushing utilisation ``U_crush(cot) = c_crush*(cot + 1/cot)``
-    is least at 45 deg and rises away from it. The member is governed by the larger of
-    the two, so the best single angle is their crossover ``cot^2 = s_stirrup/c_crush -
-    1``, floored at ``cot = 1`` (below it both worsen) and clamped to
-    ``[cot_min, cot_max]``. ``s_stirrup`` is ``U_stirrup`` at ``cot = 1`` and
-    ``c_crush`` is ``U_crush(cot=1)/2``.
+    EN 1992-1-1 6.3.2(2) uses one strut angle for the member (the same web struts
+    carry shear and torsion), and the designer may choose it freely inside the code
+    band. The best single angle is the one that minimises the worst of every check
+    that depends on it: ``utils`` is a list of callables ``cot -> utilisation`` (the
+    stirrup checks fall with ``cot``, the crushing and longitudinal-chord demands
+    rise), and the returned angle is the argmin of ``max(utils)`` over a uniform scan
+    of the band (the objective is piecewise monotone, so a fine scan is exact to its
+    resolution). Ties break toward the smallest SUM of utilisations, then the lower
+    ``cot`` (less longitudinal steel demand). Returns ``(cot, governing_util)``;
+    with no callables the band's low edge is returned with utilisation 0.
     """
-    hi = max(cot_max, cot_min)          # guard a reversed band
-    if s_stirrup <= 0.0:
-        cot_opt = 1.0                   # no stirrup demand: crushing is least at 45 deg
-    elif c_crush <= 0.0:
-        cot_opt = hi                    # no crushing demand: the flattest strut
-    else:
-        # The unconstrained optimum is the crossover, but never below cot = 1 (both
-        # utilisations worsen there). It is then clamped to the user band -- which the
-        # UI may set wholly below 1 (a warned override), so do not force the band up.
-        cot_opt = max(math.sqrt(max(s_stirrup / c_crush - 1.0, 0.0)), 1.0)
-    return min(max(cot_opt, cot_min), hi)
+    lo, hi = min(cot_min, cot_max), max(cot_min, cot_max)
+    if not utils:
+        return lo, 0.0
+    best = None
+    for i in range(max(int(n), 2)):
+        cot = lo + (hi - lo) * i / (max(int(n), 2) - 1)
+        vals = [u(cot) for u in utils]
+        worst = max(vals)
+        key = (worst, sum(vals), cot)
+        if best is None or key < best[0]:
+            best = (key, cot, worst)
+    return best[1], best[2]
 
 
 def chord_applied_moment(m_signed: float, tension_low: bool) -> float:

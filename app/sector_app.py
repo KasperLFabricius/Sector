@@ -7,6 +7,7 @@ analysis, then press Calculate to review the stresses and the ultimate capacity.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import math
 import os
@@ -2400,6 +2401,10 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     # earns its sigma_cp / alpha_cw credit. Compression-positive, as the engines expect.
     n_prestress = _prestress_axial(inp)
     n_ed_comp = -inp["P_pl"] + n_prestress
+    # Parameter stashes for the member strut-angle pass below: the links and torsion
+    # payloads are built there, at ONE shared angle (EN 1992-1-1 6.3.2(2)).
+    link_ctx = None
+    tors_ctx = None
     # Shear resistance without shear reinforcement (VRd,c). An independent ULS check,
     # recomputed on every Calculate whenever enabled (cheap; no plastic/elastic
     # reuse). The axial term uses the plastic (ULS) axial force N (tension-positive)
@@ -2440,9 +2445,11 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                             method=inp["shear_method"], model_2023=model_2023,
                             ddg=ddg, fyd_flex=fyd_flex)
         # Shear reinforcement (vertical links): the 2005 variable-strut VRd =
-        # min(VRd,s, VRd,max) with theta auto-optimised in the cot(theta) band (sec.
-        # 6.2.3). Not offered for the 2023 method here -- its with-links strain-based
-        # truss (8.2.3) is a follow-up; a note is shown in the view instead.
+        # min(VRd,s, VRd,max), sec. 6.2.3. Not offered for the 2023 method here -- its
+        # with-links strain-based truss (8.2.3) is a follow-up; a note is shown in the
+        # view instead. The strut angle is NOT chosen here: one member angle serves
+        # shear and torsion (6.3.2(2)) and is selected further down to minimise the
+        # governing utilisation -- stash the parameters and a builder for that pass.
         if inp.get("shear_links") and not model_2023:
             cot_min = min(inp["shear_cot_min"], inp["shear_cot_max"])
             cot_max = max(inp["shear_cot_min"], inp["shear_cot_max"])
@@ -2454,21 +2461,16 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             # at the ULS axial force -- not the 0.9d approximation. Fall back to 0.9d
             # only when that lever arm is degenerate (no tension steel / non-converged).
             z_mm, z_src = _shear_lever_arm(inp, axis, tension_low, d)
-            lk = shear.vrd_links(fck, code, bw, d, asw_over_s, inp["shear_fywk"],
-                                 n_ed_comp, ac, cot_min, cot_max, z_mm=z_mm)
-            util_l = (v_ed / lk["vrd"]) if lk["vrd"] > 0.0 else math.inf
-            # delta_Ftd = 0.5*VEd*cot(theta): the extra longitudinal tension from shear.
-            delta_ftd = 0.5 * v_ed * lk["cot"] if lk["valid"] else 0.0
-            lo, hi = code.shear_cot_min_limit, code.shear_cot_max_limit
-            out["shear"].update(
-                links=dict(res=lk, util=util_l, asw=asw, asw_over_s=asw_over_s,
-                           legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
-                           s=inp["shear_link_s"], fywk=inp["shear_fywk"],
-                           cot_min=cot_min, cot_max=cot_max, delta_ftd=delta_ftd,
-                           cot_limit_lo=lo, cot_limit_hi=hi, z_source=z_src,
-                           out_of_limits=bool(cot_min < lo - 1e-9
-                                              or cot_max > hi + 1e-9),
-                           required=bool(v_ed > res["vrd_c"])))
+
+            def _links_at(cot_lo, cot_hi, _fck=fck, _code=code, _bw=bw, _d=d,
+                          _aos=asw_over_s, _ac=ac, _z=z_mm):
+                return shear.vrd_links(_fck, _code, _bw, _d, _aos, inp["shear_fywk"],
+                                       n_ed_comp, _ac, cot_lo, cot_hi, z_mm=_z)
+
+            link_ctx = dict(build=_links_at, cot_min=cot_min, cot_max=cot_max,
+                            asw=asw, asw_over_s=asw_over_s, z_mm=z_mm, z_src=z_src,
+                            code=code, v_ed=v_ed, vrd_c=res["vrd_c"],
+                            axis=axis, tension_low=tension_low)
 
     # Torsion (thin-walled tube, sec. 6.3). An independent ULS check: the tube
     # (A, u, tef, Ak, uk) is derived from the outline, the closed stirrups give
@@ -2520,114 +2522,289 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # the shear with it (`primary`). Without subdivision the single tube is used.
         subrects = inp.get("torsion_subrects") or []
         subdivide = bool(inp.get("torsion_subdivide") and subrects)
-        governing_sub = None
+        # The tube set and the TEd split are strut-angle independent; the per-tube
+        # resistances are evaluated below at the MEMBER strut angle (one angle for
+        # shear and torsion, 6.3.2(2)).
         if subdivide:
-            subtubes, consts = [], []
+            subtubes, consts, sub_dims = [], [], []
             for (b_mm, h_mm) in subrects:
                 bm, hm = b_mm / 1000.0, h_mm / 1000.0
                 subtubes.append(
                     torsion.tube_properties(torsion.rectangle_ring(bm, hm), None))
                 consts.append(torsion.rectangle_torsion_constant(bm, hm))
+                sub_dims.append((b_mm, h_mm))
             ted_parts = torsion.distribute_by_stiffness(t_ed, consts)
-            sub_res = [_tube_torsion(tb, te, **_tk)
-                       for tb, te in zip(subtubes, ted_parts)]
-            for r, c, (b_mm, h_mm) in zip(sub_res, consts, subrects):
-                r["stiffness"], r["b_mm"], r["h_mm"] = c, b_mm, h_mm
-            valid = all(r["valid"] for r in sub_res)
-            trd = sum(r["trd"] for r in sub_res) if valid else 0.0
-            asl_req = sum(r["asl_req"] for r in sub_res)
-            primary = sub_res[0]
-            tube_main = primary["tube"]
-            # Governing = the WORST sub-tube (each carries its stiffness-share of TEd).
-            governing_sub = max(range(len(sub_res)), key=lambda i: sub_res[i]["util"])
-            util_t = sub_res[governing_sub]["util"]
         else:
-            sub_res = None
-            primary = _tube_torsion(tube, t_ed, **_tk)
-            trd, asl_req, tube_main, valid = (primary["trd"], primary["asl_req"],
-                                              tube, tube["valid"])
-            util_t = (t_ed / trd) if trd > 0.0 else math.inf
-        lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
-        out["torsion"] = dict(
-            tube=tube_main, trd_s=primary["trd_s"], trd_max=primary["trd_max"],
-            trd=trd, trd_c=primary["trd_c"], cot=primary["cot"],
-            theta_deg=primary["theta_deg"], util=util_t, asl_req=asl_req, t_ed=t_ed,
-            fcd=fcd, fywd=fywd_t, fyd_long=fyd_long, nu=primary["nu"], alpha_cw=alpha_cw,
-            fctd=fctd, nu_v_detailing=nu_detail_applied, sigma_cp=sigma_cp,
-            n_prestress=n_prestress, asw_t=asw_t, asw_over_s=asw_over_s_t,
-            dia=inp["shear_link_dia"], s=inp["shear_link_s"], cot_min=tcot_min,
-            cot_max=tcot_max, method=inp["torsion_method"], governs=primary["governs"],
-            valid=valid, reason=tube_main.get("reason"), cot_limit_lo=lo_t,
-            cot_limit_hi=hi_t,
-            out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9),
-            subdivided=subdivide, subtubes=sub_res, primary=primary,
-            governing_sub=governing_sub)
-        # Minimum-reinforcement screen (EN 1992-1-1 6.3.2(5), Eq 6.31): for an
-        # approximately solid rectangular section, no DESIGNED shear+torsion
-        # reinforcement (only the minimum) is needed if TEd/TRd,c + VEd/VRd,c <= 1.
-        # Both cracking resistances already exist -- this just combines them. Needs
-        # the shear block (VRd,c); applies to solid sections (flag a void).
-        sh_ms = out.get("shear")
-        _trdc = primary["trd_c"]
-        if subdivide:
-            # 6.31 is written for an approximately solid rectangular section, so it does
-            # not apply to a subdivided compound section.
-            out["torsion"]["min_reinf"] = dict(
-                applicable=False, reason="subdivided (compound) section")
-        elif sh_ms is None or not sh_ms["res"]["valid"]:
-            out["torsion"]["min_reinf"] = dict(applicable=False, reason="no shear check")
-        elif _trdc <= 0.0 or sh_ms["res"]["vrd_c"] <= 0.0:
-            out["torsion"]["min_reinf"] = dict(applicable=False, reason="zero resistance")
+            subtubes, consts, sub_dims, ted_parts = [tube], [1.0], [None], [t_ed]
+        tors_ctx = dict(
+            _tk=_tk, tube=tube, subdivide=subdivide, subtubes=subtubes, consts=consts,
+            ted_parts=ted_parts, sub_dims=sub_dims, t_ed=t_ed, tcode=tcode, fck=fck,
+            fcd=fcd, alpha_cw=alpha_cw, fywd_t=fywd_t, fyd_long=fyd_long, asw_t=asw_t,
+            asw_over_s_t=asw_over_s_t, tcot_min=tcot_min, tcot_max=tcot_max,
+            nu_detail=nu_detail, nu_detail_applied=nu_detail_applied, fctd=fctd,
+            sigma_cp=sigma_cp)
+
+    # ---- Member strut angle (EN 1992-1-1 6.3.2(2)) ----------------------------
+    # One strut angle serves shear AND torsion (the same web struts carry both).
+    # It is chosen to MINIMISE THE GOVERNING UTILISATION over every reported check
+    # that depends on it: the stirrup checks relax with a flatter strut while the
+    # crushing checks and the longitudinal-chord demand (MEd + 0.5*VEd*cot*z
+    # [+ Ftd,T*z/2] vs MRd) grow, so the optimum is load-dependent -- unlike the
+    # old per-action angle, which maximised each resistance alone and therefore sat
+    # at the band edge regardless of VEd/MEd/NEd. The chord demand enters UNCAPPED
+    # (the 6.2.3(7) cap applies to the reported check, not to what the angle
+    # physically trades). With no load-bearing checks (capacity-only runs) the
+    # legacy resistance-maximising angles are kept.
+    if link_ctx is not None or tors_ctx is not None:
+        if link_ctx is not None and tors_ctx is not None:
+            band_lo = max(link_ctx["cot_min"], tors_ctx["tcot_min"])
+            band_hi = min(link_ctx["cot_max"], tors_ctx["tcot_max"])
+        elif link_ctx is not None:
+            band_lo, band_hi = link_ctx["cot_min"], link_ctx["cot_max"]
         else:
-            vrd_c_ms, v_ed_ms = sh_ms["res"]["vrd_c"], sh_ms["v_ed"]
-            screen = t_ed / _trdc + v_ed_ms / vrd_c_ms
-            out["torsion"]["min_reinf"] = dict(
-                applicable=True, value=screen, ok=bool(screen <= 1.0 + 1e-9),
-                t_ed=t_ed, trd_c=_trdc, v_ed=v_ed_ms, vrd_c=vrd_c_ms,
-                solid=bool(not inp["holes"]), model_2023=bool(sh_ms.get("model_2023")))
-        # Combined shear+torsion concrete crushing (6.29): TEd/TRd,max + VEd/VRd,max
-        # <= 1, at a common strut angle. Both TRd,max and VRd,max peak at cot = 1
-        # (theta = 45 deg), so the least-conservative common angle is cot = 1 clamped
-        # to the band. Only when the shear check (with links) is also active.
-        sh_links = out.get("shear", {}).get("links")
-        # The crushing check pairs the shear with the PRIMARY (web) tube -- the whole
-        # tube when not subdivided, the first sub-rectangle when subdivided -- using its
-        # own share of the applied torsion.
-        p_tube, t_ed_p = primary["tube"], primary["t_ed"]
-        if sh_links is not None and sh_links["res"]["valid"] and p_tube["valid"]:
-            # Common strut angle for the crushing check: cot = 1 (where both TRd,max
-            # and VRd,max peak), clamped to the INTERSECTION of the shear and torsion
-            # cot bounds so it is admissible for both.
-            s_lo = min(inp["shear_cot_min"], inp["shear_cot_max"])
-            s_hi = max(inp["shear_cot_min"], inp["shear_cot_max"])
-            lo_b, hi_b = max(tcot_min, s_lo), min(tcot_max, s_hi)
-            if hi_b < lo_b - 1e-9:
-                # No strut angle is admissible for both shear and torsion, so the
-                # shared-angle crushing check (6.29) is undefined -- flag it.
-                out["torsion"]["interaction"] = dict(
-                    valid=False, reason="no common strut angle",
-                    cot_shear=(s_lo, s_hi), cot_torsion=(tcot_min, tcot_max))
+            band_lo, band_hi = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
+        band_ok = band_hi >= band_lo - 1e-9
+
+        # Longitudinal-chord parameters: the shear tension face's applied moment and
+        # pure-axis capacity (the B1 machinery), available when the plastic
+        # utilisation was computed and the links provide a lever arm.
+        pl = out.get("plastic")
+        chord = None
+        if link_ctx is not None and pl is not None and pl.get("util") is not None:
+            l_axis, tlow = link_ctx["axis"], link_ctx["tension_low"]
+            m_signed = inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
+            m_ed_l = combined.chord_applied_moment(m_signed, tlow)
+            m_rd_l, mrd_exact = _shear_face_mrd(inp, l_axis, tlow)
+            if not mrd_exact:
+                max_m = pl["max_mx"] if l_axis == "x" else pl["max_my"]
+                min_m = pl.get("min_mx" if l_axis == "x" else "min_my", -max_m)
+                m_rd_l = max_m if tlow else abs(min_m)
+            off_signed = inp["My_pl"] if l_axis == "x" else inp["Mx_pl"]
+            off_max = pl["max_my"] if l_axis == "x" else pl["max_mx"]
+            off_min = pl.get("min_my" if l_axis == "x" else "min_mx", -off_max)
+            off_cap = off_max if off_signed >= 0.0 else abs(off_min)
+            off_util = (abs(off_signed) / off_cap if off_cap > 0.0
+                        else (math.inf if off_signed else 0.0))
+            if m_rd_l > 0.0:
+                chord = dict(m_ed=m_ed_l, m_rd=m_rd_l, z_m=link_ctx["z_mm"] / 1000.0,
+                             axis=l_axis, tension_low=tlow, off_util=off_util)
+
+        v_ed_s = link_ctx["v_ed"] if link_ctx is not None else 0.0
+        t_ed_s = tors_ctx["t_ed"] if tors_ctx is not None else 0.0
+
+        @functools.lru_cache(maxsize=4096)
+        def _snap(cot):
+            """Every strut-angle-dependent resistance at one cot."""
+            s = {}
+            if link_ctx is not None:
+                s["lk"] = link_ctx["build"](cot, cot)
+            if tors_ctx is not None:
+                tk = dict(tors_ctx["_tk"], cot_min=cot, cot_max=cot)
+                s["subs"] = tuple(_tube_torsion(tb, te, **tk)
+                                  for tb, te in zip(tors_ctx["subtubes"],
+                                                    tors_ctx["ted_parts"]))
+            return s
+
+        def _ftd_t_at(cot):
+            """Torsion longitudinal force on the web chord (kN) at one cot."""
+            if tors_ctx is None or t_ed_s <= 0.0:
+                return 0.0
+            web = _snap(cot)["subs"][0]
+            return web["asl_req"] * tors_ctx["fyd_long"] / 1000.0
+
+        utils = []
+        if link_ctx is not None and v_ed_s > 0.0:
+            utils.append(lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_s"]))
+            utils.append(lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_max"]))
+        if tors_ctx is not None and t_ed_s > 0.0:
+            for i in range(len(tors_ctx["subtubes"])):
+                utils.append(lambda c, i=i: _snap(c)["subs"][i]["util"])
+        if (link_ctx is not None and tors_ctx is not None and t_ed_s > 0.0
+                and tors_ctx["asw_over_s_t"] > 0.0):
+            # The one closed stirrup carries shear AND the web's torsion share (the
+            # transverse check); the web struts crush under both (6.29).
+            def _shared_stirrup(c):
+                sf = (0.0 if v_ed_s <= link_ctx["vrd_c"]
+                      else combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_s"]))
+                tf = combined.ratio(_snap(c)["subs"][0]["t_ed"],
+                                    _snap(c)["subs"][0]["trd_s"])
+                return sf + tf
+
+            def _crush_629(c):
+                return (combined.ratio(_snap(c)["subs"][0]["t_ed"],
+                                       _snap(c)["subs"][0]["trd_max"])
+                        + combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_max"]))
+            utils.append(_shared_stirrup)
+            utils.append(_crush_629)
+        if chord is not None and (v_ed_s > 0.0 or t_ed_s > 0.0):
+            utils.append(lambda c: (chord["m_ed"] + 0.5 * v_ed_s * c * chord["z_m"]
+                                    + _ftd_t_at(c) * chord["z_m"] / 2.0)
+                         / chord["m_rd"])
+        if (inp.get("combined_on") and pl is not None and pl.get("util") is not None
+                and link_ctx is not None and tors_ctx is not None):
+            _mv_ind = bool(inp["combined_mv_independent"])
+
+            def _dkna(c, r_m=pl["util"]):
+                r_v = combined.ratio(v_ed_s, _snap(c)["lk"]["vrd"])
+                r_t = max(s["util"] for s in _snap(c)["subs"])
+                return combined.dkna_sum(r_m, r_v, r_t, m_v_independent=_mv_ind)
+            utils.append(_dkna)
+
+        cot_star = None
+        if band_ok and utils:
+            cot_star, _ = combined.governing_strut_cot(utils, band_lo, band_hi)
+
+        # ---- torsion payload at the member angle (or its own band when no load
+        # drives the choice / the bands do not overlap) ----
+        if tors_ctx is not None:
+            t_ed = tors_ctx["t_ed"]
+            subdivide = tors_ctx["subdivide"]
+            tk = tors_ctx["_tk"]
+            if cot_star is not None:
+                tk = dict(tk, cot_min=cot_star, cot_max=cot_star)
+            sub_res = [_tube_torsion(tb, te, **tk)
+                       for tb, te in zip(tors_ctx["subtubes"], tors_ctx["ted_parts"])]
+            governing_sub = None
+            if subdivide:
+                for r, c, dims in zip(sub_res, tors_ctx["consts"],
+                                      tors_ctx["sub_dims"]):
+                    r["stiffness"], (r["b_mm"], r["h_mm"]) = c, dims
+                valid = all(r["valid"] for r in sub_res)
+                trd = sum(r["trd"] for r in sub_res) if valid else 0.0
+                asl_req = sum(r["asl_req"] for r in sub_res)
+                primary = sub_res[0]
+                tube_main = primary["tube"]
+                # Governing = the WORST sub-tube (each carries its stiffness share).
+                governing_sub = max(range(len(sub_res)),
+                                    key=lambda i: sub_res[i]["util"])
+                util_t = sub_res[governing_sub]["util"]
             else:
-                cot_c = min(max(1.0, lo_b), hi_b)
-                trdmax_c = torsion.trd_max(fck, tcode, p_tube["Ak"], p_tube["tef"],
-                                           alpha_cw, cot_c, closed_detailing=nu_detail)
-                # VRd,max reuses the SHEAR method and the same lever arm z as the
-                # stand-alone shear check (not the torsion code / 0.9d), re-evaluated
-                # at the common angle cot_c.
-                scode = _SHEAR_CODES.get(inp["shear_method"], codes.EC2_2005_DKNA)
-                sh = out["shear"]
-                vlk = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
-                                      sh_links["asw_over_s"], sh_links["fywk"],
-                                      n_ed_comp, sh["ac"], cot_c, cot_c,
-                                      z_mm=sh_links["res"]["z"])
-                v_ed_c = sh["v_ed"]
-                inter = ((t_ed_p / trdmax_c if trdmax_c > 0 else math.inf)
-                         + (v_ed_c / vlk["vrd_max"] if vlk["vrd_max"] > 0 else math.inf))
-                out["torsion"]["interaction"] = dict(
-                    valid=True,
-                    cot=cot_c, theta_deg=math.degrees(math.atan(1.0 / cot_c)),
-                    trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p, v_ed=v_ed_c,
-                    value=inter)
+                primary = sub_res[0]
+                sub_res = None
+                trd, asl_req = primary["trd"], primary["asl_req"]
+                tube_main, valid = tors_ctx["tube"], tors_ctx["tube"]["valid"]
+                util_t = (t_ed / trd) if trd > 0.0 else math.inf
+            tcode = tors_ctx["tcode"]
+            tcot_min, tcot_max = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
+            lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
+            out["torsion"] = dict(
+                tube=tube_main, trd_s=primary["trd_s"], trd_max=primary["trd_max"],
+                trd=trd, trd_c=primary["trd_c"], cot=primary["cot"],
+                theta_deg=primary["theta_deg"], util=util_t, asl_req=asl_req,
+                t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
+                fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
+                alpha_cw=tors_ctx["alpha_cw"], fctd=tors_ctx["fctd"],
+                nu_v_detailing=tors_ctx["nu_detail_applied"],
+                sigma_cp=tors_ctx["sigma_cp"], n_prestress=n_prestress,
+                asw_t=tors_ctx["asw_t"], asw_over_s=tors_ctx["asw_over_s_t"],
+                dia=inp["shear_link_dia"], s=inp["shear_link_s"], cot_min=tcot_min,
+                cot_max=tcot_max, method=inp["torsion_method"],
+                governs=primary["governs"], valid=valid,
+                reason=tube_main.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
+                out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9),
+                subdivided=subdivide, subtubes=sub_res, primary=primary,
+                governing_sub=governing_sub,
+                theta_mode=("utilisation" if cot_star is not None else "resistance"))
+
+        # ---- links payload at the member angle ----
+        if link_ctx is not None:
+            v_ed = link_ctx["v_ed"]
+            if cot_star is not None:
+                lk = link_ctx["build"](cot_star, cot_star)
+            else:
+                lk = link_ctx["build"](link_ctx["cot_min"], link_ctx["cot_max"])
+            util_l = (v_ed / lk["vrd"]) if lk["vrd"] > 0.0 else math.inf
+            # delta_Ftd = 0.5*VEd*cot(theta): extra longitudinal tension from shear.
+            delta_ftd = 0.5 * v_ed * lk["cot"] if lk["valid"] else 0.0
+            code = link_ctx["code"]
+            lo, hi = code.shear_cot_min_limit, code.shear_cot_max_limit
+            # The reported longitudinal-chord check (capped per 6.2.3(7)), on the
+            # shear tension face; the torsion term is the web tube's share (zero
+            # without torsion). Shown in the Shear view and reused by the combined
+            # view, so both present the same numbers.
+            lchk = None
+            if chord is not None and lk["valid"]:
+                ftd_t_star = _ftd_t_at(lk["cot"]) if tors_ctx is not None else 0.0
+                lchk = combined.longitudinal_check(chord["m_ed"], chord["m_rd"],
+                                                   delta_ftd, ftd_t_star,
+                                                   chord["z_m"])
+                lchk.update(valid=True, axis=chord["axis"],
+                            tension_low=chord["tension_low"],
+                            off_util=chord["off_util"],
+                            biaxial=bool(chord["off_util"] > 0.05),
+                            has_torsion=bool(tors_ctx is not None and t_ed_s > 0.0))
+            out["shear"].update(
+                links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
+                           asw_over_s=link_ctx["asw_over_s"],
+                           legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
+                           s=inp["shear_link_s"], fywk=inp["shear_fywk"],
+                           cot_min=link_ctx["cot_min"], cot_max=link_ctx["cot_max"],
+                           delta_ftd=delta_ftd, cot_limit_lo=lo, cot_limit_hi=hi,
+                           z_source=link_ctx["z_src"],
+                           out_of_limits=bool(link_ctx["cot_min"] < lo - 1e-9
+                                              or link_ctx["cot_max"] > hi + 1e-9),
+                           required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
+                           theta_mode=("utilisation" if cot_star is not None
+                                       else "resistance")))
+
+        # ---- checks that pair shear and torsion, at the member angle ----
+        if tors_ctx is not None:
+            t_ed = tors_ctx["t_ed"]
+            primary = out["torsion"]["primary"]
+            # Minimum-reinforcement screen (EN 1992-1-1 6.3.2(5), Eq 6.31): for an
+            # approximately solid rectangular section, no DESIGNED shear+torsion
+            # reinforcement (only the minimum) is needed if TEd/TRd,c + VEd/VRd,c <= 1.
+            sh_ms = out.get("shear")
+            _trdc = primary["trd_c"]
+            if tors_ctx["subdivide"]:
+                # 6.31 is written for an approximately solid rectangular section, so
+                # it does not apply to a subdivided compound section.
+                out["torsion"]["min_reinf"] = dict(
+                    applicable=False, reason="subdivided (compound) section")
+            elif sh_ms is None or not sh_ms["res"]["valid"]:
+                out["torsion"]["min_reinf"] = dict(applicable=False,
+                                                   reason="no shear check")
+            elif _trdc <= 0.0 or sh_ms["res"]["vrd_c"] <= 0.0:
+                out["torsion"]["min_reinf"] = dict(applicable=False,
+                                                   reason="zero resistance")
+            else:
+                vrd_c_ms, v_ed_ms = sh_ms["res"]["vrd_c"], sh_ms["v_ed"]
+                screen = t_ed / _trdc + v_ed_ms / vrd_c_ms
+                out["torsion"]["min_reinf"] = dict(
+                    applicable=True, value=screen, ok=bool(screen <= 1.0 + 1e-9),
+                    t_ed=t_ed, trd_c=_trdc, v_ed=v_ed_ms, vrd_c=vrd_c_ms,
+                    solid=bool(not inp["holes"]),
+                    model_2023=bool(sh_ms.get("model_2023")))
+            # Combined shear+torsion concrete crushing (6.29) at the member angle,
+            # pairing the shear with the PRIMARY (web) tube's torsion share.
+            sh_links = out.get("shear", {}).get("links")
+            p_tube, t_ed_p = primary["tube"], primary["t_ed"]
+            if sh_links is not None and sh_links["res"]["valid"] and p_tube["valid"]:
+                if not band_ok:
+                    # No strut angle is admissible for both shear and torsion, so the
+                    # shared-angle crushing check (6.29) is undefined -- flag it.
+                    out["torsion"]["interaction"] = dict(
+                        valid=False, reason="no common strut angle",
+                        cot_shear=(link_ctx["cot_min"], link_ctx["cot_max"]),
+                        cot_torsion=(tors_ctx["tcot_min"], tors_ctx["tcot_max"]))
+                else:
+                    # The member angle when a load drives it; otherwise the
+                    # least-conservative common angle (cot = 1 clamped to the band).
+                    cot_c = (cot_star if cot_star is not None
+                             else min(max(1.0, band_lo), band_hi))
+                    trdmax_c = torsion.trd_max(
+                        tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
+                        p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
+                        closed_detailing=tors_ctx["nu_detail"])
+                    vlk = link_ctx["build"](cot_c, cot_c)
+                    inter = ((t_ed_p / trdmax_c if trdmax_c > 0 else math.inf)
+                             + (v_ed_s / vlk["vrd_max"] if vlk["vrd_max"] > 0
+                                else math.inf))
+                    out["torsion"]["interaction"] = dict(
+                        valid=True, cot=cot_c,
+                        theta_deg=math.degrees(math.atan(1.0 / cot_c)),
+                        trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
+                        v_ed=v_ed_s, value=inter)
 
     # Combined bending + shear + torsion (M-V-T), sec. 6.3.2. Ties the three checks
     # together: the concrete-crushing interaction (6.29, from the torsion block) and
@@ -2654,100 +2831,41 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 asl_torsion=to["asl_req"],
                 delta_ftd=(sl["delta_ftd"] if sl is not None else 0.0),
                 links=sl is not None)
-            # Longitudinal-steel combined check (the appendix's mode 1). The tension
-            # chord about the shear axis carries the bending tension PLUS the shear
-            # shift delta_Ftd = 0.5*VEd*cot (6.18) and the torsion longitudinal force
-            # Ftd,T = TEd*uk*cot/(2*Ak) (distributed round the perimeter, so half acts
-            # on the tension chord); each is turned into an equivalent moment on the
-            # lever arm z and checked against the uniaxial capacity MRd about that axis.
-            # Assumptions (uniaxial along the shear axis; a section tool, not a beam):
-            #  - MRd is the pure-bending capacity about the shear axis at the applied N.
-            #  - the shear shift is capped so bending+shear does not exceed MRd (6.2.3(7)
-            #    caps delta_Ftd at the peak-moment tension; a section lacks the beam's
-            #    peak, so MRd is used -- conservative).
-            if sl is not None and sl["res"]["valid"]:
-                z_m = sl["res"]["z"] / 1000.0
-                l_axis = sh["axis"]
-                tlow = sh["tension_low"]
-                # The chord is the SHEAR tension face (where z, delta_Ftd and the torsion
-                # steel act), so MEd and MRd are taken on that face, not on the face the
-                # applied-moment sign implies.
-                m_signed = inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
-                m_ed_l = combined.chord_applied_moment(m_signed, tlow)
-                # MRd is the pure-axis capacity at the shear-face neutral-axis angle,
-                # not the biaxial-sweep extremum (which can overstate the uniaxial chord
-                # capacity). Fall back to the extremum only if the angle solve fails.
-                m_rd_l, mrd_exact = _shear_face_mrd(inp, l_axis, tlow)
-                if not mrd_exact:
-                    max_m = pl["max_mx"] if l_axis == "x" else pl["max_my"]
-                    min_m = pl.get("min_mx" if l_axis == "x" else "min_my", -max_m)
-                    m_rd_l = max_m if tlow else abs(min_m)
-                ftd_v = sl["delta_ftd"]                            # kN, 0.5*VEd*cot
-                # The longitudinal chord sits on the web, so the torsion force is the
-                # PRIMARY (web) sub-tube's Asl -- its share of the torsion -- not the
-                # section total (which spans the flanges too).
-                ftd_t = to["primary"]["asl_req"] * to["fyd_long"] / 1000.0  # mm2*MPa -> kN
-                # This chord check is uniaxial (bending in the shear plane). Under
-                # biaxial bending the OTHER-axis chord -- its own bending tension plus
-                # its share of the distributed torsion force -- can govern and is NOT
-                # evaluated here, so measure the off-axis moment's utilisation and flag
-                # the check when it is non-negligible (defer to the sum(SEd/SRd) rule).
-                off_signed = inp["My_pl"] if l_axis == "x" else inp["Mx_pl"]
-                off_max = pl["max_my"] if l_axis == "x" else pl["max_mx"]
-                off_min = pl.get("min_my" if l_axis == "x" else "min_mx", -off_max)
-                off_cap = off_max if off_signed >= 0.0 else abs(off_min)
-                off_util = (abs(off_signed) / off_cap if off_cap > 0.0
-                            else (math.inf if off_signed else 0.0))
-                lchk = combined.longitudinal_check(m_ed_l, m_rd_l, ftd_v, ftd_t, z_m)
-                lchk.update(valid=True, axis=l_axis, tension_low=tlow,
-                            off_util=off_util, biaxial=bool(off_util > 0.05))
+            # Longitudinal-steel combined check (the appendix's mode 1): computed once
+            # in the strut-angle pass (the Shear view shows the same numbers) and
+            # surfaced here with the combined verdicts.
+            lchk = sl.get("chord") if sl is not None else None
+            if lchk is not None:
                 out["combined"]["longitudinal"] = lchk
             # Shared-stirrup transverse check: the one closed stirrup carries shear
-            # AND torsion, so their demands add. When VEd <= VRd,c the concrete alone
-            # carries the shear (EN 1992-1-1 6.2.1) and the stirrup serves torsion
-            # only. The check is at the common strut angle that balances the stirrup
-            # demand against the concrete crushing (both must hold at one angle).
+            # AND torsion, so their demands add; the web struts crush under both.
+            # Evaluated AT the member strut angle (both demands and both resistances
+            # at the same theta as every other check).
             if sl is not None and sl["res"]["valid"] and to["asw_over_s"] > 0.0:
-                fck = inp["concrete"].fck
-                scode = _SHEAR_METHODS.get(inp["shear_method"], codes.EC2_2005_DKNA)
-                tcode = _SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
-                # The shared stirrup is on the web, so its torsion demand is the PRIMARY
-                # (web) sub-tube's share, checked against that tube's TRd,s / TRd,max.
-                v_ed, t_ed = sh["v_ed"], to["primary"]["t_ed"]
-                vrd_c = sh["res"]["vrd_c"]
-                s_lo = min(inp["shear_cot_min"], inp["shear_cot_max"])
-                s_hi = max(inp["shear_cot_min"], inp["shear_cot_max"])
-                t_lo = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
-                t_hi = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
-                lo_b, hi_b = max(s_lo, t_lo), min(s_hi, t_hi)
-                if hi_b < lo_b - 1e-9:
+                inter = to.get("interaction")
+                if inter is not None and not inter.get("valid"):
                     # The shear and torsion strut-angle bands do not overlap, so no
                     # single angle can satisfy both -- the shared-stirrup check is
                     # undefined. Flag it rather than inventing a common angle.
                     out["combined"]["transverse"] = dict(
                         valid=False, reason="no common strut angle",
-                        cot_shear=(s_lo, s_hi), cot_torsion=(t_lo, t_hi))
+                        cot_shear=inter.get("cot_shear"),
+                        cot_torsion=inter.get("cot_torsion"))
                 else:
-                    # Utilisation pieces at cot = 1 (they scale as 1/cot for the
-                    # stirrups and as cot + 1/cot for the crushing).
-                    vlk1 = shear.vrd_links(fck, scode, sh["bw"], sh["d"],
-                                           sl["asw_over_s"], sl["fywk"], n_ed_comp,
-                                           sh["ac"], 1.0, 1.0, z_mm=sl["res"]["z"])
-                    trd_s1 = torsion.trd_s(to["tube"]["Ak"], to["fywd"],
-                                           to["asw_over_s"], 1.0)
-                    trd_max1 = torsion.trd_max(fck, tcode, to["tube"]["Ak"],
-                                               to["tube"]["tef"], to["alpha_cw"], 1.0,
-                                               closed_detailing=inp["torsion_nu_v"])
+                    # The shared stirrup is on the web, so its torsion demand is the
+                    # PRIMARY (web) sub-tube's share against that tube's TRd,s; when
+                    # VEd <= VRd,c the concrete alone carries the shear (6.2.1) and
+                    # the whole stirrup serves torsion.
+                    v_ed, t_ed_w = sh["v_ed"], to["primary"]["t_ed"]
+                    vrd_c = sh["res"]["vrd_c"]
+                    cot_b = sl["res"]["cot"]
                     shear_credited = v_ed <= vrd_c
-                    sf1 = 0.0 if shear_credited else combined.ratio(v_ed, vlk1["vrd_s"])
-                    tf1 = combined.ratio(t_ed, trd_s1)
-                    s_stirrup = sf1 + tf1                   # U_stirrup at cot = 1
-                    c_crush = 0.5 * (combined.ratio(t_ed, trd_max1)
-                                     + combined.ratio(v_ed, vlk1["vrd_max"]))
-                    cot_b = combined.combined_strut_theta(s_stirrup, c_crush,
-                                                          lo_b, hi_b)
-                    u_stir = s_stirrup / cot_b if cot_b > 0.0 else math.inf
-                    u_crush = c_crush * (cot_b + 1.0 / cot_b)
+                    sf = (0.0 if shear_credited
+                          else combined.ratio(v_ed, sl["res"]["vrd_s"]))
+                    tf = combined.ratio(t_ed_w, to["primary"]["trd_s"])
+                    u_stir = sf + tf
+                    u_crush = (inter["value"] if inter is not None
+                               else combined.ratio(v_ed, sl["res"]["vrd_max"]))
                     out["combined"]["transverse"] = dict(
                         valid=True,
                         cot=cot_b, theta_deg=math.degrees(math.atan(1.0 / cot_b)),
@@ -2755,8 +2873,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                         governing=max(u_stir, u_crush),
                         governs=("crushing" if u_crush > u_stir else "stirrups"),
                         ok=bool(max(u_stir, u_crush) <= 1.0 + 1e-9),
-                        shear_fraction=sf1 / cot_b if cot_b > 0 else math.inf,
-                        torsion_fraction=tf1 / cot_b if cot_b > 0 else math.inf,
+                        shear_fraction=sf, torsion_fraction=tf,
                         shear_credited=shear_credited, vrd_c=vrd_c, v_ed=v_ed)
         else:
             out["combined"] = dict(valid=False, have_m=have_m, have_v=have_v,
@@ -3408,12 +3525,61 @@ def shear_view(inp, results):
                        f"{lk['fywd']:.1f} MPa", f"{lk['nu1']:.3f}",
                        f"{lk['alpha_cw']:.3f}", f"{links['delta_ftd']:.1f} kN"]},
             hide_index=True, width="stretch")
+        if links.get("theta_mode") == "utilisation":
+            theta_txt = ("Sector selects ONE member strut angle " + _THETA +
+                         " (shared with torsion when enabled, EN 1992-1-1 "
+                         "6.3.2(2)) that MINIMISES THE GOVERNING UTILISATION: a "
+                         "flatter strut relaxes the stirrups but raises the "
+                         "crushing demand and the longitudinal chord tension, so "
+                         "the chosen angle depends on VEd, MEd and NEd.")
+        else:
+            theta_txt = ("Sector auto-optimises " + _THETA + " within the bounds "
+                         "to maximise VRd = min(VRd,s, VRd,max).")
         st.caption(
             "VRd,s = (Asw/s)*z*fywd*cot" + _THETA + " (6.8); VRd,max = " + _ALPHA +
             "cw*bw*z*" + _NU + "1*fcd/(cot" + _THETA + "+tan" + _THETA + ") (6.9). "
-            "Sector auto-optimises " + _THETA + " within the bounds to maximise "
-            "VRd = min(VRd,s, VRd,max). " + _DELTA + "Ftd = 0.5*VEd*cot" + _THETA +
-            " is the extra longitudinal tension the bottom steel must also carry.")
+            + theta_txt + " " + _DELTA + "Ftd = 0.5*VEd*cot" + _THETA +
+            " is the extra longitudinal tension the tension chord must also carry.")
+        # Longitudinal chord under M + V (+ T): the same check the combined view
+        # shows, computed at the member strut angle.
+        ch = links.get("chord")
+        if ch is not None and ch.get("valid"):
+            st.markdown("**Longitudinal chord: bending + shear"
+                        + (" + torsion" if ch.get("has_torsion") else "")
+                        + " tension**")
+            face_lbl = ("bottom / left" if ch.get("tension_low", True)
+                        else "top / right")
+            g1, g2, g3 = st.columns(3)
+            g1.metric(f"MEd (about {ch['axis']})", f"{ch['m_ed']:.1f} kNm")
+            g2.metric("MEd,total", f"{ch['m_total']:.1f} kNm",
+                      help="bending + shear shift (+ torsion) as an equivalent "
+                           "moment on the tension chord")
+            if ch.get("biaxial"):
+                g3.metric("MEd,total/MRd", _pct(ch["util"]),
+                          help="uniaxial (shear-plane) chord only -- see the "
+                               "warning below")
+            else:
+                g3.metric("MEd,total/MRd", _pct(ch["util"]),
+                          delta=("OK" if ch["ok"] else "Over limit"),
+                          delta_color=("normal" if ch["ok"] else "inverse"))
+            st.caption(
+                f"Tension chord = the shear tension face ({face_lbl}). MEd,total = "
+                f"MEd + {_DELTA}Ftd*z + Ftd,T*z/2 = {ch['m_ed']:.1f} + "
+                f"{ch['mv']:.1f} + {ch['mt']:.1f} = {ch['m_total']:.1f} kNm vs "
+                f"MRd = {ch['m_rd']:.1f} kNm (pure bending about {ch['axis']} at "
+                f"the applied N); z = {ch['z']:.3f} m. This demand is part of the "
+                "strut-angle objective, so " + _THETA + " backs off the band edge "
+                "when the chord would otherwise govern.")
+            if ch.get("capped"):
+                st.caption("The shear shift is capped so bending + shear does not "
+                           "exceed MRd (6.2.3(7)); the angle selection uses the "
+                           "uncapped demand.")
+            if ch.get("biaxial"):
+                st.warning(
+                    f"Biaxial bending: a moment about the OTHER axis is acting "
+                    f"({_pct(ch['off_util'])} of that axis' capacity). This "
+                    "uniaxial chord check does not evaluate the off-axis chord -- "
+                    "rely on the combined " + chr(0x03A3) + "(SEd/SRd) check.")
         st.plotly_chart(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                          links["dia"], links["s"]), width="stretch")
 
@@ -3473,8 +3639,11 @@ def torsion_view(inp, results):
         st.caption(f"Compound section (6.3.1(3)): TRd = {chr(0x03A3)} of the sub-tube "
                    f"capacities; TEd is split by uncracked torsional stiffness "
                    f"C = {chr(0x03B2)}*h*b^3 (6.3.1(4)). The first row (web) carries the "
-                   f"shear in the combined V+T checks; each sub-tube is at its own "
-                   f"optimum strut angle. Method: {t['method']}.")
+                   f"shear in the combined V+T checks; every sub-tube is at the ONE "
+                   f"member strut angle (6.3.2(2), cot {_THETA} = {t['cot']:.3f}"
+                   + (", shared with the shear check and selected to minimise the "
+                      "governing utilisation" if t.get("theta_mode") == "utilisation"
+                      else "") + f"). Method: {t['method']}.")
         st.markdown("**Sub-tubes (TRd = " + chr(0x03A3) + " TRd,i)**")
         st.dataframe(
             {"Sub-tube": [("web" if i == 0 else f"part {i + 1}")
@@ -3499,8 +3668,12 @@ def torsion_view(inp, results):
                    "bending steel.")
         st.plotly_chart(viz.subtube_figure(subs), width="stretch")
     else:
+        theta_note = ("the ONE member strut angle (6.3.2(2)), shared with the shear "
+                      "check and selected to minimise the governing utilisation"
+                      if t.get("theta_mode") == "utilisation"
+                      else "auto-optimised for the torsion resistance")
         st.caption(f"{t['theta_deg']:.1f} deg strut (cot {_THETA} = {t['cot']:.3f}, "
-                   f"auto-optimised). Method: {t['method']}. TRd,s = {t['trd_s']:.3f} "
+                   f"{theta_note}). Method: {t['method']}. TRd,s = {t['trd_s']:.3f} "
                    f"kNm, TRd,max = {t['trd_max']:.3f} kNm.")
         tef_note = ("user input" if tube["tef_user"]
                     else ("auto A/u, capped at the wall" if tube["tef_capped"]
@@ -3695,10 +3868,10 @@ def combined_view(inp, results):
         else:
             st.caption(f"VEd > VRd,c, so the stirrup carries both: shear and torsion "
                        "demands add on the shared closed stirrup.")
-        st.caption(f"At the common strut cot {_THETA} = {tr['cot']:.2f} "
-                   f"({tr['theta_deg']:.1f} deg) that balances the stirrup demand "
-                   "against the concrete crushing. A flatter strut lowers the stirrup "
-                   "demand but raises the crushing; both are checked at this one angle.")
+        st.caption(f"At the member strut angle cot {_THETA} = {tr['cot']:.2f} "
+                   f"({tr['theta_deg']:.1f} deg) -- the ONE angle shared by every "
+                   "shear and torsion check (6.3.2(2)), selected to minimise the "
+                   "governing utilisation.")
 
     st.divider()
     st.markdown("**Longitudinal reinforcement: combined M + V + T tension chord**")
@@ -3731,8 +3904,9 @@ def combined_view(inp, results):
             f"applied N). Shear shift {_DELTA}Ftd = 0.5*VEd*cot{_THETA} = "
             f"{lg['ftd_v']:.1f} kN (6.18); torsion Ftd,T = TEd*uk*cot{_THETA}/(2Ak) = "
             f"{lg['ftd_t']:.1f} kN, distributed round the perimeter so half acts on "
-            f"this chord (6.28); z = {lg['z']:.3f} m. Each contribution uses its own "
-            f"action's optimum strut angle (the DK NA sum-of-ratios rule allows it).")
+            f"this chord (6.28); z = {lg['z']:.3f} m. Both contributions are at the "
+            "ONE member strut angle shared by the shear and torsion checks "
+            "(6.3.2(2)), which is selected to minimise the governing utilisation.")
         if lg["capped"]:
             st.caption("The shear shift is capped so bending + shear does not exceed "
                        "MRd (6.2.3(7): the added tension need not exceed the "

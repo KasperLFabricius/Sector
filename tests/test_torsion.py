@@ -365,12 +365,19 @@ def test_app_combined_shear_torsion_interaction():
     inter = at.session_state["results"]["torsion"]["interaction"]
     assert inter["value"] == pytest.approx(
         inter["t_ed"] / inter["trd_max"] + inter["v_ed"] / inter["vrd_max"])
-    assert inter["cot"] == pytest.approx(1.0)       # common crushing angle at 45 deg
+    # ONE member strut angle (6.3.2(2)): the crushing interaction, the links and the
+    # torsion tube are all evaluated at the same cot theta.
+    r = at.session_state["results"]
+    assert inter["cot"] == pytest.approx(r["shear"]["links"]["res"]["cot"])
+    assert inter["cot"] == pytest.approx(r["torsion"]["cot"])
 
 
 def test_combined_vrdmax_uses_shear_method_not_torsion():
     # The combined VRd,max must follow the SHEAR method and lever arm, not the torsion
     # code / 0.9d. Changing only the torsion method moves TRd,max but leaves VRd,max.
+    # The strut-angle bands are pinned to one cot so the member angle cannot move
+    # between the two runs (the torsion method shifts nu_t and hence the chosen
+    # angle, which would move VRd,max through theta rather than through the method).
     def inter(torsion_method):
         at = _fresh()
         at.run()
@@ -379,6 +386,9 @@ def test_combined_vrdmax_uses_shear_method_not_torsion():
         at.number_input(key="shear_V").set_value(150.0).run()
         at.checkbox(key="torsion_on").set_value(True).run()
         at.number_input(key="torsion_T").set_value(40.0).run()
+        for k in ("shear_cot_min", "shear_cot_max",
+                  "torsion_cot_min", "torsion_cot_max"):
+            at.number_input(key=k).set_value(2.0).run()
         at.selectbox(key="torsion_method").set_value(torsion_method).run()
         at.button(key="calculate").click().run()
         assert not at.exception
@@ -386,6 +396,7 @@ def test_combined_vrdmax_uses_shear_method_not_torsion():
 
     a = inter(codes.EC2_2005_DKNA.label)
     b = inter(codes.EC2_2005.label)
+    assert a["cot"] == pytest.approx(2.0) and b["cot"] == pytest.approx(2.0)
     assert a["vrd_max"] == pytest.approx(b["vrd_max"])   # shear-driven, unchanged
     assert a["trd_max"] != pytest.approx(b["trd_max"])   # torsion-driven, changed
 

@@ -979,11 +979,52 @@ class ReportBuilder:
         self._formula("V<sub>Ed</sub> / V<sub>Rd</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
                       result=f"{util_txt}  ({verdict})")
-        self._small(f"The strut angle is auto-optimised within the bounds to maximise "
-                    f"V<sub>Rd</sub>. The shear adds a longitudinal tension "
-                    f"&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
-                    f"{_fmt(links['delta_ftd'], 1)} kN (6.18) that the tension "
-                    f"reinforcement must also carry.")
+        if links.get("theta_mode") == "utilisation":
+            self._small("The strut angle is the ONE member angle (shared with "
+                        "torsion when enabled, EN 1992-1-1 6.3.2(2)), selected "
+                        "within the bounds to MINIMISE THE GOVERNING UTILISATION: a "
+                        "flatter strut relaxes the stirrups but raises the crushing "
+                        "demand and the longitudinal chord tension, so the angle "
+                        "depends on V<sub>Ed</sub>, M<sub>Ed</sub> and "
+                        "N<sub>Ed</sub>. The shear adds a longitudinal tension "
+                        "&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
+                        f"{_fmt(links['delta_ftd'], 1)} kN (6.18) that the tension "
+                        "reinforcement must also carry.")
+        else:
+            self._small(f"The strut angle is auto-optimised within the bounds to "
+                        f"maximise V<sub>Rd</sub>. The shear adds a longitudinal "
+                        f"tension &#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot "
+                        f"theta = {_fmt(links['delta_ftd'], 1)} kN (6.18) that the "
+                        f"tension reinforcement must also carry.")
+        # Longitudinal chord under M + V (+ T), at the member strut angle -- the
+        # same check the combined section shows; printed here so a shear + bending
+        # run without torsion still documents it.
+        ch = links.get("chord")
+        if ch is not None and ch.get("valid"):
+            self._h2("Longitudinal chord: bending + shear"
+                     + (" + torsion" if ch.get("has_torsion") else "") + " tension")
+            vv = "OK" if ch["ok"] else "EXCEEDED"
+            face = ("bottom / left" if ch.get("tension_low", True) else "top / right")
+            self._formula(
+                "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>"
+                "&#183;z + F<sub>td,T</sub>&#183;z/2",
+                ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
+                subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
+                      f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
+                result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
+            self._formula(
+                "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
+                subst=f"{_fmt(ch['m_total'], 1)} / {_fmt(ch['m_rd'], 1)}",
+                result=(f"utilisation = {_pct(ch['util'])}"
+                        + ("  (uniaxial -- see note)" if ch.get("biaxial")
+                           else f"  ({vv})")))
+            note = (f"Tension chord = the shear tension face ({face}); the chord "
+                    "demand is part of the strut-angle objective (uncapped), so "
+                    "theta backs off the band edge when the chord would govern.")
+            if ch.get("biaxial"):
+                note += (" Biaxial bending is acting; the off-axis chord is not "
+                         "evaluated here -- rely on the combined sum(SEd/SRd).")
+            self._small(note)
 
     def _combined(self):
         c = self.out["combined"]
@@ -1050,9 +1091,10 @@ class ReportBuilder:
                 "crushing utilisation (both actions, one strut)",
                 result=f"crushing utilisation = {_pct(tr['u_crush'])}")
             self._p(f"Governing ({tr['governs']}): {_pct(tr['governing'])}  ({vv})")
-            self._small(note + f" At the common strut cot theta = {_fmt(tr['cot'], 2)} "
-                        f"({_fmt(tr['theta_deg'], 1)} deg) balancing the stirrup "
-                        "demand against the crushing.")
+            self._small(note + f" At the member strut angle cot theta = "
+                        f"{_fmt(tr['cot'], 2)} ({_fmt(tr['theta_deg'], 1)} deg) -- "
+                        "the one angle shared by every shear and torsion check "
+                        "(6.3.2(2)), selected to minimise the governing utilisation.")
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
@@ -1093,10 +1135,10 @@ class ReportBuilder:
                         "distributed torsion steel) may govern and is NOT evaluated here "
                         "-- rely on the sum(SEd/SRd) check above, which uses the full "
                         "biaxial bending utilisation.")
-            note = ("Each contribution uses its own action's optimum strut angle (the DK "
-                    "NA sum-of-ratios rule allows it). The sum(SEd/SRd) check above uses "
-                    "the full biaxial bending utilisation and remains the primary "
-                    "combined check.")
+            note = ("Both contributions are at the ONE member strut angle shared by "
+                    "the shear and torsion checks (6.3.2(2)). The sum(SEd/SRd) check "
+                    "above uses the full biaxial bending utilisation and remains the "
+                    "primary combined check.")
             if lg["capped"]:
                 note = ("The shear shift is capped so bending + shear does not exceed "
                         "M<sub>Rd</sub> (6.2.3(7): the added tension need not exceed "
@@ -1190,8 +1232,11 @@ class ReportBuilder:
         self._p("Torsion resistance from the thin-walled closed-tube idealisation "
                 "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
                 "tube is derived from the outline; the closed stirrups and the "
-                "concrete struts give the resistance at the auto-optimised strut "
-                "angle.")
+                "concrete struts give the resistance at the member strut angle "
+                + ("(one angle shared with the shear check, 6.3.2(2), selected to "
+                   "minimise the governing utilisation)."
+                   if t.get("theta_mode") == "utilisation"
+                   else "(auto-optimised for the torsion resistance)."))
         if not t["valid"]:
             if t.get("reason") == "multi-cell (2+ voids)":
                 self._small("Torsion not evaluated: a multi-cell section (two or "
