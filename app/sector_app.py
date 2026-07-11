@@ -2551,26 +2551,34 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     # crushing checks and the longitudinal-chord demand (MEd + 0.5*VEd*cot*z
     # [+ Ftd,T*z/2] vs MRd) grow, so the optimum is load-dependent -- unlike the
     # old per-action angle, which maximised each resistance alone and therefore sat
-    # at the band edge regardless of VEd/MEd/NEd. The chord demand enters UNCAPPED
-    # (the 6.2.3(7) cap applies to the reported check, not to what the angle
-    # physically trades). With no load-bearing checks (capacity-only runs) the
-    # legacy resistance-maximising angles are kept.
+    # at the band edge regardless of VEd/MEd/NEd. The chord enters the objective as
+    # the SAME capped utilisation the app reports (6.2.3(7)), so the chosen angle
+    # can never fail a reported check that another admissible angle would pass.
+    # Only LIVE checks constrain the angle -- valid AND loaded: an invalid tube
+    # (util = inf at every angle) or a companion with zero load must not drag the
+    # angle of a valid check. With no live checks (capacity-only runs) the legacy
+    # resistance-maximising angles are kept.
     if link_ctx is not None or tors_ctx is not None:
-        if link_ctx is not None and tors_ctx is not None:
-            band_lo = max(link_ctx["cot_min"], tors_ctx["tcot_min"])
-            band_hi = min(link_ctx["cot_max"], tors_ctx["tcot_max"])
-        elif link_ctx is not None:
-            band_lo, band_hi = link_ctx["cot_min"], link_ctx["cot_max"]
-        else:
-            band_lo, band_hi = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
-        band_ok = band_hi >= band_lo - 1e-9
+        v_ed_s = link_ctx["v_ed"] if link_ctx is not None else 0.0
+        t_ed_s = tors_ctx["t_ed"] if tors_ctx is not None else 0.0
+        # Validity probes: a broken links result (no stirrup area / degenerate web)
+        # or an invalid tube gives infinite utilisations at EVERY angle, which would
+        # otherwise tie the scan and pin the angle at the band edge.
+        lk_probe = (link_ctx["build"](link_ctx["cot_min"], link_ctx["cot_min"])
+                    if link_ctx is not None else None)
+        links_valid = bool(lk_probe is not None and lk_probe["valid"]
+                           and lk_probe["vrd_s"] > 0.0 and lk_probe["vrd_max"] > 0.0)
+        tors_valid = bool(tors_ctx is not None
+                          and all(tb["valid"] for tb in tors_ctx["subtubes"]))
+        shear_live = links_valid and v_ed_s > 0.0
+        tors_live = tors_valid and t_ed_s > 0.0
 
         # Longitudinal-chord parameters: the shear tension face's applied moment and
         # pure-axis capacity (the B1 machinery), available when the plastic
         # utilisation was computed and the links provide a lever arm.
         pl = out.get("plastic")
         chord = None
-        if link_ctx is not None and pl is not None and pl.get("util") is not None:
+        if links_valid and pl is not None and pl.get("util") is not None:
             l_axis, tlow = link_ctx["axis"], link_ctx["tension_low"]
             m_signed = inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
             m_ed_l = combined.chord_applied_moment(m_signed, tlow)
@@ -2589,8 +2597,20 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 chord = dict(m_ed=m_ed_l, m_rd=m_rd_l, z_m=link_ctx["z_mm"] / 1000.0,
                              axis=l_axis, tension_low=tlow, off_util=off_util)
 
-        v_ed_s = link_ctx["v_ed"] if link_ctx is not None else 0.0
-        t_ed_s = tors_ctx["t_ed"] if tors_ctx is not None else 0.0
+        # The scan band comes from the LIVE actions only: a companion that is
+        # invalid or carries no load does not constrain the member angle. Bands are
+        # "disjoint" only when BOTH actions are live and their bands do not overlap
+        # (then the legacy per-action angles + "no common strut angle" flags apply).
+        band = None
+        bands_disjoint = False
+        if shear_live and tors_live:
+            band = (max(link_ctx["cot_min"], tors_ctx["tcot_min"]),
+                    min(link_ctx["cot_max"], tors_ctx["tcot_max"]))
+            bands_disjoint = band[1] < band[0] - 1e-9
+        elif shear_live:
+            band = (link_ctx["cot_min"], link_ctx["cot_max"])
+        elif tors_live:
+            band = (tors_ctx["tcot_min"], tors_ctx["tcot_max"])
 
         @functools.lru_cache(maxsize=4096)
         def _snap(cot):
@@ -2607,20 +2627,19 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
 
         def _ftd_t_at(cot):
             """Torsion longitudinal force on the web chord (kN) at one cot."""
-            if tors_ctx is None or t_ed_s <= 0.0:
+            if not tors_live:
                 return 0.0
             web = _snap(cot)["subs"][0]
             return web["asl_req"] * tors_ctx["fyd_long"] / 1000.0
 
         utils = []
-        if link_ctx is not None and v_ed_s > 0.0:
+        if shear_live:
             utils.append(lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_s"]))
             utils.append(lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_max"]))
-        if tors_ctx is not None and t_ed_s > 0.0:
+        if tors_live:
             for i in range(len(tors_ctx["subtubes"])):
                 utils.append(lambda c, i=i: _snap(c)["subs"][i]["util"])
-        if (link_ctx is not None and tors_ctx is not None and t_ed_s > 0.0
-                and tors_ctx["asw_over_s_t"] > 0.0):
+        if links_valid and tors_live and tors_ctx["asw_over_s_t"] > 0.0:
             # The one closed stirrup carries shear AND the web's torsion share (the
             # transverse check); the web struts crush under both (6.29).
             def _shared_stirrup(c):
@@ -2636,12 +2655,16 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                         + combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_max"]))
             utils.append(_shared_stirrup)
             utils.append(_crush_629)
-        if chord is not None and (v_ed_s > 0.0 or t_ed_s > 0.0):
-            utils.append(lambda c: (chord["m_ed"] + 0.5 * v_ed_s * c * chord["z_m"]
-                                    + _ftd_t_at(c) * chord["z_m"] / 2.0)
-                         / chord["m_rd"])
+        if chord is not None and (shear_live or tors_live):
+            # The objective sees EXACTLY the reported chord utilisation (capped per
+            # 6.2.3(7)), so the optimiser and the verdicts agree: it steepens the
+            # strut while that genuinely lowers the reported check, and stops once
+            # the cap saturates (steepening further would only waste stirrups).
+            utils.append(lambda c: combined.longitudinal_check(
+                chord["m_ed"], chord["m_rd"], 0.5 * v_ed_s * c, _ftd_t_at(c),
+                chord["z_m"])["util"])
         if (inp.get("combined_on") and pl is not None and pl.get("util") is not None
-                and link_ctx is not None and tors_ctx is not None):
+                and links_valid and tors_valid and (shear_live or tors_live)):
             _mv_ind = bool(inp["combined_mv_independent"])
 
             def _dkna(c, r_m=pl["util"]):
@@ -2651,8 +2674,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             utils.append(_dkna)
 
         cot_star = None
-        if band_ok and utils:
-            cot_star, _ = combined.governing_strut_cot(utils, band_lo, band_hi)
+        if band is not None and not bands_disjoint and utils:
+            cot_star, _ = combined.governing_strut_cot(utils, band[0], band[1])
 
         # ---- torsion payload at the member angle (or its own band when no load
         # drives the choice / the bands do not overlap) ----
@@ -2724,7 +2747,13 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             # view, so both present the same numbers.
             lchk = None
             if chord is not None and lk["valid"]:
-                ftd_t_star = _ftd_t_at(lk["cot"]) if tors_ctx is not None else 0.0
+                # The torsion term comes from the BUILT torsion payload (the web
+                # tube's Asl at ITS final angle) -- with disjoint bands the links
+                # angle can lie outside the torsion band, so evaluating Ftd,T there
+                # would use an inadmissible torsion angle.
+                p_web = out.get("torsion", {}).get("primary")
+                ftd_t_star = (p_web["asl_req"] * tors_ctx["fyd_long"] / 1000.0
+                              if (p_web is not None and tors_live) else 0.0)
                 lchk = combined.longitudinal_check(chord["m_ed"], chord["m_rd"],
                                                    delta_ftd, ftd_t_star,
                                                    chord["z_m"])
@@ -2732,7 +2761,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                             tension_low=chord["tension_low"],
                             off_util=chord["off_util"],
                             biaxial=bool(chord["off_util"] > 0.05),
-                            has_torsion=bool(tors_ctx is not None and t_ed_s > 0.0))
+                            has_torsion=tors_live)
             out["shear"].update(
                 links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
                            asw_over_s=link_ctx["asw_over_s"],
@@ -2780,9 +2809,15 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             sh_links = out.get("shear", {}).get("links")
             p_tube, t_ed_p = primary["tube"], primary["t_ed"]
             if sh_links is not None and sh_links["res"]["valid"] and p_tube["valid"]:
-                if not band_ok:
+                # The plain band intersection: the fallback angle for a no-load run
+                # and the disjointness test for the 6.29 flag.
+                pl_lo = max(link_ctx["cot_min"], tors_ctx["tcot_min"])
+                pl_hi = min(link_ctx["cot_max"], tors_ctx["tcot_max"])
+                if cot_star is None and pl_hi < pl_lo - 1e-9:
                     # No strut angle is admissible for both shear and torsion, so the
                     # shared-angle crushing check (6.29) is undefined -- flag it.
+                    # (With a live single-action scan the member angle exists and the
+                    # zero-load companion does not constrain it.)
                     out["torsion"]["interaction"] = dict(
                         valid=False, reason="no common strut angle",
                         cot_shear=(link_ctx["cot_min"], link_ctx["cot_max"]),
@@ -2791,7 +2826,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     # The member angle when a load drives it; otherwise the
                     # least-conservative common angle (cot = 1 clamped to the band).
                     cot_c = (cot_star if cot_star is not None
-                             else min(max(1.0, band_lo), band_hi))
+                             else min(max(1.0, pl_lo), pl_hi))
                     trdmax_c = torsion.trd_max(
                         tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
                         p_tube["tef"], tors_ctx["alpha_cw"], cot_c,

@@ -308,6 +308,83 @@ def test_app_chord_check_in_shear_payload_without_torsion():
     assert lk["res"]["cot"] == pytest.approx(2.5)
 
 
+def test_app_invalid_tube_does_not_poison_the_member_angle():
+    # Workflow finding: an INVALID torsion tube (util = inf at every angle) must not
+    # constrain the member angle -- previously it tied the scan and pinned the links
+    # at band-low, flipping a passing shear check to FAIL.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(500.0).run()
+    at.button(key="calculate").click().run()
+    base = at.session_state["results"]["shear"]["links"]
+    assert base["res"]["cot"] == pytest.approx(2.5) and base["util"] < 1.0
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    at.number_input(key="torsion_tef").set_value(400.0).run()   # tef > section: invalid
+    at.button(key="calculate").click().run()
+    r = at.session_state["results"]
+    assert not r["torsion"]["valid"]                             # tube rejected
+    lk = r["shear"]["links"]
+    assert lk["res"]["cot"] == pytest.approx(2.5)                # angle unaffected
+    assert lk["util"] == pytest.approx(base["util"])             # verdict unchanged
+
+
+def test_app_objective_matches_reported_chord_cap():
+    # Workflow finding: the objective must scan the SAME capped chord utilisation the
+    # app reports. Here the cap saturates (MEd ~ MRd), so steepening cannot improve
+    # the reported chord -- the angle must NOT sacrifice the stirrups (the old
+    # uncapped objective dragged cot to 1.0 and failed them).
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(500.0).run()
+    at.number_input(key="pl_Mx").set_value(430.0).run()          # ~0.97 MRd
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["res"]["cot"] == pytest.approx(2.5, abs=0.05)
+    assert lk["util"] < 1.0                                      # stirrups still pass
+    assert lk["chord"]["capped"]                                 # cap is active
+
+
+def test_app_zero_torsion_does_not_constrain_the_shear_band():
+    # Workflow finding: a companion with ZERO load must not constrain the member
+    # angle -- torsion enabled with TEd = 0 and a narrow torsion band previously
+    # forced the shear angle into the intersection.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(500.0).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(0.0).run()        # enabled, no load
+    at.number_input(key="torsion_cot_min").set_value(1.0).run()
+    at.number_input(key="torsion_cot_max").set_value(1.2).run()  # narrow band
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["res"]["cot"] == pytest.approx(2.5)                # shear band governs
+
+
+def test_app_no_load_with_combined_keeps_resistance_mode():
+    # Workflow finding: with V = 0 and T = 0 the constant DK NA term must not defeat
+    # the documented no-load fallback (capacities at the resistance-max angles).
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(100.0).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(0.0).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(0.0).run()
+    at.checkbox(key="combined_on").set_value(True).run()
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["theta_mode"] == "resistance"
+    assert lk["res"]["cot"] == pytest.approx(2.5)
+
+
 def test_app_combined_longitudinal_matches_shear_chord():
     # The combined view's longitudinal check and the shear view's chord check are the
     # SAME computation (one member angle) -- the payloads must agree.
