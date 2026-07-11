@@ -2676,6 +2676,14 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         cot_star = None
         if band is not None and not bands_disjoint and utils:
             cot_star, _ = combined.governing_strut_cot(utils, band[0], band[1])
+        # One label for how the member angle was chosen, reused by every payload:
+        #   utilisation -> a live load drove the minimax choice (cot_star found);
+        #   disjoint    -> shear and torsion are both live but their cot bands do
+        #                  not overlap, so no single angle is admissible;
+        #   resistance  -> no live transverse load, so each check sits at its own
+        #                  resistance-optimum angle (nothing to optimise).
+        theta_mode_str = ("utilisation" if cot_star is not None
+                          else "disjoint" if bands_disjoint else "resistance")
 
         # ---- torsion payload at the member angle (or its own band when no load
         # drives the choice / the bands do not overlap) ----
@@ -2727,7 +2735,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9),
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
-                theta_mode=("utilisation" if cot_star is not None else "resistance"))
+                theta_mode=theta_mode_str)
 
         # ---- links payload at the member angle ----
         if link_ctx is not None:
@@ -2762,8 +2770,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                             off_util=chord["off_util"],
                             biaxial=bool(chord["off_util"] > 0.05),
                             has_torsion=tors_live,
-                            theta_mode=("utilisation" if cot_star is not None
-                                        else "resistance"))
+                            theta_mode=theta_mode_str)
             out["shear"].update(
                 links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
                            asw_over_s=link_ctx["asw_over_s"],
@@ -2775,8 +2782,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                            out_of_limits=bool(link_ctx["cot_min"] < lo - 1e-9
                                               or link_ctx["cot_max"] > hi + 1e-9),
                            required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
-                           theta_mode=("utilisation" if cot_star is not None
-                                       else "resistance")))
+                           theta_mode=theta_mode_str))
 
         # ---- checks that pair shear and torsion, at the member angle ----
         if tors_ctx is not None:
@@ -3944,12 +3950,7 @@ def combined_view(inp, results):
             f"{lg['ftd_v']:.1f} kN (6.18); torsion Ftd,T = TEd*uk*cot{_THETA}/(2Ak) = "
             f"{lg['ftd_t']:.1f} kN, distributed round the perimeter so half acts on "
             f"this chord (6.28); z = {lg['z']:.3f} m."
-            + (" Both contributions are at the ONE member strut angle shared by the "
-               "shear and torsion checks (6.3.2(2)), selected to minimise the "
-               "governing utilisation." if lg.get("theta_mode") == "utilisation"
-               else " The shear and torsion strut-angle bands do not overlap, so no "
-               "single angle is admissible; each term is at its own action's "
-               "resistance-optimum angle."))
+            + " " + viz.chord_angle_note(lg.get("theta_mode")))
         if lg["capped"]:
             st.caption("The shear shift is capped so bending + shear does not exceed "
                        "MRd (6.2.3(7): the added tension need not exceed the "

@@ -623,15 +623,24 @@ def _combined_longitudinal(theta_mode):
 
 
 def test_report_disjoint_longitudinal_note_avoids_a_shared_angle():
-    # theta_mode == "resistance" is the disjoint-band fallback (no admissible common
-    # angle). The PDF must NOT claim the shear and torsion terms share one member
-    # angle, or generated reports would contradict the on-screen disjoint warning.
+    # theta_mode == "disjoint": shear and torsion bands do not overlap, so the PDF must
+    # not claim a shared member angle -- else reports contradict the on-screen warning.
     txt = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), _combined_longitudinal("resistance"), figures=False)).split())
+        {}, _inp(), _combined_longitudinal("disjoint"), figures=False)).split())
     assert "do not overlap" in txt
     assert "resistance-optimum angle" in txt
     assert "minimise the governing utilisation" not in txt
     assert "ONE member strut angle shared" not in txt
+
+
+def test_report_no_load_longitudinal_note_is_not_labelled_disjoint():
+    # theta_mode == "resistance": no live shear or torsion. The bands are NOT disjoint
+    # (there is simply nothing to optimise), so the PDF must not say "do not overlap".
+    txt = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _combined_longitudinal("resistance"), figures=False)).split())
+    assert "No shear or torsion is acting" in txt
+    assert "do not overlap" not in txt
+    assert "minimise the governing utilisation" not in txt
 
 
 def test_report_shared_longitudinal_note_states_the_common_angle():

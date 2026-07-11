@@ -383,6 +383,14 @@ def test_app_no_load_with_combined_keeps_resistance_mode():
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["theta_mode"] == "resistance"
     assert lk["res"]["cot"] == pytest.approx(2.5)
+    # Codex: the no-load fallback (theta_mode == "resistance") must NOT be labelled as
+    # disjoint bands -- the bands overlap fine here; there is simply no load to optimise.
+    ch = lk["chord"]
+    assert ch is not None and ch["valid"] and ch["theta_mode"] == "resistance"
+    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    caps = " ".join(cap.value for cap in at.caption)
+    assert "do not overlap" not in caps
+    assert "No shear or torsion is acting" in caps
 
 
 def test_app_combined_longitudinal_matches_shear_chord():
@@ -470,8 +478,8 @@ def test_app_combined_non_overlapping_cot_bands_are_rejected():
     assert c["crushing"]["valid"] is False
     # Disjoint bands fall back to each action's own resistance angle, so the chord
     # captions must NOT claim a shared minimising angle (theta_mode drives that).
-    assert at.session_state["results"]["shear"]["links"]["theta_mode"] == "resistance"
-    assert c["longitudinal"]["theta_mode"] == "resistance"
+    assert at.session_state["results"]["shear"]["links"]["theta_mode"] == "disjoint"
+    assert c["longitudinal"]["theta_mode"] == "disjoint"
     # The chord note is actually rendered in this state, so the report wording matters.
     assert c["longitudinal"]["valid"] is True
     at.selectbox(key="view").set_value("M-V-T Combined").run()
