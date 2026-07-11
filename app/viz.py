@@ -9,6 +9,32 @@ import plotly.io as pio
 
 from sector import geometry
 
+
+def chord_angle_note(theta_mode):
+    """One shared sentence explaining how the M+V+T chord's strut angle was chosen.
+
+    Reused verbatim by the Shear/Combined views and the PDF report so the on-screen
+    caption and the generated document never diverge. Pure ASCII (no glyphs/entities),
+    so it drops straight into both the Streamlit captions and the reportlab notes.
+
+    ``theta_mode`` is one of ``utilisation`` (a live load drove the minimax choice),
+    ``disjoint`` (shear and torsion are both live but their cot bands do not overlap,
+    so no single angle is admissible) or ``resistance`` (no live transverse load, so
+    the shear-shift and torsion terms are zero and nothing drives the angle).
+    """
+    if theta_mode == "utilisation":
+        return ("Both contributions are at the ONE member strut angle shared by the "
+                "shear and torsion checks (6.3.2(2)), selected to minimise the "
+                "governing utilisation.")
+    if theta_mode == "disjoint":
+        return ("The shear and torsion strut-angle bands do not overlap, so no single "
+                "angle is admissible; each term is at its own action's "
+                "resistance-optimum angle.")
+    return ("No shear or torsion is acting, so there is no strut-angle objective; the "
+            "shear-shift and torsion terms are zero and the angle is each action's "
+            "resistance-optimum.")
+
+
 # --- House palette, grouped by role -------------------------------------------
 # Green = tension, red = compression, everywhere (bars, strain wedges, chords).
 # A hue is reused across figures only where the two roles never share a plot

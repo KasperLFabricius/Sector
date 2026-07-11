@@ -91,16 +91,39 @@ def test_longitudinal_check_zero_capacity_is_inf():
     assert not r["ok"]
 
 
-def test_combined_strut_theta():
-    # Crossover cot^2 = s/c - 1.
-    assert combined.combined_strut_theta(5.0, 1.0, 1.0, 2.5) == pytest.approx(2.0)
-    assert combined.combined_strut_theta(50.0, 1.0, 1.0, 2.5) == 2.5   # clamp to max
-    assert combined.combined_strut_theta(1.0, 5.0, 1.0, 2.5) == 1.0    # floor at 1
-    assert combined.combined_strut_theta(0.0, 1.0, 1.0, 2.5) == 1.0    # no stirrups
-    assert combined.combined_strut_theta(5.0, 0.0, 1.0, 2.5) == 2.5    # no crushing
-    # A user band wholly below 1 (a warned override) is respected, not forced up to 1.
-    assert combined.combined_strut_theta(50.0, 1.0, 0.5, 0.8) == pytest.approx(0.8)
-    assert combined.combined_strut_theta(0.0, 1.0, 0.5, 0.8) == pytest.approx(0.8)
+def test_governing_strut_cot_balances_falling_and_rising_utils():
+    # U_stirrup = 4/cot falls, U_chord = 1.0*cot rises: max is minimised at their
+    # crossing cot = 2 (util 2.0); the scan must land there (within its resolution).
+    cot, gov = combined.governing_strut_cot(
+        [lambda c: 4.0 / c, lambda c: 1.0 * c], 1.0, 2.5)
+    assert cot == pytest.approx(2.0, abs=2e-3)
+    assert gov == pytest.approx(2.0, abs=2e-3)
+
+
+def test_governing_strut_cot_clamps_to_band():
+    # A falling util alone -> the flattest allowed strut (the old resistance-max).
+    cot, _ = combined.governing_strut_cot([lambda c: 1.0 / c], 1.0, 2.5)
+    assert cot == pytest.approx(2.5)
+    # A rising util alone -> the steepest allowed strut.
+    cot, _ = combined.governing_strut_cot([lambda c: c], 1.0, 2.5)
+    assert cot == pytest.approx(1.0)
+    # Crossing outside the band clamps to the edge: 9/cot vs cot cross at 3 > 2.5.
+    cot, _ = combined.governing_strut_cot([lambda c: 9.0 / c, lambda c: c], 1.0, 2.5)
+    assert cot == pytest.approx(2.5)
+
+
+def test_governing_strut_cot_flat_objective_prefers_lower_cot():
+    # All-constant utilisations (no load): ties break to the steeper strut (less
+    # longitudinal steel demand); empty utils return the band's low edge.
+    cot, _ = combined.governing_strut_cot([lambda c: 0.5], 1.0, 2.5)
+    assert cot == pytest.approx(1.0)
+    cot, gov = combined.governing_strut_cot([], 1.0, 2.5)
+    assert cot == pytest.approx(1.0) and gov == 0.0
+
+
+def test_governing_strut_cot_reversed_band():
+    cot, _ = combined.governing_strut_cot([lambda c: 1.0 / c], 2.5, 1.0)
+    assert cot == pytest.approx(2.5)
 
 
 # -- app integration (AppTest) ----------------------------------------------
@@ -221,6 +244,287 @@ def test_app_combined_view_renders():
     assert any(lbl.startswith("Governing (") for lbl in labels)
 
 
+def test_app_strut_angle_responds_to_loads():
+    # The user-reported defect: the auto strut angle sat at cot = 2.5 regardless of
+    # VEd/MEd/NEd because it maximised the shear RESISTANCE alone. The member angle
+    # now minimises the governing utilisation, so it must respond to the loads.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+
+    def run(v, mx, p):
+        at.number_input(key="shear_V").set_value(v).run()
+        at.number_input(key="pl_Mx").set_value(mx).run()
+        at.number_input(key="pl_P").set_value(p).run()
+        at.button(key="calculate").click().run()
+        assert not at.exception
+        return at.session_state["results"]["shear"]["links"]
+
+    # Pure shear: nothing trades against the stirrups -> flattest strut (as before).
+    lk = run(500.0, 0.0, 0.0)
+    assert lk["res"]["cot"] == pytest.approx(2.5)
+    # Bending near MRd: the chord governs, the strut steepens to relieve delta_Ftd.
+    lk = run(150.0, 400.0, 0.0)
+    assert lk["res"]["cot"] < 1.2
+    assert lk["chord"]["util"] > 0.9
+    # Moderate bending: an interior optimum where stirrup and chord utils BALANCE.
+    lk = run(150.0, 100.0, 0.0)
+    assert 1.2 < lk["res"]["cot"] < 2.4
+    assert lk["util"] == pytest.approx(lk["chord"]["util"], rel=0.02)
+    # Axial compression raises MRd -> the chord relaxes and the angle flattens again.
+    cot_n0 = lk["res"]["cot"]
+    lk = run(150.0, 100.0, -800.0)
+    assert lk["res"]["cot"] > cot_n0
+
+
+def test_app_chord_check_in_shear_payload_without_torsion():
+    # The longitudinal chord check (B1) is now available for V + M without torsion
+    # (torsion term = 0) and shown from the shear links payload.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(150.0).run()
+    at.number_input(key="pl_Mx").set_value(100.0).run()
+    at.button(key="calculate").click().run()
+    ch = at.session_state["results"]["shear"]["links"]["chord"]
+    assert ch is not None and ch["valid"]
+    assert ch["mt"] == pytest.approx(0.0)            # no torsion contribution
+    assert ch["m_total"] == pytest.approx(ch["m_ed"] + ch["mv"])
+    assert not ch["has_torsion"]
+    # Capacity-only run (utilisation check off): no chord; the scan over the shear
+    # utils alone reproduces the resistance-maximising angle (2.5 here).
+    at.checkbox(key="pl_check_util").set_value(False).run()
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["chord"] is None
+    assert lk["res"]["cot"] == pytest.approx(2.5)
+    # With NO load at all there is no utilisation to scan -> legacy resistance mode.
+    at.number_input(key="shear_V").set_value(0.0).run()
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["theta_mode"] == "resistance"
+    assert lk["res"]["cot"] == pytest.approx(2.5)
+
+
+def test_app_invalid_tube_does_not_poison_the_member_angle():
+    # Workflow finding: an INVALID torsion tube (util = inf at every angle) must not
+    # constrain the member angle -- previously it tied the scan and pinned the links
+    # at band-low, flipping a passing shear check to FAIL.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(500.0).run()
+    at.button(key="calculate").click().run()
+    base = at.session_state["results"]["shear"]["links"]
+    assert base["res"]["cot"] == pytest.approx(2.5) and base["util"] < 1.0
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    at.number_input(key="torsion_tef").set_value(400.0).run()   # tef > section: invalid
+    at.button(key="calculate").click().run()
+    r = at.session_state["results"]
+    assert not r["torsion"]["valid"]                             # tube rejected
+    lk = r["shear"]["links"]
+    assert lk["res"]["cot"] == pytest.approx(2.5)                # angle unaffected
+    assert lk["util"] == pytest.approx(base["util"])             # verdict unchanged
+
+
+def test_app_objective_matches_reported_chord_cap():
+    # Workflow finding: the objective must scan the SAME capped chord utilisation the
+    # app reports. Here the cap saturates (MEd ~ MRd), so steepening cannot improve
+    # the reported chord -- the angle must NOT sacrifice the stirrups (the old
+    # uncapped objective dragged cot to 1.0 and failed them).
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(500.0).run()
+    at.number_input(key="pl_Mx").set_value(430.0).run()          # ~0.97 MRd
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["res"]["cot"] == pytest.approx(2.5, abs=0.05)
+    assert lk["util"] < 1.0                                      # stirrups still pass
+    assert lk["chord"]["capped"]                                 # cap is active
+
+
+def test_app_zero_torsion_does_not_constrain_the_shear_band():
+    # Workflow finding: a companion with ZERO load must not constrain the member
+    # angle -- torsion enabled with TEd = 0 and a narrow torsion band previously
+    # forced the shear angle into the intersection.
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(500.0).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(0.0).run()        # enabled, no load
+    at.number_input(key="torsion_cot_min").set_value(1.0).run()
+    at.number_input(key="torsion_cot_max").set_value(1.2).run()  # narrow band
+    at.button(key="calculate").click().run()
+    r = at.session_state["results"]
+    lk = r["shear"]["links"]
+    assert lk["res"]["cot"] == pytest.approx(2.5)                # shear band governs
+    # Codex: the dead torsion companion (TEd = 0) must NOT be pinned to the shear
+    # angle -- it stays inside its own [1.0, 1.2] band at its own resistance-optimum,
+    # not reported at cot = 2.5 (which the user excluded for torsion).
+    t = r["torsion"]
+    assert 1.0 - 1e-9 <= t["cot"] <= 1.2 + 1e-9
+    assert t["theta_mode"] == "resistance"
+
+
+def test_app_dead_shear_companion_stays_in_its_own_band():
+    # Mirror of the T=0 case: shear links enabled but VEd = 0 while torsion is live.
+    # The dead links must not be pinned to the torsion-driven angle outside their band.
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(80.0).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(0.0).run()          # enabled, no load
+    at.number_input(key="shear_cot_min").set_value(2.3).run()
+    at.number_input(key="shear_cot_max").set_value(2.5).run()    # narrow, high band
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    at.number_input(key="torsion_cot_min").set_value(1.0).run()
+    at.number_input(key="torsion_cot_max").set_value(1.2).run()
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert 2.3 - 1e-9 <= lk["res"]["cot"] <= 2.5 + 1e-9          # own band, not ~1.1
+    assert lk["theta_mode"] == "resistance"
+
+
+def test_app_infinite_bending_util_does_not_poison_the_member_angle():
+    # Workflow finding: an INFINITE plastic (bending) utilisation -- the applied N/M
+    # ray misses the plastic M-M envelope -- must not poison the strut-angle objective
+    # via the constant DK NA term. Guard mirrors the invalid-tube inf guard: with an
+    # inf r_m the member angle is chosen by the FINITE terms exactly as if the combined
+    # check were off, instead of being pinned to the band edge by the inf.
+    def run(combined):
+        at = _fresh()
+        at.run()
+        at.number_input(key="pl_P").set_value(8000.0).run()      # beyond axial capacity
+        at.number_input(key="pl_Mx").set_value(120.0).run()      # -> ray misses envelope
+        at.checkbox(key="shear_on").set_value(True).run()
+        at.checkbox(key="shear_links").set_value(True).run()
+        at.number_input(key="shear_V").set_value(300.0).run()
+        at.checkbox(key="torsion_on").set_value(True).run()
+        at.number_input(key="torsion_T").set_value(60.0).run()
+        at.checkbox(key="combined_on").set_value(combined).run()
+        at.button(key="calculate").click().run()
+        return at.session_state["results"]
+    r_on = run(True)
+    r_off = run(False)
+    assert not math.isfinite(r_on["plastic"]["util"])            # inf bending util
+    assert not math.isfinite(r_on["combined"]["dkna_sum"])       # verdict still FAIL
+    cot_on = r_on["shear"]["links"]["res"]["cot"]
+    cot_off = r_off["shear"]["links"]["res"]["cot"]
+    assert cot_on == pytest.approx(cot_off)                      # inf did not move the angle
+    assert cot_on > 1.05                                          # NOT pinned to the band edge
+
+
+def test_app_combined_angle_minimises_the_dkna_governing_sum():
+    # v0.69 requirement: theta minimises the LARGEST applicable utilisation. In a
+    # combined M+V+T run the governing utilisation is the DK NA sum(SEd/SRd) (a sum of
+    # ratios, so >= every component), which has a load-dependent INTERIOR optimum.
+    # Pin the strut to fixed cots across the band and confirm the auto-selected angle
+    # beats every one of them -- i.e. the chosen cot actually minimises the governing
+    # combined utilisation, not just some component. A regression that drops the DK NA
+    # objective term would move theta off this minimum and this test would catch it.
+    def dkna(pin=None):
+        at = _fresh()
+        at.run()
+        at.number_input(key="pl_Mx").set_value(150.0).run()
+        at.checkbox(key="shear_on").set_value(True).run()
+        at.checkbox(key="shear_links").set_value(True).run()
+        at.number_input(key="shear_V").set_value(280.0).run()
+        at.checkbox(key="torsion_on").set_value(True).run()
+        at.number_input(key="torsion_T").set_value(100.0).run()
+        at.checkbox(key="combined_on").set_value(True).run()
+        if pin is not None:
+            for k in ("shear_cot_min", "shear_cot_max",
+                      "torsion_cot_min", "torsion_cot_max"):
+                at.number_input(key=k).set_value(pin).run()
+        at.button(key="calculate").click().run()
+        r = at.session_state["results"]
+        return r["shear"]["links"]["res"]["cot"], r["combined"]["dkna_sum"]
+    cot_star, dk_star = dkna()
+    # A load-dependent interior optimum, NOT the pre-v0.69 clamp to the band edge.
+    assert 1.8 < cot_star < 2.4
+    # It beats every fixed strut angle across the band, including the resistance-max
+    # edge cot = 2.5 that the old code always returned.
+    for pin in (1.0, 1.6, 2.0, 2.4, 2.5):
+        _, dk_pin = dkna(pin=pin)
+        assert dk_star < dk_pin, f"cot*={cot_star} dkna*={dk_star} !< pin {pin}: {dk_pin}"
+
+
+def test_app_combined_transverse_label_uses_member_angle_when_shear_dead():
+    # Focused review: with VEd = 0 and live torsion the links are de-pinned to their
+    # own band, so the shared-stirrup transverse check must be LABELLED with the member
+    # angle its numbers actually use (the 6.29 interaction cot), not the links' own
+    # resistance-optimum cot -- otherwise the reported angle contradicts the numbers.
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(90.0).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(0.0).run()
+    at.number_input(key="shear_cot_min").set_value(2.3).run()
+    at.number_input(key="shear_cot_max").set_value(2.5).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(60.0).run()
+    at.number_input(key="torsion_cot_min").set_value(1.0).run()
+    at.number_input(key="torsion_cot_max").set_value(1.4).run()
+    at.checkbox(key="combined_on").set_value(True).run()
+    at.button(key="calculate").click().run()
+    r = at.session_state["results"]
+    tv = r["combined"]["transverse"]
+    assert tv["valid"]
+    assert tv["cot"] == pytest.approx(r["torsion"]["interaction"]["cot"])
+    assert tv["cot"] < 1.5                                        # torsion angle, not 2.5
+    assert r["shear"]["links"]["res"]["cot"] == pytest.approx(2.5)  # links de-pinned
+
+
+def test_app_no_load_with_combined_keeps_resistance_mode():
+    # Workflow finding: with V = 0 and T = 0 the constant DK NA term must not defeat
+    # the documented no-load fallback (capacities at the resistance-max angles).
+    at = _fresh()
+    at.run()
+    at.number_input(key="pl_Mx").set_value(100.0).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(0.0).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(0.0).run()
+    at.checkbox(key="combined_on").set_value(True).run()
+    at.button(key="calculate").click().run()
+    lk = at.session_state["results"]["shear"]["links"]
+    assert lk["theta_mode"] == "resistance"
+    assert lk["res"]["cot"] == pytest.approx(2.5)
+    # Codex: the no-load fallback (theta_mode == "resistance") must NOT be labelled as
+    # disjoint bands -- the bands overlap fine here; there is simply no load to optimise.
+    ch = lk["chord"]
+    assert ch is not None and ch["valid"] and ch["theta_mode"] == "resistance"
+    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    caps = " ".join(cap.value for cap in at.caption)
+    assert "do not overlap" not in caps
+    assert "No shear or torsion is acting" in caps
+
+
+def test_app_combined_longitudinal_matches_shear_chord():
+    # The combined view's longitudinal check and the shear view's chord check are the
+    # SAME computation (one member angle) -- the payloads must agree.
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    r = at.session_state["results"]
+    lg = r["combined"]["longitudinal"]
+    ch = r["shear"]["links"]["chord"]
+    assert lg["util"] == pytest.approx(ch["util"])
+    assert lg["m_total"] == pytest.approx(ch["m_total"])
+
+
 def test_app_combined_transverse_shear_credit():
     # VEd <= VRd,c: the concrete carries the shear, so the shared stirrup's shear
     # share is 0 and the whole stirrup serves torsion (Q2).
@@ -239,11 +543,17 @@ def test_app_combined_transverse_shear_credit():
     assert tr["shear_credited"] is True
     assert tr["shear_fraction"] == pytest.approx(0.0)
     assert tr["torsion_fraction"] > 0.0
-    assert tr["governing"] == pytest.approx(tr["torsion_fraction"], rel=1e-6)
-    # governing = max(stirrup, crushing); the label follows whichever controls.
+    # With the shear credited the stirrup serves torsion alone; the governing value
+    # is still max(stirrup, crushing) AT THE MEMBER ANGLE, where the crushing sum
+    # (6.29, no VRd,c credit) may control.
+    assert tr["u_stirrup"] == pytest.approx(tr["torsion_fraction"], rel=1e-6)
     assert tr["governing"] == pytest.approx(max(tr["u_stirrup"], tr["u_crush"]))
     assert tr["governs"] == ("crushing" if tr["u_crush"] > tr["u_stirrup"]
                              else "stirrups")
+    # One member strut angle: the transverse check sits at the links/torsion cot.
+    r = at.session_state["results"]
+    assert tr["cot"] == pytest.approx(r["shear"]["links"]["res"]["cot"])
+    assert tr["cot"] == pytest.approx(r["torsion"]["cot"])
 
 
 def test_app_combined_transverse_no_credit_when_shear_high():
@@ -285,8 +595,16 @@ def test_app_combined_non_overlapping_cot_bands_are_rejected():
     c = at.session_state["results"]["combined"]
     assert c["transverse"]["valid"] is False
     assert c["crushing"]["valid"] is False
+    # Disjoint bands fall back to each action's own resistance angle, so the chord
+    # captions must NOT claim a shared minimising angle (theta_mode drives that).
+    assert at.session_state["results"]["shear"]["links"]["theta_mode"] == "disjoint"
+    assert c["longitudinal"]["theta_mode"] == "disjoint"
+    # The chord note is actually rendered in this state, so the report wording matters.
+    assert c["longitudinal"]["valid"] is True
     at.selectbox(key="view").set_value("M-V-T Combined").run()
     assert any("do not overlap" in w.value for w in at.warning)
+    caps = " ".join(cap.value for cap in at.caption)
+    assert "bands do not overlap" in caps and "minimise the governing" not in caps
 
 
 def test_app_combined_is_saved_and_restored():
