@@ -630,7 +630,6 @@ class ReportBuilder:
 
     def _plastic(self):
         pl = self.out["plastic"]
-        inp = self.inp
         self._h1("Ultimate (plastic) capacity")
         if not pl.get("converged", True):
             self._small("Warning: not all sweep points converged.")
@@ -835,7 +834,7 @@ class ReportBuilder:
         self._h1("Shear resistance without shear reinforcement")
         axis = ("vertical shear (bending about x)" if sh["axis"] == "x"
                 else "horizontal shear (bending about y)")
-        face = "bottom / left" if sh["tension_low"] else "top / right"
+        face = viz.tension_face_label(sh["tension_low"])
         clause = "8.2.2" if sh.get("model_2023") else "6.2.2(1)"
         self._p(f"Design shear resistance V<sub>Rd,c</sub> of a member not requiring "
                 f"shear reinforcement (EN 1992-1-1 sec. {clause}), method "
@@ -1000,7 +999,7 @@ class ReportBuilder:
             self._h2("Longitudinal chord: bending + shear"
                      + (" + torsion" if ch.get("has_torsion") else "") + " tension")
             vv = "OK" if ch["ok"] else "EXCEEDED"
-            face = ("bottom / left" if ch.get("tension_low", True) else "top / right")
+            face = viz.tension_face_label(ch.get("tension_low", True))
             self._formula(
                 "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>"
                 "&#183;z + F<sub>td,T</sub>&#183;z/2",
@@ -1098,7 +1097,7 @@ class ReportBuilder:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
             vv = "OK" if lg["ok"] else "EXCEEDED"
             ax = lg["axis"]
-            face = "bottom / left" if lg.get("tension_low", True) else "top / right"
+            face = viz.tension_face_label(lg.get("tension_low", True))
             self._p(
                 f"The tension chord is the shear tension face ({face}) about the "
                 f"{ax}-axis; M<sub>Ed</sub> and M<sub>Rd</sub> are taken on that face. "

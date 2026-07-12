@@ -32,6 +32,11 @@ def util_ok(util, tol=0.0):
     return util is not None and math.isfinite(util) and util <= 1.0 + tol
 
 
+def tension_face_label(tension_low):
+    """The shear/chord tension face as a display label (shared by views + report)."""
+    return "bottom / left" if tension_low else "top / right"
+
+
 def chord_angle_note(theta_mode):
     """One shared sentence explaining how the M+V+T chord's strut angle was chosen.
 
@@ -1044,23 +1049,6 @@ def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
                     xanchor="center"),
     )
     return fig
-
-
-def na_endpoints(x_int, y_int, extent):
-    """Two points spanning the neutral axis from its axis intercepts.
-
-    Returns ``(x0, y0, x1, y1)`` clipped to +/- ``extent``, or ``None`` if the
-    axis is not well defined (both intercepts infinite).
-    """
-    fx = math.isfinite(x_int)
-    fy = math.isfinite(y_int)
-    if fx and fy:
-        return (x_int, 0.0, 0.0, y_int)
-    if fx and not fy:  # vertical line x = x_int
-        return (x_int, -extent, x_int, extent)
-    if fy and not fx:  # horizontal line y = y_int
-        return (-extent, y_int, extent, y_int)
-    return None
 
 
 def na_line_at(a, b, c, extent, bbox=None):

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-import json
 import math
 import os
 import pathlib
@@ -2055,6 +2054,17 @@ def _gross_area_centroid(outer, holes):
     return area, mx / area, my / area
 
 
+def _design_yield(mat):
+    """Design yield strength f_yd = f_ytk / gamma_y (falls back to f_ytk if unset).
+
+    Taken from the yield parameters, not by sampling stress() at a fixed strain,
+    which a hardening or low-rupture-strain law would misread. Used for both the
+    2023 shear flexural yield and the torsion longitudinal steel.
+    """
+    gy = getattr(mat, "gamma_y", 0.0)
+    return mat.fytk / gy if gy > 0.0 else mat.fytk
+
+
 def _prestress_axial(inp):
     """Tendon precompression from the prestress initial strain, in kN (concrete
     compression-positive), for the shear/torsion sigma_cp and alpha_cw.
@@ -2427,9 +2437,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # aggregate size ddg; the 2005 VRd,c ignores both. Take fyd from the yield
         # parameters (fytk/gamma_y) rather than sampling stress() at a fixed strain,
         # which a hardening or low-rupture-strain law would misread.
-        _steel = inp["steel"]
-        fyd_flex = (_steel.fytk / _steel.gamma_y if getattr(_steel, "gamma_y", 0.0) > 0.0
-                    else _steel.fytk)
+        fyd_flex = _design_yield(inp["steel"])
         ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
         res = shear.vrd_c(fck, code, bw, d, asl, n_ed_comp, ac,
                           fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0))
@@ -2492,9 +2500,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # The torsion tube uses the shared closed stirrup (one leg of the loop) and
         # the section's own mild-reinforcement design yield for the longitudinal steel.
         fywd_t = inp["shear_fywk"] / tcode.gamma_s
-        _st = inp["steel"]
-        fyd_long = (_st.fytk / _st.gamma_y if getattr(_st, "gamma_y", 0.0) > 0.0
-                    else _st.fytk)
+        fyd_long = _design_yield(inp["steel"])
         asw_t = templates.bar_area(inp["shear_link_dia"])
         asw_over_s_t = (asw_t / inp["shear_link_s"]
                         if inp["shear_link_s"] > 0.0 else 0.0)
@@ -3429,7 +3435,7 @@ def shear_view(inp, results):
     res = sh["res"]
     axis_lbl = ("Vertical (bending about x)" if sh["axis"] == "x"
                 else "Horizontal (bending about y)")
-    face_lbl = "bottom / left" if sh["tension_low"] else "top / right"
+    face_lbl = viz.tension_face_label(sh["tension_low"])
     if not res["valid"]:
         st.warning("VRd,c is zero -- there is no tension reinforcement on the chosen "
                    "face, or the derived effective depth / web width is zero. Add "
@@ -3563,8 +3569,7 @@ def shear_view(inp, results):
             st.markdown("**Longitudinal chord: bending + shear"
                         + (" + torsion" if ch.get("has_torsion") else "")
                         + " tension**")
-            face_lbl = ("bottom / left" if ch.get("tension_low", True)
-                        else "top / right")
+            face_lbl = viz.tension_face_label(ch.get("tension_low", True))
             g1, g2, g3 = st.columns(3)
             g1.metric(f"MEd (about {ch['axis']})", f"{ch['m_ed']:.1f} kNm")
             g2.metric("MEd,total", f"{ch['m_total']:.1f} kNm",
@@ -3899,7 +3904,7 @@ def combined_view(inp, results):
     lg = c.get("longitudinal")
     if lg is not None and lg["valid"]:
         ax_lbl = lg["axis"]
-        face_lbl = "bottom / left" if lg.get("tension_low", True) else "top / right"
+        face_lbl = viz.tension_face_label(lg.get("tension_low", True))
         biaxial = lg.get("biaxial", False)
         ok_l = lg["ok"]
         g1, g2, g3 = st.columns(3)
