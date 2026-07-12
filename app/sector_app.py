@@ -3422,7 +3422,7 @@ def _crack_width_panel(e):
                "is the distance to the nearest concrete face minus its radius.")
     member = e.get("crack_member")
     if member:
-        st.caption(f"DK NA: cover-dependent k3 = 3.4*(25/c)^(2/3), reported for both "
+        st.caption(r"DK NA: cover-dependent $k_3 = 3.4(25/c)^{2/3}$, reported for both "
                    f"the fine and the coarse crack system (7.3.4(1): centroid-matched "
                    f"effective area, $w_k$ halved). Member type = {member} (the "
                    f"(h-x)/3 effective-height term applies to slabs and prestressed "
@@ -3489,9 +3489,10 @@ def shear_view(inp, results):
                        f"{res['fyd']:.1f} MPa", f"{res['gamma_v']:.2f}"]},
             hide_index=True, width="stretch")
         st.caption(
-            _TAU + "Rd,c = max[ (0.66/gamma_v)*(100*" + _RHO + "l*fck*ddg/d)^(1/3) , "
-            + _TAU + "Rd,c,min ] (EN 1992-1-1:2023, 8.27); VRd,c = " + _TAU +
-            "Rd,c*bw*z, z = 0.9d. ddg = 16 + Dlower (<= 40 mm). Asl is the tension "
+            r"$\tau_{Rd,c} = \max[\,(0.66/\gamma_V)(100\,\rho_l f_{ck} d_{dg}/d)^{1/3},"
+            r"\ \tau_{Rd,c,min}]$ (EN 1992-1-1:2023, 8.27); "
+            r"$V_{Rd,c} = \tau_{Rd,c}\,b_w z$, $z = 0.9d$. "
+            r"$d_{dg} = 16 + D_{lower}$ ($\leq 40$ mm). $A_{sl}$ is the tension "
             "reinforcement on the chosen face, assumed fully anchored beyond d.")
     else:
         st.dataframe(
@@ -3508,10 +3509,11 @@ def shear_view(inp, results):
                        f"{res['vmin']:.3f} MPa", f"{res['fcd']:.2f} MPa"]},
             hide_index=True, width="stretch")
         st.caption(
-            "VRd,c = max[ CRd,c*k*(100*" + _RHO + "l*fck)^(1/3) + k1*" + _SIGMA +
-            "cp , vmin + k1*" + _SIGMA + "cp ] * bw * d, with k1 = "
-            f"{res['k1']:.2f}. Asl is the tension reinforcement on the chosen face, "
-            "assumed fully anchored (>= lbd + d) beyond the section.")
+            r"$V_{Rd,c} = \max[\,C_{Rd,c}\,k(100\,\rho_l f_{ck})^{1/3} + k_1\sigma_{cp},"
+            r"\ v_{min} + k_1\sigma_{cp}]\,b_w d$, with $k_1 = "
+            f"{res['k1']:.2f}$. "
+            r"$A_{sl}$ is the tension reinforcement on the chosen face, assumed fully "
+            r"anchored ($\geq l_{bd} + d$) beyond the section.")
 
     if sh.get("model_2023") and inp.get("shear_links"):
         st.info("The 2023 method's strain-based check for members WITH shear "
@@ -3523,7 +3525,7 @@ def shear_view(inp, results):
     if links is not None:
         lk = links["res"]
         st.divider()
-        st.markdown("**Shear reinforcement (links): VRd = min(VRd,s, VRd,max)**")
+        st.markdown("**Shear reinforcement (links)**")
         if not lk["valid"]:
             st.warning("The link resistance could not be computed -- check the leg "
                        "count, diameter and spacing (Asw/s must be > 0).")
@@ -3567,13 +3569,14 @@ def shear_view(inp, results):
                          "crushing demand and the longitudinal chord tension, so "
                          "the chosen angle depends on VEd, MEd and NEd.")
         else:
-            theta_txt = ("Sector auto-optimises " + _THETA + " within the bounds "
-                         "to maximise VRd = min(VRd,s, VRd,max).")
+            theta_txt = (r"Sector auto-optimises $\theta$ within the bounds to "
+                         r"maximise $V_{Rd} = \min(V_{Rd,s}, V_{Rd,max})$.")
         st.caption(
-            "VRd,s = (Asw/s)*z*fywd*cot" + _THETA + " (6.8); VRd,max = " + _ALPHA +
-            "cw*bw*z*" + _NU + "1*fcd/(cot" + _THETA + "+tan" + _THETA + ") (6.9). "
-            + theta_txt + " " + _DELTA + "Ftd = 0.5*VEd*cot" + _THETA +
-            " is the extra longitudinal tension the tension chord must also carry.")
+            r"$V_{Rd,s} = (A_{sw}/s)\,z f_{ywd}\cot\theta$ (6.8); "
+            r"$V_{Rd,max} = \alpha_{cw} b_w z\,\nu_1 f_{cd}/(\cot\theta+\tan\theta)$ "
+            r"(6.9). " + theta_txt +
+            r" $\Delta F_{td} = 0.5 V_{Ed}\cot\theta$ is the extra longitudinal "
+            "tension the tension chord must also carry.")
         # Longitudinal chord under M + V (+ T): the same check the combined view
         # shows, computed at the member strut angle.
         ch = links.get("chord")
@@ -3600,11 +3603,12 @@ def shear_view(inp, results):
                         "otherwise govern."
                         if ch.get("theta_mode") == "utilisation" else "")
             st.caption(
-                f"Tension chord = the shear tension face ({face_lbl}). MEd,total = "
-                f"MEd + {_DELTA}Ftd*z + Ftd,T*z/2 = {ch['m_ed']:.1f} + "
-                f"{ch['mv']:.1f} + {ch['mt']:.1f} = {ch['m_total']:.1f} kNm vs "
-                f"MRd = {ch['m_rd']:.1f} kNm (pure bending about {ch['axis']} at "
-                f"the applied N); z = {ch['z']:.3f} m." + obj_note)
+                f"Tension chord = the shear tension face ({face_lbl}). "
+                r"$M_{Ed,total} = M_{Ed} + \Delta F_{td}\,z + F_{td,T}\,z/2 = "
+                f"{ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
+                f"{ch['m_total']:.1f}$ kNm vs $M_{{Rd}} = {ch['m_rd']:.1f}$ kNm "
+                f"(pure bending about {ch['axis']} at the applied N); "
+                f"$z = {ch['z']:.3f}$ m." + obj_note)
             if ch.get("capped"):
                 st.caption("The shear shift is capped so bending + shear does not "
                            "exceed MRd (6.2.3(7)); the strut-angle objective uses "
@@ -3681,7 +3685,7 @@ def torsion_view(inp, results):
                             "(no single member angle applies -- see the cot column)")
         st.caption(f"Compound section (6.3.1(3)): TRd = {chr(0x03A3)} of the sub-tube "
                    f"capacities; TEd is split by uncracked torsional stiffness "
-                   f"C = {chr(0x03B2)}*h*b^3 (6.3.1(4)). The first row (web) carries the "
+                   r"$C = \beta\,h\,b^3$ (6.3.1(4)). The first row (web) carries the "
                    f"shear in the combined V+T checks; {angle_clause}. "
                    f"Method: {t['method']}.")
         st.markdown("**Sub-tubes (TRd = " + chr(0x03A3) + " TRd,i)**")
@@ -3731,11 +3735,11 @@ def torsion_view(inp, results):
                        f"{t['alpha_cw']:.3f}", f"{t['asl_req']:.0f} mm2"]},
             hide_index=True, width="stretch")
         st.caption(
-            "TRd,s = (Asw/s)*2*Ak*fywd*cot" + _THETA + " (from 6.28); TRd,max = 2*"
-            + _NU + "*" + _ALPHA + "cw*fcd*Ak*tef*sin" + _THETA + "*cos" + _THETA +
-            " (6.30); TRd,c = 2*Ak*tef*fctd. The required longitudinal steel "
-            + chr(0x03A3) + "Asl = TEd*uk*cot" + _THETA + "/(2*Ak*fyd) (6.28) is in "
-            "ADDITION to the bending reinforcement on the tension side.")
+            r"$T_{Rd,s} = (A_{sw}/s)\,2 A_k f_{ywd}\cot\theta$ (6.28); "
+            r"$T_{Rd,max} = 2\,\nu\,\alpha_{cw} f_{cd} A_k t_{ef}\sin\theta\cos\theta$ "
+            r"(6.30); $T_{Rd,c} = 2 A_k t_{ef} f_{ctd}$. The required longitudinal "
+            r"steel $\sum A_{sl} = T_{Ed}\,u_k\cot\theta / (2 A_k f_{yd})$ (6.28) is "
+            "in ADDITION to the bending reinforcement on the tension side.")
         st.plotly_chart(viz.tube_figure(inp["outer"], inp.get("holes"), tube["tef"],
                                         ak_m2=tube["Ak"]), width="stretch")
     if t.get("n_prestress"):
@@ -3935,14 +3939,15 @@ def combined_view(inp, results):
                       delta_color=("normal" if ok_l else "inverse"))
         st.caption(
             f"Tension chord = the shear tension face ({face_lbl}) about the "
-            f"{ax_lbl}-axis; MEd and MRd are taken on that face. "
-            f"MEd,total = MEd + {_DELTA}Ftd*z + Ftd,T*z/2 = "
-            f"{lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f} "
-            f"kNm, vs MRd = {lg['m_rd']:.1f} kNm (pure bending about {ax_lbl} at the "
-            f"applied N). Shear shift {_DELTA}Ftd = 0.5*VEd*cot{_THETA} = "
-            f"{lg['ftd_v']:.1f} kN (6.18); torsion Ftd,T = TEd*uk*cot{_THETA}/(2Ak) = "
-            f"{lg['ftd_t']:.1f} kN, distributed round the perimeter so half acts on "
-            f"this chord (6.28); z = {lg['z']:.3f} m."
+            f"{ax_lbl}-axis; $M_{{Ed}}$ and $M_{{Rd}}$ are taken on that face. "
+            r"$M_{Ed,total} = M_{Ed} + \Delta F_{td}\,z + F_{td,T}\,z/2 = "
+            f"{lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f}$ "
+            f"kNm, vs $M_{{Rd}} = {lg['m_rd']:.1f}$ kNm (pure bending about {ax_lbl} at "
+            r"the applied N). Shear shift $\Delta F_{td} = 0.5 V_{Ed}\cot\theta = "
+            f"{lg['ftd_v']:.1f}$ kN (6.18); torsion "
+            r"$F_{td,T} = T_{Ed}\,u_k\cot\theta / (2 A_k) = "
+            f"{lg['ftd_t']:.1f}$ kN, distributed round the perimeter so half acts on "
+            f"this chord (6.28); $z = {lg['z']:.3f}$ m."
             + " " + viz.chord_angle_note(lg.get("theta_mode")))
         if lg["capped"]:
             st.caption("The shear shift is capped so bending + shear does not exceed "
