@@ -377,7 +377,7 @@ def mild_panel(box, locked=False):
         help="On: the bar carries compression and its compression-side inputs "
              "(fyck, ey0c) are used. Off: the reinforcement is tension-only "
              "(no compression), for every curve type. This applies to the plastic "
-             "(ultimate) capacity; the elastic/SLS analysis is linear and treats "
+             "capacity; the elastic analysis is linear and treats "
              "the bars in both directions.")
     # The compression-side inputs only matter when compression is active.
     comp_only = {"fyck", "ey0c"}
@@ -1322,36 +1322,37 @@ _SHEAR_SIG_KEYS = (
 
 def build_inputs():
     """Render the sidebar dropdown panels and return the section, materials and
-    loads. Panels follow the workflow order: Section, Material Parameters, Loads,
-    Analysis settings, Report, Save/Load, About."""
+    loads. Panels follow the workflow order: About, Analysis settings (+ its check
+    configs), Section, Material Parameters, Loads, Report, Save/Load."""
     s = st.sidebar
 
-    # The panels are CREATED here in their on-screen order -- the input panels first
-    # (Section, Materials, Loads), then Analysis settings, Report, Save/Load and
-    # About -- but they are FILLED lower down in dependency order: the Analysis
-    # settings compute the bending mode and the check toggles that the Material and
-    # Loads panels gate on, so those two are written after it even though they sit
-    # higher on screen. Streamlit fixes each panel's position when it is created, so
-    # a later write still lands in the right place. The "Back to analysis" slot
-    # (shown only while the manual is open) sits at the very top; About/Report/
-    # Save-Load are filled at the end so the download and report capture the
-    # fully-built inputs.
+    # The panels are CREATED here in their on-screen order but FILLED lower down in
+    # dependency order: Analysis settings computes the bending mode and the check
+    # toggles that the Material and Loads panels gate on, so those two are written
+    # after it even though Analysis settings now sits above them anyway. Streamlit
+    # fixes each panel's position when it is created, so a later write still lands in
+    # the right place. The "Back to analysis" slot (shown only while the manual is
+    # open) sits at the very top; About/Report/Save-Load are filled at the end so the
+    # download and report capture the fully-built inputs.
     back_slot = s.container()
+    about_slot = s.container()
     # The four core input steps are numbered so the workflow order reads at a glance;
-    # the optional check configs and Report / Save / About stay unnumbered.
+    # the optional check configs and Report / Save stay unnumbered. The two check-
+    # config panels sit directly under Analysis settings because they parameterise
+    # its checks. Panels carry the calculation methodology (Elastic / Plastic), not a
+    # limit state -- the same analysis can serve several load combinations.
     _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
-    sec = s.expander(f"1 {_dot} Section", expanded=True)
-    mat = s.expander(f"2 {_dot} Material Parameters", expanded=False)
-    loads = s.expander(f"3 {_dot} Loads", expanded=True)
-    aset = s.expander(f"4 {_dot} Analysis settings", expanded=False)
-    scw = s.expander("Crack width (SLS)", expanded=False)
-    sts = s.expander("Shear, torsion & combined (ULS)", expanded=False)
+    aset = s.expander(f"1 {_dot} Analysis settings", expanded=False)
+    scw = s.expander("Crack width (Elastic)", expanded=False)
+    sts = s.expander("Shear, torsion & combined (Plastic)", expanded=False)
+    sec = s.expander(f"2 {_dot} Section", expanded=True)
+    mat = s.expander(f"3 {_dot} Material Parameters", expanded=False)
+    loads = s.expander(f"4 {_dot} Loads", expanded=True)
     report_slot = s.container()
     save_slot = s.container()
-    about_slot = s.container()
     mode = aset.radio("Bending analysis", ["Plastic", "Elastic", "Both"], key="mode",
                       help="The bending analysis only -- the shear, torsion and crack "
-                           "checks are separate toggles below. Plastic: ultimate "
+                           "checks are separate toggles below. Plastic: the "
                            "bending capacity (M-M envelope). Elastic: cracked-section "
                            "concrete and bar stresses for the applied loads. Both: "
                            "run the two.")
@@ -1382,7 +1383,8 @@ def build_inputs():
              "(N-Mx and N-My), from pure tension to the squash load. Shown in the "
              "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
-    scw.caption("Cracked-section serviceability check, reported in the Elastic view.")
+    scw.caption("Cracked-section stress and crack-width check, reported in the "
+                "Elastic view.")
     sls_cw = _seeded_checkbox(scw, "Crack width", False, "sls_cw",
                               disabled=not elastic_on,
                               help="Report the EC2 crack width wk for both the long-term "
@@ -1453,8 +1455,8 @@ def build_inputs():
 
     sts.markdown("**Shear without shear reinforcement (VRd,c)**")
     sts.caption("Design shear resistance of a member not requiring shear "
-                 "reinforcement (EN 1992-1-1 sec. 6.2.2). A ULS check of the applied "
-                 "shear VEd; the axial term uses the ULS axial force N from the "
+                 "reinforcement (EN 1992-1-1 sec. 6.2.2). A capacity check of the "
+                 "applied shear VEd; the axial term uses the axial force N from the "
                  "Plastic capacity load set (its N input stays enabled here even in "
                  "Elastic-only mode).")
     shear_on = _seeded_checkbox(
@@ -1810,15 +1812,15 @@ def build_inputs():
                                  "varies with x); biaxial bending.")
         return P, Mx, My
 
-    loads.markdown("**Bending & axial (ULS)**")
-    # The plastic axial force N is also the ULS axial used by the shear and torsion
+    loads.markdown("**Bending & axial (Plastic)**")
+    # The plastic axial force N is also the axial used by the shear and torsion
     # checks (their sigma_cp / alpha_cw), so its input stays enabled whenever any of
     # those checks is on -- even in Elastic-only mode, where the rest of the plastic
     # set is disabled -- so the user can always enter the axial force the result
     # depends on. The moments stay gated on the plastic analysis (envelope only).
     P_pl, Mx_pl, My_pl = _load_set(
         "pl", "External axial force for the plastic M-M capacity envelope; also the "
-        "ULS axial N used by the shear and torsion checks (sigma_cp / alpha_cw). Enter "
+        "axial N used by the shear and torsion checks (sigma_cp / alpha_cw). Enter "
         "the external force only -- any tendon precompression is added automatically "
         "from the prestress initial strain. Enabled whenever a plastic, shear or "
         "torsion check is active.",
@@ -1826,9 +1828,9 @@ def build_inputs():
         plastic_on or shear_on or torsion_on,
         moments_active=plastic_on and check_util)
 
-    # The applied shear VEd and torsion TEd sit with the other ULS actions here
+    # The applied shear VEd and torsion TEd sit with the other capacity actions here
     # (enable each check in Analysis settings to make its input live).
-    loads.markdown("**Shear / torsion (ULS)**")
+    loads.markdown("**Shear / torsion (Plastic)**")
     shear_V = _seeded_number(
         loads, r"Applied shear $V_{Ed}$ (kN)", 0.0, 100000.0, 0.0, 10.0, "shear_V",
         disabled=not shear_on, help="Design shear force at the section (magnitude). "
@@ -1936,7 +1938,7 @@ def build_inputs():
             "envelope and the load utilisation.\n"
             "- **Cracked-section elastic stresses** -- concrete and "
             "reinforcement stresses under the long- and short-term loads.\n"
-            "- **Serviceability checks** -- cracking threshold, section "
+            "- **Cracking and crack width** -- cracking threshold, section "
             "properties, and optional tension stiffening and crack width.")
         st.markdown("**Workflow**")
         st.caption("Define the section and materials, choose the analyses, then "
@@ -3369,7 +3371,7 @@ def _elastic_sls_section(inp, e):
         return
     show_cw = e.get("show_cw", False)
     st.divider()
-    st.markdown("#### Serviceability checks")
+    st.markdown("#### Cracking and crack width")
     if e["cracked"]:
         st.warning(f"**Cracked** - the uncracked concrete tension reaches $f_{{ctm}}$ "
                    f"at a load factor $\\lambda_{{cr}}$ = {e['lambda_cr']:.3f} "
@@ -3487,7 +3489,7 @@ def shear_view(inp, results):
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
                 "prestress initial strain)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
-               f"{sh['method']}. The axial term uses the plastic (ULS) axial force "
+               f"{sh['method']}. The axial term uses the plastic axial force "
                f"N = {sh['n_ed']:.1f} kN (tension-positive){pre_note}.")
     if sh.get("n2023_tension"):
         st.warning("This 2023 " + _TAU + "Rd,c formula (8.2.2) carries no axial term, "
@@ -3767,7 +3769,7 @@ def torsion_view(inp, results):
     if t.get("n_prestress"):
         st.caption(f"{_ALPHA}cw uses {_SIGMA}cp = {t['sigma_cp']:.3f} MPa, which "
                    f"includes the tendon precompression {t['n_prestress']:.1f} kN "
-                   "(from the prestress initial strain) as well as the ULS axial N.")
+                   "(from the prestress initial strain) as well as the axial N.")
     if t.get("nu_v_detailing"):
         st.caption(f"{_NU} = {_NU}v (raised from {_NU}t) under DK NA Figur 5.100 NA: "
                    "closed stirrups round the periphery + distributed longitudinal "

@@ -628,7 +628,7 @@ class ReportBuilder:
                 "(independent, since E<sub>s</sub> &#8800; E<sub>p</sub>), each "
                 "creep-reduced to E/E<sub>c,eff</sub> with E<sub>c,eff</sub> = "
                 "E<sub>c</sub>/(1+&#966;) for the long-term state.")
-        self._p("<b>Serviceability.</b> The cracking threshold compares the Stage-I "
+        self._p("<b>Cracking.</b> The cracking threshold compares the Stage-I "
                 "extreme tensile stress with f<sub>ct,eff</sub>; crack width follows "
                 "&#167;7.3.4 (worked below).")
 
@@ -865,7 +865,7 @@ class ReportBuilder:
                 ["Size factor", "k", f"{_fmt(res['k'], 3)} (&#8804; 2.0)"],
                 ["Concrete area", "A<sub>c</sub>",
                  f"{_fmt(sh['ac'] * 1e6, 0)} mm<sup>2</sup>"],
-                ["Axial force (ULS)", "N", f"{_fmt(sh['n_ed'], 3)} kN (tension +)"],
+                ["Axial force (Plastic)", "N", f"{_fmt(sh['n_ed'], 3)} kN (tension +)"],
                 ["Axial stress", "sigma<sub>cp</sub>",
                  f"{_fmt(res['sigma_cp'], 3)} MPa (&#8804; 0.2 f<sub>cd</sub>)"],
                 ["Design concrete strength", "f<sub>cd</sub>",
@@ -911,7 +911,7 @@ class ReportBuilder:
                       result=f"{util_txt}  ({verdict})")
         self._small("A<sub>sl</sub> is the tension reinforcement on the chosen face, "
                     "assumed fully anchored (&#8805; l<sub>bd</sub> + d) beyond the "
-                    "section. sigma<sub>cp</sub> uses the plastic (ULS) axial force "
+                    "section. sigma<sub>cp</sub> uses the plastic axial force "
                     "plus any tendon precompression from the prestress. A section with "
                     "V<sub>Ed</sub> &gt; V<sub>Rd,c</sub> requires designed shear "
                     "reinforcement.")
@@ -1276,7 +1276,7 @@ class ReportBuilder:
             self._small("alpha<sub>cw</sub> uses sigma<sub>cp</sub> = "
                         f"{_fmt(t['sigma_cp'], 3)} MPa, which includes the tendon "
                         f"precompression {_fmt(t['n_prestress'], 3)} kN (from the "
-                        "prestress initial strain) as well as the ULS axial N.")
+                        "prestress initial strain) as well as the axial N.")
         if t.get("nu_v_detailing"):
             self._small("nu = nu<sub>v</sub> (raised from nu<sub>t</sub>) under DK NA "
                         "Figur 5.100 NA: closed stirrups round the periphery and "
@@ -1426,7 +1426,7 @@ class ReportBuilder:
 
     def _cracking(self):
         el = self.out["elastic"]
-        self._h1("Serviceability - cracking and crack width")
+        self._h1("Cracking and crack width")
         # Threshold.
         self._h2("Cracking threshold")
         lam = el.get("lambda_cr")
