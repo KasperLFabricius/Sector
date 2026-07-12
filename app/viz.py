@@ -10,6 +10,28 @@ import plotly.io as pio
 from sector import geometry
 
 
+def pct(x, nd=1):
+    """A utilisation fraction as a percentage string, ``inf`` when unbounded/undefined.
+
+    Shared by the Streamlit views and the PDF report so the same utilisation never
+    formats differently on screen and in the document. ``nd`` is the decimal count
+    (the sub-tube table prints whole percent, most checks one decimal).
+    """
+    if x is None or (isinstance(x, float) and not math.isfinite(x)):
+        return "inf"
+    return f"{x * 100:.{nd}f} %"
+
+
+def util_ok(util, tol=0.0):
+    """Whether a utilisation passes (<= 1). Non-finite or ``None`` is a fail.
+
+    The single source of the pass/fail threshold so the on-screen OK/Over-limit
+    badge and the report OK/EXCEEDED verdict can never diverge. ``tol`` allows the
+    tiny float slack (1e-9) some call sites use.
+    """
+    return util is not None and math.isfinite(util) and util <= 1.0 + tol
+
+
 def chord_angle_note(theta_mode):
     """One shared sentence explaining how the M+V+T chord's strut angle was chosen.
 

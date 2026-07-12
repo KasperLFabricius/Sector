@@ -228,11 +228,7 @@ def _fmt(v, nd=3):
     return f"{v:.{nd}f}"
 
 
-def _pct(x):
-    """A utilisation fraction as a percentage string, or 'inf' when unbounded."""
-    if x is None or (isinstance(x, float) and not math.isfinite(x)):
-        return "inf"
-    return f"{x * 100:.1f} %"
+_pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
 
 
 class ReportBuilder:
@@ -815,8 +811,8 @@ class ReportBuilder:
                   f"{_fmt(sh['bw'], 1)} &#183; {_fmt(res['z'], 1)} / 1000",
             result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
         util = sh["util"]
-        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
-        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        util_txt = _pct(util)
+        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         self._h2("Utilisation")
         self._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
@@ -903,8 +899,8 @@ class ReportBuilder:
                   f"{_fmt(sh['bw'], 1)} &#183; {_fmt(sh['d'], 1)} / 1000",
             result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
         util = sh["util"]
-        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
-        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        util_txt = _pct(util)
+        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         self._h2("Utilisation")
         self._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
@@ -974,8 +970,8 @@ class ReportBuilder:
             result=f"V<sub>Rd</sub> = {_fmt(lk['vrd'], 3)} kN "
                    f"(governed by {lk['governs']})")
         util = links["util"]
-        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
-        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        util_txt = _pct(util)
+        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         self._formula("V<sub>Ed</sub> / V<sub>Rd</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
                       result=f"{util_txt}  ({verdict})")
@@ -1055,7 +1051,7 @@ class ReportBuilder:
         if cr is not None and cr.get("valid"):
             self._h2("Concrete crushing (6.29)")
             val = cr["value"]
-            vv = "OK" if (math.isfinite(val) and val <= 1.0) else "EXCEEDED"
+            vv = "OK" if viz.util_ok(val) else "EXCEEDED"
             self._formula(
                 "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
                 ref="EN 1992-1-1 (6.29)",
@@ -1177,8 +1173,8 @@ class ReportBuilder:
         # The torque is split by STIFFNESS, not capacity, so the governing check is the
         # WORST sub-tube (max util), not TEd / sum(TRd_i).
         util = t["util"]
-        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
-        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        util_txt = _pct(util)
+        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         g = t.get("governing_sub")
         gov = ("web" if g == 0 else f"part {g + 1}") if g is not None else "-"
         self._formula(
@@ -1211,8 +1207,8 @@ class ReportBuilder:
                         "overlap, so no single strut angle satisfies both.")
             return
         val = inter["value"]
-        val_txt = "inf" if not math.isfinite(val) else f"{_fmt(val * 100, 1)} %"
-        verdict_i = "OK" if (math.isfinite(val) and val <= 1.0) else "EXCEEDED"
+        val_txt = _pct(val)
+        verdict_i = "OK" if viz.util_ok(val) else "EXCEEDED"
         self._formula(
             "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
             ref="EN 1992-1-1 (6.29)",
@@ -1310,8 +1306,8 @@ class ReportBuilder:
                   "&#183; 1000",
             result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN.m")
         util = t["util"]
-        util_txt = "inf" if not math.isfinite(util) else f"{_fmt(util * 100, 1)} %"
-        verdict = "OK" if (math.isfinite(util) and util <= 1.0) else "EXCEEDED"
+        util_txt = _pct(util)
+        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         self._h2("Utilisation and longitudinal steel")
         self._formula("T<sub>Ed</sub> / T<sub>Rd</sub>",
                       subst=f"{_fmt(t['t_ed'], 3)} / {_fmt(t['trd'], 3)}",
