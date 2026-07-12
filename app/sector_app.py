@@ -335,7 +335,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     if (box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
                    width="stretch", disabled=lock_elastic,
                    help="Set Ec = Ecm = 22*(fcm/10)^0.3 GPa (EC2 Table 3.1) for the "
-                        "current grade. Press again after changing the grade.")
+                        "current grade.")
             or (auto_all and not lock_elastic)):
         st.session_state["conc_Ec"] = ecm_gpa
     Ec = box.number_input(r"Elastic modulus $E_c$ (GPa)", 1.0, 100.0, step=0.5,

@@ -380,13 +380,8 @@ def manual_blocks() -> list:
        "and the material laws; it returns the ultimate bending capacity, the "
        "cracked-section service stresses and the crack width, and it assembles a "
        "QA report you can hand in with a design.")
-    md("The whole section lives on one screen. The drawing and the stress-strain "
-       "diagrams update as you type; the result views recompute when you press "
-       "*Calculate*.")
-    call("concept", "Think of Sector as a solver for a single cut through a member. "
-         "You draw the concrete, place the reinforcement, and it tells you how much "
-         "moment the section can carry (ultimate) and how hard the concrete and "
-         "steel are working under the service loads (cracking and crack width).")
+    md("The drawing and the stress-strain diagrams update as you type; the result "
+       "views recompute when you press *Calculate*.")
     call("limit", "Sector analyses **one plane cross-section**. It assumes plane "
          "sections remain plane (a linear strain field) and perfect bond between "
          "concrete and steel; it does not do shear, torsion, buckling or "
@@ -421,9 +416,6 @@ def manual_blocks() -> list:
     fig(fig_beam_section, "The rectangular worked example as Sector draws it: the "
         "concrete corners and the bars are numbered. Turn on the point labels to "
         "see the numbering on your own section.")
-    call("tip", "There is no separate run step for the drawing: the section and the "
-         "stress-strain diagrams redraw as you edit. Only the result views (plastic "
-         "and elastic) wait for *Calculate*.")
 
     h1("The worked examples")
     md("Two sections are threaded through this manual. Every worked derivation in "
@@ -600,10 +592,9 @@ def manual_blocks() -> list:
          "8.2.1(4)) and the flexural design yield $f_{yd}$ -- it does not use the "
          "axial stress. Its strain-based method for members **with** links (8.2.3) "
          "is a follow-up; torsion and the combined lock stay on the 2005 family.")
-    call("limit", "$A_{sl}$ is taken as the longitudinal bars on the tension face, "
-         "**assumed fully anchored** ($\\geq l_{bd} + d$) beyond the section -- an "
-         "anchorage that cannot be known at section level, so it is the user's "
-         "responsibility.")
+    call("limit", "$A_{sl}$ is the tension-face bars, **assumed fully anchored** "
+         "($\\geq l_{bd} + d$) -- an anchorage the user must ensure (derived in "
+         "Part C).")
     md("With **Shear reinforcement (links) present** on, the resistance becomes the "
        "variable-strut $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3) instead of "
        "$V_{Rd,c}$ (which is still shown, to indicate whether links are strictly "
@@ -647,12 +638,6 @@ def manual_blocks() -> list:
          "the longitudinal steel for shear beyond bending is provided, tick **M & V "
          "separate** -- then $M$ and $V$ are not summed together but checked in two "
          "independent investigations, $\\max(M+T,\\,V+T)$.")
-    call("concept", "One closed stirrup does both jobs: the stirrup defined once "
-         "under Links / stirrups carries the shear and the torsion together. The DK "
-         "NA $\\sum(S_{Ed}/S_{Rd})$ rule and the shared-stirrup transverse check both "
-         "draw on it -- their transverse demands add only when $V_{Ed} > V_{Rd,c}$; "
-         "below that the concrete carries the shear and the whole stirrup is free for "
-         "torsion.")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
