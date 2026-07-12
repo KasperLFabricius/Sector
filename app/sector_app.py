@@ -2407,6 +2407,19 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     crack_coarse=_crack_dict(_cw(cr_l.cracked_state, inp["nl"], 0.4, True)),
                     crack_short_coarse=_crack_dict(_cw(short_state, inp["ns"], 0.6, True)),
                 )
+    _run_capacity_checks(inp, out)
+    return out
+
+
+def _run_capacity_checks(inp, out):
+    """Shear, torsion and the combined M-V-T checks for ``inp``; mutates ``out``.
+
+    Runs after the independent plastic and elastic analyses. Reads ``inp`` and the
+    already-built ``out["plastic"/"shear"/"torsion"]``; writes ``out["shear"]``,
+    ``out["torsion"]`` and ``out["combined"]``. One member strut angle serves shear
+    AND torsion (EN 1992-1-1 6.3.2(2)), chosen to minimise the governing utilisation
+    -- the sizeable strut-angle pass that used to sit inline in run_analysis.
+    """
     # ULS axial for the shear/torsion sigma_cp / alpha_cw (EN 1992-1-1 6.2.2/6.2.3):
     # the external axial N (tension-positive P_pl, flipped to compression) PLUS the
     # tendon precompression from the prestress initial strain, so a prestressed member
@@ -2944,7 +2957,6 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         else:
             out["combined"] = dict(valid=False, have_m=have_m, have_v=have_v,
                                    have_t=have_t, method=inp["combined_method"])
-    return out
 
 
 # ---------------------------------------------------------------------------
