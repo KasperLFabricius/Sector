@@ -1732,17 +1732,18 @@ def test_applied_moments_default_to_zero():
 
 
 def test_sidebar_panels_follow_the_workflow_order():
-    # v0.56/v0.59: panels ordered by the workflow -- geometry, materials, loads, then
-    # the settings (split into Analysis / Crack width / Shear-torsion-combined), with
-    # Report / Save-Load / About last.
+    # v0.70: About is the first heading; Analysis settings is step 1 (with its two
+    # check-config panels right under it), then Section / Materials / Loads, then
+    # Report / Save-Load. Panels carry the calculation methodology (Elastic / Plastic),
+    # not a limit state (no SLS / ULS labels).
     at = _fresh()
     at.run()
     labels = [ex.label for ex in at.expander]
     d = chr(0x00B7)   # the step-number middle dot (v0.63)
-    assert labels == [f"1 {d} Section", f"2 {d} Material Parameters", f"3 {d} Loads",
-                      f"4 {d} Analysis settings", "Crack width (SLS)",
-                      "Shear, torsion & combined (ULS)", "Report", "Save / Load",
-                      "About"]
+    assert labels == ["About", f"1 {d} Analysis settings", "Crack width (Elastic)",
+                      "Shear, torsion & combined (Plastic)", f"2 {d} Section",
+                      f"3 {d} Material Parameters", f"4 {d} Loads", "Report",
+                      "Save / Load"]
 
 
 def test_calculate_from_a_live_view_switches_to_the_result_view():
