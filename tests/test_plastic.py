@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 
 from sector.materials import Concrete, MildSteel
-from sector.plastic import plastic_capacity_at_angle, solve_plastic
+from sector.plastic import _band_stresses, plastic_capacity_at_angle, solve_plastic
 from sector.section import Section
 
 
@@ -190,3 +191,18 @@ def test_shared_prep_matches_standalone_solve():
         assert p.Mx == d.Mx and p.My == d.My and p.axial == d.axial
         assert p.compression_force == d.compression_force
         assert p.curvature == d.curvature and p.lever_arm == d.lever_arm
+
+
+def test_band_stress_memo_collapses_equal_kappa_h_and_preserves_values():
+    # The band-midpoint strain is kappa*(i+0.5)*h -- the neutral-axis depth cancels --
+    # so the band stresses are a function of the product kappa*h alone. The per-sweep
+    # memo (v0.71) exploits that: two calls with the same kappa*h but different splits
+    # collapse to one cached array, and memoization does not change the values a
+    # no-memo call produces.
+    conc = Concrete(fck=35.0, gamma_c=1.5, curve=2)
+    memo: dict = {}
+    a = _band_stresses(conc, 0.020, 0.0010, 40, memo=memo)   # kappa*h = 2.0e-5
+    b = _band_stresses(conc, 0.040, 0.0005, 40, memo=memo)   # kappa*h = 2.0e-5
+    assert a is b and len(memo) == 1                          # one cached array, reused
+    assert np.allclose(a, _band_stresses(conc, 0.020, 0.0010, 40),
+                       rtol=0.0, atol=1e-12)                  # memo preserves the values

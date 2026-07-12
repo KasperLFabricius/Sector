@@ -108,20 +108,40 @@ def _governing_curvature(steel, prestress, s_max, c, s_bars, s_tendons, eps_cu):
     return phi
 
 
-def _band_stresses(concrete, kappa, s_na, h, n_bands):
-    """Design concrete stresses at each ascending-band midpoint (MPa, comp +)."""
+def _band_stresses(concrete, kappa, h, n_bands, memo=None):
+    """Design concrete stresses at each ascending-band midpoint (MPa, comp +).
+
+    Band ``i`` spans ``[s_na + i*h, s_na + (i+1)*h]``, so its midpoint strain is
+    ``kappa*(i+0.5)*h`` -- the neutral-axis depth ``s_na`` cancels. The whole
+    array is therefore a function of the single product ``kappa*h`` (for a fixed
+    concrete + ``n_bands``). Across a neutral-axis sweep ``kappa*h`` is constant
+    in the plateau-governed regime (``h = eps_c2/(kappa*n_bands)``), so an optional
+    per-sweep ``memo`` -- a dict keyed on ``kappa*h`` -- collapses thousands of
+    identical recomputations into one, at read-only cost (the kernel never mutates
+    the returned array). Results are unchanged bar float rounding: forming the
+    midpoint strain as ``kappa*h*(i+0.5)`` avoids the ``0.5*(sa+sb)-s_na``
+    cancellation the reference used, so the two differ by ~1e-13 kNm on the moments.
+    """
+    kh = kappa * h
+    if memo is not None:
+        key = round(kh, 15)   # collapse float noise; genuine variation is >> 1e-15
+        sig = memo.get(key)
+        if sig is not None:
+            return sig
+        kh = key              # fill deterministically, so any call sharing this key
+                              # (a neighbouring sweep angle, or a standalone solve)
+                              # gets a bit-identical array, not a 1-ULP variant
     sig = np.empty(n_bands)
     for i in range(n_bands):
-        sa = s_na + i * h
-        sb = sa + h
-        eps_m = kappa * (0.5 * (sa + sb) - s_na)
-        sig[i] = -concrete.stress(-eps_m, design=True)
+        sig[i] = -concrete.stress(-kh * (i + 0.5), design=True)
+    if memo is not None:
+        memo[key] = sig
     return sig
 
 
 def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
                 rings, bar_data, tendon_data, ring_xy=None, ring_starts=None,
-                buf_a=None, buf_b=None):
+                buf_a=None, buf_b=None, band_memo=None):
     """Force resultants for a trial compression depth ``c`` (s-units).
 
     Returns compression and tension force totals and their first moments, in kN
@@ -153,7 +173,8 @@ def _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
     if ring_xy is not None:
         # Compiled path: precompute the band stresses, integrate in the kernel.
         if s_top > s_na and n_bands > 0:
-            sig = _band_stresses(concrete, kappa, s_na, (s_top - s_na) / n_bands, n_bands)
+            sig = _band_stresses(concrete, kappa, (s_top - s_na) / n_bands, n_bands,
+                                 memo=band_memo)
         else:
             sig = np.empty(0)
         cF, cFx, cFy = kernels.concrete_resultants(
@@ -291,6 +312,7 @@ def plastic_capacity_at_angle(
     n_bands: int = 80,
     max_iter: int = 100,
     prep: "_SectionPrep | None" = None,
+    band_memo: "dict | None" = None,
 ) -> PlasticPoint:
     """Ultimate capacity for axial force ``P`` (kN) at neutral-axis angle ``V``.
 
@@ -324,12 +346,19 @@ def plastic_capacity_at_angle(
     s_min = float(s.min())
     c_full = s_max - s_min
 
+    # Concrete band stresses depend only on kappa*h, which is constant across the
+    # bisection (and the whole sweep) in the plateau-governed regime; a shared memo
+    # -- passed in by a sweep, created here for a standalone call -- avoids repeating
+    # that scalar band loop on every bisection step.
+    if band_memo is None:
+        band_memo = {}
+
     def net_axial(c):
         phi = _governing_curvature(steel, prestress, s_max, c, s_bars, s_tendons,
                                    concrete.eps_cu2)
         acc = _accumulate(concrete, steel, prestress, dx, dy, s_max, c, phi,
                           n_bands, rings, bar_data, tendon_data,
-                          ring_xy, ring_starts, buf_a, buf_b)
+                          ring_xy, ring_starts, buf_a, buf_b, band_memo)
         return acc[0] + acc[3]  # comp_F + ten_F (kN)
 
     # The governing-curvature formulation never drives a material past its limit,
@@ -372,7 +401,7 @@ def plastic_capacity_at_angle(
     (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
      min_eps, max_eps, min_eps_cable) = _accumulate(
         concrete, steel, prestress, dx, dy, s_max, c, phi, n_bands,
-        rings, bar_data, tendon_data, ring_xy, ring_starts, buf_a, buf_b
+        rings, bar_data, tendon_data, ring_xy, ring_starts, buf_a, buf_b, band_memo
     )
 
     # Convergence is judged on the actual axial equilibrium at the returned depth,
@@ -448,6 +477,7 @@ def solve_plastic(
     for the axial force ``P``.
     """
     prep = _prep_section(section, prestress)   # angle-independent, built once
+    band_memo: dict = {}                        # shared across all angles of the sweep
     points = []
     # Step count from the increment, guarding against floating-point drift.
     n = int(round((v_max - v_min) / v_inc)) if v_inc else 0
@@ -455,7 +485,8 @@ def solve_plastic(
         v = v_min + i * v_inc
         points.append(
             plastic_capacity_at_angle(section, concrete, steel, P, v,
-                                      prestress=prestress, n_bands=n_bands, prep=prep)
+                                      prestress=prestress, n_bands=n_bands, prep=prep,
+                                      band_memo=band_memo)
         )
     return points
 
@@ -489,9 +520,11 @@ def solve_interaction(
     ``-M`` side. Returns ``InteractionPoint``s ordered from tension to compression.
     """
     prep = _prep_section(section, prestress)   # angle-independent, built once
+    band_memo: dict = {}                        # shared across all axial samples
     def _cap(P):
         return plastic_capacity_at_angle(section, concrete, steel, P, V_deg,
-                                         prestress=prestress, n_bands=n_bands, prep=prep)
+                                         prestress=prestress, n_bands=n_bands, prep=prep,
+                                         band_memo=band_memo)
 
     # Axial extremes: probe just past the range (a squash / tension over-estimate)
     # and read back the clamped equilibrium, so the diagram spans the true range. The
