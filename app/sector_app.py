@@ -2211,7 +2211,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # run (the applied moments are ignored and locked).
         check_util = inp.get("check_util", True)
         if closed and check_util:
-            util, util_gov = _radial_util(mx, my, inp["Mx_pl"], inp["My_pl"])
+            util, util_gov = combined.radial_util(mx, my, inp["Mx_pl"], inp["My_pl"])
         else:
             util, util_gov = None, None
         out["plastic"] = dict(
@@ -2652,9 +2652,10 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 return sf + tf
 
             def _crush_629(c):
-                return (combined.ratio(_snap(c)["subs"][0]["t_ed"],
-                                       _snap(c)["subs"][0]["trd_max"])
-                        + combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_max"]))
+                snap = _snap(c)
+                return combined.crushing_interaction(
+                    snap["subs"][0]["t_ed"], snap["subs"][0]["trd_max"],
+                    v_ed_s, snap["lk"]["vrd_max"])
             utils.append(_shared_stirrup)
             utils.append(_crush_629)
         if chord is not None and (shear_live or tors_live):
@@ -2851,9 +2852,8 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                         p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
                         closed_detailing=tors_ctx["nu_detail"])
                     vlk = link_ctx["build"](cot_c, cot_c)
-                    inter = ((t_ed_p / trdmax_c if trdmax_c > 0 else math.inf)
-                             + (v_ed_s / vlk["vrd_max"] if vlk["vrd_max"] > 0
-                                else math.inf))
+                    inter = combined.crushing_interaction(
+                        t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
                     out["torsion"]["interaction"] = dict(
                         valid=True, cot=cot_c,
                         theta_deg=math.degrees(math.atan(1.0 / cot_c)),
@@ -2939,50 +2939,6 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             out["combined"] = dict(valid=False, have_m=have_m, have_v=have_v,
                                    have_t=have_t, method=inp["combined_method"])
     return out
-
-
-def _radial_util(mx, my, ax, ay):
-    """Utilisation of an applied ``(Mx, My)`` against the plastic M-M envelope.
-
-    The envelope is the closed polygon through the swept capacity points *in sweep
-    order* -- the straight chords the M-M diagram actually draws. Utilisation is the
-    applied radius over the distance from the origin to where the applied load ray
-    crosses that polygon. Measuring against the drawn chords (not a radial
-    interpolation of the vertex radii, which bulges outside the chords) keeps the
-    check on the conservative side and consistent with the plotted envelope.
-
-    Returns ``(utilisation, gov)`` where ``gov`` is the index of the swept point
-    that governs -- the endpoint of the crossed chord nearest the crossing, i.e. the
-    section state in the applied load's direction -- or ``None`` when there is no
-    applied direction (zero moment) or the ray misses the envelope.
-    """
-    a_rad = float(np.hypot(ax, ay))
-    if a_rad < 1e-9:
-        return 0.0, None
-    ux, uy = ax / a_rad, ay / a_rad                 # applied load ray direction
-    px, py = np.asarray(mx, dtype=float), np.asarray(my, dtype=float)
-    ex, ey = np.roll(px, -1) - px, np.roll(py, -1) - py   # edge vectors (polygon closed)
-    # Intersect the ray t*u (t >= 0) with each edge P + s*e (s in [0, 1]):
-    # solving t*u = P + s*e gives t and s from the ray x edge cross product D.
-    D = ux * ey - uy * ex
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = (ey * px - ex * py) / D                 # ray distance to the edge line
-        s = (uy * px - ux * py) / D                 # edge parameter
-    hit = (np.abs(D) > 1e-12) & (s >= -1e-9) & (s <= 1.0 + 1e-9) & (t > 1e-9)
-    if not hit.any():
-        return math.inf, None                       # ray misses the envelope
-    idx = np.nonzero(hit)[0]
-    edge = int(idx[np.argmin(t[idx])])              # nearest forward boundary crossing
-    cap = float(t[edge])
-    # The governing swept state is the endpoint of that chord nearest the crossing --
-    # the computed neutral-axis angle closest to the applied load's direction.
-    n = len(px)
-    cx, cy = ux * cap, uy * cap
-    nxt = (edge + 1) % n
-    d0 = math.hypot(float(px[edge]) - cx, float(py[edge]) - cy)
-    d1 = math.hypot(float(px[nxt]) - cx, float(py[nxt]) - cy)
-    gov = edge if d0 <= d1 else nxt
-    return a_rad / cap, gov
 
 
 # ---------------------------------------------------------------------------
@@ -3479,11 +3435,11 @@ def shear_view(inp, results):
                    "face, or the derived effective depth / web width is zero. Add "
                    "tension bars on that face and check the geometry (or enter bw).")
     util = sh["util"]
-    ok = math.isfinite(util) and util <= 1.0
+    ok = viz.util_ok(util)
     m1, m2, m3 = st.columns(3)
     m1.metric("Applied VEd", f"{sh['v_ed']:.3f} kN")
     m2.metric("Resistance VRd,c", f"{res['vrd_c']:.3f} kN")
-    util_txt = "inf" if not math.isfinite(util) else f"{util * 100:.1f} %"
+    util_txt = _pct(util)
     m3.metric("Utilisation VEd/VRd,c", util_txt, delta=("OK" if ok else "Over limit"),
               delta_color=("normal" if ok else "inverse"))
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
@@ -3564,12 +3520,12 @@ def shear_view(inp, results):
                         "reinforcement rules still apply")
         st.caption(f"For this VEd, {req_txt}.")
         util_l = links["util"]
-        ok_l = math.isfinite(util_l) and util_l <= 1.0
+        ok_l = viz.util_ok(util_l)
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("VRd,s", f"{lk['vrd_s']:.3f} kN")
         c2.metric("VRd,max", f"{lk['vrd_max']:.3f} kN")
         c3.metric("VRd = min", f"{lk['vrd']:.3f} kN", help=f"governed by {lk['governs']}")
-        ul_txt = "inf" if not math.isfinite(util_l) else f"{util_l * 100:.1f} %"
+        ul_txt = _pct(util_l)
         c4.metric("Utilisation VEd/VRd", ul_txt,
                   delta=("OK" if ok_l else "Over limit"),
                   delta_color=("normal" if ok_l else "inverse"))
@@ -3676,8 +3632,8 @@ def torsion_view(inp, results):
                    f"[{t['cot_limit_lo']:.1f}, {t['cot_limit_hi']:.1f}] "
                    "(6.7N / 6.7a NA). The value is still computed.")
     util = t["util"]
-    ok = math.isfinite(util) and util <= 1.0
-    util_txt = "inf" if not math.isfinite(util) else f"{util * 100:.1f} %"
+    ok = viz.util_ok(util)
+    util_txt = _pct(util)
     if t.get("subdivided"):
         m1, m2, m3 = st.columns(3)
         m1.metric("Applied TEd", f"{t['t_ed']:.3f} kNm")
@@ -3722,8 +3678,7 @@ def torsion_view(inp, results):
              "Stiffness": [f"{s['stiffness'] / c_tot * 100:.1f} %" for s in subs],
              "TEd,i (kNm)": [f"{s['t_ed']:.3f}" for s in subs],
              "TRd,i (kNm)": [f"{s['trd']:.3f}" for s in subs],
-             "TEd/TRd,i": [("inf" if not math.isfinite(s["util"])
-                            else f"{s['util'] * 100:.1f} %") for s in subs],
+             "TEd/TRd,i": [_pct(s["util"]) for s in subs],
              "Governs": [s["governs"] for s in subs]},
             hide_index=True, width="stretch")
         g = t.get("governing_sub")
@@ -3811,13 +3766,13 @@ def torsion_view(inp, results):
         st.divider()
         st.markdown("**Combined shear + torsion (concrete crushing, 6.29)**")
         val = inter["value"]
-        ok_i = math.isfinite(val) and val <= 1.0
+        ok_i = viz.util_ok(val)
         i1, i2, i3 = st.columns(3)
         i1.metric("TEd / TRd,max", f"{(inter['t_ed']/inter['trd_max']*100):.1f} %"
                   if inter["trd_max"] > 0 else "inf")
         i2.metric("VEd / VRd,max", f"{(inter['v_ed']/inter['vrd_max']*100):.1f} %"
                   if inter["vrd_max"] > 0 else "inf")
-        val_txt = "inf" if not math.isfinite(val) else f"{val * 100:.1f} %"
+        val_txt = _pct(val)
         i3.metric("Sum (<= 100%)", val_txt, delta=("OK" if ok_i else "Over limit"),
                   delta_color=("normal" if ok_i else "inverse"))
         st.caption(
@@ -3828,9 +3783,7 @@ def torsion_view(inp, results):
             "differ from the stand-alone values above.")
 
 
-def _pct(x):
-    """A utilisation as a percentage string, or 'inf' when unbounded."""
-    return "inf" if (x is None or not math.isfinite(x)) else f"{x * 100:.1f} %"
+_pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps screen == report
 
 
 def _no_common_angle_msg(d):
@@ -3896,7 +3849,7 @@ def combined_view(inp, results):
         st.divider()
         st.markdown("**Concrete crushing (6.29): TEd/TRd,max + VEd/VRd,max <= 1**")
         val = cr["value"]
-        ok_c = math.isfinite(val) and val <= 1.0
+        ok_c = viz.util_ok(val)
         cc1, cc2 = st.columns([1, 2])
         cc1.metric("Sum", _pct(val), delta=("OK" if ok_c else "Over limit"),
                    delta_color=("normal" if ok_c else "inverse"))

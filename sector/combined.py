@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 
 def ratio(demand: float, resistance: float) -> float:
     """Utilisation ``demand / resistance``; ``inf`` when a demand has no resistance."""
@@ -124,3 +126,47 @@ def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> fl
     if m_v_independent:
         return max(r_m + r_t, r_v + r_t)
     return r_m + r_v + r_t
+
+
+def radial_util(mx, my, ax, ay):
+    """Utilisation of an applied ``(Mx, My)`` against the plastic M-M envelope.
+
+    The envelope is the closed polygon through the swept capacity points *in sweep
+    order* -- the straight chords the M-M diagram actually draws. Utilisation is the
+    applied radius over the distance from the origin to where the applied load ray
+    crosses that polygon. Measuring against the drawn chords (not a radial
+    interpolation of the vertex radii, which bulges outside the chords) keeps the
+    check on the conservative side and consistent with the plotted envelope.
+
+    Returns ``(utilisation, gov)`` where ``gov`` is the index of the swept point
+    that governs -- the endpoint of the crossed chord nearest the crossing, i.e. the
+    section state in the applied load's direction -- or ``None`` when there is no
+    applied direction (zero moment) or the ray misses the envelope.
+    """
+    a_rad = float(np.hypot(ax, ay))
+    if a_rad < 1e-9:
+        return 0.0, None
+    ux, uy = ax / a_rad, ay / a_rad                 # applied load ray direction
+    px, py = np.asarray(mx, dtype=float), np.asarray(my, dtype=float)
+    ex, ey = np.roll(px, -1) - px, np.roll(py, -1) - py   # edge vectors (polygon closed)
+    # Intersect the ray t*u (t >= 0) with each edge P + s*e (s in [0, 1]):
+    # solving t*u = P + s*e gives t and s from the ray x edge cross product D.
+    D = ux * ey - uy * ex
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (ey * px - ex * py) / D                 # ray distance to the edge line
+        s = (uy * px - ux * py) / D                 # edge parameter
+    hit = (np.abs(D) > 1e-12) & (s >= -1e-9) & (s <= 1.0 + 1e-9) & (t > 1e-9)
+    if not hit.any():
+        return math.inf, None                       # ray misses the envelope
+    idx = np.nonzero(hit)[0]
+    edge = int(idx[np.argmin(t[idx])])              # nearest forward boundary crossing
+    cap = float(t[edge])
+    # The governing swept state is the endpoint of that chord nearest the crossing --
+    # the computed neutral-axis angle closest to the applied load's direction.
+    n = len(px)
+    cx, cy = ux * cap, uy * cap
+    nxt = (edge + 1) % n
+    d0 = math.hypot(float(px[edge]) - cx, float(py[edge]) - cy)
+    d1 = math.hypot(float(px[nxt]) - cx, float(py[nxt]) - cy)
+    gov = edge if d0 <= d1 else nxt
+    return a_rad / cap, gov

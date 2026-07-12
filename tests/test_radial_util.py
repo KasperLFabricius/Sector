@@ -21,8 +21,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "app"))
 
 
 def _radial_util():
-    import sector_app
-    return sector_app._radial_util
+    from sector.combined import radial_util
+    return radial_util
 
 
 def _diamond(r=100.0):
