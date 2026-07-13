@@ -688,14 +688,26 @@ def conditional_capacity(
     angs = [i * step for i in range(n_scan + 1)]
     any_fail = any(not p.converged for p in pts)
 
-    # Every crossing of `target` between adjacent CONVERGED samples is bracketed and
-    # bisected; keep the correct-face capacity there.
+    # Keep the correct-face capacity wherever the companion equals `target`.
     caps = []
+    band = 1.0e-9 * max(1.0, abs(target))
+    # (a) A sample sitting ON `target` (e.g. the user pastes a reported envelope
+    #     value) IS the crossing -- take its own directly. Handling it here keeps it
+    #     out of (b), where a zero endpoint residual (f_lo == 0) would send the
+    #     bisection walking away from the true crossing to a different companion.
+    for pt in pts:
+        if pt.converged and abs(_companion(pt) - target) <= band:
+            r = _face_own(pt)
+            if r is not None:
+                caps.append(r)
+    # (b) A crossing STRICTLY between two samples (companion residuals of opposite
+    #     sign) is bracketed and bisected.
     for j in range(n_scan):
         a, b = pts[j], pts[j + 1]
         if not (a.converged and b.converged):
             continue
-        if (_companion(a) - target < 0.0) != (_companion(b) - target < 0.0):
+        da, db = _companion(a) - target, _companion(b) - target
+        if da * db < 0.0:
             r = _refine(angs[j], angs[j + 1], _companion(a))
             if r is not None:
                 caps.append(r)

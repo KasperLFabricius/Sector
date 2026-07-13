@@ -1115,12 +1115,17 @@ class ReportBuilder:
             vv = "OK" if lg["ok"] else "EXCEEDED"
             ax = lg["axis"]
             face = viz.tension_face_label(lg.get("tension_low", True))
+            face_desc = (f"the shear tension face ({face})" if lg.get("gets_shift", True)
+                         else f"the shear compression face ({face}) -- the torsion "
+                         "tension governs there, with no shear shift and the bending "
+                         "relieving rather than adding")
             self._p(
-                f"The tension chord is the shear tension face ({face}) about the "
+                f"The governing tension chord is {face_desc} about the "
                 f"{ax}-axis; M<sub>Ed</sub> and M<sub>Rd</sub> are taken on that face. "
                 "The chord carries the bending tension plus the shear shift "
                 "&#916;F<sub>td</sub> = "
-                "0.5&#183;V<sub>Ed</sub>&#183;cot theta (6.18) and the torsion "
+                "0.5&#183;V<sub>Ed</sub>&#183;cot theta (6.18, only on the flexural "
+                "tension face) and the torsion "
                 "longitudinal force F<sub>td,T</sub> = T<sub>Ed</sub>&#183;u<sub>k</sub>"
                 "&#183;cot theta/(2A<sub>k</sub>) (6.28, distributed round the "
                 "perimeter, so half acts on this chord). Each is turned into an "

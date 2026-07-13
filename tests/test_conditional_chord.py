@@ -193,6 +193,27 @@ def test_conditional_capacity_recovers_the_under_sampled_peak():
     assert ex_b and beyond == 0.0                          # past the peak -> honest zero
 
 
+def test_conditional_capacity_exact_sample_companion_hit():
+    # Codex round-4 P2: when m_off exactly equals the companion at a scan sample (a
+    # user pastes a reported envelope value), the descending-crossing residual is
+    # zero at the endpoint, which would send the bisection walking to a different
+    # companion. The exact-hit is now taken directly; it must match the brute slice
+    # at every 10-degree sample of the full-circle scan, on both faces.
+    sec = _asym_section()
+    _, c, s = _beam()
+    step = 360.0 / 36                              # conditional_capacity's n_scan grid
+    for i in range(1, 18):
+        pt = plastic_capacity_at_angle(sec, c, s, 0.0, i * step)
+        if not pt.converged:
+            continue
+        m_off = pt.My                             # EXACTLY a sample's companion
+        for tl in (True, False):
+            mrd, exact = conditional_capacity(sec, c, s, 0.0, "x", tl, float(m_off))
+            assert exact
+            assert mrd == pytest.approx(
+                _brute_slice(sec, c, s, 0.0, "x", tl, float(m_off)), abs=2.5)
+
+
 def test_conditional_capacity_with_axial_and_prestress():
     # The app always calls at the applied N and with prestress; axial compression
     # reshapes the envelope and prestress shifts it asymmetrically, so pin both:
