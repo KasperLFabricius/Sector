@@ -631,6 +631,14 @@ def conditional_capacity(
     if abs(_companion(p0) - target) <= 1.0e-9 * scale:
         return abs(_own(p0)), True
 
+    def _face_own(pt):
+        """|own| if ``pt`` is on the chosen tension face (own of the wanted sign),
+        else None."""
+        if not pt.converged:
+            return None
+        o = _own(pt)
+        return abs(o) if ((o > 0.0) if want_positive else (o < 0.0)) else None
+
     def _refine(v_lo, v_hi, c_lo):
         """Bisect [v_lo, v_hi] (which brackets a companion == target crossing) and
         return the correct-face |own| there, or None if it lands on the opposite
@@ -646,34 +654,86 @@ def conditional_capacity(
                 v_lo, f_lo = mid, fm
             else:
                 v_hi = mid
-        pt = _cap(0.5 * (v_lo + v_hi))
-        if not pt.converged:
-            return None
-        o = _own(pt)
-        if (o > 0.0) if want_positive else (o < 0.0):
-            return abs(o)
-        return None
+        return _face_own(_cap(0.5 * (v_lo + v_hi)))
 
-    # Full-circle scan: sample the companion moment round the neutral-axis angle,
-    # bracket every crossing of `target` between adjacent CONVERGED samples, refine
-    # it, and keep the correct-face capacity.
+    def _extremum(v_lo, v_hi, maximize):
+        """Golden-section search for the companion extremum in [v_lo, v_hi]; returns
+        (angle, point) of the extremal companion, or (None, None) if a solve fails."""
+        gr = 0.6180339887498949
+        c = v_hi - gr * (v_hi - v_lo)
+        d = v_lo + gr * (v_hi - v_lo)
+        pc, pd = _cap(c), _cap(d)
+        for _ in range(60):
+            if not (pc.converged and pd.converged):
+                return None, None
+            if v_hi - v_lo <= tol_deg:
+                break
+            fc = _companion(pc) if maximize else -_companion(pc)
+            fd = _companion(pd) if maximize else -_companion(pd)
+            if fc >= fd:
+                v_hi, d, pd = d, c, pc
+                c = v_hi - gr * (v_hi - v_lo)
+                pc = _cap(c)
+            else:
+                v_lo, c, pc = c, d, pd
+                d = v_lo + gr * (v_hi - v_lo)
+                pd = _cap(d)
+        v = 0.5 * (v_lo + v_hi)
+        pt = _cap(v)
+        return (v, pt) if pt.converged else (None, None)
+
+    # Full-circle scan: sample the companion moment round the neutral-axis angle.
     step = 360.0 / n_scan
-    samples = []
-    any_fail = False
-    for i in range(n_scan + 1):
-        pt = _cap(i * step)
-        samples.append((i * step, _companion(pt)) if pt.converged else None)
-        any_fail = any_fail or not pt.converged
+    pts = [_cap(i * step) for i in range(n_scan + 1)]
+    angs = [i * step for i in range(n_scan + 1)]
+    any_fail = any(not p.converged for p in pts)
 
+    # Every crossing of `target` between adjacent CONVERGED samples is bracketed and
+    # bisected; keep the correct-face capacity there.
     caps = []
-    for a, b in zip(samples, samples[1:]):
-        if a is None or b is None:
+    for j in range(n_scan):
+        a, b = pts[j], pts[j + 1]
+        if not (a.converged and b.converged):
             continue
-        (va, ca), (vb, cb) = a, b
-        if (ca - target < 0.0) != (cb - target < 0.0):      # a sign change brackets it
-            r = _refine(va, vb, ca)
+        if (_companion(a) - target < 0.0) != (_companion(b) - target < 0.0):
+            r = _refine(angs[j], angs[j + 1], _companion(a))
             if r is not None:
                 caps.append(r)
+
+    # Tangent touches: on a non-convex/asymmetric envelope the companion can reach
+    # `target` at a LOCAL EXTREMUM whose sampled peak sits just short of it, so the
+    # sign-change loop (which only sees the below-`target` samples) misses the true
+    # crossing(s) and the correct-face capacity there would be lost (a false
+    # honest-zero). Refine each such same-side local extremum: if its true peak
+    # overshoots `target`, bisect the two crossings it exposes; if it only touches,
+    # take the tangent point itself.
+    for j in range(1, n_scan):
+        a, m, b = pts[j - 1], pts[j], pts[j + 1]
+        if not (a.converged and m.converged and b.converged):
+            continue
+        ca, cm, cb = _companion(a), _companion(m), _companion(b)
+        is_max = cm > ca and cm > cb
+        is_min = cm < ca and cm < cb
+        # Only a local extremum whose sampled value is on the near side of `target`
+        # can hide a crossing (an under-sampled true peak/trough).
+        if not ((is_max and cm < target) or (is_min and cm > target)):
+            continue
+        v_ext, p_ext = _extremum(angs[j - 1], angs[j + 1], is_max)
+        if p_ext is None:
+            continue
+        c_ext = _companion(p_ext)
+        band = 1.0e-6 * max(1.0, abs(target))
+        if (c_ext >= target) if is_max else (c_ext <= target):
+            # The true extremum overshoots `target`: two crossings flank it.
+            for lo_a, hi_a, c_lo in ((angs[j - 1], v_ext, ca), (v_ext, angs[j + 1], c_ext)):
+                r = _refine(lo_a, hi_a, c_lo)
+                if r is not None:
+                    caps.append(r)
+        elif abs(c_ext - target) <= band:
+            r = _face_own(p_ext)                  # a true tangent: the curve touches
+            if r is not None:
+                caps.append(r)
+
     if caps:
         return max(caps), True
     # No correct-face crossing. A clean scan means the off moment genuinely leaves

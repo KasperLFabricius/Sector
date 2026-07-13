@@ -173,6 +173,26 @@ def test_conditional_matches_envelope_slice_on_asymmetric_section():
                 assert mrd == pytest.approx(ref, abs=2.5)
 
 
+def test_conditional_capacity_recovers_the_under_sampled_peak():
+    # Codex P2: when the requested companion equals a companion extremum, the coarse
+    # scan's samples all sit just short of it, so a sign-change-only search would miss
+    # the crossing and falsely report an honest zero. Sweeping the target right up to
+    # the true peak must keep matching the fine brute slice (no gap, no false zero),
+    # and stepping just past the peak must give the honest zero.
+    import numpy as np
+    sec = _asym_section()
+    _, c, s = _beam()
+    peak = max(plastic_capacity_at_angle(sec, c, s, 0.0, v).My
+               for v in np.arange(0.0, 360.0, 0.1))
+    for moff in (peak - 8.0, peak - 2.0, peak - 0.3):
+        mrd, exact = conditional_capacity(sec, c, s, 0.0, "x", True, float(moff))
+        assert exact and mrd > 0.0                        # capacity NOT lost near peak
+        assert mrd == pytest.approx(
+            _brute_slice(sec, c, s, 0.0, "x", True, float(moff)), abs=2.5)
+    beyond, ex_b = conditional_capacity(sec, c, s, 0.0, "x", True, peak + 5.0)
+    assert ex_b and beyond == 0.0                          # past the peak -> honest zero
+
+
 def test_conditional_capacity_with_axial_and_prestress():
     # The app always calls at the applied N and with prestress; axial compression
     # reshapes the envelope and prestress shifts it asymmetrically, so pin both:
