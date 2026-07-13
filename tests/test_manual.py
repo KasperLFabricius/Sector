@@ -159,12 +159,15 @@ def test_part_b_documents_the_panels_and_options():
         assert token in text, token
 
 
-def test_manual_documents_per_action_theta_and_shared_stirrup():
-    # F6-doc: the manual states (a) theta is optimised PER ACTION (shear and torsion
-    # each pick their own), and (b) one closed stirrup serves both checks.
+def test_manual_documents_shared_strut_angle_and_stirrup():
+    # F6-doc (v0.69): the manual states (a) shear and torsion share ONE strut angle,
+    # chosen to minimise the governing utilisation, and (b) one closed stirrup serves
+    # both checks. The pre-v0.69 "per action" strut angle no longer exists, so that
+    # wording must be gone from the manual.
     text = "\n".join(str(b) for b in manual.manual_blocks())
-    assert "per action" in text                       # note (a)
-    assert "shared closed stirrup" in text            # note (b)
+    assert "minimise the governing utilisation" in text   # note (a): one shared angle
+    assert "shared closed stirrup" in text                # note (b)
+    assert "per action" not in text                       # stale pre-v0.69 wording
 
 
 def test_latex_to_rl_converts_the_subset():
