@@ -1004,21 +1004,28 @@ class ReportBuilder:
                 subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
                       f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
+            fell_back = ch.get("biaxial") and not ch.get("conditional", True)
             self._formula(
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(ch['m_total'], 1)} / {_fmt(ch['m_rd'], 1)}",
                 result=(f"utilisation = {_pct(ch['util'])}"
-                        + ("  (uniaxial -- see note)" if ch.get("biaxial")
+                        + ("  (pure-axis fallback -- see note)" if fell_back
                            else f"  ({vv})")))
-            note = f"Tension chord = the shear tension face ({face})."
+            note = (f"Tension chord = the shear tension face ({face}); "
+                    "M<sub>Rd</sub> "
+                    + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
+                                          ch.get("conditional", True)) + ".")
             if ch.get("theta_mode") == "utilisation":
                 note += (" This capped demand is part of the strut-angle objective, "
                          "so theta backs off the band edge when the chord would "
                          "otherwise govern.")
-            if ch.get("biaxial"):
-                note += (" Biaxial bending is acting; the off-axis chord is not "
-                         "evaluated here -- rely on the combined sum(SEd/SRd).")
+            if fell_back:
+                note += (" Biaxial bending is acting but the conditional capacity "
+                         "solve did not converge, so M<sub>Rd</sub> is the pure-axis "
+                         "fallback and this check can be optimistic -- rely on the "
+                         "combined sum(SEd/SRd).")
             self._small(note)
+            self._chord_off_block(links.get("chord_off"))
 
     def _combined(self):
         c = self.out["combined"]
@@ -1104,8 +1111,10 @@ class ReportBuilder:
                 "longitudinal force F<sub>td,T</sub> = T<sub>Ed</sub>&#183;u<sub>k</sub>"
                 "&#183;cot theta/(2A<sub>k</sub>) (6.28, distributed round the "
                 "perimeter, so half acts on this chord). Each is turned into an "
-                "equivalent moment on the lever arm z and checked against the uniaxial "
-                f"capacity M<sub>Rd</sub> about the {ax}-axis at the applied N.")
+                "equivalent moment on the lever arm z and checked against "
+                "M<sub>Rd</sub> "
+                + viz.chord_mrd_label(ax, lg.get("m_off", 0.0),
+                                      lg.get("conditional", True)) + ".")
             self._formula(
                 "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>&#183;z + "
                 "F<sub>td,T</sub>&#183;z/2",
@@ -1116,22 +1125,31 @@ class ReportBuilder:
                       f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm")
             biaxial = lg.get("biaxial", False)
+            fell_back = biaxial and not lg.get("conditional", True)
             self._formula(
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
                 result=(f"utilisation = {_pct(lg['util'])}"
-                        + ("  (uniaxial -- see note)" if biaxial else f"  ({vv})")))
-            if biaxial:
+                        + ("  (pure-axis fallback -- see note)" if fell_back
+                           else f"  ({vv})")))
+            if fell_back:
                 self._p("Biaxial bending: a moment about the OTHER axis is acting ("
-                        f"{_pct(lg.get('off_util', 0.0))} of that axis' capacity). This "
-                        "uniaxial chord check only inspects the shear-plane chord, so the "
-                        "off-axis chord (its bending tension plus its share of the "
-                        "distributed torsion steel) may govern and is NOT evaluated here "
-                        "-- rely on the sum(SEd/SRd) check above, which uses the full "
-                        "biaxial bending utilisation.")
+                        f"{_pct(lg.get('off_util', 0.0))} of that axis' capacity) but "
+                        "the conditional capacity solve did not converge, so "
+                        "M<sub>Rd</sub> is the pure-axis fallback and this chord check "
+                        "can be optimistic -- rely on the sum(SEd/SRd) check above, "
+                        "which uses the full biaxial bending utilisation.")
             note = viz.chord_angle_note(lg.get("theta_mode"))
-            if not biaxial:
-                # In a biaxial run the paragraph above already makes this point.
+            if biaxial and lg.get("off_not_evaluated") == "subdivided":
+                note += (" Compound (subdivided) section: the torsion longitudinal "
+                         "steel is per sub-tube, so the off-axis chord's torsion "
+                         "share is not evaluated; the sum(SEd/SRd) check covers the "
+                         "biaxial bending interaction.")
+            elif biaxial and not lg.get("has_torsion"):
+                note += (" The off-axis chord carries only its bending tension (no "
+                         "torsion is acting), which the biaxial bending utilisation "
+                         "in the sum(SEd/SRd) check already covers.")
+            elif not biaxial:
                 note += (" The sum(SEd/SRd) check above uses the full biaxial bending "
                          "utilisation and remains the primary combined check.")
             if lg["capped"]:
@@ -1140,12 +1158,42 @@ class ReportBuilder:
                         "the peak-moment tension; a section tool uses M<sub>Rd</sub> as "
                         "that cap). ") + note
             self._small(note)
+            self._chord_off_block(c.get("chord_off"))
         else:
             self._small(f"Additional longitudinal steel: torsion sum A<sub>sl</sub> = "
                         f"{_fmt(c['asl_torsion'], 0)} mm<sup>2</sup> round the perimeter "
                         f"(6.28); shear &#916;F<sub>td</sub> = {_fmt(c['delta_ftd'], 1)} "
                         "kN on the tension chord (6.18) -- both beyond the bending "
                         "steel. Enable shear links for the full utilisation check.")
+
+    def _chord_off_block(self, och):
+        """Off-axis chord check (bending + torsion share), shared by the shear and
+        combined sections. Rendered when torsion is live on a single-tube section:
+        the chord about the OTHER axis carries its bending tension plus its share
+        of the distributed torsion longitudinal force, against the capacity
+        conditional on the shear-axis moment."""
+        if och is None or not och.get("valid"):
+            return
+        self._h2(f"Off-axis chord (about {och['axis']}): bending + torsion tension")
+        vv = "OK" if och["ok"] else "EXCEEDED"
+        face = viz.tension_face_label(och.get("tension_low", True))
+        self._p(
+            f"The tension chord is the {face} face about the {och['axis']}-axis "
+            "(the axis the shear does not act on). No shear shift acts on this "
+            "chord; the torsion adds its perimeter share F<sub>td,T</sub>&#183;z/2, "
+            "and the capacity is checked against M<sub>Rd</sub> "
+            + viz.chord_mrd_label(och["axis"], och.get("m_off", 0.0), True) + ".")
+        self._formula(
+            "M<sub>Ed,total</sub> = M<sub>Ed</sub> + F<sub>td,T</sub>&#183;z/2",
+            ref="EN 1992-1-1 6.3.2",
+            subst=f"{_fmt(och['m_ed'], 1)} + {_fmt(och['mt'], 1)} kNm  "
+                  f"(z = {_fmt(och['z'], 3)} m, "
+                  f"F<sub>td,T</sub> = {_fmt(och['ftd_t'], 1)} kN)",
+            result=f"M<sub>Ed,total</sub> = {_fmt(och['m_total'], 1)} kNm")
+        self._formula(
+            "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
+            subst=f"{_fmt(och['m_total'], 1)} / {_fmt(och['m_rd'], 1)}",
+            result=f"utilisation = {_pct(och['util'])}  ({vv})")
 
     def _subtube_section(self, t):
         """Torsion of a subdivided compound section (EN 1992-1-1 6.3.1(3)-(4))."""

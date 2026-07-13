@@ -62,6 +62,28 @@ def chord_angle_note(theta_mode):
             "resistance-optimum.")
 
 
+def chord_mrd_label(axis, m_off, conditional):
+    """One shared parenthetical describing how a chord's MRd was computed.
+
+    Reused verbatim by the Shear/Combined views and the PDF report (pure ASCII).
+    ``conditional`` True means MRd is the M-M envelope point that also carries
+    the coexisting off-axis moment ``m_off`` (kNm, signed, plastic convention);
+    False means the conditional solve failed and MRd fell back to the legacy
+    pure-axis capacity, which can overstate the chord capacity under biaxial
+    bending -- the caller then shows the biaxial warning.
+    """
+    off = "My" if axis == "x" else "Mx"
+    if conditional and abs(m_off) > 1e-9:
+        return (f"(capacity about {axis} at the applied N, conditional on the "
+                f"coexisting {off} = {m_off:.1f} kNm -- the M-M envelope point "
+                "carrying both moments at once)")
+    if conditional:
+        return f"(bending about {axis} at the applied N)"
+    return (f"(pure bending about {axis} at the applied N; the conditional "
+            "biaxial solve did not converge, so this can overstate the chord "
+            "capacity -- see the warning)")
+
+
 # --- House palette, grouped by role -------------------------------------------
 # Green = tension, red = compression, everywhere (bars, strain wedges, chords).
 # A hue is reused across figures only where the two roles never share a plot

@@ -549,3 +549,106 @@ def solve_interaction(
         pts.append(InteractionPoint(axial=p.axial, Mx=p.Mx, My=p.My,
                                     converged=p.converged))
     return pts
+
+
+# Neutral-axis angle whose bending is purely about the given axis with the chosen
+# face in tension (the solver's convention: V=90 -> +Mx, tension at the bottom;
+# V=0 -> +My, tension on the left). Shared with the app's shear lever-arm and
+# chord-capacity solves so every per-face solve uses the same angle.
+FACE_ANGLE = {("x", True): 90.0, ("x", False): 270.0,
+              ("y", True): 0.0, ("y", False): 180.0}
+
+
+def conditional_capacity(
+    section: Section,
+    concrete: Concrete,
+    steel: MildSteel,
+    P: float,
+    axis: str,
+    tension_low: bool,
+    m_off: float,
+    *,
+    prestress: "Prestress | None" = None,
+    n_bands: int = 80,
+    tol_deg: float = 0.01,
+) -> tuple[float, bool]:
+    """Bending capacity about ``axis`` conditional on a coexisting off-axis moment.
+
+    The pure-axis capacity overstates what a chord check can lean on under biaxial
+    bending: the section cannot deliver its full uniaxial ``MRd`` while also
+    carrying the acting moment about the other axis. This solves for the capacity
+    that IS available: the point on the M-M envelope branch that keeps the chosen
+    face in tension where the companion moment equals ``m_off`` (kNm, signed, in
+    the solver's convention), returning the magnitude of the moment about ``axis``
+    there.
+
+    The branch spans the quarter-turns either side of the pure-axis angle
+    (``FACE_ANGLE``); across it the companion moment runs from one pure-companion
+    extreme to the other, so a sign-change bisection on the neutral-axis angle
+    finds the crossing. The companion is assumed to cross ``m_off`` once over the
+    branch (it does for convex envelopes; a non-convex envelope would still yield
+    a valid on-envelope capacity point). The pure-axis angle is probed first, so
+    when the companion already matches there -- every symmetric section with
+    ``m_off = 0`` -- the result is EXACTLY the pure-axis solve.
+
+    Returns ``(mrd, exact)``. ``(value, True)`` is the conditional capacity --
+    ``(0.0, True)`` meaning the off-axis moment alone exhausts this face's branch
+    (no chord capacity remains, an honest zero). ``(0.0, False)`` means a solve
+    failed to converge and the caller should fall back.
+    """
+    v0 = FACE_ANGLE[(axis, tension_low)]
+    prep = _prep_section(section, prestress)
+    band_memo: dict = {}
+
+    def _cap(v):
+        return plastic_capacity_at_angle(section, concrete, steel, P, v,
+                                         prestress=prestress, n_bands=n_bands,
+                                         prep=prep, band_memo=band_memo)
+
+    def _companion(pt):
+        return pt.My if axis == "x" else pt.Mx
+
+    def _own(pt):
+        return pt.Mx if axis == "x" else pt.My
+
+    target = float(m_off)
+
+    # Pure-axis probe: if the companion there already equals the target (any
+    # symmetric section under a uniaxial load), this IS the answer -- the same
+    # solve at the same angle as the pure-axis capacity, bit-identical to it.
+    p0 = _cap(v0)
+    if not p0.converged:
+        return 0.0, False
+    scale = max(1.0, abs(_own(p0)), abs(target))
+    if abs(_companion(p0) - target) <= 1.0e-9 * scale:
+        return abs(_own(p0)), True
+
+    # Bracket the branch: at v0 -/+ 90 deg the bending is purely about the OTHER
+    # axis (the two pure-companion extremes bounding this face's envelope branch).
+    lo, hi = v0 - 90.0, v0 + 90.0
+    p_lo, p_hi = _cap(lo), _cap(hi)
+    if not (p_lo.converged and p_hi.converged):
+        return 0.0, False
+    c_lo, c_hi = _companion(p_lo), _companion(p_hi)
+    band = 1.0e-9 * max(1.0, abs(c_lo), abs(c_hi))
+    if not (min(c_lo, c_hi) - band <= target <= max(c_lo, c_hi) + band):
+        # The off-axis moment exceeds anything this branch can carry alongside:
+        # the branch offers no point at that companion moment, so no capacity
+        # about `axis` remains. A genuine zero, not a failure.
+        return 0.0, True
+
+    f_lo = c_lo - target
+    while hi - lo > tol_deg:
+        mid = 0.5 * (lo + hi)
+        pm = _cap(mid)
+        if not pm.converged:
+            return 0.0, False
+        fm = _companion(pm) - target
+        if (fm > 0.0) == (f_lo > 0.0):
+            lo, f_lo = mid, fm
+        else:
+            hi = mid
+    pt = _cap(0.5 * (lo + hi))
+    if not pt.converged:
+        return 0.0, False
+    return abs(_own(pt)), True
