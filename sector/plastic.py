@@ -719,8 +719,18 @@ def conditional_capacity(
     # honest-zero). Refine each such same-side local extremum: if its true peak
     # overshoots `target`, bisect the two crossings it exposes; if it only touches,
     # take the tangent point itself.
-    for j in range(1, n_scan):
-        a, m, b = pts[j - 1], pts[j], pts[j + 1]
+    # The centre runs over every distinct sample angle INCLUDING the 0/360 seam
+    # (j = 0 wraps: neighbours at the last sample and the second, with the window
+    # carried past 360 deg -- _cap is periodic in the angle), so a peak straddling
+    # the seam is not missed.
+    band = 1.0e-6 * max(1.0, abs(target))
+    for j in range(n_scan):
+        if j == 0:
+            a, m, b = pts[n_scan - 1], pts[0], pts[1]
+            lo_ang, hi_ang = angs[n_scan - 1], 360.0 + angs[1]
+        else:
+            a, m, b = pts[j - 1], pts[j], pts[j + 1]
+            lo_ang, hi_ang = angs[j - 1], angs[j + 1]
         if not (a.converged and m.converged and b.converged):
             continue
         ca, cm, cb = _companion(a), _companion(m), _companion(b)
@@ -730,15 +740,14 @@ def conditional_capacity(
         # can hide a crossing (an under-sampled true peak/trough).
         if not ((is_max and cm < target) or (is_min and cm > target)):
             continue
-        v_ext, p_ext = _extremum(angs[j - 1], angs[j + 1], is_max)
+        v_ext, p_ext = _extremum(lo_ang, hi_ang, is_max)
         if p_ext is None:
             continue
         c_ext = _companion(p_ext)
-        band = 1.0e-6 * max(1.0, abs(target))
         if (c_ext >= target) if is_max else (c_ext <= target):
             # The true extremum overshoots `target`: two crossings flank it.
-            for lo_a, hi_a, c_lo in ((angs[j - 1], v_ext, ca), (v_ext, angs[j + 1], c_ext)):
-                r = _refine(lo_a, hi_a, c_lo)
+            for a0, a1, c0 in ((lo_ang, v_ext, ca), (v_ext, hi_ang, c_ext)):
+                r = _refine(a0, a1, c0)
                 if r is not None:
                     caps.append(r)
         elif abs(c_ext - target) <= band:

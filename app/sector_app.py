@@ -2890,11 +2890,16 @@ def _run_capacity_checks(inp, out):
                 # report can disclose it rather than silently drop the torsion share
                 # on the off-axis face, as the pre-v0.78 warning always did):
                 #   subdivided -> a compound section's torsion steel is per sub-tube;
-                #   not_solved -> single tube, but the off-axis conditional capacity
-                #                 solve failed or its lever arm was degenerate.
+                #   not_solved -> single tube, but at least one chord face that
+                #                 carries the torsion share could not be built (its
+                #                 conditional solve failed or it has no tension steel).
+                # Under torsion the torsion tensions all four faces (both shear faces
+                # and both off-axis faces), so ALL four are required; if fewer were
+                # built the coverage is incomplete and a partly-checked governing
+                # chord must not read as a clean OK -- disclose it.
                 if tors_live and tors_ctx.get("subdivide", False):
                     off_not_evaluated = "subdivided"
-                elif tors_live and not chord_off_faces:
+                elif tors_live and len(chord_faces) + len(chord_off_faces) < 4:
                     off_not_evaluated = "not_solved"
                 else:
                     off_not_evaluated = None
@@ -3770,11 +3775,12 @@ def shear_view(inp, results):
                            + chr(0x03A3) + "(SEd/SRd) check covers the interaction.")
             elif ch.get("off_not_evaluated") == "not_solved":
                 st.warning(
-                    "The off-axis chord (its bending tension plus its torsion "
-                    "share) could not be evaluated -- its conditional capacity "
-                    "solve did not converge or it has no tension steel on either "
-                    "face -- so it is NOT checked here; rely on the "
-                    + chr(0x03A3) + "(SEd/SRd) check for the interaction.")
+                    "One or more chord faces that carry the torsion share could "
+                    "not be evaluated (a conditional capacity solve did not "
+                    "converge or a face has no tension steel), so they are NOT "
+                    "checked here and the governing chord shown may not be the "
+                    "critical face; rely on the " + chr(0x03A3) + "(SEd/SRd) check "
+                    "for the interaction.")
             elif ch.get("biaxial") and not ch.get("has_torsion"):
                 st.caption("The off-axis chord carries only its bending tension "
                            "(no torsion is acting), which the biaxial bending "
@@ -4173,11 +4179,12 @@ def combined_view(inp, results):
                        "sum above covers the interaction.")
         elif lg.get("off_not_evaluated") == "not_solved":
             st.warning(
-                "The off-axis chord (its bending tension plus its torsion share) "
-                "could not be evaluated -- its conditional capacity solve did not "
-                "converge or it has no tension steel on either face -- so it is NOT "
-                "checked here; the " + chr(0x03A3) + "(SEd/SRd) sum above remains "
-                "the combined verification.")
+                "One or more chord faces that carry the torsion share could not be "
+                "evaluated (a conditional capacity solve did not converge or a face "
+                "has no tension steel), so they are NOT checked here and the "
+                "governing chord shown may not be the critical face; the "
+                + chr(0x03A3) + "(SEd/SRd) sum above remains the combined "
+                "verification.")
         elif biaxial and not lg.get("has_torsion"):
             st.caption("The off-axis chord carries only its bending tension (no "
                        "torsion is acting), which the biaxial bending utilisation "

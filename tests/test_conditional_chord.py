@@ -193,6 +193,26 @@ def test_conditional_capacity_recovers_the_under_sampled_peak():
     assert ex_b and beyond == 0.0                          # past the peak -> honest zero
 
 
+def test_conditional_capacity_seam_peak_region():
+    # Codex round-5 P2: the tangent-extremum repair must include the 0/360-degree
+    # seam. On the asymmetric section the companion (My) global maximum sits right
+    # at the seam; sweeping the target densely up to it must keep matching the fine
+    # brute slice (no false honest-zero from a seam extremum the search skipped),
+    # and stepping just past it must give the honest zero.
+    import numpy as np
+    sec = _asym_section()
+    _, c, s = _beam()
+    peak = max(plastic_capacity_at_angle(sec, c, s, 0.0, v).My
+               for v in np.arange(0.0, 360.0, 0.1))
+    for moff in np.linspace(peak - 12.0, peak - 0.2, 8):
+        mrd, exact = conditional_capacity(sec, c, s, 0.0, "x", True, float(moff))
+        assert exact and mrd > 0.0
+        assert mrd == pytest.approx(
+            _brute_slice(sec, c, s, 0.0, "x", True, float(moff)), abs=2.5)
+    beyond, ex_b = conditional_capacity(sec, c, s, 0.0, "x", True, peak + 5.0)
+    assert ex_b and beyond == 0.0
+
+
 def test_conditional_capacity_exact_sample_companion_hit():
     # Codex round-4 P2: when m_off exactly equals the companion at a scan sample (a
     # user pastes a reported envelope value), the descending-crossing residual is

@@ -1033,10 +1033,11 @@ class ReportBuilder:
                          "share is not evaluated here -- rely on the combined "
                          "sum(SEd/SRd).")
             elif ch.get("off_not_evaluated") == "not_solved":
-                note += (" Torsion is acting, but the off-axis chord's conditional "
-                         "capacity could not be solved (or it has no tension steel on "
-                         "either face), so it is not checked -- rely on the combined "
-                         "sum(SEd/SRd).")
+                note += (" One or more chord faces carrying the torsion share could "
+                         "not be evaluated (a conditional solve failed or a face has "
+                         "no tension steel), so they are not checked and the governing "
+                         "chord shown may not be the critical face -- rely on the "
+                         "combined sum(SEd/SRd).")
             self._small(note)
             self._chord_off_block(links.get("chord_off"))
 
@@ -1164,11 +1165,11 @@ class ReportBuilder:
                          "share is not evaluated; the sum(SEd/SRd) check covers the "
                          "interaction.")
             elif lg.get("off_not_evaluated") == "not_solved":
-                note += (" The off-axis chord (bending tension plus its torsion "
-                         "share) could not be evaluated -- its conditional capacity "
-                         "solve did not converge or it has no tension steel on either "
-                         "face -- so it is NOT checked; the sum(SEd/SRd) check above "
-                         "remains the combined verification.")
+                note += (" One or more chord faces carrying the torsion share could "
+                         "not be evaluated (a conditional solve failed or a face has "
+                         "no tension steel), so they are NOT checked and the governing "
+                         "chord shown may not be the critical face; the sum(SEd/SRd) "
+                         "check above remains the combined verification.")
             elif biaxial and not lg.get("has_torsion"):
                 note += (" The off-axis chord carries only its bending tension (no "
                          "torsion is acting), which the biaxial bending utilisation "

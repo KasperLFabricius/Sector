@@ -538,6 +538,24 @@ def test_report_off_axis_skip_disclosed_uniaxially():
     assert "per sub-tube" in txt                     # the subdivided disclosure fired
 
 
+def test_report_partial_torsion_face_coverage_disclosed():
+    # Codex round-5 P2: when a chord face carrying the torsion share could not be
+    # built (not_solved), the governing chord shown may not be the critical face --
+    # the report must say so, even for a uniaxial run.
+    out = _out()
+    c = _combined_out()
+    c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=100.0, m_rd=400.0,
+                             ftd_v=200.0, ftd_t=120.0, mv=100.0, mt=30.0, m_total=230.0,
+                             util=230.0 / 400.0, ok=True, capped=False,
+                             tension_low=True, off_util=0.0, biaxial=False,
+                             m_off=0.0, conditional=True, has_torsion=True,
+                             gets_shift=True, off_not_evaluated="not_solved")
+    out["combined"] = c
+    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+                                                        figures=False)).split())
+    assert "may not be the critical face" in txt
+
+
 def test_report_off_axis_chord_block():
     # The off-axis chord check renders with its own formula pair: bending plus
     # the torsion share (no shear shift), against the conditional capacity.
