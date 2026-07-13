@@ -2612,34 +2612,57 @@ def _run_capacity_checks(inp, out):
         # pure-axis capacity (the B1 machinery), available when the plastic
         # utilisation was computed and the links provide a lever arm.
         pl = out.get("plastic")
-        chord = None
+        chord_faces = []           # shear-axis chord faces (see below)
         chord_off_faces = []       # off-axis chord faces (both), built when torsion is live
         if links_valid and pl is not None and pl.get("util") is not None:
             l_axis, tlow = link_ctx["axis"], link_ctx["tension_low"]
             m_signed = inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
             off_signed = inp["My_pl"] if l_axis == "x" else inp["Mx_pl"]
-            m_ed_l = combined.chord_applied_moment(m_signed, tlow)
-            # MRd is CONDITIONAL on the coexisting off-axis moment (the M-M envelope
-            # point carrying off_signed) -- the pure-axis capacity overstates what
-            # the chord can lean on under biaxial bending. Falls back to the legacy
-            # pure-axis capacity when the conditional solve fails (conditional=False,
-            # the biaxial-warning path), then to the sweep extremum.
-            m_rd_l, mrd_cond = _shear_face_mrd(inp, l_axis, tlow, m_off=off_signed)
-            if not mrd_cond and m_rd_l <= 0.0:
-                max_m = pl["max_mx"] if l_axis == "x" else pl["max_my"]
-                min_m = pl.get("min_mx" if l_axis == "x" else "min_my", -max_m)
-                m_rd_l = max_m if tlow else abs(min_m)
             off_max = pl["max_my"] if l_axis == "x" else pl["max_mx"]
             off_min = pl.get("min_my" if l_axis == "x" else "min_mx", -off_max)
             off_cap = off_max if off_signed >= 0.0 else abs(off_min)
             off_util = (abs(off_signed) / off_cap if off_cap > 0.0
                         else (math.inf if off_signed else 0.0))
-            # A conditional zero (the off moment exhausts the branch) keeps the
-            # chord -- utilisation infinity is the honest verdict, not "no check".
-            if m_rd_l > 0.0 or mrd_cond:
-                chord = dict(m_ed=m_ed_l, m_rd=m_rd_l, z_m=link_ctx["z_mm"] / 1000.0,
-                             axis=l_axis, tension_low=tlow, off_util=off_util,
-                             m_off=off_signed, conditional=mrd_cond)
+            _, scx, scy = _gross_area_centroid(inp["outer"], inp["holes"])
+            s_centroid = scy if l_axis == "x" else scx
+            # Shear-axis chord: MRd is CONDITIONAL on the coexisting off-axis moment
+            # (the M-M envelope point carrying off_signed) -- the pure-axis capacity
+            # overstates what the chord can lean on under biaxial bending. The
+            # flexural shear-TENSION face carries the shear shift dFtd; when torsion
+            # is live the OPPOSITE (compression) face also carries the torsion
+            # longitudinal share (no shear shift, tensile round the whole tube), so
+            # it is built too and the GOVERNING face reported (it can govern on a
+            # section with asymmetric steel). The tension face keeps the legacy
+            # fallback (pure-axis then sweep extremum) so a failed conditional solve
+            # still reports; the torsion-only face is only used on an honest solve.
+            shear_faces = [(tlow, True)]
+            if tors_live:
+                shear_faces.append((not tlow, False))
+            for f_tlow, gets_shift in shear_faces:
+                m_ed_f = combined.chord_applied_moment(m_signed, f_tlow)
+                m_rd_f, cond_f = _shear_face_mrd(inp, l_axis, f_tlow, m_off=off_signed)
+                if gets_shift:
+                    if not cond_f and m_rd_f <= 0.0:
+                        max_m = pl["max_mx"] if l_axis == "x" else pl["max_my"]
+                        min_m = pl.get("min_mx" if l_axis == "x" else "min_my", -max_m)
+                        m_rd_f = max_m if f_tlow else abs(min_m)
+                    if not (m_rd_f > 0.0 or cond_f):
+                        continue
+                    z_f_mm, z_f_src = link_ctx["z_mm"], link_ctx["z_src"]
+                else:
+                    if not cond_f:
+                        continue
+                    _, s_cg = shear.tension_reinforcement(inp["bars"], l_axis,
+                                                          f_tlow, s_centroid)
+                    d_f = shear.effective_depth(inp["outer"], l_axis, f_tlow, s_cg)
+                    z_f_mm, z_f_src = _shear_lever_arm(inp, l_axis, f_tlow, d_f)
+                    if z_f_mm <= 0.0:
+                        continue
+                chord_faces.append(
+                    dict(m_ed=m_ed_f, m_rd=m_rd_f, z_m=z_f_mm / 1000.0,
+                         z_src=z_f_src, axis=l_axis, tension_low=f_tlow,
+                         off_util=off_util, m_off=off_signed, conditional=cond_f,
+                         gets_shift=gets_shift))
             # Off-axis chord(s): with torsion live, the OTHER axis' tension chords
             # carry their bending tension plus a share of the distributed torsion
             # longitudinal force. The torsion force is tensile round the whole tube
@@ -2651,7 +2674,7 @@ def _run_capacity_checks(inp, out):
             # defensible MRd, so that face is simply not checked). Single-tube
             # sections only: on a compound section the torsion steel is per sub-tube,
             # so no single tube bounds the off-axis face.
-            if (chord is not None and tors_live
+            if (chord_faces and tors_live
                     and not tors_ctx.get("subdivide", False)):
                 o_axis = "y" if l_axis == "x" else "x"
                 _, ocx, ocy = _gross_area_centroid(inp["outer"], inp["holes"])
@@ -2734,17 +2757,19 @@ def _run_capacity_checks(inp, out):
                     v_ed_s, snap["lk"]["vrd_max"])
             utils.append(_shared_stirrup)
             utils.append(_crush_629)
-        if chord is not None and chord["m_rd"] > 0.0 and (shear_live or tors_live):
+        for _cf in chord_faces:
             # The objective sees EXACTLY the reported chord utilisation (capped per
             # 6.2.3(7)), so the optimiser and the verdicts agree: it steepens the
             # strut while that genuinely lowers the reported check, and stops once
-            # the cap saturates (steepening further would only waste stirrups).
-            # A zero-capacity chord (the off-axis moment exhausts the envelope) is
-            # kept OUT of the objective: its utilisation is infinite at every
-            # angle, which would tie the scan and un-constrain the other checks.
-            utils.append(lambda c: combined.longitudinal_check(
-                chord["m_ed"], chord["m_rd"], 0.5 * v_ed_s * c, _ftd_t_at(c),
-                chord["z_m"])["util"])
+            # the cap saturates. Both shear faces join (only the tension face gets
+            # the shear shift). A zero-capacity chord (the off-axis moment exhausts
+            # the envelope) is kept OUT: its utilisation is infinite at every angle,
+            # which would tie the scan and un-constrain the other checks.
+            if _cf["m_rd"] > 0.0 and (shear_live or tors_live):
+                utils.append(lambda c, f=_cf: combined.longitudinal_check(
+                    f["m_ed"], f["m_rd"],
+                    (0.5 * v_ed_s * c) if f["gets_shift"] else 0.0,
+                    _ftd_t_at(c), f["z_m"])["util"])
         for _ocf in chord_off_faces:
             # Each off-axis face depends on the angle only through Ftd,T; both join
             # the objective (m_rd > 0) so the optimiser and the reported governing
@@ -2853,7 +2878,7 @@ def _run_capacity_checks(inp, out):
             # view, so both present the same numbers.
             lchk = None
             ochk = None
-            if chord is not None and lk["valid"]:
+            if chord_faces and lk["valid"]:
                 # The torsion term comes from the BUILT torsion payload (the web
                 # tube's Asl at ITS final angle) -- with disjoint bands the links
                 # angle can lie outside the torsion band, so evaluating Ftd,T there
@@ -2861,9 +2886,6 @@ def _run_capacity_checks(inp, out):
                 p_web = out.get("torsion", {}).get("primary")
                 ftd_t_star = (p_web["asl_req"] * tors_ctx["fyd_long"] / 1000.0
                               if (p_web is not None and tors_live) else 0.0)
-                lchk = combined.longitudinal_check(chord["m_ed"], chord["m_rd"],
-                                                   delta_ftd, ftd_t_star,
-                                                   chord["z_m"])
                 # Why no off-axis chord check accompanies this one (so the views and
                 # report can disclose it rather than silently drop the torsion share
                 # on the off-axis face, as the pre-v0.78 warning always did):
@@ -2876,15 +2898,26 @@ def _run_capacity_checks(inp, out):
                     off_not_evaluated = "not_solved"
                 else:
                     off_not_evaluated = None
-                lchk.update(valid=True, axis=chord["axis"],
-                            tension_low=chord["tension_low"],
-                            off_util=chord["off_util"],
-                            biaxial=bool(chord["off_util"] > 0.05),
-                            m_off=chord["m_off"],
-                            conditional=chord["conditional"],
-                            has_torsion=tors_live,
-                            off_not_evaluated=off_not_evaluated,
-                            theta_mode=theta_mode_str)
+                # Report the GOVERNING shear-axis face (highest utilisation at the
+                # member angle): the flexural tension face (bending + dFtd + torsion)
+                # or, under torsion, the compression face (torsion share only).
+                for _cf in chord_faces:
+                    fchk = combined.longitudinal_check(
+                        _cf["m_ed"], _cf["m_rd"],
+                        delta_ftd if _cf["gets_shift"] else 0.0,
+                        ftd_t_star, _cf["z_m"])
+                    if lchk is None or fchk["util"] > lchk["util"]:
+                        fchk.update(valid=True, axis=_cf["axis"],
+                                    tension_low=_cf["tension_low"],
+                                    off_util=_cf["off_util"],
+                                    biaxial=bool(_cf["off_util"] > 0.05),
+                                    m_off=_cf["m_off"],
+                                    conditional=_cf["conditional"],
+                                    has_torsion=tors_live,
+                                    gets_shift=_cf["gets_shift"],
+                                    off_not_evaluated=off_not_evaluated,
+                                    theta_mode=theta_mode_str)
+                        lchk = fchk
                 # The off-axis chord: bending tension about the OTHER axis plus its
                 # share of the torsion longitudinal force (no shear shift -- the
                 # shear acts in the shear plane), against the capacity conditional on
@@ -3689,11 +3722,16 @@ def shear_view(inp, results):
                         + (" + torsion" if ch.get("has_torsion") else "")
                         + " tension**")
             face_lbl = viz.tension_face_label(ch.get("tension_low", True))
+            gets_shift = ch.get("gets_shift", True)
+            face_desc = (f"the shear tension face ({face_lbl})" if gets_shift else
+                         f"the shear COMPRESSION face ({face_lbl}) -- the torsion "
+                         "tension governs here, with no shear shift and the bending "
+                         "relieving rather than adding")
             g1, g2, g3 = st.columns(3)
             g1.metric(f"MEd (about {ch['axis']})", f"{ch['m_ed']:.1f} kNm")
             g2.metric("MEd,total", f"{ch['m_total']:.1f} kNm",
                       help="bending + shear shift (+ torsion) as an equivalent "
-                           "moment on the tension chord")
+                           "moment on the governing chord face")
             if ch.get("biaxial") and not ch.get("conditional", True):
                 g3.metric("MEd,total/MRd", _pct(ch["util"]),
                           help="pure-axis fallback capacity -- see the warning "
@@ -3707,7 +3745,7 @@ def shear_view(inp, results):
                         "otherwise govern."
                         if ch.get("theta_mode") == "utilisation" else "")
             st.caption(
-                f"Tension chord = the shear tension face ({face_lbl}). "
+                f"Tension chord = {face_desc}. "
                 r"$M_{Ed,total} = M_{Ed} + \Delta F_{td}\,z + F_{td,T}\,z/2 = "
                 f"{ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
                 f"{ch['m_total']:.1f}$ kNm vs $M_{{Rd}} = {ch['m_rd']:.1f}$ kNm "
@@ -4081,13 +4119,17 @@ def combined_view(inp, results):
     if lg is not None and lg["valid"]:
         ax_lbl = lg["axis"]
         face_lbl = viz.tension_face_label(lg.get("tension_low", True))
+        gets_shift = lg.get("gets_shift", True)
+        face_desc = (f"the shear tension face ({face_lbl})" if gets_shift else
+                     f"the shear COMPRESSION face ({face_lbl}) -- the torsion "
+                     "tension governs there (no shear shift, bending relieves it)")
         biaxial = lg.get("biaxial", False)
         ok_l = lg["ok"]
         g1, g2, g3 = st.columns(3)
         g1.metric(f"MEd (about {ax_lbl})", f"{lg['m_ed']:.1f} kNm")
         g2.metric("MEd,total", f"{lg['m_total']:.1f} kNm",
                   help="bending + shear shift + torsion, as an equivalent moment "
-                       "on the tension chord")
+                       "on the governing chord face")
         if biaxial and not lg.get("conditional", True):
             # The conditional biaxial solve failed and MRd fell back to the
             # pure-axis capacity, so withhold the reassuring OK/Over-limit verdict.
@@ -4098,7 +4140,7 @@ def combined_view(inp, results):
                       delta=("OK" if ok_l else "Over limit"),
                       delta_color=("normal" if ok_l else "inverse"))
         st.caption(
-            f"Tension chord = the shear tension face ({face_lbl}) about the "
+            f"Tension chord = {face_desc} about the "
             f"{ax_lbl}-axis; $M_{{Ed}}$ and $M_{{Rd}}$ are taken on that face. "
             r"$M_{Ed,total} = M_{Ed} + \Delta F_{td}\,z + F_{td,T}\,z/2 = "
             f"{lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f}$ "

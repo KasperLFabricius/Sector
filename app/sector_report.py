@@ -1011,8 +1011,11 @@ class ReportBuilder:
                 result=(f"utilisation = {_pct(ch['util'])}"
                         + ("  (pure-axis fallback -- see note)" if fell_back
                            else f"  ({vv})")))
-            note = (f"Tension chord = the shear tension face ({face}); "
-                    "M<sub>Rd</sub> "
+            face_desc = (f"the shear tension face ({face})" if ch.get("gets_shift", True)
+                         else f"the shear compression face ({face}) -- the torsion "
+                         "tension governs there, with no shear shift and the bending "
+                         "relieving rather than adding")
+            note = (f"Tension chord = {face_desc}; M<sub>Rd</sub> "
                     + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
                                           ch.get("conditional", True)) + ".")
             if ch.get("theta_mode") == "utilisation":

@@ -277,6 +277,30 @@ def test_app_off_axis_chord_present_with_torsion():
     assert at.session_state["results"]["combined"]["chord_off"] is och
 
 
+def test_app_shear_compression_face_governs_under_hogging():
+    # Codex round-3 P2: the shear-axis chord now checks BOTH faces (the torsion
+    # tension acts on both). With a HOGGING moment while the shear-tension face is
+    # the bottom, the bending tensions the OPPOSITE (compression) face -- which then
+    # governs the longitudinal chord. The old shear-tension-face-only check would
+    # have seen only the relieved bottom face and missed this failure entirely.
+    at = _fresh(); at.run()
+    at.number_input(key="pl_Mx").set_value(-150.0).run()   # hogging
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.number_input(key="shear_V").set_value(150.0).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(40.0).run()
+    at.checkbox(key="combined_on").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    lg = at.session_state["results"]["combined"]["longitudinal"]
+    assert lg["gets_shift"] is False               # the torsion-only compression face
+    assert lg["tension_low"] is False              # ...the top, opposite the shear face
+    assert lg["m_ed"] == pytest.approx(150.0)      # the hogging bending tensions it
+    assert lg["mv"] == pytest.approx(0.0)          # no shear shift on that face
+    assert lg["util"] > 1.0                        # and it governs (EXCEEDED)
+
+
 def test_app_off_axis_chord_present_under_uniaxial_torsion():
     # The torsion force tensions the off-axis faces even with NO off-axis bending,
     # so a uniaxial M+V+T on a single tube still checks the off-axis chord (pure
