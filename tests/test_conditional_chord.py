@@ -193,6 +193,32 @@ def test_conditional_capacity_recovers_the_under_sampled_peak():
     assert ex_b and beyond == 0.0                          # past the peak -> honest zero
 
 
+def test_conditional_capacity_refinement_failure_falls_back(monkeypatch):
+    # Codex round-5/6 P2: a solve failing INSIDE a bracketed crossing's refinement
+    # (not on a coarse scan sample) must fall back to the caller -- (0.0, False) --
+    # not be reported as an honest zero (0.0, True). Fail every angle that is not a
+    # 10-degree coarse sample: the coarse scan still brackets the real crossings
+    # (any_fail stays false) but every bisection midpoint fails, so caps ends empty.
+    import dataclasses
+    import sector.plastic as P
+    sec = _asym_section()
+    _, c, s = _beam()
+    my0 = P.plastic_capacity_at_angle(sec, c, s, 0.0, 0.0).My   # a biaxial target
+    real = P.plastic_capacity_at_angle
+
+    def fake(*a, **k):
+        pt = real(*a, **k)
+        v = a[4] if len(a) > 4 else k.get("V_deg")
+        r = v % 10.0
+        if min(r, 10.0 - r) > 1e-6:            # not a coarse scan multiple of 10 deg
+            return dataclasses.replace(pt, converged=False)
+        return pt
+
+    monkeypatch.setattr(P, "plastic_capacity_at_angle", fake)
+    mrd, exact = P.conditional_capacity(sec, c, s, 0.0, "x", True, float(0.5 * my0))
+    assert mrd == 0.0 and exact is False       # fallback, not a false honest zero
+
+
 def test_conditional_capacity_seam_peak_region():
     # Codex round-5 P2: the tangent-extremum repair must include the 0/360-degree
     # seam. On the asymmetric section the companion (My) global maximum sits right

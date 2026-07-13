@@ -639,32 +639,45 @@ def conditional_capacity(
         o = _own(pt)
         return abs(o) if ((o > 0.0) if want_positive else (o < 0.0)) else None
 
+    # Set by _refine/_extremum when a solve INSIDE a bracketed crossing fails to
+    # converge (as opposed to a crossing legitimately landing on the wrong face).
+    # The coarse-scan `any_fail` cannot see these, so an empty `caps` must fall back
+    # to the caller (0.0, False), not be asserted as an honest zero (0.0, True).
+    solve_failed = [False]
+
     def _refine(v_lo, v_hi, c_lo):
         """Bisect [v_lo, v_hi] (which brackets a companion == target crossing) and
         return the correct-face |own| there, or None if it lands on the opposite
-        face or a solve fails."""
+        face (not a failure) or a solve fails to converge (flags solve_failed)."""
         f_lo = c_lo - target
         while v_hi - v_lo > tol_deg:
             mid = 0.5 * (v_lo + v_hi)
             pm = _cap(mid)
             if not pm.converged:
+                solve_failed[0] = True
                 return None
             fm = _companion(pm) - target
             if (fm > 0.0) == (f_lo > 0.0):
                 v_lo, f_lo = mid, fm
             else:
                 v_hi = mid
-        return _face_own(_cap(0.5 * (v_lo + v_hi)))
+        pt = _cap(0.5 * (v_lo + v_hi))
+        if not pt.converged:
+            solve_failed[0] = True
+            return None
+        return _face_own(pt)
 
     def _extremum(v_lo, v_hi, maximize):
         """Golden-section search for the companion extremum in [v_lo, v_hi]; returns
-        (angle, point) of the extremal companion, or (None, None) if a solve fails."""
+        (angle, point) of the extremal companion, or (None, None) if a solve fails
+        to converge (flags solve_failed)."""
         gr = 0.6180339887498949
         c = v_hi - gr * (v_hi - v_lo)
         d = v_lo + gr * (v_hi - v_lo)
         pc, pd = _cap(c), _cap(d)
         for _ in range(60):
             if not (pc.converged and pd.converged):
+                solve_failed[0] = True
                 return None, None
             if v_hi - v_lo <= tol_deg:
                 break
@@ -680,7 +693,10 @@ def conditional_capacity(
                 pd = _cap(d)
         v = 0.5 * (v_lo + v_hi)
         pt = _cap(v)
-        return (v, pt) if pt.converged else (None, None)
+        if not pt.converged:
+            solve_failed[0] = True
+            return None, None
+        return v, pt
 
     # Full-circle scan: sample the companion moment round the neutral-axis angle.
     step = 360.0 / n_scan
@@ -758,6 +774,8 @@ def conditional_capacity(
     if caps:
         return max(caps), True
     # No correct-face crossing. A clean scan means the off moment genuinely leaves
-    # no capacity (honest zero); a failed solve could have hidden a crossing, so
-    # defer to the caller's pure-axis fallback instead of asserting zero.
-    return (0.0, False) if any_fail else (0.0, True)
+    # no capacity (honest zero); a failed solve -- either a coarse scan sample
+    # (any_fail) or a solve inside a bracketed crossing's refinement (solve_failed)
+    # -- could have hidden a crossing, so defer to the caller's pure-axis fallback
+    # instead of asserting zero.
+    return (0.0, False) if (any_fail or solve_failed[0]) else (0.0, True)
