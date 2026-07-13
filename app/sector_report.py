@@ -975,22 +975,19 @@ class ReportBuilder:
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
                       result=f"{util_txt}  ({verdict})")
         if links.get("theta_mode") == "utilisation":
-            self._small("The strut angle is the ONE member angle (shared with "
-                        "torsion when enabled, EN 1992-1-1 6.3.2(2)), selected "
-                        "within the bounds to MINIMISE THE GOVERNING UTILISATION: a "
-                        "flatter strut relaxes the stirrups but raises the crushing "
-                        "demand and the longitudinal chord tension, so the angle "
-                        "depends on V<sub>Ed</sub>, M<sub>Ed</sub> and "
-                        "N<sub>Ed</sub>. The shear adds a longitudinal tension "
-                        "&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
-                        f"{_fmt(links['delta_ftd'], 1)} kN (6.18) that the tension "
-                        "reinforcement must also carry.")
+            angle_note = ("The strut angle is the ONE member angle (shared with "
+                          "torsion when enabled, EN 1992-1-1 6.3.2(2)), selected "
+                          "within the bounds to MINIMISE THE GOVERNING UTILISATION: a "
+                          "flatter strut relaxes the stirrups but raises the crushing "
+                          "demand and the longitudinal chord tension, so the angle "
+                          "depends on V<sub>Ed</sub>, M<sub>Ed</sub> and N<sub>Ed</sub>.")
         else:
-            self._small(f"The strut angle is auto-optimised within the bounds to "
-                        f"maximise V<sub>Rd</sub>. The shear adds a longitudinal "
-                        f"tension &#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot "
-                        f"theta = {_fmt(links['delta_ftd'], 1)} kN (6.18) that the "
-                        f"tension reinforcement must also carry.")
+            angle_note = ("The strut angle is auto-optimised within the bounds to "
+                          "maximise V<sub>Rd</sub>.")
+        self._small(angle_note + " The shear adds a longitudinal tension "
+                    "&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
+                    f"{_fmt(links['delta_ftd'], 1)} kN (6.18) that the tension "
+                    "reinforcement must also carry.")
         # Longitudinal chord under M + V (+ T), at the member strut angle -- the
         # same check the combined section shows; printed here so a shear + bending
         # run without torsion still documents it.
@@ -1132,9 +1129,11 @@ class ReportBuilder:
                         "distributed torsion steel) may govern and is NOT evaluated here "
                         "-- rely on the sum(SEd/SRd) check above, which uses the full "
                         "biaxial bending utilisation.")
-            note = (viz.chord_angle_note(lg.get("theta_mode"))
-                    + " The sum(SEd/SRd) check above uses the full biaxial bending "
-                    "utilisation and remains the primary combined check.")
+            note = viz.chord_angle_note(lg.get("theta_mode"))
+            if not biaxial:
+                # In a biaxial run the paragraph above already makes this point.
+                note += (" The sum(SEd/SRd) check above uses the full biaxial bending "
+                         "utilisation and remains the primary combined check.")
             if lg["capped"]:
                 note = ("The shear shift is capped so bending + shear does not exceed "
                         "M<sub>Rd</sub> (6.2.3(7): the added tension need not exceed "

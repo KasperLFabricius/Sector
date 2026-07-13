@@ -164,7 +164,7 @@ def test_manual_documents_per_action_theta_and_shared_stirrup():
     # each pick their own), and (b) one closed stirrup serves both checks.
     text = "\n".join(str(b) for b in manual.manual_blocks())
     assert "per action" in text                       # note (a)
-    assert "One closed stirrup does both jobs" in text  # note (b)
+    assert "shared closed stirrup" in text            # note (b)
 
 
 def test_latex_to_rl_converts_the_subset():
