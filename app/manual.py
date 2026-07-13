@@ -1044,13 +1044,16 @@ def manual_blocks() -> list:
        "stirrup demands add. The added stirrup demand (least at a flat strut) and "
        "the crushing (least at 45 degrees) must both hold at **one** strut angle, so "
        "Sector reports the check at the single angle that balances the two.")
-    call("standard", "Sector optimises the strut angle $\\theta$ **per action**: the "
-         "shear check picks its own $\\theta$ to maximise $V_{Rd}$ and the torsion "
-         "check its own to maximise $T_{Rd}$, so the two need not share one angle. "
-         "This is defensible under DK NA 6.3.2(6), where each $S_{Rd}$ is the "
-         "resistance to that action **acting alone**. Only the concrete-crushing "
-         "interaction (6.29) and the shared-stirrup transverse check use a single "
-         "common $\\theta$, where the two actions load the same web strut at once.")
+    call("standard", "That one angle is chosen to **minimise the governing "
+         "utilisation** across every check that depends on it: as the strut "
+         "flattens the stirrup demands ease while the crushing checks (6.9, 6.30) "
+         "and the longitudinal-chord tension grow, so the optimum tracks the load "
+         "instead of sitting at a band edge. Each $S_{Rd}$ in DK NA 6.3.2(6) is "
+         "still the resistance to that action **acting alone** -- Sector only "
+         "reports them all at that shared angle. Should the shear and torsion strut "
+         "bands not overlap, no common angle exists: Sector then reverts to each "
+         "action's own resistance-maximising angle and flags it, as it also does "
+         "for a capacity-only run with no applied shear or torsion.")
 
     h1("Equilibrium check")
     md("Both analyses carry a convergence flag. The plastic solve balances the "
