@@ -119,6 +119,80 @@ def test_conditional_y_axis_asymmetric_companion():
     assert util == pytest.approx(1.0, abs=0.02)          # on the envelope
 
 
+def _brute_slice(sec, c, s, P, axis, tension_low, m_off, pre=None):
+    """Reference: a fine full-circle envelope scan, taking the correct-face own
+    moment where the companion crosses ``m_off`` (linear-interpolated). Independent
+    of conditional_capacity's own bisection -- the ground truth it must match."""
+    import numpy as np
+    comp = (lambda p: p.My) if axis == "x" else (lambda p: p.Mx)
+    own = (lambda p: p.Mx) if axis == "x" else (lambda p: p.My)
+    pts = [plastic_capacity_at_angle(sec, c, s, P, v, prestress=pre)
+           for v in np.arange(0.0, 360.2, 0.2)]
+    caps = []
+    for a, b in zip(pts, pts[1:]):
+        if not (a.converged and b.converged):
+            continue
+        if (comp(a) - m_off < 0.0) != (comp(b) - m_off < 0.0):
+            span = comp(b) - comp(a)
+            t = (m_off - comp(a)) / span if span else 0.0
+            o = own(a) + t * (own(b) - own(a))
+            if (o > 0.0) if tension_low else (o < 0.0):
+                caps.append(abs(o))
+    return max(caps) if caps else 0.0
+
+
+def _asym_section():
+    # Diagonally asymmetric (broken about BOTH axes): a bottom-left bar cluster.
+    # This is the regime where the companion is non-monotone over a face's branch
+    # and the own moment can take the wrong sign near a branch endpoint.
+    from sector.section import Section
+    outer = [(-0.15, -0.30), (0.15, -0.30), (0.15, 0.30), (-0.15, 0.30)]
+    bars = [(-0.11, -0.26, 804), (-0.05, -0.26, 804), (-0.11, -0.15, 509),
+            (0.11, -0.26, 201), (0.11, 0.26, 201), (-0.11, 0.26, 113)]
+    return Section.from_polygon(outer, bars)
+
+
+def test_conditional_matches_envelope_slice_on_asymmetric_section():
+    # The correctness pin for the full-circle rewrite: on a section asymmetric about
+    # BOTH axes (where the old fixed-bracket root-find could return a wrong-face
+    # capacity or a false honest-zero), conditional_capacity must equal the
+    # independent brute-force envelope slice for every axis/face/off-moment -- and
+    # must NEVER return a capacity from the wrong face (the nonconservative bug).
+    ex = _beam(); _, c, s = ex
+    sec = _asym_section()
+    for axis in ("x", "y"):
+        comp = (lambda p: p.My) if axis == "x" else (lambda p: p.Mx)
+        cmax = max(abs(comp(plastic_capacity_at_angle(sec, c, s, 0.0, v)))
+                   for v in range(0, 360, 3))
+        for tl in (True, False):
+            for frac in (0.0, 0.35, 0.7, 1.1):     # 1.1 -> beyond the branch
+                m_off = (frac if tl else -frac) * cmax
+                mrd, exact = conditional_capacity(sec, c, s, 0.0, axis, tl, m_off)
+                ref = _brute_slice(sec, c, s, 0.0, axis, tl, m_off)
+                assert exact
+                assert mrd == pytest.approx(ref, abs=2.5)
+
+
+def test_conditional_capacity_with_axial_and_prestress():
+    # The app always calls at the applied N and with prestress; axial compression
+    # reshapes the envelope and prestress shifts it asymmetrically, so pin both:
+    # exact, on-envelope, and monotone-decreasing there too.
+    exc = manual.example_circular()
+    sec, c, s, pre = (manual._section_of(exc), exc["concrete"], exc["steel"],
+                      exc["prestress"])
+    P = 500.0
+    my_pure = plastic_capacity_at_angle(sec, c, s, P, 0.0, prestress=pre).My
+    m0, e0 = conditional_capacity(sec, c, s, P, "x", True, 0.0, prestress=pre)
+    m1, e1 = conditional_capacity(sec, c, s, P, "x", True, 0.5 * my_pure,
+                                  prestress=pre)
+    assert e0 and e1
+    assert 0.0 < m1 < m0                                  # capacity consumed by My
+    for moff in (0.0, 0.5 * my_pure):
+        mrd, _ = conditional_capacity(sec, c, s, P, "x", True, moff, prestress=pre)
+        assert mrd == pytest.approx(
+            _brute_slice(sec, c, s, P, "x", True, moff, pre=pre), abs=3.0)
+
+
 # -- app integration (AppTest) ------------------------------------------------
 
 def _fresh():
@@ -126,8 +200,13 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=120)
 
 
+# Distinct Mx/My magnitudes so an axis/argument transposition changes the numbers
+# (a symmetric 100/100 would let m_signed<->off_signed swaps pass silently).
+_MX, _MY = 100.0, 60.0
+
+
 def _mvt(at, my=0.0, torsion=True):
-    at.number_input(key="pl_Mx").set_value(100.0).run()
+    at.number_input(key="pl_Mx").set_value(_MX).run()
     if my:
         at.number_input(key="pl_My").set_value(my).run()
     at.checkbox(key="shear_on").set_value(True).run()
@@ -150,11 +229,12 @@ def test_app_chord_mrd_conditional_under_biaxial():
     lg_uni = at.session_state["results"]["combined"]["longitudinal"]
     assert lg_uni["conditional"] and lg_uni["m_off"] == 0.0
     m_rd_uni = lg_uni["m_rd"]
-    at.number_input(key="pl_My").set_value(100.0).run()
+    at.number_input(key="pl_My").set_value(_MY).run()
     at.button(key="calculate").click().run()
     lg = at.session_state["results"]["combined"]["longitudinal"]
     assert lg["biaxial"] and lg["conditional"]
-    assert lg["m_off"] == pytest.approx(100.0)
+    assert lg["axis"] == "x"                        # vertical shear -> chord about x
+    assert lg["m_off"] == pytest.approx(_MY)        # conditioned on My, NOT Mx
     assert 0.0 < lg["m_rd"] < m_rd_uni              # capacity consumed by My
 
 
@@ -162,15 +242,16 @@ def test_app_off_axis_chord_present_with_torsion():
     # Torsion live on a single tube: the off-axis chord is checked -- bending
     # tension about the other axis plus the torsion share, no shear shift.
     at = _fresh(); at.run()
-    _mvt(at, my=100.0)
+    _mvt(at, my=_MY)
     och = at.session_state["results"]["shear"]["links"]["chord_off"]
     assert och is not None and och["valid"]
     lg = at.session_state["results"]["combined"]["longitudinal"]
-    assert och["axis"] != lg["axis"]
+    assert lg["axis"] == "x" and och["axis"] == "y"
     assert och["ftd_v"] == 0.0 and och["mv"] == 0.0  # no shear shift here
     assert och["mt"] > 0.0                           # the torsion share acts
-    assert och["m_ed"] == pytest.approx(100.0)       # |My| tensions its face
-    assert och["m_off"] == pytest.approx(100.0)      # conditional on Mx
+    # Distinct magnitudes pin which moment plays which role (a swap would fail):
+    assert och["m_ed"] == pytest.approx(_MY)         # |My| tensions the y-face
+    assert och["m_off"] == pytest.approx(_MX)        # conditioned on Mx
     assert math.isfinite(och["util"]) and och["util"] > 0.0
     # The combined view shows the same payload.
     assert at.session_state["results"]["combined"]["chord_off"] is och
@@ -180,7 +261,7 @@ def test_app_off_axis_chord_absent_without_torsion():
     # Without torsion the off-axis chord carries only its bending tension, which
     # the biaxial bending check already covers -- no separate chord check.
     at = _fresh(); at.run()
-    _mvt(at, my=100.0, torsion=False)
+    _mvt(at, my=_MY, torsion=False)
     links = at.session_state["results"]["shear"]["links"]
     assert links["chord_off"] is None
     # The shear-plane chord itself is still conditional and biaxial-aware
@@ -190,9 +271,11 @@ def test_app_off_axis_chord_absent_without_torsion():
 
 
 def test_app_zero_capacity_chord_does_not_poison_the_scan():
-    # An off-axis moment beyond the envelope leaves zero conditional capacity:
-    # the chord reports utilisation = inf (honest), but is kept OUT of the
-    # strut-angle objective so the other checks still pick a sensible angle.
+    # An off-axis moment beyond the envelope leaves zero conditional capacity: the
+    # chord reports utilisation = inf (honest), but is kept OUT of the strut-angle
+    # objective. If it leaked in, governing_strut_cot would see inf at every angle
+    # and tie to the band LOW edge (cot = 1.0); the healthy finite optimum here is
+    # well above it, so cot >> 1.0 pins that the guard actually excludes the chord.
     at = _fresh(); at.run()
     _mvt(at)
     my_max = at.session_state["results"]["plastic"]["max_my"]
@@ -202,10 +285,10 @@ def test_app_zero_capacity_chord_does_not_poison_the_scan():
     res = at.session_state["results"]
     lg = res["combined"]["longitudinal"]
     assert lg["conditional"] and lg["m_rd"] == 0.0
-    assert math.isinf(lg["util"])
+    assert math.isinf(lg["util"])                     # zero capacity, real demand
     lk = res["shear"]["links"]["res"]
-    assert lk["valid"] and math.isfinite(lk["cot"])   # the scan still worked
-    assert 1.0 <= lk["cot"] <= 2.5
+    assert lk["valid"] and math.isfinite(lk["cot"])
+    assert lk["cot"] > 1.5                            # NOT pinned to the band low edge
 
 
 def test_app_off_axis_chord_skipped_on_subdivided_section():
@@ -213,9 +296,32 @@ def test_app_off_axis_chord_skipped_on_subdivided_section():
     # is not evaluated -- the payload says why, and no off-chord is reported.
     at = _fresh(); at.run()
     at.checkbox(key="torsion_subdivide").set_value(True).run()
-    _mvt(at, my=100.0)
+    _mvt(at, my=_MY)
     t = at.session_state["results"]["torsion"]
     assert t["subdivided"]
     lg = at.session_state["results"]["combined"]["longitudinal"]
     assert lg["off_not_evaluated"] == "subdivided"
     assert at.session_state["results"]["shear"]["links"]["chord_off"] is None
+
+
+def test_shear_face_mrd_falls_back_to_pure_axis_on_solve_failure(monkeypatch):
+    # The fallback chain has to be exercised on the real code, not a hand-built
+    # payload: when the conditional solve fails (raises, or returns (0.0, False)),
+    # _shear_face_mrd returns the LEGACY pure-axis capacity with conditional=False,
+    # which drives the UI/report biaxial warning.
+    import sector_app
+    ex = manual.example_beam()
+    inp = dict(section=manual._section_of(ex), concrete=ex["concrete"],
+               steel=ex["steel"], P_pl=0.0, tendons=False, prestress=None)
+    legacy = abs(plastic_capacity_at_angle(inp["section"], inp["concrete"],
+                                           inp["steel"], 0.0, 90.0).Mx)
+    monkeypatch.setattr(sector_app, "conditional_capacity",
+                        lambda *a, **k: (0.0, False))
+    mrd, cond = sector_app._shear_face_mrd(inp, "x", True, m_off=50.0)
+    assert cond is False and mrd == pytest.approx(legacy)
+
+    def _boom(*a, **k):
+        raise RuntimeError("solve blew up")
+    monkeypatch.setattr(sector_app, "conditional_capacity", _boom)
+    mrd2, cond2 = sector_app._shear_face_mrd(inp, "x", True, m_off=50.0)
+    assert cond2 is False and mrd2 == pytest.approx(legacy)

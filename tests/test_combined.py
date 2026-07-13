@@ -91,6 +91,19 @@ def test_longitudinal_check_zero_capacity_is_inf():
     assert not r["ok"]
 
 
+def test_longitudinal_check_zero_capacity_shear_only_is_inf_not_zero():
+    # The subtle case: zero conditional capacity, no applied moment on the chord
+    # (m_ed = 0, the moment compresses this face) and no torsion, but a real shear
+    # shift. The 6.2.3(7) cap max(m_rd - m_ed, 0) = 0 would zero the shift and read
+    # 0% OK; the guard makes the UNCAPPED shift fail the zero-capacity chord.
+    r = combined.longitudinal_check(0.0, 0.0, ftd_v=200.0, ftd_t=0.0, z=0.5)
+    assert math.isinf(r["util"]) and not r["ok"]
+    assert r["mv"] == pytest.approx(100.0)          # the real shear shift is shown
+    # Genuinely no demand at all -> still zero / OK (not a spurious fail).
+    r0 = combined.longitudinal_check(0.0, 0.0, ftd_v=0.0, ftd_t=0.0, z=0.5)
+    assert r0["util"] == 0.0 and r0["ok"]
+
+
 def test_governing_strut_cot_balances_falling_and_rising_utils():
     # U_stirrup = 4/cot falls, U_chord = 1.0*cot rises: max is minimised at their
     # crossing cot = 2 (util 2.0); the scan must land there (within its resolution).

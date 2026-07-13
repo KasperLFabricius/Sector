@@ -1024,6 +1024,11 @@ class ReportBuilder:
                          "solve did not converge, so M<sub>Rd</sub> is the pure-axis "
                          "fallback and this check can be optimistic -- rely on the "
                          "combined sum(SEd/SRd).")
+            elif ch.get("biaxial") and ch.get("off_not_evaluated") == "not_solved":
+                note += (" Biaxial bending with torsion is acting, but the off-axis "
+                         "chord's conditional capacity could not be solved (or it has "
+                         "no tension steel on that face), so it is not checked -- rely "
+                         "on the combined sum(SEd/SRd).")
             self._small(note)
             self._chord_off_block(links.get("chord_off"))
 
@@ -1145,6 +1150,12 @@ class ReportBuilder:
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated; the sum(SEd/SRd) check covers the "
                          "biaxial bending interaction.")
+            elif biaxial and lg.get("off_not_evaluated") == "not_solved":
+                note += (" The off-axis chord (bending tension plus its torsion "
+                         "share) could not be evaluated -- its conditional capacity "
+                         "solve did not converge or it has no tension steel on that "
+                         "face -- so it is NOT checked; the sum(SEd/SRd) check above "
+                         "remains the combined verification.")
             elif biaxial and not lg.get("has_torsion"):
                 note += (" The off-axis chord carries only its bending tension (no "
                          "torsion is acting), which the biaxial bending utilisation "
@@ -1194,6 +1205,12 @@ class ReportBuilder:
             "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
             subst=f"{_fmt(och['m_total'], 1)} / {_fmt(och['m_rd'], 1)}",
             result=f"utilisation = {_pct(och['util'])}  ({vv})")
+        self._small(f"z = {_fmt(och['z'], 3)} m ({och.get('z_src') or '0.9 d'}). "
+                    "Each chord's capacity is conditional on the OTHER axis' "
+                    "bending moment only; the longitudinal steel the two chords "
+                    "share also carries both their shear/torsion tensions, an "
+                    "interaction the DK NA sum(SEd/SRd) check captures and which "
+                    "stays the authoritative combined verification.")
 
     def _subtube_section(self, t):
         """Torsion of a subdivided compound section (EN 1992-1-1 6.3.1(3)-(4))."""

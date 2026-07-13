@@ -570,31 +570,37 @@ def conditional_capacity(
     *,
     prestress: "Prestress | None" = None,
     n_bands: int = 80,
-    tol_deg: float = 0.01,
+    n_scan: int = 36,
+    tol_deg: float = 0.005,
 ) -> tuple[float, bool]:
     """Bending capacity about ``axis`` conditional on a coexisting off-axis moment.
 
     The pure-axis capacity overstates what a chord check can lean on under biaxial
     bending: the section cannot deliver its full uniaxial ``MRd`` while also
-    carrying the acting moment about the other axis. This solves for the capacity
-    that IS available: the point on the M-M envelope branch that keeps the chosen
-    face in tension where the companion moment equals ``m_off`` (kNm, signed, in
-    the solver's convention), returning the magnitude of the moment about ``axis``
-    there.
+    carrying the acting moment about the other axis. This returns the capacity that
+    IS available -- the point on the plastic M-M envelope, on the branch that
+    tensions the chosen face, where the companion moment equals ``m_off`` (kNm,
+    signed, in the solver's convention) -- as the magnitude of the moment about
+    ``axis`` there.
 
-    The branch spans the quarter-turns either side of the pure-axis angle
-    (``FACE_ANGLE``); across it the companion moment runs from one pure-companion
-    extreme to the other, so a sign-change bisection on the neutral-axis angle
-    finds the crossing. The companion is assumed to cross ``m_off`` once over the
-    branch (it does for convex envelopes; a non-convex envelope would still yield
-    a valid on-envelope capacity point). The pure-axis angle is probed first, so
-    when the companion already matches there -- every symmetric section with
-    ``m_off = 0`` -- the result is EXACTLY the pure-axis solve.
+    The envelope is found by a full-circle neutral-axis scan (not a fixed
+    quarter-turn bracket): every angle where the companion moment crosses ``m_off``
+    is bracketed between adjacent scan samples and bisected, and the capacity is the
+    outermost crossing whose OWN moment has the sign of the chosen tension face
+    (``+`` for a low face, ``-`` for a high face). This makes no assumption that the
+    companion is monotone or that its extremes sit at the pure-axis angle +/- 90 deg
+    -- both false on a section asymmetric about the chord axis (unequal top/bottom
+    steel, an L/T outline, an eccentric tendon), where the own moment can even take
+    the wrong sign near an endpoint. Checking the own sign is what keeps the result
+    conservative there: a crossing on the opposite face is not a capacity for this
+    chord. The pure-axis angle is probed first, so a section symmetric about the
+    chord axis under a uniaxial companion returns EXACTLY the pure-axis solve.
 
-    Returns ``(mrd, exact)``. ``(value, True)`` is the conditional capacity --
-    ``(0.0, True)`` meaning the off-axis moment alone exhausts this face's branch
-    (no chord capacity remains, an honest zero). ``(0.0, False)`` means a solve
-    failed to converge and the caller should fall back.
+    Returns ``(mrd, exact)``. ``(value, True)`` is the conditional capacity;
+    ``(0.0, True)`` is an honest zero -- the off-axis moment leaves no correct-face
+    envelope point (it exhausts this chord's capacity). ``(0.0, False)`` means a
+    solve failed to converge where a crossing could hide, so the caller should fall
+    back to the pure-axis capacity.
     """
     v0 = FACE_ANGLE[(axis, tension_low)]
     prep = _prep_section(section, prestress)
@@ -612,10 +618,12 @@ def conditional_capacity(
         return pt.Mx if axis == "x" else pt.My
 
     target = float(m_off)
+    want_positive = tension_low        # the chosen face carries own of this sign
 
     # Pure-axis probe: if the companion there already equals the target (any
-    # symmetric section under a uniaxial load), this IS the answer -- the same
-    # solve at the same angle as the pure-axis capacity, bit-identical to it.
+    # section symmetric about the chord axis under a uniaxial load), this IS the
+    # answer -- the same solve at the same angle as the pure-axis capacity,
+    # bit-identical to it.
     p0 = _cap(v0)
     if not p0.converged:
         return 0.0, False
@@ -623,32 +631,52 @@ def conditional_capacity(
     if abs(_companion(p0) - target) <= 1.0e-9 * scale:
         return abs(_own(p0)), True
 
-    # Bracket the branch: at v0 -/+ 90 deg the bending is purely about the OTHER
-    # axis (the two pure-companion extremes bounding this face's envelope branch).
-    lo, hi = v0 - 90.0, v0 + 90.0
-    p_lo, p_hi = _cap(lo), _cap(hi)
-    if not (p_lo.converged and p_hi.converged):
-        return 0.0, False
-    c_lo, c_hi = _companion(p_lo), _companion(p_hi)
-    band = 1.0e-9 * max(1.0, abs(c_lo), abs(c_hi))
-    if not (min(c_lo, c_hi) - band <= target <= max(c_lo, c_hi) + band):
-        # The off-axis moment exceeds anything this branch can carry alongside:
-        # the branch offers no point at that companion moment, so no capacity
-        # about `axis` remains. A genuine zero, not a failure.
-        return 0.0, True
+    def _refine(v_lo, v_hi, c_lo):
+        """Bisect [v_lo, v_hi] (which brackets a companion == target crossing) and
+        return the correct-face |own| there, or None if it lands on the opposite
+        face or a solve fails."""
+        f_lo = c_lo - target
+        while v_hi - v_lo > tol_deg:
+            mid = 0.5 * (v_lo + v_hi)
+            pm = _cap(mid)
+            if not pm.converged:
+                return None
+            fm = _companion(pm) - target
+            if (fm > 0.0) == (f_lo > 0.0):
+                v_lo, f_lo = mid, fm
+            else:
+                v_hi = mid
+        pt = _cap(0.5 * (v_lo + v_hi))
+        if not pt.converged:
+            return None
+        o = _own(pt)
+        if (o > 0.0) if want_positive else (o < 0.0):
+            return abs(o)
+        return None
 
-    f_lo = c_lo - target
-    while hi - lo > tol_deg:
-        mid = 0.5 * (lo + hi)
-        pm = _cap(mid)
-        if not pm.converged:
-            return 0.0, False
-        fm = _companion(pm) - target
-        if (fm > 0.0) == (f_lo > 0.0):
-            lo, f_lo = mid, fm
-        else:
-            hi = mid
-    pt = _cap(0.5 * (lo + hi))
-    if not pt.converged:
-        return 0.0, False
-    return abs(_own(pt)), True
+    # Full-circle scan: sample the companion moment round the neutral-axis angle,
+    # bracket every crossing of `target` between adjacent CONVERGED samples, refine
+    # it, and keep the correct-face capacity.
+    step = 360.0 / n_scan
+    samples = []
+    any_fail = False
+    for i in range(n_scan + 1):
+        pt = _cap(i * step)
+        samples.append((i * step, _companion(pt)) if pt.converged else None)
+        any_fail = any_fail or not pt.converged
+
+    caps = []
+    for a, b in zip(samples, samples[1:]):
+        if a is None or b is None:
+            continue
+        (va, ca), (vb, cb) = a, b
+        if (ca - target < 0.0) != (cb - target < 0.0):      # a sign change brackets it
+            r = _refine(va, vb, ca)
+            if r is not None:
+                caps.append(r)
+    if caps:
+        return max(caps), True
+    # No correct-face crossing. A clean scan means the off moment genuinely leaves
+    # no capacity (honest zero); a failed solve could have hidden a crossing, so
+    # defer to the caller's pure-axis fallback instead of asserting zero.
+    return (0.0, False) if any_fail else (0.0, True)

@@ -79,9 +79,9 @@ def chord_mrd_label(axis, m_off, conditional):
                 "carrying both moments at once)")
     if conditional:
         return f"(bending about {axis} at the applied N)"
-    return (f"(pure bending about {axis} at the applied N; the conditional "
-            "biaxial solve did not converge, so this can overstate the chord "
-            "capacity -- see the warning)")
+    return (f"(pure-axis bending about {axis} at the applied N -- the conditional "
+            "biaxial solve did not converge, so this fallback can overstate the "
+            "chord capacity)")
 
 
 # --- House palette, grouped by role -------------------------------------------
