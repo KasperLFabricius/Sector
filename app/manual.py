@@ -1048,9 +1048,13 @@ def manual_blocks() -> list:
        "capacity overstates what the chord can lean on while the other axis is "
        "loaded. With torsion acting, the **off-axis chord** is checked the same "
        "way -- its bending tension plus its share of the torsion longitudinal "
-       "force, against the capacity conditional on the shear-axis moment. On a "
-       "compound (subdivided) section the torsion steel is per sub-tube, so the "
-       "off-axis share is not evaluated there and a note says so.")
+       "force, against the capacity conditional on the shear-axis moment. The "
+       "torsion force is tensile round the whole tube, so it tensions **both** "
+       "off-axis faces; both are checked and the governing one reported (on a "
+       "section with asymmetric steel the face the bending does not tension can "
+       "still govern under the torsion share alone). On a compound (subdivided) "
+       "section the torsion steel is per sub-tube, so the off-axis share is not "
+       "evaluated there and a note says so.")
     md("The **shared closed stirrup** carries both actions, so their transverse "
        "demands add. When $V_{Ed} \\leq V_{Rd,c}$ the concrete alone carries the "
        "shear (6.2.1), so the shear takes **no** stirrup and the whole stirrup "

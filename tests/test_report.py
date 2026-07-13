@@ -520,6 +520,24 @@ def test_report_combined_longitudinal_conditional_mrd():
     assert "pure-axis fallback" not in txt
 
 
+def test_report_off_axis_skip_disclosed_uniaxially():
+    # Codex round-2 P2: a subdivided-section torsion run with NO off-axis bending
+    # (biaxial False) must still disclose that the off-axis torsion chord is skipped
+    # -- the note must not be gated on biaxial.
+    out = _out()
+    c = _combined_out()
+    c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=100.0, m_rd=400.0,
+                             ftd_v=200.0, ftd_t=120.0, mv=100.0, mt=30.0, m_total=230.0,
+                             util=230.0 / 400.0, ok=True, capped=False,
+                             tension_low=True, off_util=0.0, biaxial=False,
+                             m_off=0.0, conditional=True, has_torsion=True,
+                             off_not_evaluated="subdivided")
+    out["combined"] = c
+    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+                                                        figures=False)).split())
+    assert "per sub-tube" in txt                     # the subdivided disclosure fired
+
+
 def test_report_off_axis_chord_block():
     # The off-axis chord check renders with its own formula pair: bending plus
     # the torsion share (no shear shift), against the conditional capacity.
@@ -537,7 +555,7 @@ def test_report_off_axis_chord_block():
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
-    assert "Off-axis chord (about y)" in txt
+    assert "Off-axis chord (about y" in txt          # header now names the governing face
     assert "conditional on the coexisting Mx = 20.0 kNm" in txt
 
 

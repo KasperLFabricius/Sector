@@ -277,6 +277,23 @@ def test_app_off_axis_chord_present_with_torsion():
     assert at.session_state["results"]["combined"]["chord_off"] is och
 
 
+def test_app_off_axis_chord_present_under_uniaxial_torsion():
+    # The torsion force tensions the off-axis faces even with NO off-axis bending,
+    # so a uniaxial M+V+T on a single tube still checks the off-axis chord (pure
+    # torsion share, m_ed = 0), conditional on the shear-axis moment.
+    at = _fresh(); at.run()
+    _mvt(at)                                            # My = 0
+    lg = at.session_state["results"]["combined"]["longitudinal"]
+    och = at.session_state["results"]["shear"]["links"]["chord_off"]
+    assert not lg["biaxial"]                            # uniaxial
+    assert och is not None and och["valid"]
+    assert och["axis"] == "y"
+    assert och["m_ed"] == pytest.approx(0.0)           # no off-axis bending
+    assert och["mt"] > 0.0                             # only the torsion share
+    assert och["m_off"] == pytest.approx(_MX)          # conditioned on Mx
+    assert math.isfinite(och["util"]) and och["util"] > 0.0
+
+
 def test_app_off_axis_chord_absent_without_torsion():
     # Without torsion the off-axis chord carries only its bending tension, which
     # the biaxial bending check already covers -- no separate chord check.
@@ -311,16 +328,19 @@ def test_app_zero_capacity_chord_does_not_poison_the_scan():
     assert lk["cot"] > 1.5                            # NOT pinned to the band low edge
 
 
-def test_app_off_axis_chord_skipped_on_subdivided_section():
-    # Compound section: the torsion steel is per sub-tube, so the off-axis chord
-    # is not evaluated -- the payload says why, and no off-chord is reported.
+def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially():
+    # Compound section: the torsion steel is per sub-tube, so the off-axis chord is
+    # not evaluated. The disclosure must fire even for a UNIAXIAL run (My = 0, so
+    # biaxial is False): the off-axis torsion share is skipped regardless of biaxial
+    # bending, so the marker must not be gated on biaxial (Codex round-2 P2).
     at = _fresh(); at.run()
     at.checkbox(key="torsion_subdivide").set_value(True).run()
-    _mvt(at, my=_MY)
+    _mvt(at)                                            # My = 0 -> uniaxial
     t = at.session_state["results"]["torsion"]
     assert t["subdivided"]
     lg = at.session_state["results"]["combined"]["longitudinal"]
-    assert lg["off_not_evaluated"] == "subdivided"
+    assert not lg["biaxial"]                            # uniaxial, yet...
+    assert lg["off_not_evaluated"] == "subdivided"      # ...still disclosed
     assert at.session_state["results"]["shear"]["links"]["chord_off"] is None
 
 

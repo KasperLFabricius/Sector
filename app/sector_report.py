@@ -1024,11 +1024,16 @@ class ReportBuilder:
                          "solve did not converge, so M<sub>Rd</sub> is the pure-axis "
                          "fallback and this check can be optimistic -- rely on the "
                          "combined sum(SEd/SRd).")
-            elif ch.get("biaxial") and ch.get("off_not_evaluated") == "not_solved":
-                note += (" Biaxial bending with torsion is acting, but the off-axis "
-                         "chord's conditional capacity could not be solved (or it has "
-                         "no tension steel on that face), so it is not checked -- rely "
-                         "on the combined sum(SEd/SRd).")
+            elif ch.get("off_not_evaluated") == "subdivided":
+                note += (" Compound (subdivided) section: the torsion longitudinal "
+                         "steel is per sub-tube, so the off-axis chord's torsion "
+                         "share is not evaluated here -- rely on the combined "
+                         "sum(SEd/SRd).")
+            elif ch.get("off_not_evaluated") == "not_solved":
+                note += (" Torsion is acting, but the off-axis chord's conditional "
+                         "capacity could not be solved (or it has no tension steel on "
+                         "either face), so it is not checked -- rely on the combined "
+                         "sum(SEd/SRd).")
             self._small(note)
             self._chord_off_block(links.get("chord_off"))
 
@@ -1145,15 +1150,15 @@ class ReportBuilder:
                         "can be optimistic -- rely on the sum(SEd/SRd) check above, "
                         "which uses the full biaxial bending utilisation.")
             note = viz.chord_angle_note(lg.get("theta_mode"))
-            if biaxial and lg.get("off_not_evaluated") == "subdivided":
+            if lg.get("off_not_evaluated") == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated; the sum(SEd/SRd) check covers the "
-                         "biaxial bending interaction.")
-            elif biaxial and lg.get("off_not_evaluated") == "not_solved":
+                         "interaction.")
+            elif lg.get("off_not_evaluated") == "not_solved":
                 note += (" The off-axis chord (bending tension plus its torsion "
                          "share) could not be evaluated -- its conditional capacity "
-                         "solve did not converge or it has no tension steel on that "
+                         "solve did not converge or it has no tension steel on either "
                          "face -- so it is NOT checked; the sum(SEd/SRd) check above "
                          "remains the combined verification.")
             elif biaxial and not lg.get("has_torsion"):
@@ -1185,12 +1190,15 @@ class ReportBuilder:
         conditional on the shear-axis moment."""
         if och is None or not och.get("valid"):
             return
-        self._h2(f"Off-axis chord (about {och['axis']}): bending + torsion tension")
+        self._h2(f"Off-axis chord (about {och['axis']}, governing face): "
+                 "bending + torsion tension")
         vv = "OK" if och["ok"] else "EXCEEDED"
         face = viz.tension_face_label(och.get("tension_low", True))
         self._p(
-            f"The tension chord is the {face} face about the {och['axis']}-axis "
-            "(the axis the shear does not act on). No shear shift acts on this "
+            f"The governing tension chord is the {face} face about the "
+            f"{och['axis']}-axis (the axis the shear does not act on; the torsion "
+            "tensions both faces and the worse is reported). No shear shift acts "
+            "on this "
             "chord; the torsion adds its perimeter share F<sub>td,T</sub>&#183;z/2, "
             "and the capacity is checked against M<sub>Rd</sub> "
             + viz.chord_mrd_label(och["axis"], och.get("m_off", 0.0), True) + ".")
