@@ -485,17 +485,96 @@ def test_report_combined_longitudinal_check():
     assert "tension chord" in txt
 
 
-def test_report_combined_longitudinal_biaxial_warns():
+def test_report_combined_longitudinal_biaxial_fallback_warns():
+    # Only the FALLBACK path (conditional solve failed -> pure-axis MRd) warns;
+    # a successful conditional MRd is the honest capacity and needs no warning.
     out = _out()
     c = _combined_out()
     c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=300.0,
                              ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
                              util=105.0 / 300.0, ok=True, capped=False,
-                             tension_low=True, off_util=0.83, biaxial=True)
+                             tension_low=True, off_util=0.83, biaxial=True,
+                             m_off=90.0, conditional=False)
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "Biaxial bending" in txt                 # the off-axis warning
-    assert "off-axis chord" in txt
+    assert "Biaxial bending" in txt                 # the fallback warning
+    assert "pure-axis fallback" in txt
+
+
+def test_report_combined_longitudinal_conditional_mrd():
+    # The conditional MRd states the coexisting off-axis moment it carries; no
+    # biaxial warning is printed (the capacity is already honest).
+    out = _out()
+    c = _combined_out()
+    c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=250.0,
+                             ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
+                             util=105.0 / 250.0, ok=True, capped=False,
+                             tension_low=True, off_util=0.4, biaxial=True,
+                             m_off=90.0, conditional=True, has_torsion=True)
+    out["combined"] = c
+    # Collapse the PDF's line wrapping so multi-word phrases can be asserted.
+    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+                                                        figures=False)).split())
+    assert "conditional on the coexisting My = 90.0 kNm" in txt
+    assert "Biaxial bending" not in txt
+    assert "pure-axis fallback" not in txt
+
+
+def test_report_off_axis_skip_disclosed_uniaxially():
+    # Codex round-2 P2: a subdivided-section torsion run with NO off-axis bending
+    # (biaxial False) must still disclose that the off-axis torsion chord is skipped
+    # -- the note must not be gated on biaxial.
+    out = _out()
+    c = _combined_out()
+    c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=100.0, m_rd=400.0,
+                             ftd_v=200.0, ftd_t=120.0, mv=100.0, mt=30.0, m_total=230.0,
+                             util=230.0 / 400.0, ok=True, capped=False,
+                             tension_low=True, off_util=0.0, biaxial=False,
+                             m_off=0.0, conditional=True, has_torsion=True,
+                             off_not_evaluated="subdivided")
+    out["combined"] = c
+    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+                                                        figures=False)).split())
+    assert "per sub-tube" in txt                     # the subdivided disclosure fired
+
+
+def test_report_partial_torsion_face_coverage_disclosed():
+    # Codex round-5 P2: when a chord face carrying the torsion share could not be
+    # built (not_solved), the governing chord shown may not be the critical face --
+    # the report must say so, even for a uniaxial run.
+    out = _out()
+    c = _combined_out()
+    c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=100.0, m_rd=400.0,
+                             ftd_v=200.0, ftd_t=120.0, mv=100.0, mt=30.0, m_total=230.0,
+                             util=230.0 / 400.0, ok=True, capped=False,
+                             tension_low=True, off_util=0.0, biaxial=False,
+                             m_off=0.0, conditional=True, has_torsion=True,
+                             gets_shift=True, off_not_evaluated="not_solved")
+    out["combined"] = c
+    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+                                                        figures=False)).split())
+    assert "may not be the critical face" in txt
+
+
+def test_report_off_axis_chord_block():
+    # The off-axis chord check renders with its own formula pair: bending plus
+    # the torsion share (no shear shift), against the conditional capacity.
+    out = _out()
+    c = _combined_out()
+    c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=250.0,
+                             ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
+                             util=105.0 / 250.0, ok=True, capped=False,
+                             tension_low=True, off_util=0.4, biaxial=True,
+                             m_off=90.0, conditional=True, has_torsion=True)
+    c["chord_off"] = dict(valid=True, axis="y", z=0.3, m_ed=90.0, m_rd=180.0,
+                          ftd_v=0.0, ftd_t=100.0, mv=0.0, mt=15.0, m_total=105.0,
+                          util=105.0 / 180.0, ok=True, capped=False,
+                          tension_low=True, m_off=20.0, conditional=True)
+    out["combined"] = c
+    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+                                                        figures=False)).split())
+    assert "Off-axis chord (about y" in txt          # header now names the governing face
+    assert "conditional on the coexisting Mx = 20.0 kNm" in txt
 
 
 def test_report_combined_independent_uses_max_form():

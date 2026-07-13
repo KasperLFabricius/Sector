@@ -105,8 +105,19 @@ def longitudinal_check(m_ed: float, m_rd: float, ftd_v: float, ftd_t: float,
     are in the same units (kNm); ``ftd_v``/``ftd_t`` in kN, ``z`` in m.
     """
     mv_uncapped = ftd_v * z
-    mv = min(mv_uncapped, max(m_rd - m_ed, 0.0))
     mt = ftd_t * z / 2.0
+    if m_rd <= 0.0:
+        # No bending capacity about this axis remains -- the coexisting off-axis
+        # moment exhausts the M-M envelope on this face. The 6.2.3(7) cap would
+        # zero the shear shift against zero headroom and hide a real demand, so
+        # here the UNCAPPED shear-plus-torsion tension has nothing to carry it and
+        # the chord fails outright (util = inf) whenever any demand acts.
+        demand = m_ed + mv_uncapped + mt
+        util = math.inf if demand > 0.0 else 0.0
+        return dict(m_ed=m_ed, m_rd=m_rd, ftd_v=ftd_v, ftd_t=ftd_t, z=z,
+                    mv=mv_uncapped, mt=mt, m_total=demand, util=util,
+                    ok=util <= 1.0 + 1e-9, capped=False)
+    mv = min(mv_uncapped, max(m_rd - m_ed, 0.0))
     m_total = m_ed + mv + mt
     util = ratio(m_total, m_rd)
     return dict(m_ed=m_ed, m_rd=m_rd, ftd_v=ftd_v, ftd_t=ftd_t, z=z,

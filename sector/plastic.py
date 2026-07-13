@@ -549,3 +549,233 @@ def solve_interaction(
         pts.append(InteractionPoint(axial=p.axial, Mx=p.Mx, My=p.My,
                                     converged=p.converged))
     return pts
+
+
+# Neutral-axis angle whose bending is purely about the given axis with the chosen
+# face in tension (the solver's convention: V=90 -> +Mx, tension at the bottom;
+# V=0 -> +My, tension on the left). Shared with the app's shear lever-arm and
+# chord-capacity solves so every per-face solve uses the same angle.
+FACE_ANGLE = {("x", True): 90.0, ("x", False): 270.0,
+              ("y", True): 0.0, ("y", False): 180.0}
+
+
+def conditional_capacity(
+    section: Section,
+    concrete: Concrete,
+    steel: MildSteel,
+    P: float,
+    axis: str,
+    tension_low: bool,
+    m_off: float,
+    *,
+    prestress: "Prestress | None" = None,
+    n_bands: int = 80,
+    n_scan: int = 36,
+    tol_deg: float = 0.005,
+) -> tuple[float, bool]:
+    """Bending capacity about ``axis`` conditional on a coexisting off-axis moment.
+
+    The pure-axis capacity overstates what a chord check can lean on under biaxial
+    bending: the section cannot deliver its full uniaxial ``MRd`` while also
+    carrying the acting moment about the other axis. This returns the capacity that
+    IS available -- the point on the plastic M-M envelope, on the branch that
+    tensions the chosen face, where the companion moment equals ``m_off`` (kNm,
+    signed, in the solver's convention) -- as the magnitude of the moment about
+    ``axis`` there.
+
+    The envelope is found by a full-circle neutral-axis scan (not a fixed
+    quarter-turn bracket): every angle where the companion moment crosses ``m_off``
+    is bracketed between adjacent scan samples and bisected, and the capacity is the
+    outermost crossing whose OWN moment has the sign of the chosen tension face
+    (``+`` for a low face, ``-`` for a high face). This makes no assumption that the
+    companion is monotone or that its extremes sit at the pure-axis angle +/- 90 deg
+    -- both false on a section asymmetric about the chord axis (unequal top/bottom
+    steel, an L/T outline, an eccentric tendon), where the own moment can even take
+    the wrong sign near an endpoint. Checking the own sign is what keeps the result
+    conservative there: a crossing on the opposite face is not a capacity for this
+    chord. The pure-axis angle is probed first, so a section symmetric about the
+    chord axis under a uniaxial companion returns EXACTLY the pure-axis solve.
+
+    Returns ``(mrd, exact)``. ``(value, True)`` is the conditional capacity;
+    ``(0.0, True)`` is an honest zero -- the off-axis moment leaves no correct-face
+    envelope point (it exhausts this chord's capacity). ``(0.0, False)`` means a
+    solve failed to converge where a crossing could hide, so the caller should fall
+    back to the pure-axis capacity.
+    """
+    v0 = FACE_ANGLE[(axis, tension_low)]
+    prep = _prep_section(section, prestress)
+    band_memo: dict = {}
+
+    def _cap(v):
+        return plastic_capacity_at_angle(section, concrete, steel, P, v,
+                                         prestress=prestress, n_bands=n_bands,
+                                         prep=prep, band_memo=band_memo)
+
+    def _companion(pt):
+        return pt.My if axis == "x" else pt.Mx
+
+    def _own(pt):
+        return pt.Mx if axis == "x" else pt.My
+
+    target = float(m_off)
+    want_positive = tension_low        # the chosen face carries own of this sign
+
+    # Pure-axis probe: if the companion there already equals the target (any
+    # section symmetric about the chord axis under a uniaxial load), this IS the
+    # answer -- the same solve at the same angle as the pure-axis capacity,
+    # bit-identical to it.
+    p0 = _cap(v0)
+    if not p0.converged:
+        return 0.0, False
+    scale = max(1.0, abs(_own(p0)), abs(target))
+    if abs(_companion(p0) - target) <= 1.0e-9 * scale:
+        return abs(_own(p0)), True
+
+    def _face_own(pt):
+        """|own| if ``pt`` is on the chosen tension face (own of the wanted sign),
+        else None."""
+        if not pt.converged:
+            return None
+        o = _own(pt)
+        return abs(o) if ((o > 0.0) if want_positive else (o < 0.0)) else None
+
+    # Set by _refine/_extremum when a solve INSIDE a bracketed crossing fails to
+    # converge (as opposed to a crossing legitimately landing on the wrong face).
+    # The coarse-scan `any_fail` cannot see these, so an empty `caps` must fall back
+    # to the caller (0.0, False), not be asserted as an honest zero (0.0, True).
+    solve_failed = [False]
+
+    def _refine(v_lo, v_hi, c_lo):
+        """Bisect [v_lo, v_hi] (which brackets a companion == target crossing) and
+        return the correct-face |own| there, or None if it lands on the opposite
+        face (not a failure) or a solve fails to converge (flags solve_failed)."""
+        f_lo = c_lo - target
+        while v_hi - v_lo > tol_deg:
+            mid = 0.5 * (v_lo + v_hi)
+            pm = _cap(mid)
+            if not pm.converged:
+                solve_failed[0] = True
+                return None
+            fm = _companion(pm) - target
+            if (fm > 0.0) == (f_lo > 0.0):
+                v_lo, f_lo = mid, fm
+            else:
+                v_hi = mid
+        pt = _cap(0.5 * (v_lo + v_hi))
+        if not pt.converged:
+            solve_failed[0] = True
+            return None
+        return _face_own(pt)
+
+    def _extremum(v_lo, v_hi, maximize):
+        """Golden-section search for the companion extremum in [v_lo, v_hi]; returns
+        (angle, point) of the extremal companion, or (None, None) if a solve fails
+        to converge (flags solve_failed)."""
+        gr = 0.6180339887498949
+        c = v_hi - gr * (v_hi - v_lo)
+        d = v_lo + gr * (v_hi - v_lo)
+        pc, pd = _cap(c), _cap(d)
+        for _ in range(60):
+            if not (pc.converged and pd.converged):
+                solve_failed[0] = True
+                return None, None
+            if v_hi - v_lo <= tol_deg:
+                break
+            fc = _companion(pc) if maximize else -_companion(pc)
+            fd = _companion(pd) if maximize else -_companion(pd)
+            if fc >= fd:
+                v_hi, d, pd = d, c, pc
+                c = v_hi - gr * (v_hi - v_lo)
+                pc = _cap(c)
+            else:
+                v_lo, c, pc = c, d, pd
+                d = v_lo + gr * (v_hi - v_lo)
+                pd = _cap(d)
+        v = 0.5 * (v_lo + v_hi)
+        pt = _cap(v)
+        if not pt.converged:
+            solve_failed[0] = True
+            return None, None
+        return v, pt
+
+    # Full-circle scan: sample the companion moment round the neutral-axis angle.
+    step = 360.0 / n_scan
+    pts = [_cap(i * step) for i in range(n_scan + 1)]
+    angs = [i * step for i in range(n_scan + 1)]
+    any_fail = any(not p.converged for p in pts)
+
+    # Keep the correct-face capacity wherever the companion equals `target`.
+    caps = []
+    band = 1.0e-9 * max(1.0, abs(target))
+    # (a) A sample sitting ON `target` (e.g. the user pastes a reported envelope
+    #     value) IS the crossing -- take its own directly. Handling it here keeps it
+    #     out of (b), where a zero endpoint residual (f_lo == 0) would send the
+    #     bisection walking away from the true crossing to a different companion.
+    for pt in pts:
+        if pt.converged and abs(_companion(pt) - target) <= band:
+            r = _face_own(pt)
+            if r is not None:
+                caps.append(r)
+    # (b) A crossing STRICTLY between two samples (companion residuals of opposite
+    #     sign) is bracketed and bisected.
+    for j in range(n_scan):
+        a, b = pts[j], pts[j + 1]
+        if not (a.converged and b.converged):
+            continue
+        da, db = _companion(a) - target, _companion(b) - target
+        if da * db < 0.0:
+            r = _refine(angs[j], angs[j + 1], _companion(a))
+            if r is not None:
+                caps.append(r)
+
+    # Tangent touches: on a non-convex/asymmetric envelope the companion can reach
+    # `target` at a LOCAL EXTREMUM whose sampled peak sits just short of it, so the
+    # sign-change loop (which only sees the below-`target` samples) misses the true
+    # crossing(s) and the correct-face capacity there would be lost (a false
+    # honest-zero). Refine each such same-side local extremum: if its true peak
+    # overshoots `target`, bisect the two crossings it exposes; if it only touches,
+    # take the tangent point itself.
+    # The centre runs over every distinct sample angle INCLUDING the 0/360 seam
+    # (j = 0 wraps: neighbours at the last sample and the second, with the window
+    # carried past 360 deg -- _cap is periodic in the angle), so a peak straddling
+    # the seam is not missed.
+    band = 1.0e-6 * max(1.0, abs(target))
+    for j in range(n_scan):
+        if j == 0:
+            a, m, b = pts[n_scan - 1], pts[0], pts[1]
+            lo_ang, hi_ang = angs[n_scan - 1], 360.0 + angs[1]
+        else:
+            a, m, b = pts[j - 1], pts[j], pts[j + 1]
+            lo_ang, hi_ang = angs[j - 1], angs[j + 1]
+        if not (a.converged and m.converged and b.converged):
+            continue
+        ca, cm, cb = _companion(a), _companion(m), _companion(b)
+        is_max = cm > ca and cm > cb
+        is_min = cm < ca and cm < cb
+        # Only a local extremum whose sampled value is on the near side of `target`
+        # can hide a crossing (an under-sampled true peak/trough).
+        if not ((is_max and cm < target) or (is_min and cm > target)):
+            continue
+        v_ext, p_ext = _extremum(lo_ang, hi_ang, is_max)
+        if p_ext is None:
+            continue
+        c_ext = _companion(p_ext)
+        if (c_ext >= target) if is_max else (c_ext <= target):
+            # The true extremum overshoots `target`: two crossings flank it.
+            for a0, a1, c0 in ((lo_ang, v_ext, ca), (v_ext, hi_ang, c_ext)):
+                r = _refine(a0, a1, c0)
+                if r is not None:
+                    caps.append(r)
+        elif abs(c_ext - target) <= band:
+            r = _face_own(p_ext)                  # a true tangent: the curve touches
+            if r is not None:
+                caps.append(r)
+
+    if caps:
+        return max(caps), True
+    # No correct-face crossing. A clean scan means the off moment genuinely leaves
+    # no capacity (honest zero); a failed solve -- either a coarse scan sample
+    # (any_fail) or a solve inside a bracketed crossing's refinement (solve_failed)
+    # -- could have hidden a crossing, so defer to the caller's pure-axis fallback
+    # instead of asserting zero.
+    return (0.0, False) if (any_fail or solve_failed[0]) else (0.0, True)
