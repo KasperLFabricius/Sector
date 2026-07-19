@@ -31,6 +31,13 @@ def test_build_script_uses_the_hashed_lock():
     assert '"pyinstaller>=' not in script.lower()
 
 
+def test_kaleido_cli_mocker_is_excluded_from_the_frozen_runtime():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    spec = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
+    assert "filter_submodules" in spec
+    assert 'name.startswith("kaleido.mocker")' in spec
+
+
 def test_bundle_base_resolves_to_the_app_tree_in_dev():
     base = run_sector._bundle_base()
     assert (base / "app" / "sector_app.py").is_file()

@@ -13,11 +13,19 @@ ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 
 datas, binaries, hiddenimports = [], [], []
 
+
+def _kaleido_runtime_module(name):
+    """Exclude Kaleido's CLI mocker, which parses PyInstaller's own arguments."""
+    return not name.startswith("kaleido.mocker")
+
+
 # Heavy third-party packages: pull in their data files, binaries and submodules
 # (Streamlit ships its compiled frontend as data; numba/llvmlite ship binaries).
 for pkg in ("streamlit", "plotly", "numba", "llvmlite", "kaleido",
             "reportlab", "pypdf", "pandas", "pyarrow", "altair"):
-    d, b, h = collect_all(pkg)
+    options = ({"filter_submodules": _kaleido_runtime_module}
+               if pkg == "kaleido" else {})
+    d, b, h = collect_all(pkg, **options)
     datas += d
     binaries += b
     hiddenimports += h
