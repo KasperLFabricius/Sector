@@ -47,7 +47,7 @@ def _inputs() -> dict:
         "mode": "Both",
         "outer": [(-0.1, -0.15), (0.1, -0.15), (0.1, 0.15), (-0.1, 0.15)],
         "holes": [],
-        "bars": [(0.0, -0.12, 5.0e-4)],
+        "bars": [(0.0, -0.12, 500.0)],
         "tendons": [],
         "concrete": Concrete(fck=30.0, gamma_c=1.5, curve=2),
         "steel": MildSteel(
@@ -212,6 +212,45 @@ def validate_pdf_content(pdf: bytes) -> str:
             f"expected {_EXPECTED_FIGURE_COUNT} exported engineering figures, "
             f"found {images}"
         )
+
+    outlines = reader.outline
+    if len(outlines) < 6:
+        raise AssertionError(
+            f"expected navigable section bookmarks, found {len(outlines)}"
+        )
+
+    for number, page in enumerate(reader.pages, start=1):
+        page_text = page.extract_text() or ""
+        if "Project: QA-REFERENCE" not in page_text:
+            raise AssertionError(
+                f"page {number} is missing the repeated project/section header"
+            )
+
+    concrete_page = next(
+        (page.extract_text() or "" for page in reader.pages
+         if "Characteristic strength" in (page.extract_text() or "")),
+        "",
+    )
+    if "= 20.000 MPa" not in concrete_page:
+        raise AssertionError("the concrete worked formula is split across pages")
+
+    governing_page = next(
+        (page.extract_text() or "" for page in reader.pages
+         if "Governing case worked" in (page.extract_text() or "")),
+        "",
+    )
+    if "NA intercepts" not in governing_page:
+        raise AssertionError("the governing-case heading is separated from its table")
+
+    settings_page = next(
+        (page.extract_text() or "" for page in reader.pages
+         if "Analysis settings" in (page.extract_text() or "")),
+        "",
+    )
+    if "Sweep start V.min" not in settings_page:
+        raise AssertionError("the analysis-settings heading is separated from its table")
+    if "Elastic long-term" not in settings_page:
+        raise AssertionError("the loads and analysis settings are split across pages")
 
     for expected in (
         "QA-REFERENCE",

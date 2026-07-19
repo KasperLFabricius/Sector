@@ -115,7 +115,8 @@ def ensure_image_server():
     lifetime means only the first report pays the browser start-up and the rest are
     just render time. Idempotent (started exactly once, even across threads) and
     best-effort: it returns silently -- falling back to one browser per image, or
-    tables-only -- when kaleido or a browser is unavailable, so reports still build.
+    the per-image error path -- when kaleido or a browser is unavailable. The report
+    build then fails explicitly if a requested engineering figure cannot be embedded.
     The server is stopped at interpreter exit.
     """
     global _image_server_started
@@ -137,12 +138,14 @@ def ensure_image_server():
 
 
 class _NumberedCanvas(canvas.Canvas):
-    """Adds a 'Page x of y' footer with the tool version once the count is known."""
+    """Adds document-control furniture once the final page count is known."""
 
-    def __init__(self, *args, footer="", **kwargs):
+    def __init__(self, *args, footer="", header="", revision="", **kwargs):
         super().__init__(*args, **kwargs)
         self._saved = []
         self._footer = footer
+        self._header = header
+        self._revision = revision
 
     def showPage(self):
         self._saved.append(dict(self.__dict__))
@@ -152,11 +155,40 @@ class _NumberedCanvas(canvas.Canvas):
         n = len(self._saved)
         for state in self._saved:
             self.__dict__.update(state)
-            self._draw_footer(n)
+            self._draw_furniture(n)
             super().showPage()
         super().save()
 
-    def _draw_footer(self, total):
+    @staticmethod
+    def _fit(text, width, font, size):
+        """Ellipsise a document-control label to its available width."""
+        text = str(text)
+        if pdfmetrics.stringWidth(text, font, size) <= width:
+            return text
+        suffix = "..."
+        while text and pdfmetrics.stringWidth(text + suffix, font, size) > width:
+            text = text[:-1]
+        return text.rstrip() + suffix
+
+    def _draw_furniture(self, total):
+        self.saveState()
+        if self._header:
+            self.setFont(_FONT, 7.5)
+            self.setFillColor(_GREY)
+            revision = self._fit(
+                f"Rev: {self._revision or '-'}",
+                30 * mm,
+                _FONT,
+                7.5,
+            )
+            self.drawString(
+                20 * mm,
+                286 * mm,
+                self._fit(self._header, 136 * mm, _FONT, 7.5),
+            )
+            self.drawRightString(190 * mm, 286 * mm, revision)
+            self.setStrokeColor(_LINE)
+            self.line(20 * mm, 282 * mm, 190 * mm, 282 * mm)
         self.setFont(_FONT, 8)
         self.setFillColor(_GREY)
         self.drawString(20 * mm, 12 * mm, self._footer)
@@ -164,6 +196,22 @@ class _NumberedCanvas(canvas.Canvas):
                              "Page %d of %d" % (self._pageNumber, total))
         self.setStrokeColor(_LINE)
         self.line(20 * mm, 15 * mm, 190 * mm, 15 * mm)
+        self.restoreState()
+
+
+class _ReportDocTemplate(SimpleDocTemplate):
+    """Registers the numbered report sections as PDF outline entries."""
+
+    def afterFlowable(self, flowable):
+        key = getattr(flowable, "_sector_bookmark", None)
+        if key:
+            self.canv.bookmarkPage(key)
+            self.canv.addOutlineEntry(
+                getattr(flowable, "_sector_outline", key),
+                key,
+                level=0,
+                closed=False,
+            )
 
 
 def _styles():
@@ -193,6 +241,10 @@ def _styles():
 
 
 _FIG_EXPORT_TIMEOUT_S = 20.0
+
+
+class ReportFigureError(RuntimeError):
+    """Raised when a requested engineering figure cannot be embedded."""
 
 
 def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
@@ -228,6 +280,16 @@ def _fmt(v, nd=3):
     return f"{v:.{nd}f}"
 
 
+def _one_based(value):
+    """Convert a zero-based engine index to the one-based label shown to users."""
+    if value in (None, "-"):
+        return "-"
+    try:
+        return int(value) + 1
+    except (TypeError, ValueError):
+        return value
+
+
 _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
 
 
@@ -255,7 +317,11 @@ class ReportBuilder:
     # -- flowable helpers --------------------------------------------------
     def _h1(self, text):
         self._chapter += 1
-        self.flow.append(Paragraph(_greek(f"{self._chapter}. {text}"), self.s["h1"]))
+        numbered = f"{self._chapter}. {text}"
+        heading = Paragraph(_greek(numbered), self.s["h1"])
+        heading._sector_bookmark = f"sector-section-{self._chapter}"
+        heading._sector_outline = numbered
+        self.flow.append(heading)
 
     def _h2(self, text):
         self.flow.append(Paragraph(_greek(text), self.s["h2"]))
@@ -268,6 +334,20 @@ class ReportBuilder:
 
     def _gap(self, h=4):
         self.flow.append(Spacer(1, h))
+
+    def _keep_from(self, start):
+        """Keep the flowables added since ``start`` together when they fit a page."""
+        block = []
+        for item in self.flow[start:]:
+            # _table() already protects a short table with KeepTogether. Nesting
+            # that wrapper makes ReportLab measure the inner block as effectively
+            # page-height, which forces every following semantic group onto a new
+            # page. The outer group provides the protection here, so flatten it.
+            if isinstance(item, KeepTogether):
+                block.extend(item._content)
+            else:
+                block.append(item)
+        self.flow[start:] = [KeepTogether(block)]
 
     def _formula(self, expr, ref=None, subst=None, result=None):
         self.flow.append(Paragraph(_greek(expr), self.s["formula"]))
@@ -308,19 +388,19 @@ class ReportBuilder:
         if not self.figures:
             return
         # Once an export has wedged the browser (a full-timeout hang), stop trying:
-        # every further _fig_png would block for the whole timeout again, so a
-        # figure-rich report could freeze for minutes. Fall straight to placeholders.
+        # every further _fig_png would block for the whole timeout again.
         if self._export_hung:
-            self._small("[figure unavailable: plot export timed out]")
-            return
+            raise ReportFigureError(
+                "Engineering-figure export previously timed out; report not created."
+            )
         png, timed_out = _fig_png(fig, int(w_mm * 3.78), int(h_mm * 3.78))
         if timed_out:
             self._export_hung = True
         if png is None:
-            self._small("[figure unavailable: install kaleido and a browser to "
-                        "embed plots]" if not timed_out
-                        else "[figure unavailable: plot export timed out]")
-            return
+            detail = "timed out" if timed_out else "failed"
+            raise ReportFigureError(
+                f"Engineering-figure export {detail}; report not created."
+            )
         self.flow.append(Image(io.BytesIO(png), width=w_mm * mm, height=h_mm * mm))
         self._gap(4)
 
@@ -334,9 +414,9 @@ class ReportBuilder:
         self._tick(0.05, "Cover and conventions...")
         self._cover()
         self._conventions()
+        self._theory()
         self._tick(0.2, "Section and materials...")
         self._inputs()
-        self._theory()
         if "plastic" in self.out:
             self._tick(0.45, "Plastic capacity...")
             self.flow.append(PageBreak())
@@ -361,12 +441,23 @@ class ReportBuilder:
         self._appendix()
         self._tick(0.92, "Writing PDF...")
         footer = f"Sector {self.version}  -  Sweco".strip()
-        doc = SimpleDocTemplate(self.buffer, pagesize=A4,
-                                leftMargin=20 * mm, rightMargin=20 * mm,
-                                topMargin=18 * mm, bottomMargin=20 * mm,
-                                title="Sector cross-section report")
+        project = str(self.meta.get("proj_no", "")).strip() or "-"
+        section = str(self.meta.get("section", "")).strip() or "-"
+        revision = str(self.meta.get("rev", "")).strip()
+        header = f"Project: {project}  |  Section: {section}"
+        title = f"Sector cross-section report - {project} - {section}"
+        doc = _ReportDocTemplate(self.buffer, pagesize=A4,
+                                 leftMargin=20 * mm, rightMargin=20 * mm,
+                                 topMargin=25 * mm, bottomMargin=20 * mm,
+                                 title=title)
         doc.build(self.flow,
-                  canvasmaker=lambda *a, **k: _NumberedCanvas(*a, footer=footer, **k))
+                  canvasmaker=lambda *a, **k: _NumberedCanvas(
+                      *a,
+                      footer=footer,
+                      header=header,
+                      revision=revision,
+                      **k,
+                  ))
         self._tick(1.0, "Done")
 
     # -- sections ----------------------------------------------------------
@@ -392,7 +483,19 @@ class ReportBuilder:
             self._h2("Comments")
             self._p(str(m["comments"]))
         mode = self.inp.get("mode", "")
-        ran = ", ".join(k for k in ("plastic", "elastic") if k in self.out) or "none"
+        labels = [
+            label
+            for key, label in (
+                ("plastic", "plastic bending"),
+                ("elastic", "elastic stresses / cracking"),
+                ("shear", "shear"),
+                ("torsion", "torsion"),
+            )
+            if key in self.out
+        ]
+        if self.out.get("combined", {}).get("valid"):
+            labels.append("combined M-V-T")
+        ran = ", ".join(labels) or "none"
         self._small(f"Analysis mode: {mode}. Result sections included: {ran}.")
         self.flow.append(PageBreak())
 
@@ -431,19 +534,27 @@ class ReportBuilder:
         self._geometry_tables()
         # Materials are reported only when the section actually uses them: mild
         # steel when there are bars, prestress when there are tendons.
+        start = len(self.flow)
         self._h2("Concrete")
         self._concrete_block()
+        self._keep_from(start)
         if inp.get("bars"):
+            start = len(self.flow)
             self._h2("Reinforcement")
             self._steel_block()
+            self._keep_from(start)
         if inp.get("tendons") and inp.get("prestress") is not None:
+            start = len(self.flow)
             self._h2("Prestressing steel")
             self._prestress_block()
+            self._keep_from(start)
         # Loads & settings.
+        start = len(self.flow)
         self._h2("Loads")
         self._loads_block()
         self._h2("Analysis settings")
         self._settings_block()
+        self._keep_from(start)
 
     def _geometry_tables(self):
         inp = self.inp
@@ -466,7 +577,7 @@ class ReportBuilder:
             rows = [["#", "x (mm)", "y (mm)", "Area (mm<super>2</super>)"]]
             for i, b in enumerate(bars, 1):
                 rows.append([i, _fmt(b[0] * _MM, 3), _fmt(b[1] * _MM, 3),
-                             _fmt(b[2] * 1e6, 3)])
+                             _fmt(b[2], 3)])
             self._h2("Reinforcing bars")
             self._table(rows, [15 * mm, 35 * mm, 35 * mm, 40 * mm])
         tendons = inp.get("tendons", [])
@@ -474,7 +585,7 @@ class ReportBuilder:
             rows = [["#", "x (mm)", "y (mm)", "Area (mm<super>2</super>)"]]
             for i, t in enumerate(tendons, 1):
                 rows.append([i, _fmt(t[0] * _MM, 3), _fmt(t[1] * _MM, 3),
-                             _fmt(t[2] * 1e6, 3)])
+                             _fmt(t[2], 3)])
             self._h2("Tendons")
             self._table(rows, [15 * mm, 35 * mm, 35 * mm, 40 * mm])
 
@@ -602,31 +713,39 @@ class ReportBuilder:
 
     def _theory(self):
         self._h1("Basis of analysis")
-        self._p("<b>Ultimate (plastic) capacity.</b> Plane sections; concrete in "
-                "compression follows the design curve above, reinforcement the "
-                "design stress-strain law. For a trial neutral axis the strain "
-                "plane is scaled to the governing curvature - the first material "
-                "limit reached:")
-        self._formula("kappa<sub>u</sub> = min( eps<sub>cu2</sub>/c ,  "
-                      "eps<sub>su</sub>/(s<sub>na</sub>-s<sub>bar</sub>) ,  "
-                      "eps<sub>pu</sub>/... )",
-                      ref="DS/EN 1992-1-1 &#167;6.1, &#167;3.1.7, &#167;3.2.7")
-        self._p("The compression depth c is solved from axial equilibrium and the "
-                "moments follow from the force resultants:")
-        self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
-                      "M = sum( F<sub>i</sub> &#183; d<sub>i</sub> )")
-        self._p("<b>Cracked-section elastic stresses.</b> Transformed section "
-                "(reinforcement weighted by the modular ratio), concrete tension "
-                "ignored once cracked; long-term and short-term actions are "
-                "carried at their own modular ratios so creep is explicit. The ratios "
-                "are derived from the moduli, not entered: mild steel uses "
-                "n = E<sub>s</sub>/E<sub>c</sub> and tendons n = E<sub>p</sub>/E<sub>c</sub> "
-                "(independent, since E<sub>s</sub> &#8800; E<sub>p</sub>), each "
-                "creep-reduced to E/E<sub>c,eff</sub> with E<sub>c,eff</sub> = "
-                "E<sub>c</sub>/(1+&#966;) for the long-term state.")
-        self._p("<b>Cracking.</b> The cracking threshold compares the Stage-I "
-                "extreme tensile stress with f<sub>ct,eff</sub>; crack width follows "
-                "&#167;7.3.4 (worked below).")
+        if "plastic" in self.out:
+            self._p("<b>Ultimate (plastic) capacity.</b> Plane sections; concrete in "
+                    "compression follows the design curve above, reinforcement the "
+                    "design stress-strain law. For a trial neutral axis the strain "
+                    "plane is scaled to the governing curvature - the first material "
+                    "limit reached:")
+            self._formula("kappa<sub>u</sub> = min( eps<sub>cu2</sub>/c ,  "
+                          "eps<sub>su</sub>/(s<sub>na</sub>-s<sub>bar</sub>) ,  "
+                          "eps<sub>pu</sub>/... )",
+                          ref="DS/EN 1992-1-1 &#167;6.1, &#167;3.1.7, &#167;3.2.7")
+            self._p("The compression depth c is solved from axial equilibrium and "
+                    "the moments follow from the force resultants:")
+            self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
+                          "M = sum( F<sub>i</sub> &#183; d<sub>i</sub> )")
+        if "elastic" in self.out:
+            self._p("<b>Cracked-section elastic stresses.</b> Transformed section "
+                    "(reinforcement weighted by the modular ratio), concrete tension "
+                    "ignored once cracked; long-term and short-term actions are "
+                    "carried at their own modular ratios so creep is explicit. The "
+                    "ratios are derived from the moduli, not entered: mild steel uses "
+                    "n = E<sub>s</sub>/E<sub>c</sub> and tendons "
+                    "n = E<sub>p</sub>/E<sub>c</sub> (independent, since "
+                    "E<sub>s</sub> &#8800; E<sub>p</sub>), each creep-reduced to "
+                    "E/E<sub>c,eff</sub> with E<sub>c,eff</sub> = "
+                    "E<sub>c</sub>/(1+&#966;) for the long-term state.")
+            self._p("<b>Cracking threshold.</b> The Stage-I extreme tensile stress "
+                    "is compared with f<sub>ct,eff</sub>.")
+            if self.out["elastic"].get("show_cw"):
+                self._p("<b>Crack width.</b> The requested crack-width calculation "
+                        "follows the selected code method and is worked below.")
+        if not any(k in self.out for k in ("plastic", "elastic")):
+            self._p("No bending-capacity or elastic-stress result was included in "
+                    "this report.")
 
     def _plastic(self):
         pl = self.out["plastic"]
@@ -670,7 +789,9 @@ class ReportBuilder:
                             "tension to the squash load (concrete carries compression "
                             "only, so the tension end is reinforcement-controlled). "
                             "The marked point is the applied plastic action.")
-        # Per-angle results table -- the full column set, matching the result view.
+        # Per-angle results tables -- split into readable groups with V repeated as
+        # the row key. A single 12-14-column table forced values to wrap digit by
+        # digit in the issued PDF.
         self._h2("Capacity over the neutral-axis sweep")
         cable = bool(self.inp.get("tendons"))
         # Split the bar-strain column into the most tensile and the most compressed
@@ -679,27 +800,53 @@ class ReportBuilder:
         comp = (bool(self.inp.get("bars"))
                 and bool(getattr(self.inp.get("steel"), "active_in_compression", False))
                 and bool(pl["points"]) and "eps_s_comp" in pl["points"][0])
-        eps_s_head = ["eps<sub>s,t</sub>", "eps<sub>s,c</sub>"] if comp else ["eps<sub>s</sub>"]
-        head = (["V", "M<sub>x</sub>", "M<sub>y</sub>", "NA x", "NA y", "eps<sub>c</sub>"]
-                + eps_s_head
-                + ["kappa", "Comp", "L", "D<sub>x</sub>", "D<sub>y</sub>"])
+        capacity_rows = [[
+            "V",
+            "M<sub>x</sub>",
+            "M<sub>y</sub>",
+            "NA x",
+            "NA y",
+        ]]
+        eps_s_head = (["eps<sub>s,t</sub>", "eps<sub>s,c</sub>"]
+                      if comp else ["eps<sub>s</sub>"])
+        detail_head = (["V", "eps<sub>c</sub>"] + eps_s_head
+                       + ["kappa", "Comp", "L", "D<sub>x</sub>", "D<sub>y</sub>"])
         if cable:
-            head.append("eps<sub>p</sub>")
-        rows = [head]
+            detail_head.append("eps<sub>p</sub>")
+        detail_rows = [detail_head]
         for p in pl["points"]:
+            capacity_rows.append([
+                _fmt(p["V"], 0),
+                _fmt(p["Mx"], 3),
+                _fmt(p["My"], 3),
+                _fmt(p["na_x"] * _MM, 3),
+                _fmt(p["na_y"] * _MM, 3),
+            ])
             eps_s_vals = ([_fmt(p["eps_s"], 3), _fmt(p["eps_s_comp"], 3)] if comp
                           else [_fmt(p["eps_s"], 3)])
-            row = ([_fmt(p["V"], 0), _fmt(p["Mx"], 3), _fmt(p["My"], 3),
-                    _fmt(p["na_x"] * _MM, 3), _fmt(p["na_y"] * _MM, 3), _fmt(p["eps_c"], 3)]
+            row = ([_fmt(p["V"], 0), _fmt(p["eps_c"], 3)]
                    + eps_s_vals
                    + [_fmt(p["kappa"], 4), _fmt(p["comp_force"], 3),
                       _fmt(p["lever"] * _MM, 3), _fmt(p["dx"] * _MM, 3),
                       _fmt(p["dy"] * _MM, 3)])
             if cable:
                 row.append(_fmt(p["eps_cable"], 3))
-            rows.append(row)
-        ncol = len(head)
-        self._table(rows, [170 * mm / ncol] * ncol, font=6.5, keep=False)
+            detail_rows.append(row)
+        self._small("<b>Capacity and neutral axis</b>")
+        self._table(
+            capacity_rows,
+            [18 * mm, 38 * mm, 38 * mm, 38 * mm, 38 * mm],
+            font=7.5,
+            keep=False,
+        )
+        self._small("<b>Strain and equilibrium detail</b>")
+        detail_cols = len(detail_head)
+        self._table(
+            detail_rows,
+            [170 * mm / detail_cols] * detail_cols,
+            font=7.2,
+            keep=False,
+        )
         self._small("V deg; M kNm; NA x/y, L, D<sub>x</sub>, D<sub>y</sub> mm; "
                     "eps<sub>c</sub>/eps<sub>s</sub>/eps<sub>p</sub> %; kappa 1/m; Comp kN.")
         # Governing case worked.
@@ -721,6 +868,7 @@ class ReportBuilder:
         P = self.inp.get("P_pl", 0.0) or 0.0   # applied axial, tension-positive
         Fc = gov["comp_force"]                  # concrete compression resultant (positive)
         T = Fc + P                              # tension resultant (solver: Fc - T = -N)
+        start = len(self.flow)
         self._h2(heading)
         self._p(f"Neutral-axis angle V = {_fmt(gov['V'],0)} deg. The extreme "
                 f"concrete fibre is at the ultimate strain; the curvature scales "
@@ -747,6 +895,7 @@ class ReportBuilder:
                 ["Capacity", "M<sub>x</sub>, M<sub>y</sub>",
                  f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
+        self._keep_from(start)
         self._h2("Axial equilibrium check")
         self._formula("T - F<sub>c</sub> = N",
                       subst=f"{_fmt(T, 3)} - {_fmt(Fc, 3)} = {_fmt(T-Fc, 3)} kN",
@@ -1492,7 +1641,7 @@ class ReportBuilder:
             self._table(rows, [w] * 5, font=8, keep=False)
         rows = [["Quantity", "Value"],
                 ["Max concrete compression", f"{_fmt(el.get('max_conc'), 3)} MPa "
-                 f"(point {el.get('max_conc_point','-')})"],
+                 f"(point {_one_based(el.get('max_conc_point'))})"],
                 ["Max reinforcement tension", f"{_fmt(el.get('max_steel'), 3)} MPa "
                  f"(bar {el.get('max_steel_bar','-')})"]]
         self._table(rows, [70 * mm, 90 * mm])
@@ -1502,9 +1651,11 @@ class ReportBuilder:
 
     def _cracking(self):
         el = self.out["elastic"]
-        self._h1("Cracking and crack width")
+        self._h1("Cracking and crack width" if el.get("show_cw")
+                 else "Cracking threshold")
         # Threshold.
-        self._h2("Cracking threshold")
+        if el.get("show_cw"):
+            self._h2("Cracking threshold")
         lam = el.get("lambda_cr")
         verdict = "cracked" if el.get("cracked") else "uncracked"
         self._formula("lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
@@ -1663,17 +1814,43 @@ class ReportBuilder:
     def _appendix(self):
         self.flow.append(PageBreak())
         self._h1("References and notes")
-        for line in (
-            "DS/EN 1992-1-1 (Eurocode 2): &#167;3.1.6 (f<sub>cd</sub>), "
-            "&#167;3.1.7 / Table 3.1 (concrete curve, strains), &#167;3.2.7 "
-            "(reinforcement), &#167;6.1 (bending), &#167;7.1 (cracking), "
-            "&#167;7.3.2-7.3.4 (crack width).",
-            "The Danish National Annex modifies the crack-spacing coefficient "
-            "k<sub>3</sub> and the effective-height term as noted.",
-            "The capacity solver is verified against independent hand calculations.",
-            "All results follow from the inputs in section 1 and the formulas cited; "
-            "intermediate values are shown for the governing cases.",
-        ):
+        lines = []
+        if "plastic" in self.out:
+            lines.append(
+                "DS/EN 1992-1-1 (Eurocode 2): &#167;3.1.6 "
+                "(f<sub>cd</sub>), &#167;3.1.7 / Table 3.1 (concrete curve and "
+                "strains), &#167;3.2.7 (reinforcement), and &#167;6.1 (bending)."
+            )
+            lines.append(
+                "The capacity solver is covered by independent hand-calculation "
+                "regression cases."
+            )
+        if "elastic" in self.out:
+            elastic = self.out["elastic"]
+            clauses = "&#167;7.1 (cracking threshold)"
+            if elastic.get("show_cw"):
+                clauses += " and &#167;7.3.2-7.3.4 (crack width)"
+            lines.append(f"DS/EN 1992-1-1 (Eurocode 2): {clauses}.")
+            if "DK NA" in str(elastic.get("crack_code", "")):
+                lines.append(
+                    "The Danish National Annex modifications to crack spacing and "
+                    "effective tension-area height are stated with the calculation."
+                )
+        if "shear" in self.out:
+            lines.append(
+                "The selected shear method and its clause references are stated "
+                "with the shear-resistance calculation."
+            )
+        if "torsion" in self.out:
+            lines.append(
+                "The selected torsion method and its clause references are stated "
+                "with the torsion-resistance calculation."
+            )
+        lines.append(
+            "All results follow from the documented inputs and cited formulas; "
+            "intermediate values are shown for the governing cases."
+        )
+        for line in lines:
             self._p("- " + line)
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         self._small(f"Generated {ts} by Sector {self.version}.")
