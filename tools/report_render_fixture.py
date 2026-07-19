@@ -30,6 +30,10 @@ import sector_report  # noqa: E402
 from sector import __version__  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
+# Geometry, concrete law, steel law, plastic interaction, plastic state and
+# elastic state. An intentional fixture change must update this explicit contract.
+_EXPECTED_FIGURE_COUNT = 6
+
 
 class _FixedDateTime(datetime.datetime):
     @classmethod
@@ -203,9 +207,10 @@ def validate_pdf_content(pdf: bytes) -> str:
         for reference in xobjects.get_object().values():
             if reference.get_object().get("/Subtype") == "/Image":
                 images += 1
-    if images < 4:
+    if images != _EXPECTED_FIGURE_COUNT:
         raise AssertionError(
-            f"expected at least 4 exported engineering figures, found {images}"
+            f"expected {_EXPECTED_FIGURE_COUNT} exported engineering figures, "
+            f"found {images}"
         )
 
     for expected in (
