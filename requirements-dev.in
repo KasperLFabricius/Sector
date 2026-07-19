@@ -1,0 +1,13 @@
+# Development and QA dependencies.
+#
+# Generate the locked requirements-dev.txt with:
+#   python -m piptools compile --allow-unsafe --generate-hashes --output-file requirements-dev.txt requirements-dev.in
+
+-r requirements.in
+
+pytest>=8.0,<9
+pytest-xdist>=3.0,<4
+pip-tools>=7.6,<8
+
+# Cross-platform PDFium renderer used to inspect the actual report pages in CI.
+pypdfium2>=5.0,<6

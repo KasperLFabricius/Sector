@@ -1,0 +1,18 @@
+# Direct runtime dependencies for Sector.
+#
+# Generate the locked requirements.txt with:
+#   python -m piptools compile --generate-hashes --output-file requirements.txt requirements.in
+
+numpy>=1.24,<2.4
+
+# Numba is optional at runtime: Sector falls back to pure Python if importing it
+# fails. It remains in the supported installation because it materially speeds
+# up the plastic solver.
+numba>=0.63; python_version >= "3.14"
+numba>=0.62; python_version < "3.14"
+
+streamlit>=1.52,<2
+plotly>=5.18,<7
+reportlab>=4.0,<5
+kaleido>=0.2.1
+pypdf>=4.0,<6

@@ -19,7 +19,7 @@ powershell -ExecutionPolicy Bypass -File packaging/build.ps1
 or directly:
 
 ```powershell
-python -m pip install -r requirements.txt "pyinstaller>=6,<7"
+python -m pip install --require-hashes -r requirements-build.txt
 python -m PyInstaller --noconfirm --clean packaging/sector.spec
 ```
 
@@ -42,7 +42,7 @@ Set the `SECTOR_PORT` environment variable to use a different port.
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
 | `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
-| `build.ps1` | Convenience build script (installs deps, runs PyInstaller). |
+| `build.ps1` | Convenience build script (installs the locked build environment, runs PyInstaller). |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
 
 ## Runtime notes

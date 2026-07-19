@@ -37,7 +37,7 @@ reports can be trusted.
 ## Running the app
 
 ```
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.txt
 python run_app.py          # or: streamlit run app/sector_app.py
 ```
 
@@ -69,9 +69,14 @@ tests/         unit tests + the verification regression
 ## Development
 
 ```
-pip install -r requirements-dev.txt
-pytest
+pip install --require-hashes -r requirements-dev.txt
+pytest tests
 ```
 
 The test suite includes a permanent verification regression; the whole tree is
 kept strictly ASCII (enforced by a test).
+
+The supported runtime is pinned in `.python-version`. Runtime, development and
+Windows-build environments are locked in `requirements*.txt`; edit the matching
+`requirements*.in` file and regenerate the lock instead of editing a lock by
+hand.

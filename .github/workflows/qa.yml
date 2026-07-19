@@ -1,0 +1,99 @@
+name: Sector QA
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sector-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Full test and report gate
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install locked QA environment
+        run: python -m pip install --require-hashes -r requirements-dev.txt
+
+      - name: Prepare QA evidence directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Path qa-artifacts -Force | Out-Null
+
+      - name: Run complete test suite
+        run: python -m pytest tests -n 4 --junitxml=qa-artifacts/test-results.xml
+
+      - name: Render report fixture with real figures
+        if: always()
+        run: python tools/report_render_fixture.py --output qa-artifacts/report
+
+      - name: Upload QA evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sector-qa-evidence
+          path: qa-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-package:
+    name: Reproducible Windows package
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - name: Install locked build environment
+        run: python -m pip install --require-hashes -r requirements-build.txt
+
+      - name: Build Sector
+        run: python -m PyInstaller --noconfirm --clean packaging/sector.spec
+
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "dist/Sector/Sector.exe")) {
+            throw "Sector.exe was not produced"
+          }
+          if (-not (Test-Path -LiteralPath "dist/Sector/_internal/app/sector_app.py")) {
+            throw "Packaged app source is missing"
+          }
+          if (-not (Test-Path -LiteralPath "dist/Sector/_internal/sector/__init__.py")) {
+            throw "Packaged numerical core is missing"
+          }
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Sector-Windows
+          path: dist/Sector/
+          if-no-files-found: error
+          retention-days: 7
