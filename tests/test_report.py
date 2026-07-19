@@ -107,6 +107,24 @@ def test_report_reinforcement_areas_are_already_square_millimetres():
     assert "654321000" not in txt
 
 
+def test_oversized_reinforcement_table_repeats_its_header():
+    inp = _inp()
+    inp["bars"] = [
+        (0.0, -0.12, 300.0 + index)
+        for index in range(120)
+    ]
+    pdf = sector_report.build_report({}, inp, {}, figures=False)
+
+    import io
+    import pypdf
+
+    pages = [page.extract_text() or ""
+             for page in pypdf.PdfReader(io.BytesIO(pdf)).pages]
+    bar_pages = [page for page in pages if "Area (mm" in page]
+    assert len(bar_pages) >= 2
+    assert all("x (mm)" in page and "y (mm)" in page for page in bar_pages)
+
+
 def test_report_crack_worked_uses_the_governing_case():
     # When the short-term load gives the larger wk, the worked example uses it.
     out = _out()

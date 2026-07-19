@@ -373,7 +373,15 @@ class ReportBuilder:
             rows.append(cells)
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
-        t = Table(rows, colWidths=widths, hAlign="LEFT", repeatRows=1 if not keep else 0)
+        # Any table can outgrow one page when it contains user-pasted geometry or
+        # reinforcement. Repeat the labelled header regardless of whether the normal
+        # short-table path first tries to keep the table together.
+        t = Table(
+            rows,
+            colWidths=widths,
+            hAlign="LEFT",
+            repeatRows=1 if header else 0,
+        )
         t.setStyle(TableStyle([
             ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
             ("BACKGROUND", (0, 0), (-1, 0), _HEAD_BG if header else colors.white),
