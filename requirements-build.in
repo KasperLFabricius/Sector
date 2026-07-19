@@ -1,0 +1,8 @@
+# Standalone Windows build dependencies.
+#
+# Generate the locked requirements-build.txt with:
+#   python -m piptools compile --allow-unsafe --generate-hashes --output-file requirements-build.txt requirements-build.in
+
+-r requirements.in
+
+pyinstaller>=6.0,<7

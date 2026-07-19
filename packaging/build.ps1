@@ -9,9 +9,8 @@
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)   # repo root
 
-Write-Host "Installing build dependencies..."
-python -m pip install --quiet -r requirements.txt
-python -m pip install --quiet "pyinstaller>=6,<7"
+Write-Host "Installing locked build dependencies..."
+python -m pip install --quiet --require-hashes -r requirements-build.txt
 
 Write-Host "Building (this can take a few minutes)..."
 python -m PyInstaller --noconfirm --clean packaging/sector.spec

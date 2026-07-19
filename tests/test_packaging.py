@@ -24,6 +24,13 @@ def test_packaging_files_are_in_the_repo():
         assert (pkg / name).is_file(), f"packaging/{name} missing from the repo"
 
 
+def test_build_script_uses_the_hashed_lock():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    script = (root / "packaging" / "build.ps1").read_text(encoding="utf-8")
+    assert "--require-hashes -r requirements-build.txt" in script
+    assert '"pyinstaller>=' not in script.lower()
+
+
 def test_bundle_base_resolves_to_the_app_tree_in_dev():
     base = run_sector._bundle_base()
     assert (base / "app" / "sector_app.py").is_file()

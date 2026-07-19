@@ -51,6 +51,9 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+.pytest_*/
+qa-artifacts/
+tmp/
 cover/
 
 # Translations
