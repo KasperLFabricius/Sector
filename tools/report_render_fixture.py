@@ -1,20 +1,22 @@
-"""Build and rasterise a deterministic Sector report QA fixture.
+"""Build and rasterise a stable Sector report QA fixture.
 
 The normal report tests inspect PDF text. This fixture also passes every page
 through PDFium so CI exercises the artifact an engineer actually opens. The
-Plotly exporter is replaced by deterministic images to keep the gate independent
-of a locally installed browser while retaining the report's figure layout.
+real Plotly/Kaleido exporter is retained so the gate also fails when the figures
+an engineer expects in the issued report cannot be produced.
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import io
 import pathlib
 import sys
 
-from PIL import Image, ImageDraw
+from PIL import Image
+import pypdf
 import pypdfium2 as pdfium
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -34,23 +36,6 @@ class _FixedDateTime(datetime.datetime):
     def now(cls, tz=None):
         value = cls(2026, 7, 19, 12, 0, 0)
         return value if tz is None else value.replace(tzinfo=tz)
-
-
-def _placeholder_png(width: int, height: int) -> bytes:
-    """Return a stable engineering-diagram placeholder at the requested size."""
-    width = max(int(width), 20)
-    height = max(int(height), 20)
-    image = Image.new("RGB", (width, height), "white")
-    draw = ImageDraw.Draw(image)
-    pad = max(min(width, height) // 12, 4)
-    draw.rectangle((pad, pad, width - pad, height - pad), outline="#34495e", width=3)
-    draw.line((pad, height - pad, width // 2, pad, width - pad, height - pad),
-              fill="#0072b2", width=4)
-    draw.line((pad, height // 2, width - pad, height // 2),
-              fill="#d55e00", width=3)
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG", optimize=False)
-    return buffer.getvalue()
 
 
 def _inputs() -> dict:
@@ -178,17 +163,11 @@ def _results() -> dict:
     }
 
 
+@functools.lru_cache(maxsize=1)
 def build_fixture_pdf() -> bytes:
-    """Build the report with stable time and stable raster figure content."""
+    """Build the report with stable time and the real figure-export path."""
     original_datetime = sector_report.datetime.datetime
-    original_server = sector_report.ensure_image_server
-    original_export = sector_report._fig_png
     sector_report.datetime.datetime = _FixedDateTime
-    sector_report.ensure_image_server = lambda: None
-    sector_report._fig_png = (
-        lambda _figure, width, height, timeout=None:
-        (_placeholder_png(width, height), False)
-    )
     try:
         return sector_report.build_report(
             {
@@ -204,8 +183,41 @@ def build_fixture_pdf() -> bytes:
         )
     finally:
         sector_report.datetime.datetime = original_datetime
-        sector_report.ensure_image_server = original_server
-        sector_report._fig_png = original_export
+
+
+def validate_pdf_content(pdf: bytes) -> str:
+    """Reject a report that lost figures or core engineering content."""
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    if "figure unavailable" in text.lower():
+        raise AssertionError("the report contains an unavailable-figure placeholder")
+
+    images = 0
+    for page in reader.pages:
+        resources = page.get("/Resources")
+        if resources is None:
+            continue
+        xobjects = resources.get_object().get("/XObject")
+        if xobjects is None:
+            continue
+        for reference in xobjects.get_object().values():
+            if reference.get_object().get("/Subtype") == "/Image":
+                images += 1
+    if images < 4:
+        raise AssertionError(
+            f"expected at least 4 exported engineering figures, found {images}"
+        )
+
+    for expected in (
+        "QA-REFERENCE",
+        "Rendered report regression",
+        "Ultimate (plastic) capacity",
+        "Cracked-section elastic stresses",
+        f"Generated 2026-07-19 12:00 by Sector {__version__}",
+    ):
+        if expected not in text:
+            raise AssertionError(f"expected report content is missing: {expected}")
+    return text
 
 
 def render_pdf(pdf: bytes, scale: float = 1.5) -> list[Image.Image]:
@@ -276,9 +288,10 @@ def validate_rendered_pages(pages: list[Image.Image]) -> None:
 
 
 def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
-    """Write the deterministic PDF and rendered page PNG evidence."""
+    """Write the stable PDF and rendered page PNG evidence."""
     output.mkdir(parents=True, exist_ok=True)
     pdf = build_fixture_pdf()
+    validate_pdf_content(pdf)
     pdf_path = output / "sector-report-reference.pdf"
     pdf_path.write_bytes(pdf)
     pages = render_pdf(pdf)

@@ -41,7 +41,7 @@ jobs:
       - name: Run complete test suite
         run: python -m pytest tests -n 4 --junitxml=qa-artifacts/test-results.xml
 
-      - name: Render deterministic report fixture
+      - name: Render report fixture with real figures
         if: always()
         run: python tools/report_render_fixture.py --output qa-artifacts/report
 
