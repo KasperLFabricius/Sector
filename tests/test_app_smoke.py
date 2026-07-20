@@ -23,6 +23,20 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _fresh_qs(**state):
+    """Start directly in Quick Section with optional pre-seeded widget state.
+
+    The app always builds the sidebar before entering the builder, so the first run
+    still exercises complete input construction. Skipping an otherwise disposable
+    initial Section-view run saves one full AppTest rerun per builder scenario.
+    """
+    at = _fresh()
+    for key, value in state.items():
+        at.session_state[key] = value
+    at.session_state["_qs_open"] = True
+    return at.run()
+
+
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
     for widget_type, key, value in changes:
@@ -32,6 +46,13 @@ def _set(at, *changes):
 
 def _set_and_click(at, button_key, *changes):
     """Submit a group of existing inputs with one button-triggered rerun."""
+    # Quick Section's exit buttons deliberately escalate from a fragment rerun to a
+    # full-app rerun. AppTest does not emulate that browser transition and can retain
+    # removed builder widgets if their edits and the exit click share one test tick.
+    # Stage those edits first; the normal in-fragment buttons remain batched.
+    if button_key in {"qs_apply", "qs_back"} and changes:
+        _set(at, *changes)
+        changes = ()
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     at.button(key=button_key).click()
@@ -96,6 +117,33 @@ def test_live_curve_figures_are_memoised():
     assert id(at.session_state["_fig_cache"]["concrete"][1]) != conc_id     # rebuilt
 
 
+def test_ui_hot_paths_are_isolated_streamlit_fragments():
+    """Keep non-engineering UI interactions off the live app's full-rerun path.
+
+    Streamlit AppTest intentionally performs full script reruns and cannot time a
+    browser fragment rerun. Structural assertions therefore guard the production
+    isolation, while the rest of this file verifies the resulting behavior.
+    """
+    import inspect
+    import sector_app
+
+    for func in (
+        sector_app._analysis_workspace,
+        sector_app._quick_section_viewport,
+        sector_app._report_panel,
+        sector_app._save_load_panel,
+    ):
+        assert hasattr(func, "__wrapped__"), func.__name__
+
+    workspace = inspect.getsource(sector_app._analysis_workspace.__wrapped__)
+    assert workspace.index('c_calc.button(') < workspace.index('c_view.selectbox(')
+    assert "_switch_view" not in workspace
+    for panel in (sector_app._report_panel, sector_app._save_load_panel):
+        panel_source = inspect.getsource(panel.__wrapped__)
+        assert "st.expander(" in panel_source
+        assert "parent." not in panel_source
+
+
 def test_persisted_settings_use_the_seeded_number_helper():
     # These inputs are saved (SCALAR_KEYS), so loading a project writes their key
     # before the widget is created; passing value= too trips Streamlit's "default
@@ -131,9 +179,7 @@ def test_quick_section_shape_switch_reseeds_shared_dimensions():
     # b_mm/h_mm are shared across shapes; switching shape must reset them to the new
     # shape's default (the seeded inputs rely on _qs_shape_prefill for this, since a
     # plain setdefault would keep the previous shape's value).
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     assert (at.session_state["b_mm"], at.session_state["h_mm"]) == (400.0, 600.0)
     at.selectbox(key="shape").set_value("Box girder").run()
     assert (at.session_state["b_mm"], at.session_state["h_mm"]) == (800.0, 1000.0)
@@ -147,12 +193,11 @@ def test_quick_section_reopen_preserves_edited_dimension():
     # A custom dimension survives closing and reopening the builder (the durable qsv_
     # copy restores it), and the seeded input adopts it without a warning/error -- the
     # case that used to trip the "default value + Session State" warning.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("Box girder").run()
-    at.number_input(key="b_mm").set_value(850.0).run()
-    at.button(key="qs_back").click().run()                  # close (mirror to qsv_)
+    _set_and_click(
+        at, "qs_back", ("number_input", "b_mm", 850.0)
+    )  # close and mirror to qsv_
     _open_qs(at)                                            # reopen (restore)
     assert not at.exception
     assert at.session_state["shape"] == "Box girder"
@@ -165,21 +210,17 @@ def test_quick_section_dimensions_survive_a_project_restore():
     # open, so the shape prefill must treat it as "no change" rather than mistaking
     # the restore for a shape switch and resetting b/h to the shape defaults.
     import project_io
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("Box girder").run()
-    at.number_input(key="b_mm").set_value(850.0).run()
-    at.button(key="qs_back").click().run()
+    _set_and_click(at, "qs_back", ("number_input", "b_mm", 850.0))
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     text = project_io.dump_project({}, scalars)
 
     at2 = _fresh()
-    at2.run()
     at2.session_state["_pending_project"] = text
+    at2.session_state["_qs_open"] = True
     at2.run()
-    _open_qs(at2)
     assert not at2.exception
     assert at2.session_state["shape"] == "Box girder"
     assert at2.session_state["b_mm"] == 850.0            # restored dimension kept
@@ -194,23 +235,18 @@ def test_quick_section_dimensions_survive_a_midsession_project_load():
     # load clears it (else the loaded shape would look like an in-builder switch and
     # the dimension would be re-seeded to the shape default).
     import project_io
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("Box girder").run()
-    at.number_input(key="b_mm").set_value(850.0).run()
-    at.button(key="qs_back").click().run()
+    _set_and_click(at, "qs_back", ("number_input", "b_mm", 850.0))
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     text = project_io.dump_project({}, scalars)
 
-    at2 = _fresh()
-    at2.run()
-    _open_qs(at2)                                        # use the builder first...
+    at2 = _fresh_qs()                                    # use the builder first...
     at2.button(key="qs_back").click().run()             # (sets qs_shape_prev)
     at2.session_state["_pending_project"] = text        # ...then load the project
+    at2.session_state["_qs_open"] = True
     at2.run()
-    _open_qs(at2)
     assert not at2.exception
     assert at2.session_state["shape"] == "Box girder"
     assert at2.session_state["b_mm"] == 850.0           # loaded dimension kept
@@ -383,14 +419,14 @@ def test_nm_interaction_is_opt_in_and_renders():
     at = _fresh()
     at.run()
     # Off by default: the N-M view prompts to enable it, and no interaction is computed.
-    at.selectbox(key="view").set_value("N-M Interaction").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("selectbox", "view", "N-M Interaction")
+    )
     assert not at.exception
     assert "interaction" not in at.session_state["results"]["plastic"]
     assert any("N-M interaction" in m.value for m in at.info)
     # Enable it -> Calculate traces the diagram and the view renders it.
-    at.checkbox(key="pl_interaction").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("checkbox", "pl_interaction", True))
     assert not at.exception
     d = at.session_state["results"]["plastic"]["interaction"]
     # Both bending axes are traced now (the either/or radio is gone); each is its own
@@ -409,9 +445,10 @@ def test_axial_force_is_tension_positive():
     # capacity relative to pure bending, a tension (positive N) lowers it. This is the
     # boundary flip -- the solver stays compression-positive, so the physics is the
     # same, only the input sign changes.
+    at = _fresh()
+    at.run()
+
     def max_mx(P):
-        at = _fresh()
-        at.run()
         _set_and_click(at, "calculate", ("number_input", "pl_P", P))
         return at.session_state["results"]["plastic"]["max_mx"]
 
@@ -624,9 +661,7 @@ def test_load_sets_survive_a_mode_switch():
 
 
 def test_circular_shape_calculates():
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("Circular").run()
     _apply_qs(at)                            # apply the builder to the points
     at.button(key="calculate").click().run()
@@ -638,20 +673,50 @@ def test_builder_does_not_touch_points_until_applied():
     # The point tables drive the analysis; the Quick Section builder only writes to
     # them on Apply. Opening it, changing a dimension and pressing Back changes
     # nothing; Apply does.
+    import project_io
+
     at = _fresh()
     at.run()
     at.button(key="calculate").click().run()
     base_mx = at.session_state["results"]["plastic"]["max_mx"]
+    base_tables = {
+        key: at.session_state[key].copy(deep=True)
+        for key in project_io.TABLE_KEYS
+    }
     _open_qs(at)
-    at.number_input(key="h_mm").set_value(1000.0).run()  # taller...
-    at.button(key="qs_back").click().run()               # ...but discarded
-    at.button(key="calculate").click().run()
-    assert at.session_state["results"]["plastic"]["max_mx"] == pytest.approx(base_mx)
-    _open_qs(at)
-    at.number_input(key="h_mm").set_value(1000.0).run()
-    at.button(key="qs_apply").click().run()              # now applied
-    at.button(key="calculate").click().run()
-    assert at.session_state["results"]["plastic"]["max_mx"] > base_mx  # deeper -> stronger
+    _set_and_click(
+        at, "qs_back", ("number_input", "h_mm", 1000.0)
+    )  # taller, but discarded
+    for key, expected in base_tables.items():
+        assert at.session_state[key].equals(expected), key
+
+    # AppTest cannot continue reliably from the fragment-to-full-app rerun behind
+    # Back because it retains removed builder nodes in its element tree. Serialize
+    # the exact post-Back state into an independent session and calculate there; this
+    # retains the engineering-result assertion without relying on stale test nodes.
+    post_back_project = project_io.dump_project(
+        {key: at.session_state[key] for key in project_io.TABLE_KEYS},
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    post_back = _fresh()
+    post_back.session_state["_pending_project"] = post_back_project
+    post_back.run()
+    post_back.button(key="calculate").click().run()
+    assert (
+        post_back.session_state["results"]["plastic"]["max_mx"]
+        == pytest.approx(base_mx)
+    )
+
+    applied = _fresh_qs()
+    _set_and_click(
+        applied, "qs_apply", ("number_input", "h_mm", 1000.0)
+    )  # now applied
+    applied.button(key="calculate").click().run()
+    assert applied.session_state["results"]["plastic"]["max_mx"] > base_mx
 
 
 def test_qs_interleave_places_a_second_bar_size_at_the_midpoints():
@@ -690,9 +755,7 @@ def test_quick_section_interleave_skips_the_box_girder_void():
     # A box girder bottom layer that rises into the hollow is split across the two
     # walls; interleaving its midpoints would drop a bar into the void. The
     # interleaved bars are filtered to the concrete, so the section stays valid.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("Box girder").run()
     _set_and_click(
         at,
@@ -709,9 +772,7 @@ def test_quick_section_interleave_skips_the_box_girder_void():
 def test_quick_section_separate_top_bottom_cover_and_manual_diameter():
     # Separate top/bottom covers place each face row at its own cover, and the bar
     # diameter is a direct mm input (a Y25 bar is 491 mm2).
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     _set_and_click(
         at,
         "qs_apply",
@@ -729,9 +790,7 @@ def test_quick_section_separate_top_bottom_cover_and_manual_diameter():
 def test_quick_section_cover_to_edge_shifts_bars_by_a_radius():
     # With cover measured to the bar edge, the bar centres sit a radius deeper than the
     # cover line (a Y25 bar at 40 mm edge cover -> centre at 40 + 12.5 = 52.5 mm).
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     _set_and_click(
         at,
         "qs_apply",
@@ -746,9 +805,7 @@ def test_quick_section_cover_to_edge_shifts_bars_by_a_radius():
 def test_quick_section_separate_upper_layer_bar_count():
     # A stacked bottom face can hold a different bar count in the upper layer than the
     # main row (6 in the first, 3 above).
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     _set_and_click(
         at,
         "qs_apply",
@@ -764,9 +821,7 @@ def test_quick_section_separate_upper_layer_bar_count():
 def test_quick_section_builder_places_bars_by_spacing():
     # The builder opens full-width, places slab bars at a target spacing, and Apply
     # writes the generated points into the tables (which then analyse).
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     assert any(b.key == "qs_apply" for b in at.button)    # the builder is showing
     at.selectbox(key="shape").set_value("Slab strip").run()
     _set(at, ("radio", "qs_rebar_mode", "By spacing"))
@@ -786,9 +841,7 @@ def test_quick_section_builder_places_bars_by_spacing():
 def test_quick_section_builder_stacks_multiple_bar_layers():
     # Two bottom layers stack the 6 bottom bars at two y-levels (12), plus the 2 top
     # bars = 14; the second layer sits one layer-spacing above the bottom cover line.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     _set_and_click(
         at,
         "qs_apply",
@@ -807,9 +860,7 @@ def test_quick_section_builder_stacks_multiple_bar_layers():
 
 def test_quick_section_builder_stacks_tendon_layers():
     # Two tendon layers place the tendons at two y-levels stacked up from the bottom.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     _set_and_click(
         at,
         "qs_apply",
@@ -832,9 +883,7 @@ def test_quick_section_box_tendon_layer_splits_into_walls():
     # walls, preserving the count, rather than placing a tendon in the cavity (the
     # alternative to dropping). Defaults: 800x1000x200 box, 100 mm cover; layer 2
     # (150 mm up, y=-250) is in the hollow.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("Box girder").run()
     _set_and_click(
         at,
@@ -858,9 +907,7 @@ def test_quick_section_box_tendon_layer_splits_into_walls():
 def test_quick_section_circular_zero_cover_keeps_all_bars():
     # At zero cover the ring radius is capped at the polygon apothem, so every bar
     # stays inside the N-gon outline and none are dropped/rejected (Codex P2).
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("Circular").run()
     _set_and_click(
         at,
@@ -879,9 +926,7 @@ def test_quick_section_circular_zero_cover_keeps_all_bars():
 def test_quick_section_tsection_lower_top_layer_fits_the_web():
     # A T-section's top face is the flange; a lower top layer pushed below the flange
     # must narrow to the web, or it would sit outside the concrete and be rejected.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("T-section").run()
     _set_and_click(
         at,
@@ -903,9 +948,7 @@ def test_quick_section_tsection_lower_top_layer_fits_the_web():
 def test_quick_section_tsection_spaced_web_layer_has_fewer_bars():
     # By spacing, a T-section top layer narrowed to the web keeps the target spacing,
     # so it has far fewer bars than the flange row (not the flange count crammed in).
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("T-section").run()
     _set(at, ("radio", "qs_rebar_mode", "By spacing"))
     _set_and_click(
@@ -927,12 +970,11 @@ def test_quick_section_tsection_spaced_web_layer_has_fewer_bars():
 def test_builder_settings_persist_between_openings():
     # The builder widgets are dropped while it is closed, so the settings are
     # mirrored to durable keys: reopening restores the last shape and dimensions.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("T-section").run()
-    at.number_input(key="bf_mm").set_value(1500.0).run()
-    at.button(key="qs_back").click().run()                # close (settings kept)
+    _set_and_click(
+        at, "qs_back", ("number_input", "bf_mm", 1500.0)
+    )  # close with settings kept
     _open_qs(at)
     assert at.selectbox(key="shape").value == "T-section"
     assert at.number_input(key="bf_mm").value == pytest.approx(1500.0)
@@ -941,11 +983,8 @@ def test_builder_settings_persist_between_openings():
 def test_point_tables_are_data_only_and_hold_loaded_points():
     # The point tables hold just the coordinate columns (no stored ID -- the plot
     # numbers points by row order); the builder Apply fills them.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(4).run()
-    _apply_qs(at)
+    at = _fresh_qs()
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
     assert list(at.session_state["corners_base"].columns) == ["x (mm)", "y (mm)"]
     assert list(at.session_state["bars_base"].columns) == \
         ["x (mm)", "y (mm)", "area (mm2)"]
@@ -968,11 +1007,10 @@ def test_coordinates_are_in_millimetres():
 def test_clear_section_empties_all_point_tables():
     # The Clear Section button empties every point table -- concrete corners, the
     # void, bars and tendons -- so the section starts blank.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(4).run()    # so the builder adds tendons
-    _apply_qs(at)                                       # populate from the builder
+    at = _fresh_qs()
+    _set_and_click(
+        at, "qs_apply", ("number_input", "tnd_n", 4)
+    )  # populate with tendons
     assert len(at.session_state["corners_base"]) > 0
     assert len(at.session_state["bars_base"]) > 0
     at.button(key="clear_pts").click().run()
@@ -1014,9 +1052,7 @@ def test_blank_and_partial_point_rows_are_skipped():
 def test_box_girder_void_loads_and_calculates():
     # The box cavity loads into the (data-only) void table and the section still
     # calculates.
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.selectbox(key="shape").set_value("Box girder").run()
     _apply_qs(at)
     hb = at.session_state["hole_base"]
@@ -1140,9 +1176,7 @@ def test_void_table_migrates_for_old_sessions():
 
 
 def test_default_solid_section_has_no_void():
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     _apply_qs(at)                            # default rectangle, no cavity
     assert len(at.session_state["hole_base"]) == 0
 
@@ -1331,9 +1365,7 @@ def test_autosave_after_quick_section_apply_saves_applied_geometry(tmp_path, mon
     # closed; a due autosave must then capture the applied geometry, not the stale
     # pre-apply tables (Codex P2).
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.number_input(key="h_mm").set_value(900.0).run()   # distinctive height (450 mm half)
     at.session_state["_autosave_t"] = 0.0                # a save is due
     at.button(key="qs_apply").click().run()              # reseed + close builder + rerun
@@ -1572,14 +1604,20 @@ def test_auto_calc_all_updates_every_derived_value():
     # One button recomputes all the auto-derived values from the current inputs.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Both").run()
-    at.number_input(key="conc_fck").set_value(70.0).run()    # high grade -> Table 3.1
-    at.button(key="conc_Ec_auto").click().run()              # the EC2 secant Ec for C70
+    _set_and_click(
+        at,
+        "conc_Ec_auto",
+        ("radio", "mode", "Both"),
+        ("number_input", "conc_fck", 70.0),
+    )  # high grade -> EC2 secant Ec for C70
     ec70 = at.session_state["conc_Ec"]
     # Manually push the auto values off their derived values.
-    at.number_input(key="conc_eps_cu2").set_value(5.0).run()
-    at.number_input(key="conc_Ec").set_value(20.0).run()     # Ec drives the modular ratios
-    at.button(key="auto_all_btn").click().run()
+    _set_and_click(
+        at,
+        "auto_all_btn",
+        ("number_input", "conc_eps_cu2", 5.0),
+        ("number_input", "conc_Ec", 20.0),
+    )
     assert not at.exception
     # eps_cu2 back to the Table 3.1 value for C70 (~2.66 permille), not 5.0.
     assert at.session_state["conc_eps_cu2"] == pytest.approx(2.66, abs=0.05)
@@ -1594,11 +1632,17 @@ def test_auto_calc_all_respects_2023_constant_strains():
     # strength-dependent values above C50/60 (the Codex P2 on PR #67).
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Both").run()
-    at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
-    at.number_input(key="conc_fck").set_value(70.0).run()
-    at.number_input(key="conc_eps_cu2").set_value(2.0).run()     # skew it
-    at.button(key="auto_all_btn").click().run()
+    _set(
+        at,
+        ("radio", "mode", "Both"),
+        ("selectbox", "conc_preset", "DS/EN 1992-1-1:2023"),
+    )
+    _set_and_click(
+        at,
+        "auto_all_btn",
+        ("number_input", "conc_fck", 70.0),
+        ("number_input", "conc_eps_cu2", 2.0),
+    )  # skew it, then restore the 2023 constants
     assert not at.exception
     # Constant 0.2%/0.35%/2 -- NOT the Table 3.1 value (~2.66 permille) for C70.
     assert at.session_state["conc_eps_cu2"] == pytest.approx(3.5)
@@ -1609,11 +1653,12 @@ def test_auto_calc_all_respects_2023_constant_strains():
 def test_material_preset_switch_calculates():
     at = _fresh()
     at.run()
-    at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
-    at.selectbox(key="mild_preset").set_value(
-        "Curve 2 (elastic-perfectly-plastic)").run()
-    assert not at.exception
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "conc_preset", "DS/EN 1992-1-1:2023"),
+        ("selectbox", "mild_preset", "Curve 2 (elastic-perfectly-plastic)"),
+    )
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -1623,13 +1668,13 @@ def test_2023_concrete_fck_edit_calculates():
     at = _fresh()
     at.run()
     at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
-    at.number_input(key="conc_fck").set_value(50.0).run()
+    _set_and_click(
+        at, "calculate", ("number_input", "conc_fck", 50.0)
+    )
     assert not at.exception
     assert at.session_state["conc_alpha_cc"] == pytest.approx(
         0.85 * (40.0 / 50.0) ** (1.0 / 3.0)
     )
-    at.button(key="calculate").click().run()
-    assert not at.exception
     assert "plastic" in at.session_state["results"]
 
 
@@ -1790,21 +1835,23 @@ def test_elastic_applies_tendon_prestress_from_initial_strain():
     # With tendons + a prestrain, the elastic analysis applies the prestress force
     # from IS (N stays the external force only): the result reports the prestress
     # resultant, and changing IS changes the concrete state.
-    at = _fresh()
-    at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(4).run()       # put tendons in the section
-    _apply_qs(at)
-    at.number_input(key="pre_IS").set_value(5.0).run()    # permille
-    at.number_input(key="el_long_Mx").set_value(200.0).run()
-    at.button(key="calculate").click().run()
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(
+        at, "qs_apply", ("number_input", "tnd_n", 4)
+    )  # put tendons in the section
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pre_IS", 5.0),
+        ("number_input", "el_long_Mx", 200.0),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["prestress"] is not None and e["prestress"][0] != 0.0   # applied + reported
     base_conc = e["max_conc"]
-    at.number_input(key="pre_IS").set_value(9.0).run()    # stronger prestress
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "pre_IS", 9.0)
+    )  # stronger prestress
     assert at.session_state["results"]["elastic"]["max_conc"] != pytest.approx(base_conc)
 
 
@@ -1912,6 +1959,27 @@ def test_label_controls_live_in_the_main_view():
     assert not at.exception
 
 
+def test_workspace_choices_survive_quick_section_viewport():
+    # Quick Section temporarily removes the workspace widgets. Streamlit cleans up
+    # widget-owned state when that happens, so durable copies must restore both the
+    # selected result view and the user's plot-label settings on return.
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "label_scale", 1.5),
+        ("number_input", "label_min_gap", 0.2),
+    )
+    assert at.session_state["view"] == "Plastic Results"
+    _open_qs(at)
+    at.button(key="qs_back").click().run()
+    assert at.session_state["view"] == "Plastic Results"
+    assert at.number_input(key="label_scale").value == pytest.approx(1.5)
+    assert at.number_input(key="label_min_gap").value == pytest.approx(0.2)
+    assert not at.exception
+
+
 def test_view_dropdown_switches_without_error():
     # Every view must render. The live views (Section, Stress-Strain) need no
     # Calculate; the result views show a prompt until one is run.
@@ -1924,9 +1992,7 @@ def test_view_dropdown_switches_without_error():
 
 
 def test_stress_strain_view_includes_prestress_when_enabled():
-    at = _fresh()
-    at.run()
-    _open_qs(at)
+    at = _fresh_qs()
     at.number_input(key="tnd_n").set_value(4).run()
     _apply_qs(at)                            # put tendons in the section
     at.selectbox(key="view").set_value("Stress-Strain diagrams").run()
@@ -1936,8 +2002,7 @@ def test_stress_strain_view_includes_prestress_when_enabled():
 def test_results_views_render_after_calculate():
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Both").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
     for v in ["Plastic Results", "Elastic Results"]:
         at.selectbox(key="view").set_value(v).run()
         assert not at.exception, v
@@ -2096,11 +2161,10 @@ def test_prestress_plastic_increases_capacity():
     assert not base.exception
     mx0 = base.session_state["results"]["plastic"]["max_mx"]
 
-    at = _fresh()
-    at.run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(4).run()
-    _apply_qs(at)                            # put the tendons in the section
+    at = _fresh_qs()
+    _set_and_click(
+        at, "qs_apply", ("number_input", "tnd_n", 4)
+    )  # put the tendons in the section
     at.button(key="calculate").click().run()
     assert not at.exception
     res = at.session_state["results"]
@@ -2109,13 +2173,11 @@ def test_prestress_plastic_increases_capacity():
 
 
 def test_prestress_both_modes_run_with_tendons():
-    at = _fresh()
-    at.run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(4).run()
-    _apply_qs(at)                            # load the tendons into the points
-    at.radio(key="mode").set_value("Both").run()
-    at.button(key="calculate").click().run()
+    at = _fresh_qs()
+    _set_and_click(
+        at, "qs_apply", ("number_input", "tnd_n", 4)
+    )  # load the tendons into the points
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
     assert not at.exception
     res = at.session_state["results"]
     # Elastic models each tendon as an extra bar, so its stress list grows.
@@ -2124,14 +2186,13 @@ def test_prestress_both_modes_run_with_tendons():
 
 
 def test_prestress_preset_curve6_calculates():
-    at = _fresh()
-    at.run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(4).run()
-    _apply_qs(at)                            # load the tendons into the points
-    at.selectbox(key="pre_preset").set_value("Curve 6 (bilinear)").run()
-    assert not at.exception
-    at.button(key="calculate").click().run()
+    at = _fresh_qs()
+    _set_and_click(
+        at, "qs_apply", ("number_input", "tnd_n", 4)
+    )  # load the tendons into the points
+    _set_and_click(
+        at, "calculate", ("selectbox", "pre_preset", "Curve 6 (bilinear)")
+    )
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -2197,9 +2258,12 @@ def test_crack_width_off_by_default():
     # properties but no crack width until the toggle is on.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["show_cw"] is False
@@ -2211,11 +2275,14 @@ def test_crack_width_reports_both_load_cases():
     # load, with no cover input (cover is taken from the geometry per bar).
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.number_input(key="el_short_Mx").set_value(150.0).run()
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["show_cw"] is True
@@ -2281,12 +2348,15 @@ def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
     # system (centroid-matched effective area + wk/2) is smaller than the fine one.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.number_input(key="el_short_Mx").set_value(150.0).run()
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.selectbox(key="sls_code").set_value("DS/EN 1992-1-1 + DK NA").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "DS/EN 1992-1-1 + DK NA"),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     for key in ("crack", "crack_short", "crack_coarse", "crack_short_coarse"):
@@ -2300,11 +2370,14 @@ def test_non_dk_na_reports_no_coarse_columns():
     # The base EN 1992-1-1 code has no coarse system, so only the two fine columns.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.selectbox(key="sls_code").set_value("EN 1992-1-1:2005").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2005"),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["crack"] is not None
@@ -2315,11 +2388,14 @@ def test_ec2_2023_crack_edition_calculates():
     # Selecting EN 1992-1-1:2023 uses the refined model (9.2.3) and reports its wk.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.selectbox(key="sls_code").set_value("EN 1992-1-1:2023").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["crack_code"] == "EN 1992-1-1:2023"
@@ -2345,12 +2421,15 @@ def test_short_term_crack_uses_combined_creep_state():
     # equals the Total steel-stress column -- not a raw (long+short)-at-ns solve.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(300.0).run()
-    at.number_input(key="el_short_Mx").set_value(150.0).run()
-    at.number_input(key="el_phi").set_value(2.0).run()  # creep: n_l = (1+phi)*n_s != n_s
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 300.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("number_input", "el_phi", 2.0),
+        ("checkbox", "sls_cw", True),
+    )  # creep: n_l = (1+phi)*n_s != n_s
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     cs = e["crack_short"]
@@ -2364,13 +2443,19 @@ def test_bond_coefficient_k1_widens_cracks():
     # (k1 = 1.6) give a wider crack than ribbed / high-bond bars (k1 = 0.8).
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+    )
     wk_ribbed = at.session_state["results"]["elastic"]["crack"]["wk"]
-    at.selectbox(key="sls_bond").set_value("Plain round (k1 = 1.6)").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "sls_bond", "Plain round (k1 = 1.6)"),
+    )
     assert not at.exception
     wk_plain = at.session_state["results"]["elastic"]["crack"]["wk"]
     assert wk_plain > wk_ribbed
@@ -2380,15 +2465,14 @@ def test_crack_width_with_tendons_runs():
     # With prestressing tendons present, the per-bar k1 (tendons fixed at 1.6,
     # folded after the bars) must line up with the section, so the crack-width
     # path runs without a length mismatch.
-    at = _fresh()
-    at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(4).run()
-    _apply_qs(at)
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+    )
     assert not at.exception
 
 
@@ -2397,14 +2481,20 @@ def test_dk_na_crack_edition_narrows_wk():
     # (3.4*(25/c)^(2/3)); for the default cover > 25 mm this narrows wk vs base.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+    )
     wk_base = at.session_state["results"]["elastic"]["crack"]["wk"]
-    at.selectbox(key="sls_code").set_value("DS/EN 1992-1-1 + DK NA").run()
-    at.selectbox(key="sls_member").set_value("Slab").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "sls_code", "DS/EN 1992-1-1 + DK NA"),
+        ("selectbox", "sls_member", "Slab"),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert "DK NA" in e["crack_code"]
@@ -2416,9 +2506,12 @@ def test_elastic_uncracked_below_threshold():
     # no cracked-section properties.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(5.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 5.0),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is False
@@ -2429,11 +2522,14 @@ def test_elastic_uncracked_below_threshold():
 def test_elastic_view_renders_with_sls_subsection():
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.selectbox(key="view").set_value("Elastic Results").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "view", "Elastic Results"),
+    )
     assert not at.exception
 
 
@@ -2443,12 +2539,16 @@ def test_cracking_follows_the_total_load():
     # uncracked to cracked.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(5.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 5.0),
+    )
     assert at.session_state["results"]["elastic"]["cracked"] is False
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "el_long_Mx", 400.0)
+    )
     assert at.session_state["results"]["elastic"]["cracked"] is True
 
 
@@ -2458,11 +2558,14 @@ def test_short_term_load_triggers_cracking():
     # cracking is triggered by the peak load and is irreversible.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(5.0).run()     # uncracked alone
-    at.number_input(key="el_short_Mx").set_value(400.0).run()  # cracks the total
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 5.0),
+        ("number_input", "el_short_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+    )  # long-term alone is uncracked; the total cracks
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True                    # cracked by the short-term peak
@@ -2479,10 +2582,13 @@ def test_cracked_properties_use_the_governing_load_when_long_term_is_zero():
     # not the degenerate zero-long-term solve (which would keep the full section).
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(0.0).run()
-    at.number_input(key="el_short_Mx").set_value(400.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 0.0),
+        ("number_input", "el_short_Mx", 400.0),
+    )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True
@@ -2496,11 +2602,14 @@ def test_counteracting_short_term_load_keeps_cracked():
     # it -- cracking is irreversible), and the long-term crack width is reported.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()    # cracks on its own
-    at.number_input(key="el_short_Mx").set_value(-380.0).run()  # total ~ 20, uncracked
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", -380.0),
+        ("checkbox", "sls_cw", True),
+    )  # long-term cracks; total is about 20 kNm
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True                    # cracked by the long-term action
@@ -2512,12 +2621,14 @@ def test_plain_elastic_unchanged_by_sls_toggle():
     # when the crack-width check is toggled on.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+    )
     base = list(at.session_state["results"]["elastic"]["total"])
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("checkbox", "sls_cw", True))
     assert not at.exception
     assert list(at.session_state["results"]["elastic"]["total"]) == base
 
@@ -2527,9 +2638,12 @@ def test_fctm_auto_button_tracks_grade():
     # Table 3.1): C50 -> 0.30*50^(2/3) ~ 4.07 MPa.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="conc_fck").set_value(50.0).run()
-    at.button(key="sls_fctm_auto").click().run()
+    _set_and_click(
+        at,
+        "sls_fctm_auto",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "conc_fck", 50.0),
+    )
     assert not at.exception
     assert at.number_input(key="sls_fctm").value == pytest.approx(4.07, abs=0.05)
 
@@ -2544,10 +2658,13 @@ def test_modular_ratios_are_derived_from_moduli():
     keys = {w.key for w in at.number_input} | {b.key for b in at.button}
     assert "nl" not in keys and "ns" not in keys              # inputs removed
     assert "nl_auto" not in keys and "ns_auto" not in keys    # Auto buttons removed
-    at.radio(key="mode").set_value("Both").run()
-    at.number_input(key="mild_Es").set_value(200.0).run()     # GPa
-    at.number_input(key="conc_Ec").set_value(40.0).run()      # GPa; Es/Ec = 5.0
-    at.number_input(key="el_phi").set_value(2.0).run()        # n_l = (1+2)*5 = 15.0
+    _set(
+        at,
+        ("radio", "mode", "Both"),
+        ("number_input", "mild_Es", 200.0),
+        ("number_input", "conc_Ec", 40.0),
+        ("number_input", "el_phi", 2.0),
+    )
     md = "\n".join(m.value for m in at.markdown)
     assert "Modular ratios" in md
     assert "| Mild (Es/Ec) | 5.000 | 15.000 |" in md
@@ -2558,15 +2675,16 @@ def test_prestress_gets_its_own_derived_modular_ratio():
     # tendon in the section the loads panel adds a prestress row n = Ep/Ec alongside
     # the mild row; Ep and Ec are in GPa: Ep = 195, Ec = 39 -> Ep/Ec = 5.0, and
     # phi = 0 -> n_l = n_s.
-    at = _fresh()
-    at.run()
-    at.radio(key="mode").set_value("Both").run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(3).run()           # add tendons
-    _apply_qs(at)
-    at.number_input(key="pre_Es").set_value(195.0).run()      # Ep (GPa)
-    at.number_input(key="conc_Ec").set_value(39.0).run()      # GPa; Ep/Ec = 5.0
-    at.number_input(key="el_phi").set_value(0.0).run()        # no creep: n_l = n_s
+    at = _fresh_qs(mode="Both")
+    _set_and_click(
+        at, "qs_apply", ("number_input", "tnd_n", 3)
+    )  # add tendons
+    _set(
+        at,
+        ("number_input", "pre_Es", 195.0),
+        ("number_input", "conc_Ec", 39.0),
+        ("number_input", "el_phi", 0.0),
+    )
     md = "\n".join(m.value for m in at.markdown)
     assert "| Prestress (Ep/Ec) | 5.000 | 5.000 |" in md
 
@@ -2574,12 +2692,8 @@ def test_prestress_gets_its_own_derived_modular_ratio():
 def test_tendon_stress_limit_uses_fpk_not_proof_stress():
     # The prestress material distinguishes fp0.1k (fytk) from fpk (futk).
     # The user-facing tendon stress criterion is explicitly a percentage of fpk.
-    at = _fresh()
-    at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    _open_qs(at)
-    at.number_input(key="tnd_n").set_value(3).run()
-    _apply_qs(at)
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 3))
     at.button(key="calculate").click().run()
     check = at.session_state["results"]["elastic"]["stress_assessments"]["prestress"]
     assert check["limit"] == pytest.approx(0.75 * 1860.0)
@@ -2591,15 +2705,15 @@ def test_transformed_area_uses_the_tendon_modular_ratio():
     # (n_mult), like the elastic and cracking solves -- so changing Ep moves the
     # reported transformed area. Without n_mult the tendons would take the mild
     # ratio and Ep would have no effect on the properties.
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(
+        at, "qs_apply", ("number_input", "tnd_n", 3)
+    )  # add tendons
+
     def _area(pre_es):
-        at = _fresh()
-        at.run()
-        at.radio(key="mode").set_value("Elastic").run()
-        _open_qs(at)
-        at.number_input(key="tnd_n").set_value(3).run()          # add tendons
-        _apply_qs(at)
-        at.number_input(key="pre_Es").set_value(pre_es).run()
-        at.button(key="calculate").click().run()
+        _set_and_click(
+            at, "calculate", ("number_input", "pre_Es", pre_es)
+        )
         return at.session_state["results"]["elastic"]["props_un"]["area"]
 
     a_soft, a_stiff = _area(160.0), _area(200.0)        # Ep in GPa
@@ -2612,9 +2726,12 @@ def test_editing_ec_or_creep_marks_elastic_results_stale():
     # mark the elastic results stale (the ratios enter the signature via their inputs).
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.selectbox(key="view").set_value("Elastic Results").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("selectbox", "view", "Elastic Results"),
+    )
     assert not any("press Calculate" in w.value for w in at.warning)   # fresh, not stale
     at.number_input(key="conc_Ec").set_value(20.0).run()              # changes n_s and n_l
     assert any("press Calculate" in w.value for w in at.warning)      # now stale
@@ -2627,16 +2744,17 @@ def test_crack_width_auto_cover_circular_section():
     # No cover input: the crack width takes each bar's clear cover from the
     # geometry. A 100 mm ring cover (to centres) on a circular section gives a
     # clear cover near 100 - phi/2 mm, comfortably above 70 mm.
-    at = _fresh()
-    at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    _open_qs(at)
+    at = _fresh_qs(mode="Elastic")
     at.selectbox(key="shape").set_value("Circular").run()
-    at.number_input(key="ring_c_mm").set_value(100.0).run()
-    _apply_qs(at)                                 # apply the ring to the points
-    at.number_input(key="el_long_Mx").set_value(400.0).run()  # force cracking
-    at.checkbox(key="sls_cw").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "qs_apply", ("number_input", "ring_c_mm", 100.0)
+    )  # apply the ring to the points
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+    )  # force cracking
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     if e["crack"] is not None:

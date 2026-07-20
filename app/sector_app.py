@@ -906,14 +906,17 @@ def _apply_pending_project() -> None:
         st.session_state["_project_msg"] = ("success", "Project loaded.")
 
 
-def _save_load_panel(parent) -> None:
+@st.fragment
+def _save_load_panel() -> None:
     """Download the current project and upload one to restore it.
 
     Rendered into a slot reserved near the top of the sidebar but only *after* the
     point tables and inputs have been seeded this run, so the download always
-    reflects the live section (not an empty one on a fresh session).
+    reflects the live section (not an empty one on a fresh session). Local autosave
+    controls rerun only this fragment; loading a project explicitly requests the
+    full rerun needed to rebuild every dependent input.
     """
-    box = parent.expander("Save / Load", expanded=False)
+    box = st.expander("Save / Load", expanded=False)
     box.download_button("Download project", data=_gather_project(),
                         file_name="sector_section.json", mime="application/json",
                         width="stretch",
@@ -980,9 +983,15 @@ def _clear_report_artifact():
         st.session_state.pop(key, None)
 
 
-def _report_panel(parent, input_signature):
-    """Report metadata inputs plus Generate / Download, like the BriCoS panel."""
-    box = parent.expander("Report", expanded=False)
+@st.fragment
+def _report_panel(input_signature):
+    """Report metadata inputs plus Generate / Download, like the BriCoS panel.
+
+    Metadata typing and stale-report feedback are fragment-local. Generating a PDF
+    escalates to a full rerun because the completed input payload and result views
+    live outside this panel.
+    """
+    box = st.expander("Report", expanded=False)
     box.caption("Fill in the project details, press Generate, then download the PDF. "
                 "The report uses the current inputs and the analyses for the selected "
                 "mode.")
@@ -996,12 +1005,13 @@ def _report_panel(parent, input_signature):
     c3.text_input("Checker", key="rep_checker")
     c4.text_input("Approver", key="rep_approver")
     box.text_area("Comments", key="rep_comments", height=80)
-    # Only flag the request here; the report is built at the end of the run, once
-    # build_inputs has rendered every panel (so the materials/loads are complete).
-    # Re-running now would abort this run before those panels set their values.
+    # Flag the request and start a full rerun. The report is then built at the end
+    # of that run, once build_inputs has rendered every panel and assembled the
+    # complete material, section and load payload.
     if box.button("Generate report", type="primary", width="stretch",
                   key="gen_report"):
         st.session_state["_generating_report"] = True
+        st.rerun()
     # A progress placeholder in the panel (filled live during generation, which runs
     # at the end of this same run), in the BriCoS location -- below the button.
     global _REPORT_PROG
@@ -1391,6 +1401,7 @@ def _quick_section_geometry(box):
     return outer, (holes or []), bars, tendons
 
 
+@st.fragment
 def _quick_section_viewport():
     """Full-width Quick Section builder shown in place of the analysis layout.
 
@@ -1398,6 +1409,10 @@ def _quick_section_viewport():
     Apply to write explicit points into the editable tables (which stay the source
     of truth) or Back to leave them untouched. Mirrors the BriCoS manual viewport:
     a session flag (``_qs_open``) renders this instead of the normal layout.
+
+    The builder is an independent Streamlit fragment. Editing a dimension or layout
+    therefore rebuilds only the form and its live preview, not the large, unchanged
+    sidebar. Apply and Back still call a full rerun because they leave this viewport.
     """
     _qs_restore_settings()   # bring back the settings from the last time it was open
     st.markdown("## Quick Section builder")
@@ -2219,8 +2234,10 @@ def build_inputs():
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
-    _report_panel(report_slot, sig)
-    _save_load_panel(save_slot)
+    with report_slot:
+        _report_panel(sig)
+    with save_slot:
+        _save_load_panel()
     with about_slot.expander("About", expanded=False):
         st.markdown("### Sector")
         st.caption("Reinforced-concrete and prestressed cross-section analysis.")
@@ -4501,6 +4518,142 @@ def combined_view(inp, results):
                    "links for the full longitudinal-steel utilisation check.")
 
 
+_VIEW_ALIASES = {"M-V-T Interaction": "M-V-T Combined"}
+
+
+@st.fragment
+def _analysis_workspace(inp):
+    """Render and operate the main analysis workspace independently.
+
+    View switches, result-detail controls and plot-label changes do not alter the
+    sidebar inputs. Keeping them in a fragment avoids rebuilding every sidebar
+    widget for those interactions. A sidebar edit still causes a normal full rerun
+    and invokes this function with a freshly built input payload.
+    """
+    # Plot-label controls sit inline in the main viewport, directly above the View
+    # dropdown (not tucked inside a submenu). They only affect the drawings, so they
+    # are not part of the result-staleness signature.
+    # Keep a non-widget copy because opening Quick Section or the manual temporarily
+    # removes the workspace widgets. Streamlit then cleans up their widget keys; the
+    # durable copies restore the user's choices when the workspace returns.
+    st.markdown("**Plot labels**")
+    lc1, lc2 = st.columns(2)
+    inp["label_scale"] = _seeded_number(
+        lc1, "Label size", 0.5, 3.0,
+        st.session_state.get("_workspace_label_scale", 1.0),
+        0.1, "label_scale",
+        help="Scales the corner / bar / tendon number labels on the section "
+             "drawings.")
+    inp["label_min_gap"] = _seeded_number(
+        lc2, "Label spacing (hide threshold)", 0.0, 0.5,
+        st.session_state.get("_workspace_label_min_gap", 0.04),
+        0.01, "label_min_gap",
+        help="Labels closer together than this fraction of the section size are "
+             "hidden to avoid overlap. Lower shows more (0 shows every label); "
+             "raise it for dense outlines like a circular section.")
+    st.session_state["_workspace_label_scale"] = inp["label_scale"]
+    st.session_state["_workspace_label_min_gap"] = inp["label_min_gap"]
+
+    # Migrate a renamed view label before either workspace control renders. A keyed
+    # selectbox otherwise keeps returning the stale string, which the dispatch no
+    # longer recognises.
+    current_view = st.session_state.get(
+        "view", st.session_state.get("_workspace_view", VIEWS[0])
+    )
+    current_view = _VIEW_ALIASES.get(current_view, current_view)
+    if current_view not in VIEWS:
+        current_view = VIEWS[0]
+    st.session_state["view"] = current_view
+
+    c_view, c_calc = st.columns([3, 1])
+    # Create Calculate before View (the containers preserve their visual order).
+    # This lets a successful calculation set the destination view before the keyed
+    # selectbox is instantiated, avoiding the former second full-app rerun.
+    c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
+    calc = c_calc.button(
+        "Calculate", type="primary", key="calculate", width="stretch",
+        help="Run the selected analysis for the current inputs.",
+    )
+    if calc:
+        # Reuse a previously computed half whose split signature is unchanged, so a
+        # Both run that touched only elastic (or only plastic) inputs recomputes just
+        # the affected analysis.
+        prev = st.session_state.get("results") or {}
+        reuse_plastic = (
+            prev.get("plastic")
+            if st.session_state.get("result_plastic_sig") == inp["plastic_sig"]
+            else None
+        )
+        reuse_elastic = (
+            prev.get("elastic")
+            if st.session_state.get("result_elastic_sig") == inp["elastic_sig"]
+            else None
+        )
+        st.session_state["results"] = run_analysis(
+            inp, reuse_plastic=reuse_plastic, reuse_elastic=reuse_elastic
+        )
+        st.session_state["result_sig"] = inp["signature"]
+        st.session_state["result_plastic_sig"] = inp["plastic_sig"]
+        st.session_state["result_elastic_sig"] = inp["elastic_sig"]
+        # Re-default the Plastic view's neutral-axis state to this result's governing
+        # angle. The user can still pick another rotation until the next Calculate.
+        st.session_state.pop("pl_state", None)
+        # A valid calculation from a live input view moves directly to its natural
+        # result view in this same run. An invalid section returns {}, so it stays put.
+        if (
+            current_view in ("Section", "Stress-Strain diagrams")
+            and st.session_state["results"]
+        ):
+            current_view = (
+                "Plastic Results"
+                if inp["mode"] in ("Plastic", "Both")
+                else "Elastic Results"
+            )
+            st.session_state["view"] = current_view
+
+    view = c_view.selectbox(
+        "View", VIEWS, key="view",
+        help="What to show in the main area. Section and Stress-Strain diagrams "
+             "update live; the result views need a Calculate.",
+    )
+    st.session_state["_workspace_view"] = view
+
+    results = st.session_state.get("results")
+    # An invalid section (a void that disconnects the concrete, steel outside the
+    # outline) makes run_analysis return {}. Treat that like no result so the badge
+    # does not read green "up to date" for a calculation that produced nothing.
+    stale = bool(results) and st.session_state.get("result_sig") != inp["signature"]
+    if not results:
+        c_calc.caption("Not calculated yet")
+    elif stale:
+        c_calc.caption(":orange[Inputs changed -- recalculate]")
+    else:
+        c_calc.caption(":green[Results up to date]")
+    if stale and view in _RESULT_VIEWS:
+        st.warning("Inputs changed since the last calculation - press Calculate to update.")
+
+    for section_err in (inp.get("void_error"), inp.get("steel_error")):
+        if section_err:
+            st.error(section_err)
+
+    if view == "Section":
+        section_view(inp)
+    elif view == "Stress-Strain diagrams":
+        materials_view(inp)
+    elif view == "Plastic Results":
+        plastic_view(inp, results)
+    elif view == "N-M Interaction":
+        interaction_view(inp, results)
+    elif view == "Shear":
+        shear_view(inp, results)
+    elif view == "Torsion":
+        torsion_view(inp, results)
+    elif view == "M-V-T Combined":
+        combined_view(inp, results)
+    else:
+        elastic_view(inp, results)
+
+
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
@@ -4510,8 +4663,8 @@ _apply_pending_project()   # restore an uploaded project before any widget is bu
 # Always build the sidebar inputs, even while the Quick Section builder is open:
 # Streamlit discards a widget's state on any run where it is not rendered, so
 # skipping build_inputs would reset every material and load input to its minimum
-# (and break the next Calculate). build_inputs is cheap; its result is unused
-# while the builder owns the main area.
+# (and break the next Calculate). Its result is unused while the builder owns the
+# main area; subsequent builder edits rerun only its fragment.
 inp = build_inputs()
 
 # The Quick Section builder and the user manual each take over the main viewport
@@ -4532,109 +4685,5 @@ if st.session_state.get("_qs_open"):
 # geometry rather than the stale pre-apply tables.
 _maybe_autosave()
 
-# Plot-label controls sit inline in the main viewport, directly above the View
-# dropdown (not tucked inside a submenu). They only affect the drawings, so they
-# are not part of the result-staleness signature.
-st.markdown("**Plot labels**")
-lc1, lc2 = st.columns(2)
-inp["label_scale"] = _seeded_number(
-    lc1, "Label size", 0.5, 3.0, 1.0, 0.1, "label_scale",
-    help="Scales the corner / bar / tendon number labels on the section "
-         "drawings.")
-inp["label_min_gap"] = _seeded_number(
-    lc2, "Label spacing (hide threshold)", 0.0, 0.5, 0.04, 0.01, "label_min_gap",
-    help="Labels closer together than this fraction of the section size are "
-         "hidden to avoid overlap. Lower shows more (0 shows every label); "
-         "raise it for dense outlines like a circular section.")
-
-# Migrate a renamed view label from an older session BEFORE the selectbox renders: a
-# keyed selectbox otherwise keeps returning the stale string, which the dispatch no
-# longer recognises, so the combined view silently falls through to the elastic one.
-_VIEW_ALIASES = {"M-V-T Interaction": "M-V-T Combined"}
-if st.session_state.get("view") in _VIEW_ALIASES:
-    st.session_state["view"] = _VIEW_ALIASES[st.session_state["view"]]
-# A pending post-Calculate view switch is applied BEFORE the selectbox renders, so
-# the widget picks it up cleanly (setting a widget key after it renders is unsafe).
-if "_switch_view" in st.session_state:
-    st.session_state["view"] = st.session_state.pop("_switch_view")
-c_view, c_calc = st.columns([3, 1])
-view = c_view.selectbox("View", VIEWS, key="view",
-                        help="What to show in the main area. Section and "
-                             "Stress-Strain diagrams update live; the result "
-                             "views need a Calculate.")
-# Nudge the button down so it lines up with the selectbox input.
-c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
-calc = c_calc.button("Calculate", type="primary", key="calculate",
-                     width="stretch",
-                     help="Run the selected analysis for the current inputs.")
-
-if calc:
-    # Reuse a previously computed half whose split signature is unchanged, so a Both
-    # run that only touched the elastic (or only the plastic) inputs recomputes just
-    # the affected analysis instead of both.
-    prev = st.session_state.get("results") or {}
-    reuse_plastic = (prev.get("plastic")
-                     if st.session_state.get("result_plastic_sig") == inp["plastic_sig"]
-                     else None)
-    reuse_elastic = (prev.get("elastic")
-                     if st.session_state.get("result_elastic_sig") == inp["elastic_sig"]
-                     else None)
-    st.session_state["results"] = run_analysis(
-        inp, reuse_plastic=reuse_plastic, reuse_elastic=reuse_elastic)
-    st.session_state["result_sig"] = inp["signature"]
-    st.session_state["result_plastic_sig"] = inp["plastic_sig"]
-    st.session_state["result_elastic_sig"] = inp["elastic_sig"]
-    # Re-default the Plastic view's neutral-axis state to this result's governing
-    # angle (the sticky selectbox key would otherwise keep the previously shown
-    # rotation, e.g. 90 deg, after the load -- and its governing angle -- changed).
-    # The user can still pick another rotation until the next Calculate.
-    st.session_state.pop("pl_state", None)
-    # If the user calculated while on a live input view, take them to the natural
-    # result view so they see the outcome (queue it; applied before the selectbox).
-    # Only when a result was actually produced -- an invalid section returns {} and
-    # must NOT navigate the user away to an empty result page.
-    if view in ("Section", "Stress-Strain diagrams") and st.session_state["results"]:
-        st.session_state["_switch_view"] = ("Plastic Results"
-                                            if inp["mode"] in ("Plastic", "Both")
-                                            else "Elastic Results")
-        st.rerun()
-
+_analysis_workspace(inp)
 _generate_report(inp)   # builds the PDF when the Report panel's Generate was pressed
-
-results = st.session_state.get("results")
-# An invalid section (a void that disconnects the concrete, steel outside the outline)
-# makes run_analysis return {} -- falsy but not None. Treat that like no result so the
-# badge does not read green "up to date" for a Calculate that produced nothing.
-stale = bool(results) and st.session_state.get("result_sig") != inp["signature"]
-# Result freshness, shown under the Calculate button on EVERY view (not just the
-# result views) so the user always knows whether the results reflect the inputs.
-if not results:
-    c_calc.caption("Not calculated yet")
-elif stale:
-    c_calc.caption(":orange[Inputs changed -- recalculate]")
-else:
-    c_calc.caption(":green[Results up to date]")
-# On a result view, keep the prominent in-view banner as well.
-if stale and view in _RESULT_VIEWS:
-    st.warning("Inputs changed since the last calculation - press Calculate to update.")
-
-for _section_err in (inp.get("void_error"), inp.get("steel_error")):
-    if _section_err:
-        st.error(_section_err)
-
-if view == "Section":
-    section_view(inp)
-elif view == "Stress-Strain diagrams":
-    materials_view(inp)
-elif view == "Plastic Results":
-    plastic_view(inp, results)
-elif view == "N-M Interaction":
-    interaction_view(inp, results)
-elif view == "Shear":
-    shear_view(inp, results)
-elif view == "Torsion":
-    torsion_view(inp, results)
-elif view == "M-V-T Combined":
-    combined_view(inp, results)
-else:
-    elastic_view(inp, results)

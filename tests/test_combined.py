@@ -192,6 +192,36 @@ def _run_member(
     torsion_band=None,
 ):
     """Configure a complete M-V-T member with only the reruns needed for reveals."""
+    # Once a shared AppTest has revealed every conditional member input, later load
+    # cases can update all values and calculate in one rerun. This keeps repeated
+    # engineering comparisons independent at result level without rebuilding the
+    # same Streamlit controls two extra times per case.
+    ready = (
+        at.checkbox(key="shear_on").value
+        and at.checkbox(key="torsion_on").value
+        and at.checkbox(key="shear_links").value
+    )
+    if ready:
+        changes = [
+            ("number_input", "pl_Mx", mx),
+            ("number_input", "pl_P", p),
+            ("checkbox", "combined_on", combined_on),
+            ("number_input", "shear_V", v),
+            ("number_input", "torsion_T", t),
+        ]
+        if shear_band is not None:
+            changes.extend([
+                ("number_input", "shear_cot_min", shear_band[0]),
+                ("number_input", "shear_cot_max", shear_band[1]),
+            ])
+        if torsion_band is not None:
+            changes.extend([
+                ("number_input", "torsion_cot_min", torsion_band[0]),
+                ("number_input", "torsion_cot_max", torsion_band[1]),
+            ])
+        _set_and_click(at, "calculate", *changes)
+        return at
+
     _set(
         at,
         ("number_input", "pl_Mx", mx),
@@ -551,9 +581,10 @@ def test_app_combined_angle_minimises_the_dkna_governing_sum():
     # beats every one of them -- i.e. the chosen cot actually minimises the governing
     # combined utilisation, not just some component. A regression that drops the DK NA
     # objective term would move theta off this minimum and this test would catch it.
+    at = _fresh()
+    at.run()
+
     def dkna(pin=None):
-        at = _fresh()
-        at.run()
         band = (pin, pin) if pin is not None else None
         _run_member(
             at,
