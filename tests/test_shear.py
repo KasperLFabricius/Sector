@@ -75,8 +75,53 @@ def test_vrd_c_2023_invalid_keeps_all_keys():
                            asl_mm2=1473.0, fyd_mpa=434.8, ddg_mm=32.0)
     assert not res["valid"]
     for k in ("vrd_c", "tau_rdc", "tau_basic", "tau_min", "rho_l", "z", "ddg",
-              "fyd", "gamma_v", "model"):
+              "fyd", "gamma_v", "model", "k_vp", "d_kvp", "a_cs",
+              "n_ed_tension", "m_ed", "v_ed", "axial_applied"):
         assert k in res
+
+
+def test_vrd_c_2023_axial_factor_formula_8_31():
+    # Independent anchor for 8.30/8.31.  M/V = 1.10 m, which exceeds d = 0.55 m.
+    common = dict(
+        fck=35.0, code=codes.EC2_2023, bw_mm=300.0, d_mm=550.0,
+        asl_mm2=1473.0, fyd_mpa=500.0 / 1.15, ddg_mm=32.0,
+        m_ed_knm=110.0, v_ed_kn=100.0,
+    )
+    neutral = shear.vrd_c_2023(**common)
+    tension = shear.vrd_c_2023(**common, n_ed_tension_kn=300.0)
+    compression = shear.vrd_c_2023(**common, n_ed_tension_kn=-300.0)
+    floor = shear.vrd_c_2023(**common, n_ed_tension_kn=-10_000.0)
+
+    assert neutral["a_cs"] == pytest.approx(1100.0)
+    assert neutral["k_vp"] == pytest.approx(1.0)
+    assert tension["k_vp"] == pytest.approx(1.5)
+    assert compression["k_vp"] == pytest.approx(0.5)
+    assert floor["k_vp"] == pytest.approx(0.1)
+    assert tension["d_kvp"] == pytest.approx(1.5 * 550.0)
+    assert compression["d_kvp"] == pytest.approx(0.5 * 550.0)
+
+    # Tension raises k_vp and lowers the basic resistance; compression does the
+    # reverse.  Formula 8.20 and z = 0.9d retain the nominal depth.
+    assert tension["tau_basic"] < neutral["tau_basic"] < compression["tau_basic"]
+    assert tension["vrd_c"] < neutral["vrd_c"] < compression["vrd_c"]
+    assert tension["tau_min"] == pytest.approx(neutral["tau_min"])
+    assert compression["tau_min"] == pytest.approx(neutral["tau_min"])
+    assert tension["z"] == pytest.approx(neutral["z"])
+    assert compression["z"] == pytest.approx(neutral["z"])
+
+
+def test_vrd_c_2023_dispatch_converts_compression_positive_sign():
+    common = dict(
+        fck=35.0, code=codes.EC2_2023, bw_mm=300.0, d_mm=550.0,
+        asl_mm2=1473.0, ac_m2=0.18, fyd_mpa=500.0 / 1.15, ddg_mm=32.0,
+        m_ed_knm=110.0, v_ed_kn=100.0,
+    )
+    tension = shear.vrd_c(**common, n_ed_comp_kn=-300.0)
+    compression = shear.vrd_c(**common, n_ed_comp_kn=300.0)
+    assert tension["n_ed_tension"] == pytest.approx(300.0)
+    assert tension["k_vp"] == pytest.approx(1.5)
+    assert compression["n_ed_tension"] == pytest.approx(-300.0)
+    assert compression["k_vp"] == pytest.approx(0.5)
 
 
 def test_vrd_c_dispatches_on_shear_model():
@@ -506,12 +551,11 @@ def test_app_shear_is_saved_and_restored():
     assert at2.session_state["shear_axis"] == "Horizontal shear (bending about y)"
 
 
-# -- v0.50: prestress precompression in sigma_cp / alpha_cw (F1) and the 2023
-#    tensile-N warning (F2) -------------------------------------------------
+# -- Prestress resultants and axial-force effects in shear -------------------
 
-def test_prestress_axial_helper():
-    # _prestress_axial reproduces the elastic solver's locked-in tendon force
-    # sum(Ep*IS*Ap) (concrete compression-positive, kN); zero without prestress.
+def test_prestress_resultants_helper():
+    # The helper reproduces the locked-in tendon force sum(Ep*IS*Ap) and its
+    # eccentric moments about the concrete centroid.
     import sector_app
     from sector import material_presets as mp
     kw = dict(mp.PRESTRESS_PRESETS["EN 1992-1-1:2005"])
@@ -521,11 +565,21 @@ def test_prestress_axial_helper():
     tendons = [(0.0, -0.40, 1000.0), (0.10, -0.40, 500.0)]   # 1500 mm2 total
     expected = pre.Es * pre.IS * 1000.0 * (1500.0 / 1.0e6)   # kN
     assert expected > 0.0
+    p_res, mx_res, my_res = sector_app._prestress_resultants(
+        {"prestress": pre, "tendons": tendons}, cx=0.0, cy=0.0)
+    assert p_res == pytest.approx(expected)
+    # Mx = sum(P_i*(y_i-cy)); My = sum(P_i*(x_i-cx)).
+    assert mx_res == pytest.approx(-0.40 * expected)
+    assert my_res == pytest.approx(expected / 3.0 * 0.10)
     assert sector_app._prestress_axial(
         {"prestress": pre, "tendons": tendons}) == pytest.approx(expected)
     # No tendons or no prestress material -> no precompression.
-    assert sector_app._prestress_axial({"prestress": pre, "tendons": []}) == 0.0
-    assert sector_app._prestress_axial({"prestress": None, "tendons": tendons}) == 0.0
+    assert sector_app._prestress_resultants(
+        {"prestress": pre, "tendons": []}, 0.0, 0.0
+    ) == (0.0, 0.0, 0.0)
+    assert sector_app._prestress_resultants(
+        {"prestress": None, "tendons": tendons}, 0.0, 0.0
+    ) == (0.0, 0.0, 0.0)
 
 
 def _qs_prestressed_shear(pre_is, *, method=None):
@@ -567,32 +621,32 @@ def test_app_shear_prestress_raises_vrd_c():
     assert sh["n_ed"] == pytest.approx(sh0["n_ed"])
 
 
-def test_app_shear_2023_ignores_tension_with_warning():
-    # F2: the 2023 tau_Rd,c (8.2.2) has no axial term, so a NET axial tension is
-    # silently ignored (unconservative). Flag it and warn.
+def test_app_shear_2023_applies_axial_factor():
+    # Formula 8.31 is applied in the app: net tension reduces the basic resistance
+    # and net compression increases it.  The former "ignored" warning is obsolete.
     m2023 = codes.EC2_2023.label
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
     at.selectbox(key="shear_method").set_value(m2023).run()
-    at.number_input(key="shear_V").set_value(50.0).run()
+    at.number_input(key="shear_V").set_value(100.0).run()
+    at.number_input(key="pl_Mx").set_value(110.0).run()
+    at.number_input(key="pl_P").set_value(0.0).run()
+    at.button(key="calculate").click().run()
+    neutral = at.session_state["results"]["shear"]["res"]
+
     at.number_input(key="pl_P").set_value(200.0).run()        # tension +
     at.button(key="calculate").click().run()
     assert not at.exception
-    assert at.session_state["results"]["shear"]["n2023_tension"] is True
+    tension = at.session_state["results"]["shear"]["res"]
+    assert tension["k_vp"] > 1.0
+    assert tension["tau_basic"] < neutral["tau_basic"]
     at.selectbox(key="view").set_value("Shear").run()
-    assert any("UNCONSERVATIVE" in w.value for w in at.warning)
+    assert not any("UNCONSERVATIVE" in w.value for w in at.warning)
 
-    # Net compression -> no warning (2023 ignoring it is conservative).
+    # Net compression reverses the effect.
     at.number_input(key="pl_P").set_value(-200.0).run()
     at.button(key="calculate").click().run()
-    assert at.session_state["results"]["shear"]["n2023_tension"] is False
-
-    # A 2005 edition handles tension via k1*sigma_cp, so no warning there.
-    at2 = _fresh()
-    at2.run()
-    at2.checkbox(key="shear_on").set_value(True).run()
-    at2.number_input(key="shear_V").set_value(50.0).run()
-    at2.number_input(key="pl_P").set_value(200.0).run()
-    at2.button(key="calculate").click().run()
-    assert at2.session_state["results"]["shear"]["n2023_tension"] is False
+    compression = at.session_state["results"]["shear"]["res"]
+    assert compression["k_vp"] < 1.0
+    assert compression["tau_basic"] > neutral["tau_basic"]

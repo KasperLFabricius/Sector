@@ -143,11 +143,98 @@ st.caption("Reinforced-concrete cross-section analysis - elastic stresses and pl
 # stress-strain diagram. A preset only prefills values; all stay editable.
 # ---------------------------------------------------------------------------
 
-_PRESET_HELP = ("Prefills a named stress-strain law (a named curve shape or a "
-                "Eurocode edition). Every parameter stays editable afterwards.")
+_PRESET_HELP = (
+    "Prefills a named stress-strain law (a named curve shape or a Eurocode "
+    "edition). Direct inputs remain editable; edition-derived coefficients are "
+    "shown read-only so the named method and numerical law cannot diverge."
+)
 
 # Default material edition (Danish practice: DS/EN with the DK National Annex).
 _DEFAULT_PRESET = "DS/EN 1992-1-1:2005 + DK NA:2024"
+
+# EN 1992-1-1:2023, 5.1.6(1): 0.85 is the general/other-case value. The value
+# 1.00 is not an equivalent preference; it is an explicit applicability choice
+# for the stated reference-age and delayed-design-loading conditions.
+_KTC_CHOICES = {
+    "0.85 - General / other cases (default)": 0.85,
+    "1.00 - 5.1.6(1) reference-age and loading conditions": 1.0,
+}
+
+
+def _edition_family(label):
+    """Normalise a user-visible method/preset label for alignment reporting."""
+    text = str(label or "")
+    if "2023" in text:
+        return "EN 1992-1-1:2023"
+    if "DK NA" in text:
+        return "EN 1992-1-1:2005 + DK NA"
+    if "2005" in text or "2004" in text:
+        return "EN 1992-1-1:2005"
+    return "Custom material law"
+
+
+def _design_basis_summary(*, concrete_preset, mild_preset, prestress_preset=None,
+                          crack_code=None, shear_method=None, shear_links=False,
+                          torsion_method=None, combined_method=None):
+    """Whole-calculation edition map and any material hybrid/coverage qualification.
+
+    Sector intentionally permits independent expert choices. This summary makes
+    those choices conspicuous instead of silently presenting a mixed-edition report
+    as one end-to-end code implementation.
+    """
+    selections = [("Concrete material", concrete_preset)]
+    if mild_preset:
+        selections.append(("Reinforcing steel", mild_preset))
+    if prestress_preset:
+        selections.append(("Prestressing steel", prestress_preset))
+    if crack_code:
+        selections.append(("Crack width", crack_code))
+    if shear_method:
+        selections.append(("Shear", shear_method))
+    if torsion_method:
+        selections.append(("Torsion", torsion_method))
+    if combined_method:
+        selections.append(("Combined M-V-T", combined_method))
+
+    components = [
+        {"role": role, "selection": str(selection),
+         "family": _edition_family(selection)}
+        for role, selection in selections
+    ]
+    normative = {c["family"] for c in components
+                 if c["family"] != "Custom material law"}
+    has_custom = any(c["family"] == "Custom material law" for c in components)
+    mixed = len(normative) > 1 or (has_custom and bool(normative))
+
+    if mixed:
+        status = "Mixed/custom design basis - review every selected method"
+    elif normative and not has_custom:
+        status = f"Edition-aligned: {next(iter(normative))}"
+    elif has_custom:
+        status = "Custom material-law basis"
+    else:
+        status = "Design basis not identified"
+
+    limitations = []
+    concrete_2023 = _edition_family(concrete_preset) == "EN 1992-1-1:2023"
+    if shear_method and "2023" in str(shear_method) and shear_links:
+        limitations.append(
+            "EN 1992-1-1:2023 shear with links (8.2.3) is not implemented; "
+            "the reported 2023 shear result covers the no-links resistance only."
+        )
+    if concrete_2023 and (torsion_method or combined_method):
+        limitations.append(
+            "Torsion and combined M-V-T use a selected 2005-family method; "
+            "Sector does not implement those checks to EN 1992-1-1:2023."
+        )
+    return {
+        "components": components,
+        "families": sorted(normative),
+        "has_custom": has_custom,
+        "mixed": mixed,
+        "status": status,
+        "limitations": limitations,
+    }
 
 
 def _prefill(prefix, preset, presets):
@@ -250,20 +337,58 @@ def concrete_panel(box, locked=False, lock_elastic=False):
                                "conc_preset", help=_PRESET_HELP)
     _prefill("conc", preset, presets)
     curve = presets[preset]["curve"]
+    _code = codes.CODES.get(preset)
+    is_2023 = _code is not None and _code.eta_cc_ref is not None
     fck = _number(box, "conc", "fck", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP)
     gamma_c = _number(box, "conc", "gamma_c", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
                       disabled=locked)
-    # For a strength-dependent edition (EN 2023), keep alpha_cc tracking fck --
-    # recompute it whenever fck changes, while still allowing a manual override
-    # in between. Constant-alpha_cc editions just keep the editable value.
-    auto = mp.strength_dependent_alpha_cc(preset, fck)
-    if auto is not None and st.session_state.get("conc_alpha_fck") != fck:
+
+    k_tc = None
+    eta_cc = None
+    if is_2023:
+        by_value = {value: label for label, value in _KTC_CHOICES.items()}
+        saved = float(st.session_state.get("conc_k_tc", _code.k_tc))
+        if saved not in by_value:
+            saved = _code.k_tc
+            st.session_state["conc_k_tc"] = saved
+        k_tc = _seeded_selectbox(
+            box, r"$k_{tc}$ applicability", list(by_value), _code.k_tc,
+            "conc_k_tc", format_func=lambda value: by_value[value],
+            disabled=locked,
+            help="EN 1992-1-1:2023 5.1.6(1): use 0.85 for the general/other "
+                 "cases. Select 1.00 only when the stated reference-age and delayed "
+                 "design-loading conditions apply.",
+        )
+        if math.isclose(k_tc, 1.0):
+            box.warning(
+                "k_tc = 1.00 is applicable only for t_ref <= 28 days (CR/CN) or "
+                "<= 56 days (CS) when design loading is not expected until at least "
+                "3 months after casting, unless the governing National Annex states "
+                "otherwise. The user is explicitly assuming those conditions."
+            )
+        else:
+            box.caption("k_tc = 0.85: general / other-case value in 5.1.6(1).")
+        eta_cc = min((_code.eta_cc_ref / fck) ** (1.0 / 3.0), 1.0)
+
+    # For EN 2023, the effective coefficient is derived from the independent
+    # eta_cc(fck) and explicit k_tc applicability input. It is read-only so the
+    # displayed edition cannot diverge from the numerical material law. A custom
+    # curve preset remains available when a free effective coefficient is intended.
+    auto = mp.strength_dependent_alpha_cc(preset, fck, k_tc)
+    if auto is not None:
         st.session_state["conc_alpha_cc"] = auto
-        st.session_state["conc_alpha_fck"] = fck
-    if auto is None:
-        st.session_state.pop("conc_alpha_fck", None)
-    alpha_cc = _number(box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
-                       disabled=locked)
+        label, lo, hi, step = mp.CONCRETE_FIELD_META["alpha_cc"]
+        alpha_cc = box.number_input(
+            r"Effective $\eta_{cc} k_{tc}$", float(lo), float(hi), step=float(step),
+            key="conc_alpha_cc", disabled=True,
+            help="Derived EN 1992-1-1:2023 design-strength coefficient: "
+                 "eta_cc = min[(40/fck)^(1/3), 1.0], multiplied by the selected k_tc.",
+        )
+    else:
+        alpha_cc = _number(
+            box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
+            disabled=locked,
+        )
 
     # Concrete strain limits eps_c2, eps_cu2 and the parabola exponent n shape the
     # ULS compression curve (plastic-only). Making them editable lets grades above
@@ -277,7 +402,6 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     # strength-dependent values above C50/60 would silently overwrite the 2023 law
     # (the manual button and Auto-calc-all share these). Non-edition curve presets
     # are not in the registry -> fall back to Table 3.1.
-    _code = codes.CODES.get(preset)
     _ec2_f, _ecu2_f, _n_f = (_code.strain_law(fck) if _code is not None
                              else (codes.eps_c2(fck), codes.eps_cu2(fck),
                                    codes.n_exponent(fck)))
@@ -310,7 +434,10 @@ def concrete_panel(box, locked=False, lock_elastic=False):
 
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n)
-    note = "  (alpha_cc tracks fck via eta_cc)" if auto is not None else ""
+    note = (
+        f"  (eta_cc = {eta_cc:.4f}, k_tc = {k_tc:.2f})"
+        if auto is not None else ""
+    )
     box.caption(f"curve {curve},  $f_{{cd}}$ = {concrete.fcd:.3f} MPa,  "
                 f"$\\varepsilon_{{cu2}}$ = {concrete.eps_cu2 * 1000.0:.3f} permille{note}")
 
@@ -344,7 +471,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
                           key="conc_Ec", disabled=lock_elastic,
                           help="Concrete secant modulus, used only by the elastic "
                                "analysis to auto-derive the modular ratios n = Es/Ec.")
-    return concrete, fctm_val, Ec
+    return concrete, fctm_val, Ec, preset, k_tc, eta_cc
 
 
 def mild_panel(box, locked=False):
@@ -762,8 +889,9 @@ def _apply_pending_project() -> None:
     for marker, src in project_io.PREV_MARKERS.items():
         if src in scalars:
             st.session_state[marker] = scalars[src]
-    # For a strength-dependent edition (EN 2023) alpha_cc tracks fck via a hidden
-    # marker; align it to the loaded fck so the loaded alpha_cc is not overwritten.
+    # For a strength-dependent edition (EN 2023) the panel derives the effective
+    # eta_cc*k_tc coefficient from the loaded fck and explicit/migrated k_tc value.
+    # Keep the legacy marker aligned for compatibility with older sessions.
     if "conc_fck" in scalars:
         st.session_state["conc_alpha_fck"] = scalars["conc_fck"]
     for ed in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
@@ -1339,7 +1467,7 @@ def _modular_ratio_readout(box, ns, nl, ns_p, nl_p, *, has_tendons):
 # Anything that could affect both stays shared, so a reused result is never stale.
 # n_l/n_s are derived from conc_Ec and el_phi, so those enter the elastic signature.
 _SHARED_SIG_KEYS = (
-    "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
+    "conc_preset", "conc_fck", "conc_gamma_c", "conc_k_tc", "conc_alpha_cc",
     "conc_eps_c2", "conc_eps_cu2", "conc_n",
     "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
     "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
@@ -1415,6 +1543,8 @@ def build_inputs():
                            "run the two.")
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
+    aset.markdown("**Design-basis alignment**")
+    design_basis_slot = aset.container()
 
     aset.markdown("**Neutral-axis sweep (plastic)**")
     v_min = _seeded_number(aset, r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
@@ -1514,8 +1644,9 @@ def build_inputs():
     sts.caption("Design shear resistance of a member not requiring shear "
                  "reinforcement (EN 1992-1-1 sec. 6.2.2). A capacity check of the "
                  "applied shear VEd; the axial term uses the axial force N from the "
-                 "Plastic capacity load set (its N input stays enabled here even in "
-                 "Elastic-only mode).")
+                 "Plastic capacity load set, and the 2023 method also uses its "
+                 "selected-axis moment for Formula (8.30). Required N/M inputs stay "
+                 "enabled here even in Elastic-only mode.")
     shear_on = _seeded_checkbox(
         sts, "Check shear capacity", False, "shear_on",
         help="Compute VRd,c and the utilisation VEd/VRd,c. Members that need "
@@ -1814,26 +1945,68 @@ def build_inputs():
                                len(bars) + 1)
     tendons = _pts_to_m(tendons_mm)
 
-    # In elastic-only mode the stress-strain laws do not enter the analysis (it is
-    # linear: steel via the modular ratio, concrete linear in compression with no
-    # tension), so lock the parameters that have no elastic effect. fck (it feeds
-    # the serviceability fctm) and the steel modulus Es (the crack-width mean
-    # strain) still matter, so they stay editable.
-    lock_mats = mode == "Elastic"
+    # In a purely elastic-bending calculation the ULS stress-strain laws do not
+    # enter the result, so lock their inactive parameters. Independent shear,
+    # torsion and combined capacity checks do use characteristic/design strengths
+    # and the user's final partial factors even when bending is Elastic-only; keep
+    # the material laws editable whenever one of those checks is active.
+    capacity_checks_on = shear_on or torsion_on or combined_on
+    lock_mats = mode == "Elastic" and not capacity_checks_on
     lock_elastic = mode == "Plastic"   # fctm + Ec are elastic-only inputs
     if lock_mats:
         mat.caption("Elastic-only mode: the stress-strain laws do not affect the "
                     "elastic results and are locked. Only fck (feeds fctm) and the "
                     "steel modulus Es (crack width) stay editable; switch to "
                     "Plastic or Both to edit the full laws.")
-    concrete, sls_fctm, conc_Ec = concrete_panel(mat, locked=lock_mats,
-                                                 lock_elastic=lock_elastic)
+    elif mode == "Elastic" and capacity_checks_on:
+        mat.caption(
+            "Elastic bending is selected, but an independent shear/torsion "
+            "capacity check is active. ULS material strengths and final partial "
+            "factors therefore remain editable."
+        )
+    (concrete, sls_fctm, conc_Ec, concrete_preset,
+     concrete_k_tc, concrete_eta_cc) = concrete_panel(
+         mat, locked=lock_mats, lock_elastic=lock_elastic
+     )
     mat.divider()
     steel = mild_panel(mat, locked=lock_mats)
+    mild_preset = st.session_state.get("mild_preset", "")
     # The reinforcement laws are always definable; whether each is used follows from
     # the section (mild steel when bars exist, prestress when tendons exist).
     mat.divider()
     prestress = prestress_panel(mat, locked=lock_mats)
+    prestress_preset = st.session_state.get("pre_preset", "")
+
+    effective_shear_method = (
+        combined_method if combined_on else shear_method
+    ) if shear_on else None
+    effective_torsion_method = (
+        combined_method if combined_on else torsion_method
+    ) if torsion_on else None
+    design_basis = _design_basis_summary(
+        concrete_preset=concrete_preset,
+        mild_preset=mild_preset if bars else None,
+        prestress_preset=prestress_preset if tendons else None,
+        crack_code=sls_code if (elastic_on and sls_cw) else None,
+        shear_method=effective_shear_method,
+        shear_links=bool(shear_links),
+        torsion_method=effective_torsion_method,
+        combined_method=combined_method if combined_on else None,
+    )
+    if design_basis["mixed"] or design_basis["limitations"]:
+        design_basis_slot.warning(design_basis["status"])
+    elif design_basis["has_custom"]:
+        design_basis_slot.info(design_basis["status"])
+    else:
+        design_basis_slot.success(design_basis["status"])
+    design_basis_slot.caption(
+        " | ".join(
+            f"{item['role']}: {item['selection']}"
+            for item in design_basis["components"]
+        )
+    )
+    for limitation in design_basis["limitations"]:
+        design_basis_slot.warning(limitation)
 
     # Auto-calc all derived material values lives here (with the values it computes),
     # not next to Calculate -- which it was being mistaken for. It sets a one-shot
@@ -1875,15 +2048,21 @@ def build_inputs():
     # those checks is on -- even in Elastic-only mode, where the rest of the plastic
     # set is disabled -- so the user can always enter the axial force the result
     # depends on. The moments stay gated on the plastic analysis (envelope only).
+    shear_2023_actions = (
+        shear_on and "2023" in str(effective_shear_method or "")
+    )
     P_pl, Mx_pl, My_pl = _load_set(
         "pl", "External axial force for the plastic M-M capacity envelope; also the "
         "axial N used by the shear and torsion checks (sigma_cp / alpha_cw). Enter "
         "the external force only -- any tendon precompression is added automatically "
         "from the prestress initial strain. Enabled whenever a plastic, shear or "
         "torsion check is active.",
-        "Applied moment checked against the plastic envelope (utilisation).",
+        "Applied moment checked against the plastic envelope (utilisation). For "
+        "EN 1992-1-1:2023 shear, the moment about the selected shear axis also "
+        "defines a_cs in Formula (8.30), so it remains editable even when bending "
+        "utilisation is not being checked.",
         plastic_on or shear_on or torsion_on,
-        moments_active=plastic_on and check_util)
+        moments_active=(plastic_on and check_util) or shear_2023_actions)
 
     # The applied shear VEd and torsion TEd sit with the other capacity actions here
     # (enable each check in Analysis settings to make its input live).
@@ -2020,6 +2199,12 @@ def build_inputs():
             st.rerun()
     return dict(section=section, void_error=void_error, steel_error=steel_error,
                 concrete=concrete, steel=steel,
+                concrete_preset=concrete_preset,
+                concrete_k_tc=concrete_k_tc,
+                concrete_eta_cc=concrete_eta_cc,
+                mild_preset=mild_preset,
+                prestress_preset=prestress_preset,
+                design_basis=design_basis,
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 check_util=check_util,
@@ -2123,24 +2308,31 @@ def _design_yield(mat):
     return mat.fytk / gy if gy > 0.0 else mat.fytk
 
 
-def _prestress_axial(inp):
-    """Tendon precompression from the prestress initial strain, in kN (concrete
-    compression-positive), for the shear/torsion sigma_cp and alpha_cw.
+def _prestress_resultants(inp, cx=0.0, cy=0.0):
+    """Locked-in tendon resultants about ``(cx, cy)``.
 
-    Equals the locked-in tendon force ``sum(Ep*IS*Ap)`` -- the same quantity the
-    elastic solver applies as a force (so the user's N stays the external axial
-    only, EN 1992-1-1 6.2.2(1)/6.2.3(3) include the prestress in sigma_cp). Zero
-    without tendons or a prestress material. Recomputed here rather than read from
-    ``out['elastic']`` because the shear/torsion checks can run with the elastic
-    analysis switched off.
+    Returns ``(P, Mx, My)`` in kN/kNm for the tendon tension force
+    ``Ep*IS*Ap``. ``P`` acts as concrete precompression; ``Mx`` and ``My`` are
+    the tendon-force moments about the supplied point. The 2023 shear action then
+    uses ``N_Ed - P`` and ``M_Ed - P*e`` in accordance with 8.2.1(8).
+    Sector stores no longitudinal tendon inclination, so this assumes the tendons
+    are parallel to the member axis (``cos(beta) = 1``).
     """
     pre = inp.get("prestress")
     tendons = inp.get("tendons")
     if pre is None or not tendons:
-        return 0.0
+        return 0.0, 0.0, 0.0
     sig_ps = pre.Es * pre.IS * 1000.0                  # MPa -> kN/m2 (bar-stress units)
-    area_m2 = sum(t[2] for t in tendons) / 1.0e6       # mm2 -> m2
-    return sig_ps * area_m2                             # kN (tendon tension = concrete compression)
+    forces = [sig_ps * t[2] / 1.0e6 for t in tendons]  # kN per tendon
+    p = sum(forces)
+    mx = sum(force * (t[1] - cy) for force, t in zip(forces, tendons))
+    my = sum(force * (t[0] - cx) for force, t in zip(forces, tendons))
+    return p, mx, my
+
+
+def _prestress_axial(inp):
+    """Tendon precompression in kN (compatibility wrapper for 2005 checks)."""
+    return _prestress_resultants(inp)[0]
 
 
 def _outline_bbox(outer):
@@ -2469,6 +2661,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 crack=_crack_dict(_cw(cr_l.cracked_state, inp["nl"], 0.4, False)),
                 crack_short=_crack_dict(_cw(short_state, inp["ns"], 0.6, False)),
                 crack_code=inp["sls_code"],
+                crack_edition=inp["sls_edition"],
                 crack_member=(inp["sls_member"] if dk_na else None),
             )
             # The DK NA reports the coarse crack system alongside the fine one, for
@@ -2510,6 +2703,7 @@ def _run_capacity_checks(inp, out):
         model_2023 = getattr(code, "shear_model", "2005") == "2023"
         axis, tension_low = inp["shear_axis"], inp["shear_tension"]
         ac, cx, cy = _gross_area_centroid(inp["outer"], inp["holes"])
+        _, mx_prestress, my_prestress = _prestress_resultants(inp, cx, cy)
         centroid_coord = cy if axis == "x" else cx
         asl, cg = shear.tension_reinforcement(inp["bars"], axis, tension_low,
                                               centroid_coord)
@@ -2523,19 +2717,27 @@ def _run_capacity_checks(inp, out):
         # which a hardening or low-rupture-strain law would misread.
         fyd_flex = _design_yield(inp["steel"])
         ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
-        res = shear.vrd_c(fck, code, bw, d, asl, n_ed_comp, ac,
-                          fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0))
         v_ed = inp["shear_V"]
+        # Formula (8.30) uses the bending moment at the section centroid. User
+        # moments are about the input origin, so translate the external N and then
+        # subtract the eccentric locked-in tendon resultant per 8.2.1(8).
+        if axis == "x":
+            m_ed_2023 = inp["Mx_pl"] - inp["P_pl"] * cy - mx_prestress
+            m_prestress = mx_prestress
+        else:
+            m_ed_2023 = inp["My_pl"] - inp["P_pl"] * cx - my_prestress
+            m_prestress = my_prestress
+        res = shear.vrd_c(fck, code, bw, d, asl, n_ed_comp, ac,
+                          fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0),
+                          m_ed_knm=m_ed_2023, v_ed_kn=v_ed)
         util = (v_ed / res["vrd_c"]) if res["vrd_c"] > 0.0 else math.inf
-        # F2: the 2023 tau_Rd,c (8.2.2) carries no axial term, so it silently ignores
-        # a net axial TENSION -- unconservative. Flag it for the view/report.
-        n2023_tension = bool(model_2023 and n_ed_comp < -1e-9)
         out["shear"] = dict(res=res, v_ed=v_ed, util=util, axis=axis,
                             tension_low=tension_low, bw=bw, bw_auto=bw_auto,
                             bw_user=bool(inp["shear_bw"] > 0.0), d=d, asl=asl,
                             ac=ac, fck=fck, n_ed=inp["P_pl"],
                             n_prestress=n_prestress, n_ed_comp=n_ed_comp,
-                            n2023_tension=n2023_tension,
+                            m_ed_2023=m_ed_2023, m_prestress=m_prestress,
+                            centroid=(cx, cy),
                             method=inp["shear_method"], model_2023=model_2023,
                             ddg=ddg, fyd_flex=fyd_flex)
         # Shear reinforcement (vertical links): the 2005 variable-strut VRd =
@@ -3660,39 +3862,45 @@ def shear_view(inp, results):
     m3.metric("Utilisation VEd/VRd,c", util_txt, delta=("OK" if ok else "Over limit"),
               delta_color=("normal" if ok else "inverse"))
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
-                "prestress initial strain)" if sh.get("n_prestress") else "")
+                 "prestress initial strain)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
-               f"{sh['method']}. The axial term uses the plastic axial force "
+               f"{sh['method']}. The axial action uses the plastic axial force "
                f"N = {sh['n_ed']:.1f} kN (tension-positive){pre_note}.")
-    if sh.get("n2023_tension"):
-        st.warning("This 2023 " + _TAU + "Rd,c formula (8.2.2) carries no axial term, "
-                   "so the net axial TENSION on the section is ignored -- an "
-                   "UNCONSERVATIVE result, as tension lowers the real shear "
-                   "resistance (8.2.2(4) / the strain-based 8.2.3, not implemented). "
-                   "Use a 2005 edition, which reduces VRd,c via k1*" + _SIGMA + "cp, "
-                   "or account for the tension separately.")
 
     bw_note = ("user input" if sh["bw_user"]
                else f"auto = min solid width {sh['bw_auto']:.1f} mm")
     st.markdown("**Derived quantities**")
     if sh.get("model_2023"):
+        a_cs_text = (
+            f"{res['a_cs']:.1f} mm"
+            if res.get("a_cs", 0.0) > 0.0 else "not applicable (VEd = 0)"
+        )
         st.dataframe(
             {"Quantity": ["Effective depth d", "Web width bw", "Lever arm z",
-                          "Tension reinf. Asl", f"Reinf. ratio {_RHO}l",
-                          "Aggregate ddg", f"{_TAU}Rd,c", f"{_TAU}Rd,c,min",
-                          "Flexural fyd", "gamma_v"],
-             "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
-                       f"{res['z']:.1f} mm (0.9 d)", f"{sh['asl']:.1f} mm2",
-                       f"{res['rho_l']:.4f}", f"{res['ddg']:.1f} mm",
-                       f"{res['tau_rdc']:.3f} MPa", f"{res['tau_min']:.3f} MPa",
-                       f"{res['fyd']:.1f} MPa", f"{res['gamma_v']:.2f}"]},
+                           "Tension reinf. Asl", f"Reinf. ratio {_RHO}l",
+                          "Action moment MEd", "Shear span acs",
+                          "Axial factor kvp", "Modified depth kvp*d (8.27)",
+                           "Aggregate ddg", f"{_TAU}Rd,c", f"{_TAU}Rd,c,min",
+                           "Flexural fyd", "gamma_v"],
+              "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
+                        f"{res['z']:.1f} mm (0.9 d)", f"{sh['asl']:.1f} mm2",
+                        f"{res['rho_l']:.4f}", f"{sh['m_ed_2023']:.3f} kNm",
+                        a_cs_text, f"{res['k_vp']:.4f} (>= 0.1)",
+                        f"{res['d_kvp']:.1f} mm", f"{res['ddg']:.1f} mm",
+                        f"{res['tau_rdc']:.3f} MPa", f"{res['tau_min']:.3f} MPa",
+                        f"{res['fyd']:.1f} MPa", f"{res['gamma_v']:.2f}"]},
             hide_index=True, width="stretch")
         st.caption(
-            r"$\tau_{Rd,c} = \max[\,(0.66/\gamma_V)(100\,\rho_l f_{ck} d_{dg}/d)^{1/3},"
+            r"$k_{vp} = \max[1 + N_{Ed}/|V_{Ed}|\ d/(3a_{cs}),\,0.1]$, "
+            r"$a_{cs}=\max(|M_{Ed}/V_{Ed}|,d)$; "
+            r"$\tau_{Rd,c} = \max[\,(0.66/\gamma_V)"
+            r"(100\,\rho_l f_{ck} d_{dg}/(k_{vp}d))^{1/3},"
             r"\ \tau_{Rd,c,min}]$ (EN 1992-1-1:2023, 8.27); "
             r"$V_{Rd,c} = \tau_{Rd,c}\,b_w z$, $z = 0.9d$. "
             r"$d_{dg} = 16 + D_{lower}$ ($\leq 40$ mm). $A_{sl}$ is the tension "
-            "reinforcement on the chosen face, assumed fully anchored beyond d.")
+            "reinforcement on the chosen face, assumed fully anchored beyond d. "
+            "Prestressing tendons are assumed parallel to the member axis "
+            r"($\cos\beta=1$).")
     else:
         st.dataframe(
             {"Quantity": ["Effective depth d", "Web width bw", "Tension reinf. Asl",
@@ -4033,8 +4241,11 @@ def torsion_view(inp, results):
                           if mr["solid"] else "This section has a void: 6.31 is for "
                           "solid sections, so it does not strictly apply (a hollow "
                           "section needs the full shear + torsion check).")
-            ed_note = (" VRd,c here is the 2023 tau_Rd,c, which carries no axial term."
-                       if mr["model_2023"] else "")
+            ed_note = (
+                " VRd,c here is the 2023 tau_Rd,c including the Formula (8.31) "
+                "axial-force modification."
+                if mr["model_2023"] else ""
+            )
             st.caption("TEd/TRd,c + VEd/VRd,c <= 1 (6.3.2(5), Eq 6.31): if satisfied, "
                        "only minimum shear + torsion reinforcement is required -- no "
                        "designed stirrups for these actions. " + solid_note + ed_note)

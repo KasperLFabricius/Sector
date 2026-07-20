@@ -386,6 +386,12 @@ def manual_blocks() -> list:
          "sections remain plane (a linear strain field) and perfect bond between "
          "concrete and steel; it does not do shear, torsion, buckling or "
          "member-level effects. Those are checked separately.")
+    call("standard", "EN 1992-1-1:2023 is a fully selectable design methodology in "
+         "Sector. Individual material and check methods remain independently "
+         "selectable; the Design-basis alignment status and PDF identify any "
+         "mixed-edition calculation. The 2023 no-links shear and refined crack "
+         "models are implemented, while the UI explicitly identifies checks such "
+         "as 2023 shear with links, torsion and combined M-V-T that are not.")
 
     h2("What Sector computes - at a glance")
     md("- **Plastic bending capacity.** The biaxial $M_x$-$M_y$ interaction "
@@ -525,6 +531,11 @@ def manual_blocks() -> list:
        "$\\varepsilon_{cu2}$ with the exponent $n$, the elastic modulus $E_c$ and "
        "the mean tensile strength $f_{ctm}$. The strain limits, $E_c$ and $f_{ctm}$ "
        "have *Auto* buttons that derive them from $f_{ck}$ and the edition.")
+    call("standard", "For EN 1992-1-1:2023, Sector derives the read-only effective "
+         "coefficient $\\eta_{cc}k_{tc}$ and exposes $k_{tc}$ separately. The "
+         "default is **0.85** (general / other cases). Selecting **1.00** explicitly "
+         "assumes the reference-age and at-least-three-month delayed design-loading "
+         "conditions stated in 5.1.6(1); that assumption is repeated in the PDF.")
     fig(fig_beam_concrete_law, "The concrete law for the rectangular example "
         "(C40/50), as the Stress-Strain view draws it.")
     h2("Mild steel")
@@ -578,7 +589,8 @@ def manual_blocks() -> list:
        "$x$; or horizontal, about $y$), the tension face, the method edition, and "
        "the web width $b_w$ (0 = derived). The effective depth $d$, the tension "
        "reinforcement $A_{sl}$ and, when $b_w = 0$, the web width are all derived "
-       "from the geometry; the axial term uses the plastic (ULS) axial force $N$.")
+       "from the geometry; the axial term uses the plastic (ULS) axial force $N$ "
+       "and the selected-axis plastic moment.")
     table(["Shear method", "What it sets"],
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
             "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],
@@ -587,14 +599,20 @@ def manual_blocks() -> list:
            ["DS/EN 1992-1-1:2023", "The strain-based $\\tau_{Rd,c}$ (8.2.2) with the "
             "aggregate size $d_{dg}$ and $\\gamma_V = 1.40$; members without links"]])
     call("standard", "The **2023 method** uses "
-         "$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq "
-         "\\tau_{Rd,c,min}$ (8.27), with $d_{dg} = 16 + D_{lower}$ ($\\leq 40$ mm, "
-         "8.2.1(4)) and the flexural design yield $f_{yd}$ -- it does not use the "
-         "axial stress. Its strain-based method for members **with** links (8.2.3) "
-         "is a follow-up; torsion and the combined lock stay on the 2005 family.")
+          "$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq "
+          "\\tau_{Rd,c,min}$ (8.27), with $d_{dg} = 16 + D_{lower}$ ($\\leq 40$ mm, "
+          "8.2.1(4)) and the flexural design yield $f_{yd}$. When axial force is "
+          "present, Sector applies $d \\rightarrow k_{vp}d$ in (8.27), with "
+          "$k_{vp}=\\max[1+N_{Ed}/|V_{Ed}|\\,d/(3a_{cs}),0.1]$ and "
+          "$a_{cs}=\\max(|M_{Ed}/V_{Ed}|,d)$ (8.30-8.31), including locked-in "
+          "prestress effects. Tendons are assumed parallel to the member axis "
+          "($\\cos\\beta=1$), because a cross-section model has no longitudinal "
+          "tendon inclination. Its method for members **with** links (8.2.3) is "
+          "not implemented; torsion and the combined lock stay on the 2005 family.")
     call("limit", "$A_{sl}$ is the tension-face bars, **assumed fully anchored** "
-         "($\\geq l_{bd} + d$) -- an anchorage the user must ensure (derived in "
-         "Part C).")
+          "($\\geq l_{bd} + d$). Sector does not check anchorage; where reinforcement "
+          "is not fully anchored, the user must enter an appropriately reduced "
+          "$f_{yk}$ / $f_{ywk}$ before relying on the result.")
     md("With **Shear reinforcement (links) present** on, the resistance becomes the "
        "variable-strut $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3) instead of "
        "$V_{Rd,c}$ (which is still shown, to indicate whether links are strictly "
@@ -714,7 +732,9 @@ def manual_blocks() -> list:
        "{\\varepsilon_{c2}}\\right)^{n}\\right] \\quad (0\\le\\varepsilon_c\\le"
        "\\varepsilon_{c2}), \\qquad \\sigma_c = f_{cd}\\quad(\\varepsilon_{c2}\\le"
        "\\varepsilon_c\\le\\varepsilon_{cu2}),$$\n\n"
-       "with $f_{cd} = \\alpha_{cc}\\,f_{ck}/\\gamma_c$ and zero stress beyond "
+       "with $f_{cd} = \\alpha_{cc}\\,f_{ck}/\\gamma_c$ for the 2005 family and "
+       "$f_{cd}=\\eta_{cc}k_{tc}f_{ck}/\\gamma_c$ for EN 1992-1-1:2023, and zero "
+       "stress beyond "
        "$\\varepsilon_{cu2}$ (crushed).\n\n"
        "For $f_{ck}\\le 50$ MPa the strain limits are $\\varepsilon_{c2}=2.0$ per "
        "mille, $\\varepsilon_{cu2}=3.5$ per mille and $n=2$.\n\n"
@@ -725,7 +745,9 @@ def manual_blocks() -> list:
        "the 2005 and DK NA editions.\n\n"
        "The EN 1992-1-1:2023 edition instead keeps them **constant** "
        "($\\varepsilon_{c2}=2.0$, $\\varepsilon_{cu2}=3.5$ per mille, $n=2$) for "
-       "every grade.")
+       "every grade. Its $\\eta_{cc}=\\min[(40/f_{ck})^{1/3},1.0]$ and the "
+       "general-case $k_{tc}=0.85$ are applied separately; $k_{tc}=1.00$ is an "
+       "explicit applicability choice under 5.1.6(1).")
     md("**Worked (beam, C40/50):** $f_{cd}=1.0\\times 40/1.45 = 27.6$ MPa, with "
        "$\\varepsilon_{c2}=2.0$ and $\\varepsilon_{cu2}=3.5$ per mille.")
     fig(fig_beam_concrete_law, "The C40/50 parabola-rectangle law of the beam "
@@ -929,12 +951,20 @@ def manual_blocks() -> list:
        "section -- a curved outline should have $b_w$ entered by hand). $\\sigma_{cp}$ "
        "uses the plastic (ULS) axial force $N$; since Sector's $N$ is "
        "tension-positive it is negated to the code's compression-positive "
-       "convention, exactly as the axial-force flip elsewhere.")
+         "convention, exactly as the axial-force flip elsewhere.")
+    md("For EN 1992-1-1:2023, the action-dependent factor is\n\n"
+       "$$a_{cs}=\\max\\!\\left(\\left|M_{Ed}/V_{Ed}\\right|,d\\right),\\qquad"
+       "k_{vp}=\\max\\!\\left(1+\\frac{N_{Ed}}{|V_{Ed}|}\\frac{d}{3a_{cs}},0.1\\right),$$\n\n"
+       "and $d$ in Formula (8.27) is replaced by $k_{vp}d$. The 2023 convention "
+       "takes $N_{Ed}$ positive in tension, so axial tension raises $k_{vp}$ and "
+       "reduces the basic shear-stress resistance; compression has the opposite "
+       "effect. The minimum stress from Formula (8.20) and the lever arm "
+       "$z=0.9d$ retain the nominal $d$.")
     call("limit", "$A_{sl}$ is the longitudinal tension reinforcement, **assumed "
-         "fully anchored** ($\\geq l_{bd} + d$) beyond the section. This anchorage "
-         "cannot be checked at section level, so it is the engineer's "
-         "responsibility. Bonded tendons are not counted toward $\\rho_l$ "
-         "automatically.")
+          "fully anchored** ($\\geq l_{bd} + d$) beyond the section. This anchorage "
+          "cannot be checked at section level. If it is not fully anchored, enter "
+          "an appropriately reduced $f_{yk}$ / $f_{ywk}$; bonded tendons are not "
+          "counted toward $\\rho_l$ automatically.")
     md("**Worked** (300 x 600 mm rectangle, C35, DK NA:2024, "
        "$A_{sl} = 1473$ mm$^2$, $d = 550$ mm, $b_w = 300$ mm, $N = 0$): "
        "$k = 1.603$, $\\rho_l = 0.00893$, $C_{Rd,c} = 0.124$, the basic term "

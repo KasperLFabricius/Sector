@@ -134,43 +134,75 @@ def min_web_width(outer: Sequence, holes: Optional[Sequence], axis: str) -> floa
 
 
 def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
-               fyd_mpa: float, ddg_mm: float) -> dict:
+               fyd_mpa: float, ddg_mm: float, *, n_ed_tension_kn: float = 0.0,
+               m_ed_knm: float = 0.0, v_ed_kn: float = 0.0) -> dict:
     """Shear resistance without shear reinforcement, EN 1992-1-1:2023 sec. 8.2.2.
 
-    ``tau_Rd,c = (0.66/gamma_v)*(100*rho_l*fck*ddg/d)^(1/3) >= tau_Rd,c,min`` (8.27),
-    ``tau_Rd,c,min = (11/gamma_v)*sqrt(fck/fyd * ddg/d)`` (8.20). The resistance is
-    ``VRd,c = tau_Rd,c * bw * z`` with ``z = 0.9 d``. ``fyd_mpa`` is the design yield
-    of the flexural reinforcement; ``ddg_mm`` the aggregate size parameter (8.2.1(4)).
-    This strain-independent branch is the 2023 counterpart of the 2005 VRd,c; the
-    strain-based method for members *with* shear reinforcement (8.2.3) is separate.
+    ``tau_Rd,c = (0.66/gamma_v)*(100*rho_l*fck*ddg/d_v)^(1/3) >= tau_Rd,c,min``
+    (8.27), where axial force modifies the denominator through
+    ``d_v = k_vp*d`` and
+    ``k_vp = max(1 + NEd/abs(VEd)*d/(3*a_cs), 0.1)`` (8.31),
+    ``a_cs = max(abs(MEd/VEd), d)`` (8.30). The 2023 sign convention is used here:
+    ``n_ed_tension_kn`` is positive in tension. ``tau_Rd,c,min`` from (8.20) retains
+    the nominal ``d`` because 8.2.2(4) applies ``k_vp`` specifically to the ``d`` in
+    (8.27). The resistance is ``VRd,c = tau_Rd,c * bw * z`` with nominal
+    ``z = 0.9 d`` (8.18). ``fyd_mpa`` is the design yield of the flexural
+    reinforcement; ``ddg_mm`` the aggregate size parameter (8.2.1(4)).
     """
     if d_mm <= 0.0 or bw_mm <= 0.0 or fyd_mpa <= 0.0:
         return dict(vrd_c=0.0, tau_rdc=0.0, tau_basic=0.0, tau_min=0.0, rho_l=0.0,
-                    z=0.9 * d_mm, ddg=ddg_mm, fyd=fyd_mpa,
+                    z=0.9 * d_mm, ddg=ddg_mm, fyd=fyd_mpa, k_vp=1.0,
+                    d_kvp=d_mm, a_cs=0.0, n_ed_tension=n_ed_tension_kn,
+                    m_ed=m_ed_knm, v_ed=v_ed_kn, axial_applied=False,
                     gamma_v=code.shear_gamma_v, model="2023", valid=False)
     gv = code.shear_gamma_v
     rho_l = asl_mm2 / (bw_mm * d_mm)
     z = 0.9 * d_mm
+    v_abs = abs(v_ed_kn)
+    if v_abs > 1e-12:
+        a_cs = max(abs(m_ed_knm) / v_abs * 1000.0, d_mm)
+        k_vp = max(1.0 + n_ed_tension_kn / v_abs * d_mm / (3.0 * a_cs), 0.1)
+        axial_applied = abs(n_ed_tension_kn) > 1e-12
+    else:
+        # No applied shear means there is no Formula (8.31) action ratio to form and
+        # the utilisation is zero; retain the neutral factor rather than manufacture
+        # an infinite resistance change.
+        a_cs = 0.0
+        k_vp = 1.0
+        axial_applied = False
+    d_kvp = k_vp * d_mm
     tau_min = (11.0 / gv) * math.sqrt(fck / fyd_mpa * ddg_mm / d_mm)          # MPa
-    tau_basic = (0.66 / gv) * (100.0 * rho_l * fck * ddg_mm / d_mm) ** (1.0 / 3.0)
+    tau_basic = (0.66 / gv) * (
+        100.0 * rho_l * fck * ddg_mm / d_kvp
+    ) ** (1.0 / 3.0)
     tau_rdc = max(tau_basic, tau_min)                                        # MPa
     return dict(vrd_c=tau_rdc * bw_mm * z / 1000.0,                          # kN
-                tau_rdc=tau_rdc, tau_basic=tau_basic, tau_min=tau_min, rho_l=rho_l,
-                z=z, ddg=ddg_mm, fyd=fyd_mpa, gamma_v=gv, model="2023", valid=True)
+                 tau_rdc=tau_rdc, tau_basic=tau_basic, tau_min=tau_min, rho_l=rho_l,
+                 z=z, ddg=ddg_mm, fyd=fyd_mpa, k_vp=k_vp, d_kvp=d_kvp,
+                 a_cs=a_cs, n_ed_tension=n_ed_tension_kn, m_ed=m_ed_knm,
+                 v_ed=v_ed_kn, axial_applied=axial_applied,
+                 gamma_v=gv, model="2023", valid=True)
 
 
 def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
           n_ed_comp_kn: float, ac_m2: float, *, fyd_mpa: float = 0.0,
-          ddg_mm: float = 32.0) -> dict:
+          ddg_mm: float = 32.0, m_ed_knm: float = 0.0,
+          v_ed_kn: float = 0.0) -> dict:
     """Shear resistance without shear reinforcement, VRd,c (kN).
 
     Dispatches on the code's ``shear_model``: the 2005 variable-strut VRd,c
     (sec. 6.2.2(1)) or the strain-based 2023 tau_Rd,c (sec. 8.2.2, via
-    :func:`vrd_c_2023`, using ``fyd_mpa`` and ``ddg_mm``). ``n_ed_comp_kn`` is the
-    axial force compression-positive (pass ``-N``); ``ac_m2`` the gross concrete area.
+    :func:`vrd_c_2023`, using ``fyd_mpa``, ``ddg_mm``, ``m_ed_knm`` and
+    ``v_ed_kn``). ``n_ed_comp_kn`` is the axial force compression-positive
+    (pass ``-N``); it is converted to the 2023 tension-positive convention for
+    Formula (8.31). ``ac_m2`` is the gross concrete area.
     """
     if getattr(code, "shear_model", "2005") == "2023":
-        return vrd_c_2023(fck, code, bw_mm, d_mm, asl_mm2, fyd_mpa, ddg_mm)
+        return vrd_c_2023(
+            fck, code, bw_mm, d_mm, asl_mm2, fyd_mpa, ddg_mm,
+            n_ed_tension_kn=-n_ed_comp_kn, m_ed_knm=m_ed_knm,
+            v_ed_kn=v_ed_kn,
+        )
     if d_mm <= 0.0 or bw_mm <= 0.0:
         return dict(vrd_c=0.0, k=0.0, rho_l=0.0, sigma_cp=0.0, fcd=0.0,
                     v_basic=0.0, v_floor=0.0, crd_c=0.0, vmin=0.0,

@@ -78,9 +78,12 @@ def test_every_preset_builds_a_valid_material():
 
 def test_strength_dependent_alpha_cc_tracks_fck_for_2023():
     label = "DS/EN 1992-1-1:2023"
-    assert mp.strength_dependent_alpha_cc(label, 40.0) == pytest.approx(1.0)
-    # C50/60: eta_cc = (40/50)^(1/3) ~ 0.928 (Codex review).
+    assert mp.strength_dependent_alpha_cc(label, 40.0) == pytest.approx(0.85)
+    # C50/60: eta_cc = (40/50)^(1/3) ~ 0.928, times general k_tc = 0.85.
     assert mp.strength_dependent_alpha_cc(label, 50.0) == pytest.approx(
+        round(0.85 * (40.0 / 50.0) ** (1.0 / 3.0), 4))
+    # The explicit reference-age/loading applicability choice changes only k_tc.
+    assert mp.strength_dependent_alpha_cc(label, 50.0, k_tc=1.0) == pytest.approx(
         round((40.0 / 50.0) ** (1.0 / 3.0), 4))
     # Constant-alpha_cc editions and named curves are not strength-dependent.
     assert mp.strength_dependent_alpha_cc("EN 1992-1-1:2005", 50.0) is None

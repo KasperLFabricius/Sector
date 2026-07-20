@@ -1330,9 +1330,11 @@ def test_autosave_skips_a_blank_outline(tmp_path, monkeypatch):
     assert not (tmp_path / "autosave.json").exists()
 
 
-def test_load_preserves_manual_alpha_cc_for_strength_dependent_preset():
-    # A manually edited alpha_cc under EN 2023 (eta_cc tracks fck) must round-trip,
-    # not be overwritten by the automatic value when the project is reloaded.
+def test_load_old_2023_project_migrates_to_general_k_tc():
+    # Older projects did not store k_tc and could carry a manually edited effective
+    # alpha_cc.  Reloading an identified 2023 preset must derive the normative
+    # eta_cc*k_tc value and use the safe general-case default, not preserve a stale
+    # coefficient that contradicts the displayed edition.
     import json
     at = _fresh()
     at.run()
@@ -1353,7 +1355,37 @@ def test_load_preserves_manual_alpha_cc_for_strength_dependent_preset():
     at.session_state["_pending_project"] = json.dumps(project)
     at.run()
     assert not at.exception
-    assert at.session_state["conc_alpha_cc"] == 0.5
+    assert at.session_state["conc_k_tc"] == pytest.approx(0.85)
+    assert at.session_state["conc_alpha_cc"] == pytest.approx(0.85)
+    assert at.number_input(key="conc_alpha_cc").disabled is True
+
+
+def test_load_2023_project_preserves_explicit_k_tc_choice():
+    import json
+    at = _fresh()
+    at.run()
+    project = {
+        "format": "sector-project", "version": 1,
+        "tables": {
+            "corners_base": {"columns": ["x (mm)", "y (mm)"],
+                             "rows": [[-100.0, -150.0], [100.0, -150.0],
+                                      [100.0, 150.0], [-100.0, 150.0]]},
+            "hole_base": {"columns": ["x (mm)", "y (mm)"], "rows": []},
+            "bars_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"],
+                          "rows": [[0.0, -120.0, 500.0]]},
+            "tendons_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"],
+                             "rows": []},
+        },
+        "scalars": {"conc_preset": "DS/EN 1992-1-1:2023", "conc_fck": 50.0,
+                    "conc_k_tc": 1.0, "conc_alpha_cc": 0.5, "mode": "Plastic"},
+    }
+    at.session_state["_pending_project"] = json.dumps(project)
+    at.run()
+    assert not at.exception
+    eta_50 = (40.0 / 50.0) ** (1.0 / 3.0)
+    assert at.session_state["conc_k_tc"] == pytest.approx(1.0)
+    assert at.session_state["conc_alpha_cc"] == pytest.approx(round(eta_50, 4))
+    assert any("explicitly assuming" in warning.value for warning in at.warning)
 
 
 def test_generate_report_produces_pdf():
@@ -1436,6 +1468,32 @@ def test_capacity_only_toggle_locks_moments_and_drops_utilisation():
     assert pl["util"] is None and pl["check_util"] is False and pl["applied"] is None
 
 
+def test_2023_shear_keeps_required_moment_editable_without_bending_utilisation():
+    from sector import codes
+
+    # Elastic-only normally locks the Plastic bending moments, but the 2023 shear
+    # method needs the selected-axis MEd for Formula 8.30.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
+    assert at.number_input(key="pl_Mx").disabled is False
+    assert at.number_input(key="pl_My").disabled is False
+    assert at.number_input(key="conc_gamma_c").disabled is False
+    assert at.number_input(key="mild_gamma_y").disabled is False
+    at.number_input(key="pl_Mx").set_value(110.0).run()
+    assert not at.exception
+
+    # The 2005 method has no action-moment term, so those fields return to their
+    # normal locked state. Its capacity factors remain editable because VRd,c uses
+    # gamma_c.
+    at.selectbox(key="shear_method").set_value(codes.EC2_2005_DKNA.label).run()
+    assert at.number_input(key="pl_Mx").disabled is True
+    assert at.number_input(key="pl_My").disabled is True
+    assert at.number_input(key="conc_gamma_c").disabled is False
+
+
 def test_prestress_always_available_without_a_toggle():
     # The "include prestressing tendons" checkbox is gone: the prestress material
     # panel and the tendon point table are always present.
@@ -1506,6 +1564,71 @@ def test_2023_concrete_fck_edit_calculates():
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
+
+
+def test_2023_concrete_k_tc_is_explicit_and_updates_fcd():
+    at = _fresh()
+    at.run()
+    at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
+    assert at.session_state["conc_k_tc"] == pytest.approx(0.85)
+    fcd_general = 0.85 * at.session_state["conc_fck"] / at.session_state["conc_gamma_c"]
+    assert at.session_state["conc_alpha_cc"] == pytest.approx(0.85)
+
+    at.selectbox(key="conc_k_tc").set_value(1.0).run()
+    assert not at.exception
+    assert at.session_state["conc_alpha_cc"] == pytest.approx(1.0)
+    assert any("explicitly assuming" in warning.value for warning in at.warning)
+    assert fcd_general < (
+        at.session_state["conc_alpha_cc"] * at.session_state["conc_fck"]
+        / at.session_state["conc_gamma_c"]
+    )
+
+
+def test_design_basis_summary_identifies_alignment_and_limitations():
+    import sector_app
+
+    aligned = sector_app._design_basis_summary(
+        concrete_preset="DS/EN 1992-1-1:2023",
+        mild_preset="DS/EN 1992-1-1:2023",
+        crack_code="EN 1992-1-1:2023",
+        shear_method="DS/EN 1992-1-1:2023",
+    )
+    assert aligned["mixed"] is False
+    assert aligned["families"] == ["EN 1992-1-1:2023"]
+    assert "Edition-aligned" in aligned["status"]
+
+    limited = sector_app._design_basis_summary(
+        concrete_preset="DS/EN 1992-1-1:2023",
+        mild_preset="DS/EN 1992-1-1:2023",
+        shear_method="DS/EN 1992-1-1:2023",
+        shear_links=True,
+        torsion_method="DS/EN 1992-1-1:2005 + DK NA:2024",
+        combined_method="DS/EN 1992-1-1:2005 + DK NA:2024",
+    )
+    assert limited["mixed"] is True
+    assert any("8.2.3" in item for item in limited["limitations"])
+    assert any("does not implement" in item for item in limited["limitations"])
+
+    # An unused material selector must not create a false mixed-edition warning.
+    tendon_only = sector_app._design_basis_summary(
+        concrete_preset="DS/EN 1992-1-1:2023",
+        mild_preset=None,
+        prestress_preset="DS/EN 1992-1-1:2023",
+    )
+    assert tendon_only["mixed"] is False
+    assert all(
+        component["role"] != "Reinforcing steel"
+        for component in tendon_only["components"]
+    )
+
+    crack_only_2023 = sector_app._design_basis_summary(
+        concrete_preset="DS/EN 1992-1-1:2005 + DK NA:2024",
+        mild_preset="DS/EN 1992-1-1:2005 + DK NA:2024",
+        crack_code="EN 1992-1-1:2023",
+        torsion_method="DS/EN 1992-1-1:2005 + DK NA:2024",
+    )
+    assert crack_only_2023["mixed"] is True
+    assert crack_only_2023["limitations"] == []
 
 
 def test_es_field_present_and_editable():

@@ -17,9 +17,11 @@ Concrete (ULS)
       ``alpha_cc = 1.0``.
     * EN 1992-1-1:2023: ``fcd = eta_cc * k_tc * fck / gamma_c`` with the
       strength-dependent ``eta_cc = (fck_ref / fck)^(1/3) <= 1`` (``fck_ref =
-      40 MPa``) and the sustained-load factor ``k_tc = 1.0``. The 2023 ultimate
-      parabola keeps constant strains for all classes, so this maps onto the same
-      ``alpha_cc`` coefficient.
+      40 MPa``) and the general-case sustained-load factor ``k_tc = 0.85``.
+      ``k_tc = 1.0`` is available in the UI only as an explicit applicability
+      choice for the reference-age / loading conditions in 5.1.6(1). The 2023
+      ultimate parabola keeps constant strains for all classes, so this maps onto
+      the material law's effective ``alpha_cc`` coefficient.
 
 Reinforcement (ULS)
     The design diagram with a horizontal top branch at ``fyd = fyk / gamma_s`` and
@@ -156,7 +158,7 @@ class DesignCode:
     const_strains: bool = False
     # Shear (EN 1992-1-1:2005 sec. 6.2.2 members without shear reinforcement). The
     # ``shear_model`` selects the resistance formula; "2005" is the variable-strut
-    # family (2005 + DK NA), "2023" the strain-based sec. 8.2 (added later). CRd,c and
+    # family (2005 + DK NA), "2023" the strain-based sec. 8.2. CRd,c and
     # k1 are the recommended values (the DK NA keeps them); the DK NA changes only
     # v_min: the recommended v_min = 0.035*k^1.5*sqrt(fck), the DK NA:2024
     # v_min = (0.051/gamma_c)*k^1.5*sqrt(fck), selected by ``shear_vmin_over_gamma_c``.
@@ -176,9 +178,11 @@ class DesignCode:
     shear_cot_min_limit: float = 1.0
     shear_cot_max_limit: float = 2.5
     # EN 1992-1-1:2023 sec. 8.2.2 (strain-based, members without shear reinforcement):
-    # tau_Rd,c = (0.66/gamma_v)*(100*rho_l*fck*ddg/d)^(1/3) >= tau_Rd,c,min (8.27),
-    # tau_Rd,c,min = (11/gamma_v)*sqrt(fck/fyd*ddg/d) (8.20). gamma_v is the shear
-    # partial factor (Table 4.3: 1.40 recommended); ddg the aggregate size parameter.
+    # tau_Rd,c = (0.66/gamma_v)*(100*rho_l*fck*ddg/(k_vp*d))^(1/3)
+    # >= tau_Rd,c,min (8.27), tau_Rd,c,min =
+    # (11/gamma_v)*sqrt(fck/fyd*ddg/d) (8.20). Formulae (8.30)-(8.31) define the
+    # axial/action factor k_vp. gamma_v is the shear partial factor (Table 4.3:
+    # 1.40 recommended); ddg the aggregate size parameter.
     shear_gamma_v: float = 1.40
 
     def shear_ddg(self, fck: float, d_lower_mm: float) -> float:
@@ -332,15 +336,17 @@ EC2_2005_DKNA = DesignCode(
 )
 
 # DS/EN 1992-1-1:2023: gamma_c = 1.5, gamma_s = 1.15, with the strength-dependent
-# design-strength factor eta_cc = (40/fck)^(1/3) <= 1 and k_tc = 1.0. The
-# ultimate parabola keeps constant strains for all classes.
+# design-strength factor eta_cc = (40/fck)^(1/3) <= 1 and the general-case
+# k_tc = 0.85. Clause 5.1.6(1) permits k_tc = 1.0 only under its stated
+# reference-age / loading conditions; the app exposes that as an explicit choice.
+# The ultimate parabola keeps constant strains for all classes.
 EC2_2023 = DesignCode(
     key="EC2-2023",
     label="DS/EN 1992-1-1:2023",
     gamma_c=1.5,
     gamma_s=1.15,
     eta_cc_ref=40.0,
-    k_tc=1.0,
+    k_tc=0.85,
     const_strains=True,   # the 2023 ultimate parabola keeps constant strains
     shear_model="2023",   # strain-based sec. 8.2 (implemented later)
 )

@@ -88,13 +88,31 @@ def _tables():
 def test_round_trip_tables_and_scalars():
     tables = _tables()
     scalars = {"conc_fck": 55.0, "mode": "Both", "rep_author": "KLA",
-               "conc_preset": "Curve 2 (parabola-rectangle)", "label_scale": 1.5}
+               "conc_preset": "DS/EN 1992-1-1:2023", "conc_k_tc": 1.0,
+               "label_scale": 1.5}
     rt, rs = project_io.parse_project(project_io.dump_project(tables, scalars))
     assert rs == scalars
     for key, df in tables.items():
         pd.testing.assert_frame_equal(
             rt[key].reset_index(drop=True),
             df.astype("float64").reset_index(drop=True), check_dtype=False)
+
+
+def test_legacy_2023_project_defaults_to_general_k_tc():
+    import json
+
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": {
+            "conc_preset": "DS/EN 1992-1-1:2023",
+            "conc_fck": 40.0,
+            "conc_alpha_cc": 1.0,
+        },
+    })
+    _, scalars = project_io.parse_project(text)
+    assert scalars["conc_k_tc"] == pytest.approx(0.85)
 
 
 def test_blank_separator_row_survives_round_trip():

@@ -50,9 +50,11 @@ def _concrete_presets():
     base = {"eps_c2": _DEFAULT_EPS_C2, "eps_cu2": _DEFAULT_EPS_CU2, "n": _DEFAULT_N}
     presets = {
         "Curve 1 (cubic)":
-            {"curve": 1, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0, **base},
+            {"curve": 1, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0,
+             "k_tc": 1.0, **base},
         "Curve 2 (parabola-rectangle)":
-            {"curve": 2, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0, **base},
+            {"curve": 2, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0,
+             "k_tc": 1.0, **base},
     }
     for label, code in codes.CODES.items():
         presets[label] = {
@@ -60,6 +62,7 @@ def _concrete_presets():
             "fck": _DEFAULT_FCK,
             "gamma_c": code.gamma_c,
             "alpha_cc": round(code.concrete_factor(_DEFAULT_FCK), 4),
+            "k_tc": code.k_tc,
             **base,
         }
     return presets
@@ -101,11 +104,13 @@ CONCRETE_HELP = {
 
 def build_concrete(curve, fck, gamma_c, alpha_cc,
                    eps_c2=_DEFAULT_EPS_C2, eps_cu2=_DEFAULT_EPS_CU2,
-                   n=_DEFAULT_N) -> Concrete:
+                   n=_DEFAULT_N, k_tc=None) -> Concrete:
     """Build a :class:`~sector.materials.Concrete` from the panel parameters.
 
     ``eps_c2``/``eps_cu2`` are taken in per mille (the diagram's unit) and
-    converted to the fractions the law uses.
+    converted to the fractions the law uses. ``k_tc`` is accepted as preset
+    applicability metadata; the supplied ``alpha_cc`` is already the effective
+    ``eta_cc*k_tc`` coefficient used by the material law.
     """
     return Concrete(fck=float(fck), gamma_c=float(gamma_c), curve=int(curve),
                     alpha_cc=float(alpha_cc),
@@ -113,16 +118,18 @@ def build_concrete(curve, fck, gamma_c, alpha_cc,
                     n=float(n))
 
 
-def strength_dependent_alpha_cc(preset, fck):
+def strength_dependent_alpha_cc(preset, fck, k_tc=None):
     """``alpha_cc`` for a preset whose design factor depends on ``fck``, else None.
 
     EN 1992-1-1:2023 uses ``eta_cc = (40/fck)^(1/3) <= 1`` (times ``k_tc``), so its
-    ``alpha_cc`` must follow the chosen strength rather than stay at the prefilled
-    default. Constant-``alpha_cc`` editions return ``None``.
+    effective coefficient must follow both the chosen strength and the explicit
+    ``k_tc`` applicability choice rather than stay at the prefilled default.
+    Constant-``alpha_cc`` editions return ``None``.
     """
     code = codes.CODES.get(preset)
     if code is not None and code.eta_cc_ref is not None:
-        return round(code.concrete_factor(float(fck)), 4)
+        eta_cc = min((code.eta_cc_ref / float(fck)) ** (1.0 / 3.0), 1.0)
+        return round(eta_cc * (code.k_tc if k_tc is None else float(k_tc)), 4)
     return None
 
 
