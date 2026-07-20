@@ -11,6 +11,7 @@ import functools
 import math
 import os
 import pathlib
+import re
 import sys
 import threading
 import time
@@ -814,7 +815,45 @@ _REPORT_FIELDS = [("proj_no", "Project no."), ("proj_name", "Project name"),
 _REPORT_PROG = None
 
 
-def _report_panel(parent):
+def _report_meta():
+    """Return the report metadata exactly as shown in the current widgets."""
+    meta = {k: st.session_state.get(f"rep_{k}", "")
+            for k, _ in _REPORT_FIELDS}
+    meta["comments"] = st.session_state.get("rep_comments", "")
+    return meta
+
+
+def _report_signature(input_signature, meta=None):
+    """Identify the complete input and document-control state behind a PDF."""
+    meta = _report_meta() if meta is None else meta
+    document_values = tuple(str(meta.get(k, "")) for k, _ in _REPORT_FIELDS)
+    document_values += (str(meta.get("comments", "")),)
+    return repr(input_signature), document_values
+
+
+def _safe_filename_part(value, fallback):
+    """Make one human-readable component safe on Windows and other platforms."""
+    part = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", str(value or "").strip())
+    part = re.sub(r"\s+", "_", part).strip(" ._-")
+    return (part or fallback)[:60]
+
+
+def _report_filename(meta, generated_on=None):
+    """Build an issue-ready filename carrying the key revision identifiers."""
+    day = generated_on or datetime.now().date().isoformat()
+    project = _safe_filename_part(meta.get("proj_no"), "Project")
+    section = _safe_filename_part(meta.get("section"), "Section")
+    revision = _safe_filename_part(meta.get("rev"), "DRAFT")
+    return f"Sector_{project}_{section}_Rev-{revision}_{day}.pdf"
+
+
+def _clear_report_artifact():
+    """Remove every key that could expose an older PDF after a failed rebuild."""
+    for key in ("report_buffer", "report_signature", "report_filename"):
+        st.session_state.pop(key, None)
+
+
+def _report_panel(parent, input_signature):
     """Report metadata inputs plus Generate / Download, like the BriCoS panel."""
     box = parent.expander("Report", expanded=False)
     box.caption("Fill in the project details, press Generate, then download the PDF. "
@@ -844,10 +883,23 @@ def _report_panel(parent):
     if msg:
         (box.success if msg[0] == "success" else box.error)(msg[1])
     if st.session_state.get("report_buffer"):
-        name = (st.session_state.get("rep_proj_no") or "section").strip() or "section"
-        box.download_button("Download report (PDF)", st.session_state["report_buffer"],
-                            file_name=f"Sector_report_{name}.pdf",
-                            mime="application/pdf", width="stretch")
+        current_signature = _report_signature(input_signature)
+        if st.session_state.get("report_signature") == current_signature:
+            box.download_button(
+                "Download report (PDF)",
+                st.session_state["report_buffer"],
+                file_name=st.session_state.get(
+                    "report_filename",
+                    _report_filename(_report_meta()),
+                ),
+                mime="application/pdf",
+                width="stretch",
+            )
+        else:
+            box.warning(
+                "Report out of date: inputs or report metadata changed. "
+                "Generate it again before downloading."
+            )
 
 
 def _generate_report(inp):
@@ -855,6 +907,7 @@ def _generate_report(inp):
     if not st.session_state.pop("_generating_report", False):
         return
     if inp.get("section") is None or inp.get("void_error") or inp.get("steel_error"):
+        _clear_report_artifact()
         st.session_state["_report_msg"] = ("error", "Define a valid section (and "
                                            "resolve any void or reinforcement error) "
                                            "before generating a report.")
@@ -868,17 +921,21 @@ def _generate_report(inp):
 
     try:
         import sector_report
-        meta = {k: st.session_state.get(f"rep_{k}", "")
-                for k, _ in _REPORT_FIELDS}
-        meta["comments"] = st.session_state.get("rep_comments", "")
+        meta = _report_meta()
         figs = not st.session_state.get("_report_no_figures", False)
         out = run_analysis(inp)
         pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
                                          figures=figs, progress=_on_progress)
         st.session_state["report_buffer"] = pdf
+        st.session_state["report_signature"] = _report_signature(
+            inp.get("signature"),
+            meta,
+        )
+        st.session_state["report_filename"] = _report_filename(meta)
         st.session_state["_report_msg"] = ("success", "Report generated - use the "
                                            "Download button in the Report panel.")
     except Exception as exc:                       # never let it crash the app
+        _clear_report_artifact()
         st.session_state["_report_msg"] = ("error", f"Report generation failed: {exc}")
     if prog is not None:
         prog.empty()
@@ -1926,7 +1983,7 @@ def build_inputs():
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
-    _report_panel(report_slot)
+    _report_panel(report_slot, sig)
     _save_load_panel(save_slot)
     with about_slot.expander("About", expanded=False):
         st.markdown("### Sector")

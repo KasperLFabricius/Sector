@@ -1363,10 +1363,42 @@ def test_generate_report_produces_pdf():
     at.run()
     at.session_state["_report_no_figures"] = True
     at.session_state["rep_proj_no"] = "T-1"
+    at.session_state["rep_section"] = "S/1"
+    at.session_state["rep_rev"] = "A:2"
     at.button(key="gen_report").click().run()
     assert not at.exception
     assert "report_buffer" in at.session_state
     assert at.session_state["report_buffer"][:4] == b"%PDF"
+    assert "report_signature" in at.session_state
+    assert at.session_state["report_filename"].startswith(
+        "Sector_T-1_S-1_Rev-A-2_"
+    )
+    assert at.session_state["report_filename"].endswith(".pdf")
+
+
+def test_report_download_becomes_stale_after_metadata_change():
+    at = _fresh()
+    at.run()
+    at.session_state["_report_no_figures"] = True
+    at.session_state["rep_proj_no"] = "T-1"
+    at.session_state["rep_section"] = "S/1"
+    at.session_state["rep_rev"] = "A:2"
+    at.button(key="gen_report").click().run()
+    assert not any("Report out of date" in w.value for w in at.warning)
+
+    at.text_input(key="rep_rev").set_value("B").run()
+    assert any("Report out of date" in w.value for w in at.warning)
+
+
+def test_report_download_becomes_stale_after_analysis_input_change():
+    at = _fresh()
+    at.run()
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+    assert not any("Report out of date" in w.value for w in at.warning)
+
+    at.number_input(key="pl_Mx").set_value(123.0).run()
+    assert any("Report out of date" in w.value for w in at.warning)
 
 
 def test_load_project_without_tendon_table_does_not_crash():

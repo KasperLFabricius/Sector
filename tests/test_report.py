@@ -5,6 +5,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
@@ -16,7 +18,7 @@ def _inp():
     return {
         "mode": "Both",
         "outer": [(-0.1, -0.15), (0.1, -0.15), (0.1, 0.15), (-0.1, 0.15)],
-        "holes": [], "bars": [(0.0, -0.12, 5.0e-4)], "tendons": [],
+        "holes": [], "bars": [(0.0, -0.12, 500.0)], "tendons": [],
         "concrete": Concrete(fck=30.0, gamma_c=1.5, curve=2),
         "steel": MildSteel(fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
                            gamma_y=1.15, curve=2),
@@ -92,6 +94,35 @@ def test_report_crack_width_uses_millimetres_not_metres():
     assert "235.0" in txt and "235000" not in txt     # sr_max stays mm
     assert "0.213" in txt                              # wk in mm (0.213 mm)
     assert "213.000" not in txt                        # wk not 1000x (would be 213 mm)
+
+
+def test_report_reinforcement_areas_are_already_square_millimetres():
+    inp = _inp()
+    inp["bars"] = [(0.0, -0.12, 321.123)]
+    inp["tendons"] = [(0.0, 0.12, 654.321)]
+    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    assert "321.123" in txt
+    assert "654.321" in txt
+    assert "321123000" not in txt
+    assert "654321000" not in txt
+
+
+def test_oversized_reinforcement_table_repeats_its_header():
+    inp = _inp()
+    inp["bars"] = [
+        (0.0, -0.12, 300.0 + index)
+        for index in range(120)
+    ]
+    pdf = sector_report.build_report({}, inp, {}, figures=False)
+
+    import io
+    import pypdf
+
+    pages = [page.extract_text() or ""
+             for page in pypdf.PdfReader(io.BytesIO(pdf)).pages]
+    bar_pages = [page for page in pages if "Area (mm" in page]
+    assert len(bar_pages) >= 2
+    assert all("x (mm)" in page and "y (mm)" in page for page in bar_pages)
 
 
 def test_report_crack_worked_uses_the_governing_case():
@@ -221,6 +252,16 @@ def test_report_handles_plastic_only():
     out = {"plastic": _out()["plastic"]}
     pdf = sector_report.build_report({}, _inp(), out, figures=False)
     assert pdf[:4] == b"%PDF"
+    txt = _pdf_text(pdf)
+    assert "Cracked-section elastic stresses" not in txt
+    assert "crack width" not in txt.lower()
+
+
+def test_report_elastic_only_omits_plastic_theory():
+    out = {"elastic": _out()["elastic"]}
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Ultimate (plastic) capacity" not in txt
+    assert "Cracked-section elastic stresses" in txt
 
 
 def test_report_capacity_only_omits_utilisation():
@@ -645,8 +686,8 @@ def test_report_shear_links_out_of_limits_note():
 
 def test_fig_png_times_out_instead_of_hanging():
     # v0.62: the report's kaleido export runs off the main thread with a join
-    # timeout, so a stuck browser yields a placeholder (None) instead of freezing
-    # report generation -- matching the manual's export guard.
+    # timeout, so a stuck browser signals failure (None) instead of freezing report
+    # generation. The report builder converts that signal to ReportFigureError.
     import time
 
     class _SlowFig:
@@ -661,7 +702,7 @@ def test_fig_png_times_out_instead_of_hanging():
 def test_report_stops_exporting_after_a_timeout():
     # Once one figure export times out (worker still alive at the join), the builder
     # marks _export_hung and skips every later export instead of blocking for each -- so
-    # a figure-rich report degrades to placeholders promptly.
+    # a figure-rich report fails truthfully and promptly.
     import io as _io
     rb = sector_report.ReportBuilder(_io.BytesIO(), {}, _inp(), _out(), figures=True)
     calls = {"n": 0}
@@ -672,12 +713,29 @@ def test_report_stops_exporting_after_a_timeout():
     orig = sector_report._fig_png
     try:
         sector_report._fig_png = _stub
-        rb._fig(object())            # first export "times out" -> sets the sentinel
+        with pytest.raises(sector_report.ReportFigureError, match="timed out"):
+            rb._fig(object())        # first export times out -> sets the sentinel
         assert rb._export_hung is True
-        rb._fig(object())            # second export must be skipped
+        with pytest.raises(sector_report.ReportFigureError, match="previously"):
+            rb._fig(object())        # second export fails without trying again
     finally:
         sector_report._fig_png = orig
     assert calls["n"] == 1           # only the first figure actually tried to export
+
+
+def test_report_fails_when_a_requested_figure_cannot_be_exported(monkeypatch):
+    monkeypatch.setattr(sector_report, "_fig_png",
+                        lambda fig, width, height: (None, False))
+    with pytest.raises(sector_report.ReportFigureError, match="report not created"):
+        sector_report.build_report({}, _inp(), _out(), figures=True)
+
+
+def test_report_prints_zero_based_concrete_point_as_one_based():
+    out = _out()
+    out["elastic"]["max_conc_point"] = 0
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "point 1" in txt
+    assert "point 0" not in txt
 
 
 def _combined_longitudinal(theta_mode):
