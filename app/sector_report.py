@@ -2258,7 +2258,7 @@ class ReportBuilder:
         limit = assessment.get("limit")
         margin = assessment.get("margin")
         text = (
-            f"{display_status} - Crack width | w<sub>k</sub> "
+            f"{display_status} - Crack width | governing w<sub>k</sub> "
             f"{'-' if value is None else _fmt(value, 3) + ' mm'} | limit "
             f"{'not supplied' if limit is None or limit <= 0.0 else _fmt(limit, 3) + ' mm'} | "
             f"case {assessment.get('case') or '-'} | "

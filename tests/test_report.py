@@ -183,6 +183,7 @@ def test_report_mirrors_the_views():
     assert "PASS - Plastic bending" in txt
     assert "margin +20.0 pp" in flat
     assert "does not exceed" not in flat
+    assert "PASS - Crack width | governing" in flat
     assert "Governing concrete corner response" in txt
     assert "Governing reinforcement and tendon response" in txt
     assert "Cracked" in txt                        # cracked transformed-props column

@@ -2520,6 +2520,14 @@ def test_crack_limit_verdict_and_candidate_table_are_retained():
     assert {"element_id", "x_mm", "y_mm", "area_mm2", "cover",
             "sigma_s", "ac_eff", "esm_ecm", "sr_max", "wk"} <= \
         e["crack"]["candidates"][0].keys()
+    at.selectbox(key="view").set_value("Elastic Results").run()
+    assert any(
+        "FAIL - Crack width" in item.value
+        and "governing" in item.value
+        and "case" in item.value
+        and "element" in item.value
+        for item in at.error
+    )
 
 
 def test_crack_limit_and_source_are_retained_when_no_width_is_calculated():

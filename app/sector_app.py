@@ -4071,10 +4071,10 @@ def _crack_width_panel(e):
     governing = assessment.get("governing") or "-"
     margin = assessment.get("margin")
     message = (
-        f"**{display_status} - Crack width** | $w_k$ "
+        f"**{display_status} - Crack width** | governing $w_k$ "
         f"{'-' if value is None else f'{value:.3f} mm'} | limit "
         f"{'not supplied' if limit is None or limit <= 0.0 else f'{limit:.3f} mm'} | "
-        f"{case} | {governing}"
+        f"case {case} | element {governing}"
     )
     if margin is not None:
         message += f" | margin {margin:+.3f} mm"
