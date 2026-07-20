@@ -650,10 +650,14 @@ def manual_blocks() -> list:
          "$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\leq 1$ (6.29) is added.")
     call("limit", "A re-entrant T, L, I or flanged outline is a compound section. "
          "Sector detects it and withholds the single-tube resistance and verdict until "
-         "**Subdivide into sub-tubes** is enabled and component rectangles are defined "
-         "(6.3.1(3)). Multi-cell sections likewise require subdivision. Strut bounds "
-         "outside the code range remain visible for exploration but receive no code "
-         "verdict.")
+         "**Subdivide into sub-tubes** is enabled and positioned component rectangles "
+         "are defined by global centre x/y and b/h (6.3.1(3)). Sector checks that their "
+         "non-overlapping union equals the concrete net area, stays inside the outline "
+         "and does not enter a void; until that geometric partition is valid, torsion "
+         "and dependent interaction are not evaluated. Older projects that stored only "
+         "sub-tube dimensions must add the centre coordinates before recalculation. "
+         "Multi-cell sections likewise require subdivision. Strut bounds outside the "
+         "code range remain visible for exploration but receive no code verdict.")
     h2("Combined M-V-T interaction")
     md("With **Check combined M-V-T** on, Sector ties the bending (plastic $M$), "
        "shear ($V$) and torsion ($T$) checks together under **one shared code "

@@ -544,8 +544,9 @@ def test_report_compound_torsion_requires_subdivision():
     assert "Enable sub-tubes" in txt
 
 
-def _subtube(b, h, tef, ak, c, ted, trd, util, gov):
+def _subtube(b, h, tef, ak, c, ted, trd, util, gov, cx=0.0, cy=0.0):
     return dict(tube={"tef": tef, "Ak": ak, "valid": True}, b_mm=b, h_mm=h,
+                x_mm=cx, y_mm=cy,
                 stiffness=c, t_ed=ted, trd=trd, util=util, governs=gov,
                 trd_s=trd, trd_max=trd + 5.0, trd_c=trd * 0.4, cot=1.75, nu=0.37)
 
@@ -554,9 +555,9 @@ def test_report_torsion_subdivided():
     out = _out()
     t = _torsion_out(interaction=True)               # subdivided run with shear links
     subs = [_subtube(300, 600, 100.0, 0.10, 0.0037, 24.6, 90.0, 24.6 / 90.0,
-                     "stirrups (TRd,s)"),
+                     "stirrups (TRd,s)", 0.0, -100.0),
             _subtube(1000, 200, 91.0, 0.15, 0.0023, 15.4, 20.0, 15.4 / 20.0,
-                     "crushing (TRd,max)")]
+                     "crushing (TRd,max)", 0.0, 300.0)]
     t["subdivided"] = True
     t["subtubes"] = subs
     t["trd"] = 110.0
@@ -571,6 +572,22 @@ def test_report_torsion_subdivided():
     assert "web" in txt
     assert "governing" in txt                        # P1: governing (max) utilisation
     assert "6.29" in txt                             # P2: crushing printed in sub-report
+
+
+def test_report_invalid_subtube_partition_withholds_verdict():
+    out = _out()
+    t = _torsion_out()
+    t["valid"] = False
+    t["tube"]["valid"] = False
+    t["reason"] = "invalid sub-tube partition: sub-rectangle 1 extends outside"
+    t["subdivision_requested"] = True
+    t["subdivision_valid"] = False
+    t["subdivision_reason"] = "sub-rectangle 1 extends outside"
+    out["torsion"] = t
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Torsion not evaluated" in txt
+    assert "positioned sub-rectangles" in txt
+    assert "No torsion or dependent interaction compliance verdict" in txt
 
 
 def test_report_torsion_shows_combined_interaction():

@@ -1499,6 +1499,8 @@ _SHEAR_SIG_KEYS = (
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
     "torsion_cot_min", "torsion_cot_max",
     "torsion_subdivide", "torsion_nsub",
+    "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
+    "torsion_sub_x2", "torsion_sub_y2", "torsion_sub_x3", "torsion_sub_y3",
     "torsion_sub_b0", "torsion_sub_h0", "torsion_sub_b1", "torsion_sub_h1",
     "torsion_sub_b2", "torsion_sub_h2", "torsion_sub_b3", "torsion_sub_h3",
     "combined_on", "combined_method", "combined_mv_independent",
@@ -1757,27 +1759,47 @@ def build_inputs():
              "sub-tube capacities and the applied TEd is split by uncracked torsional "
              "stiffness C = beta*h*b^3 (6.3.1(4)). The FIRST rectangle is the web -- it "
              "carries the shear in the combined V+T checks. Off = the single tube from "
-             "the outline.")
+             "the outline. A resistance is issued only after the positioned rectangles "
+             "are proven to partition the concrete without gaps, overlaps or void "
+             "intrusion.")
     torsion_subrects = []
     if torsion_subdivide and _tors:
         n_sub = int(_seeded_number(
             sts, "Number of sub-rectangles", 2.0, 4.0, 2.0, 1.0, "torsion_nsub",
             help="Component rectangles: a T = web + flange (2), a double console = web "
                  "+ 2 consoles (3). The first is the web."))
+        defaults = (
+            (0.0, -100.0, 300.0, 600.0),
+            (0.0, 300.0, 1200.0, 200.0),
+            (0.0, 0.0, 300.0, 600.0),
+            (0.0, 0.0, 300.0, 600.0),
+        )
         for i in range(n_sub):
             role = "web" if i == 0 else f"part {i + 1}"
-            cb, ch = sts.columns(2)
+            x_default, y_default, b_default, h_default = defaults[i]
+            cx_col, cy_col, cb, ch = sts.columns(4)
+            x_i = _seeded_number(
+                cx_col, f"x{i + 1} (mm)", -100000.0, 100000.0, x_default, 10.0,
+                f"torsion_sub_x{i}", disabled=not _tors,
+                help=f"Global x-coordinate of the centre of {role}.")
+            y_i = _seeded_number(
+                cy_col, f"y{i + 1} (mm)", -100000.0, 100000.0, y_default, 10.0,
+                f"torsion_sub_y{i}", disabled=not _tors,
+                help=f"Global y-coordinate of the centre of {role}.")
             b_i = _seeded_number(
-                cb, f"b{i + 1} (mm) - {role}", 1.0, 100000.0, 300.0, 10.0,
+                cb, f"b{i + 1} (mm) - {role}", 1.0, 100000.0, b_default, 10.0,
                 f"torsion_sub_b{i}", disabled=not _tors,
-                help="The width / height order does not matter to the tube.")
+                help=f"Global x-direction width of {role}.")
             h_i = _seeded_number(
-                ch, f"h{i + 1} (mm) - {role}", 1.0, 100000.0, 600.0, 10.0,
-                f"torsion_sub_h{i}", disabled=not _tors)
-            torsion_subrects.append((b_i, h_i))
-        sts.caption("Rectangles should partition the section without overlap "
-                    "(6.3.1(3)); the first is the web (it pairs with the shear in the "
-                    "combined checks).")
+                ch, f"h{i + 1} (mm) - {role}", 1.0, 100000.0, h_default, 10.0,
+                f"torsion_sub_h{i}", disabled=not _tors,
+                help=f"Global y-direction height of {role}.")
+            torsion_subrects.append((x_i, y_i, b_i, h_i))
+        sts.caption("The positioned rectangles must cover the concrete net area "
+                    "without gaps, overlaps, extensions outside the outline or "
+                    "intrusion into a void. Sector validates that partition before "
+                    "issuing a torsion result. The first rectangle is the web and "
+                    "pairs with shear in the combined checks (6.3.1(3)).")
     torsion_cot_min = _seeded_number(
         sts, r"Strut $\cot\theta$ min (torsion)", 0.5, 5.0, 1.0, 0.1,
         "torsion_cot_min", disabled=not _tors,
@@ -2827,9 +2849,31 @@ def _run_capacity_checks(inp, out):
         # match capacity. The FIRST rectangle is the web -- the combined V+T checks pair
         # the shear with it (`primary`). Without subdivision the single tube is used.
         subrects = inp.get("torsion_subrects") or []
-        subdivide = bool(inp.get("torsion_subdivide") and subrects)
+        subdivision_requested = bool(inp.get("torsion_subdivide"))
+        subdivision_valid = False
+        subdivision_reason = ""
+        if subdivision_requested:
+            subrects_m = [
+                (x_mm / 1000.0, y_mm / 1000.0,
+                 b_mm / 1000.0, h_mm / 1000.0)
+                for x_mm, y_mm, b_mm, h_mm in subrects
+            ]
+            subdivision_valid, subdivision_reason = (
+                geometry.rectangles_partition_concrete(
+                    inp["outer"], inp.get("holes") or [], subrects_m
+                )
+            )
+        subdivide = subdivision_requested and subdivision_valid
         compound_detected = not geometry.polygon_is_convex(inp["outer"])
-        if compound_detected and not subdivide:
+        if subdivision_requested and not subdivision_valid:
+            # Dimensions alone are not a defensible 6.3.1(3) model. The positioned
+            # rectangles must be a verified geometric partition before any torsion
+            # resistance or dependent interaction verdict is allowed.
+            tube = dict(
+                tube, valid=False,
+                reason=f"invalid sub-tube partition: {subdivision_reason}",
+            )
+        elif compound_detected and not subdivide:
             # EN 1992-1-1 6.3.1(3): a T/L/I/flanged (re-entrant) section is a
             # compound section. A single perimeter tube can be unconservative, so
             # retain the diagnostic geometry but withhold resistance/verdict until
@@ -2841,12 +2885,12 @@ def _run_capacity_checks(inp, out):
         # shear and torsion, 6.3.2(2)).
         if subdivide:
             subtubes, consts, sub_dims = [], [], []
-            for (b_mm, h_mm) in subrects:
+            for (x_mm, y_mm, b_mm, h_mm) in subrects:
                 bm, hm = b_mm / 1000.0, h_mm / 1000.0
                 subtubes.append(
                     torsion.tube_properties(torsion.rectangle_ring(bm, hm), None))
                 consts.append(torsion.rectangle_torsion_constant(bm, hm))
-                sub_dims.append((b_mm, h_mm))
+                sub_dims.append((x_mm, y_mm, b_mm, h_mm))
             ted_parts = torsion.distribute_by_stiffness(t_ed, consts)
         else:
             subtubes, consts, sub_dims, ted_parts = [tube], [1.0], [None], [t_ed]
@@ -2857,7 +2901,10 @@ def _run_capacity_checks(inp, out):
             asw_over_s_t=asw_over_s_t, tcot_min=tcot_min, tcot_max=tcot_max,
             nu_detail=nu_detail, nu_detail_applied=nu_detail_applied, fctd=fctd,
             sigma_cp=sigma_cp, gamma_c=gamma_c_eff, gamma_s=gamma_s_eff,
-            compound_detected=compound_detected)
+            compound_detected=compound_detected,
+            subdivision_requested=subdivision_requested,
+            subdivision_valid=subdivision_valid,
+            subdivision_reason=subdivision_reason)
 
     # ---- Member strut angle (EN 1992-1-1 6.3.2(2)) ----------------------------
     # One strut angle serves shear AND torsion (the same web struts carry both).
@@ -3099,7 +3146,9 @@ def _run_capacity_checks(inp, out):
             if subdivide:
                 for r, c, dims in zip(sub_res, tors_ctx["consts"],
                                       tors_ctx["sub_dims"]):
-                    r["stiffness"], (r["b_mm"], r["h_mm"]) = c, dims
+                    r["stiffness"] = c
+                    (r["x_mm"], r["y_mm"],
+                     r["b_mm"], r["h_mm"]) = dims
                 valid = all(r["valid"] for r in sub_res)
                 trd = sum(r["trd"] for r in sub_res) if valid else 0.0
                 asl_req = sum(r["asl_req"] for r in sub_res)
@@ -3141,6 +3190,9 @@ def _run_capacity_checks(inp, out):
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
                 compound_detected=tors_ctx["compound_detected"],
+                subdivision_requested=tors_ctx["subdivision_requested"],
+                subdivision_valid=tors_ctx["subdivision_valid"],
+                subdivision_reason=tors_ctx["subdivision_reason"],
                 theta_mode=(theta_mode_str if tors_live else "resistance"))
 
         # ---- links payload at the member angle ----
@@ -4181,6 +4233,16 @@ def torsion_view(inp, results):
                        "6.3.1(3) requires component sub-sections: enable 'Subdivide "
                        "into sub-tubes' and enter rectangles that partition the "
                        "section before a resistance or verdict is issued.")
+        elif str(t.get("reason") or "").startswith("invalid sub-tube partition:"):
+            detail = (t.get("subdivision_reason")
+                      or str(t["reason"]).split(":", 1)[-1].strip())
+            st.warning(
+                "Torsion is not evaluated because the positioned sub-rectangles "
+                f"do not form the concrete section: {detail}. Adjust each centre "
+                "x/y and b/h so the rectangles cover the net concrete area without "
+                "gaps, overlaps, extensions outside the outline or intrusion into "
+                "a void. No torsion or dependent interaction verdict is issued."
+            )
         else:
             st.warning("The torsion tube could not be formed from the outline (a "
                        "degenerate or too-thin section). Enter a wall thickness tef "
@@ -4234,6 +4296,9 @@ def torsion_view(inp, results):
         st.dataframe(
             {"Sub-tube": [("web" if i == 0 else f"part {i + 1}")
                           for i in range(len(subs))],
+             "centre x, y (mm)": [
+                 f"{s['x_mm']:.0f}, {s['y_mm']:.0f}" for s in subs
+             ],
              "b x h (mm)": [f"{s['b_mm']:.0f} x {s['h_mm']:.0f}" for s in subs],
              "tef (mm)": [f"{s['tube']['tef']:.1f}" for s in subs],
              "Ak (mm2)": [f"{s['tube']['Ak'] * 1e6:.0f}" for s in subs],
@@ -4251,7 +4316,8 @@ def torsion_view(inp, results):
                    "only when EVERY sub-tube passes (max util), not when TEd <= "
                    f"{chr(0x03A3)}TRd,i. Total longitudinal steel {chr(0x03A3)}Asl = "
                    f"{t['asl_req']:.0f} mm2 (sum over the sub-tubes), in ADDITION to the "
-                   "bending steel.")
+                   "bending steel. The displayed assembled geometry is the validated "
+                   "sub-rectangle partition used by the calculation.")
         st.plotly_chart(viz.subtube_figure(subs), width="stretch")
     else:
         theta_note = ("the ONE member strut angle (6.3.2(2)), shared with the shear "

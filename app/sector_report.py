@@ -1514,18 +1514,23 @@ class ReportBuilder:
                 "thin-walled tube. T<sub>Rd</sub> is the SUM of the sub-tube capacities "
                 "(6.3.1(3)) and the applied T<sub>Ed</sub> is split by uncracked "
                 "torsional stiffness C = beta h b<sup>3</sup> (6.3.1(4)). The first "
-                "rectangle (web) carries the shear in the combined V+T checks.")
-        rows = [["Sub-tube", "b x h (mm)", "t<sub>ef</sub>", "A<sub>k</sub> (mm2)",
-                 "share", "T<sub>Ed,i</sub>", "T<sub>Rd,i</sub>", "util", "governs"]]
+                "rectangle (web) carries the shear in the combined V+T checks. Its "
+                "positioned rectangle union has been validated against the concrete "
+                "outline and voids before these results are issued.")
+        rows = [["Sub-tube", "centre x, y<br/>b x h (mm)", "t<sub>ef</sub>",
+                 "A<sub>k</sub> (mm2)", "share", "T<sub>Ed,i</sub>",
+                 "T<sub>Rd,i</sub>", "util", "governs"]]
         for i, s in enumerate(subs):
             role = "web" if i == 0 else f"part {i + 1}"
             ut = ("inf" if not math.isfinite(s["util"])
                   else f"{_fmt(s['util'] * 100, 0)}%")
-            rows.append([role, f"{_fmt(s['b_mm'], 0)}x{_fmt(s['h_mm'], 0)}",
+            rows.append([role,
+                         f"({_fmt(s['x_mm'], 0)}, {_fmt(s['y_mm'], 0)})<br/>"
+                         f"{_fmt(s['b_mm'], 0)}x{_fmt(s['h_mm'], 0)}",
                          _fmt(s["tube"]["tef"], 1), _fmt(s["tube"]["Ak"] * 1e6, 0),
                          f"{_fmt(s['stiffness'] / c_tot * 100, 0)}%",
                          _fmt(s["t_ed"], 2), _fmt(s["trd"], 2), ut, s["governs"]])
-        self._table(rows, [16 * mm, 22 * mm, 14 * mm, 20 * mm, 13 * mm, 16 * mm,
+        self._table(rows, [16 * mm, 24 * mm, 14 * mm, 18 * mm, 13 * mm, 16 * mm,
                            16 * mm, 12 * mm, 25 * mm])
         # The torque is split by STIFFNESS, not capacity, so the governing check is the
         # WORST sub-tube (max util), not TEd / sum(TRd_i).
@@ -1609,6 +1614,17 @@ class ReportBuilder:
                             "under EN 1992-1-1 6.3.1(3). Enable sub-tubes and define "
                             "rectangles that partition the section before a "
                             "resistance or compliance verdict is issued.")
+            elif str(t.get("reason") or "").startswith(
+                    "invalid sub-tube partition:"):
+                detail = (t.get("subdivision_reason")
+                          or str(t["reason"]).split(":", 1)[-1].strip())
+                self._small(
+                    "Torsion not evaluated: the positioned sub-rectangles do not "
+                    f"form the concrete section ({detail}). Adjust each centre x/y "
+                    "and b/h so their non-overlapping union equals the concrete net "
+                    "area and does not enter a void. No torsion or dependent "
+                    "interaction compliance verdict is issued."
+                )
             else:
                 self._small("Warning: the tube could not be formed (a degenerate or "
                             "too-thin section).")
