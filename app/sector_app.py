@@ -33,6 +33,7 @@ from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import (capacity, codes, combined, geometry, kernels,  # noqa: E402
                     material_presets as mp, shear, templates, torsion)
+from sector import sls as sls_core  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
@@ -1483,6 +1484,8 @@ _ELASTIC_SIG_KEYS = (
     "el_short_P", "el_short_Mx", "el_short_My",
     "conc_Ec", "el_phi",
     "sls_cw", "sls_fctm", "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
+    "sls_pre_limit_pct", "sls_limit_source",
 )
 # Shear inputs. Folded into the overall signature (not the plastic/elastic split)
 # so a shear-only change marks the results stale without forcing the bending
@@ -1528,7 +1531,7 @@ def build_inputs():
     # limit state -- the same analysis can serve several load combinations.
     _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
     aset = s.expander(f"1 {_dot} Analysis settings", expanded=False)
-    scw = s.expander("Crack width (Elastic)", expanded=False)
+    scw = s.expander("Serviceability criteria (Elastic)", expanded=False)
     sts = s.expander("Shear, torsion & combined (Plastic)", expanded=False)
     sec = s.expander(f"2 {_dot} Section", expanded=True)
     mat = s.expander(f"3 {_dot} Material Parameters", expanded=False)
@@ -1570,18 +1573,49 @@ def build_inputs():
              "(N-Mx and N-My), from pure tension to the squash load. Shown in the "
              "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
-    scw.caption("Cracked-section stress and crack-width check, reported in the "
-                "Elastic view.")
+    scw.caption("User-defined stress and crack-width criteria, reported with the "
+                "Elastic result. Enter 0 for a limit that is not to be assessed.")
+    sls_conc_limit_pct = _seeded_number(
+        scw, "Concrete compression limit (% fck, 0 = not assessed)",
+        0.0, 100.0, 60.0, 1.0, "sls_conc_limit_pct", disabled=not elastic_on,
+        help="Upper concrete compressive-stress criterion as a percentage of the "
+             "entered characteristic concrete strength fck. The user is responsible "
+             "for confirming the applicable action combination and project basis.")
+    sls_steel_limit_pct = _seeded_number(
+        scw, "Reinforcement tension limit (% fyk, 0 = not assessed)",
+        0.0, 100.0, 80.0, 1.0, "sls_steel_limit_pct", disabled=not elastic_on,
+        help="Upper reinforcing-steel tensile-stress criterion as a percentage of "
+             "the entered characteristic yield strength fyk.")
+    sls_pre_limit_pct = _seeded_number(
+        scw, "Tendon tension limit (% fpk, 0 = not assessed)",
+        0.0, 100.0, 75.0, 1.0, "sls_pre_limit_pct", disabled=not elastic_on,
+        help="Upper prestressing-steel tensile-stress criterion as a percentage of "
+             "the entered characteristic tendon strength fpk. It is assessed only "
+             "when the section contains tendons.")
+    sls_limit_source = scw.text_input(
+        "SLS criteria source",
+        value="Project design basis / user-defined criteria",
+        key="sls_limit_source", disabled=not elastic_on,
+        help="Document, clause or project requirement supporting the entered limits. "
+             "Sector reports this text verbatim and does not infer exposure class.")
     sls_cw = _seeded_checkbox(scw, "Crack width", False, "sls_cw",
                               disabled=not elastic_on,
                               help="Report the EC2 crack width wk for both the long-term "
                                    "and the short-term (instantaneous) load. Each bar's "
                                    "clear cover is taken from the geometry.")
-    sls_phi = _seeded_number(scw, r"Crack-width bar diameter $\phi$ (mm, 0 = auto)", 0.0,
-                             60.0, 0.0, 1.0, "sls_phi",
-                             disabled=not (elastic_on and sls_cw),
-                             help="Governing bar diameter for the crack spacing "
-                                  "sr,max; 0 derives it from each bar's area.")
+    sls_wk_limit = _seeded_number(
+        scw, r"Crack-width limit $w_{lim}$ (mm, 0 = not assessed)",
+        0.0, 5.0, 0.30, 0.05, "sls_wk_limit",
+        disabled=not (elastic_on and sls_cw),
+        help="User-supplied allowable calculated crack width in millimetres. "
+             "Sector checks the largest reported long-/short-term and fine/coarse "
+             "value against this limit.")
+    sls_phi = _seeded_number(
+        scw, r"Crack-width element diameter $\phi$ (mm, 0 = auto)",
+        0.0, 60.0, 0.0, 1.0, "sls_phi",
+        disabled=not (elastic_on and sls_cw),
+        help="Diameter override for crack spacing, applied to each reinforcement "
+             "element; 0 derives it from each bar or tendon's area.")
     # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
     sls_bond = scw.selectbox(
@@ -2239,6 +2273,11 @@ def build_inputs():
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
+                sls_wk_limit=sls_wk_limit,
+                sls_conc_limit_pct=sls_conc_limit_pct,
+                sls_steel_limit_pct=sls_steel_limit_pct,
+                sls_pre_limit_pct=sls_pre_limit_pct,
+                sls_limit_source=sls_limit_source,
                 shear_on=shear_on,
                 shear_method=(combined_method if combined_on else shear_method),
                 shear_axis=_SHEAR_AXES[shear_axis],
@@ -2285,15 +2324,40 @@ def _props_dict(p):
     return dict(area=p.area, cx=p.cx, cy=p.cy, Ix=p.Ix, Iy=p.Iy, Ixy=p.Ixy)
 
 
-def _crack_dict(cw):
+def _crack_dict(cw, n_bars=0):
     """Flatten a CrackWidthResult (or None) for the results payload."""
     if cw is None:
         return None
-    return dict(wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm, sigma_s=cw.sigma_s,
-                rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff, hc_ef=cw.hc_ef,
-                phi=cw.phi, cover=cw.cover, gov_bar=cw.gov_bar + 1, coarse=cw.coarse,
-                edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
-                sr_max_geometric=cw.sr_max_geometric)
+
+    def element(index):
+        if index < n_bars:
+            return "Bar", index + 1
+        return "Tendon", index - n_bars + 1
+
+    def candidate(c):
+        kind, number = element(c.bar_index)
+        return dict(
+            element_type=kind, element_no=number,
+            element_id=f"{kind.lower()} {number}",
+            x_mm=c.x * _MM, y_mm=c.y * _MM, area_mm2=c.area,
+            wk=c.wk, sr_max=c.sr_max, esm_ecm=c.esm_ecm,
+            sigma_s=c.sigma_s, rho_p_eff=c.rho_p_eff, ac_eff=c.ac_eff,
+            hc_ef=c.hc_ef, phi=c.phi, cover=c.cover, coarse=c.coarse,
+            edition=c.edition, kw=c.kw, k1_r=c.k1_r, kfl=c.kfl,
+            sr_max_geometric=c.sr_max_geometric,
+        )
+
+    kind, number = element(cw.gov_bar)
+    return dict(
+        wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm,
+        sigma_s=cw.sigma_s, rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff,
+        hc_ef=cw.hc_ef, phi=cw.phi, cover=cw.cover,
+        gov_bar=cw.gov_bar + 1, element_type=kind, element_no=number,
+        element_id=f"{kind.lower()} {number}", coarse=cw.coarse,
+        edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
+        sr_max_geometric=cw.sr_max_geometric,
+        candidates=[candidate(c) for c in cw.candidates],
+    )
 
 
 # Compatibility names retained for integrations that imported the former app
@@ -2410,7 +2474,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # locked-in prestress Ep*IS, applied as a force so the user's N is the
         # external normal force only -- matching the plastic solver.
         sec = inp["section"]
-        n_mult = prestress_stress = pre_resultant = None
+        n_mult = prestress_stress = pre_resultant = pre_mat = None
         if inp["tendons"]:
             sec = Section.from_polygon(corners=inp["outer"],
                                        bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
@@ -2432,17 +2496,68 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                                    n_mult=n_mult, prestress_stress=prestress_stress)
         mpa = lambda arr: [s / 1000.0 for s in arr]  # kN/m2 -> MPa
         total = mpa(r.bar_stress_total)
+        elements = sls_core.element_rows(
+            inp["bars"], inp["tendons"],
+            total=total, long=mpa(r.bar_stress_long),
+            dif=mpa(r.bar_stress_dif), rst1=mpa(r.bar_stress_rst1),
+            es_mpa=inp["steel"].Es,
+            ep_mpa=(pre_mat.Es if pre_mat is not None else None),
+        )
+        corners = sls_core.concrete_corner_rows(
+            inp["outer"], inp["holes"],
+            stress_plane=(r.short_term.eps0, r.short_term.kx, r.short_term.ky),
+            ec_mpa=inp["conc_Ec"] * 1000.0,
+        )
+        governing_element = (
+            max(elements, key=lambda row: row["total_mpa"]) if elements else None
+        )
+        if governing_element is not None and governing_element["total_mpa"] <= 0.0:
+            governing_element = None
+        stress_checks = sls_core.stress_assessments(
+            total,
+            n_bars=len(inp["bars"]),
+            max_concrete_compression=r.max_concrete_compression / 1000.0,
+            fck=inp["concrete"].fck,
+            fyk=inp["steel"].fytk,
+            # The tendon SLS criterion is stated against characteristic ultimate
+            # strength fpk (the material model calls this ``futk``); ``fytk`` is
+            # the separate fp0.1k proof stress.
+            fpk=(pre_mat.futk if pre_mat is not None else None),
+            concrete_limit_pct=inp["sls_conc_limit_pct"],
+            reinforcement_limit_pct=inp["sls_steel_limit_pct"],
+            prestress_limit_pct=inp["sls_pre_limit_pct"],
+            valid=r.converged,
+        )
         out["elastic"] = dict(
             total=total, long=mpa(r.bar_stress_long), dif=mpa(r.bar_stress_dif),
             rst1=mpa(r.bar_stress_rst1),
             max_conc=r.max_concrete_compression / 1000.0,
             max_conc_xy=tuple(r.short_term.max_concrete_xy),
-            max_conc_point=int(r.max_concrete_point),
+            # Public point identifiers are one-based everywhere; the engine keeps
+            # zero-based arrays internally.
+            max_conc_point=int(r.max_concrete_point) + 1,
             na_x=r.na_x_intercept, na_y=r.na_y_intercept,
-            max_steel=max(total) if total else 0.0,
-            max_steel_bar=(int(np.argmax(total)) + 1) if total else 0,
+            max_steel=(governing_element["total_mpa"] if governing_element else 0.0),
+            # Compatibility field: global one-based position in the solver's
+            # bars-then-tendons array. New presentation uses max_steel_element so
+            # a tendon is never labelled as a reinforcing bar.
+            max_steel_bar=(int(np.argmax(total)) + 1
+                           if governing_element is not None else 0),
+            max_steel_type=(governing_element["element_type"]
+                            if governing_element else None),
+            max_steel_element=(governing_element["element_id"]
+                               if governing_element else None),
             prestress=pre_resultant,
             converged=r.converged,
+            stress_plane=(r.short_term.eps0, r.short_term.kx, r.short_term.ky),
+            elements=elements,
+            concrete_corners=corners,
+            stress_assessments=stress_checks,
+            sls_limit_source=inp["sls_limit_source"],
+            sls_conc_limit_pct=inp["sls_conc_limit_pct"],
+            sls_steel_limit_pct=inp["sls_steel_limit_pct"],
+            sls_pre_limit_pct=inp["sls_pre_limit_pct"],
+            sls_wk_limit=inp["sls_wk_limit"],
         )
 
         # Extended serviceability checks. Each bar's clear cover is taken from the
@@ -2478,6 +2593,15 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             edition=inp["sls_edition"],
             n_mult=n_mult, prestress_stress=prestress_stress)
+        sls_converged = (
+            r.converged
+            and cr_l.uncracked.converged
+            and cr_l.cracked_state.converged
+        )
+        out["elastic"]["converged"] = sls_converged
+        if not sls_converged:
+            for assessment in out["elastic"]["stress_assessments"].values():
+                assessment.update(status="INVALID", util=None, margin=None)
         crk_t, lam_t, sig_t = combined_cracking(
             sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             p_el_s, inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
@@ -2533,8 +2657,12 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             # is reported even when the long-term load alone would not cross the
             # cracking threshold. The short-term is the instantaneous total (kt = 0.6).
             out["elastic"].update(
-                crack=_crack_dict(_cw(cr_l.cracked_state, inp["nl"], 0.4, False)),
-                crack_short=_crack_dict(_cw(short_state, inp["ns"], 0.6, False)),
+                crack=_crack_dict(
+                    _cw(cr_l.cracked_state, inp["nl"], 0.4, False),
+                    len(inp["bars"])),
+                crack_short=_crack_dict(
+                    _cw(short_state, inp["ns"], 0.6, False),
+                    len(inp["bars"])),
                 crack_code=inp["sls_code"],
                 crack_edition=inp["sls_edition"],
                 crack_member=(inp["sls_member"] if dk_na else None),
@@ -2543,9 +2671,34 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             # both load cases (four crack widths in total).
             if dk_na:
                 out["elastic"].update(
-                    crack_coarse=_crack_dict(_cw(cr_l.cracked_state, inp["nl"], 0.4, True)),
-                    crack_short_coarse=_crack_dict(_cw(short_state, inp["ns"], 0.6, True)),
+                    crack_coarse=_crack_dict(
+                        _cw(cr_l.cracked_state, inp["nl"], 0.4, True),
+                        len(inp["bars"])),
+                    crack_short_coarse=_crack_dict(
+                        _cw(short_state, inp["ns"], 0.6, True),
+                        len(inp["bars"])),
                 )
+        eout = out["elastic"]
+        if (
+            eout.get("crack_coarse") is not None
+            or eout.get("crack_short_coarse") is not None
+        ):
+            crack_cases = {
+                "Long-term (fine)": eout.get("crack"),
+                "Short-term (fine)": eout.get("crack_short"),
+                "Long-term (coarse)": eout.get("crack_coarse"),
+                "Short-term (coarse)": eout.get("crack_short_coarse"),
+            }
+        else:
+            crack_cases = {
+                "Long-term": eout.get("crack"),
+                "Short-term": eout.get("crack_short"),
+            }
+        eout["crack_assessment"] = sls_core.crack_assessment(
+            crack_cases,
+            limit_mm=inp["sls_wk_limit"],
+            valid=eout["converged"],
+        )
     _run_capacity_checks(inp, out)
     return out
 
@@ -3330,6 +3483,21 @@ def interaction_view(inp, results):
                "$N$ and $M$.")
 
 
+def _sls_metric(box, label, assessment, unit="MPa"):
+    """Render one explicit SLS result/criterion/status card."""
+    value = assessment.get("value")
+    value_text = "-" if value is None else f"{value:.3f} {unit}"
+    status = assessment.get("status", "NOT ASSESSED")
+    colour = "normal" if status == "OK" else ("inverse" if status in {
+        "EXCEEDED", "INVALID"} else "off")
+    box.metric(label, value_text, delta=status, delta_color=colour)
+    limit = assessment.get("limit")
+    limit_text = "not supplied" if limit is None or limit <= 0.0 else f"{limit:.3f} {unit}"
+    util = assessment.get("util")
+    util_text = "" if util is None else f"; utilisation {_pct(util)}"
+    box.caption(f"Limit {limit_text} ({assessment.get('criterion', '-')}){util_text}.")
+
+
 def elastic_view(inp, results):
     """Cracked-section elastic stresses: peak concrete, neutral axis, the section
     diagnostic and per-bar stresses, matching the handcalc verification."""
@@ -3337,11 +3505,26 @@ def elastic_view(inp, results):
         st.info("Run an Elastic or Both analysis, then press Calculate.")
         return
     e = results["elastic"]
-    m1, m2 = st.columns(2)
-    m1.metric("Max concrete compression", f"{e['max_conc']:.3f} MPa",
-              help=f"at concrete corner {e['max_conc_point'] + 1}")
-    m2.metric("Max steel tension", f"{e['max_steel']:.3f} MPa",
-              help=f"in bar {e['max_steel_bar']}")
+    if not e.get("converged", True):
+        st.error("INVALID ELASTIC RESULT - the cracked-section solver did not "
+                 "converge. Values below are diagnostic only and must not be used "
+                 "as verified SLS results.")
+
+    st.markdown("### Stress-limit assessment")
+    checks = e.get("stress_assessments", {})
+    enabled = [
+        ("Concrete compression", checks.get("concrete", {})),
+        ("Reinforcement tension", checks.get("reinforcement", {})),
+    ]
+    if inp.get("tendons"):
+        enabled.append(("Tendon tension", checks.get("prestress", {})))
+    metric_cols = st.columns(len(enabled))
+    for col, (label, assessment) in zip(metric_cols, enabled):
+        _sls_metric(col, label, assessment)
+    st.caption(
+        f"Criteria source (user supplied): {e.get('sls_limit_source', '-')}. "
+        "The limits are applied to the displayed total elastic action; confirm "
+        "that the entered action set is the combination required by the stated basis.")
 
     # Modular ratios are derived (not entered); report the values actually used. Mild
     # steel and prestress differ (Es != Ep), so both pairs are shown when tendons exist.
@@ -3386,31 +3569,71 @@ def elastic_view(inp, results):
     sign = lambda s: viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
     bar_colors = [sign(s) for s in e["total"][:nb]]
     tendon_colors = [sign(s) for s in e["total"][nb:]]
-    st.plotly_chart(
-        viz.section_figure(inp["outer"], inp["holes"], bar_xy, bar_colors=bar_colors,
-                           tendons=tendon_xy, tendon_colors=tendon_colors,
-                           na_line=na, zones=zones, show_labels=True,
-                           label_scale=inp["label_scale"],
-                           label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
-                           title="Elastic state (green tension, red compression)"),
-        width="stretch")
+    section_col, strain_col = st.columns([3, 2])
+    with section_col:
+        st.plotly_chart(
+            viz.section_figure(inp["outer"], inp["holes"], bar_xy,
+                               bar_colors=bar_colors,
+                               tendons=tendon_xy, tendon_colors=tendon_colors,
+                               na_line=na, zones=zones, show_labels=True,
+                               label_scale=inp["label_scale"],
+                               label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
+                               title="Elastic state (green tension, red compression)"),
+            width="stretch")
+    with strain_col:
+        st.plotly_chart(
+            viz.elastic_strain_figure(
+                e.get("concrete_corners"), e.get("elements"),
+                e.get("stress_plane"), ec_mpa=inp["conc_Ec"] * 1000.0),
+            width="stretch")
 
-    # The per-bar stress table sits below the figure, sized to all rows.
-    st.markdown("**Steel stresses (MPa, tension +)**")
-    n = len(e["total"])
-    st.dataframe(
-        {"Bar": list(range(1, n + 1)),
-         "Total": [round(s, 3) for s in e["total"]],
-         "Long": [round(s, 3) for s in e["long"]],
-         "Dif": [round(s, 3) for s in e["dif"]],
-         "RST1": [round(s, 3) for s in e["rst1"]]},
-        hide_index=True, width="stretch", height=35 * (n + 1) + 3)
+    # Complete, explicitly typed element evidence: no tendon is called a bar, and
+    # geometry/area/strain stay beside every stress component for direct QA.
+    st.markdown("**Reinforcement and tendon response (tension +)**")
+    element_rows = e.get("elements", [])
+    if element_rows:
+        st.dataframe(
+            {
+                "Element": [r["element_id"] for r in element_rows],
+                "x (mm)": [round(r["x_mm"], 2) for r in element_rows],
+                "y (mm)": [round(r["y_mm"], 2) for r in element_rows],
+                "Area (mm2)": [round(r["area_mm2"], 2) for r in element_rows],
+                f"Strain ({_EPS}, permille)": [
+                    round(r["strain_permille"], 5) for r in element_rows],
+                "Total (MPa)": [round(r["total_mpa"], 3) for r in element_rows],
+                "Long (MPa)": [round(r["long_mpa"], 3) for r in element_rows],
+                "Dif (MPa)": [round(r["dif_mpa"], 3) for r in element_rows],
+                "RST1 (MPa)": [round(r["rst1_mpa"], 3) for r in element_rows],
+            },
+            hide_index=True, width="stretch",
+            height=min(35 * (len(element_rows) + 1) + 3, 560))
     st.caption(
         "**Total** = long + short  \n"
         "**Long** = long-term alone  \n"
         "**Dif** = total - long  \n"
         "**RST1** = instantaneous response with the long-term concrete stresses "
         "neutralised.")
+
+    corner_rows = e.get("concrete_corners", [])
+    if corner_rows:
+        with st.expander("Concrete corner stress/strain evidence", expanded=False):
+            st.dataframe(
+                {
+                    "Point": [r["point_no"] for r in corner_rows],
+                    "Ring": [r["ring"] for r in corner_rows],
+                    "Ring point": [r["ring_point_no"] for r in corner_rows],
+                    "x (mm)": [round(r["x_mm"], 2) for r in corner_rows],
+                    "y (mm)": [round(r["y_mm"], 2) for r in corner_rows],
+                    f"Strain ({_EPS}, permille)": [
+                        round(r["strain_permille"], 5) for r in corner_rows],
+                    f"Concrete stress ({_SIGMA}c, MPa)": [
+                        round(r["stress_mpa"], 3) for r in corner_rows],
+                },
+                hide_index=True, width="stretch",
+                height=min(35 * (len(corner_rows) + 1) + 3, 560))
+            st.caption("Cracked concrete carries compression only. Compatible "
+                       "tensile strains remain in the plane while concrete tensile "
+                       "stress is reported as zero.")
 
     _elastic_sls_section(inp, e)
 
@@ -3427,7 +3650,11 @@ def _elastic_sls_section(inp, e):
     show_cw = e.get("show_cw", False)
     st.divider()
     st.markdown("#### Cracking and crack width")
-    if e["cracked"]:
+    if not e.get("converged", True):
+        st.error("**Invalid cracking classification** - at least one elastic "
+                 "section solve did not converge. The values below are retained "
+                 "as diagnostics only; no cracked/uncracked verdict is issued.")
+    elif e["cracked"]:
         st.warning(f"**Cracked** - the uncracked concrete tension reaches $f_{{ctm}}$ "
                    f"at a load factor $\\lambda_{{cr}}$ = {e['lambda_cr']:.3f} "
                    f"(governing of the long-term and total actions; "
@@ -3472,17 +3699,45 @@ def _crack_width_panel(e):
     cl, cs = e.get("crack"), e.get("crack_short")
     clc, csc = e.get("crack_coarse"), e.get("crack_short_coarse")
     st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
-    if cl is None and cs is None and clc is None and csc is None:
-        st.info("No crack width: uncracked, or no bar in tension, under either "
-                "the long-term or the short-term load.")
+    no_results = cl is None and cs is None and clc is None and csc is None
+    assessment = e.get("crack_assessment", {})
+    status = assessment.get("status", "NOT ASSESSED")
+    value = assessment.get("value")
+    limit = assessment.get("limit")
+    case = assessment.get("case") or "-"
+    governing = assessment.get("governing") or "-"
+    margin = assessment.get("margin")
+    message = (
+        f"**{status}** - governing $w_k$ "
+        f"{'-' if value is None else f'{value:.3f} mm'}; limit "
+        f"{'not supplied' if limit is None or limit <= 0.0 else f'{limit:.3f} mm'}; "
+        f"case {case}; {governing}"
+    )
+    if margin is not None:
+        message += f"; margin {margin:+.3f} mm."
+    else:
+        message += "."
+    if status == "OK":
+        st.success(message)
+    elif status in {"EXCEEDED", "INVALID"}:
+        st.error(message)
+    elif status == "NOT ASSESSED":
+        st.warning(message)
+    else:
+        st.info(message)
+    st.caption(f"Criteria source (user supplied): "
+               f"{e.get('sls_limit_source', '-')}.")
+    if no_results:
+        st.info("No crack width was calculated: the section is uncracked, or no "
+                "reinforcement element is in tension, under either load case.")
         return
     quants = ["wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
               f"{_SIGMA}s (MPa)", f"{_RHO}p,eff", "hc,ef (m)", "cover c (mm)",
-              f"bar dia {_PHI} (mm)", "gov. bar"]
+              f"element dia {_PHI} (mm)", "governing element"]
     keys = ["wk", "sr_max", "esm_ecm", "sigma_s", "rho_p_eff", "hc_ef", "cover",
-            "phi", "gov_bar"]
+            "phi", "element_id"]
     fmts = ["{:.3f}", "{:.3f}", "{:.3e}", "{:.3f}", "{:.4f}", "{:.3f}", "{:.3f}",
-            "{:.3f}", "{:d}"]
+            "{:.3f}", "{}"]
 
     def column(c):
         if c is None:
@@ -3499,8 +3754,50 @@ def _crack_width_panel(e):
         data = {"Quantity": quants, "Long-term": column(cl),
                 "Short-term": column(cs)}
     st.dataframe(data, hide_index=True, width="stretch")
-    st.caption("Governing (largest-$w_k$) bar per load case; each bar's clear cover "
-               "is the distance to the nearest concrete face minus its radius.")
+    st.caption("Governing (largest-$w_k$) element per load case; each element's "
+               "clear cover is the distance to the nearest concrete face minus "
+               "its radius.")
+
+    cases = ([
+        ("Long-term (fine)", cl),
+        ("Short-term (fine)", cs),
+        ("Long-term (coarse)", clc),
+        ("Short-term (coarse)", csc),
+    ] if has_coarse else [
+        ("Long-term", cl),
+        ("Short-term", cs),
+    ])
+    candidate_rows = []
+    for case_name, case_result in cases:
+        if not case_result:
+            continue
+        case_max = float(case_result.get("wk", 0.0))
+        for rank, row in enumerate(case_result.get("candidates", []), start=1):
+            wk = float(row["wk"])
+            candidate_rows.append({
+                "Case": case_name,
+                "Rank": rank,
+                "Status": ("Governing" if rank == 1 else
+                           ("Within 10%" if case_max > 0.0 and wk >= 0.9 * case_max
+                            else "Candidate")),
+                "Element": row["element_id"],
+                "x (mm)": round(row["x_mm"], 2),
+                "y (mm)": round(row["y_mm"], 2),
+                "Area (mm2)": round(row["area_mm2"], 2),
+                "Cover (mm)": round(row["cover"], 2),
+                f"{_PHI} (mm)": round(row["phi"], 2),
+                f"{_SIGMA}s (MPa)": round(row["sigma_s"], 3),
+                "Ac,eff (m2)": round(row["ac_eff"], 6),
+                f"{_EPS}sm-{_EPS}cm": round(row["esm_ecm"], 7),
+                "sr,max (mm)": round(row["sr_max"], 2),
+                "wk (mm)": round(wk, 3),
+            })
+    if candidate_rows:
+        with st.expander("All crack-width candidates", expanded=False):
+            st.dataframe(candidate_rows, hide_index=True, width="stretch",
+                         height=min(35 * (len(candidate_rows) + 1) + 3, 560))
+            st.caption("Sorted by crack width within each case. 'Within 10%' marks "
+                       "near-governing elements for rapid sensitivity review.")
     member = e.get("crack_member")
     if member:
         st.caption(r"DK NA: cover-dependent $k_3 = 3.4(25/c)^{2/3}$, reported for both "

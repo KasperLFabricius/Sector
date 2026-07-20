@@ -60,6 +60,30 @@ def test_section_figure_accepts_numpy_array_rings():
     assert max(fig.data[0].x) == pytest.approx(400.0)
 
 
+def test_elastic_strain_profile_distinguishes_bars_and_tendons():
+    corners = [
+        {"point_no": 1, "ring": "Outer", "x_mm": -100.0, "y_mm": -200.0,
+         "strain_permille": -0.5},
+        {"point_no": 2, "ring": "Outer", "x_mm": 100.0, "y_mm": 200.0,
+         "strain_permille": 1.0},
+    ]
+    elements = [
+        {"element_type": "Bar", "element_id": "bar 1", "x_mm": 0.0,
+         "y_mm": -150.0, "strain_permille": 0.8, "total_mpa": 160.0},
+        {"element_type": "Tendon", "element_id": "tendon 1", "x_mm": 0.0,
+         "y_mm": 150.0, "strain_permille": 4.0, "total_mpa": 780.0},
+    ]
+    fig = viz.elastic_strain_figure(
+        corners, elements, (-10_000.0, 0.0, 50_000.0),
+        ec_mpa=30_000.0,
+    )
+    names = [trace.name for trace in fig.data]
+    assert "Concrete strain plane" in names
+    assert "Bars" in names and "Tendons" in names
+    assert fig.layout.yaxis.autorange == "reversed"
+    assert "permille" in fig.layout.xaxis.title.text
+
+
 def test_tension_only_curve_has_no_spurious_vertical_at_origin():
     # A tension-only law (zero in compression, elastic in tension) is continuous
     # at the origin: the 0 -> elastic-branch transition must NOT be drawn as a

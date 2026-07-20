@@ -281,14 +281,13 @@ def _fmt(v, nd=3):
     return f"{v:.{nd}f}"
 
 
-def _one_based(value):
-    """Convert a zero-based engine index to the one-based label shown to users."""
-    if value in (None, "-"):
+def _fmt_sig(v, sig=6):
+    """Format small engineering values without rounding nonzero evidence to zero."""
+    if v is None:
         return "-"
-    try:
-        return int(value) + 1
-    except (TypeError, ValueError):
-        return value
+    if isinstance(v, float) and not math.isfinite(v):
+        return "inf"
+    return f"{v:.{sig}g}"
 
 
 _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
@@ -339,6 +338,33 @@ class ReportBuilder:
 
     def _small(self, text):
         self.flow.append(Paragraph(_greek(text), self.s["small"]))
+
+    def _status_block(self, text, status):
+        """Add a prominent, print-readable assessment banner."""
+        palette = {
+            "OK": ("#E8F5E9", "#1B5E20"),
+            "EXCEEDED": ("#FDECEC", "#9B1C1C"),
+            "INVALID": ("#FDECEC", "#9B1C1C"),
+            "NOT ASSESSED": ("#FFF4D6", "#7A4E00"),
+            "NOT APPLICABLE": ("#EEF2F6", "#374151"),
+        }
+        bg, fg = palette.get(status, palette["NOT APPLICABLE"])
+        style = ParagraphStyle(
+            "status", parent=self.s["body"], fontName=_FONT_BOLD,
+            textColor=colors.HexColor(fg), leading=13,
+        )
+        table = Table([[Paragraph(_greek(text), style)]],
+                      colWidths=[160 * mm], hAlign="LEFT")
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor(fg)),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        self.flow.append(KeepTogether(table))
+        self._gap(4)
 
     def _gap(self, h=4):
         self.flow.append(Spacer(1, h))
@@ -779,13 +805,28 @@ class ReportBuilder:
                              f"{_fmt(ns_v * r, 3)} / {_fmt(nl_v * r, 3)}"])
             rows.append(["Mean tensile strength f<sub>ctm</sub>",
                          f"{_fmt(inp.get('sls_fctm'), 3)} MPa"])
+            rows.append(["Concrete compression criterion",
+                         f"{_fmt(inp.get('sls_conc_limit_pct'), 1)} % f<sub>ck</sub>"
+                         if inp.get("sls_conc_limit_pct") else "not assessed"])
+            rows.append(["Reinforcement tension criterion",
+                         f"{_fmt(inp.get('sls_steel_limit_pct'), 1)} % f<sub>yk</sub>"
+                         if inp.get("sls_steel_limit_pct") else "not assessed"])
+            if inp.get("tendons"):
+                rows.append(["Tendon tension criterion",
+                             f"{_fmt(inp.get('sls_pre_limit_pct'), 1)} % f<sub>pk</sub>"
+                             if inp.get("sls_pre_limit_pct") else "not assessed"])
+            rows.append(["SLS criteria source",
+                         str(inp.get("sls_limit_source") or "not stated")])
             rows.append(["Crack width checked", "yes" if inp.get("sls_cw") else "no"])
             if inp.get("sls_cw"):
                 rows.append(["Crack-width code", str(el.get("crack_code", "-"))])
+                rows.append(["Crack-width criterion",
+                             f"{_fmt(inp.get('sls_wk_limit'), 3)} mm"
+                             if inp.get("sls_wk_limit") else "not assessed"])
                 if el.get("crack_member"):
                     rows.append(["Member type", str(el["crack_member"])])
                 dia = inp.get("sls_phi") or 0.0
-                rows.append(["Crack-width bar diameter",
+                rows.append(["Crack-width element diameter",
                              "auto (from geometry)" if not dia else f"{_fmt(dia, 3)} mm"])
                 rows.append(["Mild-steel bond coefficient k<sub>1</sub>",
                              _fmt(inp.get("sls_k1"), 3)])
@@ -1735,12 +1776,28 @@ class ReportBuilder:
 
     def _elastic(self):
         el = self.out["elastic"]
-        self._h1("Cracked-section elastic stresses")
-        state = "cracked" if el.get("cracked") else "uncracked"
-        self._p(f"The section is <b>{state}</b> (governing of the long-term and "
-                f"total actions). Neutral-axis intercepts: "
+        self._h1("Elastic section response and stress limits")
+        valid = el.get("converged", True)
+        if not valid:
+            self._status_block(
+                "INVALID ELASTIC RESULT - the cracked-section solver did not "
+                "converge. All elastic and serviceability values in this report "
+                "are diagnostic only and shall not be used as verified results.",
+                "INVALID",
+            )
+        if valid:
+            state = "cracked" if el.get("cracked") else "uncracked"
+            self._p(f"The section is <b>{state}</b> (governing of the long-term "
+                    f"and total actions). Neutral-axis intercepts: "
+                    f"x<sub>na</sub> = {_fmt(el['na_x']*_MM, 3)} mm, "
+                    f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm.")
+        else:
+            self._p(
+                "No verified cracked/uncracked classification is issued. "
+                "Diagnostic neutral-axis intercepts: "
                 f"x<sub>na</sub> = {_fmt(el['na_x']*_MM, 3)} mm, "
-                f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm.")
+                f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm."
+            )
         ps = el.get("prestress")
         if ps is not None:
             # ps[0] is the tendon tension resultant; the prestress precompresses the
@@ -1749,6 +1806,36 @@ class ReportBuilder:
                     f"is the external force only): equivalent prestress action "
                     f"N = {_fmt(-ps[0], 3)} kN, M<sub>x</sub> = {_fmt(ps[1], 3)} kNm, "
                     f"M<sub>y</sub> = {_fmt(ps[2], 3)} kNm (N tension-positive).")
+        checks = el.get("stress_assessments") or {}
+        if checks:
+            self._h2("Stress-limit assessment")
+            rows = [["Check", "Result", "Limit", "Utilisation", "Status"]]
+            for label, key in (
+                ("Concrete compression", "concrete"),
+                ("Reinforcement tension", "reinforcement"),
+                ("Tendon tension", "prestress"),
+            ):
+                item = checks.get(key)
+                if not item or (key == "prestress" and not self.inp.get("tendons")):
+                    continue
+                limit = item.get("limit")
+                rows.append([
+                    label,
+                    "-" if item.get("value") is None else
+                    f"{_fmt(item.get('value'), 3)} MPa",
+                    ("not supplied" if limit is None or limit <= 0.0 else
+                     f"{_fmt(limit, 3)} MPa ({item.get('criterion', '-')})"),
+                    "-" if item.get("util") is None else _pct(item.get("util")),
+                    item.get("status", "NOT ASSESSED"),
+                ])
+            self._table(rows, [42 * mm, 30 * mm, 47 * mm, 24 * mm, 27 * mm],
+                        font=7.5)
+            self._small(
+                f"Criteria source (user supplied): "
+                f"{el.get('sls_limit_source', '-')}. Limits are applied to the "
+                "displayed total elastic action; the user shall confirm that the "
+                "entered action set is the combination required by that basis."
+            )
         # Elastic state diagram (bars coloured by stress sign, compression zone).
         if self.figures and el.get("max_conc", 0.0) > 0.0:
             hp = viz.elastic_halfplane(el["na_x"], el["na_y"],
@@ -1768,43 +1855,100 @@ class ReportBuilder:
                     tendon_colors=[sgn(s) for s in total[nb:]], na_line=na, zones=zones,
                     show_labels=True, scale=_MM, unit="mm",
                     title="Elastic state (green tension, red compression)"), 150, 100)
+        if self.figures and el.get("concrete_corners"):
+            self._fig(viz.elastic_strain_figure(
+                el.get("concrete_corners"), el.get("elements"),
+                el.get("stress_plane"),
+                ec_mpa=float(self.inp.get("conc_Ec", 0.0)) * 1000.0,
+                title="SLS strain profile"), 150, 100)
         # Transformed properties: uncracked and (when cracked) cracked, n_l-weighted.
         self._h2("Transformed section properties (n<sub>l</sub>)")
         pu = el.get("props_un") or {}
         pc = el.get("props_cr")
-        specs = [("Area A", "area", 4, "m<super>2</super>", 1.0),
-                 ("Centroid x", "cx", 1, "mm", _MM),
-                 ("Centroid y", "cy", 1, "mm", _MM),
-                 ("I<sub>x</sub>", "Ix", 6, "m<super>4</super>", 1.0),
-                 ("I<sub>y</sub>", "Iy", 6, "m<super>4</super>", 1.0)]
+        specs = [("Area A", "area", 4, "m<super>2</super>", 1.0, False),
+                 ("Centroid x", "cx", 1, "mm", _MM, False),
+                 ("Centroid y", "cy", 1, "mm", _MM, False),
+                 ("I<sub>x</sub>", "Ix", 6, "m<super>4</super>", 1.0, True),
+                 ("I<sub>y</sub>", "Iy", 6, "m<super>4</super>", 1.0, True),
+                 ("I<sub>xy</sub>", "Ixy", 6, "m<super>4</super>", 1.0, True)]
         head = ["Property", "Uncracked"] + (["Cracked"] if pc else [])
         rows = [head]
-        for label, k, nd, unit, sc in specs:
-            row = [f"{label} ({unit})", _fmt(pu.get(k, 0.0) * sc, nd)]
+        for label, k, nd, unit, sc, significant in specs:
+            formatter = _fmt_sig if significant else _fmt
+            row = [f"{label} ({unit})", formatter(pu.get(k, 0.0) * sc, nd)]
             if pc:
-                row.append(_fmt(pc.get(k, 0.0) * sc, nd))
+                row.append(formatter(pc.get(k, 0.0) * sc, nd))
             rows.append(row)
         self._table(rows, [55 * mm, 45 * mm] + ([45 * mm] if pc else []))
         self._small("Transformed (n<sub>l</sub>-weighted) about the centroid; the "
                     "cracked column drops the concrete in tension.")
-        # Per-bar stress table.
-        self._h2("Reinforcement stresses (creep decomposition)")
+        # Complete, explicitly typed bar/tendon evidence.
+        self._h2("Reinforcement and tendon response")
         self._small("TOTAL = long + short at the section state; LONG = long-term "
                     "part; DIF = short-term difference; RST1 = restraint. "
                     "Tension positive.")
-        total = el.get("total", [])
-        rows = [["Bar", "TOTAL", "LONG", "DIF", "RST1"]]
-        for i in range(len(total)):
-            rows.append([i + 1, _fmt(total[i], 3), _fmt(el["long"][i], 3),
-                         _fmt(el["dif"][i], 3), _fmt(el["rst1"][i], 3)])
-        if len(total):
-            w = 150 * mm / 5
-            self._table(rows, [w] * 5, font=8, keep=False)
+        element_rows = el.get("elements") or []
+        if element_rows:
+            rows = [["Element", "x", "y", "Area", "Strain", "TOTAL",
+                     "LONG", "DIF", "RST1"]]
+            for row in element_rows:
+                rows.append([
+                    row["element_id"],
+                    _fmt(row["x_mm"], 1),
+                    _fmt(row["y_mm"], 1),
+                    _fmt(row["area_mm2"], 1),
+                    _fmt(row["strain_permille"], 4),
+                    _fmt(row["total_mpa"], 2),
+                    _fmt(row["long_mpa"], 2),
+                    _fmt(row["dif_mpa"], 2),
+                    _fmt(row["rst1_mpa"], 2),
+                ])
+            self._table(
+                rows,
+                [24 * mm, 15 * mm, 15 * mm, 18 * mm, 20 * mm,
+                 20 * mm, 20 * mm, 18 * mm, 20 * mm],
+                font=6.5, keep=False,
+            )
+            self._small("Coordinates in mm; area in mm<super>2</super>; strain in "
+                        "permille; stresses in MPa.")
+        else:
+            # Backward-compatible report path for pre-PR6 result fixtures.
+            total = el.get("total", [])
+            rows = [["Element", "TOTAL", "LONG", "DIF", "RST1"]]
+            for i in range(len(total)):
+                rows.append([f"bar {i + 1}", _fmt(total[i], 3),
+                             _fmt(el["long"][i], 3), _fmt(el["dif"][i], 3),
+                             _fmt(el["rst1"][i], 3)])
+            if len(total):
+                w = 150 * mm / 5
+                self._table(rows, [w] * 5, font=8, keep=False)
+        corner_rows = el.get("concrete_corners") or []
+        if corner_rows:
+            self._h2("Concrete corner stress and strain")
+            rows = [["Point", "Ring", "Ring point", "x", "y",
+                     "Strain", "Concrete stress"]]
+            for row in corner_rows:
+                rows.append([
+                    row["point_no"], row["ring"], row["ring_point_no"],
+                    _fmt(row["x_mm"], 1), _fmt(row["y_mm"], 1),
+                    _fmt(row["strain_permille"], 5),
+                    _fmt(row["stress_mpa"], 3),
+                ])
+            self._table(
+                rows,
+                [16 * mm, 29 * mm, 20 * mm, 19 * mm, 19 * mm,
+                 28 * mm, 29 * mm],
+                font=7, keep=False,
+            )
+            self._small("Coordinates in mm; strain in permille; stress in MPa "
+                        "(compression negative). Cracked concrete carries "
+                        "compression only; compatible tensile strains remain in "
+                        "the plane while tensile stress is zero.")
         rows = [["Quantity", "Value"],
                 ["Max concrete compression", f"{_fmt(el.get('max_conc'), 3)} MPa "
-                 f"(point {_one_based(el.get('max_conc_point'))})"],
-                ["Max reinforcement tension", f"{_fmt(el.get('max_steel'), 3)} MPa "
-                 f"(bar {el.get('max_steel_bar','-')})"]]
+                 f"(point {el.get('max_conc_point', '-')})"],
+                ["Max steel-element tension", f"{_fmt(el.get('max_steel'), 3)} MPa "
+                 f"({el.get('max_steel_element') or 'not in tension'})"]]
         self._table(rows, [70 * mm, 90 * mm])
         self._p("Stresses are the transformed-section result, sigma = "
                 "n &#183; (N/A<sub>t</sub> + M&#183;z/I<sub>t</sub>), summed over "
@@ -1819,6 +1963,7 @@ class ReportBuilder:
             self._h2("Cracking threshold")
         lam = el.get("lambda_cr")
         verdict = "cracked" if el.get("cracked") else "uncracked"
+        valid = el.get("converged", True)
         crack_2023 = (
             el.get("crack_edition") == "2023"
             or "2023" in str(el.get("crack_code", ""))
@@ -1831,19 +1976,54 @@ class ReportBuilder:
                            "(DS/EN 1992-1-1 &#167;7.1)"),
                       subst=f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
                             f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa",
-                      result=f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
-                             f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)")
-        self._small("Governing of the long-term and total (long + short) actions: "
-                    "cracking is triggered by the peak tension the section sees, and "
-                    "is irreversible.")
+                      result=(
+                          f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
+                          f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)"
+                          if valid else
+                          f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
+                          "no verified cracking classification"
+                      ))
+        if valid:
+            self._small(
+                "Governing of the long-term and total (long + short) actions: "
+                "cracking is triggered by the peak tension the section sees, and "
+                "is irreversible."
+            )
+        else:
+            self._small(
+                "Diagnostic value only: at least one elastic solve did not "
+                "converge, so no cracked/uncracked verdict is issued."
+            )
         if not el.get("show_cw"):
             self._small("Crack width was not requested for this run.")
             return
         cl, cs = el.get("crack"), el.get("crack_short")
         clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
-        if cl is None and cs is None and clc is None and csc is None:
-            self._small("No crack width: the section is uncracked, or no bar is in "
-                        "tension, under either the long-term or the short-term load.")
+        no_results = cl is None and cs is None and clc is None and csc is None
+        assessment = el.get("crack_assessment") or {}
+        status = assessment.get("status", "NOT ASSESSED")
+        value = assessment.get("value")
+        limit = assessment.get("limit")
+        margin = assessment.get("margin")
+        text = (
+            f"{status} - governing w<sub>k</sub> = "
+            f"{'-' if value is None else _fmt(value, 3) + ' mm'}; limit = "
+            f"{'not supplied' if limit is None or limit <= 0.0 else _fmt(limit, 3) + ' mm'}; "
+            f"case = {assessment.get('case') or '-'}; "
+            f"element = {assessment.get('governing') or '-'}"
+        )
+        if margin is not None:
+            text += f"; margin = {_fmt(margin, 3)} mm"
+        self._status_block(text + ".", status)
+        self._small(
+            f"Criteria source (user supplied): "
+            f"{el.get('sls_limit_source', '-')}."
+        )
+        if no_results:
+            self._small(
+                "No crack width was calculated: the section is uncracked, or no "
+                "reinforcement element is in tension, under either load case."
+            )
             return
         self._crack_table(cl, cs, clc, csc)
         # Work the case that actually governs (the larger crack width) over every
@@ -1856,6 +2036,7 @@ class ReportBuilder:
         gov_case, gov_which = max(((c, w) for c, w in cases if c),
                                   key=lambda cw: cw[0].get("wk", 0.0))
         self._crack_worked(gov_case, gov_which)
+        self._crack_candidates(cases)
 
     def _crack_table(self, cl, cs, clc=None, csc=None):
         # The full crack-width breakdown for both load cases, matching the view.
@@ -1871,11 +2052,17 @@ class ReportBuilder:
                  ("Effective area A<sub>c,eff</sub> (m<super>2</super>)", "ac_eff", 5, 1.0),
                  ("Clear cover c (mm)", "cover", 1, 1.0),
                  ("Bar diameter phi (mm)", "phi", 1, 1.0),
-                 ("Governing bar", "gov_bar", 0, 1.0)]
+                 ("Governing element", "element_id", None, 1.0)]
 
         def col(c):
-            return ["-"] * len(specs) if c is None else \
-                [_fmt(c.get(k, 0.0) * sc, nd) for _, k, nd, sc in specs]
+            if c is None:
+                return ["-"] * len(specs)
+            out = []
+            for _label, key, nd, scale in specs:
+                value = c.get(key, "-")
+                out.append(str(value) if nd is None else
+                           _fmt(float(value) * scale, nd))
+            return out
 
         if clc is not None or csc is not None:
             # DK NA: fine and coarse crack systems, each for both load cases.
@@ -1896,9 +2083,10 @@ class ReportBuilder:
         if not cw:
             return
         self._h2(f"Crack width worked - governing case ({which})" if which
-                 else "Crack width worked (governing bar)")
-        self._small(f"Governing bar (largest w<sub>k</sub>): bar "
-                    f"{cw.get('gov_bar','-')}; clear cover c = {_fmt(cw.get('cover',0), 3)} mm.")
+                 else "Crack width worked (governing element)")
+        self._small(f"Governing element (largest w<sub>k</sub>): "
+                    f"{cw.get('element_id', 'element ' + str(cw.get('gov_bar','-')))}; "
+                    f"clear cover c = {_fmt(cw.get('cover',0), 3)} mm.")
         code = self.out["elastic"].get("crack_code")
         if cw.get("edition") == "2023":
             self._crack_worked_2023(cw, code)
@@ -1948,6 +2136,52 @@ class ReportBuilder:
                     note += ("The (h-x)/3 term in h<sub>c,ef</sub> applies to slabs "
                              "and prestressed members only.")
             self._small(note)
+
+    def _crack_candidates(self, cases):
+        """Append the complete sorted per-element crack-width audit table."""
+        rows = [["Case", "#", "Element", "x", "y", "c", "phi",
+                 "sigma<sub>s</sub>", "A<sub>c,eff</sub>", "delta eps",
+                 "s<sub>r</sub>", "w<sub>k</sub>"]]
+        for case, label in cases:
+            candidates = [] if not case else case.get("candidates", [])
+            if not candidates:
+                continue
+            case_max = float(case.get("wk", 0.0))
+            for rank, row in enumerate(candidates, start=1):
+                wk = float(row.get("wk", 0.0))
+                marker = ("G" if rank == 1 else
+                          ("N" if case_max > 0.0 and wk >= 0.9 * case_max else ""))
+                rows.append([
+                    label.replace("Long-term", "LT").replace("long-term", "LT")
+                    .replace("Short-term", "ST").replace("short-term", "ST"),
+                    f"{rank}{marker}",
+                    row.get("element_id", "-"),
+                    _fmt(row.get("x_mm"), 1),
+                    _fmt(row.get("y_mm"), 1),
+                    _fmt(row.get("cover"), 1),
+                    _fmt(row.get("phi"), 1),
+                    _fmt(row.get("sigma_s"), 1),
+                    _fmt(row.get("ac_eff"), 5),
+                    _fmt(row.get("esm_ecm"), 6),
+                    _fmt(row.get("sr_max"), 1),
+                    _fmt(wk, 3),
+                ])
+        if len(rows) == 1:
+            return
+        self._h2("Crack-width candidates - all checked cases")
+        self._table(
+            rows,
+            [18 * mm, 8 * mm, 17 * mm, 13 * mm, 13 * mm, 11 * mm,
+             11 * mm, 17 * mm, 18 * mm, 18 * mm, 13 * mm, 13 * mm],
+            font=5.4, keep=False,
+        )
+        self._small(
+            "LT = long-term; ST = short-term. Coordinates, c, phi and "
+            "s<sub>r</sub> in mm; sigma<sub>s</sub> in MPa; "
+            "A<sub>c,eff</sub> in m<super>2</super>; delta eps "
+            "dimensionless; w<sub>k</sub> in mm. G = governing; "
+            "N = within 10% of governing."
+        )
 
     def _crack_worked_2023(self, cw, code):
         """The EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
@@ -2019,9 +2253,9 @@ class ReportBuilder:
                 or "2023" in str(elastic.get("crack_code", ""))
             )
             clauses = (
-                "&#167;9.2.1 (cracking threshold)"
+                "&#167;9.1-9.2 (stress limitations and cracking threshold)"
                 if crack_2023 else
-                "&#167;7.1 (cracking threshold)"
+                "&#167;7.1-7.2 (stress limitations and cracking threshold)"
             )
             if elastic.get("show_cw"):
                 clauses += (
@@ -2031,6 +2265,11 @@ class ReportBuilder:
                 )
             edition = "EN 1992-1-1:2023" if crack_2023 else "DS/EN 1992-1-1"
             lines.append(f"{edition} (Eurocode 2): {clauses}.")
+            lines.append(
+                "Stress and crack-width acceptance limits are the explicit "
+                "user-entered project criteria printed with the result; Sector "
+                "does not infer exposure class or action-combination applicability."
+            )
             if "DK NA" in str(elastic.get("crack_code", "")):
                 lines.append(
                     "The Danish National Annex modifications to crack spacing and "

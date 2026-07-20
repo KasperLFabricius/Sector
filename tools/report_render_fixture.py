@@ -31,8 +31,9 @@ from sector import __version__  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 # Geometry, concrete law, steel law, plastic interaction, plastic state and
-# elastic state. An intentional fixture change must update this explicit contract.
-_EXPECTED_FIGURE_COUNT = 6
+# elastic state and SLS strain profile. An intentional fixture change must update
+# this explicit contract.
+_EXPECTED_FIGURE_COUNT = 7
 
 
 class _FixedDateTime(datetime.datetime):
@@ -70,8 +71,14 @@ def _inputs() -> dict:
         "My_el_s": 0.0,
         "nl": 15.0,
         "ns": 6.0,
+        "conc_Ec": 33.0,
         "sls_fctm": 2.9,
         "sls_cw": True,
+        "sls_wk_limit": 0.30,
+        "sls_conc_limit_pct": 60.0,
+        "sls_steel_limit_pct": 80.0,
+        "sls_pre_limit_pct": 75.0,
+        "sls_limit_source": "QA fixture SLS criteria",
         "v_min": 0.0,
         "v_max": 360.0,
         "v_inc": 90.0,
@@ -80,7 +87,13 @@ def _inputs() -> dict:
 
 
 def _crack() -> dict:
-    return {
+    candidate = {
+        "element_type": "Bar",
+        "element_no": 1,
+        "element_id": "bar 1",
+        "x_mm": 0.0,
+        "y_mm": -120.0,
+        "area_mm2": 500.0,
         "wk": 0.213,
         "sr_max": 235.0,
         "esm_ecm": 8.4e-4,
@@ -90,8 +103,14 @@ def _crack() -> dict:
         "hc_ef": 0.125,
         "phi": 16.0,
         "cover": 40.0,
-        "gov_bar": 1,
+        "coarse": False,
+        "edition": "2004",
+        "kw": 1.0,
+        "k1_r": 1.0,
+        "kfl": 1.0,
+        "sr_max_geometric": False,
     }
+    return dict(candidate, gov_bar=1, candidates=[candidate])
 
 
 def _results() -> dict:
@@ -132,17 +151,60 @@ def _results() -> dict:
             "rst1": [0.0],
             "max_conc": 12.0,
             "max_conc_xy": (0.0, 0.15),
-            "max_conc_point": 3,
+            "max_conc_point": 4,
             "na_x": 0.0,
             "na_y": 0.04,
             "max_steel": 150.0,
             "max_steel_bar": 1,
+            "max_steel_element": "bar 1",
             "converged": True,
             "cracked": True,
             "lambda_cr": 0.4,
             "sigma_ct": 7.2,
             "fctm": 2.9,
             "show_cw": True,
+            "stress_plane": (-12000.0, 0.0, 80000.0),
+            "elements": [{
+                "element_type": "Bar",
+                "element_no": 1,
+                "element_id": "bar 1",
+                "x_mm": 0.0,
+                "y_mm": -120.0,
+                "area_mm2": 500.0,
+                "strain_permille": 0.75,
+                "total_mpa": 150.0,
+                "long_mpa": 120.0,
+                "dif_mpa": 30.0,
+                "rst1_mpa": 0.0,
+            }],
+            "concrete_corners": [
+                {"point_no": 1, "ring": "Outer", "ring_point_no": 1,
+                 "x_mm": -100.0, "y_mm": -150.0,
+                 "strain_permille": -0.72727, "stress_mpa": -24.0},
+                {"point_no": 2, "ring": "Outer", "ring_point_no": 2,
+                 "x_mm": 100.0, "y_mm": -150.0,
+                 "strain_permille": -0.72727, "stress_mpa": -24.0},
+                {"point_no": 3, "ring": "Outer", "ring_point_no": 3,
+                 "x_mm": 100.0, "y_mm": 150.0,
+                 "strain_permille": 0.0, "stress_mpa": 0.0},
+                {"point_no": 4, "ring": "Outer", "ring_point_no": 4,
+                 "x_mm": -100.0, "y_mm": 150.0,
+                 "strain_permille": 0.0, "stress_mpa": 0.0},
+            ],
+            "stress_assessments": {
+                "concrete": {"value": 12.0, "limit": 18.0, "util": 2 / 3,
+                             "margin": 6.0, "status": "OK",
+                             "criterion": "60% fck"},
+                "reinforcement": {"value": 150.0, "limit": 400.0,
+                                  "util": 0.375, "margin": 250.0,
+                                  "status": "OK", "criterion": "80% fyk",
+                                  "governing": "bar 1"},
+                "prestress": {"value": None, "limit": None, "util": None,
+                              "margin": None, "status": "NOT APPLICABLE",
+                              "criterion": "75% fpk"},
+            },
+            "sls_limit_source": "QA fixture SLS criteria",
+            "sls_wk_limit": 0.30,
             "props_un": {
                 "area": 0.06,
                 "cx": 0.0,
@@ -161,6 +223,16 @@ def _results() -> dict:
             },
             "crack": _crack(),
             "crack_short": _crack(),
+            "crack_assessment": {
+                "value": 0.213,
+                "limit": 0.30,
+                "util": 0.71,
+                "margin": 0.087,
+                "status": "OK",
+                "case": "Long-term",
+                "governing": "bar 1",
+                "criterion": "0.3 mm",
+            },
             "crack_code": "EN 1992-1-1:2005",
             "crack_member": None,
         },
@@ -256,7 +328,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "QA-REFERENCE",
         "Rendered report regression",
         "Ultimate (plastic) capacity",
-        "Cracked-section elastic stresses",
+        "Elastic section response and stress limits",
+        "Crack-width candidates",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",
     ):
         if expected not in text:

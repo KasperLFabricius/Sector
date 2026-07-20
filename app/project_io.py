@@ -54,6 +54,8 @@ SCALAR_KEYS = [
     "mode", "v_min", "v_max", "v_inc", "pl_check_util",
     "pl_interaction",
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
+    "sls_pre_limit_pct", "sls_limit_source",
     # Shear (VRd,c without links, and the variable-strut VRd with links).
     "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
     "shear_dlower",

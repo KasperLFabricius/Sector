@@ -40,6 +40,10 @@ def _inp():
         "P_el_l": 0.0, "Mx_el_l": 80.0, "My_el_l": 0.0,
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
         "nl": 15.0, "ns": 6.0, "sls_fctm": 2.9, "sls_cw": True,
+        "conc_Ec": 33.0,
+        "sls_wk_limit": 0.30, "sls_conc_limit_pct": 60.0,
+        "sls_steel_limit_pct": 80.0, "sls_pre_limit_pct": 75.0,
+        "sls_limit_source": "DB-SLS-01 section 4",
         "v_min": 0.0, "v_max": 360.0, "v_inc": 90.0,
     }
 
@@ -47,9 +51,16 @@ def _inp():
 def _crack():
     # Units as returned by CrackWidthResult: wk/sr_max/phi/cover in mm; hc_ef in m;
     # ac_eff in m^2; esm_ecm dimensionless.
-    return {"wk": 0.213, "sr_max": 235.0, "esm_ecm": 8.4e-4, "sigma_s": 215.0,
-            "rho_p_eff": 0.04, "ac_eff": 0.0125, "hc_ef": 0.125, "phi": 16.0,
-            "cover": 40.0, "gov_bar": 1}
+    candidate = {
+        "element_type": "Bar", "element_no": 1, "element_id": "bar 1",
+        "x_mm": 0.0, "y_mm": -120.0, "area_mm2": 500.0,
+        "wk": 0.213, "sr_max": 235.0, "esm_ecm": 8.4e-4,
+        "sigma_s": 215.0, "rho_p_eff": 0.04, "ac_eff": 0.0125,
+        "hc_ef": 0.125, "phi": 16.0, "cover": 40.0,
+        "coarse": False, "edition": "2004", "kw": 1.0,
+        "k1_r": 1.0, "kfl": 1.0, "sr_max_geometric": False,
+    }
+    return dict(candidate, gov_bar=1, candidates=[candidate])
 
 
 def _out():
@@ -64,15 +75,58 @@ def _out():
                                 "comp_force": 300.0, "lever": 0.2, "dx": 0.0,
                                 "dy": 0.2}]},
         "elastic": {"total": [150.0], "long": [120.0], "dif": [30.0], "rst1": [0.0],
-                    "max_conc": 12.0, "max_conc_xy": (0.0, 0.15), "max_conc_point": 3,
+                    "max_conc": 12.0, "max_conc_xy": (0.0, 0.15), "max_conc_point": 4,
                     "na_x": 0.0, "na_y": 0.04, "max_steel": 150.0, "max_steel_bar": 1,
+                    "max_steel_element": "bar 1",
                     "converged": True, "cracked": True, "lambda_cr": 0.4,
                     "sigma_ct": 7.2, "fctm": 2.9, "show_cw": True,
+                    "stress_plane": (-12000.0, 0.0, 80000.0),
+                    "elements": [{
+                        "element_type": "Bar", "element_no": 1,
+                        "element_id": "bar 1", "x_mm": 0.0, "y_mm": -120.0,
+                        "area_mm2": 500.0, "strain_permille": 0.75,
+                        "total_mpa": 150.0, "long_mpa": 120.0,
+                        "dif_mpa": 30.0, "rst1_mpa": 0.0,
+                    }],
+                    "concrete_corners": [
+                        {"point_no": 1, "ring": "Outer", "ring_point_no": 1,
+                         "x_mm": -100.0, "y_mm": -150.0,
+                         "strain_permille": -0.72727, "stress_mpa": -24.0},
+                        {"point_no": 2, "ring": "Outer", "ring_point_no": 2,
+                         "x_mm": 100.0, "y_mm": -150.0,
+                         "strain_permille": -0.72727, "stress_mpa": -24.0},
+                        {"point_no": 3, "ring": "Outer", "ring_point_no": 3,
+                         "x_mm": 100.0, "y_mm": 150.0,
+                         "strain_permille": 0.0, "stress_mpa": 0.0},
+                        {"point_no": 4, "ring": "Outer", "ring_point_no": 4,
+                         "x_mm": -100.0, "y_mm": 150.0,
+                         "strain_permille": 0.0, "stress_mpa": 0.0},
+                    ],
+                    "stress_assessments": {
+                        "concrete": {"value": 12.0, "limit": 18.0, "util": 2/3,
+                                     "margin": 6.0, "status": "OK",
+                                     "criterion": "60% fck"},
+                        "reinforcement": {"value": 150.0, "limit": 400.0,
+                                          "util": 0.375, "margin": 250.0,
+                                          "status": "OK", "criterion": "80% fyk",
+                                          "governing": "bar 1"},
+                        "prestress": {"value": None, "limit": None, "util": None,
+                                      "margin": None, "status": "NOT APPLICABLE",
+                                      "criterion": "75% fpk"},
+                    },
+                    "sls_limit_source": "DB-SLS-01 section 4",
+                    "sls_wk_limit": 0.30,
                     "props_un": {"area": 0.06, "cx": 0.0, "cy": 0.0, "Ix": 4.5e-4,
                                  "Iy": 2.0e-4, "Ixy": 0.0},
                     "props_cr": {"area": 0.03, "cx": 0.0, "cy": 0.02, "Ix": 2.1e-4,
                                  "Iy": 1.0e-4, "Ixy": 0.0},
                     "crack": _crack(), "crack_short": _crack(),
+                    "crack_assessment": {
+                        "value": 0.213, "limit": 0.30, "util": 0.71,
+                        "margin": 0.087, "status": "OK",
+                        "case": "Long-term", "governing": "bar 1",
+                        "criterion": "0.3 mm",
+                    },
                     "crack_code": "EN 1992-1-1:2005", "crack_member": None}}
 
 
@@ -91,6 +145,66 @@ def test_report_mirrors_the_views():
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
     assert "Utilisation check" in txt              # analysis settings documented
     assert "Max / Min" in txt                      # both extremes for Mx and My
+
+
+def test_report_includes_sls_criteria_strain_and_candidate_evidence():
+    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    assert "Stress-limit assessment" in txt
+    assert "DB-SLS-01 section 4" in txt
+    assert "60% fck" in txt and "80% fyk" in txt
+    assert "Ixy" in txt
+    assert "Reinforcement and tendon response" in txt
+    assert "Concrete corner stress and strain" in txt
+    assert "Crack-width candidates" in txt
+    assert "Crack-width element diameter" in txt
+    assert "bar 1" in txt
+    assert "0.300 mm" in txt and "0.213 mm" in txt
+
+
+def test_report_does_not_round_small_nonzero_product_inertia_to_zero():
+    out = _out()
+    out["elastic"]["props_un"]["Ixy"] = 1.234567e-8
+    out["elastic"]["props_cr"]["Ixy"] = -2.345678e-9
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "1.23457e-08" in txt
+    assert "-2.34568e-09" in txt
+
+
+def test_report_marks_nonconverged_elastic_results_invalid():
+    out = _out()
+    out["elastic"]["converged"] = False
+    for item in out["elastic"]["stress_assessments"].values():
+        item["status"] = "INVALID"
+    out["elastic"]["crack_assessment"]["status"] = "INVALID"
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "INVALID ELASTIC RESULT" in txt
+    assert "diagnostic only" in txt
+    assert "no verified cracking classification" in txt
+
+
+def test_report_keeps_crack_criterion_when_no_width_is_calculated():
+    out = _out()
+    elastic = out["elastic"]
+    elastic.update(
+        cracked=False,
+        crack=None,
+        crack_short=None,
+        crack_assessment={
+            "value": None,
+            "limit": 0.30,
+            "util": None,
+            "margin": None,
+            "status": "NOT APPLICABLE",
+            "case": None,
+            "governing": None,
+            "criterion": "0.3 mm",
+        },
+    )
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "NOT APPLICABLE" in txt
+    assert "limit = 0.300 mm" in txt
+    assert "No crack width was calculated" in txt
+    assert "DB-SLS-01 section 4" in txt
 
 
 def test_report_renders_greek_glyphs():
@@ -875,9 +989,9 @@ def test_report_fails_when_a_requested_figure_cannot_be_exported(monkeypatch):
         sector_report.build_report({}, _inp(), _out(), figures=True)
 
 
-def test_report_prints_zero_based_concrete_point_as_one_based():
+def test_report_prints_public_one_based_concrete_point_without_conversion():
     out = _out()
-    out["elastic"]["max_conc_point"] = 0
+    out["elastic"]["max_conc_point"] = 1
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "point 1" in txt
     assert "point 0" not in txt
