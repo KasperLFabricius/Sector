@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 
@@ -94,7 +95,11 @@ def test_round_trip_tables_and_scalars():
                "torsion_sub_b0": 300.0, "torsion_sub_h0": 600.0,
                "sls_wk_limit": 0.25, "sls_conc_limit_pct": 55.0,
                "sls_steel_limit_pct": 75.0, "sls_pre_limit_pct": 70.0,
-               "sls_limit_source": "DB section SLS-2"}
+               "sls_limit_source": "DB section SLS-2",
+               "pl_case_id": "PL-17", "pl_case_type": "ALS",
+               "pl_case_source": "Load model LM-4",
+               "el_case_id": "EL-08", "el_case_type": "FLS",
+               "el_case_source": "Combination register C2"}
     rt, rs = project_io.parse_project(project_io.dump_project(tables, scalars))
     assert rs == scalars
     for key, df in tables.items():
@@ -132,6 +137,62 @@ def test_unknown_scalar_keys_are_dropped():
     text = project_io.dump_project({}, {"conc_fck": 30.0, "secret": 1, "results": "x"})
     _, scalars = project_io.parse_project(text)
     assert scalars == {"conc_fck": 30.0}
+
+
+def test_project_provenance_records_and_verifies_exact_inputs():
+    text = project_io.dump_project(
+        _tables(),
+        {"mode": "Both", "pl_case_id": "PL-01", "el_case_id": "EL-01"},
+        app_version="0.78",
+        revision="a" * 40,
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+
+    assert payload["version"] == 3
+    assert provenance["sector_version"] == "0.78"
+    assert provenance["source_revision"] == "a" * 40
+    assert provenance["saved_at_utc"].endswith("+00:00")
+    assert len(provenance["input_sha256"]) == 64
+    assert provenance["input_hash_valid"] is True
+    assert provenance["results_included"] is False
+
+
+def test_project_provenance_detects_tampered_inputs():
+    scalars = {"conc_fck": 30.0}
+    text = project_io.dump_project(
+        {}, scalars,
+        calculation={"input_sha256": project_io.input_sha256({}, scalars)},
+        app_version="0.78", revision="b" * 40,
+    )
+    payload = json.loads(text)
+    payload["scalars"]["conc_fck"] = 35.0
+
+    provenance = project_io.project_provenance(json.dumps(payload))
+    assert provenance["input_hash_valid"] is False
+    assert provenance["calculation"]["matches_saved_inputs"] is False
+
+
+def test_project_records_whether_calculation_matches_saved_inputs():
+    scalars = {"mode": "Plastic", "pl_case_id": "PL-01"}
+    digest = project_io.input_sha256({}, scalars)
+    calculation = {
+        "performed_at_utc": "2026-07-20T10:00:00+00:00",
+        "sector_version": "0.78",
+        "source_revision": "c" * 40,
+        "input_sha256": digest,
+    }
+    matching = json.loads(project_io.dump_project(
+        {}, scalars, calculation=calculation,
+        app_version="0.78", revision="c" * 40,
+    ))
+    changed = json.loads(project_io.dump_project(
+        {}, {**scalars, "pl_case_id": "PL-02"}, calculation=calculation,
+        app_version="0.78", revision="c" * 40,
+    ))
+
+    assert matching["calculation"]["matches_saved_inputs"] is True
+    assert changed["calculation"]["matches_saved_inputs"] is False
 
 
 def test_legacy_mpa_moduli_are_rescaled_to_gpa():

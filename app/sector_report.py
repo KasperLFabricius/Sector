@@ -24,6 +24,7 @@ import math
 import os
 import re
 import threading
+from html import escape as _html_escape
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -38,6 +39,7 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
 
 import viz
 import result_presentation as presentation
+from sector.build_info import short_revision
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
@@ -299,6 +301,17 @@ def _fmt_sig(v, sig=6):
 _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
 
 
+def _report_action_set_text(inp, family):
+    """Escape user-entered action provenance before ReportLab paragraph parsing."""
+    record = presentation.action_set(inp, family)
+    parts = [_html_escape(record["id"] or "ID NOT SET")]
+    if record["type"]:
+        parts.append(_html_escape(record["type"]))
+    if record["source"]:
+        parts.append("Source: " + _html_escape(record["source"]))
+    return " | ".join(parts)
+
+
 def _code_verdict(ok, applicable=True):
     """Compliance wording that never turns an out-of-scope value into ``OK``."""
     if not applicable:
@@ -372,6 +385,64 @@ class ReportBuilder:
             ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ]))
         self.flow.append(KeepTogether(table))
+        self._gap(4)
+
+    def _case_line(self, family):
+        self._small("<b>Action set:</b> "
+                    + _report_action_set_text(self.inp, family))
+
+    def _results_overview(self):
+        rows = presentation.result_summary_rows(self.inp, self.out)
+        overall = presentation.overall_summary_status(rows)
+        self._h2(f"Results overview - {overall}")
+        data = [["Check", "Action set", "Status", "Result", "Criterion"]]
+        data.extend([
+            [
+                row["check"], _html_escape(row["case"]), row["status"],
+                row["result"], row["criterion"],
+            ]
+            for row in rows
+        ])
+        body = ParagraphStyle(
+            "summary-cell", parent=self.s["body"], fontSize=7.2,
+            fontName=_FONT, leading=9.2,
+        )
+        head = ParagraphStyle(
+            "summary-head", parent=body, fontName=_FONT_BOLD,
+        )
+        formatted = []
+        for index, row in enumerate(data):
+            style = head if index == 0 else body
+            formatted.append([
+                Paragraph(_greek(str(cell)), style) for cell in row
+            ])
+        table = Table(
+            formatted,
+            colWidths=[48 * mm, 27 * mm, 25 * mm, 35 * mm, 35 * mm],
+            repeatRows=1,
+            hAlign="LEFT",
+        )
+        style = [
+            ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
+            ("BACKGROUND", (0, 0), (-1, 0), _HEAD_BG),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]
+        fills = {
+            "PASS": colors.HexColor("#E8F5E9"),
+            "FAIL": colors.HexColor("#FDECEC"),
+            "INVALID": colors.HexColor("#FDECEC"),
+            "NOT ASSESSED": colors.HexColor("#FFF4D6"),
+            "NOT RUN": colors.HexColor("#EEF2F6"),
+            "NOT APPLICABLE": colors.HexColor("#EEF2F6"),
+        }
+        for row_index, row in enumerate(rows, start=1):
+            fill = fills.get(row["status"])
+            if fill is not None:
+                style.append(("BACKGROUND", (2, row_index), (2, row_index), fill))
+        table.setStyle(TableStyle(style))
+        self.flow.append(table)
         self._gap(4)
 
     def _gap(self, h=4):
@@ -490,11 +561,25 @@ class ReportBuilder:
             self._combined()
         self._appendix()
         self._tick(0.92, "Writing PDF...")
-        footer = f"Sector {self.version}  -  Sweco".strip()
+        revision_id = short_revision(self.meta.get("source_revision"))
+        footer = f"Sector {self.version}  -  {revision_id}  -  Sweco".strip()
         project = str(self.meta.get("proj_no", "")).strip() or "-"
         section = str(self.meta.get("section", "")).strip() or "-"
         revision = str(self.meta.get("rev", "")).strip()
-        header = f"Project: {project}  |  Section: {section}"
+        active_families = []
+        if any(key in self.out for key in ("plastic", "shear", "torsion", "combined")):
+            active_families.append("plastic")
+        if "elastic" in self.out:
+            active_families.append("elastic")
+        cases = [
+            presentation.action_set(self.inp, family)["id"]
+            for family in active_families
+            if presentation.action_set(self.inp, family)["id"]
+        ]
+        case_text = " / ".join(cases) or "-"
+        header = (
+            f"Project: {project}  |  Section: {section}  |  Cases: {case_text}"
+        )
         title = f"Sector cross-section report - {project} - {section}"
         doc = _ReportDocTemplate(self.buffer, pagesize=A4,
                                  leftMargin=20 * mm, rightMargin=20 * mm,
@@ -527,7 +612,18 @@ class ReportBuilder:
                 ["Checker", m.get("checker", "")],
                 ["Approver", m.get("approver", "")],
                 ["Date", date],
-                ["Tool version", self.version or "-"]]
+                ["Tool version", self.version or "-"],
+                ["Source revision", short_revision(m.get("source_revision"))]]
+        if any(key in self.out for key in ("plastic", "shear", "torsion", "combined")):
+            rows.append([
+                "Plastic analysis action set",
+                _report_action_set_text(self.inp, "plastic"),
+            ])
+        if "elastic" in self.out:
+            rows.append([
+                "Elastic analysis action set",
+                _report_action_set_text(self.inp, "elastic"),
+            ])
         self._table(rows, [55 * mm, 110 * mm])
         if m.get("comments"):
             self._h2("Comments")
@@ -556,6 +652,7 @@ class ReportBuilder:
             self._p(qualifier)
             for limitation in basis.get("limitations", []):
                 self._small("<b>Scope limitation:</b> " + str(limitation))
+        self._results_overview()
         self.flow.append(PageBreak())
 
     def _conventions(self):
@@ -756,14 +853,23 @@ class ReportBuilder:
             # In a capacity-only run the applied moments are ignored, so only the
             # axial force (which defines the envelope) is listed.
             cap_only = not self.out["plastic"].get("check_util", True)
-            label = "Plastic (axial, capacity only)" if cap_only else "Plastic (applied)"
+            case = _html_escape(
+                presentation.action_set(inp, "plastic")["id"] or "-"
+            )
+            label = (
+                f"{case} - axial, capacity only"
+                if cap_only else f"{case} - plastic applied"
+            )
             mx = "-" if cap_only else _fmt(inp.get("Mx_pl"), 3)
             my = "-" if cap_only else _fmt(inp.get("My_pl"), 3)
             rows.append([label, _fmt(inp.get("P_pl"), 3), mx, my])
         if "elastic" in self.out:
-            rows.append(["Elastic long-term", _fmt(inp.get("P_el_l"), 3),
+            case = _html_escape(
+                presentation.action_set(inp, "elastic")["id"] or "-"
+            )
+            rows.append([f"{case} - long-term", _fmt(inp.get("P_el_l"), 3),
                          _fmt(inp.get("Mx_el_l"), 3), _fmt(inp.get("My_el_l"), 3)])
-            rows.append(["Elastic short-term", _fmt(inp.get("P_el_s"), 3),
+            rows.append([f"{case} - short-term", _fmt(inp.get("P_el_s"), 3),
                          _fmt(inp.get("Mx_el_s"), 3), _fmt(inp.get("My_el_s"), 3)])
         self._table(rows, [55 * mm, 35 * mm, 38 * mm, 38 * mm])
 
@@ -855,7 +961,7 @@ class ReportBuilder:
                 if steel_2023 else
                 "DS/EN 1992-1-1 &#167;3.2.7"
             )
-            self._p("<b>Ultimate (plastic) capacity.</b> Plane sections; concrete in "
+            self._p("<b>Plastic section capacity.</b> Plane sections; concrete in "
                     "compression follows the design curve above, reinforcement the "
                     "design stress-strain law. For a trial neutral axis the strain "
                     "plane is scaled to the governing curvature - the first material "
@@ -890,15 +996,16 @@ class ReportBuilder:
 
     def _plastic(self):
         pl = self.out["plastic"]
-        self._h1("Ultimate (plastic) capacity")
-        assessment = presentation.plastic_uls_assessment(pl)
+        self._h1("Plastic section capacity")
+        self._case_line("plastic")
+        assessment = presentation.plastic_action_assessment(pl)
         status = assessment["status"]
         if assessment["assessed"]:
             margin = assessment["margin"]
             margin_text = ("not finite" if margin is None else
                            f"{margin * 100:+.1f} percentage points")
             self._status_block(
-                f"{status} - ULS plastic bending. Applied-action utilisation = "
+                f"{status} - Plastic bending. Applied-action utilisation = "
                 f"{_pct(assessment['util'])}; limit = 100 %; margin to limit = "
                 f"{margin_text}. "
                 f"{assessment['detail']}.",
@@ -906,7 +1013,7 @@ class ReportBuilder:
             )
         else:
             self._status_block(
-                f"{status} - ULS plastic bending. {assessment['detail']}.",
+                f"{status} - Plastic bending. {assessment['detail']}.",
                 status,
             )
         applied = pl.get("applied")   # None for a capacity-only run
@@ -1194,7 +1301,7 @@ class ReportBuilder:
                 bar_colors=bar_colors, na_line=na, tendons=tendons,
                 tendon_colors=tendon_colors, zones=zones, show_labels=True,
                 scale=_MM, unit="mm",
-                title=f"ULS state at V = {_fmt(gov['V'],0)} deg "
+                title=f"Plastic state at V = {_fmt(gov['V'],0)} deg "
                       "(tension + / compression -)"), 150, 100)
             self._small(
                 "Blue/plain markers are tension (+); vermillion/x markers are "
@@ -1287,6 +1394,7 @@ class ReportBuilder:
         sh = self.out["shear"]
         res = sh["res"]
         self._h1("Shear resistance without shear reinforcement")
+        self._case_line("plastic")
         axis = ("vertical shear (bending about x)" if sh["axis"] == "x"
                 else "horizontal shear (bending about y)")
         face = viz.tension_face_label(sh["tension_low"])
@@ -1503,6 +1611,7 @@ class ReportBuilder:
     def _combined(self):
         c = self.out["combined"]
         self._h1("Combined bending + shear + torsion (M-V-T)")
+        self._case_line("plastic")
         self._p("The three checks tied together under the shared edition <b>"
                 + str(c["method"]) + "</b>. The bending utilisation is the plastic "
                 "M-M envelope at the applied N; the shear and torsion utilisations "
@@ -1787,6 +1896,7 @@ class ReportBuilder:
         t = self.out["torsion"]
         tube = t["tube"]
         self._h1("Torsion (thin-walled tube)")
+        self._case_line("plastic")
         self._p("Torsion resistance from the thin-walled closed-tube idealisation "
                 "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
                 "tube is derived from the outline; the closed stirrups and the "
@@ -1928,6 +2038,7 @@ class ReportBuilder:
     def _elastic(self):
         el = self.out["elastic"]
         self._h1("Elastic section response and stress limits")
+        self._case_line("elastic")
         valid = el.get("converged", True)
         if not valid:
             self._status_block(
@@ -2016,7 +2127,7 @@ class ReportBuilder:
                 el.get("concrete_corners"), el.get("elements"),
                 el.get("stress_plane"),
                 ec_mpa=float(self.inp.get("conc_Ec", 0.0)) * 1000.0,
-                title="SLS strain profile"), 150, 100)
+                title="Elastic strain profile"), 150, 100)
         # Transformed properties: uncracked and (when cracked) cracked, n_l-weighted.
         self._h2("Transformed section properties (n<sub>l</sub>)")
         pu = el.get("props_un") or {}

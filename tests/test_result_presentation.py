@@ -27,6 +27,24 @@ def _plastic(**updates):
     return result
 
 
+def _inp(**updates):
+    inp = {
+        "mode": "Both",
+        "plastic_case": {
+            "id": "PL-17",
+            "type": "ALS",
+            "source": "Combination register C1",
+        },
+        "elastic_case": {
+            "id": "EL-08",
+            "type": "FLS",
+            "source": "Combination register C2",
+        },
+    }
+    inp.update(updates)
+    return inp
+
+
 @pytest.mark.parametrize(
     ("updates", "status", "assessed"),
     [
@@ -37,16 +55,16 @@ def _plastic(**updates):
         ({"converged": False}, "INVALID", False),
     ],
 )
-def test_plastic_uls_assessment_has_explicit_semantic_states(
+def test_plastic_action_assessment_has_explicit_semantic_states(
         updates, status, assessed):
-    result = presentation.plastic_uls_assessment(_plastic(**updates))
+    result = presentation.plastic_action_assessment(_plastic(**updates))
     assert result["status"] == status
     assert result["assessed"] is assessed
 
 
-def test_plastic_uls_assessment_reports_signed_margin_and_governing_angle():
-    passed = presentation.plastic_uls_assessment(_plastic(util=0.8))
-    failed = presentation.plastic_uls_assessment(_plastic(util=1.2))
+def test_plastic_action_assessment_reports_signed_margin_and_governing_angle():
+    passed = presentation.plastic_action_assessment(_plastic(util=0.8))
+    failed = presentation.plastic_action_assessment(_plastic(util=1.2))
     assert passed["margin"] == pytest.approx(0.2)
     assert failed["margin"] == pytest.approx(-0.2)
     assert passed["governing_angle"] == 90.0
@@ -89,3 +107,115 @@ def test_nm_boundary_rows_preserve_both_independent_axial_traces():
     assert rows[0]["N, Mx boundary (kN)"] == -100.0
     assert rows[0]["N, My boundary (kN)"] == -120.0
     assert rows[1]["N, My boundary (kN)"] is None
+
+
+def test_action_sets_are_normalised_and_required_for_active_families():
+    inp = _inp()
+    assert presentation.action_set_text(inp, "plastic") == (
+        "PL-17 | ALS | Source: Combination register C1"
+    )
+    assert presentation.required_action_set_errors(inp) == []
+
+    inp["plastic_case"]["id"] = " "
+    inp["elastic_case"]["id"] = ""
+    assert presentation.required_action_set_errors(inp) == [
+        "Plastic action-set ID is required",
+        "Elastic action-set ID is required",
+    ]
+
+    assert presentation.required_action_set_errors({
+        "mode": "Elastic",
+        "combined_on": True,
+        "plastic_case": {"id": ""},
+        "elastic_case": {"id": "EL-01"},
+    }) == ["Plastic action-set ID is required"]
+
+
+def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
+    elastic = {
+        "converged": True,
+        "stress_assessments": {
+            "concrete": {
+                "value": 12.0, "limit": 18.0, "util": 2 / 3,
+                "status": "OK", "criterion": "60% fck",
+            },
+            "reinforcement": {
+                "value": 450.0, "limit": 400.0, "util": 1.125,
+                "status": "EXCEEDED", "criterion": "80% fyk",
+            },
+        },
+        "show_cw": False,
+    }
+    rows = presentation.result_summary_rows(
+        _inp(), {"plastic": _plastic(), "elastic": elastic},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Plastic bending"]["case"] == "PL-17"
+    assert by_check["Concrete stress"]["case"] == "EL-08"
+    assert by_check["Plastic bending"]["status"] == "PASS"
+    assert by_check["Reinforcement stress"]["status"] == "FAIL"
+    assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_stale_summary_retains_last_status_as_evidence():
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic"), {"plastic": _plastic()}, stale=True,
+    )
+    assert rows[0]["status"] == "STALE"
+    assert "Last status: PASS" in rows[0]["note"]
+    assert presentation.overall_summary_status(rows) == "STALE"
+
+
+def test_combined_summary_cannot_hide_subordinate_failure():
+    combined = {
+        "valid": True,
+        "code_applicable": True,
+        "method": "DK NA",
+        "dkna_sum": 0.80,
+        "crushing": {"valid": True, "value": 1.10, "cot": 1.5},
+        "transverse": {
+            "valid": True, "governing": 0.75, "governs": "stirrups",
+        },
+        "longitudinal": {
+            "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
+        },
+        "chord_off": {"valid": True, "util": 0.55, "axis": "y"},
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Combined M-V-T - DK NA sum"]["status"] == "PASS"
+    assert by_check["Combined V-T crushing"]["status"] == "FAIL"
+    assert by_check["Combined transverse reinforcement"]["status"] == "PASS"
+    assert by_check["Combined longitudinal reinforcement"]["status"] == "PASS"
+    assert by_check["Combined off-axis chord"]["status"] == "PASS"
+    assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
+    combined = {
+        "valid": True,
+        "code_applicable": True,
+        "method": "DK NA",
+        "dkna_sum": 0.80,
+        "crushing": None,
+        "transverse": None,
+        "longitudinal": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "biaxial": True, "conditional": False,
+        },
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Combined V-T crushing"]["status"] == "NOT ASSESSED"
+    assert by_check["Combined transverse reinforcement"]["status"] == "NOT ASSESSED"
+    assert by_check["Combined longitudinal reinforcement"]["status"] == "NOT ASSESSED"
+    assert "fallback" in by_check["Combined longitudinal reinforcement"]["note"].lower()

@@ -89,6 +89,9 @@ jobs:
           if (-not (Test-Path -LiteralPath "dist/Sector/_internal/sector/__init__.py")) {
             throw "Packaged numerical core is missing"
           }
+          if (-not (Test-Path -LiteralPath "dist/Sector/_internal/sector/sector_build_info.json")) {
+            throw "Packaged source-provenance manifest is missing"
+          }
 
       - name: Upload Windows package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

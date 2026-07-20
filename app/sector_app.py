@@ -15,7 +15,7 @@ import re
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Make both the repo root (for ``sector``) and this app folder (for ``viz``)
 # importable when run as a script or via Streamlit's AppTest.
@@ -34,6 +34,7 @@ from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import (capacity, codes, combined, geometry, kernels,  # noqa: E402
                     material_presets as mp, shear, templates, torsion)
+from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector import sls as sls_core  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
@@ -279,7 +280,15 @@ def _seeded_selectbox(box, label, options, default, key, **kw):
     ``index=`` -- same reason as :func:`_seeded_number`. ``default`` must be one of
     ``options``."""
     st.session_state.setdefault(key, default)
+    if st.session_state[key] not in options:
+        st.session_state[key] = default
     return box.selectbox(label, options, key=key, **kw)
+
+
+def _seeded_text(box, label, default, key, **kw):
+    """A persisted text input that does not conflict with loaded session state."""
+    st.session_state.setdefault(key, default)
+    return box.text_input(label, key=key, **kw)
 
 
 def _safe_build(box, builder, curve, vals, **extra):
@@ -328,7 +337,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     plastic-only quantity. fck stays editable -- it feeds the serviceability fctm
     (the Auto button) -- and so does the preset, which prefills fck.
     ``lock_elastic`` (plastic-only mode) disables fctm and Ec, which only affect
-    the elastic/SLS results.
+    the elastic results.
     """
     box.markdown("**Concrete**")
     presets = mp.CONCRETE_PRESETS
@@ -391,7 +400,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
         )
 
     # Concrete strain limits eps_c2, eps_cu2 and the parabola exponent n shape the
-    # ULS compression curve (plastic-only). Making them editable lets grades above
+    # Design compression curve (plastic-only). Making them editable lets grades above
     # C50/60 -- where EC2 Table 3.1 makes them strength-dependent -- be modelled;
     # they apply to the parabola-rectangle (curve 2). The Auto button fills the
     # Table 3.1 values for the current grade (constant up to C50/60).
@@ -736,13 +745,30 @@ _PROJECT_TABLES = (
 )
 
 
-def _gather_project() -> str:
-    """Serialise the current inputs (live point tables + scalar keys) to JSON."""
+def _project_state():
+    """Return the canonical table/scalar inputs behind a project download."""
     tables = {base: _current_table(base, ed, cols)
               for base, ed, cols in _PROJECT_TABLES if base in st.session_state}
     scalars = {k: st.session_state[k] for k in project_io.SCALAR_KEYS
                if k in st.session_state}
-    return project_io.dump_project(tables, scalars)
+    return tables, scalars
+
+
+def _project_input_hash() -> str:
+    tables, scalars = _project_state()
+    return project_io.input_sha256(tables, scalars)
+
+
+def _gather_project() -> str:
+    """Serialise current inputs with their source and calculation provenance."""
+    tables, scalars = _project_state()
+    return project_io.dump_project(
+        tables,
+        scalars,
+        calculation=st.session_state.get("calculation_record"),
+        app_version=APP_VERSION,
+        revision=source_revision(),
+    )
 
 
 _AUTOSAVE_DEFAULT_MIN = 5     # default autosave interval (minutes), BriCoS-style
@@ -789,13 +815,14 @@ def _perform_autosave() -> bool:
     if len(corners) < 3:
         return False   # no usable outline yet
     try:
-        data = _gather_project()
+        digest = _project_input_hash()
     except Exception:
         return False
-    if data == st.session_state.get("_autosave_data"):
+    if digest == st.session_state.get("_autosave_hash"):
         return False                                 # unchanged since the last save
+    data = _gather_project()
     if _write_autosave(data, _autosave_path()):
-        st.session_state["_autosave_data"] = data
+        st.session_state["_autosave_hash"] = digest
         st.session_state["_autosave_last"] = datetime.now().strftime("%H:%M:%S")
         return True
     return False
@@ -836,6 +863,7 @@ def _autosave_startup() -> None:
             return
         text = path.read_text(encoding="utf-8")
         project_io.parse_project(text)               # validate before restoring
+        provenance = project_io.project_provenance(text)
     except Exception:
         st.session_state["_project_msg"] = (
             "error", "An autosave file was found but could not be read; "
@@ -843,7 +871,7 @@ def _autosave_startup() -> None:
         return
     st.session_state["_pending_project"] = text
     st.session_state["_autosave_restoring"] = True
-    st.session_state["_autosave_data"] = text        # do not immediately re-save it
+    st.session_state["_autosave_hash"] = provenance.get("input_sha256")
 
 
 def _autosave_panel(box) -> None:
@@ -873,6 +901,7 @@ def _apply_pending_project() -> None:
     if text is None:
         return
     try:
+        provenance = project_io.project_provenance(text)
         tables, scalars = project_io.parse_project(text)
     except ValueError as exc:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
@@ -896,6 +925,20 @@ def _apply_pending_project() -> None:
         st.session_state["conc_alpha_fck"] = scalars["conc_fck"]
     for ed in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
         st.session_state.pop(ed, None)
+    calculation = provenance.get("calculation")
+    if calculation:
+        st.session_state["calculation_record"] = calculation
+    else:
+        st.session_state.pop("calculation_record", None)
+    st.session_state["_loaded_project_provenance"] = provenance
+    # Project files intentionally contain inputs, not result payloads. Remove any
+    # result/report from the previously open project so it cannot be mistaken for
+    # evidence belonging to the newly loaded section.
+    for key in (
+        "results", "result_sig", "result_plastic_sig", "result_elastic_sig",
+        "report_bytes", "report_signature", "report_filename", "report_generated_on",
+    ):
+        st.session_state.pop(key, None)
     # Forget the Quick Section builder's last shape so the loaded qsv_ dimensions are
     # not mistaken for an in-builder shape switch: the next builder open takes the
     # first-call branch (records the loaded shape, no re-seed) and keeps b/h as saved.
@@ -904,7 +947,18 @@ def _apply_pending_project() -> None:
     if st.session_state.pop("_autosave_restoring", False):
         st.session_state["_project_msg"] = ("success", "Restored your last autosaved session.")
     else:
-        st.session_state["_project_msg"] = ("success", "Project loaded.")
+        version = provenance.get("sector_version")
+        revision = short_revision(provenance.get("source_revision"))
+        verified = provenance.get("input_hash_valid")
+        if version:
+            integrity = "verified" if verified else "does not match"
+            detail = f"Sector {version}, source {revision}, input hash {integrity}"
+        else:
+            detail = "legacy file; source provenance unavailable"
+        st.session_state["_project_msg"] = (
+            "success" if verified is not False else "error",
+            f"Project loaded ({detail}). Recalculate to create current results.",
+        )
 
 
 @st.fragment
@@ -923,6 +977,34 @@ def _save_load_panel() -> None:
                         width="stretch",
                         help="Save the section, materials, loads and settings to a "
                              "JSON file.")
+    box.caption(f"Saved with Sector {APP_VERSION}, source "
+                f"{short_revision()}; results are recalculated on load.")
+    loaded = st.session_state.get("_loaded_project_provenance")
+    if loaded:
+        if loaded.get("sector_version"):
+            integrity = (
+                "hash verified"
+                if loaded.get("input_hash_valid") is True
+                else "HASH MISMATCH"
+            )
+            box.caption(
+                f"Loaded: Sector {loaded['sector_version']} | source "
+                f"{short_revision(loaded.get('source_revision'))} | {integrity}"
+            )
+            calculation = loaded.get("calculation") or {}
+            if calculation:
+                match = (
+                    "input match"
+                    if calculation.get("matches_saved_inputs")
+                    else "inputs changed after calculation"
+                )
+                box.caption(
+                    "Recorded calculation: "
+                    f"{calculation.get('performed_at_utc') or 'time unavailable'}"
+                    f" | {match}"
+                )
+        else:
+            box.caption("Loaded: legacy project | provenance unavailable")
     _autosave_panel(box)
     up = box.file_uploader("Load project", type=["json"], key="project_upload",
                            help="Restore a section from a downloaded project file.")
@@ -951,6 +1033,7 @@ def _report_meta():
     meta = {k: st.session_state.get(f"rep_{k}", "")
             for k, _ in _REPORT_FIELDS}
     meta["comments"] = st.session_state.get("rep_comments", "")
+    meta["source_revision"] = source_revision()
     return meta
 
 
@@ -1049,6 +1132,13 @@ def _generate_report(inp):
         st.session_state["_report_msg"] = ("error", "Define a valid section (and "
                                            "resolve any void or reinforcement error) "
                                            "before generating a report.")
+        st.rerun()
+    case_errors = presentation.required_action_set_errors(inp)
+    if case_errors:
+        _clear_report_artifact()
+        st.session_state["_report_msg"] = (
+            "error", "; ".join(case_errors) + ".",
+        )
         st.rerun()
     prog = _REPORT_PROG
     bar = prog.progress(0.0, text="Preparing report...") if prog is not None else None
@@ -1521,6 +1611,10 @@ _SHEAR_SIG_KEYS = (
     "torsion_sub_b0", "torsion_sub_h0", "torsion_sub_b1", "torsion_sub_h1",
     "torsion_sub_b2", "torsion_sub_h2", "torsion_sub_b3", "torsion_sub_h3",
     "combined_on", "combined_method", "combined_mv_independent",
+)
+_PROVENANCE_SIG_KEYS = (
+    "pl_case_id", "pl_case_type", "pl_case_source",
+    "el_case_id", "el_case_type", "el_case_source",
 )
 
 
@@ -2018,7 +2112,7 @@ def build_inputs():
                                len(bars) + 1)
     tendons = _pts_to_m(tendons_mm)
 
-    # In a purely elastic-bending calculation the ULS stress-strain laws do not
+    # In a purely elastic-bending calculation the design stress-strain laws do not
     # enter the result, so lock their inactive parameters. Independent shear,
     # torsion and combined capacity checks do use characteristic/design strengths
     # and the user's final partial factors even when bending is Elastic-only; keep
@@ -2034,7 +2128,7 @@ def build_inputs():
     elif mode == "Elastic" and capacity_checks_on:
         mat.caption(
             "Elastic bending is selected, but an independent shear/torsion "
-            "capacity check is active. ULS material strengths and final partial "
+            "capacity check is active. Design material strengths and final partial "
             "factors therefore remain editable."
         )
     (concrete, sls_fctm, conc_Ec, concrete_preset,
@@ -2092,12 +2186,51 @@ def build_inputs():
         st.session_state["_auto_all"] = True
         st.rerun()
 
-    # Loads: the plastic and elastic analyses take their own load sets, so a
-    # capacity check (e.g. ULS) and a stress check (e.g. SLS) use different
-    # actions without overwriting each other. The plastic axial force fixes the
+    # Loads: the plastic and elastic analyses take their own action sets, so they
+    # can represent any project-defined limit state or combination without
+    # overwriting each other. The plastic axial force fixes the
     # M-M envelope; its moments are the point checked against it. Both sets stay
     # mounted (the inactive one is disabled) so their values survive a mode
     # switch instead of being reset when Streamlit drops unrendered widgets.
+    loads.markdown("**Action-set identification**")
+    loads.caption("Active action-set IDs are required and are "
+                  "repeated in results, saved projects and reports.")
+    pl_case_id = _seeded_text(
+        loads, "Plastic action-set ID *", "PL-01", "pl_case_id",
+        disabled=not (plastic_on or shear_on or torsion_on),
+        help="External load-case or combination identifier used for plastic "
+             "bending, shear, torsion and combined checks.",
+    )
+    pl_case_type = _seeded_text(
+        loads, "Plastic classification (optional)", "", "pl_case_type",
+        disabled=not (plastic_on or shear_on or torsion_on),
+        help="Optional project classification, combination or limit state; "
+             "for example ALS, ULS fundamental or a custom designation.",
+    )
+    pl_case_source = _seeded_text(
+        loads, "Plastic source (optional)", "", "pl_case_source",
+        disabled=not (plastic_on or shear_on or torsion_on),
+        help="Model, load-combination table, calculation note or clause reference.",
+    )
+    el_case_id = _seeded_text(
+        loads, "Elastic action-set ID *", "EL-01", "el_case_id",
+        disabled=not elastic_on,
+        help="Identifier for the complete elastic action set. The long- and "
+             "short-term entries below are its sustained and instantaneous parts.",
+    )
+    el_case_type = _seeded_text(
+        loads, "Elastic classification (optional)", "", "el_case_type",
+        disabled=not elastic_on,
+        help="Optional project classification, combination or limit state; "
+             "for example SLS characteristic, FLS or a custom designation.",
+    )
+    el_case_source = _seeded_text(
+        loads, "Elastic source (optional)", "", "el_case_source",
+        disabled=not elastic_on,
+        help="Model, load-combination table, calculation note or clause reference.",
+    )
+    loads.divider()
+
     def _load_set(prefix, n_help, m_help, active, mx_default=0.0, moments_active=None):
         # ``moments_active`` lets the moments lock independently of the axial force
         # (the plastic capacity-only mode keeps N but disables the applied moments).
@@ -2231,7 +2364,10 @@ def build_inputs():
     shared_sig = geom_sig + _get(_SHARED_SIG_KEYS)
     plastic_sig = shared_sig + _get(_PLASTIC_SIG_KEYS)
     elastic_sig = shared_sig + _get(_ELASTIC_SIG_KEYS)
-    sig = plastic_sig + elastic_sig + _get(_SHEAR_SIG_KEYS)
+    sig = (
+        plastic_sig + elastic_sig
+        + _get(_SHEAR_SIG_KEYS) + _get(_PROVENANCE_SIG_KEYS)
+    )
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
@@ -2280,6 +2416,16 @@ def build_inputs():
                 mild_preset=mild_preset,
                 prestress_preset=prestress_preset,
                 design_basis=design_basis,
+                plastic_case={
+                    "id": str(pl_case_id).strip(),
+                    "type": pl_case_type,
+                    "source": str(pl_case_source).strip(),
+                },
+                elastic_case={
+                    "id": str(el_case_id).strip(),
+                    "type": el_case_type,
+                    "source": str(el_case_source).strip(),
+                },
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 check_util=check_util,
@@ -3221,8 +3367,9 @@ def _run_capacity_checks(inp, out):
 # View order follows the results workflow: the live input previews first, then the
 # plastic bending results (envelope + its N-M diagram kept adjacent), then elastic,
 # then the shear/torsion/combined checks.
-VIEWS = ["Section", "Stress-Strain diagrams", "Plastic Results", "N-M Interaction",
-         "Elastic Results", "Shear", "Torsion", "M-V-T Combined"]
+VIEWS = ["Section", "Stress-Strain diagrams", "Results Overview",
+         "Plastic Results", "N-M Interaction", "Elastic Results",
+         "Shear", "Torsion", "M-V-T Combined"]
 # The result views (everything except the two live input previews) -- used for the
 # staleness banner and to know which views need a Calculate.
 _RESULT_VIEWS = tuple(v for v in VIEWS
@@ -3285,6 +3432,86 @@ def materials_view(inp):
     if pre is not None:
         st.plotly_chart(_memo_fig("prestress", pre, lambda: viz.prestress_curve_figure(pre)),
                         width="stretch")
+
+
+def results_overview_view(inp, results, *, stale=False):
+    """One-screen status and provenance register for every requested check."""
+    rows = presentation.result_summary_rows(inp, results, stale=stale)
+    overall = presentation.overall_summary_status(rows)
+    counts = {status: sum(row["status"] == status for row in rows)
+              for status in {
+                  "PASS", "FAIL", "INVALID", "NOT ASSESSED", "NOT RUN", "STALE",
+              }}
+    headline = f"{overall} - {len(rows)} result checks"
+    if overall == "PASS":
+        st.success(headline)
+    elif overall in {"FAIL", "INVALID"}:
+        st.error(headline)
+    else:
+        st.warning(headline)
+
+    action_rows = []
+    for family, label in (("plastic", "Plastic analysis"),
+                          ("elastic", "Elastic analysis")):
+        record = presentation.action_set(inp, family)
+        active = any(row["family"] == family for row in rows)
+        if active:
+            action_rows.append({
+                "Action set": label,
+                "ID": record["id"] or "-",
+                "Combination type": record["type"] or "-",
+                "Source": record["source"] or "-",
+            })
+    if action_rows:
+        st.dataframe(action_rows, hide_index=True, width="stretch")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Pass", counts.get("PASS", 0))
+    c2.metric("Fail / invalid", counts.get("FAIL", 0) + counts.get("INVALID", 0))
+    c3.metric("Not assessed / run",
+              counts.get("NOT ASSESSED", 0) + counts.get("NOT RUN", 0))
+    c4.metric("Stale", counts.get("STALE", 0))
+
+    finite_utils = [
+        row["util"] for row in rows
+        if row.get("util") is not None and math.isfinite(row["util"])
+    ]
+    governing = max(finite_utils) if finite_utils else None
+    display = []
+    for row in rows:
+        is_governing = (
+            governing is not None and row.get("util") is not None
+            and math.isfinite(row["util"])
+            and math.isclose(row["util"], governing, rel_tol=1e-12, abs_tol=1e-12)
+        )
+        display.append({
+            "Check": row["check"],
+            "Action set": row["case"],
+            "Status": row["status"],
+            "Result": row["result"],
+            "Criterion": row["criterion"],
+            "Governing": "Yes" if is_governing else "",
+            "View": row["view"],
+            "Note": row["note"],
+        })
+    summary = pd.DataFrame(display)
+    status_colours = {
+        "PASS": "background-color: #E8F5E9; color: #1B5E20; font-weight: 600",
+        "FAIL": "background-color: #FDECEC; color: #9B1C1C; font-weight: 600",
+        "INVALID": "background-color: #FDECEC; color: #9B1C1C; font-weight: 600",
+        "NOT ASSESSED": (
+            "background-color: #FFF4D6; color: #7A4E00; font-weight: 600"
+        ),
+        "NOT RUN": "background-color: #EEF2F6; color: #374151; font-weight: 600",
+        "STALE": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
+        "NOT APPLICABLE": "background-color: #EEF2F6; color: #374151",
+    }
+    styled = summary.style.map(
+        lambda value: status_colours.get(str(value), ""),
+        subset=["Status"],
+    )
+    st.dataframe(styled, hide_index=True, width="stretch",
+                 height=min(35 * (len(display) + 1) + 3, 560))
 
 
 def _fmt(v):
@@ -3352,7 +3579,7 @@ def plastic_view(inp, results):
     # before min_mx/min_my existed (matching inputs -> no recompute) still renders.
     min_mx = p.get("min_mx", min(p["mx"]))
     min_my = p.get("min_my", min(p["my"]))
-    assessment = presentation.plastic_uls_assessment(p)
+    assessment = presentation.plastic_action_assessment(p)
     status = assessment["status"]
     if assessment["assessed"]:
         util_text = _pct(assessment["util"])
@@ -3360,15 +3587,15 @@ def plastic_view(inp, results):
         margin_text = ("not finite" if margin is None else
                        f"{margin * 100:+.1f} percentage points")
         verdict = (
-            f"**{status} - ULS plastic bending.** Applied-action utilisation "
+            f"**{status} - Plastic bending.** Applied-action utilisation "
             f"{util_text} against the 100 % limit; margin {margin_text}. "
             f"{assessment['detail']}."
         )
         (st.success if status == "PASS" else st.error)(verdict)
     elif status == "INVALID":
-        st.error(f"**INVALID - ULS plastic bending.** {assessment['detail']}.")
+        st.error(f"**INVALID - Plastic bending.** {assessment['detail']}.")
     else:
-        st.warning(f"**NOT ASSESSED - ULS plastic bending.** "
+        st.warning(f"**NOT ASSESSED - Plastic bending.** "
                    f"{assessment['detail']}.")
 
     st.markdown("#### Applied actions")
@@ -3606,8 +3833,8 @@ def interaction_view(inp, results):
                    "may use different numerical points.")
 
 
-def _sls_metric(box, label, assessment, unit="MPa"):
-    """Render one explicit SLS result/criterion/status card."""
+def _acceptance_metric(box, label, assessment, unit="MPa"):
+    """Render one explicit acceptance result/criterion/status card."""
     value = assessment.get("value")
     value_text = "-" if value is None else f"{value:.3f} {unit}"
     status = assessment.get("status", "NOT ASSESSED")
@@ -3631,7 +3858,7 @@ def elastic_view(inp, results):
     if not e.get("converged", True):
         st.error("INVALID ELASTIC RESULT - the cracked-section solver did not "
                  "converge. Values below are diagnostic only and must not be used "
-                 "as verified SLS results.")
+                 "as verified acceptance results.")
 
     st.markdown("### Stress-limit assessment")
     checks = e.get("stress_assessments", {})
@@ -3643,7 +3870,7 @@ def elastic_view(inp, results):
         enabled.append(("Tendon tension", checks.get("prestress", {})))
     metric_cols = st.columns(len(enabled))
     for col, (label, assessment) in zip(metric_cols, enabled):
-        _sls_metric(col, label, assessment)
+        _acceptance_metric(col, label, assessment)
     st.caption(
         f"Criteria source (user supplied): {e.get('sls_limit_source', '-')}. "
         "The limits are applied to the displayed total elastic action; confirm "
@@ -4683,6 +4910,12 @@ def _analysis_workspace(inp):
         "Calculate", type="primary", key="calculate", width="stretch",
         help="Run the selected analysis for the current inputs.",
     )
+    case_errors = presentation.required_action_set_errors(inp)
+    if calc and case_errors:
+        st.session_state["_case_error"] = "; ".join(case_errors) + "."
+        calc = False
+    elif not case_errors:
+        st.session_state.pop("_case_error", None)
     if calc:
         # Reuse a previously computed half whose split signature is unchanged, so a
         # Both run that touched only elastic (or only plastic) inputs recomputes just
@@ -4704,6 +4937,15 @@ def _analysis_workspace(inp):
         st.session_state["result_sig"] = inp["signature"]
         st.session_state["result_plastic_sig"] = inp["plastic_sig"]
         st.session_state["result_elastic_sig"] = inp["elastic_sig"]
+        if st.session_state["results"]:
+            st.session_state["calculation_record"] = {
+                "performed_at_utc": datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+                "sector_version": APP_VERSION,
+                "source_revision": source_revision(),
+                "input_sha256": _project_input_hash(),
+            }
         # Re-default the Plastic view's neutral-axis state to this result's governing
         # angle. The user can still pick another rotation until the next Calculate.
         st.session_state.pop("pl_state", None)
@@ -4713,11 +4955,7 @@ def _analysis_workspace(inp):
             current_view in ("Section", "Stress-Strain diagrams")
             and st.session_state["results"]
         ):
-            current_view = (
-                "Plastic Results"
-                if inp["mode"] in ("Plastic", "Both")
-                else "Elastic Results"
-            )
+            current_view = "Results Overview"
             st.session_state["view"] = current_view
 
     view = c_view.selectbox(
@@ -4740,15 +4978,30 @@ def _analysis_workspace(inp):
         c_calc.caption(":green[Results up to date]")
     if stale and view in _RESULT_VIEWS:
         st.warning("Inputs changed since the last calculation - press Calculate to update.")
+    if st.session_state.get("_case_error"):
+        st.error(st.session_state["_case_error"])
 
     for section_err in (inp.get("void_error"), inp.get("steel_error")):
         if section_err:
             st.error(section_err)
 
+    family = (
+        "elastic" if view == "Elastic Results"
+        else "plastic" if view in {
+            "Plastic Results", "N-M Interaction", "Shear", "Torsion",
+            "M-V-T Combined",
+        }
+        else None
+    )
+    if family:
+        st.caption("Action set: " + presentation.action_set_text(inp, family))
+
     if view == "Section":
         section_view(inp)
     elif view == "Stress-Strain diagrams":
         materials_view(inp)
+    elif view == "Results Overview":
+        results_overview_view(inp, results, stale=stale)
     elif view == "Plastic Results":
         plastic_view(inp, results)
     elif view == "N-M Interaction":

@@ -31,7 +31,7 @@ from sector import __version__  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 # Geometry, concrete law, steel law, plastic interaction, plastic state and
-# elastic state and SLS strain profile. An intentional fixture change must update
+# elastic state and elastic strain profile. An intentional fixture change must update
 # this explicit contract.
 _EXPECTED_FIGURE_COUNT = 7
 
@@ -46,6 +46,16 @@ class _FixedDateTime(datetime.datetime):
 def _inputs() -> dict:
     return {
         "mode": "Both",
+        "plastic_case": {
+            "id": "PL-QA",
+            "type": "ALS",
+            "source": "QA fixture combination register",
+        },
+        "elastic_case": {
+            "id": "EL-QA",
+            "type": "FLS",
+            "source": "QA fixture combination register",
+        },
         "outer": [(-0.1, -0.15), (0.1, -0.15), (0.1, 0.15), (-0.1, 0.15)],
         "holes": [],
         "bars": [(0.0, -0.12, 500.0)],
@@ -251,6 +261,7 @@ def build_fixture_pdf() -> bytes:
                 "proj_name": "Rendered report regression",
                 "section": "Reference section",
                 "author": "Sector QA",
+                "source_revision": "fixture000000000000000000000000000000000",
             },
             _inputs(),
             _results(),
@@ -321,13 +332,16 @@ def validate_pdf_content(pdf: bytes) -> str:
     )
     if "Sweep start V.min" not in settings_page:
         raise AssertionError("the analysis-settings heading is separated from its table")
-    if "Elastic long-term" not in settings_page:
+    if "EL-QA - long-term" not in settings_page:
         raise AssertionError("the loads and analysis settings are split across pages")
 
     for expected in (
         "QA-REFERENCE",
         "Rendered report regression",
-        "Ultimate (plastic) capacity",
+        "Results overview - PASS",
+        "PL-QA",
+        "EL-QA",
+        "Plastic section capacity",
         "Elastic section response and stress limits",
         "Crack-width candidates",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",

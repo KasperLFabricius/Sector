@@ -152,7 +152,9 @@ def test_persisted_settings_use_the_seeded_number_helper():
     import inspect
     import sector_app
     src = inspect.getsource(sector_app)
-    for helper in ("_seeded_number", "_seeded_checkbox", "_seeded_selectbox"):
+    for helper in (
+        "_seeded_number", "_seeded_checkbox", "_seeded_selectbox", "_seeded_text",
+    ):
         assert f"def {helper}(" in src
     # Widgets whose key is restored from a saved project/session (a value= / index=
     # alongside the externally-set key trips the warning) go through a seeded helper,
@@ -165,6 +167,8 @@ def test_persisted_settings_use_the_seeded_number_helper():
                 "label_scale", "label_min_gap",                # seeded number inputs
                 "pl_check_util", "pl_interaction", "sls_cw",    # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
+                "pl_case_id", "pl_case_type", "pl_case_source",  # seeded text inputs
+                "el_case_id", "el_case_type", "el_case_source",
                 "ring_d", "bot_d", "top_d",                     # QS diameter inputs
                 "qs_cover_to_edge", "bot_off_d", "top_off_d",   # QS toggle + interleave
                 "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "dia_mm",  # QS dims
@@ -382,8 +386,9 @@ def test_partial_sweep_keeps_its_end_angle():
     _set_and_click(at, "calculate", ("number_input", "v_max", 180.0))
     vs = [p["V"] for p in at.session_state["results"]["plastic"]["points"]]
     assert vs[-1] == 180.0
-    assert at.session_state["view"] == "Plastic Results"
-    assert any("NOT ASSESSED - ULS plastic bending" in item.value
+    assert at.session_state["view"] == "Results Overview"
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    assert any("NOT ASSESSED - Plastic bending" in item.value
                and "open arc" in item.value for item in at.warning)
 
 
@@ -427,8 +432,9 @@ def test_plastic_result_overview_has_explicit_verdict_margin_and_qa_tables():
         ("number_input", "pl_Mx", 20.0),
         ("number_input", "pl_My", 0.0),
     )
-    assert at.session_state["view"] == "Plastic Results"
-    assert any("PASS - ULS plastic bending" in item.value for item in at.success)
+    assert at.session_state["view"] == "Results Overview"
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    assert any("PASS - Plastic bending" in item.value for item in at.success)
     assert any("100 % limit" in item.value and "margin +" in item.value
                for item in at.success)
 
@@ -450,7 +456,7 @@ def test_plastic_result_overview_has_explicit_verdict_margin_and_qa_tables():
         "calculate",
         ("number_input", "pl_Mx", 100000.0),
     )
-    assert any("FAIL - ULS plastic bending" in item.value for item in at.error)
+    assert any("FAIL - Plastic bending" in item.value for item in at.error)
     assert any("margin -" in item.value for item in at.error)
 
 
@@ -1306,6 +1312,8 @@ def test_load_project_restores_section_and_calculates():
     import json
     at = _fresh()
     at.run()
+    at.button(key="calculate").click().run()
+    assert "results" in at.session_state
     project = {
         "format": "sector-project", "version": 1,
         "tables": {
@@ -1324,6 +1332,7 @@ def test_load_project_restores_section_and_calculates():
     assert not at.exception
     assert at.session_state["conc_fck"] == 55.0
     assert list(at.session_state["corners_base"]["x (mm)"]) == [-100.0, 100.0, 100.0, -100.0]
+    assert "results" not in at.session_state
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]
@@ -1334,7 +1343,12 @@ def test_save_load_round_trip_through_the_app():
     import sys as _sys
     at = _fresh()
     at.run()
-    at.number_input(key="conc_fck").set_value(48.0).run()
+    _set(
+        at,
+        ("number_input", "conc_fck", 48.0),
+        ("text_input", "pl_case_id", "PL-ROUNDTRIP"),
+        ("text_input", "pl_case_source", "Register C7"),
+    )
     _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
     import project_io  # noqa: E402  (app dir is on sys.path once the app has run)
     text = project_io.dump_project(
@@ -1345,6 +1359,10 @@ def test_save_load_round_trip_through_the_app():
     at.session_state["_pending_project"] = text
     at.run()
     assert at.session_state["conc_fck"] == 48.0
+    assert at.session_state["pl_case_id"] == "PL-ROUNDTRIP"
+    assert at.session_state["pl_case_source"] == "Register C7"
+    assert at.session_state["_loaded_project_provenance"]["input_hash_valid"] is True
+    assert any("hash verified" in caption.value for caption in at.caption)
 
 
 def test_fresh_session_project_captures_default_section():
@@ -1605,8 +1623,9 @@ def test_capacity_only_toggle_locks_moments_and_drops_utilisation():
     assert not at.exception
     pl = at.session_state["results"]["plastic"]
     assert pl["util"] is None and pl["check_util"] is False and pl["applied"] is None
-    assert at.session_state["view"] == "Plastic Results"
-    assert any("NOT ASSESSED - ULS plastic bending" in item.value
+    assert at.session_state["view"] == "Results Overview"
+    at.selectbox(key="view").set_value("Plastic Results").run()
+    assert any("NOT ASSESSED - Plastic bending" in item.value
                and "capacity-only run" in item.value.lower()
                for item in at.warning)
 
@@ -1914,7 +1933,7 @@ def test_material_laws_editable_in_both_and_plastic_modes():
 
 
 def test_fctm_and_ec_locked_in_plastic_only_mode():
-    # fctm and Ec only affect the elastic/SLS results, so plastic-only mode
+    # fctm and Ec only affect the elastic results, so plastic-only mode
     # disables them; Elastic re-enables them.
     at = _fresh()
     at.run()                                   # default mode is Plastic
@@ -2018,10 +2037,10 @@ def test_workspace_choices_survive_quick_section_viewport():
         ("number_input", "label_scale", 1.5),
         ("number_input", "label_min_gap", 0.2),
     )
-    assert at.session_state["view"] == "Plastic Results"
+    assert at.session_state["view"] == "Results Overview"
     _open_qs(at)
     at.button(key="qs_back").click().run()
-    assert at.session_state["view"] == "Plastic Results"
+    assert at.session_state["view"] == "Results Overview"
     assert at.number_input(key="label_scale").value == pytest.approx(1.5)
     assert at.number_input(key="label_min_gap").value == pytest.approx(0.2)
     assert not at.exception
@@ -2032,8 +2051,8 @@ def test_view_dropdown_switches_without_error():
     # Calculate; the result views show a prompt until one is run.
     at = _fresh()
     at.run()
-    for v in ["Section", "Stress-Strain diagrams", "Plastic Results",
-              "Elastic Results"]:
+    for v in ["Section", "Stress-Strain diagrams", "Results Overview",
+              "Plastic Results", "Elastic Results"]:
         at.selectbox(key="view").set_value(v).run()
         assert not at.exception, v
 
@@ -2050,9 +2069,67 @@ def test_results_views_render_after_calculate():
     at = _fresh()
     at.run()
     _set_and_click(at, "calculate", ("radio", "mode", "Both"))
-    for v in ["Plastic Results", "Elastic Results"]:
+    for v in ["Results Overview", "Plastic Results", "Elastic Results"]:
         at.selectbox(key="view").set_value(v).run()
         assert not at.exception, v
+
+
+def test_results_overview_shows_action_provenance_and_explicit_states():
+    at = _fresh()
+    at.run()
+    at.selectbox(key="view").set_value("Results Overview").run()
+    status = next(
+        frame.value for frame in at.dataframe if "Status" in frame.value.columns
+    )
+    assert set(status["Status"]) == {"NOT RUN"}
+    assert set(status["Action set"]) == {"PL-01"}
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("text_input", "pl_case_id", "PL-GOV-04"),
+        ("text_input", "pl_case_source", "Combination register C1"),
+    )
+    actions = next(
+        frame.value for frame in at.dataframe
+        if "Combination type" in frame.value.columns
+    )
+    status = next(
+        frame.value for frame in at.dataframe if "Status" in frame.value.columns
+    )
+    assert actions.iloc[0]["ID"] == "PL-GOV-04"
+    assert actions.iloc[0]["Source"] == "Combination register C1"
+    assert set(status["Status"]) == {"PASS"}
+
+    at.text_input(key="pl_case_id").set_value("PL-GOV-05").run()
+    stale = next(
+        frame.value for frame in at.dataframe if "Status" in frame.value.columns
+    )
+    assert set(stale["Status"]) == {"STALE"}
+    assert any("inputs changed" in warning.value.lower() for warning in at.warning)
+
+
+def test_action_classification_is_free_text_for_any_limit_state():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("text_input", "pl_case_type", "ALS"),
+        ("text_input", "el_case_type", "FLS"),
+    )
+    assert at.session_state["pl_case_type"] == "ALS"
+    assert at.session_state["el_case_type"] == "FLS"
+
+
+def test_calculate_requires_active_action_set_identifiers():
+    at = _fresh()
+    at.run()
+    _set_and_click(at, "calculate", ("text_input", "pl_case_id", ""))
+    assert "results" not in at.session_state
+    assert any(
+        "Plastic action-set ID is required" in error.value
+        for error in at.error
+    )
 
 
 def test_applied_moments_default_to_zero():
@@ -2081,14 +2158,13 @@ def test_sidebar_panels_follow_the_workflow_order():
                       "Save / Load"]
 
 
-def test_calculate_from_a_live_view_switches_to_the_result_view():
-    # v0.60: calculating while on Section / Stress-Strain takes the user to the
-    # natural result view so they see the outcome.
+def test_calculate_from_a_live_view_switches_to_the_results_overview():
+    # Calculating from a live view opens the consolidated QA overview first.
     at = _fresh()
     at.run()
     assert at.session_state["view"] == "Section"
     at.button(key="calculate").click().run()
-    assert at.session_state["view"] == "Plastic Results"
+    assert at.session_state["view"] == "Results Overview"
 
 
 def test_calculate_from_a_result_view_stays_put():
