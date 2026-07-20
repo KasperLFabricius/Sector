@@ -639,3 +639,29 @@ def overall_summary_status(rows):
         if status in states:
             return status
     return "NOT RUN"
+
+
+def summary_governing_flags(rows):
+    """Mark the largest utilisation among rows that carry acceptance verdicts."""
+    eligible = [
+        row.get("util")
+        for row in rows
+        if (
+            row.get("status") in {"PASS", "FAIL"}
+            and row.get("util") is not None
+            and math.isfinite(row["util"])
+        )
+    ]
+    governing = max(eligible) if eligible else None
+    return [
+        bool(
+            governing is not None
+            and row.get("status") in {"PASS", "FAIL"}
+            and row.get("util") is not None
+            and math.isfinite(row["util"])
+            and math.isclose(
+                row["util"], governing, rel_tol=1e-12, abs_tol=1e-12
+            )
+        )
+        for row in rows
+    ]

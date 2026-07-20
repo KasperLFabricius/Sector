@@ -293,6 +293,12 @@ def test_shear_screening_does_not_fail_when_selected_links_pass():
     assert by_check["Shear without links"]["util"] == pytest.approx(1.20)
     assert by_check["Shear with links"]["status"] == "PASS"
     assert presentation.overall_summary_status(rows) == "PASS"
+    governing = dict(zip(
+        (row["check"] for row in rows),
+        presentation.summary_governing_flags(rows),
+    ))
+    assert governing["Shear without links"] is False
+    assert governing["Shear with links"] is True
 
 
 def test_shear_without_links_retains_concrete_screening_verdict():

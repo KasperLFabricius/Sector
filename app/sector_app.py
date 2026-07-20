@@ -3472,18 +3472,9 @@ def results_overview_view(inp, results, *, stale=False):
               counts.get("NOT ASSESSED", 0) + counts.get("NOT RUN", 0))
     c4.metric("Stale", counts.get("STALE", 0))
 
-    finite_utils = [
-        row["util"] for row in rows
-        if row.get("util") is not None and math.isfinite(row["util"])
-    ]
-    governing = max(finite_utils) if finite_utils else None
+    governing_flags = presentation.summary_governing_flags(rows)
     display = []
-    for row in rows:
-        is_governing = (
-            governing is not None and row.get("util") is not None
-            and math.isfinite(row["util"])
-            and math.isclose(row["util"], governing, rel_tol=1e-12, abs_tol=1e-12)
-        )
+    for row, is_governing in zip(rows, governing_flags):
         display.append({
             "Check": row["check"],
             "Action set": row["case"],
