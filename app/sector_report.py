@@ -44,6 +44,11 @@ _BLUE = colors.HexColor("#1F3B66")
 _GREY = colors.HexColor("#5A5A5A")
 _LINE = colors.HexColor("#9AA5B1")
 _HEAD_BG = colors.HexColor("#E8ECF2")
+_A4_CONTENT_WIDTH = A4[0] - 40 * mm
+_CRACK_CANDIDATE_COL_WIDTHS = tuple(
+    value * mm
+    for value in (17, 7, 16, 13, 13, 10, 10, 17, 18, 18, 13, 13)
+)
 
 # A Unicode (Greek-capable) font for the report. DejaVuSans is free and shipped
 # with the app; Helvetica is the fallback (Greek glyphs then render as boxes, but
@@ -2051,7 +2056,7 @@ class ReportBuilder:
                  ("Effective height h<sub>c,ef</sub> (mm)", "hc_ef", 1, _MM),
                  ("Effective area A<sub>c,eff</sub> (m<super>2</super>)", "ac_eff", 5, 1.0),
                  ("Clear cover c (mm)", "cover", 1, 1.0),
-                 ("Bar diameter phi (mm)", "phi", 1, 1.0),
+                 ("Element diameter phi (mm)", "phi", 1, 1.0),
                  ("Governing element", "element_id", None, 1.0)]
 
         def col(c):
@@ -2171,8 +2176,7 @@ class ReportBuilder:
         self._h2("Crack-width candidates - all checked cases")
         self._table(
             rows,
-            [18 * mm, 8 * mm, 17 * mm, 13 * mm, 13 * mm, 11 * mm,
-             11 * mm, 17 * mm, 18 * mm, 18 * mm, 13 * mm, 13 * mm],
+            _CRACK_CANDIDATE_COL_WIDTHS,
             font=5.4, keep=False,
         )
         self._small(

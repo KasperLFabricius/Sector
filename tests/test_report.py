@@ -157,6 +157,8 @@ def test_report_includes_sls_criteria_strain_and_candidate_evidence():
     assert "Concrete corner stress and strain" in txt
     assert "Crack-width candidates" in txt
     assert "Crack-width element diameter" in txt
+    assert "Element diameter" in txt
+    assert "Bar diameter" not in txt
     assert "bar 1" in txt
     assert "0.300 mm" in txt and "0.213 mm" in txt
 
@@ -168,6 +170,11 @@ def test_report_does_not_round_small_nonzero_product_inertia_to_zero():
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "1.23457e-08" in txt
     assert "-2.34568e-09" in txt
+
+
+def test_crack_candidate_table_stays_inside_a4_content_width():
+    assert sum(sector_report._CRACK_CANDIDATE_COL_WIDTHS) <= \
+        sector_report._A4_CONTENT_WIDTH
 
 
 def test_report_marks_nonconverged_elastic_results_invalid():
