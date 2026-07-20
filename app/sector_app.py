@@ -380,7 +380,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
         label, lo, hi, step = mp.CONCRETE_FIELD_META["alpha_cc"]
         alpha_cc = box.number_input(
             r"Effective $\eta_{cc} k_{tc}$", float(lo), float(hi), step=float(step),
-            key="conc_alpha_cc", disabled=True,
+            key="conc_alpha_cc", disabled=True, format="%.6f",
             help="Derived EN 1992-1-1:2023 design-strength coefficient: "
                  "eta_cc = min[(40/fck)^(1/3), 1.0], multiplied by the selected k_tc.",
         )
@@ -435,7 +435,7 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n)
     note = (
-        f"  (eta_cc = {eta_cc:.4f}, k_tc = {k_tc:.2f})"
+        f"  (eta_cc = {eta_cc:.6f}, k_tc = {k_tc:.2f})"
         if auto is not None else ""
     )
     box.caption(f"curve {curve},  $f_{{cd}}$ = {concrete.fcd:.3f} MPa,  "

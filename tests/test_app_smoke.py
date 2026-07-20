@@ -1384,7 +1384,7 @@ def test_load_2023_project_preserves_explicit_k_tc_choice():
     assert not at.exception
     eta_50 = (40.0 / 50.0) ** (1.0 / 3.0)
     assert at.session_state["conc_k_tc"] == pytest.approx(1.0)
-    assert at.session_state["conc_alpha_cc"] == pytest.approx(round(eta_50, 4))
+    assert at.session_state["conc_alpha_cc"] == pytest.approx(eta_50)
     assert any("explicitly assuming" in warning.value for warning in at.warning)
 
 
@@ -1561,6 +1561,9 @@ def test_2023_concrete_fck_edit_calculates():
     at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
     at.number_input(key="conc_fck").set_value(50.0).run()
     assert not at.exception
+    assert at.session_state["conc_alpha_cc"] == pytest.approx(
+        0.85 * (40.0 / 50.0) ** (1.0 / 3.0)
+    )
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]

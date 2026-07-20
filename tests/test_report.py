@@ -331,9 +331,9 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     from sector.materials import Concrete
 
     inp = _inp()
-    eta = (40.0 / 50.0) ** (1.0 / 3.0)
+    eta = (40.0 / 45.0) ** (1.0 / 3.0)
     inp["concrete"] = Concrete(
-        fck=50.0, gamma_c=1.5, alpha_cc=0.85 * eta, curve=2,
+        fck=45.0, gamma_c=1.5, alpha_cc=0.85 * eta, curve=2,
     )
     inp["concrete_preset"] = "DS/EN 1992-1-1:2023"
     inp["concrete_eta_cc"] = eta
@@ -351,6 +351,9 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     assert "5.1.6" in txt and "5.3" in txt and "5.4" in txt
     assert "8.1.2" in txt and "8.4" in txt
     assert "0.85" in txt
+    assert f"{eta:.6f}" in txt
+    assert f"{0.85 * eta:.6f}" in txt
+    assert f"{inp['concrete'].fcd:.3f}" in txt
     assert "3.15" not in txt
 
 

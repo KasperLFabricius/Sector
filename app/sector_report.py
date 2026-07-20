@@ -618,10 +618,10 @@ class ReportBuilder:
             eta_cc = self.inp.get("concrete_eta_cc")
             k_tc = self.inp.get("concrete_k_tc")
             rows.extend([
-                ["Strength factor", "eta<sub>cc</sub>", _fmt(eta_cc, 4)],
+                ["Strength factor", "eta<sub>cc</sub>", _fmt(eta_cc, 6)],
                 ["Sustained-load / time factor", "k<sub>tc</sub>", _fmt(k_tc, 2)],
                 ["Effective design coefficient", "eta<sub>cc</sub> k<sub>tc</sub>",
-                 _fmt(c.alpha_cc, 4)],
+                 _fmt(c.alpha_cc, 6)],
             ])
         else:
             rows.append(
@@ -640,7 +640,7 @@ class ReportBuilder:
                 "f<sub>cd</sub> = eta<sub>cc</sub> &#183; k<sub>tc</sub> &#183; "
                 "f<sub>ck</sub> / gamma<sub>c</sub>",
                 ref="EN 1992-1-1:2023 &#167;5.1.6(1), Formulae (5.3) and (5.4)",
-                subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),4)} &#183; "
+                subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),6)} &#183; "
                       f"{_fmt(self.inp.get('concrete_k_tc'),2)} &#183; "
                       f"{_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
                 result=f"= {_fmt(c.fcd, 3)} MPa")

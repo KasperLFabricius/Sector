@@ -129,7 +129,7 @@ def strength_dependent_alpha_cc(preset, fck, k_tc=None):
     code = codes.CODES.get(preset)
     if code is not None and code.eta_cc_ref is not None:
         eta_cc = min((code.eta_cc_ref / float(fck)) ** (1.0 / 3.0), 1.0)
-        return round(eta_cc * (code.k_tc if k_tc is None else float(k_tc)), 4)
+        return eta_cc * (code.k_tc if k_tc is None else float(k_tc))
     return None
 
 
