@@ -119,15 +119,37 @@ def test_conditional_y_axis_asymmetric_companion():
     assert util == pytest.approx(1.0, abs=0.02)          # on the envelope
 
 
+_BRUTE_ENVELOPES = []
+
+
+def _brute_envelope(sec, c, s, P, pre=None):
+    """Reuse an immutable dense reference envelope within one test process."""
+    for (
+        cached_sec, cached_c, cached_s, cached_p, cached_pre, points
+    ) in _BRUTE_ENVELOPES:
+        if (
+            sec is cached_sec
+            and c is cached_c
+            and s is cached_s
+            and P == cached_p
+            and pre is cached_pre
+        ):
+            return points
+    # solve_plastic calls the same per-angle solver as the former list
+    # comprehension, while reusing its angle-independent section preparation.
+    points = solve_plastic(sec, c, s, P, 0.0, 360.0, 0.2, prestress=pre)
+    # Retaining the source objects makes identity matching immune to CPython id reuse.
+    _BRUTE_ENVELOPES.append((sec, c, s, P, pre, points))
+    return points
+
+
 def _brute_slice(sec, c, s, P, axis, tension_low, m_off, pre=None):
     """Reference: a fine full-circle envelope scan, taking the correct-face own
     moment where the companion crosses ``m_off`` (linear-interpolated). Independent
     of conditional_capacity's own bisection -- the ground truth it must match."""
-    import numpy as np
     comp = (lambda p: p.My) if axis == "x" else (lambda p: p.Mx)
     own = (lambda p: p.Mx) if axis == "x" else (lambda p: p.My)
-    pts = [plastic_capacity_at_angle(sec, c, s, P, v, prestress=pre)
-           for v in np.arange(0.0, 360.2, 0.2)]
+    pts = _brute_envelope(sec, c, s, P, pre)
     caps = []
     for a, b in zip(pts, pts[1:]):
         if not (a.converged and b.converged):
@@ -287,23 +309,44 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=120)
 
 
+def _set(at, *changes):
+    """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    return at.run()
+
+
+def _set_and_click(at, button_key, *changes):
+    """Submit a group of existing inputs with one button-triggered rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    at.button(key=button_key).click()
+    return at.run()
+
+
 # Distinct Mx/My magnitudes so an axis/argument transposition changes the numbers
 # (a symmetric 100/100 would let m_signed<->off_signed swaps pass silently).
 _MX, _MY = 100.0, 60.0
 
 
 def _mvt(at, my=0.0, torsion=True):
-    at.number_input(key="pl_Mx").set_value(_MX).run()
+    first = [
+        ("number_input", "pl_Mx", _MX),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "combined_on", True),
+    ]
     if my:
-        at.number_input(key="pl_My").set_value(my).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(150.0).run()
+        first.append(("number_input", "pl_My", my))
     if torsion:
-        at.checkbox(key="torsion_on").set_value(True).run()
-        at.number_input(key="torsion_T").set_value(40.0).run()
-    at.checkbox(key="combined_on").set_value(True).run()
-    at.button(key="calculate").click().run()
+        first.append(("checkbox", "torsion_on", True))
+    _set(at, *first)
+    second = [
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+    ]
+    if torsion:
+        second.append(("number_input", "torsion_T", 40.0))
+    _set_and_click(at, "calculate", *second)
     return at
 
 
@@ -311,22 +354,28 @@ def _valid_t_subdivision(at):
     """Apply a 1000 x 200 flange + 300 x 600 web and its positioned partition."""
     at.session_state["_qs_open"] = True
     at.run()
-    at.selectbox(key="shape").set_value("T-section").run()
-    at.number_input(key="bf_mm").set_value(1000.0).run()
-    at.number_input(key="hf_mm").set_value(200.0).run()
-    at.number_input(key="bw_mm").set_value(300.0).run()
-    at.number_input(key="hw_mm").set_value(600.0).run()
-    at.button(key="qs_apply").click().run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.checkbox(key="torsion_subdivide").set_value(True).run()
-    at.number_input(key="torsion_sub_x0").set_value(0.0).run()
-    at.number_input(key="torsion_sub_y0").set_value(-100.0).run()
-    at.number_input(key="torsion_sub_b0").set_value(300.0).run()
-    at.number_input(key="torsion_sub_h0").set_value(600.0).run()
-    at.number_input(key="torsion_sub_x1").set_value(0.0).run()
-    at.number_input(key="torsion_sub_y1").set_value(300.0).run()
-    at.number_input(key="torsion_sub_b1").set_value(1000.0).run()
-    at.number_input(key="torsion_sub_h1").set_value(200.0).run()
+    _set(at, ("selectbox", "shape", "T-section"))
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bf_mm", 1000.0),
+        ("number_input", "hf_mm", 200.0),
+        ("number_input", "bw_mm", 300.0),
+        ("number_input", "hw_mm", 600.0),
+    )
+    _set(at, ("checkbox", "torsion_on", True))
+    _set(at, ("checkbox", "torsion_subdivide", True))
+    _set(
+        at,
+        ("number_input", "torsion_sub_x0", 0.0),
+        ("number_input", "torsion_sub_y0", -100.0),
+        ("number_input", "torsion_sub_b0", 300.0),
+        ("number_input", "torsion_sub_h0", 600.0),
+        ("number_input", "torsion_sub_x1", 0.0),
+        ("number_input", "torsion_sub_y1", 300.0),
+        ("number_input", "torsion_sub_b1", 1000.0),
+        ("number_input", "torsion_sub_h1", 200.0),
+    )
     return at
 
 
@@ -463,19 +512,19 @@ def test_shear_face_mrd_falls_back_to_pure_axis_on_solve_failure(monkeypatch):
     # payload: when the conditional solve fails (raises, or returns (0.0, False)),
     # _shear_face_mrd returns the LEGACY pure-axis capacity with conditional=False,
     # which drives the UI/report biaxial warning.
-    import sector_app
+    from sector import capacity
     ex = manual.example_beam()
     inp = dict(section=manual._section_of(ex), concrete=ex["concrete"],
                steel=ex["steel"], P_pl=0.0, tendons=False, prestress=None)
     legacy = abs(plastic_capacity_at_angle(inp["section"], inp["concrete"],
                                            inp["steel"], 0.0, 90.0).Mx)
-    monkeypatch.setattr(sector_app, "conditional_capacity",
+    monkeypatch.setattr(capacity, "conditional_capacity",
                         lambda *a, **k: (0.0, False))
-    mrd, cond = sector_app._shear_face_mrd(inp, "x", True, m_off=50.0)
+    mrd, cond = capacity.shear_face_mrd(inp, "x", True, m_off=50.0)
     assert cond is False and mrd == pytest.approx(legacy)
 
     def _boom(*a, **k):
         raise RuntimeError("solve blew up")
-    monkeypatch.setattr(sector_app, "conditional_capacity", _boom)
-    mrd2, cond2 = sector_app._shear_face_mrd(inp, "x", True, m_off=50.0)
+    monkeypatch.setattr(capacity, "conditional_capacity", _boom)
+    mrd2, cond2 = capacity.shear_face_mrd(inp, "x", True, m_off=50.0)
     assert cond2 is False and mrd2 == pytest.approx(legacy)

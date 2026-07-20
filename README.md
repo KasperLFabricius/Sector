@@ -59,6 +59,7 @@ sector/        computation core (headless, exhaustively tested)
   section      the cross-section model
   elastic      cracked-section elastic stresses
   plastic      ultimate capacity (neutral-axis sweep, governing failure)
+  capacity     headless shear, torsion, and M-V-T result orchestration
   serviceability  cracking threshold, tension stiffening, crack width (SLS)
   templates    parametric section + reinforcement builders
 app/           Streamlit interface (sector_app, viz)
@@ -70,11 +71,13 @@ tests/         unit tests + the verification regression
 
 ```
 pip install --require-hashes -r requirements-dev.txt
-pytest tests
+python -m pytest tests -n 4
 ```
 
-The test suite includes a permanent verification regression; the whole tree is
-kept strictly ASCII (enforced by a test).
+The four-worker command matches the GitHub QA gate and keeps the solver-heavy
+verification cases distributed. Run without ``-n 4`` only when a serial diagnostic
+trace is useful. The test suite includes a permanent verification regression; the
+whole tree is kept strictly ASCII (enforced by a test).
 
 The supported runtime is pinned in `.python-version`. Runtime, development and
 Windows-build environments are locked in `requirements*.txt`; edit the matching

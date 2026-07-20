@@ -23,6 +23,21 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _set(at, *changes):
+    """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    return at.run()
+
+
+def _set_and_click(at, button_key, *changes):
+    """Submit a group of existing inputs with one button-triggered rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    at.button(key=button_key).click()
+    return at.run()
+
+
 def _open_qs(at):
     """Open the full-width Quick Section builder so its widgets render."""
     at.session_state["_qs_open"] = True
@@ -261,8 +276,7 @@ def test_plastic_view_tolerates_legacy_results_without_min_fields():
 def test_calculate_elastic_produces_bar_stresses():
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Elastic"))
     assert not at.exception
     res = at.session_state["results"]
     assert "elastic" in res
@@ -274,8 +288,7 @@ def test_combined_elastic_reports_four_columns():
     # columns (total / long / dif / rst1), all the same length.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Elastic"))
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     n = len(e["total"])
@@ -289,12 +302,14 @@ def test_combined_elastic_reports_four_columns():
 def test_short_term_load_and_ratio_change_the_combined_result():
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Elastic"))
     base = list(at.session_state["results"]["elastic"]["total"])
-    at.number_input(key="el_short_Mx").set_value(80.0).run()  # add a short-term moment
-    at.number_input(key="conc_Ec").set_value(25.0).run()      # softer concrete -> larger n_s/n_l
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "el_short_Mx", 80.0),
+        ("number_input", "conc_Ec", 25.0),
+    )
     assert not at.exception
     assert at.session_state["results"]["elastic"]["total"] != base
 
@@ -304,8 +319,9 @@ def test_plastic_sweep_increment_changes_point_count():
     at.run()
     at.button(key="calculate").click().run()
     n_default = len(at.session_state["results"]["plastic"]["points"])
-    at.number_input(key="v_inc").set_value(5.0).run()  # finer sweep
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "v_inc", 5.0)
+    )  # finer sweep
     assert not at.exception
     assert len(at.session_state["results"]["plastic"]["points"]) > n_default
 
@@ -327,8 +343,7 @@ def test_partial_sweep_keeps_its_end_angle():
     # A partial arc is not a full turn, so both endpoints are distinct and kept.
     at = _fresh()
     at.run()
-    at.number_input(key="v_max").set_value(180.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "v_max", 180.0))
     vs = [p["V"] for p in at.session_state["results"]["plastic"]["points"]]
     assert vs[-1] == 180.0
 
@@ -338,10 +353,13 @@ def test_plastic_sweep_stays_within_requested_bounds():
     # ends, with no swept angle outside [V.min, V.max].
     at = _fresh()
     at.run()
-    at.number_input(key="v_min").set_value(0.0).run()
-    at.number_input(key="v_max").set_value(10.0).run()
-    at.number_input(key="v_inc").set_value(7.0).run()  # max increment, doesn't divide
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "v_min", 0.0),
+        ("number_input", "v_max", 10.0),
+        ("number_input", "v_inc", 7.0),
+    )  # max increment, doesn't divide
     assert not at.exception
     p = at.session_state["results"]["plastic"]
     vs = sorted(pt["V"] for pt in p["points"])
@@ -394,8 +412,7 @@ def test_axial_force_is_tension_positive():
     def max_mx(P):
         at = _fresh()
         at.run()
-        at.number_input(key="pl_P").set_value(P).run()
-        at.button(key="calculate").click().run()
+        _set_and_click(at, "calculate", ("number_input", "pl_P", P))
         return at.session_state["results"]["plastic"]["max_mx"]
 
     assert max_mx(-2000.0) > max_mx(0.0) > max_mx(2000.0)   # compression > 0 > tension
@@ -426,16 +443,22 @@ def test_plastic_view_defaults_to_the_governing_rotation_each_calculate():
     # angle) changed -- the "always 90 deg" symptom.
     at = _fresh()
     at.run()
-    at.number_input(key="pl_Mx").set_value(200.0).run()   # pure Mx -> governs near V=90
-    at.number_input(key="pl_My").set_value(0.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 200.0),
+        ("number_input", "pl_My", 0.0),
+    )  # pure Mx -> governs near V=90
     at.selectbox(key="view").set_value("Plastic Results").run()
     res = at.session_state["results"]["plastic"]
     assert at.session_state["pl_state"] == res["util_gov"]
     # A biaxial load governs at a different rotation; recalculating must follow it.
-    at.number_input(key="pl_Mx").set_value(150.0).run()
-    at.number_input(key="pl_My").set_value(120.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 150.0),
+        ("number_input", "pl_My", 120.0),
+    )
     res2 = at.session_state["results"]["plastic"]
     assert res2["util_gov"] != res["util_gov"]             # the governing angle changed
     assert at.session_state["pl_state"] == res2["util_gov"]
@@ -451,9 +474,12 @@ def test_plastic_strains_are_reported_tension_positive():
     # though the solver computes them compression-positive internally.
     at = _fresh()
     at.run()
-    at.number_input(key="pl_Mx").set_value(200.0).run()   # sagging bending, N = 0
-    at.number_input(key="pl_My").set_value(0.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 200.0),
+        ("number_input", "pl_My", 0.0),
+    )  # sagging bending, N = 0
     res = at.session_state["results"]["plastic"]
     pt = res["points"][res["util_gov"]]
     assert pt["eps_c"] < 0.0     # concrete crushing -> compression -> negative
@@ -516,8 +542,7 @@ def test_plastic_bar_hover_reports_stress_strain_per_bar_and_varies_with_rotatio
 def test_both_mode_runs_elastic_and_plastic():
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Both").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
     assert not at.exception
     res = at.session_state["results"]
     assert "plastic" in res and "elastic" in res
@@ -528,17 +553,21 @@ def test_plastic_and_elastic_use_independent_loads():
     # must not move the plastic utilisation, and vice versa.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Both").run()
-    at.number_input(key="pl_Mx").set_value(150.0).run()
-    at.number_input(key="el_long_Mx").set_value(50.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Both"),
+        ("number_input", "pl_Mx", 150.0),
+        ("number_input", "el_long_Mx", 50.0),
+    )
     assert not at.exception
     res = at.session_state["results"]
     util0 = res["plastic"]["util"]
     stress0 = list(res["elastic"]["total"])
 
-    at.number_input(key="el_long_Mx").set_value(120.0).run()  # change only the elastic load
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "el_long_Mx", 120.0)
+    )  # change only the elastic load
     res2 = at.session_state["results"]
     assert res2["plastic"]["util"] == pytest.approx(util0)   # plastic unchanged
     assert res2["elastic"]["total"] != stress0         # elastic changed
@@ -549,30 +578,28 @@ def test_recalculate_reuses_the_unchanged_analysis_half():
     # half whose inputs changed and reuses the other (same result object).
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Both").run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
     pl1 = at.session_state["results"]["plastic"]
     el1 = at.session_state["results"]["elastic"]
 
     # Elastic-only change -> plastic reused (identity), elastic recomputed.
-    at.number_input(key="el_short_Mx").set_value(123.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "el_short_Mx", 123.0)
+    )
     res = at.session_state["results"]
     assert res["plastic"] is pl1
     assert res["elastic"] is not el1
     el2 = res["elastic"]
 
     # Plastic-only change (sweep increment) -> elastic reused, plastic recomputed.
-    at.number_input(key="v_inc").set_value(30.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "v_inc", 30.0))
     res = at.session_state["results"]
     assert res["elastic"] is el2
     assert res["plastic"] is not pl1
 
     # Shared change (concrete grade) -> both recomputed.
     pl3 = res["plastic"]
-    at.number_input(key="conc_fck").set_value(40.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "conc_fck", 40.0))
     res = at.session_state["results"]
     assert res["plastic"] is not pl3
     assert res["elastic"] is not el2
@@ -583,9 +610,12 @@ def test_load_sets_survive_a_mode_switch():
     # toggling modes hides them for a few reruns.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Both").run()
-    at.number_input(key="pl_Mx").set_value(175.0).run()
-    at.number_input(key="el_long_Mx").set_value(60.0).run()
+    _set(
+        at,
+        ("radio", "mode", "Both"),
+        ("number_input", "pl_Mx", 175.0),
+        ("number_input", "el_long_Mx", 60.0),
+    )
     at.radio(key="mode").set_value("Elastic").run()   # plastic set disabled
     at.run()                                            # extra rerun
     at.radio(key="mode").set_value("Both").run()        # plastic set active again
@@ -647,8 +677,9 @@ def test_quick_section_interleaves_a_second_bar_size():
     plain = len(at.session_state["bars_base"])
     # With a bottom interleave -> more bars, and two distinct bar sizes present.
     _open_qs(at)
-    at.number_input(key="bot_off_d").set_value(16.0).run()   # 0 = off; a diameter enables it
-    _apply_qs(at)
+    _set_and_click(
+        at, "qs_apply", ("number_input", "bot_off_d", 16.0)
+    )  # 0 = off; a diameter enables it
     bars = at.session_state["bars_base"]
     areas = {round(float(a), 1) for a in bars["area (mm2)"]}
     assert len(bars) > plain                               # extra interleaved bars added
@@ -663,10 +694,13 @@ def test_quick_section_interleave_skips_the_box_girder_void():
     at.run()
     _open_qs(at)
     at.selectbox(key="shape").set_value("Box girder").run()
-    at.number_input(key="bot_layers").set_value(2).run()
-    at.number_input(key="layer_s").set_value(300.0).run()  # 2nd layer rises into the hollow
-    at.number_input(key="bot_off_d").set_value(16.0).run()
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bot_layers", 2),
+        ("number_input", "layer_s", 300.0),
+        ("number_input", "bot_off_d", 16.0),
+    )  # 2nd layer rises into the hollow
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]        # no bar in the void -> valid section
@@ -678,10 +712,13 @@ def test_quick_section_separate_top_bottom_cover_and_manual_diameter():
     at = _fresh()
     at.run()
     _open_qs(at)
-    at.number_input(key="bot_c_mm").set_value(40.0).run()
-    at.number_input(key="top_c_mm").set_value(60.0).run()
-    at.number_input(key="bot_d").set_value(25.0).run()
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bot_c_mm", 40.0),
+        ("number_input", "top_c_mm", 60.0),
+        ("number_input", "bot_d", 25.0),
+    )
     b = at.session_state["bars_base"]
     ys = sorted(round(float(y), 3) for y in b["y (mm)"])
     assert min(ys) == pytest.approx(-260.0)                # -300 + 40 bottom cover
@@ -695,10 +732,13 @@ def test_quick_section_cover_to_edge_shifts_bars_by_a_radius():
     at = _fresh()
     at.run()
     _open_qs(at)
-    at.checkbox(key="qs_cover_to_edge").set_value(True).run()
-    at.number_input(key="bot_c_mm").set_value(40.0).run()
-    at.number_input(key="bot_d").set_value(25.0).run()
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("checkbox", "qs_cover_to_edge", True),
+        ("number_input", "bot_c_mm", 40.0),
+        ("number_input", "bot_d", 25.0),
+    )
     yb = min(round(float(y), 2) for y in at.session_state["bars_base"]["y (mm)"])
     assert yb == pytest.approx(-247.5)                     # -300 + 40 + 12.5 radius
 
@@ -709,10 +749,13 @@ def test_quick_section_separate_upper_layer_bar_count():
     at = _fresh()
     at.run()
     _open_qs(at)
-    at.number_input(key="bot_n").set_value(6).run()
-    at.number_input(key="bot_layers").set_value(2).run()
-    at.number_input(key="bot_n2").set_value(3).run()
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bot_n", 6),
+        ("number_input", "bot_layers", 2),
+        ("number_input", "bot_n2", 3),
+    )
     from collections import Counter
     counts = Counter(round(float(y), 3) for y in at.session_state["bars_base"]["y (mm)"])
     assert sorted(counts.values(), reverse=True)[:2] == [6, 3]
@@ -726,10 +769,13 @@ def test_quick_section_builder_places_bars_by_spacing():
     _open_qs(at)
     assert any(b.key == "qs_apply" for b in at.button)    # the builder is showing
     at.selectbox(key="shape").set_value("Slab strip").run()
-    at.radio(key="qs_rebar_mode").set_value("By spacing").run()
-    at.number_input(key="bot_s").set_value(150.0).run()
-    at.number_input(key="top_s").set_value(150.0).run()
-    _apply_qs(at)
+    _set(at, ("radio", "qs_rebar_mode", "By spacing"))
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bot_s", 150.0),
+        ("number_input", "top_s", 150.0),
+    )
     assert not at.exception
     # 1 m slab, 50 mm cover -> a 0.9 m face at 150 mm gives 7 bars per row (14 total).
     assert len(at.session_state["bars_base"]) == 14
@@ -743,9 +789,12 @@ def test_quick_section_builder_stacks_multiple_bar_layers():
     at = _fresh()
     at.run()
     _open_qs(at)
-    at.number_input(key="bot_layers").set_value(2).run()
-    at.number_input(key="layer_s").set_value(60.0).run()
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bot_layers", 2),
+        ("number_input", "layer_s", 60.0),
+    )
     assert not at.exception
     bars = at.session_state["bars_base"]
     assert len(bars) == 14                          # 2 x 6 bottom + 1 x 2 top
@@ -761,10 +810,13 @@ def test_quick_section_builder_stacks_tendon_layers():
     at = _fresh()
     at.run()
     _open_qs(at)
-    at.number_input(key="tnd_n").set_value(3).run()
-    at.number_input(key="tnd_layers").set_value(2).run()
-    at.number_input(key="tnd_layer_s").set_value(60.0).run()
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "tnd_n", 3),
+        ("number_input", "tnd_layers", 2),
+        ("number_input", "tnd_layer_s", 60.0),
+    )
     assert not at.exception
     tendons = at.session_state["tendons_base"]
     assert len(tendons) == 6                          # 2 layers x 3 tendons
@@ -784,10 +836,13 @@ def test_quick_section_box_tendon_layer_splits_into_walls():
     at.run()
     _open_qs(at)
     at.selectbox(key="shape").set_value("Box girder").run()
-    at.number_input(key="tnd_n").set_value(3).run()
-    at.number_input(key="tnd_layers").set_value(2).run()
-    at.number_input(key="tnd_layer_s").set_value(150.0).run()
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "tnd_n", 3),
+        ("number_input", "tnd_layers", 2),
+        ("number_input", "tnd_layer_s", 150.0),
+    )
     assert not at.exception
     tendons = at.session_state["tendons_base"]
     assert len(tendons) == 6                          # count preserved (3 per layer)
@@ -807,9 +862,12 @@ def test_quick_section_circular_zero_cover_keeps_all_bars():
     at.run()
     _open_qs(at)
     at.selectbox(key="shape").set_value("Circular").run()
-    at.number_input(key="ring_n").set_value(10).run()
-    at.number_input(key="ring_c_mm").set_value(0.0).run()
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "ring_n", 10),
+        ("number_input", "ring_c_mm", 0.0),
+    )
     assert not at.exception
     assert len(at.session_state["bars_base"]) == 10            # all 10 placed
     assert not any("within the concrete" in (e.value or "") for e in at.error)
@@ -825,9 +883,12 @@ def test_quick_section_tsection_lower_top_layer_fits_the_web():
     at.run()
     _open_qs(at)
     at.selectbox(key="shape").set_value("T-section").run()
-    at.number_input(key="top_layers").set_value(2).run()
-    at.number_input(key="layer_s").set_value(250.0).run()   # pushes layer 2 into the web
-    _apply_qs(at)
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "top_layers", 2),
+        ("number_input", "layer_s", 250.0),
+    )  # pushes layer 2 into the web
     assert not at.exception
     assert not any("within the concrete" in (e.value or "") for e in at.error)
     bars = at.session_state["bars_base"]
@@ -846,11 +907,14 @@ def test_quick_section_tsection_spaced_web_layer_has_fewer_bars():
     at.run()
     _open_qs(at)
     at.selectbox(key="shape").set_value("T-section").run()
-    at.radio(key="qs_rebar_mode").set_value("By spacing").run()
-    at.number_input(key="top_s").set_value(150.0).run()
-    at.number_input(key="top_layers").set_value(2).run()
-    at.number_input(key="layer_s").set_value(250.0).run()       # lower row into the web
-    _apply_qs(at)
+    _set(at, ("radio", "qs_rebar_mode", "By spacing"))
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "top_s", 150.0),
+        ("number_input", "top_layers", 2),
+        ("number_input", "layer_s", 250.0),
+    )  # lower row into the web
     assert not at.exception
     assert not any("within the concrete" in (e.value or "") for e in at.error)
     bars = at.session_state["bars_base"]

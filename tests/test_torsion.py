@@ -170,9 +170,12 @@ def test_app_nu_v_detailing_flag_gated_to_dk_na():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.checkbox(key="torsion_nu_v").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "torsion_T", 40.0),
+        ("checkbox", "torsion_nu_v", True),
+    )
     assert at.session_state["results"]["torsion"]["nu_v_detailing"] is True   # DK NA
     at.selectbox(key="torsion_method").set_value(codes.EC2_2005.label).run()
     at.button(key="calculate").click().run()
@@ -270,15 +273,33 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _set(at, *changes):
+    """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    return at.run()
+
+
+def _set_and_click(at, button_key, *changes):
+    """Submit a group of existing inputs with one button-triggered rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    at.button(key=button_key).click()
+    return at.run()
+
+
 def _apply_t_section(at, bf=1000.0, hf=200.0, bw=300.0, hw=600.0):
     at.session_state["_qs_open"] = True
     at.run()
-    at.selectbox(key="shape").set_value("T-section").run()
-    at.number_input(key="bf_mm").set_value(bf).run()
-    at.number_input(key="hf_mm").set_value(hf).run()
-    at.number_input(key="bw_mm").set_value(bw).run()
-    at.number_input(key="hw_mm").set_value(hw).run()
-    at.button(key="qs_apply").click().run()
+    _set(at, ("selectbox", "shape", "T-section"))
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bf_mm", bf),
+        ("number_input", "hf_mm", hf),
+        ("number_input", "bw_mm", bw),
+        ("number_input", "hw_mm", hw),
+    )
     return at
 
 
@@ -286,8 +307,7 @@ def test_app_torsion_produces_a_resistance():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 40.0))
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["valid"] and t["trd"] > 0.0
@@ -300,9 +320,12 @@ def test_app_torsion_produces_a_resistance():
 def test_app_torsion_uses_final_material_factors():
     at = _fresh()
     at.run()
-    at.number_input(key="conc_gamma_c").set_value(1.80).run()
-    at.number_input(key="mild_gamma_y").set_value(1.35).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
+    _set(
+        at,
+        ("number_input", "conc_gamma_c", 1.80),
+        ("number_input", "mild_gamma_y", 1.35),
+        ("checkbox", "torsion_on", True),
+    )
     at.button(key="calculate").click().run()
     assert not at.exception
     t = at.session_state["results"]["torsion"]
@@ -319,8 +342,7 @@ def test_app_torsion_view_renders():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(30.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 30.0))
     at.selectbox(key="view").set_value("Torsion").run()
     assert not at.exception
     labels = [m.label for m in at.metric]
@@ -330,17 +352,23 @@ def test_app_torsion_view_renders():
 
 def _subdivided(at, b0=300.0, h0=600.0, b1=1000.0, h1=200.0, T=40.0):
     _apply_t_section(at, bf=b1, hf=h1, bw=b0, hw=h0)
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(T).run()
-    at.checkbox(key="torsion_subdivide").set_value(True).run()   # reveals sub-rect inputs
-    at.number_input(key="torsion_sub_x0").set_value(0.0).run()
-    at.number_input(key="torsion_sub_y0").set_value(-h1 / 2.0).run()
-    at.number_input(key="torsion_sub_b0").set_value(b0).run()
-    at.number_input(key="torsion_sub_h0").set_value(h0).run()
-    at.number_input(key="torsion_sub_x1").set_value(0.0).run()
-    at.number_input(key="torsion_sub_y1").set_value(h0 / 2.0).run()
-    at.number_input(key="torsion_sub_b1").set_value(b1).run()
-    at.number_input(key="torsion_sub_h1").set_value(h1).run()
+    _set(at, ("checkbox", "torsion_on", True))
+    _set(
+        at,
+        ("number_input", "torsion_T", T),
+        ("checkbox", "torsion_subdivide", True),
+    )  # subdivision reveals the positioned sub-rectangle inputs
+    _set(
+        at,
+        ("number_input", "torsion_sub_x0", 0.0),
+        ("number_input", "torsion_sub_y0", -h1 / 2.0),
+        ("number_input", "torsion_sub_b0", b0),
+        ("number_input", "torsion_sub_h0", h0),
+        ("number_input", "torsion_sub_x1", 0.0),
+        ("number_input", "torsion_sub_y1", h0 / 2.0),
+        ("number_input", "torsion_sub_b1", b1),
+        ("number_input", "torsion_sub_h1", h1),
+    )
     return at
 
 
@@ -366,8 +394,7 @@ def test_app_compound_torsion_requires_subdivision():
     at.run()
     _apply_t_section(at)
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(20.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["compound_detected"] is True
@@ -395,8 +422,9 @@ def test_app_invalid_subtube_partition_withholds_torsion_verdict():
     at.run()
     _subdivided(at)
     # Shift the web so part of it lies outside the actual T-section.
-    at.number_input(key="torsion_sub_x0").set_value(100.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "torsion_sub_x0", 100.0)
+    )
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["subdivision_requested"] is True
@@ -437,13 +465,19 @@ def test_app_torsion_subdivided_caption_not_shared_angle_when_disjoint():
     at = _fresh(); at.run()
     at.checkbox(key="shear_on").set_value(True).run()
     at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(150.0).run()
-    at.number_input(key="shear_cot_min").set_value(1.0).run()
-    at.number_input(key="shear_cot_max").set_value(1.25).run()   # below the torsion band
+    _set(
+        at,
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "shear_cot_min", 1.0),
+        ("number_input", "shear_cot_max", 1.25),
+    )  # below the torsion band
     _subdivided(at, T=40.0)
-    at.number_input(key="torsion_cot_min").set_value(1.35).run()
-    at.number_input(key="torsion_cot_max").set_value(2.5).run()  # disjoint from shear
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "torsion_cot_min", 1.35),
+        ("number_input", "torsion_cot_max", 2.5),
+    )  # disjoint from shear
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["theta_mode"] == "disjoint"
@@ -459,12 +493,18 @@ def test_app_torsion_subdivided_combined_pairs_web():
     # The combined V+T crushing must use the WEB sub-tube's torsion SHARE, not full TEd.
     at = _fresh(); at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(150.0).run()
+    _set(
+        at,
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+    )
     _subdivided(at)
-    at.checkbox(key="combined_on").set_value(True).run()
-    at.number_input(key="pl_Mx").set_value(100.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "combined_on", True),
+        ("number_input", "pl_Mx", 100.0),
+    )
     assert not at.exception
     to = at.session_state["results"]["torsion"]
     inter = to["interaction"]
@@ -476,12 +516,18 @@ def test_app_combined_shear_torsion_interaction():
     # With both shear links and torsion on, the 6.29 crushing interaction appears.
     at = _fresh()
     at.run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(150.0).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.button(key="calculate").click().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
     assert not at.exception
     inter = at.session_state["results"]["torsion"]["interaction"]
     assert inter["value"] == pytest.approx(
@@ -502,16 +548,23 @@ def test_combined_vrdmax_uses_shear_method_not_torsion():
     def inter(torsion_method):
         at = _fresh()
         at.run()
-        at.checkbox(key="shear_on").set_value(True).run()
-        at.checkbox(key="shear_links").set_value(True).run()
-        at.number_input(key="shear_V").set_value(150.0).run()
-        at.checkbox(key="torsion_on").set_value(True).run()
-        at.number_input(key="torsion_T").set_value(40.0).run()
+        _set(
+            at,
+            ("checkbox", "shear_on", True),
+            ("checkbox", "torsion_on", True),
+        )
+        _set(
+            at,
+            ("checkbox", "shear_links", True),
+            ("number_input", "shear_V", 150.0),
+            ("number_input", "torsion_T", 40.0),
+        )
+        pinned = []
         for k in ("shear_cot_min", "shear_cot_max",
                   "torsion_cot_min", "torsion_cot_max"):
-            at.number_input(key=k).set_value(2.0).run()
-        at.selectbox(key="torsion_method").set_value(torsion_method).run()
-        at.button(key="calculate").click().run()
+            pinned.append(("number_input", k, 2.0))
+        pinned.append(("selectbox", "torsion_method", torsion_method))
+        _set_and_click(at, "calculate", *pinned)
         assert not at.exception
         return at.session_state["results"]["torsion"]["interaction"]
 
@@ -528,14 +581,18 @@ def test_app_torsion_only_axial_input_enabled():
     # compression axial force must raise TRd,max.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(30.0).run()
+    _set(
+        at,
+        ("radio", "mode", "Elastic"),
+        ("checkbox", "torsion_on", True),
+    )
+    _set(at, ("number_input", "torsion_T", 30.0))
     assert not at.number_input(key="pl_P").disabled
     at.button(key="calculate").click().run()
     base = at.session_state["results"]["torsion"]["trd_max"]
-    at.number_input(key="pl_P").set_value(-1500.0).run()   # compression (N tension +)
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "pl_P", -1500.0)
+    )  # compression (N tension +)
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["alpha_cw"] > 1.0                              # compression -> alpha_cw up
@@ -551,8 +608,7 @@ def test_app_torsion_multi_void_rejected():
         "x (mm)": [-100.0, -40.0, -70.0, None, 40.0, 100.0, 70.0],
         "y (mm)": [-50.0, -50.0, 50.0, None, -50.0, -50.0, 50.0]})
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(20.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
     assert not at.exception
     assert not at.session_state["results"]["torsion"]["valid"]
     at.selectbox(key="view").set_value("Torsion").run()
@@ -566,14 +622,18 @@ def test_app_torsion_uses_the_shared_stirrup():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
     assert not at.number_input(key="shear_link_dia").disabled   # enabled for torsion
-    at.number_input(key="shear_link_dia").set_value(10.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "torsion_T", 40.0),
+        ("number_input", "shear_link_dia", 10.0),
+    )
     t10 = at.session_state["results"]["torsion"]
     assert t10["dia"] == pytest.approx(10.0)
-    at.number_input(key="shear_link_dia").set_value(16.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "shear_link_dia", 16.0)
+    )
     t16 = at.session_state["results"]["torsion"]
     assert t16["dia"] == pytest.approx(16.0)
     assert t16["trd_s"] > t10["trd_s"]                          # bigger stirrup
@@ -583,8 +643,7 @@ def test_app_torsion_longitudinal_uses_mild_fyd():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 40.0))
     t = at.session_state["results"]["torsion"]
     fytk = at.session_state["mild_fytk"]
     gy = at.session_state["mild_gamma_y"]
@@ -598,13 +657,18 @@ def test_app_torsion_prestress_raises_alpha_cw():
     at.run()
     at.session_state["_qs_open"] = True
     at.run()
-    at.number_input(key="tnd_n").set_value(4).run()
-    at.number_input(key="tnd_a").set_value(1000.0).run()
-    at.button(key="qs_apply").click().run()
-    at.number_input(key="pre_IS").set_value(3.0).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(20.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "tnd_n", 4),
+        ("number_input", "tnd_a", 1000.0),
+    )
+    _set(
+        at,
+        ("number_input", "pre_IS", 3.0),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["n_prestress"] > 0.0
@@ -617,11 +681,17 @@ def test_app_min_reinf_screen_evaluated():
     # when both the shear and torsion checks are on (needs VRd,c).
     at = _fresh()
     at.run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="shear_V").set_value(30.0).run()
-    at.number_input(key="torsion_T").set_value(15.0).run()
-    at.button(key="calculate").click().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
     assert not at.exception
     mr = at.session_state["results"]["torsion"]["min_reinf"]
     assert mr["applicable"] is True
@@ -638,8 +708,7 @@ def test_app_min_reinf_screen_needs_shear():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(15.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 15.0))
     mr = at.session_state["results"]["torsion"]["min_reinf"]
     assert mr["applicable"] is False
     at.selectbox(key="view").set_value("Torsion").run()
@@ -650,11 +719,17 @@ def test_app_min_reinf_screen_over_limit():
     # A large VEd + TEd pushes the sum above 1: designed reinforcement is required.
     at = _fresh()
     at.run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="shear_V").set_value(200.0).run()
-    at.number_input(key="torsion_T").set_value(60.0).run()
-    at.button(key="calculate").click().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 200.0),
+        ("number_input", "torsion_T", 60.0),
+    )
     mr = at.session_state["results"]["torsion"]["min_reinf"]
     assert mr["applicable"] is True
     assert mr["value"] > 1.0
@@ -666,7 +741,7 @@ def test_app_torsion_is_saved_and_restored():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(55.0).run()
+    _set(at, ("number_input", "torsion_T", 55.0))
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     assert scalars["torsion_on"] is True and scalars["torsion_T"] == 55.0
@@ -702,11 +777,9 @@ def test_app_torsion_nu_v_toggle_raises_trd_max():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(30.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 30.0))
     base = at.session_state["results"]["torsion"]["trd_max"]
-    at.checkbox(key="torsion_nu_v").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("checkbox", "torsion_nu_v", True))
     t = at.session_state["results"]["torsion"]
     assert t["nu_v_detailing"] is True
     assert t["trd_max"] > base
@@ -716,9 +789,12 @@ def test_app_torsion_out_of_range_withholds_verdict():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(30.0).run()
-    at.number_input(key="torsion_cot_max").set_value(3.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "torsion_T", 30.0),
+        ("number_input", "torsion_cot_max", 3.0),
+    )
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["out_of_limits"] is True

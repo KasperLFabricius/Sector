@@ -31,12 +31,10 @@ import project_io  # noqa: E402
 import viz  # noqa: E402
 from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import (codes, combined, geometry, kernels,  # noqa: E402
+from sector import (capacity, codes, combined, geometry, kernels,  # noqa: E402
                     material_presets as mp, shear, templates, torsion)
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
-from sector.plastic import (FACE_ANGLE, conditional_capacity,  # noqa: E402
-                            plastic_capacity_at_angle, solve_interaction,
-                            solve_plastic)
+from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
 from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
                                    crack_width)
@@ -80,8 +78,8 @@ _CRACK_CODE_ALIASES = {
 # family drives the with-links truss, the torsion tube and the combined lock; the
 # strain-based EN 1992-1-1:2023 tau_Rd,c (sec. 8.2.2) is offered for the shear check
 # without links. Default is the DK NA:2024 edition (the house default material code).
-_SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
-_SHEAR_METHODS = dict(_SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
+_SHEAR_CODES = capacity.SHEAR_CODES
+_SHEAR_METHODS = capacity.SHEAR_METHODS
 # Shear direction -> the bending axis passed to the engine ("x" = vertical shear,
 # stress varies with y; "y" = horizontal shear, stress varies with x).
 _SHEAR_AXES = {
@@ -2298,66 +2296,12 @@ def _crack_dict(cw):
                 sr_max_geometric=cw.sr_max_geometric)
 
 
-def _gross_area_centroid(outer, holes):
-    """Net concrete area (m2) and its centroid ``(cx, cy)`` in metres: the outline
-    minus the voids, from the exact polygon moments. Orientation-independent -- the
-    centroid ``sx/area`` is unchanged by a sign flip and each area is taken positive.
-    Returns ``(0, 0, 0)`` for a degenerate section."""
-    mo = geometry.area_moments(outer)
-    a = abs(mo.area)
-    if a <= 0.0:
-        return 0.0, 0.0, 0.0
-    cx, cy = mo.sx / mo.area, mo.sy / mo.area
-    area, mx, my = a, cx * a, cy * a
-    for h in holes or []:
-        mh = geometry.area_moments(h)
-        ah = abs(mh.area)
-        if ah <= 0.0:
-            continue
-        area -= ah
-        mx -= (mh.sx / mh.area) * ah
-        my -= (mh.sy / mh.area) * ah
-    if area <= 0.0:
-        return a, cx, cy
-    return area, mx / area, my / area
-
-
-def _design_yield(mat):
-    """Design yield strength f_yd = f_ytk / gamma_y (falls back to f_ytk if unset).
-
-    Taken from the yield parameters, not by sampling stress() at a fixed strain,
-    which a hardening or low-rupture-strain law would misread. Used for both the
-    2023 shear flexural yield and the torsion longitudinal steel.
-    """
-    gy = getattr(mat, "gamma_y", 0.0)
-    return mat.fytk / gy if gy > 0.0 else mat.fytk
-
-
-def _prestress_resultants(inp, cx=0.0, cy=0.0):
-    """Locked-in tendon resultants about ``(cx, cy)``.
-
-    Returns ``(P, Mx, My)`` in kN/kNm for the tendon tension force
-    ``Ep*IS*Ap``. ``P`` acts as concrete precompression; ``Mx`` and ``My`` are
-    the tendon-force moments about the supplied point. The 2023 shear action then
-    uses ``N_Ed - P`` and ``M_Ed - P*e`` in accordance with 8.2.1(8).
-    Sector stores no longitudinal tendon inclination, so this assumes the tendons
-    are parallel to the member axis (``cos(beta) = 1``).
-    """
-    pre = inp.get("prestress")
-    tendons = inp.get("tendons")
-    if pre is None or not tendons:
-        return 0.0, 0.0, 0.0
-    sig_ps = pre.Es * pre.IS * 1000.0                  # MPa -> kN/m2 (bar-stress units)
-    forces = [sig_ps * t[2] / 1.0e6 for t in tendons]  # kN per tendon
-    p = sum(forces)
-    mx = sum(force * (t[1] - cy) for force, t in zip(forces, tendons))
-    my = sum(force * (t[0] - cx) for force, t in zip(forces, tendons))
-    return p, mx, my
-
-
-def _prestress_axial(inp):
-    """Tendon precompression in kN (compatibility wrapper for 2005 checks)."""
-    return _prestress_resultants(inp)[0]
+# Compatibility names retained for integrations that imported the former app
+# helpers. Their implementations now live in the headless calculation layer.
+_gross_area_centroid = capacity.gross_area_centroid
+_design_yield = capacity.design_yield
+_prestress_resultants = capacity.prestress_resultants
+_prestress_axial = capacity.prestress_axial
 
 
 def _outline_bbox(outer):
@@ -2375,103 +2319,9 @@ def _outline_bbox(outer):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-# Neutral-axis angle giving bending about the shear axis with the tension face on the
-# chosen side (the plastic solver's convention: V=90 -> +Mx, tension at the bottom;
-# V=0 -> +My, tension on the left). Used to pull the internal lever arm z for shear.
-_SHEAR_LEVER_ANGLE = FACE_ANGLE
-
-
-def _shear_lever_arm(inp, axis, tension_low, d_mm):
-    """Internal lever arm z (mm) for the shear truss and its source label.
-
-    The plastic engine already computes the lever arm between the concrete
-    compression resultant and the steel tension resultant; for shear about the given
-    axis this is the depth-direction component of that lever arm (its y-part for
-    vertical shear, x-part for horizontal). It is evaluated at the ULS axial force and
-    the neutral-axis angle whose bending puts the chosen face in tension. Falls back to
-    the EC2-permitted ``z = 0.9 d`` when the lever arm is degenerate (no tension
-    reinforcement, a non-converged / fully-compressed state, or a solver error).
-    """
-    fallback = (0.9 * d_mm, "0.9 d (fallback)")
-    if inp["section"] is None:
-        return fallback
-    angle = _SHEAR_LEVER_ANGLE[(axis, tension_low)]
-    pre = inp["prestress"] if inp["tendons"] else None
-    try:
-        pt = plastic_capacity_at_angle(inp["section"], inp["concrete"], inp["steel"],
-                                       -inp["P_pl"], angle, prestress=pre)
-    except Exception:
-        return fallback
-    lever = abs(pt.dy) if axis == "x" else abs(pt.dx)   # depth-direction component, m
-    if not pt.converged or lever <= 1e-6:
-        return fallback
-    return lever * 1000.0, "plastic internal lever arm"
-
-
-def _shear_face_mrd(inp, axis, tension_low, m_off=0.0):
-    """Chord bending capacity MRd (kNm) about the given axis, CONDITIONAL on the
-    coexisting off-axis moment ``m_off``.
-
-    The capacity is the point on the plastic M-M envelope branch (chosen face in
-    tension) whose companion moment equals ``m_off`` -- what the section can still
-    deliver about this axis while also carrying the off-axis moment. With
-    ``m_off`` matching the pure-axis companion (any symmetric section under a
-    uniaxial load) this is exactly the pure-axis solve, bit-identical to the
-    pre-conditional behaviour. Returns ``(mrd, conditional)``: ``(0.0, True)``
-    means the off-axis moment alone exhausts the branch (an honest zero
-    capacity); ``conditional=False`` means the conditional solve failed and the
-    legacy pure-axis capacity is returned instead -- ``(0.0, False)`` when even
-    that solve failed, so the caller falls back to the sweep extremum.
-    """
-    if inp["section"] is None:
-        return 0.0, False
-    pre = inp["prestress"] if inp["tendons"] else None
-    try:
-        mrd, exact = conditional_capacity(inp["section"], inp["concrete"],
-                                          inp["steel"], -inp["P_pl"], axis,
-                                          tension_low, m_off, prestress=pre)
-    except Exception:
-        mrd, exact = 0.0, False
-    if exact:
-        return mrd, True
-    # Conditional solve failed: legacy pure-axis capacity at the face angle.
-    angle = _SHEAR_LEVER_ANGLE[(axis, tension_low)]
-    try:
-        pt = plastic_capacity_at_angle(inp["section"], inp["concrete"], inp["steel"],
-                                       -inp["P_pl"], angle, prestress=pre)
-    except Exception:
-        return 0.0, False
-    if not pt.converged:
-        return 0.0, False
-    return (abs(pt.Mx) if axis == "x" else abs(pt.My)), False
-
-
-def _tube_torsion(tube, t_ed, *, tcode, fck, fcd, alpha_cw, fywd, asw_over_s,
-                  cot_min, cot_max, nu_detail, fctd, fyd_long):
-    """Torsion resistances + utilisation for ONE thin-walled tube at its optimum angle.
-
-    Shared by the single-tube check and each sub-tube of a compound section. Returns a
-    dict with the resistances (TRd,s / TRd,max / TRd,c), the chosen ``TRd = min`` and its
-    governing mechanism, the optimum ``cot(theta)``, the utilisation ``t_ed / TRd`` and
-    the required longitudinal steel ``asl_req``.
-    """
-    nu_t = tcode.torsion_nu(fck, closed_detailing=nu_detail)
-    a_t = asw_over_s * fywd
-    b_t = nu_t * alpha_cw * fcd * tube["tef"]
-    cot = (shear.optimum_cot_theta(a_t, b_t, cot_min, cot_max)
-           if a_t > 0.0 else max(cot_min, 1.0))
-    trds = torsion.trd_s(tube["Ak"], fywd, asw_over_s, cot)
-    trdmax = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"], alpha_cw, cot,
-                             closed_detailing=nu_detail, fcd_mpa=fcd)
-    trd = min(trds, trdmax) if asw_over_s > 0.0 else trdmax
-    trdc = torsion.trd_c(fctd, tube["Ak"], tube["tef"])
-    util = (t_ed / trd) if trd > 0.0 else math.inf
-    asl = torsion.asl_required(t_ed, tube["uk"], tube["Ak"], fyd_long, cot)
-    governs = ("stirrups (TRd,s)" if (asw_over_s > 0.0 and trds <= trdmax)
-               else "crushing (TRd,max)")
-    return dict(tube=tube, t_ed=t_ed, trd_s=trds, trd_max=trdmax, trd=trd, trd_c=trdc,
-                cot=cot, theta_deg=math.degrees(math.atan(1.0 / cot)) if cot > 0 else 0.0,
-                util=util, asl_req=asl, nu=nu_t, governs=governs, valid=tube["valid"])
+_shear_lever_arm = capacity.shear_lever_arm
+_shear_face_mrd = capacity.shear_face_mrd
+_tube_torsion = capacity.tube_torsion
 
 
 def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
@@ -2709,202 +2559,16 @@ def _run_capacity_checks(inp, out):
     AND torsion (EN 1992-1-1 6.3.2(2)), chosen to minimise the governing utilisation
     -- the sizeable strut-angle pass that used to sit inline in run_analysis.
     """
-    # ULS axial for the shear/torsion sigma_cp / alpha_cw (EN 1992-1-1 6.2.2/6.2.3):
-    # the external axial N (tension-positive P_pl, flipped to compression) PLUS the
-    # tendon precompression from the prestress initial strain, so a prestressed member
-    # earns its sigma_cp / alpha_cw credit. Compression-positive, as the engines expect.
-    n_prestress = _prestress_axial(inp)
+    # Build angle-independent contexts in the headless calculation layer. The
+    # Streamlit app retains the shared member-angle scan and presentation only.
+    n_prestress = capacity.prestress_axial(inp)
     n_ed_comp = -inp["P_pl"] + n_prestress
-    # Parameter stashes for the member strut-angle pass below: the links and torsion
-    # payloads are built there, at ONE shared angle (EN 1992-1-1 6.3.2(2)).
-    link_ctx = None
-    tors_ctx = None
-    # Shear resistance without shear reinforcement (VRd,c). An independent ULS check,
-    # recomputed on every Calculate whenever enabled (cheap; no plastic/elastic
-    # reuse). The axial term uses the plastic (ULS) axial force N (tension-positive)
-    # plus the tendon precompression, as the compression-positive sigma_cp.
-    if inp.get("shear_on"):
-        code = _SHEAR_METHODS.get(inp["shear_method"], codes.EC2_2005_DKNA)
-        model_2023 = getattr(code, "shear_model", "2005") == "2023"
-        axis, tension_low = inp["shear_axis"], inp["shear_tension"]
-        ac, cx, cy = _gross_area_centroid(inp["outer"], inp["holes"])
-        _, mx_prestress, my_prestress = _prestress_resultants(inp, cx, cy)
-        centroid_coord = cy if axis == "x" else cx
-        asl, cg = shear.tension_reinforcement(inp["bars"], axis, tension_low,
-                                              centroid_coord)
-        d = shear.effective_depth(inp["outer"], axis, tension_low, cg)
-        bw_auto = shear.min_web_width(inp["outer"], inp["holes"], axis)
-        bw = inp["shear_bw"] if inp["shear_bw"] > 0.0 else bw_auto
-        fck = inp["concrete"].fck
-        # The 2023 tau_Rd,c uses the flexural-reinforcement design yield and the
-        # aggregate size ddg; the 2005 VRd,c ignores both. Take fyd from the yield
-        # parameters (fytk/gamma_y) rather than sampling stress() at a fixed strain,
-        # which a hardening or low-rupture-strain law would misread.
-        fyd_flex = _design_yield(inp["steel"])
-        ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
-        v_ed = inp["shear_V"]
-        # Formula (8.30) uses the bending moment at the section centroid. User
-        # moments are about the input origin, so translate the external N and then
-        # subtract the eccentric locked-in tendon resultant per 8.2.1(8).
-        if axis == "x":
-            m_ed_2023 = inp["Mx_pl"] - inp["P_pl"] * cy - mx_prestress
-            m_prestress = mx_prestress
-        else:
-            m_ed_2023 = inp["My_pl"] - inp["P_pl"] * cx - my_prestress
-            m_prestress = my_prestress
-        res = shear.vrd_c(fck, code, bw, d, asl, n_ed_comp, ac,
-                          fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0),
-                          m_ed_knm=m_ed_2023, v_ed_kn=v_ed,
-                          fcd_mpa=inp["concrete"].fcd,
-                          gamma_c=inp["concrete"].gamma_c)
-        util = (v_ed / res["vrd_c"]) if res["vrd_c"] > 0.0 else math.inf
-        out["shear"] = dict(res=res, v_ed=v_ed, util=util, axis=axis,
-                            tension_low=tension_low, bw=bw, bw_auto=bw_auto,
-                            bw_user=bool(inp["shear_bw"] > 0.0), d=d, asl=asl,
-                            ac=ac, fck=fck, n_ed=inp["P_pl"],
-                            n_prestress=n_prestress, n_ed_comp=n_ed_comp,
-                            m_ed_2023=m_ed_2023, m_prestress=m_prestress,
-                            centroid=(cx, cy),
-                            method=inp["shear_method"], model_2023=model_2023,
-                            ddg=ddg, fyd_flex=fyd_flex)
-        # Shear reinforcement (vertical links): the 2005 variable-strut VRd =
-        # min(VRd,s, VRd,max), sec. 6.2.3. Not offered for the 2023 method here -- its
-        # with-links strain-based truss (8.2.3) is a follow-up; a note is shown in the
-        # view instead. The strut angle is NOT chosen here: one member angle serves
-        # shear and torsion (6.3.2(2)) and is selected further down to minimise the
-        # governing utilisation -- stash the parameters and a builder for that pass.
-        if inp.get("shear_links") and not model_2023:
-            cot_min = min(inp["shear_cot_min"], inp["shear_cot_max"])
-            cot_max = max(inp["shear_cot_min"], inp["shear_cot_max"])
-            asw = inp["shear_link_legs"] * templates.bar_area(inp["shear_link_dia"])
-            asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
-            # z is the internal lever arm actually computed by the plastic engine (the
-            # separation of the concrete compression resultant and the steel tension
-            # resultant) for bending about the shear axis with the chosen tension face,
-            # at the ULS axial force -- not the 0.9d approximation. Fall back to 0.9d
-            # only when that lever arm is degenerate (no tension steel / non-converged).
-            z_mm, z_src = _shear_lever_arm(inp, axis, tension_low, d)
-
-            def _links_at(cot_lo, cot_hi, _fck=fck, _code=code, _bw=bw, _d=d,
-                          _aos=asw_over_s, _ac=ac, _z=z_mm):
-                return shear.vrd_links(_fck, _code, _bw, _d, _aos, inp["shear_fywk"],
-                                       n_ed_comp, _ac, cot_lo, cot_hi, z_mm=_z,
-                                       fcd_mpa=inp["concrete"].fcd,
-                                       gamma_s=inp["steel"].gamma_y)
-
-            link_ctx = dict(build=_links_at, cot_min=cot_min, cot_max=cot_max,
-                            asw=asw, asw_over_s=asw_over_s, z_mm=z_mm, z_src=z_src,
-                            code=code, v_ed=v_ed, vrd_c=res["vrd_c"],
-                            axis=axis, tension_low=tension_low)
-
-    # Torsion (thin-walled tube, sec. 6.3). An independent ULS check: the tube
-    # (A, u, tef, Ak, uk) is derived from the outline, the closed stirrups give
-    # TRd,s and the struts TRd,max at the auto-optimised angle, plus the required
-    # longitudinal steel. When shear links are also present the combined V+T
-    # concrete-crushing check (6.29) is evaluated at a common strut angle.
-    if inp.get("torsion_on") and inp["section"] is not None:
-        tcode = _SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
-        fck = inp["concrete"].fck
-        # The material panel owns the final effective factors. The method selector
-        # contributes formula/NDP choices only; it must not silently restore preset
-        # gamma values after the user has entered their complete factors.
-        fcd = inp["concrete"].fcd
-        tac, _tcx, _tcy = _gross_area_centroid(inp["outer"], inp["holes"])
-        # sigma_cp = (external N + tendon precompression) / Ac, compression-positive.
-        sigma_cp = n_ed_comp / tac / 1000.0 if tac > 0.0 else 0.0
-        alpha_cw = tcode.shear_alpha_cw(sigma_cp, fcd)
-        tube = torsion.tube_properties(inp["outer"], inp["holes"],
-                                       tef_override=inp["torsion_tef"])
-        # The torsion tube uses the shared closed stirrup (one leg of the loop) and
-        # the section's own mild-reinforcement design yield for the longitudinal steel.
-        gamma_s_eff = inp["steel"].gamma_y
-        fywd_t = inp["shear_fywk"] / gamma_s_eff
-        fyd_long = _design_yield(inp["steel"])
-        asw_t = templates.bar_area(inp["shear_link_dia"])
-        asw_over_s_t = (asw_t / inp["shear_link_s"]
-                        if inp["shear_link_s"] > 0.0 else 0.0)
-        tcot_min = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
-        tcot_max = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
-        nu_detail = inp["torsion_nu_v"]   # DK NA Fig 5.100 NA: nu_t raised to nu_v
-        # The allowance only actually changes nu on the DK NA edition; the recommended
-        # edition's torsion_nu ignores closed_detailing. Record the DISPLAY flag (which
-        # drives the "nu raised to nu_v" captions) only when nu truly changed, so a
-        # recommended-edition run with the toggle on does not claim an unapplied change.
-        nu_detail_applied = bool(
-            nu_detail and tcode.torsion_nu(fck, closed_detailing=True)
-            != tcode.torsion_nu(fck, closed_detailing=False))
-        gamma_c_eff = inp["concrete"].gamma_c
-        fctd = 0.7 * codes.fctm(fck) / gamma_c_eff         # fctk,0.05 / gamma_c
-        t_ed = inp["torsion_T"]
-        _tk = dict(tcode=tcode, fck=fck, fcd=fcd, alpha_cw=alpha_cw, fywd=fywd_t,
-                   asw_over_s=asw_over_s_t, cot_min=tcot_min, cot_max=tcot_max,
-                   nu_detail=nu_detail, fctd=fctd, fyd_long=fyd_long)
-        # A compound (T / L / I / flanged) section may be modelled as a set of component
-        # rectangles, each an equivalent thin-walled tube (EN 1992-1-1 6.3.1(3)): TEd is
-        # split by uncracked torsional stiffness (6.3.1(4)) and every sub-tube is checked
-        # against its OWN capacity. Because the split is by stiffness, not capacity, a
-        # sub-tube can be overstressed (util_i > 1) even while TEd <= sum(TRd_i), so the
-        # GOVERNING utilisation is the worst sub-tube (max util_i), not TEd/sum(TRd_i) --
-        # sum(TRd_i) is only the theoretical total if the torque could redistribute to
-        # match capacity. The FIRST rectangle is the web -- the combined V+T checks pair
-        # the shear with it (`primary`). Without subdivision the single tube is used.
-        subrects = inp.get("torsion_subrects") or []
-        subdivision_requested = bool(inp.get("torsion_subdivide"))
-        subdivision_valid = False
-        subdivision_reason = ""
-        if subdivision_requested:
-            subrects_m = [
-                (x_mm / 1000.0, y_mm / 1000.0,
-                 b_mm / 1000.0, h_mm / 1000.0)
-                for x_mm, y_mm, b_mm, h_mm in subrects
-            ]
-            subdivision_valid, subdivision_reason = (
-                geometry.rectangles_partition_concrete(
-                    inp["outer"], inp.get("holes") or [], subrects_m
-                )
-            )
-        subdivide = subdivision_requested and subdivision_valid
-        compound_detected = not geometry.polygon_is_convex(inp["outer"])
-        if subdivision_requested and not subdivision_valid:
-            # Dimensions alone are not a defensible 6.3.1(3) model. The positioned
-            # rectangles must be a verified geometric partition before any torsion
-            # resistance or dependent interaction verdict is allowed.
-            tube = dict(
-                tube, valid=False,
-                reason=f"invalid sub-tube partition: {subdivision_reason}",
-            )
-        elif compound_detected and not subdivide:
-            # EN 1992-1-1 6.3.1(3): a T/L/I/flanged (re-entrant) section is a
-            # compound section. A single perimeter tube can be unconservative, so
-            # retain the diagnostic geometry but withhold resistance/verdict until
-            # the user supplies the component rectangles.
-            tube = dict(tube, valid=False,
-                        reason="compound outline requires subdivision")
-        # The tube set and the TEd split are strut-angle independent; the per-tube
-        # resistances are evaluated below at the MEMBER strut angle (one angle for
-        # shear and torsion, 6.3.2(2)).
-        if subdivide:
-            subtubes, consts, sub_dims = [], [], []
-            for (x_mm, y_mm, b_mm, h_mm) in subrects:
-                bm, hm = b_mm / 1000.0, h_mm / 1000.0
-                subtubes.append(
-                    torsion.tube_properties(torsion.rectangle_ring(bm, hm), None))
-                consts.append(torsion.rectangle_torsion_constant(bm, hm))
-                sub_dims.append((x_mm, y_mm, b_mm, h_mm))
-            ted_parts = torsion.distribute_by_stiffness(t_ed, consts)
-        else:
-            subtubes, consts, sub_dims, ted_parts = [tube], [1.0], [None], [t_ed]
-        tors_ctx = dict(
-            _tk=_tk, tube=tube, subdivide=subdivide, subtubes=subtubes, consts=consts,
-            ted_parts=ted_parts, sub_dims=sub_dims, t_ed=t_ed, tcode=tcode, fck=fck,
-            fcd=fcd, alpha_cw=alpha_cw, fywd_t=fywd_t, fyd_long=fyd_long, asw_t=asw_t,
-            asw_over_s_t=asw_over_s_t, tcot_min=tcot_min, tcot_max=tcot_max,
-            nu_detail=nu_detail, nu_detail_applied=nu_detail_applied, fctd=fctd,
-            sigma_cp=sigma_cp, gamma_c=gamma_c_eff, gamma_s=gamma_s_eff,
-            compound_detected=compound_detected,
-            subdivision_requested=subdivision_requested,
-            subdivision_valid=subdivision_valid,
-            subdivision_reason=subdivision_reason)
+    shear_payload, link_ctx = capacity.build_shear_context(
+        inp, n_prestress, n_ed_comp
+    )
+    if shear_payload is not None:
+        out["shear"] = shear_payload
+    tors_ctx = capacity.build_torsion_context(inp, n_ed_comp)
 
     # ---- Member strut angle (EN 1992-1-1 6.3.2(2)) ----------------------------
     # One strut angle serves shear AND torsion (the same web struts carry both).
@@ -3373,92 +3037,7 @@ def _run_capacity_checks(inp, out):
                             and sh_links.get("code_applicable", True)
                         ))
 
-    # Combined bending + shear + torsion (M-V-T), sec. 6.3.2. Ties the three checks
-    # together: the concrete-crushing interaction (6.29, from the torsion block) and
-    # the DK NA sum(SEd/SRd) <= 1 rule (6.3.2(6)). Requires the plastic utilisation
-    # (M, at the applied N), the shear utilisation (V) and the torsion utilisation (T).
-    if inp.get("combined_on"):
-        pl = out.get("plastic")
-        sh = out.get("shear")
-        to = out.get("torsion")
-        r_m = pl.get("util") if pl else None
-        have_m = r_m is not None
-        have_v = sh is not None and sh["res"]["valid"]
-        have_t = to is not None and to["valid"]
-        if have_m and have_v and have_t:
-            sl = sh.get("links")
-            r_v = sl["util"] if sl is not None else sh["util"]
-            r_t = to["util"]
-            indep = bool(inp["combined_mv_independent"])
-            dk_sum = combined.dkna_sum(r_m, r_v, r_t, m_v_independent=indep)
-            code_applicable = bool(
-                to.get("code_applicable", True)
-                and (sl is None or sl.get("code_applicable", True))
-            )
-            out["combined"] = dict(
-                valid=True, method=inp["combined_method"], r_m=r_m, r_v=r_v, r_t=r_t,
-                m_v_independent=indep, dkna_sum=dk_sum, dkna_ok=dk_sum <= 1.0 + 1e-9,
-                code_applicable=code_applicable,
-                crushing=to.get("interaction"),
-                asl_torsion=to["asl_req"],
-                delta_ftd=(sl["delta_ftd"] if sl is not None else 0.0),
-                links=sl is not None)
-            # Longitudinal-steel combined check (the appendix's mode 1): computed once
-            # in the strut-angle pass (the Shear view shows the same numbers) and
-            # surfaced here with the combined verdicts.
-            lchk = sl.get("chord") if sl is not None else None
-            if lchk is not None:
-                out["combined"]["longitudinal"] = lchk
-            ochk = sl.get("chord_off") if sl is not None else None
-            if ochk is not None:
-                out["combined"]["chord_off"] = ochk
-            # Shared-stirrup transverse check: the one closed stirrup carries shear
-            # AND torsion, so their demands add; the web struts crush under both.
-            # Evaluated AT the member strut angle (both demands and both resistances
-            # at the same theta as every other check).
-            if sl is not None and sl["res"]["valid"] and to["asw_over_s"] > 0.0:
-                inter = to.get("interaction")
-                if inter is not None and not inter.get("valid"):
-                    # The shear and torsion strut-angle bands do not overlap, so no
-                    # single angle can satisfy both -- the shared-stirrup check is
-                    # undefined. Flag it rather than inventing a common angle.
-                    out["combined"]["transverse"] = dict(
-                        valid=False, reason="no common strut angle",
-                        cot_shear=inter.get("cot_shear"),
-                        cot_torsion=inter.get("cot_torsion"))
-                else:
-                    # The shared stirrup is on the web, so its torsion demand is the
-                    # PRIMARY (web) sub-tube's share against that tube's TRd,s; when
-                    # VEd <= VRd,c the concrete alone carries the shear (6.2.1) and
-                    # the whole stirrup serves torsion.
-                    v_ed, t_ed_w = sh["v_ed"], to["primary"]["t_ed"]
-                    vrd_c = sh["res"]["vrd_c"]
-                    # Label with the MEMBER angle the shared-stirrup numbers are
-                    # actually evaluated at (cot_c = cot_star): u_crush = interaction
-                    # value and the web torsion share both sit there. sl["res"]["cot"]
-                    # only equals it when shear is a live participant -- with a dead
-                    # shear companion (VEd = 0) the links are de-pinned to their own
-                    # band, so reading their cot here would mislabel the check.
-                    cot_b = inter["cot"] if inter is not None else sl["res"]["cot"]
-                    shear_credited = v_ed <= vrd_c
-                    sf = (0.0 if shear_credited
-                          else combined.ratio(v_ed, sl["res"]["vrd_s"]))
-                    tf = combined.ratio(t_ed_w, to["primary"]["trd_s"])
-                    u_stir = sf + tf
-                    u_crush = (inter["value"] if inter is not None
-                               else combined.ratio(v_ed, sl["res"]["vrd_max"]))
-                    out["combined"]["transverse"] = dict(
-                        valid=True,
-                        cot=cot_b, theta_deg=math.degrees(math.atan(1.0 / cot_b)),
-                        u_stirrup=u_stir, u_crush=u_crush,
-                        governing=max(u_stir, u_crush),
-                        governs=("crushing" if u_crush > u_stir else "stirrups"),
-                        ok=bool(max(u_stir, u_crush) <= 1.0 + 1e-9),
-                        shear_fraction=sf, torsion_fraction=tf,
-                        shear_credited=shear_credited, vrd_c=vrd_c, v_ed=v_ed)
-        else:
-            out["combined"] = dict(valid=False, have_m=have_m, have_v=have_v,
-                                   have_t=have_t, method=inp["combined_method"])
+    capacity.finalize_combined(inp, out)
 
 
 # ---------------------------------------------------------------------------
