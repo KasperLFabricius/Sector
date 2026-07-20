@@ -435,27 +435,36 @@ def result_summary_rows(inp, results, *, stale=False):
         valid = bool(combined.get("valid"))
         applicable = bool(combined.get("code_applicable", True))
         util = combined.get("dkna_sum")
+        missing = [
+            label
+            for key, label in (
+                ("have_m", "M"),
+                ("have_v", "V"),
+                ("have_t", "T"),
+            )
+            if key in combined and not combined.get(key)
+        ]
         if valid:
             combined_note = str(combined.get("method") or "")
-        else:
-            missing = [
-                label
-                for key, label in (
-                    ("have_m", "M"),
-                    ("have_v", "V"),
-                    ("have_t", "T"),
-                )
-                if not combined.get(key)
-            ]
+        elif missing:
             combined_note = "Missing prerequisite: " + ", ".join(missing)
-        rows.append(_summary_row(
-            "Combined M-V-T - DK NA sum",
-            "plastic",
-            _util_summary_status(
+        else:
+            combined_note = str(
+                combined.get("reason") or "Combined calculation is invalid"
+            )
+        combined_status = (
+            "NOT ASSESSED"
+            if not valid and missing
+            else _util_summary_status(
                 util,
                 valid=valid,
                 applicable=applicable,
-            ),
+            )
+        )
+        rows.append(_summary_row(
+            "Combined M-V-T - DK NA sum",
+            "plastic",
+            combined_status,
             _percent(util),
             "<= 100 %",
             util,
@@ -584,6 +593,20 @@ def result_summary_rows(inp, results, *, stale=False):
                     "M-V-T Combined",
                     str(chord_off.get("axis") or ""),
                     inp,
+                ))
+            if (
+                longitudinal is not None
+                and longitudinal.get("off_not_evaluated") == "not_solved"
+            ):
+                rows.append(_summary_row(
+                    "Combined off-axis chord coverage",
+                    "plastic",
+                    "NOT ASSESSED",
+                    view="M-V-T Combined",
+                    note=(
+                        "One or more torsion-tensioned chord faces were not solved"
+                    ),
+                    inp=inp,
                 ))
 
     if stale and results:

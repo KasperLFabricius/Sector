@@ -219,3 +219,54 @@ def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
     assert by_check["Combined transverse reinforcement"]["status"] == "NOT ASSESSED"
     assert by_check["Combined longitudinal reinforcement"]["status"] == "NOT ASSESSED"
     assert "fallback" in by_check["Combined longitudinal reinforcement"]["note"].lower()
+
+
+def test_combined_summary_marks_missing_prerequisites_not_assessed():
+    combined = {
+        "valid": False,
+        "have_m": True,
+        "have_v": False,
+        "have_t": False,
+        "method": "DK NA",
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Combined M-V-T - DK NA sum"]["status"] == "NOT ASSESSED"
+    assert by_check["Combined M-V-T - DK NA sum"]["note"] == (
+        "Missing prerequisite: V, T"
+    )
+    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
+
+
+def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
+    combined = {
+        "valid": True,
+        "code_applicable": True,
+        "method": "DK NA",
+        "dkna_sum": 0.80,
+        "crushing": {"valid": True, "value": 0.70, "cot": 1.5},
+        "transverse": {
+            "valid": True, "governing": 0.75, "governs": "stirrups",
+        },
+        "longitudinal": {
+            "valid": True,
+            "util": 0.65,
+            "axis": "x",
+            "biaxial": False,
+            "off_not_evaluated": "not_solved",
+        },
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Combined longitudinal reinforcement"]["status"] == "PASS"
+    assert by_check["Combined off-axis chord coverage"]["status"] == "NOT ASSESSED"
+    assert "not solved" in by_check["Combined off-axis chord coverage"]["note"]
+    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
