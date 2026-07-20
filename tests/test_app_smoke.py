@@ -1962,7 +1962,8 @@ def test_sidebar_panels_follow_the_workflow_order():
     at.run()
     labels = [ex.label for ex in at.expander]
     d = chr(0x00B7)   # the step-number middle dot (v0.63)
-    assert labels == ["About", f"1 {d} Analysis settings", "Crack width (Elastic)",
+    assert labels == ["About", f"1 {d} Analysis settings",
+                      "Serviceability criteria (Elastic)",
                       "Shear, torsion & combined (Plastic)", f"2 {d} Section",
                       f"3 {d} Material Parameters", f"4 {d} Loads", "Report",
                       "Save / Load"]
@@ -2166,6 +2167,31 @@ def test_elastic_reports_cracking_and_section_properties():
     assert e["props_cr"]["area"] < e["props_un"]["area"]   # cracked section is smaller
 
 
+def test_elastic_reports_explicit_limits_and_complete_evidence():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at, "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "sls_conc_limit_pct", 10.0),
+        ("number_input", "sls_steel_limit_pct", 10.0),
+        ("text_input", "sls_limit_source", "DB-SLS-01 section 4"),
+    )
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["converged"] is True
+    assert e["stress_assessments"]["concrete"]["status"] == "EXCEEDED"
+    assert e["stress_assessments"]["reinforcement"]["status"] == "EXCEEDED"
+    assert e["sls_limit_source"] == "DB-SLS-01 section 4"
+    assert e["max_conc_point"] >= 1                 # public IDs are one-based
+    assert e["elements"][0]["element_type"] == "Bar"
+    assert {"x_mm", "y_mm", "area_mm2", "strain_permille", "total_mpa"} <= \
+        e["elements"][0].keys()
+    assert e["concrete_corners"][0]["point_no"] == 1
+    assert {"strain_permille", "stress_mpa"} <= e["concrete_corners"][0].keys()
+
+
 def test_crack_width_off_by_default():
     # Crack width is an opt-in: a cracked section reports the threshold and
     # properties but no crack width until the toggle is on.
@@ -2198,6 +2224,55 @@ def test_crack_width_reports_both_load_cases():
     # The short-term state carries the extra variable load, so its crack is wider.
     assert e["crack_short"]["wk"] > e["crack"]["wk"]
     assert e["crack"]["cover"] > 0.0       # auto cover from the geometry
+
+
+def test_crack_limit_verdict_and_candidate_table_are_retained():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at, "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("number_input", "sls_wk_limit", 0.01),
+        ("text_input", "sls_limit_source", "Project crack criterion"),
+    )
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["crack_assessment"]["status"] == "EXCEEDED"
+    assert e["crack_assessment"]["limit"] == pytest.approx(0.01)
+    assert e["crack_assessment"]["case"] in {"Long-term", "Short-term"}
+    assert e["crack_assessment"]["governing"].startswith(("bar ", "tendon "))
+    assert e["crack"]["candidates"]
+    assert e["crack"]["candidates"][0]["wk"] == pytest.approx(e["crack"]["wk"])
+    assert {"element_id", "x_mm", "y_mm", "area_mm2", "cover",
+            "sigma_s", "ac_eff", "esm_ecm", "sr_max", "wk"} <= \
+        e["crack"]["candidates"][0].keys()
+
+
+def test_crack_limit_and_source_are_retained_when_no_width_is_calculated():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at, "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 0.0),
+        ("number_input", "el_short_Mx", 0.0),
+        ("checkbox", "sls_cw", True),
+        ("number_input", "sls_wk_limit", 0.25),
+        ("text_input", "sls_limit_source", "Project no-crack criterion"),
+    )
+    assert not at.exception
+    e = at.session_state["results"]["elastic"]
+    assert e["crack"] is None and e["crack_short"] is None
+    assert e["crack_assessment"]["status"] == "NOT APPLICABLE"
+    assert e["crack_assessment"]["limit"] == pytest.approx(0.25)
+    assert e["sls_limit_source"] == "Project no-crack criterion"
+    at.selectbox(key="view").set_value("Elastic Results").run()
+    assert any("No crack width was calculated" in item.value for item in at.info)
+    assert any(
+        "Project no-crack criterion" in item.value for item in at.caption
+    )
 
 
 def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
@@ -2494,6 +2569,21 @@ def test_prestress_gets_its_own_derived_modular_ratio():
     at.number_input(key="el_phi").set_value(0.0).run()        # no creep: n_l = n_s
     md = "\n".join(m.value for m in at.markdown)
     assert "| Prestress (Ep/Ec) | 5.000 | 5.000 |" in md
+
+
+def test_tendon_stress_limit_uses_fpk_not_proof_stress():
+    # The prestress material distinguishes fp0.1k (fytk) from fpk (futk).
+    # The user-facing tendon stress criterion is explicitly a percentage of fpk.
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Elastic").run()
+    _open_qs(at)
+    at.number_input(key="tnd_n").set_value(3).run()
+    _apply_qs(at)
+    at.button(key="calculate").click().run()
+    check = at.session_state["results"]["elastic"]["stress_assessments"]["prestress"]
+    assert check["limit"] == pytest.approx(0.75 * 1860.0)
+    assert check["criterion"] == "75% fpk"
 
 
 def test_transformed_area_uses_the_tendon_modular_ratio():

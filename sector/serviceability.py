@@ -65,6 +65,31 @@ _KPA_PER_MPA = 1000.0
 
 
 @dataclass
+class CrackWidthCandidate:
+    """One reinforcement element considered by the crack-width calculation."""
+
+    bar_index: int       # zero-based index in Section.bar_arrays()
+    x: float             # section x coordinate (m)
+    y: float             # section y coordinate (m)
+    area: float          # element area (mm2)
+    wk: float            # crack width (mm)
+    sr_max: float        # maximum / calculated mean crack spacing (mm)
+    esm_ecm: float       # mean strain difference, dimensionless
+    sigma_s: float       # Stage II steel stress (MPa)
+    rho_p_eff: float
+    ac_eff: float        # effective tension area (m2)
+    hc_ef: float         # effective tension height (m)
+    phi: float           # equivalent / overridden diameter (mm)
+    cover: float         # clear cover (mm)
+    coarse: bool = False
+    edition: str = "2004"
+    kw: float = 1.0
+    k1_r: float = 1.0
+    kfl: float = 1.0
+    sr_max_geometric: bool = False
+
+
+@dataclass
 class CrackWidthResult:
     """EC2 crack-width breakdown for the governing (largest-wk) tension bar."""
 
@@ -75,7 +100,7 @@ class CrackWidthResult:
     rho_p_eff: float     # effective reinforcement ratio As,eff / Ac,eff
     ac_eff: float        # effective tension area (m^2)
     hc_ef: float         # effective tension height (m)
-    phi: float           # governing bar diameter (mm)
+    phi: float           # governing reinforcement-element diameter (mm)
     cover: float         # clear cover to that bar's surface (mm)
     gov_bar: int         # index of the governing (largest-wk) bar
     coarse: bool = False  # DK NA coarse crack system (centroid-matched Ac,eff, wk/2)
@@ -84,6 +109,24 @@ class CrackWidthResult:
     k1_r: float = 1.0    # 2023 curvature factor k1/r (9.9); 1.0 for 2004
     kfl: float = 1.0     # 2023 flexural coefficient (9.16/9.17); 1.0 for 2004
     sr_max_geometric: bool = False  # 2004 wide-spacing: sr_max is Eq (7.14) 1.3(h-x), not (7.11)
+    candidates: tuple[CrackWidthCandidate, ...] = ()
+
+
+def _governing_crack(
+    candidates: list[CrackWidthCandidate],
+) -> Optional[CrackWidthResult]:
+    """Return the largest-``wk`` candidate and retain the full sorted audit set."""
+    if not candidates:
+        return None
+    ordered = tuple(sorted(candidates, key=lambda c: (-c.wk, c.bar_index)))
+    c = ordered[0]
+    return CrackWidthResult(
+        wk=c.wk, sr_max=c.sr_max, esm_ecm=c.esm_ecm, sigma_s=c.sigma_s,
+        rho_p_eff=c.rho_p_eff, ac_eff=c.ac_eff, hc_ef=c.hc_ef,
+        phi=c.phi, cover=c.cover, gov_bar=c.bar_index, coarse=c.coarse,
+        edition=c.edition, kw=c.kw, k1_r=c.k1_r, kfl=c.kfl,
+        sr_max_geometric=c.sr_max_geometric, candidates=ordered,
+    )
 
 
 @dataclass
@@ -207,7 +250,7 @@ def _crack_width(
     edition: str = "2004",
     n_mult: Optional[np.ndarray] = None,
 ) -> Optional[CrackWidthResult]:
-    """EC2 7.3.4 crack width, evaluated per bar, returning the largest-wk bar.
+    """EC2 7.3.4 crack width, evaluated per bar, retaining every candidate.
 
     ``fctm`` and ``Es`` are in MPa. ``bar_diameter`` (mm) overrides the diameter
     derived from each bar's area. ``cover`` (mm), when given, is used for every
@@ -215,10 +258,10 @@ def _crack_width(
     distance to the nearest concrete face minus half its diameter. The effective
     tension area, height and reinforcement ratio are section quantities (defined
     for the bending direction); the crack spacing and mean strain are then formed
-    per bar (its own cover, diameter and Stage II stress) and the bar with the
-    largest ``wk`` governs. Returns ``None`` when there is no tension bar in the
-    effective zone or no usable bending gradient (pure axial tension uses a
-    different effective-area definition).
+    per bar (its own cover, diameter and Stage II stress); candidates are sorted by
+    ``wk`` and the largest governs. Returns ``None`` when there is no tension bar
+    in the effective zone or no usable bending gradient (pure axial tension uses
+    a different effective-area definition).
 
     Three flags select the DK NA crack-width rules. ``k3_cover_dependent`` replaces
     the cover-term coefficient ``k3`` by ``k3*(25/c)^(2/3)`` (DK NA 7.3.4(3)).
@@ -300,7 +343,7 @@ def _crack_width(
     # diameter and Stage II stress; the largest wk governs.
     wk_factor = 0.5 if coarse else 1.0   # DK NA coarse system halves wk (7.3.4(1))
     band_tens = in_band & (sigma > 0.0)  # tension bars that set the crack spacing
-    best: Optional[CrackWidthResult] = None
+    candidates: list[CrackWidthCandidate] = []
     for i in range(bx.size):
         if not in_band[i] or sigma[i] <= 0.0:
             continue
@@ -341,13 +384,14 @@ def _crack_width(
         else:
             sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho    # (7.11)
         wk = wk_factor * sr_max * esm_ecm
-        if best is None or wk > best.wk:
-            best = CrackWidthResult(
-                wk=wk, sr_max=sr_max, esm_ecm=esm_ecm, sigma_s=sigma_s,
-                rho_p_eff=rho, ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, cover=c_i,
-                gov_bar=i, coarse=coarse, sr_max_geometric=geometric,
-            )
-    return best
+        candidates.append(CrackWidthCandidate(
+            bar_index=i, x=float(bx[i]), y=float(by[i]),
+            area=float(ba[i]) * 1.0e6,
+            wk=wk, sr_max=sr_max, esm_ecm=esm_ecm, sigma_s=sigma_s,
+            rho_p_eff=rho, ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, cover=c_i,
+            coarse=coarse, sr_max_geometric=geometric,
+        ))
+    return _governing_crack(candidates)
 
 
 _KW_2023 = 1.7   # EN 1992-1-1:2023 (9.8) NOTE 1: mean -> calculated crack width
@@ -455,7 +499,7 @@ def _crack_width_2023(
 
     k1_arr = np.broadcast_to(np.asarray(k1, dtype=float), (bx.size,))
     sr_cap = 1.3 / _KW_2023 * hx * 1000.0   # (1.3/kw)*(h-x), m -> mm
-    best: Optional[CrackWidthResult] = None
+    candidates: list[CrackWidthCandidate] = []
     for i in range(bx.size):
         if not in_band[i] or sigma[i] <= 0.0:
             continue
@@ -479,13 +523,14 @@ def _crack_width_2023(
         sr = min(1.5 * c_i + kfl * kb / 7.2 * phi / rho, sr_cap)
         k1r = hx / denom               # (9.9) curvature factor, >= 1
         wk = _KW_2023 * k1r * sr * esm_ecm
-        if best is None or wk > best.wk:
-            best = CrackWidthResult(
-                wk=wk, sr_max=sr, esm_ecm=esm_ecm, sigma_s=sigma_s,
-                rho_p_eff=rho, ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, cover=c_i,
-                gov_bar=i, edition="2023", kw=_KW_2023, k1_r=k1r, kfl=kfl,
-            )
-    return best
+        candidates.append(CrackWidthCandidate(
+            bar_index=i, x=float(bx[i]), y=float(by[i]),
+            area=float(ba[i]) * 1.0e6,
+            wk=wk, sr_max=sr, esm_ecm=esm_ecm, sigma_s=sigma_s,
+            rho_p_eff=rho, ac_eff=ac_eff, hc_ef=hc_ef, phi=phi, cover=c_i,
+            edition="2023", kw=_KW_2023, k1_r=k1r, kfl=kfl,
+        ))
+    return _governing_crack(candidates)
 
 
 def analyse_cracking(

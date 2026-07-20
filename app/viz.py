@@ -62,6 +62,87 @@ def chord_angle_note(theta_mode):
             "resistance-optimum.")
 
 
+def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
+                          title="SLS strain profile"):
+    """Plot the section strain plane along its steepest gradient.
+
+    The ordinate is projected section depth from the most compressed face. The
+    concrete line comes from the cracked elastic plane; explicitly typed bar and
+    tendon markers use their reported total elastic strains.
+    """
+    fig = go.Figure()
+    rows = list(corners or [])
+    if not rows or not stress_plane or not ec_mpa:
+        fig.add_annotation(text="No strain-profile data", showarrow=False)
+        return fig
+
+    _eps0, kx, ky = (float(v) for v in stress_plane)
+    mag = math.hypot(kx, ky)
+    gx, gy = ((kx / mag, ky / mag) if mag > 0.0 else (0.0, 1.0))
+    projections = [float(r["x_mm"]) * gx + float(r["y_mm"]) * gy for r in rows]
+    s_min = min(projections)
+    corner_depth = [s - s_min for s in projections]
+    corner_strain = [float(r["strain_permille"]) for r in rows]
+    order = sorted(range(len(rows)), key=lambda i: corner_depth[i])
+    fig.add_trace(go.Scatter(
+        x=[corner_strain[order[0]], corner_strain[order[-1]]],
+        y=[corner_depth[order[0]], corner_depth[order[-1]]],
+        mode="lines",
+        name="Concrete strain plane",
+        line=dict(color="#334155", width=3),
+        hovertemplate="strain %{x:.4f} permille<br>depth %{y:.1f} mm<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=corner_strain,
+        y=corner_depth,
+        mode="markers",
+        name="Concrete corners",
+        marker=dict(color="#64748B", size=7, symbol="square-open"),
+        text=[f"point {r['point_no']} ({r['ring']})" for r in rows],
+        hovertemplate="%{text}<br>strain %{x:.4f} permille"
+                      "<br>depth %{y:.1f} mm<extra></extra>",
+    ))
+
+    for kind, symbol, colour in (
+        ("Bar", "circle", "#0072B2"),
+        ("Tendon", "diamond", "#CC79A7"),
+    ):
+        typed = [r for r in (elements or []) if r.get("element_type") == kind]
+        if not typed:
+            continue
+        depth = [
+            float(r["x_mm"]) * gx + float(r["y_mm"]) * gy - s_min
+            for r in typed
+        ]
+        fig.add_trace(go.Scatter(
+            x=[float(r["strain_permille"]) for r in typed],
+            y=depth,
+            mode="markers",
+            name=kind + "s",
+            marker=dict(color=colour, size=9, symbol=symbol,
+                        line=dict(color="#111827", width=0.8)),
+            text=[r["element_id"] for r in typed],
+            customdata=[[r["total_mpa"]] for r in typed],
+            hovertemplate="%{text}<br>strain %{x:.4f} permille"
+                          "<br>stress %{customdata[0]:.3f} MPa"
+                          "<br>depth %{y:.1f} mm<extra></extra>",
+        ))
+
+    fig.add_vline(x=0.0, line_dash="dash", line_color="#111827", line_width=1)
+    fig.update_layout(
+        title=title,
+        xaxis_title="Strain epsilon (permille, tension +)",
+        yaxis_title="Projected depth from compression face (mm)",
+        yaxis=dict(autorange="reversed"),
+        template="plotly_white",
+        margin=dict(l=55, r=20, t=55, b=50),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01,
+                    xanchor="left", x=0.0),
+        height=480,
+    )
+    return fig
+
+
 def chord_mrd_label(axis, m_off, conditional):
     """One shared parenthetical describing how a chord's MRd was computed.
 

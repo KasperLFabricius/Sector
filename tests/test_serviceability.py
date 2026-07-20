@@ -80,6 +80,23 @@ def test_rectangular_beam_matches_hand_calc():
     assert c.wk == pytest.approx(0.1975, rel=0.02)
 
 
+def test_crack_width_retains_sorted_per_bar_candidates():
+    sec = beam_section()
+    result = analyse_cracking(
+        sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+        bar_diameter=25.0,
+    )
+    crack = result.crack
+    assert crack is not None
+    assert len(crack.candidates) == 3
+    assert [c.wk for c in crack.candidates] == sorted(
+        (c.wk for c in crack.candidates), reverse=True)
+    assert crack.candidates[0].bar_index == crack.gov_bar
+    assert crack.candidates[0].area == pytest.approx(491.0)
+    assert crack.candidates[0].x == pytest.approx(
+        sec.bar_arrays()[0][crack.gov_bar])
+
+
 def test_auto_per_bar_cover_matches_hand_calc():
     # With no explicit cover, each bar's clear cover is taken from the geometry:
     # the bars sit 0.05 m above the bottom face, so c = 50 - 25/2 = 37.5 mm, which
