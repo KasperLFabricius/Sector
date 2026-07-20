@@ -461,7 +461,8 @@ def test_app_shear_view_renders_and_shows_utilisation():
 def test_app_shear_axial_input_enabled_in_elastic_mode():
     # Codex P2: in Elastic-only mode the shear sigma_cp still uses the plastic axial
     # force, so that input must stay enabled when the shear check is on (else the user
-    # cannot enter the ULS axial the result depends on). A compression axial (negative
+    # cannot enter the Plastic action-set force the result depends on). A compression
+    # axial (negative
     # N, tension-positive) must raise VRd,c through sigma_cp.
     at = _fresh()
     at.run()

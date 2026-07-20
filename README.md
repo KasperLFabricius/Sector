@@ -5,23 +5,19 @@
 Sector analyses a polygonal reinforced (and optionally prestressed) concrete
 cross-section and reports, for the same section:
 
-* **Elastic analysis** - the concrete and reinforcement stresses of the cracked
-  section under an eccentric axial force (axial load with biaxial bending),
-  including combined long- and short-term load effects. The service/fatigue
-  side of the work.
-* **Plastic analysis** - the ultimate bending capacity under a given axial force
-  and biaxial bending, traced as the neutral axis is rotated through the section
-  to give the full N-M interaction envelope. The ultimate-limit-state side.
-* **Serviceability checks (SLS)** - reported alongside the elastic stresses, on
-  the long-term (quasi-permanent) load (EN 1992-1-1): the **cracking threshold**
-  (does the section crack, comparing the uncracked concrete tension with the
-  tensile strength `fctm`), the cracked / uncracked **transformed section
-  properties** (area, centroid, second moments), and - when enabled - **tension
-  stiffening** and the **crack width** `wk`. The cracked-section stresses
-  themselves are unchanged (zero concrete tensile strength).
+* **Elastic analysis** - cracked-section concrete and reinforcement stresses
+  from long- and short-term action components, including creep.
+* **Plastic analysis** - nonlinear bending capacity at a given axial force,
+  traced as a full biaxial M-M envelope with optional applied-action utilisation.
+* **Stress and crack-width acceptance** - user-defined stress limits, cracking
+  threshold, transformed properties and optional crack width `wk`, reported with
+  the elastic result.
+* **Section capacity checks** - shear, torsion and combined M-V-T checks where
+  supported by the selected Eurocode method.
 
-You choose elastic, plastic, or both from one section definition; the
-serviceability checks ride along with the elastic analysis.
+Plastic and Elastic identify the calculation method, not the limit state. Each
+action set carries the user's project-defined classification (for example ULS,
+ALS, SLS or FLS).
 
 ## Goals
 
@@ -30,9 +26,9 @@ shape and reinforcement (not by typing coordinates), choose the analysis, press
 **Calculate**, and review the stresses, the capacity envelope, and the governing
 results visually. Reports and an in-app manual round it out.
 
-The numerical core is exhaustively validated against established cross-section
-analysis results before any feature is built on it, so every number Sector
-reports can be trusted.
+The numerical core is covered by independent hand checks, regression fixtures
+and automated tests. The project engineer remains responsible for inputs,
+method applicability and acceptance criteria.
 
 ## Running the app
 
@@ -53,14 +49,14 @@ slowly.
 ## Project layout
 
 ```
-sector/        computation core (headless, exhaustively tested)
+sector/        computation core (headless, regression-tested)
   geometry     exact polygon area-moment integrals and clipping
   materials    concrete / mild-steel / prestress stress-strain laws
   section      the cross-section model
   elastic      cracked-section elastic stresses
-  plastic      ultimate capacity (neutral-axis sweep, governing failure)
+  plastic      nonlinear capacity (neutral-axis sweep, governing failure)
   capacity     headless shear, torsion, and M-V-T result orchestration
-  serviceability  cracking threshold, tension stiffening, crack width (SLS)
+  serviceability  cracking threshold, tension stiffening, crack width
   templates    parametric section + reinforcement builders
 app/           Streamlit interface (sector_app, viz)
 tools/         developer tooling (e.g. regression-fixture generation)

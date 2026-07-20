@@ -180,6 +180,19 @@ def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
     assert "per action" not in text                       # stale pre-v0.69 wording
 
 
+def test_manual_describes_solvers_without_assigning_limit_states():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    assert "do not prescribe a limit state" in text
+    for stale in (
+        "Plastic (ultimate)",
+        "plastic (ULS)",
+        "ULS axial force",
+        "cracked-elastic (service)",
+        "Elastic (the cracked-section stresses for the service loads)",
+    ):
+        assert stale not in text
+
+
 def test_latex_to_rl_converts_the_subset():
     # The PDF converter turns the LaTeX subset into ReportLab markup: Greek and
     # operators to entities, sub/superscripts to tags, fractions to a/b, and it

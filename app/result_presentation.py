@@ -28,25 +28,22 @@ def plastic_action_assessment(pl):
 
     if not converged:
         status = "INVALID"
-        detail = ("One or more neutral-axis sweep points did not converge; "
-                  "the displayed values are diagnostic only")
+        detail = "Neutral-axis sweep did not converge; values are diagnostic only"
     elif not checked:
         status = "NOT ASSESSED"
-        detail = ("Capacity-only run; enable the applied-moment utilisation "
-                  "check to issue a verdict")
+        detail = "Capacity only; applied-moment check disabled"
     elif not complete or util is None:
         status = "NOT ASSESSED"
-        detail = ("The neutral-axis sweep is an open arc; a closed 360 degree "
-                  "envelope is required for an applied-action verdict")
+        detail = "Open arc; close the 360 deg envelope to assess utilisation"
     elif not math.isfinite(util):
         status = "FAIL"
-        detail = "The applied action has no finite capacity intersection"
+        detail = "No finite capacity intersection"
     elif viz.util_ok(util):
         status = "PASS"
-        detail = "Applied-action utilisation does not exceed the 100 % limit"
+        detail = ""
     else:
         status = "FAIL"
-        detail = "Applied-action utilisation exceeds the 100 % limit"
+        detail = ""
 
     assessed = status in {"PASS", "FAIL"}
     margin = (1.0 - util
@@ -67,6 +64,26 @@ def plastic_action_assessment(pl):
         "governing_angle": gov_angle,
         "assessed": assessed,
     }
+
+
+def plastic_assessment_text(assessment):
+    """Return one compact, solver-neutral plastic-bending verdict."""
+    parts = [f"{assessment.get('status', 'NOT ASSESSED')} - Plastic bending"]
+    util = assessment.get("util")
+    margin = assessment.get("margin")
+    if assessment.get("assessed"):
+        if util is not None and math.isfinite(util):
+            parts.extend([
+                f"utilisation {util * 100:.1f} %",
+                "limit 100 %",
+            ])
+            if margin is not None and math.isfinite(margin):
+                parts.append(f"margin {margin * 100:+.1f} pp")
+        else:
+            parts.append("utilisation not finite")
+    if assessment.get("detail"):
+        parts.append(str(assessment["detail"]))
+    return " | ".join(parts)
 
 
 def plastic_state_evidence(inp, point):
@@ -246,6 +263,11 @@ def _map_assessment_status(status):
         "NOT ASSESSED": "NOT ASSESSED",
         "NOT APPLICABLE": "NOT APPLICABLE",
     }.get(str(status or "").upper(), "NOT ASSESSED")
+
+
+def assessment_status_label(status):
+    """Map solver-specific acceptance states to the UI/report vocabulary."""
+    return _map_assessment_status(status)
 
 
 def _percent(util):

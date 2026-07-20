@@ -398,7 +398,7 @@ def test_partial_sweep_keeps_its_end_angle():
     assert at.session_state["view"] == "Results Overview"
     at.selectbox(key="view").set_value("Plastic Results").run()
     assert any("NOT ASSESSED - Plastic bending" in item.value
-               and "open arc" in item.value for item in at.warning)
+               and "open arc" in item.value.lower() for item in at.warning)
 
 
 def test_plastic_sweep_stays_within_requested_bounds():
@@ -444,8 +444,10 @@ def test_plastic_result_overview_has_explicit_verdict_margin_and_qa_tables():
     assert at.session_state["view"] == "Results Overview"
     at.selectbox(key="view").set_value("Plastic Results").run()
     assert any("PASS - Plastic bending" in item.value for item in at.success)
-    assert any("100 % limit" in item.value and "margin +" in item.value
+    assert any("limit 100 %" in item.value and "margin +" in item.value
+               and " pp" in item.value
                for item in at.success)
+    assert not any("does not exceed" in item.value for item in at.success)
 
     # Three short applied-action cards replace the five cramped capacity cards.
     labels = [metric.label for metric in at.metric]
@@ -1696,7 +1698,7 @@ def test_capacity_only_toggle_locks_moments_and_drops_utilisation():
     assert at.session_state["view"] == "Results Overview"
     at.selectbox(key="view").set_value("Plastic Results").run()
     assert any("NOT ASSESSED - Plastic bending" in item.value
-               and "capacity-only run" in item.value.lower()
+               and "capacity only" in item.value.lower()
                for item in at.warning)
 
 
@@ -2539,7 +2541,7 @@ def test_crack_limit_and_source_are_retained_when_no_width_is_calculated():
     assert e["crack_assessment"]["limit"] == pytest.approx(0.25)
     assert e["sls_limit_source"] == "Project no-crack criterion"
     at.selectbox(key="view").set_value("Elastic Results").run()
-    assert any("No crack width was calculated" in item.value for item in at.info)
+    assert any("No crack width:" in item.value for item in at.info)
     assert any(
         "Project no-crack criterion" in item.value for item in at.caption
     )

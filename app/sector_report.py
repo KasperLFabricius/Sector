@@ -929,7 +929,7 @@ class ReportBuilder:
                 rows.append(["Tendon tension criterion",
                              f"{_fmt(inp.get('sls_pre_limit_pct'), 1)} % f<sub>pk</sub>"
                              if inp.get("sls_pre_limit_pct") else "not assessed"])
-            rows.append(["SLS criteria source",
+            rows.append(["Acceptance-criteria source",
                          str(inp.get("sls_limit_source") or "not stated")])
             rows.append(["Crack width checked", "yes" if inp.get("sls_cw") else "no"])
             if inp.get("sls_cw"):
@@ -1000,22 +1000,10 @@ class ReportBuilder:
         self._case_line("plastic")
         assessment = presentation.plastic_action_assessment(pl)
         status = assessment["status"]
-        if assessment["assessed"]:
-            margin = assessment["margin"]
-            margin_text = ("not finite" if margin is None else
-                           f"{margin * 100:+.1f} percentage points")
-            self._status_block(
-                f"{status} - Plastic bending. Applied-action utilisation = "
-                f"{_pct(assessment['util'])}; limit = 100 %; margin to limit = "
-                f"{margin_text}. "
-                f"{assessment['detail']}.",
-                status,
-            )
-        else:
-            self._status_block(
-                f"{status} - Plastic bending. {assessment['detail']}.",
-                status,
-            )
+        self._status_block(
+            presentation.plastic_assessment_text(assessment),
+            status,
+        )
         applied = pl.get("applied")   # None for a capacity-only run
         self._fig(viz.interaction_figure(
             pl["mx"], pl["my"], applied=applied, title="M-M interaction",
@@ -1039,9 +1027,8 @@ class ReportBuilder:
             rows.append(["Utilisation (applied direction)",
                          f"{_fmt(pl['util']*100, 3)} %"])
             if assessment["margin"] is not None:
-                rows.append(["Margin to 100 % limit",
-                             f"{assessment['margin'] * 100:+.1f} percentage points "
-                             f"({status})"])
+                rows.append(["Margin to 100 % limit (pp)",
+                             f"{assessment['margin'] * 100:+.1f}"])
         else:
             rows.append(["Utilisation", "open arc (no closed envelope)"])
         self._table(rows, [90 * mm, 60 * mm])
@@ -1055,9 +1042,8 @@ class ReportBuilder:
             )
             if not nm_valid:
                 self._status_block(
-                    "INVALID N-M BOUNDARY - one or more axial-moment solve points "
-                    "did not converge. The diagrams and numerical boundary are "
-                    "diagnostic only.",
+                    "INVALID - N-M boundary | One or more points did not converge; "
+                    "values are diagnostic only.",
                     "INVALID",
                 )
             for axis, mlab, mtag in (("x", "M<sub>x</sub>", "Mx"),
@@ -2042,9 +2028,8 @@ class ReportBuilder:
         valid = el.get("converged", True)
         if not valid:
             self._status_block(
-                "INVALID ELASTIC RESULT - the cracked-section solver did not "
-                "converge. All elastic and serviceability values in this report "
-                "are diagnostic only and shall not be used as verified results.",
+                "INVALID - Elastic result | Solver did not converge; values are "
+                "diagnostic only.",
                 "INVALID",
             )
         if valid:
@@ -2088,15 +2073,14 @@ class ReportBuilder:
                     ("not supplied" if limit is None or limit <= 0.0 else
                      f"{_fmt(limit, 3)} MPa ({item.get('criterion', '-')})"),
                     "-" if item.get("util") is None else _pct(item.get("util")),
-                    item.get("status", "NOT ASSESSED"),
+                    presentation.assessment_status_label(
+                        item.get("status", "NOT ASSESSED")),
                 ])
             self._table(rows, [42 * mm, 30 * mm, 47 * mm, 24 * mm, 27 * mm],
                         font=7.5)
             self._small(
-                f"Criteria source (user supplied): "
-                f"{el.get('sls_limit_source', '-')}. Limits are applied to the "
-                "displayed total elastic action; the user shall confirm that the "
-                "entered action set is the combination required by that basis."
+                f"Criteria: {el.get('sls_limit_source', '-')}. "
+                "Limits apply to the total elastic action."
             )
         # Elastic state diagram (bars coloured by stress sign, compression zone).
         if self.figures and el.get("max_conc", 0.0) > 0.0:
@@ -2269,28 +2253,24 @@ class ReportBuilder:
         no_results = cl is None and cs is None and clc is None and csc is None
         assessment = el.get("crack_assessment") or {}
         status = assessment.get("status", "NOT ASSESSED")
+        display_status = presentation.assessment_status_label(status)
         value = assessment.get("value")
         limit = assessment.get("limit")
         margin = assessment.get("margin")
         text = (
-            f"{status} - governing w<sub>k</sub> = "
-            f"{'-' if value is None else _fmt(value, 3) + ' mm'}; limit = "
-            f"{'not supplied' if limit is None or limit <= 0.0 else _fmt(limit, 3) + ' mm'}; "
-            f"case = {assessment.get('case') or '-'}; "
-            f"element = {assessment.get('governing') or '-'}"
+            f"{display_status} - Crack width | w<sub>k</sub> "
+            f"{'-' if value is None else _fmt(value, 3) + ' mm'} | limit "
+            f"{'not supplied' if limit is None or limit <= 0.0 else _fmt(limit, 3) + ' mm'} | "
+            f"case {assessment.get('case') or '-'} | "
+            f"element {assessment.get('governing') or '-'}"
         )
         if margin is not None:
-            text += f"; margin = {_fmt(margin, 3)} mm"
-        self._status_block(text + ".", status)
-        self._small(
-            f"Criteria source (user supplied): "
-            f"{el.get('sls_limit_source', '-')}."
-        )
+            text += f" | margin {_fmt(margin, 3)} mm"
+        self._status_block(text, status)
+        self._small(f"Criteria: {el.get('sls_limit_source', '-')}.")
         if no_results:
-            self._small(
-                "No crack width was calculated: the section is uncracked, or no "
-                "reinforcement element is in tension, under either load case."
-            )
+            self._small("No crack width: section uncracked or no reinforcement "
+                        "in tension.")
             return
         self._crack_table(cl, cs, clc, csc)
         # Work the case that actually governs (the larger crack width) over every

@@ -70,6 +70,37 @@ def test_plastic_action_assessment_reports_signed_margin_and_governing_angle():
     assert passed["governing_angle"] == 90.0
 
 
+def test_plastic_assessment_text_is_compact_and_solver_neutral():
+    passed = presentation.plastic_action_assessment(_plastic(util=0.8))
+    text = presentation.plastic_assessment_text(passed)
+    assert text == (
+        "PASS - Plastic bending | utilisation 80.0 % | limit 100 % | "
+        "margin +20.0 pp"
+    )
+    assert "does not exceed" not in text
+    assert "ULS" not in text and "SLS" not in text
+
+    capacity_only = presentation.plastic_action_assessment(
+        _plastic(check_util=False, util=None))
+    assert presentation.plastic_assessment_text(capacity_only) == (
+        "NOT ASSESSED - Plastic bending | Capacity only; "
+        "applied-moment check disabled"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "label"),
+    [
+        ("OK", "PASS"),
+        ("EXCEEDED", "FAIL"),
+        ("INVALID", "INVALID"),
+        ("NOT APPLICABLE", "NOT APPLICABLE"),
+    ],
+)
+def test_acceptance_status_label_uses_common_report_vocabulary(source, label):
+    assert presentation.assessment_status_label(source) == label
+
+
 def test_plastic_state_evidence_is_tension_positive_and_uses_mm2_area():
     steel = MildSteel(
         fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,

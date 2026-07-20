@@ -181,7 +181,8 @@ def test_report_mirrors_the_views():
     flat = " ".join(txt.split())
     assert "Comp" in txt and "NA x" in txt         # full plastic table columns
     assert "PASS - Plastic bending" in txt
-    assert "margin to limit = +20.0 percentage points" in flat
+    assert "margin +20.0 pp" in flat
+    assert "does not exceed" not in flat
     assert "Governing concrete corner response" in txt
     assert "Governing reinforcement and tendon response" in txt
     assert "Cracked" in txt                        # cracked transformed-props column
@@ -228,7 +229,7 @@ def test_report_marks_nonconverged_elastic_results_invalid():
         item["status"] = "INVALID"
     out["elastic"]["crack_assessment"]["status"] = "INVALID"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "INVALID ELASTIC RESULT" in txt
+    assert "INVALID - Elastic result" in txt
     assert "diagnostic only" in txt
     assert "no verified cracking classification" in txt
 
@@ -253,8 +254,8 @@ def test_report_keeps_crack_criterion_when_no_width_is_calculated():
     )
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "NOT APPLICABLE" in txt
-    assert "limit = 0.300 mm" in txt
-    assert "No crack width was calculated" in txt
+    assert "limit 0.300 mm" in txt
+    assert "No crack width:" in txt
     assert "DB-SLS-01 section 4" in txt
 
 
@@ -454,7 +455,7 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     failed["plastic"]["util"] = 1.25
     txt = _pdf_text(sector_report.build_report({}, _inp(), failed, figures=False))
     assert "FAIL - Plastic bending" in txt
-    assert "-25.0 percentage points" in txt
+    assert "margin -25.0 pp" in txt
 
     invalid = _out()
     invalid["plastic"]["converged"] = False
