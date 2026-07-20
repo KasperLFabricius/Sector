@@ -907,7 +907,7 @@ def _apply_pending_project() -> None:
 
 
 @st.fragment
-def _save_load_panel(parent) -> None:
+def _save_load_panel() -> None:
     """Download the current project and upload one to restore it.
 
     Rendered into a slot reserved near the top of the sidebar but only *after* the
@@ -916,7 +916,7 @@ def _save_load_panel(parent) -> None:
     controls rerun only this fragment; loading a project explicitly requests the
     full rerun needed to rebuild every dependent input.
     """
-    box = parent.expander("Save / Load", expanded=False)
+    box = st.expander("Save / Load", expanded=False)
     box.download_button("Download project", data=_gather_project(),
                         file_name="sector_section.json", mime="application/json",
                         width="stretch",
@@ -984,14 +984,14 @@ def _clear_report_artifact():
 
 
 @st.fragment
-def _report_panel(parent, input_signature):
+def _report_panel(input_signature):
     """Report metadata inputs plus Generate / Download, like the BriCoS panel.
 
     Metadata typing and stale-report feedback are fragment-local. Generating a PDF
     escalates to a full rerun because the completed input payload and result views
     live outside this panel.
     """
-    box = parent.expander("Report", expanded=False)
+    box = st.expander("Report", expanded=False)
     box.caption("Fill in the project details, press Generate, then download the PDF. "
                 "The report uses the current inputs and the analyses for the selected "
                 "mode.")
@@ -2234,8 +2234,10 @@ def build_inputs():
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
-    _report_panel(report_slot, sig)
-    _save_load_panel(save_slot)
+    with report_slot:
+        _report_panel(sig)
+    with save_slot:
+        _save_load_panel()
     with about_slot.expander("About", expanded=False):
         st.markdown("### Sector")
         st.caption("Reinforced-concrete and prestressed cross-section analysis.")

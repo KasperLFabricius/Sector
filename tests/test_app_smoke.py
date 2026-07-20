@@ -138,6 +138,10 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
     workspace = inspect.getsource(sector_app._analysis_workspace.__wrapped__)
     assert workspace.index('c_calc.button(') < workspace.index('c_view.selectbox(')
     assert "_switch_view" not in workspace
+    for panel in (sector_app._report_panel, sector_app._save_load_panel):
+        panel_source = inspect.getsource(panel.__wrapped__)
+        assert "st.expander(" in panel_source
+        assert "parent." not in panel_source
 
 
 def test_persisted_settings_use_the_seeded_number_helper():
@@ -669,20 +673,44 @@ def test_builder_does_not_touch_points_until_applied():
     # The point tables drive the analysis; the Quick Section builder only writes to
     # them on Apply. Opening it, changing a dimension and pressing Back changes
     # nothing; Apply does.
+    import project_io
+
     at = _fresh()
     at.run()
     at.button(key="calculate").click().run()
     base_mx = at.session_state["results"]["plastic"]["max_mx"]
-    base_corners = at.session_state["corners_base"].copy(deep=True)
+    base_tables = {
+        key: at.session_state[key].copy(deep=True)
+        for key in project_io.TABLE_KEYS
+    }
     _open_qs(at)
     _set_and_click(
         at, "qs_back", ("number_input", "h_mm", 1000.0)
     )  # taller, but discarded
-    assert at.session_state["corners_base"].equals(base_corners)
+    for key, expected in base_tables.items():
+        assert at.session_state[key].equals(expected), key
 
-    # AppTest does not model the fragment-to-full-app rerun behind Back and can keep
-    # removed builder nodes in its element tree. Use a fresh independent session for
-    # the Apply branch; the live browser flow is covered separately.
+    # AppTest cannot continue reliably from the fragment-to-full-app rerun behind
+    # Back because it retains removed builder nodes in its element tree. Serialize
+    # the exact post-Back state into an independent session and calculate there; this
+    # retains the engineering-result assertion without relying on stale test nodes.
+    post_back_project = project_io.dump_project(
+        {key: at.session_state[key] for key in project_io.TABLE_KEYS},
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    post_back = _fresh()
+    post_back.session_state["_pending_project"] = post_back_project
+    post_back.run()
+    post_back.button(key="calculate").click().run()
+    assert (
+        post_back.session_state["results"]["plastic"]["max_mx"]
+        == pytest.approx(base_mx)
+    )
+
     applied = _fresh_qs()
     _set_and_click(
         applied, "qs_apply", ("number_input", "h_mm", 1000.0)
