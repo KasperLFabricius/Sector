@@ -14,6 +14,9 @@ from importlib import metadata
 from pathlib import Path
 from typing import Iterable
 
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
 
 _NOTICE_NAMES = ("license", "licence", "copying", "notice")
 
@@ -52,6 +55,56 @@ def _licence_files(dist) -> list[tuple[str, str]]:
     return found
 
 
+def distributions_from_lock(lock_path: Path,
+                            installed: Iterable | None = None) -> list:
+    """Return exactly the installed distributions selected by a hashed lock.
+
+    Hash lines and pip-compile provenance comments are ignored; each active
+    requirement must use an exact ``==`` pin. Installed runner-only packages are
+    excluded, and a missing or mismatched locked package fails the build.
+    """
+    pinned: dict[str, tuple[str, str]] = {}
+    for raw in lock_path.read_text(encoding="utf-8").splitlines():
+        if not raw or raw[0].isspace():
+            continue
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        requirement = Requirement(line.removesuffix("\\").strip())
+        if requirement.marker is not None and not requirement.marker.evaluate():
+            continue
+        specs = list(requirement.specifier)
+        if len(specs) != 1 or specs[0].operator != "==":
+            raise ValueError(f"Lock entry is not exactly pinned: {line}")
+        key = canonicalize_name(requirement.name)
+        value = (requirement.name, specs[0].version)
+        if key in pinned and pinned[key] != value:
+            raise ValueError(f"Conflicting lock entries for {requirement.name}")
+        pinned[key] = value
+
+    available: dict[str, list] = {}
+    for dist in list(installed or metadata.distributions()):
+        name = _clean(dist.metadata.get("Name"))
+        if name:
+            available.setdefault(canonicalize_name(name), []).append(dist)
+
+    selected = []
+    for key, (name, version) in sorted(pinned.items()):
+        matches = [dist for dist in available.get(key, [])
+                   if _clean(getattr(dist, "version", "")) == version]
+        if not matches:
+            installed_versions = sorted(
+                {_clean(getattr(dist, "version", ""))
+                 for dist in available.get(key, [])}
+            )
+            detail = ", ".join(v for v in installed_versions if v) or "not installed"
+            raise RuntimeError(
+                f"Locked distribution {name}=={version} is unavailable ({detail})"
+            )
+        selected.append(matches[0])
+    return selected
+
+
 def build_notice(distributions: Iterable | None = None,
                  tabulator_license: Path | None = None) -> str:
     """Return a deterministic consolidated notice for installed distributions."""
@@ -68,7 +121,7 @@ def build_notice(distributions: Iterable | None = None,
         "SECTOR THIRD-PARTY NOTICES",
         "",
         "Sector itself is proprietary software. This inventory covers the",
-        "installed locked build environment and may include build-only packages.",
+        "hash-locked build dependency set and may include build-only packages.",
         "Third-party components remain governed by their respective terms.",
         "",
     ]
@@ -117,10 +170,20 @@ def main() -> None:
         type=Path,
         default=Path("app/point_grid_frontend/LICENSE"),
     )
+    parser.add_argument(
+        "--requirements",
+        type=Path,
+        default=Path("requirements-build.txt"),
+        help="pip-compile lock defining the package inventory",
+    )
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
-        build_notice(tabulator_license=args.tabulator_license), encoding="utf-8"
+        build_notice(
+            distributions=distributions_from_lock(args.requirements),
+            tabulator_license=args.tabulator_license,
+        ),
+        encoding="utf-8",
     )
 
 
