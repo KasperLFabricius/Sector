@@ -30,7 +30,7 @@ import streamlit as st  # noqa: E402
 import project_io  # noqa: E402
 import result_presentation as presentation  # noqa: E402
 import viz  # noqa: E402
-from point_grid import point_grid, _rows_to_df  # noqa: E402
+from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import (capacity, codes, combined, geometry, kernels,  # noqa: E402
                     material_presets as mp, shear, templates, torsion)
@@ -92,7 +92,11 @@ _SHEAR_AXES = {
 # Tension face -> tension_low (True when the tension face is the low-coordinate side).
 _SHEAR_TENSION = {"Bottom / left face": True, "Top / right face": False}
 
-st.set_page_config(layout="wide", page_title=f"Sector v{APP_VERSION}")
+st.set_page_config(
+    layout="wide",
+    page_title=f"Sector v{APP_VERSION}",
+    initial_sidebar_state="collapsed",
+)
 
 
 @st.cache_resource(show_spinner=False)
@@ -115,21 +119,6 @@ def _warm_solver():
 
 _warm_solver()
 
-# The sidebar's scroll container (stSidebarContent) ships with height:100% +
-# overflow:auto, which only scrolls while its <section> parent keeps a definite
-# height from the flex layout. When that height intermittently collapses to auto
-# (seen with a single tall expander open, e.g. only Material Parameters), the
-# container grows to full content height, no scrollbar appears, and everything
-# below the fold becomes unreachable. Capping it at the viewport height gives
-# overflow:auto a definite height to act against -- a no-op in the healthy case.
-st.markdown(
-    "<style>"
-    'section[data-testid="stSidebar"] [data-testid="stSidebarContent"]'
-    "{max-height:100vh;overflow-y:auto;}"
-    "</style>",
-    unsafe_allow_html=True,
-)
-
 _logo = ROOT / "assets" / "logo.png"
 if _logo.exists():
     st.sidebar.image(str(_logo), width="stretch")
@@ -139,7 +128,7 @@ st.caption("Reinforced-concrete cross-section analysis - elastic stresses and pl
 
 
 # ---------------------------------------------------------------------------
-# Material Parameters panel: one section per material, each with a preset
+# Material parameters panel: one section per material, each with a preset
 # dropdown (named curves + Eurocode editions), editable parameters and a live
 # stress-strain diagram. A preset only prefills values; all stay editable.
 # ---------------------------------------------------------------------------
@@ -566,7 +555,7 @@ def prestress_panel(box, locked=False):
 
 
 # ---------------------------------------------------------------------------
-# Build the section + materials from the sidebar inputs
+# Build the section and materials from the staged input tabs
 # ---------------------------------------------------------------------------
 
 # Editable cross-section point tables (the section's source of truth). Coordinates
@@ -732,9 +721,11 @@ def _current_table(base_key, ed_key, cols):
     re-seeded), so unsaved edits are never discarded.
     """
     value = st.session_state.get(ed_key)
-    if not isinstance(value, list):   # absent / not yet reported -- use the base
+    version = st.session_state.get(ed_key + "_ver", 0)
+    rows = _versioned_rows(value, version)
+    if rows is None:   # absent, malformed or stale -- use the current base
         return st.session_state[base_key].copy().reset_index(drop=True)
-    return _rows_to_df(value, cols)   # an empty list is a valid (cleared) grid
+    return _rows_to_df(rows, cols)   # an empty list is a valid (cleared) grid
 
 
 _PROJECT_TABLES = (
@@ -743,6 +734,45 @@ _PROJECT_TABLES = (
     ("bars_base", "ed_bars", _REBAR_COLS),
     ("tendons_base", "ed_tendons", _REBAR_COLS),
 )
+
+
+def _section_table_snapshot():
+    """Copy the four live point tables for one-step Clear Section recovery."""
+    return {
+        base: _current_table(base, ed, cols).copy(deep=True)
+        for base, ed, cols in _PROJECT_TABLES
+    }
+
+
+def _reseed_section_tables(tables):
+    """Restore a complete section-table snapshot and refresh all four grids."""
+    for base, ed, cols in _PROJECT_TABLES:
+        df = tables.get(base)
+        if not isinstance(df, pd.DataFrame):
+            df = pd.DataFrame(columns=cols, dtype="float64")
+        _reseed_table(base, ed, df.reindex(columns=cols).copy(deep=True))
+
+
+def _clear_section_tables():
+    """Empty every point table through the same grid-safe reseed path."""
+    _reseed_section_tables({
+        base: pd.DataFrame(columns=cols, dtype="float64")
+        for base, _ed, cols in _PROJECT_TABLES
+    })
+
+
+def _section_tables_are_empty():
+    """Whether the four current point tables contain no rows."""
+    return all(
+        _current_table(base, ed, cols).empty
+        for base, ed, cols in _PROJECT_TABLES
+    )
+
+
+def _discard_clear_recovery():
+    """Discard pending Clear Section confirmation and undo state."""
+    st.session_state.pop("_clear_section_confirm", None)
+    st.session_state.pop("_clear_section_undo", None)
 
 
 def _project_state():
@@ -906,6 +936,7 @@ def _apply_pending_project() -> None:
     except ValueError as exc:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
         return
+    _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
     for key, df in tables.items():
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
@@ -965,7 +996,7 @@ def _apply_pending_project() -> None:
 def _save_load_panel() -> None:
     """Download the current project and upload one to restore it.
 
-    Rendered into a slot reserved near the top of the sidebar but only *after* the
+    Rendered in the Project & report tab only *after* the
     point tables and inputs have been seeded this run, so the download always
     reflects the live section (not an empty one on a fresh session). Local autosave
     controls rerun only this fragment; loading a project explicitly requests the
@@ -1502,8 +1533,8 @@ def _quick_section_viewport():
     a session flag (``_qs_open``) renders this instead of the normal layout.
 
     The builder is an independent Streamlit fragment. Editing a dimension or layout
-    therefore rebuilds only the form and its live preview, not the large, unchanged
-    sidebar. Apply and Back still call a full rerun because they leave this viewport.
+    therefore rebuilds only the form and its live preview, not the unchanged input
+    tabs. Apply and Back still call a full rerun because they leave this viewport.
     """
     _qs_restore_settings()   # bring back the settings from the last time it was open
     st.markdown("## Quick Section builder")
@@ -1534,6 +1565,7 @@ def _quick_section_viewport():
         st.session_state["_qs_open"] = False
         st.rerun()
     if apply:
+        _discard_clear_recovery()
         qs_hole = [(float(p[0]), float(p[1])) for p in holes[0]] if holes else []
         _reseed_table("corners_base", "ed_corners", _corners_df(_pts_to_mm(
             [(float(p[0]), float(p[1])) for p in outer])))
@@ -1618,36 +1650,32 @@ _PROVENANCE_SIG_KEYS = (
 )
 
 
-def build_inputs():
-    """Render the sidebar dropdown panels and return the section, materials and
-    loads. Panels follow the workflow order: About, Analysis settings (+ its check
-    configs), Section, Material Parameters, Loads, Report, Save/Load."""
-    s = st.sidebar
+def build_inputs(host=st):
+    """Render staged, full-width input tabs and return the analysis payload.
 
-    # The panels are CREATED here in their on-screen order but FILLED lower down in
-    # dependency order: Analysis settings computes the bending mode and the check
-    # toggles that the Material and Loads panels gate on, so those two are written
-    # after it even though Analysis settings now sits above them anyway. Streamlit
-    # fixes each panel's position when it is created, so a later write still lands in
-    # the right place. The "Back to analysis" slot (shown only while the manual is
-    # open) sits at the very top; About/Report/Save-Load are filled at the end so the
-    # download and report capture the fully-built inputs.
-    back_slot = s.container()
-    about_slot = s.container()
-    # The four core input steps are numbered so the workflow order reads at a glance;
-    # the optional check configs and Report / Save stay unnumbered. The two check-
-    # config panels sit directly under Analysis settings because they parameterise
-    # its checks. Panels carry the calculation methodology (Elastic / Plastic), not a
-    # limit state -- the same analysis can serve several load combinations.
+    All tabs are built on every run so Streamlit preserves every widget value while
+    the engineer moves between Analysis settings, Section, Materials, Loads and
+    Project/report. The containers are created in workflow order but filled below
+    in dependency order.
+    """
+    s = host
+
+    # Full-width tabs replace the former long, narrow sidebar stack. Panels carry
+    # the calculation methodology (Elastic / Plastic), not a limit state -- the
+    # same analysis can serve several load combinations.
     _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
-    aset = s.expander(f"1 {_dot} Analysis settings", expanded=False)
-    scw = s.expander("Serviceability criteria (Elastic)", expanded=False)
-    sts = s.expander("Shear, torsion & combined (Plastic)", expanded=False)
-    sec = s.expander(f"2 {_dot} Section", expanded=True)
-    mat = s.expander(f"3 {_dot} Material Parameters", expanded=False)
-    loads = s.expander(f"4 {_dot} Loads", expanded=True)
-    report_slot = s.container()
-    save_slot = s.container()
+    aset, sec, mat, loads, project = s.tabs([
+        f"1 {_dot} Analysis settings",
+        f"2 {_dot} Section",
+        f"3 {_dot} Material parameters",
+        f"4 {_dot} Loads",
+        "Project & report",
+    ])
+    scw = aset.expander("Stress and crack-width criteria (Elastic)", expanded=False)
+    sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
+    about_slot = project.container()
+    report_slot = project.container()
+    save_slot = project.container()
     mode = aset.radio("Bending analysis", ["Plastic", "Elastic", "Both"], key="mode",
                       help="The bending analysis only -- the shear, torsion and crack "
                            "checks are separate toggles below. Plastic: the "
@@ -2002,25 +2030,10 @@ def build_inputs():
             combined_warn.warning("Combined M-V-T needs all of these (it is not "
                                   "evaluated until then):  \n" + lines)
 
-    # (Section / Material / Loads expanders were created at the top; fill them now.)
+    # (Section / Material / Loads tabs were created at the top; fill them now.)
     sec.caption("The section is a set of explicit points (the source of truth). "
                 "Use the Quick Section builder to generate a parametric shape and "
                 "write its points here, or edit the point tables directly.")
-    if sec.button("Quick Section builder...", key="open_qs", width="stretch",
-                  help="Open a full-width builder: pick a shape, dimensions and "
-                       "reinforcement with a live preview, then Apply to fill the "
-                       "point tables."):
-        # Do NOT st.rerun() here: this button renders partway through build_inputs, so a
-        # rerun would abort the rest of it -- including the deferred Report panel at the
-        # end -- and Streamlit drops the unrendered rep_* widget state, resetting the
-        # Report metadata. Just set the flag; build_inputs finishes (preserving rep_*)
-        # and the _qs_open check after it opens the builder viewport this same run.
-        st.session_state["_qs_open"] = True
-    clear_pts = sec.button("Clear Section (empty all points)", key="clear_pts",
-                           width="stretch",
-                           help="Remove every concrete corner, the void, and all "
-                                "bars and tendons from the point tables, to start "
-                                "from a blank section.")
     if "pts_init" not in st.session_state:
         # Seed the tables once from the default Quick Section (metres -> mm).
         d_outer, d_holes, d_bars, d_tendons = _default_quick_section()
@@ -2033,13 +2046,6 @@ def build_inputs():
         _reseed_table("tendons_base", "ed_tendons", _rebar_df(_pts_to_mm(
             [(float(p[0]), float(p[1]), float(p[2])) for p in d_tendons])))
         st.session_state["pts_init"] = True
-    if clear_pts:
-        # Empty every point table (corners, void, bars, tendons) and drop the live
-        # editor edits, so the section starts blank.
-        _reseed_table("corners_base", "ed_corners", _corners_df([]))
-        _reseed_table("hole_base", "ed_hole", _corners_df([]))
-        _reseed_table("bars_base", "ed_bars", _rebar_df([]))
-        _reseed_table("tendons_base", "ed_tendons", _rebar_df([]))
     # Migrate a session that predates the void table (or the ID-column tables): seed
     # hole_base, and coerce any stored table to the current data-only schema.
     if "hole_base" not in st.session_state:
@@ -2060,10 +2066,61 @@ def build_inputs():
             continue
         if list(df.columns) != cols:
             if set(cols).issubset(df.columns):
-                _reseed_table(base_key, ed_key, df.reindex(columns=cols))  # drop legacy ID col
-            else:   # an older schema (e.g. metre column names) -> reset to empty
+                _reseed_table(base_key, ed_key, df.reindex(columns=cols))
+            else:
                 _reseed_table(base_key, ed_key, _corners_df([]) if cols is _CORNER_COLS
                               else _rebar_df([]))
+
+    if sec.button("Open Quick Section...", key="open_qs", width="stretch",
+                  help="Open a full-width builder: pick a shape, dimensions and "
+                       "reinforcement with a live preview, then Apply to fill the "
+                       "point tables."):
+        # Complete build_inputs before changing the analysis-page content so report
+        # metadata and every other input widget remain mounted on this run.
+        st.session_state["_qs_open"] = True
+        st.toast("Quick Section is in the Analysis workspace tab.")
+
+    if sec.button("Clear section...", key="clear_pts", width="stretch",
+                  disabled=_section_tables_are_empty(),
+                  help="Request removal of all concrete, void, bar and tendon "
+                       "points. A separate confirmation is required."):
+        st.session_state["_clear_section_confirm"] = True
+
+    if st.session_state.get("_clear_section_confirm"):
+        confirm_slot = sec.empty()
+        with confirm_slot.container():
+            st.warning("Clear all section point tables?")
+            confirm_col, cancel_col = st.columns(2)
+            confirm_clear = confirm_col.button(
+                "Confirm clear", key="confirm_clear_pts", type="primary",
+                width="stretch",
+            )
+            cancel_clear = cancel_col.button(
+                "Cancel", key="cancel_clear_pts", width="stretch",
+            )
+        if confirm_clear:
+            st.session_state["_clear_section_undo"] = _section_table_snapshot()
+            _clear_section_tables()
+            st.session_state.pop("_clear_section_confirm", None)
+            confirm_slot.empty()
+        elif cancel_clear:
+            st.session_state.pop("_clear_section_confirm", None)
+            confirm_slot.empty()
+
+    undo_snapshot = st.session_state.get("_clear_section_undo")
+    if undo_snapshot is not None and not _section_tables_are_empty():
+        # A new point-table edit supersedes the one-step recovery. This prevents
+        # Undo from overwriting geometry entered after the clear.
+        st.session_state.pop("_clear_section_undo", None)
+        undo_snapshot = None
+    if undo_snapshot is not None:
+        undo_slot = sec.empty()
+        if undo_slot.button("Undo clear", key="undo_clear_pts", width="stretch",
+                            help="Restore the four point tables removed by the "
+                                 "last clear."):
+            _reseed_section_tables(undo_snapshot)
+            st.session_state.pop("_clear_section_undo", None)
+            undo_slot.empty()
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
     sec.caption("Concrete corners define the outline (3 or more, in order); the "
@@ -2398,16 +2455,10 @@ def build_inputs():
         if st.button("User manual", key="open_manual", width="stretch",
                      help="Open the full-width user manual: what Sector computes, "
                           "the theory it applies, its features, and how to use it."):
-            # No rerun: build_inputs continues so every panel renders (state kept);
-            # the reserved back_slot below shows the Back button on this same run.
+            # No rerun: build_inputs completes so every input stays mounted, and the
+            # analysis page renders the manual during this same full-app run.
             st.session_state["_manual_open"] = True
-    # Fill the reserved Back-to-analysis slot now that every panel has rendered, so
-    # its rerun cannot drop any sidebar input's widget state.
-    if st.session_state.get("_manual_open"):
-        if back_slot.button("Back to analysis", type="primary",
-                            width="stretch", key="manual_back"):
-            st.session_state["_manual_open"] = False
-            st.rerun()
+            st.toast("Manual is in the Analysis workspace tab.")
     return dict(section=section, void_error=void_error, steel_error=steel_error,
                 concrete=concrete, steel=steel,
                 concrete_preset=concrete_preset,
@@ -4853,8 +4904,8 @@ def _analysis_workspace(inp):
     """Render and operate the main analysis workspace independently.
 
     View switches, result-detail controls and plot-label changes do not alter the
-    sidebar inputs. Keeping them in a fragment avoids rebuilding every sidebar
-    widget for those interactions. A sidebar edit still causes a normal full rerun
+    input tabs. Keeping them in a fragment avoids rebuilding every input
+    widget for those interactions. An input edit still causes a normal full rerun
     and invokes this function with a freshly built input payload.
     """
     # Plot-label controls sit inline in the main viewport, directly above the View
@@ -5013,30 +5064,34 @@ def _analysis_workspace(inp):
 
 _autosave_startup()        # restore the last autosaved session (BriCoS-style) on launch
 _apply_pending_project()   # restore an uploaded project before any widget is built
-# Always build the sidebar inputs, even while the Quick Section builder is open:
-# Streamlit discards a widget's state on any run where it is not rendered, so
-# skipping build_inputs would reset every material and load input to its minimum
-# (and break the next Calculate). Its result is unused while the builder owns the
-# main area; subsequent builder edits rerun only its fragment.
-inp = build_inputs()
+# The two main pages are tabs rather than a long sidebar. Streamlit renders both tab
+# trees on every run, so all inputs remain mounted while the analysis page or Quick
+# Section is active. This preserves widget state without squeezing the point grids
+# and load definitions into a narrow column.
+inputs_page, analysis_page = st.tabs(["Inputs", "Analysis workspace"])
+with inputs_page:
+    inp = build_inputs(st)
 
-# The Quick Section builder and the user manual each take over the main viewport
-# (the BriCoS manual pattern): render in place of the analysis views while open,
-# and stop before they draw. The sidebar stays, so its widget state survives.
-if st.session_state.get("_manual_open"):
-    import manual                          # lazy: keep the manual off the hot path
-    manual.render_manual_streamlit()
-    st.stop()
+manual_open = bool(st.session_state.get("_manual_open"))
+quick_section_open = bool(st.session_state.get("_qs_open"))
 
-if st.session_state.get("_qs_open"):
-    _quick_section_viewport()
-    st.stop()
+# Autosave rides a normal input/edit rerun once the interval has elapsed. Applying
+# Quick Section closes its fragment and reruns, so the applied geometry is saved on
+# that next normal run rather than while the builder still holds a preview.
+if not manual_open and not quick_section_open:
+    _maybe_autosave()
 
-# Autosave rides this rerun (triggered by the user's edit/click) once the interval
-# has elapsed. It runs only past the Quick Section branch: applying the builder
-# reseeds the tables and reruns with the builder closed, so this saves the applied
-# geometry rather than the stale pre-apply tables.
-_maybe_autosave()
+with analysis_page:
+    if manual_open:
+        if st.button("Back to analysis", type="primary",
+                     width="stretch", key="manual_back"):
+            st.session_state["_manual_open"] = False
+            st.rerun()
+        import manual                      # lazy: keep the manual off the hot path
+        manual.render_manual_streamlit()
+    elif quick_section_open:
+        _quick_section_viewport()
+    else:
+        _analysis_workspace(inp)
 
-_analysis_workspace(inp)
 _generate_report(inp)   # builds the PDF when the Report panel's Generate was pressed

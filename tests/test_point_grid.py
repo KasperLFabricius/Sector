@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "app"))
 
-from point_grid import _rows_to_df  # noqa: E402
+from point_grid import _rows_to_df, _versioned_rows  # noqa: E402
 
 _CORNERS = ["x (mm)", "y (mm)"]
 _REBAR = ["x (mm)", "y (mm)", "area (mm2)"]
@@ -47,6 +47,17 @@ def test_rows_to_df_coerces_nonnumeric_and_fills_missing_columns():
     assert list(df.columns) == _REBAR
     assert np.isnan(df["x (mm)"].iloc[0])
     assert np.isnan(df["area (mm2)"].iloc[0])
+
+
+def test_versioned_rows_rejects_a_stale_reseed_payload():
+    rows = [{"x (mm)": 10.0, "y (mm)": 20.0}]
+    assert _versioned_rows(
+        {"data_version": "4", "rows": rows}, 4
+    ) == rows
+    assert _versioned_rows(
+        {"data_version": "3", "rows": rows}, 4
+    ) is None
+    assert _versioned_rows(rows, 4) is None       # old frontend: seed is unknowable
 
 
 def test_app_feeds_grid_points_to_the_analysis():

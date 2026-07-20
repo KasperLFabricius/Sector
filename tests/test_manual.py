@@ -254,7 +254,7 @@ def test_manual_pdf_builds_tables_only():
     assert len(pdf) > 8000
 
 
-def test_manual_opens_from_about_and_closes_from_the_sidebar():
+def test_manual_opens_from_about_and_closes_from_the_analysis_page():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     assert not at.exception
@@ -264,17 +264,15 @@ def test_manual_opens_from_about_and_closes_from_the_sidebar():
     assert not at.exception
     assert at.session_state["_manual_open"] is True
     assert any("Sector user manual" in m.value for m in at.markdown)
-    # The "Back to analysis" button is in the sidebar (reachable without scrolling
-    # the manual); clicking it exits the manual.
+    # The "Back to analysis" button is above the manual in the analysis page.
     at.button(key="manual_back").click().run()
     assert not at.exception
     assert at.session_state["_manual_open"] is False
 
 
-def test_opening_and_closing_the_manual_keeps_sidebar_inputs():
-    # Opening the manual and closing it via the sidebar Back must not drop the
-    # user's sidebar inputs (build_inputs always renders the panels, so their
-    # widget state survives the rerun).
+def test_opening_and_closing_the_manual_keeps_inputs():
+    # Both full-width pages remain rendered, so opening and closing the manual must
+    # not drop input widget state.
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()   # a non-default input

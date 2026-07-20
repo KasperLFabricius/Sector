@@ -79,9 +79,10 @@ verification cases distributed. Run without ``-n 4`` only when a serial diagnost
 trace is useful. The test suite includes a permanent verification regression; the
 whole tree is kept strictly ASCII (enforced by a test).
 
-The live Streamlit UI keeps view navigation, result-detail controls, Quick Section,
-report metadata and save/load controls in independent fragments. Those interactions
-therefore avoid rebuilding the complete sidebar in a browser. Streamlit's
+The live Streamlit UI stages the engineering inputs in full-width workflow tabs and
+keeps view navigation, result-detail controls, Quick Section, report metadata and
+save/load controls in independent fragments. Those interactions therefore avoid
+rebuilding the complete input workspace in a browser. Streamlit's
 ``AppTest`` runner always executes a full script rerun and does not emulate browser
 fragment reruns; UI tests consequently stage already-rendered widget changes and
 submit them together. The Quick Section Apply and Back buttons are the exception:

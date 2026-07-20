@@ -113,7 +113,10 @@
     }
 
     function emit() {
-      sendValue(currentRows());
+      // Pair the live rows with the seed token. During a Clear/Load rerun the
+      // previous iframe can report once before the rebuilt grid is ready; Python
+      // rejects that old token instead of resurrecting the pre-reseed rows.
+      sendValue({ data_version: dataVersion, rows: currentRows() });
       reportHeight();
     }
 

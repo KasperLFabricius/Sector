@@ -410,7 +410,7 @@ def manual_blocks() -> list:
     md("1. **Define the section.** Open the *Section* panel and either edit the "
        "point tables (concrete corners, voids, bars and tendons, all in mm) or "
        "press *Quick Section builder* to generate a parametric shape.\n"
-       "2. **Set the materials.** In *Material Parameters* pick or enter the "
+       "2. **Set the materials.** In *Material parameters* pick or enter the "
        "concrete, mild steel and (if any) prestress.\n"
        "3. **Choose the analyses.** In *Analysis settings* pick Plastic, "
        "Elastic or Both, and toggle the crack-width check.\n"
@@ -462,11 +462,11 @@ def manual_blocks() -> list:
     part("Part B - Features & options")
 
     h1("The workspace")
-    md("The sidebar holds the input panels (*About*, *Save / Load*, *Report*, "
-       "*Analysis settings*, *Section*, *Material Parameters*, *Loads*); "
-       "the main area shows the drawings and results, chosen from the **View** "
-       "dropdown. The section drawing and the stress-strain diagrams update live; "
-       "the plastic and elastic result views recompute on **Calculate**.")
+    md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
+       "parameters*, *Loads* and *Project & report* in full-width tabs. The "
+       "**Analysis workspace** page contains the drawings and results selected "
+       "with the **View** dropdown. The section drawing and stress-strain diagrams "
+       "update live; result views recompute on **Calculate**.")
     table(["View", "Shows"],
           [["Section", "The concrete outline, voids and reinforcement (live)"],
            ["Stress-Strain diagrams", "The concrete, mild-steel and tendon laws (live)"],
@@ -1472,7 +1472,7 @@ def render_manual_streamlit():
 
     Mirrors the Quick Section builder: a session flag (``_manual_open``) makes the
     app render this instead of the normal views. Exiting is via the *Back to
-    analysis* button in the sidebar (rendered by ``build_inputs``), so it is
+    analysis* button above the manual on the Analysis workspace page, so it is
     reachable without scrolling the manual.
     """
     c_gen, c_dl, _ = st.columns([1, 1, 4])
