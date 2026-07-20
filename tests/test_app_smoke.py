@@ -26,8 +26,8 @@ def _fresh():
 def _fresh_qs(**state):
     """Start directly in Quick Section with optional pre-seeded widget state.
 
-    The app always builds the sidebar before entering the builder, so the first run
-    still exercises complete input construction. Skipping an otherwise disposable
+    The app always builds the input tabs before entering the builder, so the first
+    run still exercises complete input construction. Skipping an otherwise disposable
     initial Section-view run saves one full AppTest rerun per builder scenario.
     """
     at = _fresh()
@@ -72,6 +72,13 @@ def _apply_qs(at):
     return at
 
 
+def _clear_section(at):
+    """Confirm the two-step section clear and return the rerun AppTest."""
+    at.button(key="clear_pts").click().run()
+    at.button(key="confirm_clear_pts").click().run()
+    return at
+
+
 def test_app_loads_without_error():
     at = _fresh()
     at.run()
@@ -95,7 +102,7 @@ def test_app_empty_result_reads_not_calculated():
     # read "Not calculated yet", not green "Results up to date".
     at = _fresh()
     at.run()
-    at.button(key="clear_pts").click().run()      # empty the section -> no valid points
+    _clear_section(at)                           # empty the section -> no valid points
     at.button(key="calculate").click().run()
     assert ("results" in at.session_state) and at.session_state["results"] == {}
     caps = [c.value for c in at.caption]
@@ -267,10 +274,12 @@ def test_loading_a_project_applies_a_seeded_setting(tmp_path):
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     scalars["v_min"] = 45.0
+    at.session_state["_clear_section_undo"] = {"obsolete": True}
     at.session_state["_pending_project"] = project_io.dump_project({}, scalars)
     at.run()
     assert not at.exception
     assert at.session_state["v_min"] == 45.0
+    assert "_clear_section_undo" not in at.session_state
 
 
 def test_about_panel_shows_version_and_author():
@@ -1053,19 +1062,52 @@ def test_coordinates_are_in_millimetres():
     assert set(cb["y (mm)"].abs().round().tolist()) == {300.0}
 
 
-def test_clear_section_empties_all_point_tables():
-    # The Clear Section button empties every point table -- concrete corners, the
-    # void, bars and tendons -- so the section starts blank.
+def test_clear_section_requires_confirmation_and_undo_restores_all_tables():
+    # A first click cannot delete data. Cancel leaves the exact tables unchanged;
+    # confirmation clears all four, and the one-step undo restores them exactly.
+    from pandas.testing import assert_frame_equal
+
     at = _fresh_qs()
     _set_and_click(
         at, "qs_apply", ("number_input", "tnd_n", 4)
     )  # populate with tendons
-    assert len(at.session_state["corners_base"]) > 0
-    assert len(at.session_state["bars_base"]) > 0
+    bases = ("corners_base", "hole_base", "bars_base", "tendons_base")
+    before = {base: at.session_state[base].copy(deep=True) for base in bases}
+
     at.button(key="clear_pts").click().run()
     assert not at.exception
-    for base in ("corners_base", "hole_base", "bars_base", "tendons_base"):
+    for base in bases:
+        assert_frame_equal(at.session_state[base], before[base])
+    assert at.button(key="confirm_clear_pts")
+    assert at.button(key="cancel_clear_pts")
+
+    at.button(key="cancel_clear_pts").click().run()
+    for base in bases:
+        assert_frame_equal(at.session_state[base], before[base])
+
+    _clear_section(at)
+    assert not at.exception
+    for base in bases:
         assert len(at.session_state[base]) == 0
+    assert at.button(key="undo_clear_pts")
+
+    at.button(key="undo_clear_pts").click().run()
+    assert not at.exception
+    for base in bases:
+        assert_frame_equal(at.session_state[base], before[base])
+
+
+def test_quick_section_apply_supersedes_clear_undo():
+    at = _fresh()
+    at.run()
+    _clear_section(at)
+    assert "_clear_section_undo" in at.session_state
+
+    _open_qs(at)
+    _apply_qs(at)
+    assert not at.exception
+    assert "_clear_section_undo" not in at.session_state
+    assert len(at.session_state["corners_base"]) >= 3
 
 
 def test_cleared_section_does_not_fall_back_to_quick_section():
@@ -1074,7 +1116,7 @@ def test_cleared_section_does_not_fall_back_to_quick_section():
     # error, and no results are produced (the section is blank).
     at = _fresh()
     at.run()
-    at.button(key="clear_pts").click().run()
+    _clear_section(at)
     at.selectbox(key="view").set_value("Section").run()
     assert not at.exception
     at.button(key="calculate").click().run()
@@ -2015,7 +2057,7 @@ def _widget(seq, key):
 
 def test_label_controls_live_in_the_main_view():
     # The label size and spacing controls are in the main viewport (not the
-    # sidebar) and changing them re-renders without error.
+    # input page) and changing them re-renders without error.
     at = _fresh()
     at.run()
     keys = {ni.key for ni in at.number_input}
@@ -2142,20 +2184,30 @@ def test_applied_moments_default_to_zero():
     assert at.session_state["el_long_Mx"] == 0.0
 
 
-def test_sidebar_panels_follow_the_workflow_order():
-    # v0.70: About is the first heading; Analysis settings is step 1 (with its two
-    # check-config panels right under it), then Section / Materials / Loads, then
-    # Report / Save-Load. Panels carry the calculation methodology (Elastic / Plastic),
-    # not a limit state (no SLS / ULS labels).
+def test_full_width_input_tabs_follow_the_workflow_order():
+    # Inputs and analysis are separate full-width pages. The input page stages the
+    # four engineering steps plus project/report, without tying Plastic or Elastic
+    # to a limit state.
     at = _fresh()
     at.run()
-    labels = [ex.label for ex in at.expander]
     d = chr(0x00B7)   # the step-number middle dot (v0.63)
-    assert labels == ["About", f"1 {d} Analysis settings",
-                      "Serviceability criteria (Elastic)",
-                      "Shear, torsion & combined (Plastic)", f"2 {d} Section",
-                      f"3 {d} Material Parameters", f"4 {d} Loads", "Report",
-                      "Save / Load"]
+    assert [tab.label for tab in at.tabs] == [
+        "Inputs",
+        f"1 {d} Analysis settings",
+        f"2 {d} Section",
+        f"3 {d} Material parameters",
+        f"4 {d} Loads",
+        "Project & report",
+        "Analysis workspace",
+    ]
+    labels = [ex.label for ex in at.expander]
+    assert labels == [
+        "Stress and crack-width criteria (Elastic)",
+        "Shear, torsion & combined (Plastic)",
+        "About",
+        "Report",
+        "Save / Load",
+    ]
 
 
 def test_calculate_from_a_live_view_switches_to_the_results_overview():

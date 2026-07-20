@@ -44,6 +44,24 @@ def _rows_to_df(rows, columns) -> pd.DataFrame:
     return df.astype("float64")
 
 
+def _versioned_rows(value, data_version):
+    """Return rows only when a component payload belongs to the current seed.
+
+    The frontend includes its ``data_version`` in every value. A browser can briefly
+    deliver the previous grid value while a Clear/Load reseed is in flight; rejecting
+    that stale payload keeps the new base authoritative. Plain lists remain accepted
+    for saved sessions and tests created before versioned payloads were introduced.
+    """
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, dict):
+        return None
+    if str(value.get("data_version")) != str(data_version):
+        return None
+    rows = value.get("rows")
+    return rows if isinstance(rows, list) else None
+
+
 def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
                data_version: int = 0) -> pd.DataFrame:
     """Render the editable grid for ``df`` and return the edited rows.
@@ -59,6 +77,8 @@ def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
     # component returns before the frontend first reports (and under AppTest, which
     # does not run the frontend) -- i.e. the seeded table flows straight through.
     records = base.where(pd.notnull(base), None).to_dict("records")
+    default = {"data_version": str(data_version), "rows": records}
     value = _component(columns=cols, data=records, id_start=int(id_start),
-                       data_version=str(data_version), key=key, default=records)
-    return _rows_to_df(value, cols)
+                       data_version=str(data_version), key=key, default=default)
+    rows = _versioned_rows(value, data_version)
+    return _rows_to_df(records if rows is None else rows, cols)
