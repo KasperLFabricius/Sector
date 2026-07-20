@@ -315,3 +315,16 @@ def test_shear_without_links_retains_concrete_screening_verdict():
 
     assert by_check["Shear without links"]["status"] == "FAIL"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_infinite_failure_governs_while_nan_and_non_applicable_do_not():
+    rows = [
+        {"status": "PASS", "util": 0.80},
+        {"status": "FAIL", "util": float("inf")},
+        {"status": "FAIL", "util": float("nan")},
+        {"status": "NOT APPLICABLE", "util": float("inf")},
+    ]
+
+    assert presentation.summary_governing_flags(rows) == [
+        False, True, False, False,
+    ]

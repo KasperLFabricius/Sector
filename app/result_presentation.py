@@ -643,24 +643,26 @@ def overall_summary_status(rows):
 
 def summary_governing_flags(rows):
     """Mark the largest utilisation among rows that carry acceptance verdicts."""
-    eligible = [
-        row.get("util")
-        for row in rows
-        if (
+    def eligible(row):
+        util = row.get("util")
+        return bool(
             row.get("status") in {"PASS", "FAIL"}
-            and row.get("util") is not None
-            and math.isfinite(row["util"])
+            and util is not None
+            and (math.isfinite(util) or util == math.inf)
         )
-    ]
-    governing = max(eligible) if eligible else None
+
+    candidates = [row["util"] for row in rows if eligible(row)]
+    governing = max(candidates) if candidates else None
     return [
         bool(
             governing is not None
-            and row.get("status") in {"PASS", "FAIL"}
-            and row.get("util") is not None
-            and math.isfinite(row["util"])
-            and math.isclose(
-                row["util"], governing, rel_tol=1e-12, abs_tol=1e-12
+            and eligible(row)
+            and (
+                row["util"] == governing
+                if governing == math.inf
+                else math.isclose(
+                    row["util"], governing, rel_tol=1e-12, abs_tol=1e-12
+                )
             )
         )
         for row in rows
