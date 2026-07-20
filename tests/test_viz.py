@@ -280,15 +280,20 @@ def test_label_scale_sets_font_size():
     assert sizes and all(sz == pytest.approx(22.0) for sz in sizes)   # 11 * 2.0
 
 
-def test_tendons_drawn_as_diamonds_with_given_colors():
+def test_section_state_uses_element_shapes_and_non_colour_sign_patterns():
     outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
     fig = viz.section_figure(outer, bars=[(0.0, -0.2)], bar_colors=[viz.BAR_TENSION],
                              tendons=[(0.0, 0.2)], tendon_colors=[viz.BAR_COMPRESSION])
     tendon = next(t for t in fig.data if getattr(t, "name", None) == "tendon")
-    assert tendon.marker.symbol == "diamond"
+    assert list(tendon.marker.symbol) == ["diamond-x"]
     assert list(tendon.marker.color) == [viz.BAR_COMPRESSION]
     bar = next(t for t in fig.data if getattr(t, "name", None) == "reinforcing bar")
-    assert bar.marker.symbol == "circle"
+    assert list(bar.marker.symbol) == ["circle"]
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    assert "tension (+): plain marker" in names
+    assert "compression (-): x marker" in names
+    assert viz.BAR_TENSION == "#0072B2"
+    assert viz.BAR_COMPRESSION == "#D55E00"
 
 
 def test_section_figure_no_labels_by_default():

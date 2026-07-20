@@ -299,7 +299,7 @@ def fig_strain_plane():
     x_top = -0.50
     x_bot = -x_top * y_na / (1.0 - y_na)
     # Shade the wedges between the zero line and the strain line, app-wide semantics:
-    # red = compression (top), green = tension (bottom).
+    # Vermillion = compression (top), blue = tension (bottom).
     fig.add_trace(go.Scatter(x=[0.0, 0.0, x_top], y=[y_na, 1.0, 1.0],
                              fill="toself", mode="none", fillcolor=viz.COMP_ZONE_FILL))
     fig.add_trace(go.Scatter(x=[0.0, 0.0, x_bot], y=[y_na, 0.0, 0.0],
