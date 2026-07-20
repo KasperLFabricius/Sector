@@ -282,6 +282,9 @@ def _set(at, *changes):
 
 def _set_and_click(at, button_key, *changes):
     """Submit a group of existing inputs with one button-triggered rerun."""
+    if button_key in {"qs_apply", "qs_back"} and changes:
+        _set(at, *changes)
+        changes = ()
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     at.button(key=button_key).click()

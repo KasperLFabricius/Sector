@@ -411,6 +411,9 @@ def _set(at, *changes):
 
 def _set_and_click(at, button_key, *changes):
     """Submit a group of existing inputs with one button-triggered rerun."""
+    if button_key in {"qs_apply", "qs_back"} and changes:
+        _set(at, *changes)
+        changes = ()
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     at.button(key=button_key).click()
@@ -678,7 +681,6 @@ def _qs_prestressed_shear(pre_is, *, method=None):
     """A Quick Section rectangle with four tendons and the given prestrain, with
     the shear check enabled. ``pre_is`` in permille (0 = no precompression)."""
     at = _fresh()
-    at.run()
     at.session_state["_qs_open"] = True
     at.run()
     _set_and_click(
@@ -709,8 +711,8 @@ def test_app_shear_prestress_raises_vrd_c():
     assert sh["res"]["sigma_cp"] > 0.0
     vrd_pre = sh["res"]["vrd_c"]
 
-    at0 = _qs_prestressed_shear(0.0)
-    sh0 = at0.session_state["results"]["shear"]
+    _set_and_click(at, "calculate", ("number_input", "pre_IS", 0.0))
+    sh0 = at.session_state["results"]["shear"]
     assert sh0["n_prestress"] == pytest.approx(0.0)
     assert sh0["res"]["sigma_cp"] == pytest.approx(0.0)
     # Same geometry / reinforcement, only the prestress differs -> higher VRd,c.

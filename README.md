@@ -79,6 +79,17 @@ verification cases distributed. Run without ``-n 4`` only when a serial diagnost
 trace is useful. The test suite includes a permanent verification regression; the
 whole tree is kept strictly ASCII (enforced by a test).
 
+The live Streamlit UI keeps view navigation, result-detail controls, Quick Section,
+report metadata and save/load controls in independent fragments. Those interactions
+therefore avoid rebuilding the complete sidebar in a browser. Streamlit's
+``AppTest`` runner always executes a full script rerun and does not emulate browser
+fragment reruns; UI tests consequently stage already-rendered widget changes and
+submit them together. The Quick Section Apply and Back buttons are the exception:
+they deliberately escalate from a fragment to a full-app rerun, so AppTest stages
+their input edits once before clicking the exit button. Preserve those patterns
+when adding UI coverage so test time tracks engineering work rather than redundant
+page construction without retaining a stale fragment tree.
+
 The supported runtime is pinned in `.python-version`. Runtime, development and
 Windows-build environments are locked in `requirements*.txt`; edit the matching
 `requirements*.in` file and regenerate the lock instead of editing a lock by
