@@ -130,6 +130,21 @@ def test_signed_area_degenerate_is_zero():
     assert signed_area([(0, 0)]) == 0.0
 
 
+def test_polygon_is_convex_detects_compound_reentrant_outline():
+    from sector.geometry import polygon_is_convex
+
+    rectangle = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    with_collinear = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0),
+                      (1.0, 1.0), (0.0, 1.0)]
+    tee = [(-0.15, 0.0), (0.15, 0.0), (0.15, 0.45), (0.5, 0.45),
+           (0.5, 0.6), (-0.5, 0.6), (-0.5, 0.45), (-0.15, 0.45)]
+    assert polygon_is_convex(rectangle)
+    assert polygon_is_convex(list(reversed(rectangle)))  # winding independent
+    assert polygon_is_convex(with_collinear)
+    assert not polygon_is_convex(tee)
+    assert not polygon_is_convex([(0.0, 0.0), (1.0, 0.0)])
+
+
 def test_signed_area_translation_invariant():
     tri = [(0, 0), (2, 0), (0, 3)]
     shifted = [(x + 10.0, y - 5.0) for x, y in tri]

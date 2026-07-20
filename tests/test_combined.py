@@ -257,6 +257,29 @@ def test_app_combined_view_renders():
     assert any(lbl.startswith("Governing (") for lbl in labels)
 
 
+def test_app_combined_out_of_range_withholds_dependent_verdicts():
+    at = _fresh()
+    at.run()
+    at.number_input(key="shear_cot_max").set_value(3.0).run()
+    _enable_all(at)
+    assert not at.exception
+    c = at.session_state["results"]["combined"]
+    assert c["code_applicable"] is False
+    assert c["crushing"]["code_applicable"] is False
+    assert c["longitudinal"]["code_applicable"] is False
+    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    assert any("NO CODE VERDICT" in w.value for w in at.warning)
+    verdict_labels = (
+        chr(0x03A3) + "(SEd/SRd)", "Sum", "MEd,total/MRd",
+    )
+    verdict_metrics = [
+        m for m in at.metric
+        if m.label in verdict_labels or m.label.startswith("Governing (")
+    ]
+    assert verdict_metrics
+    assert all(not metric.delta for metric in verdict_metrics)
+
+
 def test_app_strut_angle_responds_to_loads():
     # The user-reported defect: the auto strut angle sat at cot = 2.5 regardless of
     # VEd/MEd/NEd because it maximised the shear RESISTANCE alone. The member angle

@@ -211,7 +211,8 @@ def trd_s(ak_m2: float, fywd: float, asw_over_s: float, cot: float) -> float:
 
 
 def trd_max(fck: float, code, ak_m2: float, tef_mm: float, alpha_cw: float,
-            cot: float, closed_detailing: bool = False) -> float:
+            cot: float, closed_detailing: bool = False,
+            fcd_mpa: float | None = None) -> float:
     """Torsion resistance limited by the concrete struts (kN.m), 6.30.
 
     ``TRd,max = 2*nu*alpha_cw*fcd*Ak*tef*sin(theta)*cos(theta)`` with
@@ -219,7 +220,8 @@ def trd_max(fck: float, code, ak_m2: float, tef_mm: float, alpha_cw: float,
     ``closed_detailing`` raises ``nu_t`` to ``nu_v`` under DK NA Figur 5.100 NA
     (closed stirrups round the periphery + distributed longitudinal steel).
     """
-    fcd = code.concrete_factor(fck) * fck / code.gamma_c
+    fcd = (code.concrete_factor(fck) * fck / code.gamma_c
+           if fcd_mpa is None else float(fcd_mpa))
     nu = code.torsion_nu(fck, closed_detailing=closed_detailing)
     sin_cos = cot / (1.0 + cot * cot)
     return (2.0 * nu * alpha_cw * fcd * ak_m2 * (tef_mm / 1000.0) * sin_cos

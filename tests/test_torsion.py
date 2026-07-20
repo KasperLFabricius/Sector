@@ -226,6 +226,17 @@ def test_trd_max_peaks_at_cot_one():
     assert peak == pytest.approx(88.7, abs=0.5)
 
 
+def test_trd_max_accepts_final_user_fcd():
+    code = codes.EC2_2005_DKNA
+    t = _tube()
+    preset = torsion.trd_max(35.0, code, t["Ak"], t["tef"], 1.0, 1.0)
+    custom_fcd = 0.8 * code.concrete_factor(35.0) * 35.0 / code.gamma_c
+    custom = torsion.trd_max(
+        35.0, code, t["Ak"], t["tef"], 1.0, 1.0, fcd_mpa=custom_fcd,
+    )
+    assert custom == pytest.approx(0.8 * preset)
+
+
 def test_trd_c_cracking_moment():
     code = codes.EC2_2005_DKNA
     t = _tube()
@@ -259,6 +270,14 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _apply_t_section(at):
+    at.session_state["_qs_open"] = True
+    at.run()
+    at.selectbox(key="shape").set_value("T-section").run()
+    at.button(key="qs_apply").click().run()
+    return at
+
+
 def test_app_torsion_produces_a_resistance():
     at = _fresh()
     at.run()
@@ -272,6 +291,24 @@ def test_app_torsion_produces_a_resistance():
     assert 1.0 <= t["cot"] <= 2.5
     assert t["util"] == pytest.approx(40.0 / t["trd"])
     assert t["asl_req"] > 0.0                       # torsion needs longitudinal steel
+
+
+def test_app_torsion_uses_final_material_factors():
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_gamma_c").set_value(1.80).run()
+    at.number_input(key="mild_gamma_y").set_value(1.35).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["gamma_c"] == pytest.approx(1.80)
+    assert t["fcd"] == pytest.approx(
+        at.session_state["conc_alpha_cc"]
+        * at.session_state["conc_fck"] / 1.80
+    )
+    assert t["gamma_s"] == pytest.approx(1.35)
+    assert t["fywd"] == pytest.approx(at.session_state["shear_fywk"] / 1.35)
 
 
 def test_app_torsion_view_renders():
@@ -313,6 +350,36 @@ def test_app_torsion_subdivided_sums_capacities():
     assert t["governing_sub"] == max(range(len(t["subtubes"])),
                                      key=lambda i: t["subtubes"][i]["util"])
     assert t["primary"]["t_ed"] == t["subtubes"][0]["t_ed"]              # web is primary
+
+
+def test_app_compound_torsion_requires_subdivision():
+    at = _fresh()
+    at.run()
+    _apply_t_section(at)
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(20.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["compound_detected"] is True
+    assert t["valid"] is False
+    assert t["reason"] == "compound outline requires subdivision"
+    at.selectbox(key="view").set_value("Torsion").run()
+    assert any("compound" in w.value and "Subdivide" in w.value
+               for w in at.warning)
+
+
+def test_app_compound_torsion_is_valid_after_subdivision():
+    at = _fresh()
+    at.run()
+    _apply_t_section(at)
+    _subdivided(at)
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["compound_detected"] is True
+    assert t["subdivided"] is True
+    assert t["valid"] is True
 
 
 def test_app_torsion_subdivided_distributes_by_stiffness():
@@ -615,3 +682,20 @@ def test_app_torsion_nu_v_toggle_raises_trd_max():
     t = at.session_state["results"]["torsion"]
     assert t["nu_v_detailing"] is True
     assert t["trd_max"] > base
+
+
+def test_app_torsion_out_of_range_withholds_verdict():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.number_input(key="torsion_T").set_value(30.0).run()
+    at.number_input(key="torsion_cot_max").set_value(3.0).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["out_of_limits"] is True
+    assert t["code_applicable"] is False
+    at.selectbox(key="view").set_value("Torsion").run()
+    assert any("NO CODE VERDICT" in w.value for w in at.warning)
+    util_metric = next(m for m in at.metric if m.label == "Utilisation TEd/TRd")
+    assert not util_metric.delta

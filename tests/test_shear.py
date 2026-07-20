@@ -42,6 +42,16 @@ def test_shear_vmin_recommended_vs_dk_na():
     assert codes.EC2_2005_DKNA.shear_vmin(k, fck) > codes.EC2_2005.shear_vmin(k, fck)
 
 
+def test_shear_ndps_accept_the_final_user_gamma_c():
+    # The preset is only a starting value: the final effective user factor must
+    # propagate into both CRd,c and the DK NA vmin expression.
+    k, fck, gamma_c = 1.6, 35.0, 1.45 * 0.95 * 1.10
+    code = codes.EC2_2005_DKNA
+    assert code.shear_crd_c_over_gamma(gamma_c) == pytest.approx(0.18 / gamma_c)
+    assert code.shear_vmin(k, fck, gamma_c) == pytest.approx(
+        (0.051 / gamma_c) * k ** 1.5 * math.sqrt(fck))
+
+
 # -- EN 1992-1-1:2023 strain-based tau_Rd,c (sec. 8.2.2) ---------------------
 
 def test_shear_ddg_size_parameter():
@@ -156,6 +166,23 @@ def test_vrd_c_hand_calc_dk_na():
     assert res["k1"] == pytest.approx(0.15)
 
 
+def test_vrd_c_uses_final_user_concrete_factor_and_fcd():
+    # Deliberately differ from the DK preset (1.45): every shear quantity that
+    # depends on concrete design strength must use the material-panel values.
+    gamma_c = 1.45 * 0.95 * 1.10
+    fcd = 0.90 * 35.0 / gamma_c
+    res = shear.vrd_c(
+        35.0, codes.EC2_2005_DKNA, 300.0, 550.0, 1473.0,
+        n_ed_comp_kn=1e9, ac_m2=0.18, gamma_c=gamma_c, fcd_mpa=fcd,
+    )
+    assert res["gamma_c"] == pytest.approx(gamma_c)
+    assert res["crd_c"] == pytest.approx(0.18 / gamma_c)
+    assert res["vmin"] == pytest.approx(
+        (0.051 / gamma_c) * res["k"] ** 1.5 * math.sqrt(35.0))
+    assert res["fcd"] == pytest.approx(fcd)
+    assert res["sigma_cp"] == pytest.approx(0.2 * fcd)
+
+
 def test_vrd_c_caps_rho_l_and_k():
     # rho_l is capped at 0.02 and k at 2.0.
     res = shear.vrd_c(35.0, codes.EC2_2005_DKNA, bw_mm=300.0, d_mm=120.0,
@@ -228,6 +255,19 @@ def test_vrd_links_hand_calc_dk_na_stirrups_govern():
     assert res["vrd_max"] == pytest.approx(648.9, abs=1.5)
     assert res["vrd"] == pytest.approx(res["vrd_s"])
     assert "stirrups" in res["governs"]
+
+
+def test_vrd_links_uses_final_material_factors_not_method_preset():
+    gamma_s = 1.20 * 0.95 * 1.10
+    fcd = 19.75
+    res = shear.vrd_links(
+        35.0, codes.EC2_2005_DKNA, 300.0, 550.0, asw_over_s=3.0,
+        fywk=500.0, n_ed_comp_kn=0.0, ac_m2=0.18, cot_min=1.0,
+        cot_max=2.5, fcd_mpa=fcd, gamma_s=gamma_s,
+    )
+    assert res["gamma_s"] == pytest.approx(gamma_s)
+    assert res["fywd"] == pytest.approx(500.0 / gamma_s)
+    assert res["fcd"] == pytest.approx(fcd)
 
 
 def test_vrd_links_interior_optimum_balances_stirrups_and_crushing():
@@ -480,9 +520,33 @@ def test_app_shear_links_flag_out_of_code_bounds():
     assert not at.exception
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["out_of_limits"] is True
+    assert lk["code_applicable"] is False
     at.selectbox(key="view").set_value("Shear").run()
     assert not at.exception
-    assert any("outside the code range" in w.value for w in at.warning)
+    assert any("NO CODE VERDICT" in w.value for w in at.warning)
+    util_metric = next(m for m in at.metric if m.label == "Utilisation VEd/VRd")
+    assert not util_metric.delta
+
+
+def test_app_shear_uses_final_material_factors():
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_gamma_c").set_value(1.80).run()
+    at.number_input(key="mild_gamma_y").set_value(1.35).run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.button(key="calculate").click().run()
+    assert not at.exception
+    sh = at.session_state["results"]["shear"]
+    assert sh["res"]["gamma_c"] == pytest.approx(1.80)
+    assert sh["res"]["fcd"] == pytest.approx(
+        at.session_state["conc_alpha_cc"]
+        * at.session_state["conc_fck"] / 1.80
+    )
+    assert sh["links"]["res"]["gamma_s"] == pytest.approx(1.35)
+    assert sh["links"]["res"]["fywd"] == pytest.approx(
+        at.session_state["shear_fywk"] / 1.35
+    )
 
 
 def test_app_shear_2023_method_uses_tau_rdc():

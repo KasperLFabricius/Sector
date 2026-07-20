@@ -854,7 +854,8 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
 
 
 def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
-                          title="V-T interaction (crushing)"):
+                          title="V-T interaction (crushing)",
+                          show_verdict=True):
     """Shear-torsion concrete-crushing envelope (EN 1992-1-1 6.29).
 
     The limit ``VEd/VRd,max + TEd/TRd,max = 1`` is the straight line from
@@ -889,8 +890,10 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
             fig.add_annotation(
                 x=v_ed, y=t_ed, ax=30, ay=26, showarrow=True, arrowhead=2,
                 arrowsize=0.7, arrowwidth=1, arrowcolor=GUIDE_LINE,
-                text=f"sum = {s:.2f} ({'OK' if ok else 'over'})",
-                font=dict(size=11, color=(ENVELOPE if ok else LOAD_POINT)))
+                text=(f"sum = {s:.2f} ({'OK' if ok else 'over'})"
+                      if show_verdict else f"sum = {s:.2f} (exploratory)"),
+                font=dict(size=11, color=(ENVELOPE if (show_verdict and ok)
+                                          else LOAD_POINT)))
     fig.add_trace(go.Scatter(
         x=[v_ed], y=[t_ed], mode="markers",
         marker=dict(size=11, color=LOAD_POINT, symbol="x"), name="applied",

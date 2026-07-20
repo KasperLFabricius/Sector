@@ -114,6 +114,32 @@ def signed_area(verts: Vertices) -> float:
     return 0.5 * float(np.sum(x * y1 - x1 * y))
 
 
+def polygon_is_convex(verts: Vertices, tol: float = 1e-12) -> bool:
+    """Whether a simple polygon has no re-entrant (concave) corner.
+
+    Collinear edge points are ignored, so a rectangle with intermediate points
+    remains convex. Fewer than three vertices and zero-area rings are not valid
+    convex polygons. Sector uses this as a conservative compound-section screen:
+    a concave T/L/I/flanged outline must be explicitly subdivided before the
+    thin-walled torsion model may issue a resistance verdict.
+    """
+    arr = _as_array(verts)
+    n = arr.shape[0]
+    area = signed_area(arr)
+    if n < 3 or abs(area) <= tol:
+        return False
+    orientation = 1.0 if area > 0.0 else -1.0
+    for i in range(n):
+        a = arr[i - 1]
+        b = arr[i]
+        c = arr[(i + 1) % n]
+        cross = ((b[0] - a[0]) * (c[1] - b[1])
+                 - (b[1] - a[1]) * (c[0] - b[0]))
+        if orientation * cross < -tol:
+            return False
+    return True
+
+
 _ZERO_MOMENTS = AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 

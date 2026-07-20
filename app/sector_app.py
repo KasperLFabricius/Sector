@@ -1815,7 +1815,10 @@ def build_inputs():
         sts, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
         disabled=not _stirrups,
         help="Characteristic yield strength of the stirrup steel; the design value "
-             "is fywk / gamma_s of the selected method.")
+             "is fywk divided by the final effective gamma_s entered in the Mild "
+             "steel material panel. If the stirrup is not fully anchored, reduce "
+             "fywk here; Sector assumes anchorage and applies no hidden category "
+             "multiplier.")
 
     # Pre-flight for the combined check (it needs several things at once): flag what
     # is missing in the reserved slot right under its toggle, not only after Calculate.
@@ -2437,7 +2440,7 @@ def _tube_torsion(tube, t_ed, *, tcode, fck, fcd, alpha_cw, fywd, asw_over_s,
            if a_t > 0.0 else max(cot_min, 1.0))
     trds = torsion.trd_s(tube["Ak"], fywd, asw_over_s, cot)
     trdmax = torsion.trd_max(fck, tcode, tube["Ak"], tube["tef"], alpha_cw, cot,
-                             closed_detailing=nu_detail)
+                             closed_detailing=nu_detail, fcd_mpa=fcd)
     trd = min(trds, trdmax) if asw_over_s > 0.0 else trdmax
     trdc = torsion.trd_c(fctd, tube["Ak"], tube["tef"])
     util = (t_ed / trd) if trd > 0.0 else math.inf
@@ -2729,7 +2732,9 @@ def _run_capacity_checks(inp, out):
             m_prestress = my_prestress
         res = shear.vrd_c(fck, code, bw, d, asl, n_ed_comp, ac,
                           fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0),
-                          m_ed_knm=m_ed_2023, v_ed_kn=v_ed)
+                          m_ed_knm=m_ed_2023, v_ed_kn=v_ed,
+                          fcd_mpa=inp["concrete"].fcd,
+                          gamma_c=inp["concrete"].gamma_c)
         util = (v_ed / res["vrd_c"]) if res["vrd_c"] > 0.0 else math.inf
         out["shear"] = dict(res=res, v_ed=v_ed, util=util, axis=axis,
                             tension_low=tension_low, bw=bw, bw_auto=bw_auto,
@@ -2761,7 +2766,9 @@ def _run_capacity_checks(inp, out):
             def _links_at(cot_lo, cot_hi, _fck=fck, _code=code, _bw=bw, _d=d,
                           _aos=asw_over_s, _ac=ac, _z=z_mm):
                 return shear.vrd_links(_fck, _code, _bw, _d, _aos, inp["shear_fywk"],
-                                       n_ed_comp, _ac, cot_lo, cot_hi, z_mm=_z)
+                                       n_ed_comp, _ac, cot_lo, cot_hi, z_mm=_z,
+                                       fcd_mpa=inp["concrete"].fcd,
+                                       gamma_s=inp["steel"].gamma_y)
 
             link_ctx = dict(build=_links_at, cot_min=cot_min, cot_max=cot_max,
                             asw=asw, asw_over_s=asw_over_s, z_mm=z_mm, z_src=z_src,
@@ -2776,7 +2783,10 @@ def _run_capacity_checks(inp, out):
     if inp.get("torsion_on") and inp["section"] is not None:
         tcode = _SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
         fck = inp["concrete"].fck
-        fcd = tcode.concrete_factor(fck) * fck / tcode.gamma_c
+        # The material panel owns the final effective factors. The method selector
+        # contributes formula/NDP choices only; it must not silently restore preset
+        # gamma values after the user has entered their complete factors.
+        fcd = inp["concrete"].fcd
         tac, _tcx, _tcy = _gross_area_centroid(inp["outer"], inp["holes"])
         # sigma_cp = (external N + tendon precompression) / Ac, compression-positive.
         sigma_cp = n_ed_comp / tac / 1000.0 if tac > 0.0 else 0.0
@@ -2785,7 +2795,8 @@ def _run_capacity_checks(inp, out):
                                        tef_override=inp["torsion_tef"])
         # The torsion tube uses the shared closed stirrup (one leg of the loop) and
         # the section's own mild-reinforcement design yield for the longitudinal steel.
-        fywd_t = inp["shear_fywk"] / tcode.gamma_s
+        gamma_s_eff = inp["steel"].gamma_y
+        fywd_t = inp["shear_fywk"] / gamma_s_eff
         fyd_long = _design_yield(inp["steel"])
         asw_t = templates.bar_area(inp["shear_link_dia"])
         asw_over_s_t = (asw_t / inp["shear_link_s"]
@@ -2800,7 +2811,8 @@ def _run_capacity_checks(inp, out):
         nu_detail_applied = bool(
             nu_detail and tcode.torsion_nu(fck, closed_detailing=True)
             != tcode.torsion_nu(fck, closed_detailing=False))
-        fctd = 0.7 * codes.fctm(fck) / tcode.gamma_c        # fctk,0.05 / gamma_c
+        gamma_c_eff = inp["concrete"].gamma_c
+        fctd = 0.7 * codes.fctm(fck) / gamma_c_eff         # fctk,0.05 / gamma_c
         t_ed = inp["torsion_T"]
         _tk = dict(tcode=tcode, fck=fck, fcd=fcd, alpha_cw=alpha_cw, fywd=fywd_t,
                    asw_over_s=asw_over_s_t, cot_min=tcot_min, cot_max=tcot_max,
@@ -2816,6 +2828,14 @@ def _run_capacity_checks(inp, out):
         # the shear with it (`primary`). Without subdivision the single tube is used.
         subrects = inp.get("torsion_subrects") or []
         subdivide = bool(inp.get("torsion_subdivide") and subrects)
+        compound_detected = not geometry.polygon_is_convex(inp["outer"])
+        if compound_detected and not subdivide:
+            # EN 1992-1-1 6.3.1(3): a T/L/I/flanged (re-entrant) section is a
+            # compound section. A single perimeter tube can be unconservative, so
+            # retain the diagnostic geometry but withhold resistance/verdict until
+            # the user supplies the component rectangles.
+            tube = dict(tube, valid=False,
+                        reason="compound outline requires subdivision")
         # The tube set and the TEd split are strut-angle independent; the per-tube
         # resistances are evaluated below at the MEMBER strut angle (one angle for
         # shear and torsion, 6.3.2(2)).
@@ -2836,7 +2856,8 @@ def _run_capacity_checks(inp, out):
             fcd=fcd, alpha_cw=alpha_cw, fywd_t=fywd_t, fyd_long=fyd_long, asw_t=asw_t,
             asw_over_s_t=asw_over_s_t, tcot_min=tcot_min, tcot_max=tcot_max,
             nu_detail=nu_detail, nu_detail_applied=nu_detail_applied, fctd=fctd,
-            sigma_cp=sigma_cp)
+            sigma_cp=sigma_cp, gamma_c=gamma_c_eff, gamma_s=gamma_s_eff,
+            compound_detected=compound_detected)
 
     # ---- Member strut angle (EN 1992-1-1 6.3.2(2)) ----------------------------
     # One strut angle serves shear AND torsion (the same web struts carry both).
@@ -3097,6 +3118,9 @@ def _run_capacity_checks(inp, out):
             tcode = tors_ctx["tcode"]
             tcot_min, tcot_max = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
             lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
+            torsion_out_of_limits = bool(
+                tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9
+            )
             out["torsion"] = dict(
                 tube=tube_main, trd_s=primary["trd_s"], trd_max=primary["trd_max"],
                 trd=trd, trd_c=primary["trd_c"], cot=primary["cot"],
@@ -3104,6 +3128,7 @@ def _run_capacity_checks(inp, out):
                 t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
                 fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
                 alpha_cw=tors_ctx["alpha_cw"], fctd=tors_ctx["fctd"],
+                gamma_c=tors_ctx["gamma_c"], gamma_s=tors_ctx["gamma_s"],
                 nu_v_detailing=tors_ctx["nu_detail_applied"],
                 sigma_cp=tors_ctx["sigma_cp"], n_prestress=n_prestress,
                 asw_t=tors_ctx["asw_t"], asw_over_s=tors_ctx["asw_over_s_t"],
@@ -3111,9 +3136,11 @@ def _run_capacity_checks(inp, out):
                 cot_max=tcot_max, method=inp["torsion_method"],
                 governs=primary["governs"], valid=valid,
                 reason=tube_main.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
-                out_of_limits=bool(tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9),
+                out_of_limits=torsion_out_of_limits,
+                code_applicable=not torsion_out_of_limits,
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
+                compound_detected=tors_ctx["compound_detected"],
                 theta_mode=(theta_mode_str if tors_live else "resistance"))
 
         # ---- links payload at the member angle ----
@@ -3131,6 +3158,10 @@ def _run_capacity_checks(inp, out):
             delta_ftd = 0.5 * v_ed * lk["cot"] if lk["valid"] else 0.0
             code = link_ctx["code"]
             lo, hi = code.shear_cot_min_limit, code.shear_cot_max_limit
+            links_out_of_limits = bool(
+                link_ctx["cot_min"] < lo - 1e-9
+                or link_ctx["cot_max"] > hi + 1e-9
+            )
             # The reported longitudinal-chord check (capped per 6.2.3(7)), on the
             # shear tension face; the torsion term is the web tube's share (zero
             # without torsion). Shown in the Shear view and reused by the combined
@@ -3198,6 +3229,14 @@ def _run_capacity_checks(inp, out):
                                     z_src=_ocf.get("z_src"),
                                     theta_mode=theta_mode_str)
                         ochk = fchk
+            member_code_applicable = bool(
+                not links_out_of_limits
+                and out.get("torsion", {}).get("code_applicable", True)
+            )
+            if lchk is not None:
+                lchk["code_applicable"] = member_code_applicable
+            if ochk is not None:
+                ochk["code_applicable"] = member_code_applicable
             out["shear"].update(
                 links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
                            asw_over_s=link_ctx["asw_over_s"],
@@ -3206,8 +3245,8 @@ def _run_capacity_checks(inp, out):
                            cot_min=link_ctx["cot_min"], cot_max=link_ctx["cot_max"],
                            delta_ftd=delta_ftd, cot_limit_lo=lo, cot_limit_hi=hi,
                            z_source=link_ctx["z_src"],
-                           out_of_limits=bool(link_ctx["cot_min"] < lo - 1e-9
-                                              or link_ctx["cot_max"] > hi + 1e-9),
+                           out_of_limits=links_out_of_limits,
+                           code_applicable=not links_out_of_limits,
                            required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
                            chord_off=ochk,
                            theta_mode=(theta_mode_str if shear_live
@@ -3267,7 +3306,8 @@ def _run_capacity_checks(inp, out):
                     trdmax_c = torsion.trd_max(
                         tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
                         p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
-                        closed_detailing=tors_ctx["nu_detail"])
+                        closed_detailing=tors_ctx["nu_detail"],
+                        fcd_mpa=tors_ctx["fcd"])
                     vlk = link_ctx["build"](cot_c, cot_c)
                     inter = combined.crushing_interaction(
                         t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
@@ -3275,7 +3315,11 @@ def _run_capacity_checks(inp, out):
                         valid=True, cot=cot_c,
                         theta_deg=math.degrees(math.atan(1.0 / cot_c)),
                         trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
-                        v_ed=v_ed_s, value=inter)
+                        v_ed=v_ed_s, value=inter,
+                        code_applicable=bool(
+                            out["torsion"].get("code_applicable", True)
+                            and sh_links.get("code_applicable", True)
+                        ))
 
     # Combined bending + shear + torsion (M-V-T), sec. 6.3.2. Ties the three checks
     # together: the concrete-crushing interaction (6.29, from the torsion block) and
@@ -3295,9 +3339,14 @@ def _run_capacity_checks(inp, out):
             r_t = to["util"]
             indep = bool(inp["combined_mv_independent"])
             dk_sum = combined.dkna_sum(r_m, r_v, r_t, m_v_independent=indep)
+            code_applicable = bool(
+                to.get("code_applicable", True)
+                and (sl is None or sl.get("code_applicable", True))
+            )
             out["combined"] = dict(
                 valid=True, method=inp["combined_method"], r_m=r_m, r_v=r_v, r_t=r_t,
                 m_v_independent=indep, dkna_sum=dk_sum, dkna_ok=dk_sum <= 1.0 + 1e-9,
+                code_applicable=code_applicable,
                 crushing=to.get("interaction"),
                 asl_torsion=to["asl_req"],
                 delta_ftd=(sl["delta_ftd"] if sl is not None else 0.0),
@@ -3830,6 +3879,19 @@ def _crack_width_panel(e):
                    f"members, fine system only).")
 
 
+def _verdict_metric(box, label, value, ok, *, code_applicable=True, help=None):
+    """Render a utilisation metric without a reassuring verdict outside scope."""
+    if code_applicable:
+        box.metric(label, value, delta=("OK" if ok else "Over limit"),
+                   delta_color=("normal" if ok else "inverse"), help=help)
+    else:
+        scope_help = ("Exploratory value only: the selected strut-angle bounds fall "
+                      "outside the method's code range, so Sector issues no code "
+                      "compliance verdict.")
+        box.metric(label, value, help=(scope_help if help is None
+                                      else help + " " + scope_help))
+
+
 def shear_view(inp, results):
     """Shear resistance without shear reinforcement (VRd,c) and the utilisation.
 
@@ -3941,7 +4003,8 @@ def shear_view(inp, results):
                        f"[{links['cot_min']:.2f}, {links['cot_max']:.2f}]) fall "
                        f"outside the code range [{links['cot_limit_lo']:.1f}, "
                        f"{links['cot_limit_hi']:.1f}] (EN 1992-1-1 6.7N / DK NA 6.7a "
-                       "NA). The value is still computed, but check it is justified.")
+                       "NA). Values are shown for exploration only: NO CODE VERDICT "
+                       "is issued for the links or dependent interaction checks.")
         req_txt = ("links are required (VEd > VRd,c)" if links["required"]
                    else "links are not strictly required (VEd <= VRd,c); minimum "
                         "reinforcement rules still apply")
@@ -3953,9 +4016,8 @@ def shear_view(inp, results):
         c2.metric("VRd,max", f"{lk['vrd_max']:.3f} kN")
         c3.metric("VRd = min", f"{lk['vrd']:.3f} kN", help=f"governed by {lk['governs']}")
         ul_txt = _pct(util_l)
-        c4.metric("Utilisation VEd/VRd", ul_txt,
-                  delta=("OK" if ok_l else "Over limit"),
-                  delta_color=("normal" if ok_l else "inverse"))
+        _verdict_metric(c4, "Utilisation VEd/VRd", ul_txt, ok_l,
+                        code_applicable=links.get("code_applicable", True))
         st.dataframe(
             {"Quantity": [f"Strut angle {_THETA}", f"cot {_THETA} (auto)",
                           "Lever arm z", "Link area/spacing Asw/s", "Design yield fywd",
@@ -4002,10 +4064,13 @@ def shear_view(inp, results):
             g2.metric("MEd,total", f"{ch['m_total']:.1f} kNm",
                       help="bending + shear shift (+ torsion) as an equivalent "
                            "moment on the governing chord face")
-            if ch.get("biaxial") and not ch.get("conditional", True):
+            if (not ch.get("code_applicable", True)
+                    or (ch.get("biaxial") and not ch.get("conditional", True))):
                 g3.metric("MEd,total/MRd", _pct(ch["util"]),
-                          help="pure-axis fallback capacity -- see the warning "
-                               "below")
+                          help=("No code verdict outside the strut-angle range."
+                                if not ch.get("code_applicable", True)
+                                else "pure-axis fallback capacity -- see the warning "
+                                     "below"))
             else:
                 g3.metric("MEd,total/MRd", _pct(ch["util"]),
                           delta=("OK" if ch["ok"] else "Over limit"),
@@ -4073,9 +4138,8 @@ def _render_chord_off(och):
     g2.metric("MEd,total", f"{och['m_total']:.1f} kNm",
               help="bending + the torsion share as an equivalent moment on "
                    "this chord")
-    g3.metric("MEd,total/MRd", _pct(och["util"]),
-              delta=("OK" if och["ok"] else "Over limit"),
-              delta_color=("normal" if och["ok"] else "inverse"))
+    _verdict_metric(g3, "MEd,total/MRd", _pct(och["util"]), och["ok"],
+                    code_applicable=och.get("code_applicable", True))
     st.caption(
         f"Tension chord = the {face_lbl} face about the {och['axis']}-axis "
         "(the axis the shear does not act on). No shear shift acts on this chord; "
@@ -4111,6 +4175,12 @@ def torsion_view(inp, results):
                        "not model the internal webs, so its TRd would be "
                        "unconservative (EN 1992-1-1 6.3.2(1) requires sub-dividing "
                        "into separate tubes). Use a solid or single-cell outline.")
+        elif t.get("reason") == "compound outline requires subdivision":
+            st.warning("Torsion is not evaluated for this re-entrant/compound "
+                       "(for example T, L or I) outline as one tube. EN 1992-1-1 "
+                       "6.3.1(3) requires component sub-sections: enable 'Subdivide "
+                       "into sub-tubes' and enter rectangles that partition the "
+                       "section before a resistance or verdict is issued.")
         else:
             st.warning("The torsion tube could not be formed from the outline (a "
                        "degenerate or too-thin section). Enter a wall thickness tef "
@@ -4120,7 +4190,9 @@ def torsion_view(inp, results):
         st.warning(f"The strut bounds (cot {_THETA} in [{t['cot_min']:.2f}, "
                    f"{t['cot_max']:.2f}]) fall outside the code range "
                    f"[{t['cot_limit_lo']:.1f}, {t['cot_limit_hi']:.1f}] "
-                   "(6.7N / 6.7a NA). The value is still computed.")
+                   "(6.7N / 6.7a NA). Values are shown for exploration only: "
+                   "NO CODE VERDICT is issued for torsion or dependent interaction "
+                   "checks.")
     util = t["util"]
     ok = viz.util_ok(util)
     util_txt = _pct(util)
@@ -4130,16 +4202,17 @@ def torsion_view(inp, results):
         m2.metric(chr(0x03A3) + " TRd,i", f"{t['trd']:.3f} kNm",
                   help="theoretical sum of the sub-tube capacities (6.3.1(3)); the "
                        "pass/fail check is the governing sub-tube, not this sum")
-        m3.metric("Governing util (max TEd_i/TRd_i)", util_txt,
-                  delta=("OK" if ok else "Over limit"),
-                  delta_color=("normal" if ok else "inverse"))
+        _verdict_metric(
+            m3, "Governing util (max TEd_i/TRd_i)", util_txt, ok,
+            code_applicable=t.get("code_applicable", True),
+        )
     else:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Applied TEd", f"{t['t_ed']:.3f} kNm")
         m2.metric("TRd = min", f"{t['trd']:.3f} kNm", help=f"governed by {t['governs']}")
         m3.metric("Cracking TRd,c", f"{t['trd_c']:.3f} kNm")
-        m4.metric("Utilisation TEd/TRd", util_txt, delta=("OK" if ok else "Over limit"),
-                  delta_color=("normal" if ok else "inverse"))
+        _verdict_metric(m4, "Utilisation TEd/TRd", util_txt, ok,
+                        code_applicable=t.get("code_applicable", True))
 
     if t.get("subdivided"):
         subs = t["subtubes"]
@@ -4266,8 +4339,10 @@ def torsion_view(inp, results):
         i2.metric("VEd / VRd,max", f"{(inter['v_ed']/inter['vrd_max']*100):.1f} %"
                   if inter["vrd_max"] > 0 else "inf")
         val_txt = _pct(val)
-        i3.metric("Sum (<= 100%)", val_txt, delta=("OK" if ok_i else "Over limit"),
-                  delta_color=("normal" if ok_i else "inverse"))
+        _verdict_metric(
+            i3, "Sum (<= 100%)", val_txt, ok_i,
+            code_applicable=inter.get("code_applicable", True),
+        )
         st.caption(
             "TEd/TRd,max + VEd/VRd,max <= 1 (6.29), evaluated at a common strut angle "
             f"cot {_THETA} = {inter['cot']:.2f} ({inter['theta_deg']:.1f} deg) -- both "
@@ -4314,6 +4389,11 @@ def combined_view(inp, results):
                    + "; ".join(missing) + ".")
         return
     st.caption(f"Shared code edition: {c['method']}.")
+    if not c.get("code_applicable", True):
+        st.warning("One or more selected strut-angle bounds fall outside the "
+                   "method's code range. Combined values are exploratory only: "
+                   "NO CODE VERDICT is issued until every active strut band is "
+                   "within its permitted range.")
     m1, m2, m3 = st.columns(3)
     m1.metric("Bending M", _pct(c["r_m"]))
     m2.metric("Shear V", _pct(c["r_v"]))
@@ -4325,9 +4405,8 @@ def combined_view(inp, results):
     st.markdown("**DK NA 6.3.2(6): " + chr(0x03A3) + "(SEd/SRd) <= 1**")
     ok = c["dkna_ok"]
     d1, d2 = st.columns([1, 2])
-    d1.metric(chr(0x03A3) + "(SEd/SRd)", _pct(c["dkna_sum"]),
-              delta=("OK" if ok else "Over limit"),
-              delta_color=("normal" if ok else "inverse"))
+    _verdict_metric(d1, chr(0x03A3) + "(SEd/SRd)", _pct(c["dkna_sum"]), ok,
+                    code_applicable=c.get("code_applicable", True))
     if c["m_v_independent"]:
         d2.caption("M and V are checked separately (shear longitudinal steel "
                    "provided): sum = max(M+T, V+T). N is folded into the bending "
@@ -4344,13 +4423,19 @@ def combined_view(inp, results):
         val = cr["value"]
         ok_c = viz.util_ok(val)
         cc1, cc2 = st.columns([1, 2])
-        cc1.metric("Sum", _pct(val), delta=("OK" if ok_c else "Over limit"),
-                   delta_color=("normal" if ok_c else "inverse"))
+        _verdict_metric(
+            cc1, "Sum", _pct(val), ok_c,
+            code_applicable=cr.get("code_applicable",
+                                   c.get("code_applicable", True)),
+        )
         cc2.caption(f"At a common strut cot {_THETA} = {cr['cot']:.2f} "
                     f"({cr['theta_deg']:.1f} deg). TRd,max = {cr['trd_max']:.1f} kNm, "
                     f"VRd,max = {cr['vrd_max']:.1f} kN.")
         st.plotly_chart(viz.vt_interaction_figure(
-            cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"]), width="stretch")
+            cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],
+            show_verdict=cr.get("code_applicable",
+                                c.get("code_applicable", True))),
+            width="stretch")
     elif cr is not None and not cr.get("valid"):
         st.warning(_no_common_angle_msg(cr))
     else:
@@ -4372,9 +4457,10 @@ def combined_view(inp, results):
         ok_t = tr["ok"]
         g1, g2 = st.columns(2)
         g1.metric("Crushing utilisation", _pct(tr["u_crush"]))
-        g2.metric(f"Governing ({tr['governs']})", _pct(tr["governing"]),
-                  delta=("OK" if ok_t else "Over limit"),
-                  delta_color=("normal" if ok_t else "inverse"))
+        _verdict_metric(
+            g2, f"Governing ({tr['governs']})", _pct(tr["governing"]), ok_t,
+            code_applicable=c.get("code_applicable", True),
+        )
         if tr["shear_credited"]:
             st.caption(f"The concrete alone carries the shear (VEd = {tr['v_ed']:.1f} "
                        f"kN <= VRd,c = {tr['vrd_c']:.1f} kN, 6.2.1), so the shear "
@@ -4404,11 +4490,14 @@ def combined_view(inp, results):
         g2.metric("MEd,total", f"{lg['m_total']:.1f} kNm",
                   help="bending + shear shift + torsion, as an equivalent moment "
                        "on the governing chord face")
-        if biaxial and not lg.get("conditional", True):
+        if (not c.get("code_applicable", True)
+                or (biaxial and not lg.get("conditional", True))):
             # The conditional biaxial solve failed and MRd fell back to the
             # pure-axis capacity, so withhold the reassuring OK/Over-limit verdict.
             g3.metric("MEd,total/MRd", _pct(lg["util"]),
-                      help="pure-axis fallback capacity -- see the warning below")
+                      help=("No code verdict outside the strut-angle range."
+                            if not c.get("code_applicable", True)
+                            else "pure-axis fallback capacity -- see the warning below"))
         else:
             g3.metric("MEd,total/MRd", _pct(lg["util"]),
                       delta=("OK" if ok_l else "Over limit"),

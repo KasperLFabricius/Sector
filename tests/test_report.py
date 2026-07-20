@@ -510,11 +510,12 @@ def _torsion_out(interaction=False):
            "asw_over_s": 0.5236, "dia": 10.0, "s": 150.0, "cot_min": 1.0,
            "cot_max": 2.5, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
            "governs": "stirrups (TRd,s)", "valid": True, "cot_limit_lo": 1.0,
-           "cot_limit_hi": 2.5, "out_of_limits": False}
+           "cot_limit_hi": 2.5, "out_of_limits": False, "code_applicable": True}
     if interaction:
         out["interaction"] = dict(valid=True, cot=1.0, theta_deg=45.0, trd_max=88.7,
                                   vrd_max=650.0, t_ed=40.0, v_ed=150.0,
-                                  value=40.0 / 88.7 + 150.0 / 650.0)
+                                  value=40.0 / 88.7 + 150.0 / 650.0,
+                                  code_applicable=True)
     return out
 
 
@@ -527,6 +528,20 @@ def test_report_includes_torsion_section():
     assert "76.4" in txt                            # TRd
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1176" in txt                            # required Asl
+
+
+def test_report_compound_torsion_requires_subdivision():
+    out = _out()
+    t = _torsion_out()
+    t["valid"] = False
+    t["tube"]["valid"] = False
+    t["reason"] = "compound outline requires subdivision"
+    t["compound_detected"] = True
+    out["torsion"] = t
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "Torsion not evaluated" in txt
+    assert "6.3.1(3)" in txt
+    assert "Enable sub-tubes" in txt
 
 
 def _subtube(b, h, tef, ak, c, ted, trd, util, gov):
@@ -597,6 +612,22 @@ def test_report_includes_combined_section():
     assert "Combined bending" in txt or "M-V-T" in txt
     assert "6.3.2(6)" in txt                        # the DK NA combined rule
     assert "EXCEEDED" in txt                        # sum 1.3 > 1
+
+
+def test_report_combined_out_of_range_withholds_dependent_verdicts():
+    out = _out()
+    c = _combined_out()
+    c["code_applicable"] = False
+    c["crushing"]["code_applicable"] = False
+    c["longitudinal"] = dict(
+        valid=True, axis="x", z=0.54, m_ed=100.0, m_rd=400.0,
+        ftd_v=200.0, ftd_t=120.0, mv=108.0, mt=32.4,
+        m_total=240.4, util=240.4 / 400.0, ok=True, capped=False,
+    )
+    out["combined"] = c
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "exploratory" in txt
+    assert txt.count("NO CODE VERDICT") >= 3
 
 
 def test_report_combined_longitudinal_check():
@@ -743,7 +774,7 @@ def _links_out():
             "dia": 10.0, "s": 150.0, "fywk": 500.0, "cot_min": 1.0, "cot_max": 2.5,
             "delta_ftd": 375.0, "cot_limit_lo": 1.0, "cot_limit_hi": 2.5,
             "z_source": "plastic internal lever arm",
-            "out_of_limits": False, "required": True}
+            "out_of_limits": False, "code_applicable": True, "required": True}
 
 
 def test_report_includes_shear_links_section():
@@ -763,11 +794,22 @@ def test_report_shear_links_out_of_limits_note():
     out = _out()
     sh = _shear_out()
     lk = _links_out()
-    lk["cot_max"], lk["out_of_limits"] = 3.0, True
+    lk["cot_max"], lk["out_of_limits"], lk["code_applicable"] = 3.0, True, False
     sh["links"] = lk
     out["shear"] = sh
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "outside the code range" in txt
+    assert "NO CODE VERDICT" in txt
+
+
+def test_report_torsion_out_of_limits_withholds_verdict():
+    out = _out()
+    t = _torsion_out()
+    t["cot_max"], t["out_of_limits"], t["code_applicable"] = 3.0, True, False
+    out["torsion"] = t
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "exploratory" in txt
+    assert "NO CODE VERDICT" in txt
 
 
 def test_fig_png_times_out_instead_of_hanging():
