@@ -19,7 +19,12 @@ def test_proprietary_notice_grants_no_public_licence():
 
 def test_generated_notice_is_deterministic_and_includes_embedded_frontend():
     tabulator = ROOT / "app" / "point_grid_frontend" / "LICENSE"
-    locked = distributions_from_lock(ROOT / "requirements-build.txt")
+    # The QA job installs requirements-dev.txt, which contains the complete
+    # runtime lock but intentionally omits PyInstaller-only packages. Exercise
+    # selection with that installed runtime subset; the Windows package job runs
+    # the CLI against requirements-build.txt and fails there if any build pin is
+    # absent or mismatched.
+    locked = distributions_from_lock(ROOT / "requirements.txt")
     first = build_notice(distributions=locked, tabulator_license=tabulator)
     second = build_notice(distributions=locked, tabulator_license=tabulator)
     assert first == second
