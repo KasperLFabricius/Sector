@@ -23,6 +23,19 @@ def _inp():
         "steel": MildSteel(fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
                            gamma_y=1.15, curve=2),
         "prestress": None,
+        "concrete_preset": "EN 1992-1-1:2005",
+        "concrete_k_tc": 1.0,
+        "concrete_eta_cc": 1.0,
+        "mild_preset": "EN 1992-1-1:2005",
+        "prestress_preset": "EN 1992-1-1:2005",
+        "design_basis": {
+            "status": "Edition-aligned: EN 1992-1-1:2005",
+            "components": [
+                {"role": "Concrete material", "selection": "EN 1992-1-1:2005"},
+                {"role": "Reinforcing steel", "selection": "EN 1992-1-1:2005"},
+            ],
+            "mixed": False, "limitations": [],
+        },
         "P_pl": 0.0, "Mx_pl": 100.0, "My_pl": 0.0,
         "P_el_l": 0.0, "Mx_el_l": 80.0, "My_el_l": 0.0,
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
@@ -314,6 +327,68 @@ def test_report_omits_unused_material_sections():
     assert "Most-compressed bar" not in txt2
 
 
+def test_report_ec2_2023_material_strength_is_edition_aware():
+    from sector.materials import Concrete
+
+    inp = _inp()
+    eta = (40.0 / 45.0) ** (1.0 / 3.0)
+    inp["concrete"] = Concrete(
+        fck=45.0, gamma_c=1.5, alpha_cc=0.85 * eta, curve=2,
+    )
+    inp["concrete_preset"] = "DS/EN 1992-1-1:2023"
+    inp["concrete_eta_cc"] = eta
+    inp["concrete_k_tc"] = 0.85
+    inp["mild_preset"] = "DS/EN 1992-1-1:2023"
+    inp["design_basis"] = {
+        "status": "Edition-aligned: EN 1992-1-1:2023",
+        "components": [
+            {"role": "Concrete material", "selection": "DS/EN 1992-1-1:2023"},
+            {"role": "Reinforcing steel", "selection": "DS/EN 1992-1-1:2023"},
+        ],
+        "mixed": False, "limitations": [],
+    }
+    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    assert "5.1.6" in txt and "5.3" in txt and "5.4" in txt
+    assert "8.1.2" in txt and "8.4" in txt
+    assert "0.85" in txt
+    assert f"{eta:.6f}" in txt
+    assert f"{0.85 * eta:.6f}" in txt
+    assert f"{inp['concrete'].fcd:.3f}" in txt
+    assert "3.15" not in txt
+
+
+def test_report_ec2_2023_k_tc_one_states_the_full_assumption():
+    inp = _inp()
+    inp["concrete_preset"] = "DS/EN 1992-1-1:2023"
+    inp["concrete_eta_cc"] = 1.0
+    inp["concrete_k_tc"] = 1.0
+    inp["mild_preset"] = "DS/EN 1992-1-1:2023"
+    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    assert "28 days" in txt and "56 days" in txt
+    assert "at least 3 months" in txt
+    assert "National" in txt and "Annex" in txt
+
+
+def test_report_discloses_mixed_design_basis_and_scope_limitations():
+    inp = _inp()
+    inp["design_basis"] = {
+        "status": "Mixed/custom design basis - review every selected method",
+        "components": [
+            {"role": "Concrete material", "selection": "DS/EN 1992-1-1:2023"},
+            {"role": "Torsion", "selection": "DS/EN 1992-1-1:2005 + DK NA:2024"},
+        ],
+        "mixed": True,
+        "limitations": [
+            "Sector does not implement the torsion check to EN 1992-1-1:2023."
+        ],
+    }
+    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    assert "Design basis qualification" in txt
+    assert "Mixed/custom design basis" in txt
+    assert "Scope limitation" in txt
+    assert "does not implement the torsion check" in txt
+
+
 def test_report_handles_uncracked_section():
     out = _out()
     out["elastic"]["cracked"] = False
@@ -345,24 +420,34 @@ def test_report_includes_shear_section():
 
 
 def _shear_out_2023():
-    return {"res": {"vrd_c": 85.4, "tau_rdc": 0.575, "tau_basic": 0.575,
-                    "tau_min": 0.538, "rho_l": 0.00893, "z": 495.0, "ddg": 32.0,
-                    "fyd": 434.8, "gamma_v": 1.40, "model": "2023", "valid": True},
-            "v_ed": 50.0, "util": 50.0 / 85.4, "axis": "x", "tension_low": True,
+    from sector import codes as _codes, shear as _shear
+
+    fyd = 500.0 / 1.15
+    res = _shear.vrd_c_2023(
+        35.0, _codes.EC2_2023, 300.0, 550.0, 1473.0, fyd, 32.0,
+        n_ed_tension_kn=300.0, m_ed_knm=110.0, v_ed_kn=50.0,
+    )
+    return {"res": res,
+            "v_ed": 50.0, "util": 50.0 / res["vrd_c"], "axis": "x",
+            "tension_low": True,
             "bw": 300.0, "bw_auto": 300.0, "bw_user": False, "d": 550.0,
-            "asl": 1473.0, "ac": 0.18, "fck": 35.0, "n_ed": 0.0,
+            "asl": 1473.0, "ac": 0.18, "fck": 35.0, "n_ed": 300.0,
             "method": "DS/EN 1992-1-1:2023", "model_2023": True, "ddg": 32.0,
-            "fyd_flex": 434.8}
+            "fyd_flex": fyd, "m_ed_2023": 110.0, "m_prestress": 0.0,
+            "centroid": (0.0, 0.0)}
 
 
 def test_report_shear_2023_section():
     out = _out()
-    out["shear"] = _shear_out_2023()
+    sh = _shear_out_2023()
+    out["shear"] = sh
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "8.27" in txt and "8.20" in txt          # the 2023 clauses
+    assert "8.30" in txt and "8.31" in txt          # action/axial modification
     assert "8.2.2" in txt                            # the 2023 section reference
-    assert "85.4" in txt                             # VRd,c
+    assert f"{sh['res']['vrd_c']:.3f}" in txt        # VRd,c
     assert "d" in txt and "dg" in txt                # ddg appears
+    assert "k" in txt and "vp" in txt                # k_vp appears
 
 
 def test_report_shear_shows_prestress_precompression():
@@ -377,14 +462,15 @@ def test_report_shear_shows_prestress_precompression():
     assert "900" in txt
 
 
-def test_report_shear_2023_tension_warning():
-    # F2: the 2023 tau_Rd,c ignores a net axial tension -- warn in the report.
+def test_report_shear_2023_documents_axial_factor():
     out = _out()
     sh = _shear_out_2023()
-    sh["n2023_tension"] = True
     out["shear"] = sh
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "UNCONSERVATIVE" in txt
+    assert "Formula (8.31)" in txt
+    assert f"{sh['res']['k_vp']:.4f}" in txt
+    assert "parallel to the member axis" in txt
+    assert "UNCONSERVATIVE" not in txt
 
 
 def test_report_shear_2023_invalid_is_reportable():

@@ -7,6 +7,8 @@ EN 1992-1-1:2023 (Table 4.3, 5.1.6, 8.1.2).
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from sector import codes
@@ -92,13 +94,20 @@ def test_dk_na_2024_partial_factors():
 def test_ec2_2023_eta_cc_is_strength_dependent():
     code = codes.CODES["DS/EN 1992-1-1:2023"]
     assert (code.gamma_c, code.gamma_s) == (1.5, 1.15)
-    # eta_cc = (40/fck)^(1/3), capped at 1.0; k_tc = 1.0.
-    assert code.concrete_factor(40.0) == pytest.approx(1.0)        # fck = ref
-    assert code.concrete_factor(20.0) == pytest.approx(1.0)        # capped at 1.0
-    assert code.concrete_factor(50.0) == pytest.approx((40.0 / 50.0) ** (1.0 / 3.0))
+    # eta_cc = (40/fck)^(1/3), capped at 1.0; the general-case k_tc is 0.85.
+    assert code.k_tc == pytest.approx(0.85)
+    assert code.concrete_factor(40.0) == pytest.approx(0.85)       # fck = ref
+    assert code.concrete_factor(20.0) == pytest.approx(0.85)       # eta_cc capped at 1.0
+    eta_50 = (40.0 / 50.0) ** (1.0 / 3.0)
+    assert code.concrete_factor(50.0) == pytest.approx(0.85 * eta_50)
     # The reduction flows through to fcd.
     c = code.concrete(50.0)
-    assert c.fcd == pytest.approx((40.0 / 50.0) ** (1.0 / 3.0) * 50.0 / 1.5)
+    assert c.fcd == pytest.approx(0.85 * eta_50 * 50.0 / 1.5)
+
+    # k_tc = 1.0 remains an explicit applicability option; only that factor changes.
+    reference_age_case = replace(code, k_tc=1.0)
+    assert reference_age_case.concrete_factor(50.0) == pytest.approx(eta_50)
+    assert reference_age_case.concrete(50.0).fcd == pytest.approx(eta_50 * 50.0 / 1.5)
 
 
 def test_all_codes_use_perfectly_plastic_steel_without_strain_limit():

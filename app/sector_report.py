@@ -2,7 +2,8 @@
 
 Modelled on the BriCoS report: a sectioned reportlab document with a numbered
 footer, the governing case worked in full and the remainder summarised in tables,
-and every computed quantity tied to its formula and a ``DS/EN 1992-1-1`` reference.
+and every computed quantity tied to its formula and the selected
+``EN 1992-1-1`` edition.
 
 The builder is fed the same two objects the result views use -- the collected
 inputs ``inp`` and the analysis payload ``out = run_analysis(inp)`` -- plus the
@@ -505,6 +506,15 @@ class ReportBuilder:
             labels.append("combined M-V-T")
         ran = ", ".join(labels) or "none"
         self._small(f"Analysis mode: {mode}. Result sections included: {ran}.")
+        basis = self.inp.get("design_basis") or {}
+        if basis:
+            status = str(basis.get("status", "Design basis not identified"))
+            qualifier = "<b>Design basis:</b> " + status
+            if basis.get("mixed") or basis.get("limitations"):
+                qualifier = "<b>Design basis qualification:</b> " + status
+            self._p(qualifier)
+            for limitation in basis.get("limitations", []):
+                self._small("<b>Scope limitation:</b> " + str(limitation))
         self.flow.append(PageBreak())
 
     def _conventions(self):
@@ -599,27 +609,70 @@ class ReportBuilder:
 
     def _concrete_block(self):
         c = self.inp["concrete"]
+        preset = str(self.inp.get("concrete_preset", ""))
+        is_2023 = "2023" in preset
         rows = [["Parameter", "Symbol", "Value"],
-                ["Characteristic strength", "f<sub>ck</sub>", f"{_fmt(c.fck, 3)} MPa"],
-                ["Partial factor", "gamma<sub>c</sub>", _fmt(c.gamma_c, 3)],
-                ["Design coefficient", "alpha<sub>cc</sub>", _fmt(c.alpha_cc, 3)],
-                ["Curve", "-", "parabola-rectangle" if c.curve == 2 else "cubic"],
-                ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} permille"],
-                ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} permille"],
-                ["Exponent", "n", _fmt(c.n, 3)],
-                ["Design strength", "f<sub>cd</sub>", f"{_fmt(c.fcd, 3)} MPa"]]
+                 ["Characteristic strength", "f<sub>ck</sub>", f"{_fmt(c.fck, 3)} MPa"],
+                 ["Partial factor", "gamma<sub>c</sub>", _fmt(c.gamma_c, 3)]]
+        if is_2023:
+            eta_cc = self.inp.get("concrete_eta_cc")
+            k_tc = self.inp.get("concrete_k_tc")
+            rows.extend([
+                ["Strength factor", "eta<sub>cc</sub>", _fmt(eta_cc, 6)],
+                ["Sustained-load / time factor", "k<sub>tc</sub>", _fmt(k_tc, 2)],
+                ["Effective design coefficient", "eta<sub>cc</sub> k<sub>tc</sub>",
+                 _fmt(c.alpha_cc, 6)],
+            ])
+        else:
+            rows.append(
+                ["Design coefficient", "alpha<sub>cc</sub>", _fmt(c.alpha_cc, 3)]
+            )
+        rows.extend([
+                 ["Curve", "-", "parabola-rectangle" if c.curve == 2 else "cubic"],
+                 ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} permille"],
+                 ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} permille"],
+                 ["Exponent", "n", _fmt(c.n, 3)],
+                 ["Design strength", "f<sub>cd</sub>", f"{_fmt(c.fcd, 3)} MPa"],
+        ])
         self._table(rows, [60 * mm, 35 * mm, 50 * mm])
-        self._formula(
-            "f<sub>cd</sub> = alpha<sub>cc</sub> &#183; f<sub>ck</sub> / gamma<sub>c</sub>",
-            ref="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
-            subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
-            result=f"= {_fmt(c.fcd, 3)} MPa")
+        if is_2023:
+            self._formula(
+                "f<sub>cd</sub> = eta<sub>cc</sub> &#183; k<sub>tc</sub> &#183; "
+                "f<sub>ck</sub> / gamma<sub>c</sub>",
+                ref="EN 1992-1-1:2023 &#167;5.1.6(1), Formulae (5.3) and (5.4)",
+                subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),6)} &#183; "
+                      f"{_fmt(self.inp.get('concrete_k_tc'),2)} &#183; "
+                      f"{_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
+                result=f"= {_fmt(c.fcd, 3)} MPa")
+            if math.isclose(float(self.inp.get("concrete_k_tc") or 0.0), 1.0):
+                self._small(
+                    "<b>Applicability assumption:</b> k<sub>tc</sub> = 1.00 was "
+                    "selected assuming t<sub>ref</sub> &#8804; 28 days for CR/CN "
+                    "or &#8804; 56 days for CS and that design loading is not "
+                    "expected until at least 3 months after casting, unless the "
+                    "governing National Annex states otherwise (5.1.6(1))."
+                )
+            else:
+                self._small(
+                    "k<sub>tc</sub> = 0.85 is the general / other-case value stated "
+                    "in EN 1992-1-1:2023 5.1.6(1)."
+                )
+        else:
+            self._formula(
+                "f<sub>cd</sub> = alpha<sub>cc</sub> &#183; f<sub>ck</sub> / "
+                "gamma<sub>c</sub>",
+                ref="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
+                subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / "
+                      f"{_fmt(c.gamma_c, 3)}",
+                result=f"= {_fmt(c.fcd, 3)} MPa")
         if c.curve == 2:
             self._formula(
                 "sigma<sub>c</sub> = f<sub>cd</sub> &#183; [1 - (1 - eps<sub>c</sub>/"
                 "eps<sub>c2</sub>)<super>n</super>],  for eps<sub>c</sub> &lt;= eps<sub>c2</sub>; "
                 "then f<sub>cd</sub> up to eps<sub>cu2</sub>",
-                ref="DS/EN 1992-1-1 &#167;3.1.7, Eq (3.17); strains from Table 3.1")
+                ref=("EN 1992-1-1:2023 &#167;8.1.2(1), Formula (8.4)"
+                     if is_2023 else
+                     "DS/EN 1992-1-1 &#167;3.1.7, Eq (3.17); strains from Table 3.1"))
         if self.figures:
             self._fig(viz.concrete_curve_figure(c), 130, 80)
 
@@ -637,7 +690,9 @@ class ReportBuilder:
                 ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]]
         self._table(rows, [60 * mm, 35 * mm, 50 * mm])
         self._formula("f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>s</sub>",
-                      ref="DS/EN 1992-1-1 &#167;3.2.7",
+                      ref=("EN 1992-1-1:2023 &#167;5.2.4(1), Formula (5.11)"
+                           if "2023" in str(self.inp.get("mild_preset", "")) else
+                           "DS/EN 1992-1-1 &#167;3.2.7"),
                       subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
                       result=f"= {_fmt(fyd, 3)} MPa")
         if self.figures:
@@ -677,6 +732,16 @@ class ReportBuilder:
         inp = self.inp
         rows = [["Setting", "Value"]]
         rows.append(["Analysis mode", str(inp.get("mode", "-"))])
+        basis = inp.get("design_basis") or {}
+        if basis:
+            rows.append(["Design-basis status", str(basis.get("status", "-"))])
+            for component in basis.get("components", []):
+                rows.append([
+                    "Design basis - " + str(component.get("role", "")),
+                    str(component.get("selection", "-")),
+                ])
+            for limitation in basis.get("limitations", []):
+                rows.append(["Scope limitation", str(limitation)])
         if "plastic" in self.out:
             rows.append(["Sweep start V.min", f"{_fmt(inp.get('v_min'),0)} deg"])
             rows.append(["Sweep end V.max", f"{_fmt(inp.get('v_max'),0)} deg"])
@@ -722,6 +787,18 @@ class ReportBuilder:
     def _theory(self):
         self._h1("Basis of analysis")
         if "plastic" in self.out:
+            material_2023 = "2023" in str(self.inp.get("concrete_preset", ""))
+            steel_2023 = "2023" in str(self.inp.get("mild_preset", ""))
+            concrete_ref = (
+                "EN 1992-1-1:2023 &#167;8.1.1-8.1.2 and &#167;5.1.6"
+                if material_2023 else
+                "DS/EN 1992-1-1 &#167;6.1 and &#167;3.1.7"
+            )
+            steel_ref = (
+                "EN 1992-1-1:2023 &#167;5.2.4"
+                if steel_2023 else
+                "DS/EN 1992-1-1 &#167;3.2.7"
+            )
             self._p("<b>Ultimate (plastic) capacity.</b> Plane sections; concrete in "
                     "compression follows the design curve above, reinforcement the "
                     "design stress-strain law. For a trial neutral axis the strain "
@@ -730,7 +807,7 @@ class ReportBuilder:
             self._formula("kappa<sub>u</sub> = min( eps<sub>cu2</sub>/c ,  "
                           "eps<sub>su</sub>/(s<sub>na</sub>-s<sub>bar</sub>) ,  "
                           "eps<sub>pu</sub>/... )",
-                          ref="DS/EN 1992-1-1 &#167;6.1, &#167;3.1.7, &#167;3.2.7")
+                          ref=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}")
             self._p("The compression depth c is solved from axial equilibrium and "
                     "the moments follow from the force resultants:")
             self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
@@ -937,6 +1014,15 @@ class ReportBuilder:
                 ["Tension reinforcement", "A<sub>sl</sub>",
                  f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
                 ["Reinforcement ratio", "rho<sub>l</sub>", f"{_fmt(res['rho_l'], 4)}"],
+                ["Action moment at centroid", "M<sub>Ed</sub>",
+                 f"{_fmt(sh.get('m_ed_2023'), 3)} kNm"],
+                ["Effective shear span", "a<sub>cs</sub>",
+                 (f"{_fmt(res.get('a_cs'), 1)} mm"
+                  if res.get("a_cs", 0.0) > 0.0 else "not applicable (VEd = 0)")],
+                ["Axial-force factor", "k<sub>vp</sub>",
+                 f"{_fmt(res.get('k_vp'), 4)} (>= 0.1)"],
+                ["Modified depth in Formula (8.27)", "k<sub>vp</sub>d",
+                 f"{_fmt(res.get('d_kvp'), 1)} mm"],
                 ["Aggregate size", "d<sub>dg</sub>", f"{_fmt(res['ddg'], 1)} mm"],
                 ["Flexural design yield", "f<sub>yd</sub>",
                  f"{_fmt(res['fyd'], 1)} MPa"],
@@ -944,13 +1030,28 @@ class ReportBuilder:
                  f"{_fmt(res['gamma_v'], 2)}"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._h2("Resistance")
+        if res.get("a_cs", 0.0) > 0.0:
+            self._formula(
+                "a<sub>cs</sub> = max(|M<sub>Ed</sub>/V<sub>Ed</sub>|, d)",
+                ref="EN 1992-1-1:2023 Formula (8.30)",
+                subst=f"max(|{_fmt(sh.get('m_ed_2023'), 3)}| / "
+                      f"{_fmt(sh.get('v_ed'), 3)} &#183; 1000, {_fmt(sh['d'], 1)})",
+                result=f"a<sub>cs</sub> = {_fmt(res.get('a_cs'), 1)} mm")
+            self._formula(
+                "k<sub>vp</sub> = max(1 + N<sub>Ed</sub>/|V<sub>Ed</sub>| &#183; "
+                "d/(3a<sub>cs</sub>), 0.1)",
+                ref="EN 1992-1-1:2023 &#167;8.2.2(4), Formula (8.31)",
+                subst=f"N<sub>Ed</sub> = {_fmt(res.get('n_ed_tension'), 3)} kN; "
+                      f"k<sub>vp</sub> = {_fmt(res.get('k_vp'), 4)}",
+                result=f"k<sub>vp</sub>d = {_fmt(res.get('d_kvp'), 1)} mm")
         self._formula(
             "tau<sub>Rd,c</sub> = (0.66/gamma<sub>v</sub>)(100 rho<sub>l</sub> "
-            "f<sub>ck</sub> d<sub>dg</sub>/d)<sup>1/3</sup>",
+            "f<sub>ck</sub> d<sub>dg</sub>/(k<sub>vp</sub>d))<sup>1/3</sup>",
             ref="EN 1992-1-1:2023 (8.27), stress",
             subst=f"(0.66/{_fmt(res['gamma_v'], 2)})(100 &#183; "
                   f"{_fmt(res['rho_l'], 4)} &#183; {_fmt(fck, 0)} &#183; "
-                  f"{_fmt(res['ddg'], 1)}/{_fmt(sh['d'], 1)})<sup>1/3</sup>",
+                  f"{_fmt(res['ddg'], 1)}/{_fmt(res.get('d_kvp'), 1)})"
+                  "<sup>1/3</sup>",
             result=f"tau = {_fmt(res['tau_basic'], 3)} MPa")
         self._formula(
             "tau<sub>Rd,c,min</sub> = (11/gamma<sub>v</sub>) "
@@ -973,17 +1074,15 @@ class ReportBuilder:
         self._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
                       result=f"{util_txt}  ({verdict})")
-        self._small("The 2023 tau<sub>Rd,c</sub> uses the aggregate size d<sub>dg</sub>"
-                    " = 16 + D<sub>lower</sub> and the flexural design yield; it does "
-                    "not use the axial stress. The with-links strain-based method "
-                    "(8.2.3) is a follow-up.")
-        if sh.get("n2023_tension"):
-            self._small("<b>Warning:</b> this formula carries no axial term, so the "
-                        "net axial TENSION on the section is ignored -- "
-                        "UNCONSERVATIVE, as tension lowers the real shear resistance "
-                        "(8.2.2(4) / 8.2.3, not implemented). Use a 2005 edition "
-                        "(k<sub>1</sub> sigma<sub>cp</sub>) or account for it "
-                        "separately.")
+        self._small(
+            "The 2023 tau<sub>Rd,c</sub> uses d<sub>dg</sub> = 16 + "
+            "D<sub>lower</sub>, the flexural design yield and the Formula (8.31) "
+            "axial-force modification. N<sub>Ed</sub> and M<sub>Ed</sub> include "
+            "the locked-in tendon prestress effects in accordance with 8.2.1(8). "
+            "Tendons are assumed parallel to the member axis "
+            "(cos beta = 1). "
+            "The with-links method (8.2.3) is not implemented."
+        )
 
     def _shear(self):
         sh = self.out["shear"]
@@ -1666,9 +1765,16 @@ class ReportBuilder:
             self._h2("Cracking threshold")
         lam = el.get("lambda_cr")
         verdict = "cracked" if el.get("cracked") else "uncracked"
+        crack_2023 = (
+            el.get("crack_edition") == "2023"
+            or "2023" in str(el.get("crack_code", ""))
+        )
         self._formula("lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
-                      ref="Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
-                          "(DS/EN 1992-1-1 &#167;7.1)",
+                      ref=("Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
+                           "(EN 1992-1-1:2023 &#167;9.2.1)"
+                           if crack_2023 else
+                           "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
+                           "(DS/EN 1992-1-1 &#167;7.1)"),
                       subst=f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
                             f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa",
                       result=f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
@@ -1824,36 +1930,101 @@ class ReportBuilder:
         self._h1("References and notes")
         lines = []
         if "plastic" in self.out:
-            lines.append(
-                "DS/EN 1992-1-1 (Eurocode 2): &#167;3.1.6 "
-                "(f<sub>cd</sub>), &#167;3.1.7 / Table 3.1 (concrete curve and "
-                "strains), &#167;3.2.7 (reinforcement), and &#167;6.1 (bending)."
-            )
+            if "2023" in str(self.inp.get("concrete_preset", "")):
+                lines.append(
+                    "Selected concrete material - EN 1992-1-1:2023: &#167;5.1.6 "
+                    "and Formulae (5.3)-(5.4) (f<sub>cd</sub>, eta<sub>cc</sub>, "
+                    "k<sub>tc</sub>), and &#167;8.1.1-8.1.2 / Formula (8.4) "
+                    "(bending and concrete compression law)."
+                )
+            else:
+                lines.append(
+                    "Selected concrete material - DS/EN 1992-1-1: &#167;3.1.6 "
+                    "(f<sub>cd</sub>), &#167;3.1.7 / Table 3.1 (concrete curve and "
+                    "strains), and &#167;6.1 (bending)."
+                )
+            if self.inp.get("bars"):
+                if "2023" in str(self.inp.get("mild_preset", "")):
+                    lines.append(
+                        "Selected reinforcing-steel material - EN 1992-1-1:2023 "
+                        "&#167;5.2.4 and Formula (5.11)."
+                    )
+                else:
+                    lines.append(
+                        "Selected reinforcing-steel material - DS/EN 1992-1-1 "
+                        "&#167;3.2.7."
+                    )
             lines.append(
                 "The capacity solver is covered by independent hand-calculation "
                 "regression cases."
             )
         if "elastic" in self.out:
             elastic = self.out["elastic"]
-            clauses = "&#167;7.1 (cracking threshold)"
+            crack_2023 = (
+                elastic.get("crack_edition") == "2023"
+                or "2023" in str(elastic.get("crack_code", ""))
+            )
+            clauses = (
+                "&#167;9.2.1 (cracking threshold)"
+                if crack_2023 else
+                "&#167;7.1 (cracking threshold)"
+            )
             if elastic.get("show_cw"):
-                clauses += " and &#167;7.3.2-7.3.4 (crack width)"
-            lines.append(f"DS/EN 1992-1-1 (Eurocode 2): {clauses}.")
+                clauses += (
+                    " and &#167;9.2.3 (refined crack control)"
+                    if crack_2023 else
+                    " and &#167;7.3.2-7.3.4 (crack width)"
+                )
+            edition = "EN 1992-1-1:2023" if crack_2023 else "DS/EN 1992-1-1"
+            lines.append(f"{edition} (Eurocode 2): {clauses}.")
             if "DK NA" in str(elastic.get("crack_code", "")):
                 lines.append(
                     "The Danish National Annex modifications to crack spacing and "
                     "effective tension-area height are stated with the calculation."
                 )
         if "shear" in self.out:
-            lines.append(
-                "The selected shear method and its clause references are stated "
-                "with the shear-resistance calculation."
-            )
+            sh = self.out["shear"]
+            if sh.get("model_2023"):
+                lines.append(
+                    "EN 1992-1-1:2023 &#167;8.2.1-8.2.2: Formulae (8.18), "
+                    "(8.20), (8.27), (8.30) and (8.31), including the axial-force "
+                    "factor k<sub>vp</sub> and prestressing effects."
+                )
+            elif "DK NA" in str(sh.get("method", "")):
+                lines.append(
+                    "The selected Danish shear method applies the DK NA:2024 "
+                    "v<sub>min</sub> and, where links are checked, the stated "
+                    "Danish concrete-strut factor. Intermediate values are printed "
+                    "with the calculation."
+                )
+            else:
+                lines.append(
+                    "The selected shear method and its clause references are stated "
+                    "with the shear-resistance calculation."
+                )
         if "torsion" in self.out:
+            tor = self.out["torsion"]
+            if "DK NA" in str(tor.get("method", "")):
+                lines.append(
+                    "The Danish torsion method applies the reported DK NA:2024 "
+                    "pure-torsion strut factor and any explicitly selected closed-"
+                    "stirrup detailing enhancement."
+                )
+            else:
+                lines.append(
+                    "The selected torsion method and its clause references are "
+                    "stated with the torsion-resistance calculation."
+                )
+        if self.out.get("combined", {}).get("valid"):
             lines.append(
-                "The selected torsion method and its clause references are stated "
-                "with the torsion-resistance calculation."
+                "The combined M-V-T chapter states the selected edition, the common "
+                "strut-angle basis and the applicable interaction expressions."
             )
+        lines.append(
+            "The printed gamma<sub>c</sub>, gamma<sub>s</sub> and reinforcement "
+            "factors are the final user-entered partial factors. Sector applies no "
+            "hidden construction-, control- or consequence-category multiplier."
+        )
         lines.append(
             "All results follow from the documented inputs and cited formulas; "
             "intermediate values are shown for the governing cases."

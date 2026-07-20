@@ -37,7 +37,7 @@ SCALAR_KEYS = [
     "qsv_layer_s", "qsv_bot_off_d", "qsv_top_off_d", "qsv_tnd_n",
     "qsv_tnd_a", "qsv_tnd_c_mm", "qsv_tnd_layers", "qsv_tnd_layer_s",
     # Concrete.
-    "conc_preset", "conc_fck", "conc_gamma_c", "conc_alpha_cc",
+    "conc_preset", "conc_fck", "conc_gamma_c", "conc_k_tc", "conc_alpha_cc",
     "conc_eps_c2", "conc_eps_cu2", "conc_n", "conc_Ec", "sls_fctm",
     # Mild reinforcement.
     "mild_preset", "mild_active_comp", "mild_fytk", "mild_fyck", "mild_futk",
@@ -162,6 +162,12 @@ def parse_project(text: str):
         raise ValueError("malformed 'tables' or 'scalars' section")
     tables = {k: _obj_to_table(raw_tables[k]) for k in TABLE_KEYS if k in raw_tables}
     scalars = {k: v for k, v in raw_scalars.items() if k in SCALAR_KEYS}
+    # Files saved before the explicit EN 1992-1-1:2023 applicability selector have
+    # no k_tc field. Migrate those deterministically to the general/other-case value
+    # instead of letting an unrelated preset value already in session state leak
+    # into the loaded calculation.
+    if "2023" in str(scalars.get("conc_preset", "")):
+        scalars.setdefault("conc_k_tc", 0.85)
     # The steel moduli are now entered in GPa; files written before that stored them
     # in MPa. A real modulus in GPa is at most a few hundred, so a value of 1000 or
     # more is unambiguously a legacy MPa figure -- rescale it so old projects load

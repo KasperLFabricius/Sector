@@ -167,6 +167,16 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     text = "\n".join(str(b) for b in manual.manual_blocks())
     assert "minimise the governing utilisation" in text   # note (a): one shared angle
     assert "shared closed stirrup" in text                # note (b)
+
+
+def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    assert "general / other cases" in text
+    assert "at-least-three-month" in text
+    assert "k_{vp}" in text and "a_{cs}" in text
+    assert "parallel to the member axis" in text and "beta=1" in text
+    assert "assumed fully anchored" in text
+    assert "reduced $f_{yk}$ / $f_{ywk}$" in text
     assert "per action" not in text                       # stale pre-v0.69 wording
 
 
