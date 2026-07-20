@@ -1,9 +1,10 @@
 """Design-code presets that assemble the material laws for a chosen edition.
 
-A design code fixes the partial safety factors and design coefficients and builds
-the concrete and reinforcement laws, so the user selects a code and a material
-grade rather than entering factors by hand. Selecting a code is optional -- the
-materials can still be defined manually for full control.
+A design-code preset supplies starting values for the partial safety factors and
+design coefficients and builds the concrete and reinforcement laws. The factors
+remain editable: the user enters the final effective values, including every
+applicable national increase or reduction. Sector never derives a construction,
+control or consequence category and applies no hidden category multiplier.
 
 Concrete (ULS)
     All editions use the parabola-rectangle design diagram
@@ -30,9 +31,9 @@ Reinforcement (ULS)
     modulus is left un-factored at ``Es`` (the code reduces the yield stress, not
     the modulus), so bars below yield carry their correct ``Es * eps`` force.
 
-Partial factors are the recommended / national values for the persistent and
-transient design situation. The Danish factors are the normal control-class
-values (the national consequence/control factor ``gamma_3 = 1.0``).
+Preset partial factors are recommended / national starting values for the
+persistent and transient design situation. Calculations use the final values on
+the material objects, not an immutable factor hidden in the selected preset.
 """
 
 from __future__ import annotations
@@ -195,9 +196,14 @@ class DesignCode:
         term = d_lower_mm if fck <= 60.0 else d_lower_mm * (60.0 / fck) ** 2
         return min(16.0 + term, 40.0)
 
-    def shear_crd_c_over_gamma(self) -> float:
-        """``C_Rd,c = 0.18 / gamma_c`` -- the VRd,c coefficient (2005 sec. 6.2.2(1))."""
-        return self.shear_crd_c / self.gamma_c
+    def shear_crd_c_over_gamma(self, gamma_c: Optional[float] = None) -> float:
+        """``C_Rd,c = 0.18 / gamma_c`` -- the VRd,c coefficient (2005 sec. 6.2.2(1)).
+
+        ``gamma_c`` may be the final user-entered effective factor. Omitting it
+        retains the preset value for standalone/reference calculations.
+        """
+        gc = self.gamma_c if gamma_c is None else float(gamma_c)
+        return self.shear_crd_c / gc
 
     def shear_nu1(self, fck: float) -> float:
         """Strength reduction factor ``nu1`` for concrete cracked in shear (VRd,max).
@@ -249,15 +255,18 @@ class DesignCode:
             return 2.5 * (1.0 - r)
         return 0.0
 
-    def shear_vmin(self, k: float, fck: float) -> float:
+    def shear_vmin(self, k: float, fck: float,
+                   gamma_c: Optional[float] = None) -> float:
         """``v_min`` (MPa) for shear resistance without links, sec. 6.2.2(1).
 
         Recommended ``0.035*k^1.5*sqrt(fck)``; the DK NA:2024 uses
         ``(0.051/gamma_c)*k^1.5*sqrt(fck)`` (``shear_vmin_over_gamma_c``).
+        ``gamma_c`` may be the final user-entered effective factor.
         """
         coeff = self.shear_vmin_coeff
         if self.shear_vmin_over_gamma_c:
-            coeff = coeff / self.gamma_c
+            gc = self.gamma_c if gamma_c is None else float(gamma_c)
+            coeff = coeff / gc
         return coeff * k ** 1.5 * math.sqrt(fck)
 
     def concrete_factor(self, fck: float) -> float:
@@ -318,9 +327,10 @@ EC2_2005 = DesignCode(
     alpha_cc=1.0,
 )
 
-# DS/EN 1992-1-1:2005 with the Danish National Annex (2024): in-situ reinforced
-# concrete at normal control class (gamma_3 = 1.0). The NA does not change
-# alpha_cc and mandates the horizontal reinforcement branch.
+# DS/EN 1992-1-1:2005 with the Danish National Annex (2024): starting values for
+# in-situ reinforced concrete. The user enters the final effective gamma_c/gamma_s;
+# Sector applies no construction/control/consequence-category multiplier. The NA
+# does not change alpha_cc and mandates the horizontal reinforcement branch.
 EC2_2005_DKNA = DesignCode(
     key="EC2-2005-DKNA2024",
     label="DS/EN 1992-1-1:2005 + DK NA:2024",

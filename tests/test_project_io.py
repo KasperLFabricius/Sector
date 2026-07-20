@@ -89,7 +89,9 @@ def test_round_trip_tables_and_scalars():
     tables = _tables()
     scalars = {"conc_fck": 55.0, "mode": "Both", "rep_author": "KLA",
                "conc_preset": "DS/EN 1992-1-1:2023", "conc_k_tc": 1.0,
-               "label_scale": 1.5}
+               "label_scale": 1.5, "torsion_subdivide": True,
+               "torsion_sub_x0": 0.0, "torsion_sub_y0": -100.0,
+               "torsion_sub_b0": 300.0, "torsion_sub_h0": 600.0}
     rt, rs = project_io.parse_project(project_io.dump_project(tables, scalars))
     assert rs == scalars
     for key, df in tables.items():

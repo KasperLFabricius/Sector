@@ -85,7 +85,7 @@ def test_strain_law_is_edition_aware():
 
 def test_dk_na_2024_partial_factors():
     code = codes.CODES["DS/EN 1992-1-1:2005 + DK NA:2024"]
-    # In-situ reinforced concrete, normal control class.
+    # Starting values only; the material panels own the final effective factors.
     assert (code.gamma_c, code.gamma_s, code.alpha_cc) == (1.45, 1.20, 1.0)
     assert code.concrete(35.0).fcd == pytest.approx(35.0 / 1.45)
     assert code.steel(500.0).stress(0.02, design=True) == pytest.approx(500.0 / 1.20)

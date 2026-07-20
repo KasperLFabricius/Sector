@@ -187,7 +187,8 @@ def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
 def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
           n_ed_comp_kn: float, ac_m2: float, *, fyd_mpa: float = 0.0,
           ddg_mm: float = 32.0, m_ed_knm: float = 0.0,
-          v_ed_kn: float = 0.0) -> dict:
+          v_ed_kn: float = 0.0, fcd_mpa: Optional[float] = None,
+          gamma_c: Optional[float] = None) -> dict:
     """Shear resistance without shear reinforcement, VRd,c (kN).
 
     Dispatches on the code's ``shear_model``: the 2005 variable-strut VRd,c
@@ -203,24 +204,26 @@ def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
             n_ed_tension_kn=-n_ed_comp_kn, m_ed_knm=m_ed_knm,
             v_ed_kn=v_ed_kn,
         )
+    gc = code.gamma_c if gamma_c is None else float(gamma_c)
     if d_mm <= 0.0 or bw_mm <= 0.0:
         return dict(vrd_c=0.0, k=0.0, rho_l=0.0, sigma_cp=0.0, fcd=0.0,
                     v_basic=0.0, v_floor=0.0, crd_c=0.0, vmin=0.0,
-                    k1=code.shear_k1, valid=False)
+                    k1=code.shear_k1, gamma_c=gc, valid=False)
     k = min(1.0 + math.sqrt(200.0 / d_mm), 2.0)
     rho_l = min(asl_mm2 / (bw_mm * d_mm), 0.02)
-    fcd = code.concrete_factor(fck) * fck / code.gamma_c                  # MPa
+    fcd = (code.concrete_factor(fck) * fck / gc
+           if fcd_mpa is None else float(fcd_mpa))                       # MPa
     sigma_cp = min(n_ed_comp_kn / ac_m2 / 1000.0 if ac_m2 > 0 else 0.0,   # kN/m2 -> MPa
                    0.2 * fcd)
-    crd_c = code.shear_crd_c_over_gamma()
-    vmin = code.shear_vmin(k, fck)
+    crd_c = code.shear_crd_c_over_gamma(gc)
+    vmin = code.shear_vmin(k, fck, gc)
     basic = crd_c * k * (100.0 * rho_l * fck) ** (1.0 / 3.0) + code.shear_k1 * sigma_cp
     floor = vmin + code.shear_k1 * sigma_cp
     stress = max(basic, floor, 0.0)                                       # MPa
     return dict(vrd_c=stress * bw_mm * d_mm / 1000.0,                     # kN
                 k=k, rho_l=rho_l, sigma_cp=sigma_cp, fcd=fcd,
                 v_basic=basic, v_floor=floor, crd_c=crd_c, vmin=vmin,
-                k1=code.shear_k1, valid=True)
+                k1=code.shear_k1, gamma_c=gc, valid=True)
 
 
 def optimum_cot_theta(a: float, b: float, cot_min: float, cot_max: float) -> float:
@@ -244,7 +247,9 @@ def optimum_cot_theta(a: float, b: float, cot_min: float, cot_max: float) -> flo
 
 def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
               fywk: float, n_ed_comp_kn: float, ac_m2: float, cot_min: float,
-              cot_max: float, z_mm: Optional[float] = None) -> dict:
+              cot_max: float, z_mm: Optional[float] = None, *,
+              fcd_mpa: Optional[float] = None,
+              gamma_s: Optional[float] = None) -> dict:
     """Shear resistance of a member with vertical links, sec. 6.2.3 (variable strut).
 
     Returns ``VRd,s`` (6.8) and ``VRd,max`` (6.9) at the strut angle ``theta`` that
@@ -255,12 +260,15 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
     ``ac_m2`` the gross concrete area (for ``sigma_cp``). ``z`` defaults to ``0.9 d``.
     """
     z = z_mm if (z_mm and z_mm > 0.0) else 0.9 * d_mm
+    gs = code.gamma_s if gamma_s is None else float(gamma_s)
     if d_mm <= 0.0 or bw_mm <= 0.0 or asw_over_s <= 0.0 or z <= 0.0:
         return dict(vrd_s=0.0, vrd_max=0.0, vrd=0.0, cot=0.0, theta_deg=0.0, z=z,
                     fywd=0.0, nu1=0.0, alpha_cw=0.0, sigma_cp=0.0, fcd=0.0,
-                    asw_over_s=asw_over_s, governs="none", valid=False)
-    fcd = code.concrete_factor(fck) * fck / code.gamma_c                  # MPa
-    fywd = fywk / code.gamma_s                                            # MPa
+                    gamma_s=gs, asw_over_s=asw_over_s, governs="none",
+                    valid=False)
+    fcd = (code.concrete_factor(fck) * fck / code.gamma_c
+           if fcd_mpa is None else float(fcd_mpa))                       # MPa
+    fywd = fywk / gs                                                     # MPa
     nu1 = code.shear_nu1(fck)
     # sigma_cp for alpha_cw is the mean axial stress (compression positive), NOT capped
     # at 0.2 fcd (6.11N spans the full 0..fcd range).
@@ -276,4 +284,5 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
     theta_deg = math.degrees(math.atan(1.0 / cot))
     return dict(vrd_s=vrd_s, vrd_max=vrd_max, vrd=vrd, cot=cot, theta_deg=theta_deg,
                 z=z, fywd=fywd, nu1=nu1, alpha_cw=alpha_cw, sigma_cp=sigma_cp,
-                fcd=fcd, asw_over_s=asw_over_s, governs=governs, valid=True)
+                fcd=fcd, gamma_s=gs, asw_over_s=asw_over_s,
+                governs=governs, valid=True)

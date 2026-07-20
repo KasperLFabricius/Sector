@@ -23,6 +23,7 @@ from sector.geometry import (
     distance_to_boundary,
     orient,
     points_inside_concrete,
+    rectangles_partition_concrete,
     signed_area,
 )
 
@@ -128,6 +129,72 @@ def test_signed_area_sign_flips_with_winding():
 def test_signed_area_degenerate_is_zero():
     assert signed_area([(0, 0), (1, 1)]) == 0.0
     assert signed_area([(0, 0)]) == 0.0
+
+
+def test_polygon_is_convex_detects_compound_reentrant_outline():
+    from sector.geometry import polygon_is_convex
+
+    rectangle = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    with_collinear = [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0),
+                      (1.0, 1.0), (0.0, 1.0)]
+    tee = [(-0.15, 0.0), (0.15, 0.0), (0.15, 0.45), (0.5, 0.45),
+           (0.5, 0.6), (-0.5, 0.6), (-0.5, 0.45), (-0.15, 0.45)]
+    assert polygon_is_convex(rectangle)
+    assert polygon_is_convex(list(reversed(rectangle)))  # winding independent
+    assert polygon_is_convex(with_collinear)
+    assert not polygon_is_convex(tee)
+    assert not polygon_is_convex([(0.0, 0.0), (1.0, 0.0)])
+
+
+def test_positioned_rectangles_form_valid_t_section_partition():
+    from sector import templates
+
+    outer = templates.t_section(1.0, 0.2, 0.3, 0.6)
+    # Web below the flange, followed by the top flange. Their boundaries touch
+    # at y = 0.2 m but their interiors do not overlap.
+    rectangles = [
+        (0.0, -0.1, 0.3, 0.6),
+        (0.0, 0.3, 1.0, 0.2),
+    ]
+    valid, reason = rectangles_partition_concrete(outer, [], rectangles)
+    assert valid
+    assert reason == ""
+
+
+@pytest.mark.parametrize(
+    ("rectangles", "reason_fragment"),
+    [
+        (
+            [(0.0, -0.05, 0.3, 0.6), (0.0, 0.3, 1.0, 0.2)],
+            "overlap",
+        ),
+        (
+            [(0.0, -0.1, 0.3, 0.5), (0.0, 0.3, 1.0, 0.2)],
+            "concrete net area",
+        ),
+        (
+            [(0.2, -0.1, 0.3, 0.6), (0.0, 0.3, 1.0, 0.2)],
+            "outside the concrete",
+        ),
+    ],
+)
+def test_invalid_t_section_partitions_are_rejected(rectangles, reason_fragment):
+    from sector import templates
+
+    outer = templates.t_section(1.0, 0.2, 0.3, 0.6)
+    valid, reason = rectangles_partition_concrete(outer, [], rectangles)
+    assert not valid
+    assert reason_fragment in reason
+
+
+def test_rectangle_intruding_into_void_is_rejected():
+    outer = _centered_rect(1.0, 1.0)
+    hole = _centered_rect(0.2, 0.2)
+    valid, reason = rectangles_partition_concrete(
+        outer, [hole], [(0.0, 0.0, 1.0, 1.0)]
+    )
+    assert not valid
+    assert "void" in reason
 
 
 def test_signed_area_translation_invariant():

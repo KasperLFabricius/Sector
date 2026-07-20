@@ -114,6 +114,32 @@ def signed_area(verts: Vertices) -> float:
     return 0.5 * float(np.sum(x * y1 - x1 * y))
 
 
+def polygon_is_convex(verts: Vertices, tol: float = 1e-12) -> bool:
+    """Whether a simple polygon has no re-entrant (concave) corner.
+
+    Collinear edge points are ignored, so a rectangle with intermediate points
+    remains convex. Fewer than three vertices and zero-area rings are not valid
+    convex polygons. Sector uses this as a conservative compound-section screen:
+    a concave T/L/I/flanged outline must be explicitly subdivided before the
+    thin-walled torsion model may issue a resistance verdict.
+    """
+    arr = _as_array(verts)
+    n = arr.shape[0]
+    area = signed_area(arr)
+    if n < 3 or abs(area) <= tol:
+        return False
+    orientation = 1.0 if area > 0.0 else -1.0
+    for i in range(n):
+        a = arr[i - 1]
+        b = arr[i]
+        c = arr[(i + 1) % n]
+        cross = ((b[0] - a[0]) * (c[1] - b[1])
+                 - (b[1] - a[1]) * (c[0] - b[0]))
+        if orientation * cross < -tol:
+            return False
+    return True
+
+
 _ZERO_MOMENTS = AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
@@ -371,6 +397,123 @@ def clip_halfplane(
     if not out:
         return np.empty((0, 2), dtype=float)
     return np.asarray(out, dtype=float)
+
+
+def _clip_to_axis_aligned_rectangle(
+    verts: Vertices, xmin: float, xmax: float, ymin: float, ymax: float
+) -> np.ndarray:
+    """Clip a polygon to an axis-aligned rectangle.
+
+    Four exact half-plane clips are used rather than a sampling grid. The signed
+    area of the result is therefore suitable for proving that a proposed torsion
+    sub-rectangle lies wholly inside a concrete polygon.
+    """
+    clipped = clip_halfplane(verts, 1.0, 0.0, -xmin)   # x >= xmin
+    clipped = clip_halfplane(clipped, -1.0, 0.0, xmax)  # x <= xmax
+    clipped = clip_halfplane(clipped, 0.0, 1.0, -ymin)  # y >= ymin
+    return clip_halfplane(clipped, 0.0, -1.0, ymax)     # y <= ymax
+
+
+def rectangles_partition_concrete(
+    outer: Vertices,
+    holes: Iterable[Vertices],
+    rectangles: Iterable[Sequence[float]],
+    rel_tol: float = 1e-6,
+) -> tuple[bool, str]:
+    """Validate an axis-aligned rectangular partition of a concrete section.
+
+    ``rectangles`` contains ``(centre_x, centre_y, width, height)`` in the same
+    units as ``outer``. A valid partition satisfies three geometry-backed
+    conditions:
+
+    * every rectangle lies wholly inside the outer ring and outside every void;
+    * rectangle interiors do not overlap (shared boundaries are allowed); and
+    * the sum of their areas equals the concrete net area.
+
+    Exact polygon/rectangle clipping supplies the containment areas. Together
+    with the non-overlap and equal-area checks, containment proves that the
+    rectangle union covers the concrete section (up to zero-area boundaries).
+    The explanatory string is empty for a valid partition and suitable for the
+    UI/report when invalid.
+    """
+    outer_arr = _as_array(outer)
+    hole_arrs = [
+        arr for arr in (_as_array(ring) for ring in holes)
+        if arr.shape[0] >= 3
+    ]
+    raw_rects = list(rectangles)
+    if outer_arr.shape[0] < 3 or abs(signed_area(outer_arr)) <= 0.0:
+        return False, "the concrete outline is degenerate"
+    if not raw_rects:
+        return False, "no sub-rectangles are defined"
+
+    net_area = abs(signed_area(outer_arr)) - sum(
+        abs(signed_area(ring)) for ring in hole_arrs
+    )
+    if net_area <= 0.0:
+        return False, "the concrete net area is zero"
+
+    bounds: list[tuple[float, float, float, float, float]] = []
+    for i, raw in enumerate(raw_rects):
+        if len(raw) != 4:
+            return False, f"sub-rectangle {i + 1} needs centre x/y, width and height"
+        cx, cy, width, height = (float(v) for v in raw)
+        if not all(math.isfinite(v) for v in (cx, cy, width, height)):
+            return False, f"sub-rectangle {i + 1} contains a non-finite value"
+        if width <= 0.0 or height <= 0.0:
+            return False, f"sub-rectangle {i + 1} has a non-positive dimension"
+        bounds.append((
+            cx - width / 2.0,
+            cx + width / 2.0,
+            cy - height / 2.0,
+            cy + height / 2.0,
+            width * height,
+        ))
+
+    total_rect_area = sum(item[4] for item in bounds)
+    area_scale = max(net_area, total_rect_area, 1e-12)
+    area_tol = max(1e-12, abs(float(rel_tol)) * area_scale)
+
+    for i, (xmin, xmax, ymin, ymax, rect_area) in enumerate(bounds):
+        outer_part = _clip_to_axis_aligned_rectangle(
+            outer_arr, xmin, xmax, ymin, ymax
+        )
+        contained_area = abs(signed_area(outer_part))
+        for hole in hole_arrs:
+            hole_part = _clip_to_axis_aligned_rectangle(
+                hole, xmin, xmax, ymin, ymax
+            )
+            contained_area -= abs(signed_area(hole_part))
+        missing = rect_area - max(0.0, contained_area)
+        if missing > area_tol:
+            return (
+                False,
+                f"sub-rectangle {i + 1} extends outside the concrete or into a void "
+                f"by {missing * 1e6:.1f} mm2",
+            )
+
+    for i, a in enumerate(bounds):
+        for j, b in enumerate(bounds[i + 1:], start=i + 1):
+            overlap_w = max(0.0, min(a[1], b[1]) - max(a[0], b[0]))
+            overlap_h = max(0.0, min(a[3], b[3]) - max(a[2], b[2]))
+            overlap = overlap_w * overlap_h
+            if overlap > area_tol:
+                return (
+                    False,
+                    f"sub-rectangles {i + 1} and {j + 1} overlap by "
+                    f"{overlap * 1e6:.1f} mm2",
+                )
+
+    area_difference = total_rect_area - net_area
+    if abs(area_difference) > area_tol:
+        relation = "exceeds" if area_difference > 0.0 else "is below"
+        return (
+            False,
+            "the total sub-rectangle area "
+            f"{relation} the concrete net area by "
+            f"{abs(area_difference) * 1e6:.1f} mm2",
+        )
+    return True, ""
 
 
 def _clip_pts(pts, a: float, b: float, c: float, eps: float = 0.0):

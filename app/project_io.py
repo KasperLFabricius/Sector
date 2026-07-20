@@ -64,6 +64,8 @@ SCALAR_KEYS = [
     "torsion_cot_min", "torsion_cot_max",
     # Sub-tube subdivision for compound / T-sections (6.3.1(3)).
     "torsion_subdivide", "torsion_nsub",
+    "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
+    "torsion_sub_x2", "torsion_sub_y2", "torsion_sub_x3", "torsion_sub_y3",
     "torsion_sub_b0", "torsion_sub_h0", "torsion_sub_b1", "torsion_sub_h1",
     "torsion_sub_b2", "torsion_sub_h2", "torsion_sub_b3", "torsion_sub_h3",
     # Combined M-V-T interaction.

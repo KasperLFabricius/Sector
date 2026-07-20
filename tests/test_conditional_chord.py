@@ -307,6 +307,29 @@ def _mvt(at, my=0.0, torsion=True):
     return at
 
 
+def _valid_t_subdivision(at):
+    """Apply a 1000 x 200 flange + 300 x 600 web and its positioned partition."""
+    at.session_state["_qs_open"] = True
+    at.run()
+    at.selectbox(key="shape").set_value("T-section").run()
+    at.number_input(key="bf_mm").set_value(1000.0).run()
+    at.number_input(key="hf_mm").set_value(200.0).run()
+    at.number_input(key="bw_mm").set_value(300.0).run()
+    at.number_input(key="hw_mm").set_value(600.0).run()
+    at.button(key="qs_apply").click().run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.checkbox(key="torsion_subdivide").set_value(True).run()
+    at.number_input(key="torsion_sub_x0").set_value(0.0).run()
+    at.number_input(key="torsion_sub_y0").set_value(-100.0).run()
+    at.number_input(key="torsion_sub_b0").set_value(300.0).run()
+    at.number_input(key="torsion_sub_h0").set_value(600.0).run()
+    at.number_input(key="torsion_sub_x1").set_value(0.0).run()
+    at.number_input(key="torsion_sub_y1").set_value(300.0).run()
+    at.number_input(key="torsion_sub_b1").set_value(1000.0).run()
+    at.number_input(key="torsion_sub_h1").set_value(200.0).run()
+    return at
+
+
 def test_app_chord_mrd_conditional_under_biaxial():
     # Biaxial run: the chord MRd is the conditional capacity -- strictly below the
     # uniaxial value -- the payload records the acting off moment, and the verdict
@@ -425,7 +448,7 @@ def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially()
     # biaxial is False): the off-axis torsion share is skipped regardless of biaxial
     # bending, so the marker must not be gated on biaxial (Codex round-2 P2).
     at = _fresh(); at.run()
-    at.checkbox(key="torsion_subdivide").set_value(True).run()
+    _valid_t_subdivision(at)
     _mvt(at)                                            # My = 0 -> uniaxial
     t = at.session_state["results"]["torsion"]
     assert t["subdivided"]

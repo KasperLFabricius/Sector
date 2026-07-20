@@ -854,7 +854,8 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
 
 
 def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
-                          title="V-T interaction (crushing)"):
+                          title="V-T interaction (crushing)",
+                          show_verdict=True):
     """Shear-torsion concrete-crushing envelope (EN 1992-1-1 6.29).
 
     The limit ``VEd/VRd,max + TEd/TRd,max = 1`` is the straight line from
@@ -889,8 +890,10 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
             fig.add_annotation(
                 x=v_ed, y=t_ed, ax=30, ay=26, showarrow=True, arrowhead=2,
                 arrowsize=0.7, arrowwidth=1, arrowcolor=GUIDE_LINE,
-                text=f"sum = {s:.2f} ({'OK' if ok else 'over'})",
-                font=dict(size=11, color=(ENVELOPE if ok else LOAD_POINT)))
+                text=(f"sum = {s:.2f} ({'OK' if ok else 'over'})"
+                      if show_verdict else f"sum = {s:.2f} (exploratory)"),
+                font=dict(size=11, color=(ENVELOPE if (show_verdict and ok)
+                                          else LOAD_POINT)))
     fig.add_trace(go.Scatter(
         x=[v_ed], y=[t_ed], mode="markers",
         marker=dict(size=11, color=LOAD_POINT, symbol="x"), name="applied",
@@ -963,49 +966,55 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
 def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
     """Component rectangles of a subdivided (compound) torsion section.
 
-    Each sub-tube is drawn at its true ``b x h`` (mm) with its wall centre-line, laid
-    out left to right (the web first), and labelled with its torsion share ``TEd,i`` /
-    capacity ``TRd,i`` and utilisation. A schematic of the decomposition (EN 1992-1-1
-    6.3.1(3)), not the assembled section.
+    Each sub-tube is drawn in its validated global ``(x, y)`` position at its true
+    ``b x h`` (mm), with its wall centre-line and torsion utilisation. This makes the
+    geometric partition used by the calculation directly auditable.
     """
     fig = go.Figure()
     subtubes = list(subtubes or [])
     if not subtubes:
         fig.update_layout(title=title, template=_TEMPLATE, height=340)
         return fig
-    gap = 0.12 * max(max(s["b_mm"], s["h_mm"]) for s in subtubes)
-    # One common label baseline just below the TALLEST rectangle, so the text blocks
-    # align in a row and never overlap their own rectangle's bottom edge.
-    label_y = -max(s["h_mm"] for s in subtubes) / 2.0
-    x0 = 0.0
     for i, s in enumerate(subtubes):
         b, h, tef = s["b_mm"], s["h_mm"], s["tube"]["tef"]
+        cx, cy = s.get("x_mm", 0.0), s.get("y_mm", 0.0)
+        xmin, xmax = cx - b / 2.0, cx + b / 2.0
+        ymin, ymax = cy - h / 2.0, cy + h / 2.0
         role = "web" if i == 0 else f"part {i + 1}"
         fig.add_trace(go.Scatter(
-            x=[x0, x0 + b, x0 + b, x0, x0], y=[-h / 2, -h / 2, h / 2, h / 2, -h / 2],
+            x=[xmin, xmax, xmax, xmin, xmin],
+            y=[ymin, ymin, ymax, ymax, ymin],
             fill="toself", mode="lines", fillcolor=CONCRETE_FILL,
-            line=dict(color=CONCRETE_LINE, width=2), name=role, hoverinfo="skip",
+            line=dict(color=CONCRETE_LINE, width=2), name=role,
+            customdata=[[cx, cy, b, h, s["t_ed"], s["trd"], s["util"]]] * 5,
+            hovertemplate=(
+                f"<b>{role}</b><br>"
+                "centre (%{customdata[0]:.0f}, %{customdata[1]:.0f}) mm<br>"
+                "b x h %{customdata[2]:.0f} x %{customdata[3]:.0f} mm<br>"
+                "TEd %{customdata[4]:.2f} kNm<br>"
+                "TRd %{customdata[5]:.2f} kNm<br>"
+                "util %{customdata[6]:.1%}<extra></extra>"
+            ),
             showlegend=False))
         if 0.0 < tef < min(b, h):            # wall centre-line, inset by tef/2
             fig.add_trace(go.Scatter(
-                x=[x0 + tef / 2, x0 + b - tef / 2, x0 + b - tef / 2, x0 + tef / 2,
-                   x0 + tef / 2],
-                y=[-h / 2 + tef / 2, -h / 2 + tef / 2, h / 2 - tef / 2, h / 2 - tef / 2,
-                   -h / 2 + tef / 2],
+                x=[xmin + tef / 2, xmax - tef / 2, xmax - tef / 2,
+                   xmin + tef / 2, xmin + tef / 2],
+                y=[ymin + tef / 2, ymin + tef / 2, ymax - tef / 2,
+                   ymax - tef / 2, ymin + tef / 2],
                 mode="lines", line=dict(color=ENVELOPE, width=1.5, dash="dash"),
                 hoverinfo="skip", showlegend=False))
         util_txt = "inf" if not math.isfinite(s["util"]) else f"{s['util'] * 100:.0f}%"
         fig.add_annotation(
-            x=x0 + b / 2, y=label_y, yshift=-12, yanchor="top", showarrow=False,
+            x=cx, y=cy, showarrow=False,
             text=(f"<b>{role}</b><br>{b:.0f} x {h:.0f} mm<br>"
-                  f"TEd {s['t_ed']:.1f} / TRd {s['trd']:.1f} kNm<br>util {util_txt}"),
+                  f"util {util_txt}"),
             font=dict(size=11, color=SCHEMATIC_INK), align="center")
-        x0 += b + gap
     fig.update_layout(
-        title=title, template=_TEMPLATE, height=380,
-        margin=dict(l=10, r=10, t=40, b=76),
-        xaxis=dict(title="", showticklabels=False, zeroline=False),
-        yaxis=dict(title="mm", scaleanchor="x", scaleratio=1, zeroline=False),
+        title=title, template=_TEMPLATE, height=420,
+        margin=dict(l=10, r=10, t=40, b=36),
+        xaxis=dict(title="x (mm)", zeroline=True),
+        yaxis=dict(title="y (mm)", scaleanchor="x", scaleratio=1, zeroline=True),
         showlegend=False)
     return fig
 

@@ -294,6 +294,13 @@ def _one_based(value):
 _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
 
 
+def _code_verdict(ok, applicable=True):
+    """Compliance wording that never turns an out-of-scope value into ``OK``."""
+    if not applicable:
+        return "NO CODE VERDICT - STRUT BOUNDS OUTSIDE RANGE"
+    return "OK" if ok else "EXCEEDED"
+
+
 class ReportBuilder:
     """Builds the PDF into ``buffer`` from ``meta``, ``inp`` and ``out``."""
 
@@ -1184,11 +1191,13 @@ class ReportBuilder:
                         "diameter and spacing (A<sub>sw</sub>/s must be &gt; 0).")
             return
         if links["out_of_limits"]:
-            self._small(f"Note: the strut bounds cot theta in "
+            self._small(f"Warning: the strut bounds cot theta in "
                         f"[{_fmt(links['cot_min'], 2)}, {_fmt(links['cot_max'], 2)}] "
                         f"fall outside the code range "
                         f"[{_fmt(links['cot_limit_lo'], 1)}, "
-                        f"{_fmt(links['cot_limit_hi'], 1)}] (6.7N / 6.7a NA).")
+                        f"{_fmt(links['cot_limit_hi'], 1)}] (6.7N / 6.7a NA). "
+                        "The values below are exploratory; no compliance verdict "
+                        "applies to the links or dependent interaction checks.")
         rows = [["Quantity", "Symbol", "Value"],
                 ["Links", "n x phi / s",
                  f"{_fmt(links['legs'], 0)} x {_fmt(links['dia'], 0)} / "
@@ -1226,7 +1235,9 @@ class ReportBuilder:
                    f"(governed by {lk['governs']})")
         util = links["util"]
         util_txt = _pct(util)
-        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
+        verdict = _code_verdict(
+            viz.util_ok(util), links.get("code_applicable", True)
+        )
         self._formula("V<sub>Ed</sub> / V<sub>Rd</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
                       result=f"{util_txt}  ({verdict})")
@@ -1251,7 +1262,7 @@ class ReportBuilder:
         if ch is not None and ch.get("valid"):
             self._h2("Longitudinal chord: bending + shear"
                      + (" + torsion" if ch.get("has_torsion") else "") + " tension")
-            vv = "OK" if ch["ok"] else "EXCEEDED"
+            vv = _code_verdict(ch["ok"], ch.get("code_applicable", True))
             face = viz.tension_face_label(ch.get("tension_low", True))
             self._formula(
                 "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>"
@@ -1310,7 +1321,12 @@ class ReportBuilder:
                 ["Torsion T", _pct(c["r_t"])]]
         self._table(rows, [90 * mm, 60 * mm])
         self._h2("DK NA 6.3.2(6): sum(SEd/SRd) &#8804; 1")
-        verdict = "OK" if c["dkna_ok"] else "EXCEEDED"
+        applicable = c.get("code_applicable", True)
+        if not applicable:
+            self._small("Warning: one or more active strut-angle bounds fall outside "
+                        "the method's code range. The combined values are exploratory "
+                        "and carry no compliance verdict.")
+        verdict = _code_verdict(c["dkna_ok"], applicable)
         if c["m_v_independent"]:
             expr = "max(r<sub>M</sub> + r<sub>T</sub>, r<sub>V</sub> + r<sub>T</sub>)"
             note = ("M and V checked separately (shear longitudinal steel provided); "
@@ -1324,7 +1340,9 @@ class ReportBuilder:
         if cr is not None and cr.get("valid"):
             self._h2("Concrete crushing (6.29)")
             val = cr["value"]
-            vv = "OK" if viz.util_ok(val) else "EXCEEDED"
+            vv = _code_verdict(
+                viz.util_ok(val), cr.get("code_applicable", applicable)
+            )
             self._formula(
                 "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
                 ref="EN 1992-1-1 (6.29)",
@@ -1334,7 +1352,10 @@ class ReportBuilder:
             self._small(f"At a common strut cot theta = {_fmt(cr['cot'], 2)} "
                         f"({_fmt(cr['theta_deg'], 1)} deg).")
             self._fig(viz.vt_interaction_figure(cr["vrd_max"], cr["trd_max"],
-                                                cr["v_ed"], cr["t_ed"]), 120, 100)
+                                                cr["v_ed"], cr["t_ed"],
+                                                show_verdict=cr.get(
+                                                    "code_applicable", applicable)),
+                      120, 100)
         elif cr is not None and not cr.get("valid"):
             self._h2("Concrete crushing (6.29)")
             self._small("Not evaluated: the shear and torsion cot theta bands do not "
@@ -1346,7 +1367,7 @@ class ReportBuilder:
                         "overlap, so no single strut angle satisfies both.")
         elif tr is not None:
             self._h2("Shared stirrup (shear + torsion transverse steel)")
-            vv = "OK" if tr["ok"] else "EXCEEDED"
+            vv = _code_verdict(tr["ok"], applicable)
             if tr["shear_credited"]:
                 note = (f"V<sub>Ed</sub> = {_fmt(tr['v_ed'], 1)} &#8804; V<sub>Rd,c</sub>"
                         f" = {_fmt(tr['vrd_c'], 1)} kN, so the concrete carries the "
@@ -1369,7 +1390,7 @@ class ReportBuilder:
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
-            vv = "OK" if lg["ok"] else "EXCEEDED"
+            vv = _code_verdict(lg["ok"], applicable)
             ax = lg["axis"]
             face = viz.tension_face_label(lg.get("tension_low", True))
             face_desc = (f"the shear tension face ({face})" if lg.get("gets_shift", True)
@@ -1457,7 +1478,7 @@ class ReportBuilder:
             return
         self._h2(f"Off-axis chord (about {och['axis']}, governing face): "
                  "bending + torsion tension")
-        vv = "OK" if och["ok"] else "EXCEEDED"
+        vv = _code_verdict(och["ok"], och.get("code_applicable", True))
         face = viz.tension_face_label(och.get("tension_low", True))
         self._p(
             f"The governing tension chord is the {face} face about the "
@@ -1493,24 +1514,31 @@ class ReportBuilder:
                 "thin-walled tube. T<sub>Rd</sub> is the SUM of the sub-tube capacities "
                 "(6.3.1(3)) and the applied T<sub>Ed</sub> is split by uncracked "
                 "torsional stiffness C = beta h b<sup>3</sup> (6.3.1(4)). The first "
-                "rectangle (web) carries the shear in the combined V+T checks.")
-        rows = [["Sub-tube", "b x h (mm)", "t<sub>ef</sub>", "A<sub>k</sub> (mm2)",
-                 "share", "T<sub>Ed,i</sub>", "T<sub>Rd,i</sub>", "util", "governs"]]
+                "rectangle (web) carries the shear in the combined V+T checks. Its "
+                "positioned rectangle union has been validated against the concrete "
+                "outline and voids before these results are issued.")
+        rows = [["Sub-tube", "centre x, y<br/>b x h (mm)", "t<sub>ef</sub>",
+                 "A<sub>k</sub> (mm2)", "share", "T<sub>Ed,i</sub>",
+                 "T<sub>Rd,i</sub>", "util", "governs"]]
         for i, s in enumerate(subs):
             role = "web" if i == 0 else f"part {i + 1}"
             ut = ("inf" if not math.isfinite(s["util"])
                   else f"{_fmt(s['util'] * 100, 0)}%")
-            rows.append([role, f"{_fmt(s['b_mm'], 0)}x{_fmt(s['h_mm'], 0)}",
+            rows.append([role,
+                         f"({_fmt(s['x_mm'], 0)}, {_fmt(s['y_mm'], 0)})<br/>"
+                         f"{_fmt(s['b_mm'], 0)}x{_fmt(s['h_mm'], 0)}",
                          _fmt(s["tube"]["tef"], 1), _fmt(s["tube"]["Ak"] * 1e6, 0),
                          f"{_fmt(s['stiffness'] / c_tot * 100, 0)}%",
                          _fmt(s["t_ed"], 2), _fmt(s["trd"], 2), ut, s["governs"]])
-        self._table(rows, [16 * mm, 22 * mm, 14 * mm, 20 * mm, 13 * mm, 16 * mm,
+        self._table(rows, [16 * mm, 24 * mm, 14 * mm, 18 * mm, 13 * mm, 16 * mm,
                            16 * mm, 12 * mm, 25 * mm])
         # The torque is split by STIFFNESS, not capacity, so the governing check is the
         # WORST sub-tube (max util), not TEd / sum(TRd_i).
         util = t["util"]
         util_txt = _pct(util)
-        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
+        verdict = _code_verdict(
+            viz.util_ok(util), t.get("code_applicable", True)
+        )
         g = t.get("governing_sub")
         gov = ("web" if g == 0 else f"part {g + 1}") if g is not None else "-"
         self._formula(
@@ -1544,7 +1572,9 @@ class ReportBuilder:
             return
         val = inter["value"]
         val_txt = _pct(val)
-        verdict_i = "OK" if viz.util_ok(val) else "EXCEEDED"
+        verdict_i = _code_verdict(
+            viz.util_ok(val), inter.get("code_applicable", True)
+        )
         self._formula(
             "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
             ref="EN 1992-1-1 (6.29)",
@@ -1556,7 +1586,10 @@ class ReportBuilder:
                     "T<sub>Rd,max</sub> and V<sub>Rd,max</sub> here are at that shared "
                     "angle.")
         self._fig(viz.vt_interaction_figure(inter["vrd_max"], inter["trd_max"],
-                                            inter["v_ed"], inter["t_ed"]), 120, 100)
+                                            inter["v_ed"], inter["t_ed"],
+                                            show_verdict=inter.get(
+                                                "code_applicable", True)),
+                  120, 100)
 
     def _torsion(self):
         t = self.out["torsion"]
@@ -1575,14 +1608,33 @@ class ReportBuilder:
                 self._small("Torsion not evaluated: a multi-cell section (two or "
                             "more voids) needs sub-division into separate tubes "
                             "(6.3.2(1)); the single-tube idealisation is not applied.")
+            elif t.get("reason") == "compound outline requires subdivision":
+                self._small("Torsion not evaluated: the re-entrant/compound outline "
+                            "(for example T, L or I) requires component sub-sections "
+                            "under EN 1992-1-1 6.3.1(3). Enable sub-tubes and define "
+                            "rectangles that partition the section before a "
+                            "resistance or compliance verdict is issued.")
+            elif str(t.get("reason") or "").startswith(
+                    "invalid sub-tube partition:"):
+                detail = (t.get("subdivision_reason")
+                          or str(t["reason"]).split(":", 1)[-1].strip())
+                self._small(
+                    "Torsion not evaluated: the positioned sub-rectangles do not "
+                    f"form the concrete section ({detail}). Adjust each centre x/y "
+                    "and b/h so their non-overlapping union equals the concrete net "
+                    "area and does not enter a void. No torsion or dependent "
+                    "interaction compliance verdict is issued."
+                )
             else:
                 self._small("Warning: the tube could not be formed (a degenerate or "
                             "too-thin section).")
             return
         if t["out_of_limits"]:
-            self._small("Note: the strut bounds cot theta in "
+            self._small("Warning: the strut bounds cot theta in "
                         f"[{_fmt(t['cot_min'], 2)}, {_fmt(t['cot_max'], 2)}] fall "
-                        "outside the code range 1..2.5 (6.7N / 6.7a NA).")
+                        "outside the code range 1..2.5 (6.7N / 6.7a NA). Values are "
+                        "exploratory; no compliance verdict applies to torsion or "
+                        "dependent interaction checks.")
         if t.get("subdivided"):
             self._h2("Sub-tubes (compound section, 6.3.1(3))")
             self._subtube_section(t)
@@ -1643,7 +1695,9 @@ class ReportBuilder:
             result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN.m")
         util = t["util"]
         util_txt = _pct(util)
-        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
+        verdict = _code_verdict(
+            viz.util_ok(util), t.get("code_applicable", True)
+        )
         self._h2("Utilisation and longitudinal steel")
         self._formula("T<sub>Ed</sub> / T<sub>Rd</sub>",
                       subst=f"{_fmt(t['t_ed'], 3)} / {_fmt(t['trd'], 3)}",

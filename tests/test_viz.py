@@ -482,14 +482,14 @@ def test_vt_figure_subscripts_and_capacity_marker():
     assert any("capacity (this direction)" in n for n in names)
 
 
-def test_subtube_labels_share_a_baseline_below_the_tallest():
-    subs = [_sub(300, 600, 100.0, 0.10, 24.6, 90.0, 0.27),
-            _sub(1000, 200, 91.0, 0.15, 15.4, 58.5, 0.26)]
+def test_subtube_labels_follow_validated_global_centres():
+    subs = [_sub(300, 600, 100.0, 0.10, 24.6, 90.0, 0.27, 0.0, -100.0),
+            _sub(1000, 200, 91.0, 0.15, 15.4, 58.5, 0.26, 0.0, 300.0)]
     fig = viz.subtube_figure(subs)
     anns = fig.layout.annotations
     assert len(anns) == 2
-    assert all(a.yanchor == "top" for a in anns)     # text hangs below the anchor
-    assert anns[0].y == anns[1].y == -300.0          # common baseline (tallest h/2)
+    assert anns[0].y == pytest.approx(-100.0)
+    assert anns[1].y == pytest.approx(300.0)
 
 
 def test_concrete_curve_labels_design_plateau():
@@ -543,20 +543,23 @@ def test_interaction_nm_landmark_uses_signed_max():
     assert ann and ann[0].x == pytest.approx(200.0)    # positive max, not the -350 apex
 
 
-def _sub(b, h, tef, ak, ted, trd, util):
-    return dict(tube={"tef": tef, "Ak": ak}, b_mm=b, h_mm=h, stiffness=0.003,
+def _sub(b, h, tef, ak, ted, trd, util, cx=0.0, cy=0.0):
+    return dict(tube={"tef": tef, "Ak": ak}, b_mm=b, h_mm=h,
+                x_mm=cx, y_mm=cy, stiffness=0.003,
                 t_ed=ted, trd=trd, util=util, governs="stirrups")
 
 
 def test_subtube_figure_draws_each_rectangle_with_walls():
-    subs = [_sub(300, 600, 100.0, 0.10, 24.6, 90.0, 0.27),
-            _sub(1000, 200, 91.0, 0.15, 15.4, 58.5, 0.26)]
+    subs = [_sub(300, 600, 100.0, 0.10, 24.6, 90.0, 0.27, 0.0, -100.0),
+            _sub(1000, 200, 91.0, 0.15, 15.4, 58.5, 0.26, 0.0, 300.0)]
     fig = viz.subtube_figure(subs)
     # Two rectangle outlines + two wall centre-lines = 4 traces; equal aspect.
     assert len(fig.data) == 4
     assert fig.layout.yaxis.scaleanchor == "x"
-    # Four annotations (one label per sub-tube).
+    # One annotation per sub-tube, drawn at the validated global centres.
     assert len(fig.layout.annotations) == 2
+    assert fig.layout.annotations[0].y == pytest.approx(-100.0)
+    assert fig.layout.annotations[1].y == pytest.approx(300.0)
 
 
 def test_subtube_figure_empty_is_safe():

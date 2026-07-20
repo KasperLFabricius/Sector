@@ -519,8 +519,12 @@ def manual_blocks() -> list:
 
     h1("Materials")
     md("Each material can be entered by hand or loaded from a code preset, then "
-       "adjusted. The presets carry the partial factors and the curve shape; the "
-       "*Preset* dropdown at the top of each material sets them.")
+       "adjusted. The presets supply starting values for the partial factors and the "
+       "curve shape; the *Preset* dropdown at the top of each material sets them.")
+    call("limit", "Enter the **final effective** material partial factors in the "
+         "material panels, including every applicable national increase or reduction "
+         "for construction, control and consequence category. Sector does not ask for "
+         "those categories and applies no hidden category multiplier.")
     h2("Concrete")
     md("The concrete stress-strain law is chosen by the *Preset*: **Curve 2 "
        "(parabola-rectangle)**, the EC2 design law used throughout this manual, or "
@@ -625,7 +629,8 @@ def manual_blocks() -> list:
          "steel) allow $1 \\leq \\cot\\theta \\leq 2.5$; the DK NA takes the strut "
          "factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 NA) rather "
          "than the recommended $\\nu = 0.6(1 - f_{ck}/250)$. Bounds outside the "
-         "code range are accepted but **warned**, not blocked.")
+         "code range are accepted for exploration, but Sector withholds the code "
+         "verdict for the links and every dependent interaction check.")
     h2("Torsion (TRd, thin-walled tube)")
     md("With **Check torsion capacity** on, Sector idealises the section as a "
        "thin-walled closed tube (6.3) and reports the closed-stirrup resistance "
@@ -643,6 +648,16 @@ def manual_blocks() -> list:
          "$\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA). When shear links are also "
          "defined, the combined concrete-crushing check "
          "$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\leq 1$ (6.29) is added.")
+    call("limit", "A re-entrant T, L, I or flanged outline is a compound section. "
+         "Sector detects it and withholds the single-tube resistance and verdict until "
+         "**Subdivide into sub-tubes** is enabled and positioned component rectangles "
+         "are defined by global centre x/y and b/h (6.3.1(3)). Sector checks that their "
+         "non-overlapping union equals the concrete net area, stays inside the outline "
+         "and does not enter a void; until that geometric partition is valid, torsion "
+         "and dependent interaction are not evaluated. Older projects that stored only "
+         "sub-tube dimensions must add the centre coordinates before recalculation. "
+         "Multi-cell sections likewise require subdivision. Strut bounds outside the "
+         "code range remain visible for exploration but receive no code verdict.")
     h2("Combined M-V-T interaction")
     md("With **Check combined M-V-T** on, Sector ties the bending (plastic $M$), "
        "shear ($V$) and torsion ($T$) checks together under **one shared code "
@@ -1040,9 +1055,12 @@ def manual_blocks() -> list:
          "a further 0.7 on the pure-shear expression for the circulatory shear "
          "flow. Note $\\nu_t$ has NO lower bound: the 0.45 floor of 5.103 NA "
          "belongs to $\\nu_v$ only, so above C50 $\\nu_t$ keeps falling. Only solid and "
-         "single-cell (box) sections are idealised automatically; a multi-cell "
-         "section (two or more voids) is rejected (6.3.2(1) needs sub-division), and "
-         "a curved outline should have $t_{ef}$ entered by hand.")
+         "single-cell (box) sections are idealised automatically; a multi-cell section "
+         "(two or more voids) and a re-entrant compound outline (T, L, I or flanged) "
+         "require explicit sub-division (6.3.1(3)); the single-tube resistance and "
+         "verdict are withheld until component rectangles are defined. A curved "
+         "outline should have $t_{ef}$ entered by hand. Bounds outside the permitted "
+         "$\\cot\\theta$ range may be explored, but no code verdict is issued.")
     md("**Worked** (300 x 600 mm rectangle, C35, DK NA:2024, closed $\\phi$10 "
        "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, $t_{ef} = 100$ mm, "
        "$A_k = 0.1$ m$^2$, $u_k = 1.4$ m, $\\nu_t = 0.368$. At the optimum "
