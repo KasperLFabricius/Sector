@@ -104,7 +104,7 @@ def _warm_solver():
     """Compile the solver kernels in a background thread, so the ~1 s JIT warm-up
     does not block the first paint.
 
-    The live Section and Stress-Strain views never call the kernels, so the page is
+    The live Section and Material laws views never call the kernels, so the page is
     interactive while the thread compiles; by the time a section is defined and
     Calculate is pressed the warm-up is normally finished. A Calculate that races
     the thread is safe -- numba's per-dispatcher compile lock makes the second
@@ -2432,7 +2432,7 @@ def build_inputs(host=st):
         st.divider()
         st.markdown(f"**Sector v{APP_VERSION}**")
         st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
-        st.caption("Internal engineering tool, Sweco.")
+        st.caption("Proprietary internal engineering tool, Sweco.")
         if st.button("User manual", key="open_manual", width="stretch",
                      help="Open the full-width user manual: what Sector computes, "
                           "the theory it applies, its features, and how to use it."):
@@ -2639,7 +2639,7 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                          dx=p.dx, dy=p.dy) for p in pts],
         )
         # Opt-in N-M interaction diagrams, one about each bending axis. For each axis
-        # trace the +M branch (neutral-axis angle V) and the -M branch (V+180) from
+        # trace the +M branch (NA angle stored as V) and the -M branch (V+180) from
         # pure tension to the squash load, then join them into one closed capacity
         # boundary. About x uses a horizontal neutral axis (V = 90/270, Mx varies);
         # about y a vertical one (V = 0/180, My varies).
@@ -3392,27 +3392,27 @@ def _run_capacity_checks(inp, out):
 # ---------------------------------------------------------------------------
 # Views (main area). A "View" dropdown selects what fills the main viewport,
 # the way BriCoS switches between its result diagrams. The Section drawing and
-# the stress-strain diagrams reflect the inputs live; the Plastic and Elastic
+# the material-law diagrams reflect the inputs live; the Plastic and Elastic
 # result views need a Calculate.
 # ---------------------------------------------------------------------------
 
 # View order follows the results workflow: the live input previews first, then the
 # plastic bending results (envelope + its N-M diagram kept adjacent), then elastic,
 # then the shear/torsion/combined checks.
-VIEWS = ["Section", "Stress-Strain diagrams", "Results Overview",
+VIEWS = ["Section", "Material laws", "Results Overview",
          "Plastic Results", "N-M Interaction", "Elastic Results",
          "Shear", "Torsion", "M-V-T Combined"]
 # The result views (everything except the two live input previews) -- used for the
 # staleness banner and to know which views need a Calculate.
 _RESULT_VIEWS = tuple(v for v in VIEWS
-                      if v not in ("Section", "Stress-Strain diagrams"))
+                      if v not in ("Section", "Material laws"))
 
 
 def _memo_fig(name, sig, build):
     """Return a cached live figure, rebuilding only when its inputs change.
 
     Streamlit reruns the whole script on every widget change, so the live Section
-    and Stress-Strain views would otherwise re-run the ~10-20 ms plotly figure
+    and Material laws views would otherwise re-run the ~10-20 ms plotly figure
     construction each time -- e.g. rebuilding the material curves when the user
     only touched a load. One slot per figure kind is kept in session state, keyed
     by ``sig`` (compared by value); the figure is reused in place rather than
@@ -3551,7 +3551,7 @@ def _plastic_table(pts, cable, steel_comp=False):
                   if steel_comp else
                   {f"{_EPS}s (%)": [round(pt["eps_s"], 3) for pt in pts]})
     cols = {
-        "V (deg)": [round(pt["V"], 1) for pt in pts],
+        "NA angle (deg)": [round(pt["V"], 1) for pt in pts],
         "Mx (kNm)": [round(pt["Mx"], 3) for pt in pts],
         "My (kNm)": [round(pt["My"], 3) for pt in pts],
         "NA x (mm)": [_fmt(pt["na_x"] * _MM) for pt in pts],
@@ -3559,10 +3559,10 @@ def _plastic_table(pts, cable, steel_comp=False):
         f"{_EPS}c (%)": [round(pt["eps_c"], 3) for pt in pts],
         **eps_s_cols,
         f"{_KAPPA} (1/m)": [round(pt["kappa"], 4) for pt in pts],
-        "Comp (kN)": [round(pt["comp_force"], 3) for pt in pts],
-        "L (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
-        "Dx (mm)": [round(pt["dx"] * _MM, 3) for pt in pts],
-        "Dy (mm)": [round(pt["dy"] * _MM, 3) for pt in pts],
+        "Fc (kN)": [round(pt["comp_force"], 3) for pt in pts],
+        "Lever L (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
+        "dx (mm)": [round(pt["dx"] * _MM, 3) for pt in pts],
+        "dy (mm)": [round(pt["dy"] * _MM, 3) for pt in pts],
     }
     if cable:
         cols[f"{_EPS}cable (%)"] = [round(pt["eps_cable"], 3) for pt in pts]
@@ -3650,7 +3650,9 @@ def plastic_view(inp, results):
     if st.session_state.get("pl_state", 0) >= len(pts):
         st.session_state["pl_state"] = default_i
     sel = st.selectbox("Neutral-axis state", range(len(pts)), index=default_i,
-                       format_func=lambda i: f"{i + 1}: V = {pts[i]['V']:.0f} deg",
+                       format_func=lambda i: (
+                           f"{i + 1}: NA angle = {pts[i]['V']:.0f} deg"
+                       ),
                        key="pl_state",
                        help="Inspect the section state at one swept neutral-axis angle.")
     pt = pts[sel]
@@ -3678,7 +3680,7 @@ def plastic_view(inp, results):
                                bar_colors=bar_colors, tendons=tendon_xy,
                                tendon_colors=tendon_colors,
                                zones=viz.compression_zones(inp["outer"], hp),
-                               title=f"Section at V = {pt['V']:.0f} deg "
+                               title=f"Section at NA angle = {pt['V']:.0f} deg "
                                      "(tension + / compression -)",
                                show_labels=True, label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
@@ -3721,7 +3723,7 @@ def plastic_view(inp, results):
     evidence = presentation.plastic_state_evidence(inp, pt)
     with st.expander("Selected neutral-axis state - QA evidence", expanded=False):
         st.caption(
-            f"Point-by-point design stress and compatible strain at V = "
+            f"Point-by-point design stress and compatible strain at NA angle = "
             f"{pt['V']:.0f} deg. Signs are tension positive; reinforcement force "
             "is stress x entered area."
         )
@@ -4215,6 +4217,23 @@ def shear_view(inp, results):
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
                f"{sh['method']}. The axial action uses the plastic axial force "
                f"N = {sh['n_ed']:.1f} kN (tension-positive){pre_note}.")
+
+    links_payload = sh.get("links") or {}
+    link_res = links_payload.get("res") or {}
+    z_geometry = float(link_res.get("z", res.get("z", 0.9 * sh["d"])))
+    bw_source = "user input" if sh["bw_user"] else "auto minimum solid width"
+    st.plotly_chart(
+        viz.shear_geometry_figure(
+            inp.get("outer", []), inp.get("holes", []), inp.get("bars", []),
+            axis=sh["axis"], tension_low=sh["tension_low"],
+            centroid=sh["centroid"], asl_bar_ids=sh.get("asl_bar_ids", []),
+            asl_cg_m=sh.get("asl_cg"), asl_mm2=sh["asl"],
+            d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
+            bw_source=bw_source,
+            title=f"Shear geometry - {face_lbl} tension",
+        ),
+        width="stretch",
+    )
 
     bw_note = ("user input" if sh["bw_user"]
                else f"auto = min solid width {sh['bw_auto']:.1f} mm")
@@ -4860,7 +4879,10 @@ def combined_view(inp, results):
                    "links for the full longitudinal-steel utilisation check.")
 
 
-_VIEW_ALIASES = {"M-V-T Interaction": "M-V-T Combined"}
+_VIEW_ALIASES = {
+    "M-V-T Interaction": "M-V-T Combined",
+    "Stress-Strain diagrams": "Material laws",
+}
 
 
 @st.fragment
@@ -4958,7 +4980,7 @@ def _analysis_workspace(inp):
         # A valid calculation from a live input view moves directly to its natural
         # result view in this same run. An invalid section returns {}, so it stays put.
         if (
-            current_view in ("Section", "Stress-Strain diagrams")
+            current_view in ("Section", "Material laws")
             and st.session_state["results"]
         ):
             current_view = "Results Overview"
@@ -4966,7 +4988,7 @@ def _analysis_workspace(inp):
 
     view = c_view.selectbox(
         "View", VIEWS, key="view",
-        help="What to show in the main area. Section and Stress-Strain diagrams "
+        help="What to show in the main area. Section and Material laws "
              "update live; the result views need a Calculate.",
     )
     st.session_state["_workspace_view"] = view
@@ -5004,7 +5026,7 @@ def _analysis_workspace(inp):
 
     if view == "Section":
         section_view(inp)
-    elif view == "Stress-Strain diagrams":
+    elif view == "Material laws":
         materials_view(inp)
     elif view == "Results Overview":
         results_overview_view(inp, results, stale=stale)

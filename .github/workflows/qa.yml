@@ -75,7 +75,12 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-build.txt
 
       - name: Build Sector
-        run: python -m PyInstaller --noconfirm --clean packaging/sector.spec
+        shell: pwsh
+        run: |
+          python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
+          python -m PyInstaller --noconfirm --clean packaging/sector.spec
+          Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
+          Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
 
       - name: Verify package contents
         shell: pwsh
@@ -91,6 +96,12 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath "dist/Sector/_internal/sector/sector_build_info.json")) {
             throw "Packaged source-provenance manifest is missing"
+          }
+          if (-not (Test-Path -LiteralPath "dist/Sector/LICENSE.txt")) {
+            throw "Sector proprietary notice is missing"
+          }
+          if (-not (Test-Path -LiteralPath "dist/Sector/THIRD_PARTY_NOTICES.txt")) {
+            throw "Third-party notice bundle is missing"
           }
 
       - name: Upload Windows package

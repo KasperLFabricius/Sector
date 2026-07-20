@@ -93,6 +93,17 @@ def test_manual_covers_both_examples_and_all_crack_editions():
     assert "mild steel" in text.lower() and "prestress" in text.lower()
 
 
+def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
+    blocks = manual.manual_blocks()
+    text = "\n".join(str(block) for block in blocks)
+    assert "Material laws" in text
+    assert "Stress-Strain diagrams" not in text
+    for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{sw}/s",
+                 "TOTAL", "LONG", "DIF", "RST1", "F_c"):
+        assert term in text
+    assert "No shear, torsion" not in text
+
+
 def test_manual_has_the_expected_parts_in_order():
     parts = [b[1] for b in manual.manual_blocks() if b[0] == "part"]
     assert parts == ["Part A - Get started", "Part B - Features & options",

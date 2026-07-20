@@ -209,8 +209,7 @@ def _curved_arrow(fig, cx, cy, r, a0, a1, color):
 
 
 def fig_sign_convention():
-    """Schematic of the centroidal axes and the positive senses of N, Mx, My and
-    the neutral-axis sweep angle V."""
+    """Centroidal axes, action signs and the neutral-axis sweep angle."""
     import math
     fig = _schematic()
     ink = viz.SCHEMATIC_INK
@@ -246,11 +245,12 @@ def fig_sign_convention():
                   viz.LOAD_POINT)
     fig.add_annotation(x=0.0, y=2.85, text="M<sub>y</sub>", showarrow=False,
                        yanchor="bottom", font=dict(size=13, color=viz.LOAD_POINT))
-    # The sweep angle V: a neutral axis at angle V from the +y axis, with an arc. The
-    # solver defines V as the compression-gradient direction (cos V, sin V), so the
-    # neutral axis is PERPENDICULAR to it, at angle (90 + V) from +x (V measured CCW
-    # from +y). Drawing it at 90 - V would mirror the line and teach the wrong sweep
-    # sense for intermediate V (the 0 / 90 deg endpoints coincide either way).
+    # The sweep angle phi_NA: a neutral axis at that angle from the +y axis. The
+    # solver stores the value internally as V and uses the compression-gradient
+    # direction (cos V, sin V), so the neutral axis is perpendicular to it, at angle
+    # (90 + V) from +x. Drawing it at 90 - V would mirror the line and teach the
+    # wrong sweep sense for intermediate V (the 0 / 90 deg endpoints coincide
+    # either way).
     vdeg = 35.0
     vr = math.radians(90.0 + vdeg)   # measured from +x for the geometry
     fig.add_shape(type="line", x0=-1.7 * math.cos(vr), y0=-1.7 * math.sin(vr),
@@ -261,12 +261,13 @@ def fig_sign_convention():
     fig.add_trace(go.Scatter(
         x=[0.9 * math.cos(t) for t in ts], y=[0.9 * math.sin(t) for t in ts],
         mode="lines", line=dict(color=viz.NA_LINE, width=1.2), hoverinfo="skip"))
-    fig.add_annotation(x=-0.42, y=1.08, text="V", showarrow=False,
+    fig.add_annotation(x=-0.42, y=1.08, text="&#966;<sub>NA</sub>", showarrow=False,
                        font=dict(size=12, color=viz.NA_LINE))
     # Label the line's LOWER-RIGHT end (open space): the upper-left end sits over the
     # +y axis and the section, so the caption would cross them.
     fig.add_annotation(x=-1.55 * math.cos(vr), y=-1.55 * math.sin(vr),
-                       text="neutral axis (angle V from +y)", showarrow=False,
+                       text="neutral axis (angle &#966;<sub>NA</sub> from +y)",
+                       showarrow=False,
                        xanchor="left", xshift=6, font=dict(size=11, color=viz.NA_LINE))
     return fig
 
@@ -379,7 +380,7 @@ def manual_blocks() -> list:
        "(with any number of voids), the mild-steel bars and prestressing tendons, "
        "and the material laws. It returns plastic capacity, cracked-section elastic "
        "response, optional acceptance checks and a QA report.")
-    md("The drawing and the stress-strain diagrams update as you type; the result "
+    md("The section and material-law diagrams update as you type; the result "
        "views recompute when you press *Calculate*.")
     call("limit", "Sector analyses **one plane cross-section**. It assumes plane "
          "sections remain plane (a linear strain field) and perfect bond between "
@@ -415,7 +416,7 @@ def manual_blocks() -> list:
        "4. **Enter the loads.** Give each solver's axial force and moments, with "
        "the project action-set ID and optional classification.\n"
        "5. **Calculate.** Read the results in the *View* dropdown: the section, the "
-       "stress-strain diagrams, the plastic envelope and the elastic stresses.\n"
+       "material-law diagrams, the plastic envelope and the elastic stresses.\n"
        "6. **Export.** Generate the PDF report or download the project file.")
     fig(fig_beam_section, "The rectangular worked example as Sector draws it: the "
         "concrete corners and the bars are numbered. Turn on the point labels to "
@@ -463,11 +464,11 @@ def manual_blocks() -> list:
     md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
        "parameters*, *Loads* and *Project & report* in full-width tabs. The "
        "**Analysis workspace** page contains the drawings and results selected "
-       "with the **View** dropdown. The section drawing and stress-strain diagrams "
+       "with the **View** dropdown. The section drawing and material-law diagrams "
        "update live; result views recompute on **Calculate**.")
     table(["View", "Shows"],
           [["Section", "The concrete outline, voids and reinforcement (live)"],
-           ["Stress-Strain diagrams", "The concrete, mild-steel and tendon laws (live)"],
+           ["Material laws", "Concrete, mild-steel and tendon input laws (live)"],
            ["Plastic Results", "The M-M envelope and the utilisation (on Calculate)"],
            ["Elastic Results", "The cracked-section stresses and crack width (on Calculate)"],
            ["Shear", "The shear resistance $V_{Rd,c}$ and the utilisation (on Calculate)"]])
@@ -539,7 +540,7 @@ def manual_blocks() -> list:
          "assumes the reference-age and at-least-three-month delayed design-loading "
          "conditions stated in 5.1.6(1); that assumption is repeated in the PDF.")
     fig(fig_beam_concrete_law, "The concrete law for the rectangular example "
-        "(C40/50), as the Stress-Strain view draws it.")
+        "(C40/50), as the Material laws view draws it.")
     h2("Mild steel")
     md("The mild steel is bilinear (optionally with hardening). The inputs are the "
        "yield and ultimate strengths $f_{yk}$ / $f_{tk}$, the ultimate strain "
@@ -720,14 +721,15 @@ def manual_blocks() -> list:
     part("Part C - Theory & methodology")
 
     h1("Conventions and sign convention")
-    md("Coordinates are in metres, taken about the section origin. The axial force "
+    md("Coordinates are entered and reported in millimetres about the section "
+       "origin (the numerical core stores metres). The axial force "
        "$N$ is positive in **tension** (compression negative, kN), so its sign agrees "
        "with the stresses and strains -- a crushing concrete strain reads negative; "
        "the moments $M_x$ and $M_y$ act "
        "about the $x$ and $y$ axes (kNm). Along any straining direction a **depth "
        "coordinate** $s$ is the projection of a point onto the strain gradient; the "
        "neutral axis is a line $s = s_{na}$, and in the plastic sweep its "
-       "orientation is the angle $V$ measured from the $y$ axis.")
+       "orientation is $\\varphi_{NA}$, measured from the $y$ axis.")
     fig(fig_sign_convention, "Axes and the positive senses of the axial force, the "
         "moments and the neutral-axis angle.")
     call("concept", "The reported axial force $N$, the stresses and the strains are "
@@ -833,9 +835,11 @@ def manual_blocks() -> list:
        "axial force balances, $\\sum F = N$; the first moments of the resultants "
        "about the origin are the capacity moments $M_x$, $M_y$.")
     h2("The interaction envelope")
-    md("Rotating the neutral-axis angle $V$ and solving at each gives one point on "
+    md("Rotating the neutral-axis angle $\\varphi_{NA}$ and solving at each gives "
+       "one point on "
        "the $M_x$-$M_y$ envelope; sweeping $0$ to $360$ degrees closes the biaxial "
-       "diagram. **Worked (beam, $N=0$, $V=90$):** the concrete reaches its "
+       "diagram. **Worked (beam, $N=0$, $\\varphi_{NA}=90^\\circ$):** the concrete "
+       "reaches its "
        "crushing strain ($3.5$ per mille) while the most tensile bars are well past "
        "yield ($18.9$ per mille, against the $2.75$ per mille yield), so this "
        "tension-controlled point gives $M_{x} = 346$ kNm. The applied $M_x=300$ "
@@ -1164,8 +1168,10 @@ def manual_blocks() -> list:
        "- **Ultimate is strain-controlled.** The section fails when the first "
        "material reaches its strain limit (concrete crushing or steel/tendon "
        "rupture); no material is driven past its limit.\n"
-       "- **Section-level only.** No shear, torsion, buckling, second-order or "
-       "member effects.")
+       "- **Section and resistance scope.** Sector includes section bending, "
+       "elastic/crack response, shear, torsion and combined M-V-T checks where "
+       "the selected method is supported. It does not model member buckling, "
+       "second-order response, deflection, connections or global load paths.")
     call("limit", "The crack-width models are one-directional: the effective "
          "tension area and the crack spacing are defined for a single bending "
          "direction, so the crack width is reported for the governing bar along the "
@@ -1173,9 +1179,18 @@ def manual_blocks() -> list:
 
     h1("Glossary")
     table(["Symbol / term", "Meaning"],
-          [["$N$ or $P$", "Axial force (tension positive)"],
-           ["$M_x$, $M_y$", "Bending moments about the x and y axes"],
-           ["$V$", "Neutral-axis angle in the plastic sweep"],
+          [["$N$ or $P$", "Axial force; tension positive; kN"],
+           ["$M_x$, $M_y$", "Bending moments about the x and y axes; kNm"],
+           ["$\\varphi_{NA}$", "Neutral-axis sweep angle from +y; degrees"],
+           ["$V_{Ed}$", "Applied design shear action; kN"],
+           ["$A_{sl}$", "Selected tension-side longitudinal reinforcement; mm2"],
+           ["$A_{sw}/s$", "Shear-link area per spacing; mm2/mm"],
+           ["$F_c$", "Concrete compression resultant; kN"],
+           ["$L$, $d_x$, $d_y$", "Internal lever arm and its components; mm"],
+           ["TOTAL", "Elastic stress from long- and short-term actions; MPa"],
+           ["LONG", "Elastic stress from the long-term action alone; MPa"],
+           ["DIF", "TOTAL minus LONG; MPa"],
+           ["RST1", "Instantaneous response after neutralising long-term concrete stress; MPa"],
            ["$f_{ck}$, $f_{cd}$", "Characteristic / design concrete strength"],
            ["$f_{yk}$, $f_{yd}$", "Characteristic / design steel strength"],
            ["$\\varepsilon_{cu2}$", "Ultimate concrete compressive strain"],
@@ -1367,6 +1382,7 @@ def build_manual_pdf(buffer, figures=True):
     flow = [
         Paragraph("Sector user manual", styles["MTitle"]),
         Paragraph(f"Version {APP_VERSION}", styles["MSmall"]),
+        Paragraph("Proprietary internal engineering tool", styles["MSmall"]),
         Spacer(1, 0.3 * cm),
         Paragraph("What Sector computes, the theory it applies, its features, and "
                   "how to use it.", styles["MBody"]),

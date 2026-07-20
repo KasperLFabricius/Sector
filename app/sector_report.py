@@ -1090,7 +1090,8 @@ class ReportBuilder:
                 "kNm; N is tension-positive. Separate N columns are retained "
                 "because the two traces may use different numerical points."
             )
-        # Per-angle results tables -- split into readable groups with V repeated as
+        # Per-angle results tables -- split into readable groups with the NA angle
+        # repeated as
         # the row key. A single 12-14-column table forced values to wrap digit by
         # digit in the issued PDF.
         self._h2("Capacity over the neutral-axis sweep")
@@ -1102,7 +1103,7 @@ class ReportBuilder:
                 and bool(getattr(self.inp.get("steel"), "active_in_compression", False))
                 and bool(pl["points"]) and "eps_s_comp" in pl["points"][0])
         capacity_rows = [[
-            "V",
+            "NA angle",
             "M<sub>x</sub>",
             "M<sub>y</sub>",
             "NA x",
@@ -1110,8 +1111,9 @@ class ReportBuilder:
         ]]
         eps_s_head = (["eps<sub>s,t</sub>", "eps<sub>s,c</sub>"]
                       if comp else ["eps<sub>s</sub>"])
-        detail_head = (["V", "eps<sub>c</sub>"] + eps_s_head
-                       + ["kappa", "Comp", "L", "D<sub>x</sub>", "D<sub>y</sub>"])
+        detail_head = (["NA angle", "eps<sub>c</sub>"] + eps_s_head
+                       + ["kappa", "F<sub>c</sub>", "lever L",
+                          "d<sub>x</sub>", "d<sub>y</sub>"])
         if cable:
             detail_head.append("eps<sub>p</sub>")
         detail_rows = [detail_head]
@@ -1148,8 +1150,9 @@ class ReportBuilder:
             font=7.2,
             keep=False,
         )
-        self._small("V deg; M kNm; NA x/y, L, D<sub>x</sub>, D<sub>y</sub> mm; "
-                    "eps<sub>c</sub>/eps<sub>s</sub>/eps<sub>p</sub> %; kappa 1/m; Comp kN.")
+        self._small("NA angle in deg; M in kNm; NA x/y, lever L, d<sub>x</sub> "
+                    "and d<sub>y</sub> in mm; strain in %; kappa in 1/m; "
+                    "F<sub>c</sub> in kN.")
         # Governing case worked.
         self._plastic_worked(pl)
 
@@ -1171,7 +1174,7 @@ class ReportBuilder:
         T = Fc + P                              # tension resultant (solver: Fc - T = -N)
         start = len(self.flow)
         self._h2(heading)
-        self._p(f"Neutral-axis angle V = {_fmt(gov['V'],0)} deg. The extreme "
+        self._p(f"Neutral-axis angle = {_fmt(gov['V'],0)} deg. The extreme "
                 f"concrete fibre is at the ultimate strain; the curvature scales "
                 f"the strain plane to that limit.")
         comp = (bool(self.inp.get("bars"))
@@ -1287,7 +1290,7 @@ class ReportBuilder:
                 bar_colors=bar_colors, na_line=na, tendons=tendons,
                 tendon_colors=tendon_colors, zones=zones, show_labels=True,
                 scale=_MM, unit="mm",
-                title=f"Plastic state at V = {_fmt(gov['V'],0)} deg "
+                title=f"Plastic state at NA angle = {_fmt(gov['V'],0)} deg "
                       "(tension + / compression -)"), 150, 100)
             self._small(
                 "Blue/plain markers are tension (+); vermillion/x markers are "
@@ -1393,6 +1396,31 @@ class ReportBuilder:
             self._small("Warning: V<sub>Rd,c</sub> is zero -- no tension "
                         "reinforcement on the chosen face, or a zero effective depth "
                         "/ web width.")
+        links_payload = sh.get("links") or {}
+        link_res = links_payload.get("res") or {}
+        z_geometry = float(link_res.get("z", res.get("z", 0.9 * sh["d"])))
+        bw_src = "user input" if sh["bw_user"] else "auto minimum solid width"
+        if self.figures:
+            self._h2("Derived shear geometry")
+            self._fig(
+                viz.shear_geometry_figure(
+                    self.inp.get("outer", []), self.inp.get("holes", []),
+                    self.inp.get("bars", []), axis=sh["axis"],
+                    tension_low=sh["tension_low"],
+                    centroid=sh.get("centroid", (0.0, 0.0)),
+                    asl_bar_ids=sh.get("asl_bar_ids", []),
+                    asl_cg_m=sh.get("asl_cg"), asl_mm2=sh["asl"],
+                    d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
+                    bw_source=bw_src,
+                    title=f"Shear geometry - {face} tension",
+                ),
+                145,
+                103,
+            )
+            self._small(
+                "Star markers are the bars included in A<sub>sl</sub>; the dotted "
+                "line is the gross-section centroid used as the selection boundary."
+            )
         if sh.get("model_2023"):
             self._shear_2023(sh, res)
             return
@@ -2135,9 +2163,9 @@ class ReportBuilder:
                     "cracked column drops the concrete in tension.")
         # Complete, explicitly typed bar/tendon evidence.
         self._h2("Reinforcement and tendon response")
-        self._small("TOTAL = long + short at the section state; LONG = long-term "
-                    "part; DIF = short-term difference; RST1 = restraint. "
-                    "Tension positive.")
+        self._small("TOTAL = long + short; LONG = long-term; DIF = TOTAL - LONG; "
+                    "RST1 = instantaneous response after neutralising the "
+                    "long-term concrete stress. Tension positive.")
         element_rows = el.get("elements") or []
         if element_rows:
             rows = [["Element", "x", "y", "Area", "Strain", "TOTAL",

@@ -2,6 +2,8 @@
 
 **Reinforced-concrete cross-section analysis for structural engineering.**
 
+Current release: **Sector 0.80**. See [CHANGELOG.md](CHANGELOG.md).
+
 Sector analyses a polygonal reinforced (and optionally prestressed) concrete
 cross-section and reports, for the same section:
 
@@ -91,3 +93,10 @@ The supported runtime is pinned in `.python-version`. Runtime, development and
 Windows-build environments are locked in `requirements*.txt`; edit the matching
 `requirements*.in` file and regenerate the lock instead of editing a lock by
 hand.
+
+## Distribution
+
+Sector is proprietary internal software; access to the repository or application
+does not grant a licence. See [LICENSE](LICENSE). Windows builds include a
+generated third-party notice bundle beside `Sector.exe`; the source process is
+documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
