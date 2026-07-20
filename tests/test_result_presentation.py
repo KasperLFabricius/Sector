@@ -270,3 +270,42 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
     assert by_check["Combined off-axis chord coverage"]["status"] == "NOT ASSESSED"
     assert "not solved" in by_check["Combined off-axis chord coverage"]["note"]
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
+
+
+def test_shear_screening_does_not_fail_when_selected_links_pass():
+    shear = {
+        "res": {"valid": True, "vrd_c": 100.0},
+        "util": 1.20,
+        "method": "DK NA",
+        "links": {
+            "res": {"valid": True, "governs": "links"},
+            "util": 0.80,
+            "code_applicable": True,
+        },
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", shear_on=True, shear_links=True),
+        {"plastic": _plastic(), "shear": shear},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Shear without links"]["status"] == "NOT APPLICABLE"
+    assert by_check["Shear without links"]["util"] == pytest.approx(1.20)
+    assert by_check["Shear with links"]["status"] == "PASS"
+    assert presentation.overall_summary_status(rows) == "PASS"
+
+
+def test_shear_without_links_retains_concrete_screening_verdict():
+    shear = {
+        "res": {"valid": True, "vrd_c": 100.0},
+        "util": 1.20,
+        "method": "DK NA",
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", shear_on=True, shear_links=False),
+        {"plastic": _plastic(), "shear": shear},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Shear without links"]["status"] == "FAIL"
+    assert presentation.overall_summary_status(rows) == "FAIL"

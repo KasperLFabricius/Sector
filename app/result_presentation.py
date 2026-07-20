@@ -359,25 +359,36 @@ def result_summary_rows(inp, results, *, stale=False):
         ))
     elif shear is not None:
         resistance = (shear.get("res") or {}).get("vrd_c")
+        links_selected = bool(inp.get("shear_links"))
         result = (
             f"{_percent(shear.get('util'))} (VEd / VRd,c)"
             if resistance is not None else "-"
         )
+        no_links_status = (
+            "NOT APPLICABLE"
+            if links_selected
+            else _util_summary_status(
+                shear.get("util"),
+                valid=bool((shear.get("res") or {}).get("valid")),
+            )
+        )
+        no_links_note = (
+            "Links present; use the reinforced shear check"
+            if links_selected
+            else str(shear.get("method") or "")
+        )
         rows.append(_summary_row(
             "Shear without links",
             "plastic",
-            _util_summary_status(
-                shear.get("util"),
-                valid=bool((shear.get("res") or {}).get("valid")),
-            ),
+            no_links_status,
             result,
             "<= 100 %",
             shear.get("util"),
             "Shear",
-            str(shear.get("method") or ""),
+            no_links_note,
             inp,
         ))
-        if inp.get("shear_links"):
+        if links_selected:
             links = shear.get("links")
             if links is None:
                 rows.append(_summary_row(
