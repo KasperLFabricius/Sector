@@ -20,11 +20,15 @@ or directly:
 
 ```powershell
 python -m pip install --require-hashes -r requirements-build.txt
+python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
 python -m PyInstaller --noconfirm --clean packaging/sector.spec
+Copy-Item LICENSE dist/Sector/LICENSE.txt
+Copy-Item build/legal/THIRD_PARTY_NOTICES.txt dist/Sector/THIRD_PARTY_NOTICES.txt
 ```
 
-The result is `dist/Sector/`. Zip that whole folder to distribute it; the user
-unzips it anywhere and runs `Sector.exe`.
+The result is `dist/Sector/`, including Sector's proprietary notice and the
+generated third-party notice bundle. Zip that whole folder to distribute it;
+the user unzips it anywhere and runs `Sector.exe`.
 
 ## What it does
 
@@ -42,7 +46,7 @@ Set the `SECTOR_PORT` environment variable to use a different port.
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
 | `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
-| `build.ps1` | Convenience build script (installs the locked build environment, runs PyInstaller). |
+| `build.ps1` | Convenience build script: installs the lock, generates notices, builds and assembles the package. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
 
 ## Runtime notes
@@ -52,7 +56,7 @@ Set the `SECTOR_PORT` environment variable to use a different port.
   launcher), so a read-only install location (e.g. Program Files) does not break
   startup.
 - **Report figures need a browser engine.** The PDF report exports its plots with
-  kaleido, which needs a Chrome/Chromium install at runtime; without one the report
-  still builds, with tables instead of figures.
+  kaleido, which needs Chrome/Chromium at runtime. If a requested figure cannot be
+  embedded, report generation fails visibly instead of issuing an incomplete PDF.
 - **numba** speeds up the plastic solver but is optional -- if it cannot load in the
   frozen build the app falls back to the (slower) pure-Python kernels.

@@ -28,12 +28,13 @@ if str(ROOT) not in sys.path:
 
 import sector_report  # noqa: E402
 from sector import __version__  # noqa: E402
+from sector import codes, shear  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 # Geometry, concrete law, steel law, plastic interaction, plastic state and
-# elastic state and elastic strain profile. An intentional fixture change must update
+# elastic state, elastic strain profile and derived shear geometry. An intentional fixture change must update
 # this explicit contract.
-_EXPECTED_FIGURE_COUNT = 7
+_EXPECTED_FIGURE_COUNT = 8
 
 
 class _FixedDateTime(datetime.datetime):
@@ -124,6 +125,10 @@ def _crack() -> dict:
 
 
 def _results() -> dict:
+    shear_res = shear.vrd_c(
+        30.0, codes.EC2_2005_DKNA, bw_mm=200.0, d_mm=270.0,
+        asl_mm2=500.0, n_ed_comp_kn=0.0, ac_m2=0.06, gamma_c=1.5,
+    )
     return {
         "plastic": {
             "mx": [100.0, 0.0, -100.0, 0.0],
@@ -245,6 +250,27 @@ def _results() -> dict:
             },
             "crack_code": "EN 1992-1-1:2005",
             "crack_member": None,
+        },
+        "shear": {
+            "res": shear_res,
+            "v_ed": 0.5 * shear_res["vrd_c"],
+            "util": 0.5,
+            "axis": "x",
+            "tension_low": True,
+            "bw": 200.0,
+            "bw_auto": 200.0,
+            "bw_user": False,
+            "d": 270.0,
+            "asl": 500.0,
+            "asl_bar_ids": [1],
+            "asl_cg": -0.12,
+            "ac": 0.06,
+            "fck": 30.0,
+            "n_ed": 0.0,
+            "n_prestress": 0.0,
+            "centroid": (0.0, 0.0),
+            "method": codes.EC2_2005_DKNA.label,
+            "model_2023": False,
         },
     }
 

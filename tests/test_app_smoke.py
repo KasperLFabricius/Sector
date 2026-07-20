@@ -87,14 +87,18 @@ def test_app_loads_without_error():
     assert "results" not in at.session_state
 
 
-def test_app_migrates_legacy_view_label():
-    # A session that stored the old "M-V-T Interaction" label (renamed since v0.54) must
-    # be migrated to the current option so the combined view still resolves.
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [("M-V-T Interaction", "M-V-T Combined"),
+     ("Stress-Strain diagrams", "Material laws")],
+)
+def test_app_migrates_legacy_view_label(old, new):
+    # Stored pre-rename view labels migrate before the keyed selectbox renders.
     at = _fresh()
-    at.session_state["view"] = "M-V-T Interaction"   # stale label before any widget
+    at.session_state["view"] = old
     at.run()
     assert not at.exception
-    assert at.session_state["view"] == "M-V-T Combined"
+    assert at.session_state["view"] == new
 
 
 def test_app_empty_result_reads_not_calculated():
@@ -111,12 +115,12 @@ def test_app_empty_result_reads_not_calculated():
 
 
 def test_live_curve_figures_are_memoised():
-    # The Stress-Strain curve figures are rebuilt only when a material actually
+    # The Material laws figures are rebuilt only when a material actually
     # changes -- an unrelated rerun reuses the cached figure (perf: skip the
     # ~20 ms plotly construction).
     at = _fresh()
     at.run()
-    at.selectbox(key="view").set_value("Stress-Strain diagrams").run()
+    at.selectbox(key="view").set_value("Material laws").run()
     conc_id = id(at.session_state["_fig_cache"]["concrete"][1])
     at.number_input(key="el_phi").set_value(2.0).run()     # unrelated to the concrete law
     assert id(at.session_state["_fig_cache"]["concrete"][1]) == conc_id     # reused
@@ -2119,11 +2123,11 @@ def test_workspace_choices_survive_quick_section_viewport():
 
 
 def test_view_dropdown_switches_without_error():
-    # Every view must render. The live views (Section, Stress-Strain) need no
+    # Every view must render. The live views (Section, Material laws) need no
     # Calculate; the result views show a prompt until one is run.
     at = _fresh()
     at.run()
-    for v in ["Section", "Stress-Strain diagrams", "Results Overview",
+    for v in ["Section", "Material laws", "Results Overview",
               "Plastic Results", "Elastic Results"]:
         at.selectbox(key="view").set_value(v).run()
         assert not at.exception, v
@@ -2133,7 +2137,7 @@ def test_stress_strain_view_includes_prestress_when_enabled():
     at = _fresh_qs()
     at.number_input(key="tnd_n").set_value(4).run()
     _apply_qs(at)                            # put tendons in the section
-    at.selectbox(key="view").set_value("Stress-Strain diagrams").run()
+    at.selectbox(key="view").set_value("Material laws").run()
     assert not at.exception
 
 

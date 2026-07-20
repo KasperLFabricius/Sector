@@ -370,6 +370,17 @@ def test_tension_reinforcement_and_effective_depth():
     assert shear.effective_depth(outer, "x", False, None) == 0.0
 
 
+def test_tension_reinforcement_selection_retains_public_bar_ids():
+    bars = [(0.05, -0.25, 300.0), (0.15, -0.20, 500.0),
+            (0.10, 0.22, 400.0)]
+    area, cg, bar_ids = shear.tension_reinforcement_selection(
+        bars, "x", tension_low=True, centroid_coord=0.0
+    )
+    assert area == pytest.approx(800.0)
+    assert cg == pytest.approx((-0.25 * 300.0 - 0.20 * 500.0) / 800.0)
+    assert bar_ids == [1, 2]
+
+
 def test_horizontal_shear_uses_the_x_coordinate():
     # Axis 'y' (horizontal shear) measures depth in x; the tension bar is on the left.
     outer = [(0.0, 0.0), (0.6, 0.0), (0.6, 0.3), (0.0, 0.3)]
@@ -432,6 +443,7 @@ def test_app_shear_check_produces_a_resistance():
     assert sh["d"] == pytest.approx(550.0, abs=1.0)
     assert sh["bw"] == pytest.approx(400.0, abs=1.0)
     assert not sh["bw_user"]                           # auto width
+    assert sh["asl_bar_ids"] and sh["asl_cg"] is not None
     assert sh["util"] == pytest.approx(100.0 / sh["res"]["vrd_c"])
 
 

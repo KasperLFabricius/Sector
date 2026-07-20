@@ -34,24 +34,35 @@ def _coord(point, axis: str) -> float:
     return point[1] if axis == "x" else point[0]
 
 
-def tension_reinforcement(bars: Sequence, axis: str, tension_low: bool,
-                          centroid_coord: float):
-    """Total area and centroid of the tension-side longitudinal bars.
+def tension_reinforcement_selection(bars: Sequence, axis: str, tension_low: bool,
+                                    centroid_coord: float):
+    """Area, centroid and one-based IDs of the tension-side longitudinal bars.
 
     ``bars`` are ``(x, y, area_mm2)`` in metres; ``axis`` is the bending axis ('x' =
     vertical shear); ``tension_low`` True when the tension face is the low-coordinate
     side (bottom / left). The tension bars are those on the tension side of the
-    section centroid. Returns ``(Asl_mm2, centroid_along_axis_m)`` or ``(0.0, None)``.
+    section centroid. Returns ``(Asl_mm2, centroid_along_axis_m, bar_ids)``.
+    The IDs follow the public bar numbering used in the UI and reports.
     """
     tens = []
-    for b in bars:
+    for i, b in enumerate(bars):
         c = _coord(b, axis)
         if (c < centroid_coord) if tension_low else (c > centroid_coord):
-            tens.append(b)
-    area = sum(float(b[2]) for b in tens)
+            tens.append((i + 1, b))
+    area = sum(float(b[2]) for _, b in tens)
     if area <= 0.0:
-        return 0.0, None
-    cg = sum(float(b[2]) * _coord(b, axis) for b in tens) / area
+        return 0.0, None, []
+    cg = sum(float(b[2]) * _coord(b, axis) for _, b in tens) / area
+    ids = [bar_id for bar_id, _ in tens]
+    return area, cg, ids
+
+
+def tension_reinforcement(bars: Sequence, axis: str, tension_low: bool,
+                          centroid_coord: float):
+    """Backward-compatible ``(area, centroid)`` tension-bar selection."""
+    area, cg, _ = tension_reinforcement_selection(
+        bars, axis, tension_low, centroid_coord
+    )
     return area, cg
 
 

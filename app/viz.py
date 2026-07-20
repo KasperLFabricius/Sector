@@ -790,6 +790,156 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     return fig
 
 
+def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
+                          centroid, asl_bar_ids, asl_cg_m, asl_mm2,
+                          d_mm, z_mm, bw_mm, bw_source,
+                          title="Shear geometry"):
+    """Annotated section used to audit the geometry behind a shear check.
+
+    ``axis == 'x'`` means vertical shear / bending about x; ``axis == 'y'``
+    means horizontal shear / bending about y. The actual section is retained,
+    the bars counted in ``A_sl`` are marked and numbered, and the displayed
+    dimensions use the same derived payload as the resistance calculation.
+    ``b_w`` is a callout because an automatic value can be the sum of multiple
+    solid web intervals (for example a box section), not one bounding width.
+    """
+    outer = list(outer or [])
+    holes = list(holes or [])
+    bars = list(bars or [])
+    fig = section_figure(
+        outer, holes, bars, title=title, show_labels=False,
+        scale=1000.0, unit="mm", height=470,
+    )
+    if not outer:
+        return fig
+
+    xs = [float(p[0]) * 1000.0 for p in outer]
+    ys = [float(p[1]) * 1000.0 for p in outer]
+    xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
+    span_x = max(xmax - xmin, 1.0)
+    span_y = max(ymax - ymin, 1.0)
+    cx, cy = float(centroid[0]) * 1000.0, float(centroid[1]) * 1000.0
+    selected = [i for i in asl_bar_ids or [] if 1 <= i <= len(bars)]
+    if selected:
+        pts = [bars[i - 1] for i in selected]
+        fig.add_trace(go.Scatter(
+            x=[p[0] * 1000.0 for p in pts],
+            y=[p[1] * 1000.0 for p in pts],
+            mode="markers+text", name="included in Asl",
+            marker=dict(size=18, symbol="star", color=LOAD_POINT,
+                        line=dict(color="white", width=1.2)),
+            text=[str(i) for i in selected], textposition="bottom center",
+            textfont=dict(size=10, color=SCHEMATIC_INK),
+            hovertemplate="Bar %{text}<br>included in Asl<extra></extra>",
+        ))
+
+    if axis == "x":
+        fig.add_shape(type="line", x0=xmin, x1=xmax, y0=cy, y1=cy,
+                      line=dict(color=SCHEMATIC_INK, width=1, dash="dot"))
+        face_level = ymin if tension_low else ymax
+        fig.add_shape(type="line", x0=xmin, x1=xmax, y0=face_level, y1=face_level,
+                      line=dict(color=LOAD_POINT, width=2, dash="dash"))
+        fig.add_annotation(x=xmin + 0.04 * span_x, y=face_level,
+                           text="tension face", showarrow=False,
+                           xanchor="left",
+                           yanchor="bottom" if tension_low else "top",
+                           yshift=6 if tension_low else -6,
+                           font=dict(size=10, color=SCHEMATIC_INK))
+        # VEd arrow in the physical shear direction.
+        fig.add_annotation(x=xmin - 0.12 * span_x, y=ymax,
+                           ax=xmin - 0.12 * span_x, ay=ymin,
+                           axref="x", ayref="y", text="", showarrow=True,
+                           arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
+                           font=dict(size=11, color=SCHEMATIC_INK))
+        fig.add_annotation(x=xmin - 0.12 * span_x, y=(ymin + ymax) / 2.0,
+                           text="VEd", showarrow=False, xanchor="right", xshift=-6,
+                           font=dict(size=11, color=SCHEMATIC_INK))
+        if asl_cg_m is not None and d_mm > 0.0:
+            cg = float(asl_cg_m) * 1000.0
+            direction = 1.0 if tension_low else -1.0
+            comp = ymax if tension_low else ymin
+            dim_x = xmax + 0.13 * span_x
+            z_x = xmax + 0.25 * span_x
+            fig.add_shape(type="line", x0=dim_x, x1=dim_x, y0=cg, y1=comp,
+                          line=dict(color=SCHEMATIC_INK, width=1.2))
+            fig.add_annotation(x=dim_x, y=comp, ax=dim_x,
+                               ay=comp - direction * 0.10 * span_y,
+                               axref="x", ayref="y", text="", showarrow=True,
+                               arrowhead=2, arrowwidth=1, arrowcolor=SCHEMATIC_INK)
+            fig.add_annotation(x=dim_x, y=cg, ax=dim_x,
+                               ay=cg + direction * 0.10 * span_y,
+                               axref="x", ayref="y", text="", showarrow=True,
+                               arrowhead=2, arrowwidth=1, arrowcolor=SCHEMATIC_INK)
+            fig.add_annotation(x=dim_x, y=(cg + comp) / 2.0,
+                               text=f"d = {d_mm:.0f} mm", showarrow=False,
+                               xanchor="right", xshift=-6)
+            z_end = cg + direction * min(float(z_mm), float(d_mm))
+            fig.add_shape(type="line", x0=z_x, x1=z_x, y0=cg, y1=z_end,
+                          line=dict(color=ENVELOPE, width=1.2))
+            fig.add_annotation(x=z_x, y=(cg + z_end) / 2.0,
+                               text=f"z = {z_mm:.0f} mm", showarrow=False,
+                               xanchor="left", xshift=6,
+                               font=dict(color=ENVELOPE))
+    else:
+        fig.add_shape(type="line", x0=cx, x1=cx, y0=ymin, y1=ymax,
+                      line=dict(color=SCHEMATIC_INK, width=1, dash="dot"))
+        face_level = xmin if tension_low else xmax
+        fig.add_shape(type="line", x0=face_level, x1=face_level, y0=ymin, y1=ymax,
+                      line=dict(color=LOAD_POINT, width=2, dash="dash"))
+        fig.add_annotation(x=face_level, y=ymin + 0.05 * span_y,
+                           text="tension face", showarrow=False,
+                           xanchor="left" if tension_low else "right",
+                           xshift=6 if tension_low else -6, yanchor="bottom",
+                           font=dict(size=10, color=SCHEMATIC_INK))
+        fig.add_annotation(x=xmax, y=ymax + 0.12 * span_y,
+                           ax=xmin, ay=ymax + 0.12 * span_y,
+                           axref="x", ayref="y", text="", showarrow=True,
+                           arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
+                           font=dict(size=11, color=SCHEMATIC_INK))
+        fig.add_annotation(x=(xmin + xmax) / 2.0, y=ymax + 0.12 * span_y,
+                           text="VEd", showarrow=False, yanchor="bottom", yshift=6,
+                           font=dict(size=11, color=SCHEMATIC_INK))
+        if asl_cg_m is not None and d_mm > 0.0:
+            cg = float(asl_cg_m) * 1000.0
+            direction = 1.0 if tension_low else -1.0
+            comp = xmax if tension_low else xmin
+            dim_y = ymax + 0.13 * span_y
+            z_y = ymax + 0.25 * span_y
+            fig.add_shape(type="line", x0=cg, x1=comp, y0=dim_y, y1=dim_y,
+                          line=dict(color=SCHEMATIC_INK, width=1.2))
+            fig.add_annotation(x=comp, y=dim_y,
+                               ax=comp - direction * 0.10 * span_x, ay=dim_y,
+                               axref="x", ayref="y", text="", showarrow=True,
+                               arrowhead=2, arrowwidth=1, arrowcolor=SCHEMATIC_INK)
+            fig.add_annotation(x=cg, y=dim_y,
+                               ax=cg + direction * 0.10 * span_x, ay=dim_y,
+                               axref="x", ayref="y", text="", showarrow=True,
+                               arrowhead=2, arrowwidth=1, arrowcolor=SCHEMATIC_INK)
+            fig.add_annotation(x=(cg + comp) / 2.0, y=dim_y,
+                               text=f"d = {d_mm:.0f} mm", showarrow=False,
+                               yanchor="top", yshift=-6)
+            z_end = cg + direction * min(float(z_mm), float(d_mm))
+            fig.add_shape(type="line", x0=cg, x1=z_end, y0=z_y, y1=z_y,
+                          line=dict(color=ENVELOPE, width=1.2))
+            fig.add_annotation(x=(cg + z_end) / 2.0, y=z_y,
+                               text=f"z = {z_mm:.0f} mm", showarrow=False,
+                               yanchor="bottom", yshift=6,
+                               font=dict(color=ENVELOPE))
+
+    ids = ", ".join(str(i) for i in selected) if selected else "none"
+    fig.add_annotation(
+        x=0.99, y=0.99, xref="paper", yref="paper",
+        xanchor="right", yanchor="top", showarrow=False, align="left",
+        text=(f"<b>b<sub>w</sub></b> = {bw_mm:.0f} mm ({bw_source})<br>"
+              f"<b>A<sub>sl</sub></b> = {asl_mm2:.0f} mm<sup>2</sup> "
+              f"(bars {ids})<br>bending about {axis}<br>"
+              "dotted: gross centroid / Asl selection"),
+        bgcolor="rgba(255,255,255,0.82)",
+        font=dict(size=10, color=SCHEMATIC_INK),
+    )
+    return fig
+
+
 def interaction_figure(mx, my, applied=None, angles=None, util=None,
                        closed=True, title="M-M interaction"):
     """Biaxial moment capacity envelope, with an optional applied-load point.

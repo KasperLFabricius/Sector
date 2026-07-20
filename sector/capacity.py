@@ -182,7 +182,7 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
     area, cx, cy = gross_area_centroid(inp["outer"], inp["holes"])
     _, mx_prestress, my_prestress = prestress_resultants(inp, cx, cy)
     centroid_coord = cy if axis == "x" else cx
-    asl, cg = shear.tension_reinforcement(
+    asl, cg, asl_bar_ids = shear.tension_reinforcement_selection(
         inp["bars"], axis, tension_low, centroid_coord
     )
     d_mm = shear.effective_depth(inp["outer"], axis, tension_low, cg)
@@ -217,6 +217,8 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
         "bw_user": bool(inp["shear_bw"] > 0.0),
         "d": d_mm,
         "asl": asl,
+        "asl_bar_ids": asl_bar_ids,
+        "asl_cg": cg,
         "ac": area,
         "fck": fck,
         "n_ed": inp["P_pl"],

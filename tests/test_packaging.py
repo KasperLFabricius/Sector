@@ -31,6 +31,21 @@ def test_build_script_uses_the_hashed_lock():
     assert '"pyinstaller>=' not in script.lower()
 
 
+def test_distribution_notices_are_generated_and_package_gated():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md",
+                 "tools/generate_third_party_notices.py"):
+        assert (root / name).is_file(), f"{name} missing from the repository"
+    build = (root / "packaging" / "build.ps1").read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "qa.yml").read_text(
+        encoding="utf-8"
+    )
+    for text in (build, workflow):
+        assert "generate_third_party_notices.py" in text
+        assert "dist/Sector/LICENSE.txt" in text
+        assert "dist/Sector/THIRD_PARTY_NOTICES.txt" in text
+
+
 def test_kaleido_cli_mocker_is_excluded_from_the_frozen_runtime():
     root = pathlib.Path(__file__).resolve().parent.parent
     spec = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")

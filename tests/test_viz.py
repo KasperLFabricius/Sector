@@ -700,3 +700,34 @@ def test_truss_figure_labels_theta_and_z_dimension():
     texts = [a.text for a in fig.layout.annotations]
     assert chr(0x3B8) in texts                                 # theta label at the arc
     assert any("z =" in (t or "") for t in texts)              # z dimension label
+
+
+def test_shear_geometry_figure_exposes_derived_geometry_and_selected_bars():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    bars = [(-0.1, -0.25, 300.0), (0.1, -0.25, 300.0),
+            (-0.1, 0.25, 200.0), (0.1, 0.25, 200.0)]
+    fig = viz.shear_geometry_figure(
+        outer, [], bars, axis="x", tension_low=True,
+        centroid=(0.0, 0.0), asl_bar_ids=[1, 2], asl_cg_m=-0.25,
+        asl_mm2=600.0, d_mm=550.0, z_mm=495.0, bw_mm=400.0,
+        bw_source="auto minimum solid width",
+    )
+    selected = next(t for t in fig.data if t.name == "included in Asl")
+    assert list(selected.text) == ["1", "2"]
+    text = " ".join((a.text or "") for a in fig.layout.annotations)
+    assert "d = 550 mm" in text and "z = 495 mm" in text
+    assert "400 mm" in text and "auto minimum solid width" in text
+    assert "bars 1, 2" in text and "VEd" in text
+
+
+def test_horizontal_shear_geometry_uses_left_tension_face():
+    fig = viz.shear_geometry_figure(
+        [(0.0, 0.0), (0.6, 0.0), (0.6, 0.3), (0.0, 0.3)], [],
+        [(0.05, 0.15, 500.0), (0.55, 0.15, 500.0)],
+        axis="y", tension_low=True, centroid=(0.3, 0.15),
+        asl_bar_ids=[1], asl_cg_m=0.05, asl_mm2=500.0,
+        d_mm=550.0, z_mm=495.0, bw_mm=300.0, bw_source="user input",
+    )
+    text = " ".join((a.text or "") for a in fig.layout.annotations)
+    assert "tension face" in text and "bending about y" in text
+    assert "user input" in text
