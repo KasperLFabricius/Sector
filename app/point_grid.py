@@ -49,11 +49,11 @@ def _versioned_rows(value, data_version):
 
     The frontend includes its ``data_version`` in every value. A browser can briefly
     deliver the previous grid value while a Clear/Load reseed is in flight; rejecting
-    that stale payload keeps the new base authoritative. Plain lists remain accepted
-    for saved sessions and tests created before versioned payloads were introduced.
+    that stale payload keeps the new base authoritative. Unversioned list payloads
+    from the previous frontend are deliberately rejected because they cannot prove
+    which seed they belong to. Saved projects contain base tables, not component
+    payloads, so this does not affect project compatibility.
     """
-    if isinstance(value, list):
-        return value
     if not isinstance(value, dict):
         return None
     if str(value.get("data_version")) != str(data_version):

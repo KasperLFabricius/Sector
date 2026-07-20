@@ -1110,6 +1110,24 @@ def test_quick_section_apply_supersedes_clear_undo():
     assert len(at.session_state["corners_base"]) >= 3
 
 
+def test_unversioned_pre_upgrade_grid_value_cannot_cancel_clear_undo():
+    # A browser tab carried over from the old frontend can report one final plain
+    # list after the new app has bumped the grid seed. It is not authoritative:
+    # the cleared base and its recovery snapshot must remain intact.
+    at = _fresh()
+    at.run()
+    _clear_section(at)
+    at.session_state["ed_corners"] = [
+        {"x (mm)": -999.0, "y (mm)": -999.0},
+        {"x (mm)": 999.0, "y (mm)": -999.0},
+        {"x (mm)": 0.0, "y (mm)": 999.0},
+    ]
+    at.run()
+    assert not at.exception
+    assert at.session_state["corners_base"].empty
+    assert "_clear_section_undo" in at.session_state
+
+
 def test_cleared_section_does_not_fall_back_to_quick_section():
     # After Clear Section the source-of-truth outline is genuinely empty -- it must
     # not revert to the Quick Section. The Section view and a Calculate run without
@@ -1197,10 +1215,16 @@ def test_void_buttons_preserve_unsaved_edits():
     # base = one void; the grid's live rows carry an extra, not-yet-saved corner.
     at.session_state["hole_base"] = pd.DataFrame({
         "x (mm)": [-100.0, -40.0, -70.0], "y (mm)": [-50.0, -50.0, 50.0]})
-    at.session_state["ed_hole"] = [
-        {"x (mm)": -100.0, "y (mm)": -50.0}, {"x (mm)": -40.0, "y (mm)": -50.0},
-        {"x (mm)": -70.0, "y (mm)": 50.0},
-        {"x (mm)": 80.0, "y (mm)": -50.0}]   # an unsaved corner, live in the grid
+    # The fourth row is an unsaved corner reported by the current grid seed.
+    at.session_state["ed_hole"] = {
+        "data_version": str(at.session_state["ed_hole_ver"]),
+        "rows": [
+            {"x (mm)": -100.0, "y (mm)": -50.0},
+            {"x (mm)": -40.0, "y (mm)": -50.0},
+            {"x (mm)": -70.0, "y (mm)": 50.0},
+            {"x (mm)": 80.0, "y (mm)": -50.0},
+        ],
+    }
     at.button(key="add_void").click().run()   # handler reads the live rows before re-render
     assert not at.exception
     hb = at.session_state["hole_base"]
@@ -1216,7 +1240,11 @@ def test_cleared_grid_is_respected_not_resurrected():
     at.run()
     at.session_state["hole_base"] = pd.DataFrame(
         {"x (mm)": [-100.0, -40.0, -70.0], "y (mm)": [-50.0, -50.0, 50.0]})
-    at.session_state["ed_hole"] = []          # the grid reports all rows deleted
+    # The current grid seed reports that every row was deleted.
+    at.session_state["ed_hole"] = {
+        "data_version": str(at.session_state["ed_hole_ver"]),
+        "rows": [],
+    }
     at.run()
     assert not at.exception
     assert at.button(key="rem_void").disabled  # 0 voids -> Remove disabled

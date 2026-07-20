@@ -57,7 +57,7 @@ def test_versioned_rows_rejects_a_stale_reseed_payload():
     assert _versioned_rows(
         {"data_version": "3", "rows": rows}, 4
     ) is None
-    assert _versioned_rows(rows, 4) == rows       # legacy session/test payload
+    assert _versioned_rows(rows, 4) is None       # old frontend: seed is unknowable
 
 
 def test_app_feeds_grid_points_to_the_analysis():
