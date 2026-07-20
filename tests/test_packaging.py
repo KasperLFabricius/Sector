@@ -38,6 +38,19 @@ def test_kaleido_cli_mocker_is_excluded_from_the_frozen_runtime():
     assert 'name.startswith("kaleido.mocker")' in spec
 
 
+def test_packaged_runtime_embeds_exact_source_provenance():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    spec = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "qa.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "sector_build_info.json" in spec
+    assert "GITHUB_SHA" in spec
+    assert "source_revision" in spec
+    assert "subprocess" not in spec
+    assert "sector/sector_build_info.json" in workflow
+
+
 def test_bundle_base_resolves_to_the_app_tree_in_dev():
     base = run_sector._bundle_base()
     assert (base / "app" / "sector_app.py").is_file()

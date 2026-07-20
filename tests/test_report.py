@@ -17,6 +17,16 @@ from sector.materials import Concrete, MildSteel  # noqa: E402
 def _inp():
     return {
         "mode": "Both",
+        "plastic_case": {
+            "id": "PL-TEST",
+            "type": "ALS",
+            "source": "Combination register C1",
+        },
+        "elastic_case": {
+            "id": "EL-TEST",
+            "type": "FLS",
+            "source": "Combination register C2",
+        },
         "outer": [(-0.1, -0.15), (0.1, -0.15), (0.1, 0.15), (-0.1, 0.15)],
         "holes": [], "bars": [(0.0, -0.12, 500.0)], "tendons": [],
         "concrete": Concrete(fck=30.0, gamma_c=1.5, curve=2),
@@ -131,17 +141,47 @@ def _out():
 
 
 def test_report_pdf_generates():
-    pdf = sector_report.build_report({"proj_no": "P-1", "author": "KLA"},
-                                     _inp(), _out(), version="0.1.0", figures=False)
+    pdf = sector_report.build_report(
+        {"proj_no": "P-1", "author": "KLA", "source_revision": "a" * 40},
+        _inp(), _out(), version="0.1.0", figures=False,
+    )
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 3000
 
 
+def test_report_front_matter_identifies_action_sets_and_result_statuses():
+    txt = _pdf_text(sector_report.build_report(
+        {"source_revision": "abcdef1234567890"},
+        _inp(),
+        _out(),
+        figures=False,
+    ))
+    assert "Results overview - PASS" in txt
+    assert "PL-TEST" in txt and "EL-TEST" in txt
+    assert "Combination register C1" in txt
+    assert "Combination register C2" in txt
+    assert "abcdef123456" in txt
+    assert "Concrete stress" in txt and "Crack width" in txt
+
+
+def test_report_escapes_user_entered_action_provenance():
+    inp = _inp()
+    inp["plastic_case"] = {
+        "id": "PL&A<1>",
+        "type": "Other / project-specific",
+        "source": "Model A & register <C1>",
+    }
+    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+    assert "PL&A<1>" in txt
+    assert "Model A & register <C1>" in txt
+
+
 def test_report_mirrors_the_views():
     txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    flat = " ".join(txt.split())
     assert "Comp" in txt and "NA x" in txt         # full plastic table columns
-    assert "PASS - ULS plastic bending" in txt
-    assert "margin to limit = +20.0 percentage points" in txt
+    assert "PASS - Plastic bending" in txt
+    assert "margin to limit = +20.0 percentage points" in flat
     assert "Governing concrete corner response" in txt
     assert "Governing reinforcement and tendon response" in txt
     assert "Cracked" in txt                        # cracked transformed-props column
@@ -413,29 +453,40 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     failed = _out()
     failed["plastic"]["util"] = 1.25
     txt = _pdf_text(sector_report.build_report({}, _inp(), failed, figures=False))
-    assert "FAIL - ULS plastic bending" in txt
+    assert "FAIL - Plastic bending" in txt
     assert "-25.0 percentage points" in txt
 
     invalid = _out()
     invalid["plastic"]["converged"] = False
     txt = _pdf_text(sector_report.build_report({}, _inp(), invalid, figures=False))
-    assert "INVALID - ULS plastic bending" in txt
+    assert "INVALID - Plastic bending" in txt
     assert "diagnostic only" in txt
 
 
 def test_report_handles_plastic_only():
     out = {"plastic": _out()["plastic"]}
-    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    inp = _inp()
+    inp["mode"] = "Plastic"
+    pdf = sector_report.build_report({}, inp, out, figures=False)
     assert pdf[:4] == b"%PDF"
     txt = _pdf_text(pdf)
     assert "Cracked-section elastic stresses" not in txt
     assert "crack width" not in txt.lower()
 
 
+def test_report_plastic_only_omits_inactive_sls_action_set():
+    out = {"plastic": _out()["plastic"]}
+    inp = _inp()
+    inp["mode"] = "Plastic"
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    assert "PL-TEST" in txt
+    assert "EL-TEST" not in txt
+
+
 def test_report_elastic_only_omits_plastic_theory():
     out = {"elastic": _out()["elastic"]}
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "Ultimate (plastic) capacity" not in txt
+    assert "Plastic section capacity" not in txt
     assert "Cracked-section elastic stresses" in txt
 
 

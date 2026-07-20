@@ -12,13 +12,18 @@ directly; the app wires the download / upload widgets to them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+from datetime import datetime, timezone
 
 import pandas as pd
 
+from sector import __version__ as sector_version
+from sector.build_info import source_revision
+
 FORMAT = "sector-project"
-VERSION = 2   # v2: axial force N is tension-positive (v1 stored it compression-positive)
+VERSION = 3   # v3: application/source provenance and canonical input hash
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -48,6 +53,8 @@ SCALAR_KEYS = [
     "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
     # Loads. The modular ratios n_l/n_s are derived from Ec, Es, Ep and the creep
     # coefficient (el_phi), so they are not persisted -- they follow from the moduli.
+    "pl_case_id", "pl_case_type", "pl_case_source",
+    "el_case_id", "el_case_type", "el_case_source",
     "pl_P", "pl_Mx", "pl_My", "el_long_P", "el_long_Mx", "el_long_My", "el_phi",
     "el_short_P", "el_short_Mx", "el_short_My",
     # Analysis & result settings.
@@ -133,19 +140,109 @@ def _obj_to_table(obj) -> pd.DataFrame:
     return df.astype("float64") if cols else df
 
 
-def dump_project(tables: dict, scalars: dict) -> str:
+def _canonical_inputs(tables: dict, scalars: dict) -> dict:
+    """Return the JSON-native input payload used by both save and hash checks."""
+    return {
+        "tables": {k: _table_to_obj(tables.get(k)) for k in TABLE_KEYS},
+        "scalars": {k: _scalar(scalars[k]) for k in SCALAR_KEYS if k in scalars},
+    }
+
+
+def input_sha256(tables: dict, scalars: dict) -> str:
+    """Hash the canonical calculation inputs, independent of save timestamps."""
+    content = _canonical_inputs(tables, scalars)
+    canonical = json.dumps(
+        content, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def dump_project(tables: dict, scalars: dict, *, calculation=None,
+                 app_version=None, revision=None) -> str:
     """Serialise the point tables and scalar inputs to a JSON project string.
 
     ``tables`` maps the table keys to DataFrames; ``scalars`` maps the input keys
     to their values. Unknown scalar keys are dropped so the file stays canonical.
     """
+    content = _canonical_inputs(tables, scalars)
+    digest = input_sha256(tables, scalars)
+    revision = str(revision or source_revision())
+    app_version = str(app_version or sector_version)
     payload = {
         "format": FORMAT,
         "version": VERSION,
-        "tables": {k: _table_to_obj(tables.get(k)) for k in TABLE_KEYS},
-        "scalars": {k: _scalar(scalars[k]) for k in SCALAR_KEYS if k in scalars},
+        **content,
+        "provenance": {
+            "sector_version": app_version,
+            "source_revision": revision,
+            "saved_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "input_sha256": digest,
+            "results_included": False,
+        },
     }
+    if calculation:
+        record = {
+            key: calculation.get(key)
+            for key in (
+                "performed_at_utc", "sector_version", "source_revision",
+                "input_sha256",
+            )
+            if calculation.get(key) not in (None, "")
+        }
+        record["matches_saved_inputs"] = record.get("input_sha256") == digest
+        payload["calculation"] = record
     return json.dumps(payload, indent=2)
+
+
+def project_provenance(text: str) -> dict:
+    """Read and verify provenance without changing the parse return contract."""
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError("not valid JSON") from exc
+    if not isinstance(data, dict) or data.get("format") != FORMAT:
+        raise ValueError("not a Sector project file")
+    provenance = data.get("provenance")
+    if not isinstance(provenance, dict):
+        return {
+            "sector_version": None,
+            "source_revision": None,
+            "saved_at_utc": None,
+            "input_sha256": None,
+            "input_hash_valid": None,
+            "results_included": False,
+            "calculation": None,
+        }
+    raw_tables = data.get("tables") or {}
+    raw_scalars = data.get("scalars") or {}
+    if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
+        raise ValueError("malformed 'tables' or 'scalars' section")
+    canonical = json.dumps(
+        {"tables": raw_tables, "scalars": raw_scalars},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        allow_nan=False,
+    )
+    actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    recorded = provenance.get("input_sha256")
+    calculation = (
+        dict(data["calculation"])
+        if isinstance(data.get("calculation"), dict) else None
+    )
+    if calculation is not None:
+        calculation["matches_saved_inputs"] = (
+            bool(calculation.get("input_sha256"))
+            and calculation.get("input_sha256") == actual
+        )
+    return {
+        "sector_version": provenance.get("sector_version"),
+        "source_revision": provenance.get("source_revision"),
+        "saved_at_utc": provenance.get("saved_at_utc"),
+        "input_sha256": recorded,
+        "input_hash_valid": bool(recorded) and recorded == actual,
+        "results_included": bool(provenance.get("results_included", False)),
+        "calculation": calculation,
+    }
 
 
 def parse_project(text: str):
