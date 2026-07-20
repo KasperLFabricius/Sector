@@ -377,15 +377,14 @@ def manual_blocks() -> list:
     md("**Sector** is a cross-section analysis tool for reinforced-concrete and "
        "prestressed sections. You give it an arbitrary polygonal concrete outline "
        "(with any number of voids), the mild-steel bars and prestressing tendons, "
-       "and the material laws; it returns the ultimate bending capacity, the "
-       "cracked-section service stresses and the crack width, and it assembles a "
-       "QA report you can hand in with a design.")
+       "and the material laws. It returns plastic capacity, cracked-section elastic "
+       "response, optional acceptance checks and a QA report.")
     md("The drawing and the stress-strain diagrams update as you type; the result "
        "views recompute when you press *Calculate*.")
     call("limit", "Sector analyses **one plane cross-section**. It assumes plane "
          "sections remain plane (a linear strain field) and perfect bond between "
-         "concrete and steel; it does not do shear, torsion, buckling or "
-         "member-level effects. Those are checked separately.")
+         "concrete and steel. Shear and torsion are section-level checks; buckling, "
+         "second-order response and other member-level effects are outside scope.")
     call("standard", "EN 1992-1-1:2023 is a fully selectable design methodology in "
          "Sector. Individual material and check methods remain independently "
          "selectable; the Design-basis alignment status and PDF identify any "
@@ -398,11 +397,10 @@ def manual_blocks() -> list:
        "envelope at the given axial force, from the full nonlinear material laws, "
        "and the utilisation of an applied load against it.\n"
        "- **Cracked-section elastic stresses.** The concrete and reinforcement "
-       "stresses under the long-term and short-term service loads, on the cracked "
+       "stresses from long- and short-term action components, on the cracked "
        "(tension-ignored) section, with creep through the modular ratio.\n"
-       "- **Serviceability.** Whether the section cracks under the service load, "
-       "the transformed section properties, and the crack width to a choice of "
-       "code editions.\n"
+       "- **Acceptance criteria.** User-defined stress limits, cracking threshold, "
+       "transformed section properties and crack width.\n"
        "- **Reporting.** A one-click QA PDF with the worked formulas and their "
        "code references, plus a project file that saves the whole input set.")
 
@@ -414,8 +412,8 @@ def manual_blocks() -> list:
        "concrete, mild steel and (if any) prestress.\n"
        "3. **Choose the analyses.** In *Analysis settings* pick Plastic, "
        "Elastic or Both, and toggle the crack-width check.\n"
-       "4. **Enter the loads.** Give the axial force and moments for the plastic "
-       "utilisation and the service combinations.\n"
+       "4. **Enter the loads.** Give each solver's axial force and moments, with "
+       "the project action-set ID and optional classification.\n"
        "5. **Calculate.** Read the results in the *View* dropdown: the section, the "
        "stress-strain diagrams, the plastic envelope and the elastic stresses.\n"
        "6. **Export.** Generate the PDF report or download the project file.")
@@ -547,8 +545,8 @@ def manual_blocks() -> list:
        "yield and ultimate strengths $f_{yk}$ / $f_{tk}$, the ultimate strain "
        "$\\varepsilon_{uk}$, the partial factors and the modulus $E_s$. The "
        "**Active in compression** toggle decides whether the bars carry "
-       "compression in the **plastic (ultimate)** law: with it off the steel is "
-       "tension-only there. The cracked-elastic (service) analysis is linear and "
+       "compression in the **plastic** law: with it off the steel is "
+       "tension-only there. The cracked-elastic analysis is linear and "
        "always treats the bars in both directions, regardless of this toggle.")
     fig(fig_beam_steel_law, "The B550 mild-steel law for the rectangular example.")
     call("standard", "The concrete and steel laws follow DS/EN 1992-1-1 3.1.7 and "
@@ -562,9 +560,9 @@ def manual_blocks() -> list:
 
     h1("Analysis & result settings")
     h2("Analysis mode")
-    md("*Analysis* selects what runs: **Plastic** (the ultimate M-M envelope), "
-       "**Elastic** (the cracked-section stresses for the service loads), or "
-       "**Both**.")
+    md("*Analysis* selects the calculation method: **Plastic** (nonlinear M-M "
+       "capacity), **Elastic** (cracked-section stresses), or **Both**. These names "
+       "do not prescribe a limit state; classify each action set for the project.")
     h2("The plastic sweep")
     md("The envelope is traced by rotating the neutral axis from $V_{min}$ to "
        "$V_{max}$ in steps of $V_{inc}$ (degrees). Each angle gives one point on "
@@ -593,7 +591,7 @@ def manual_blocks() -> list:
        "$x$; or horizontal, about $y$), the tension face, the method edition, and "
        "the web width $b_w$ (0 = derived). The effective depth $d$, the tension "
        "reinforcement $A_{sl}$ and, when $b_w = 0$, the web width are all derived "
-       "from the geometry; the axial term uses the plastic (ULS) axial force $N$ "
+       "from the geometry; the axial term uses the Plastic action-set force $N$ "
        "and the selected-axis plastic moment.")
     table(["Shear method", "What it sets"],
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
@@ -795,14 +793,14 @@ def manual_blocks() -> list:
     call("standard", "The concrete, mild-steel and tendon laws follow DS/EN "
          "1992-1-1 3.1.7, 3.2.7 and 3.3.6; the strain limits follow Table 3.1.")
 
-    h1("Plastic (ultimate) capacity")
-    h2("The strain plane at ultimate")
+    h1("Plastic capacity analysis")
+    h2("The strain plane at capacity")
     md("Plane sections remain plane, so the strain is linear across the depth: "
        "$\\varepsilon(s) = \\varphi\\,(s - s_{na})$, where $\\varphi$ is the "
-       "curvature and $s_{na}$ the neutral-axis depth. At ultimate the extreme "
+       "curvature and $s_{na}$ the neutral-axis depth. At capacity the extreme "
        "compression fibre reaches the concrete crushing strain "
        "$\\varepsilon_{cu2}$; the compression depth is $c = s_{max}-s_{na}$.")
-    fig(fig_strain_plane, "The ultimate strain plane (reported tension-positive "
+    fig(fig_strain_plane, "The capacity strain plane (reported tension-positive "
         "convention): one straight line -- zero at the neutral axis, compression "
         "(negative) above it and tension (positive) below, the top fibre at the "
         "crushing strain. The internal solver formula above is compression-positive; "
@@ -846,7 +844,7 @@ def manual_blocks() -> list:
         "one solved neutral-axis angle.")
 
     h1("Cracked-section elastic analysis")
-    md("For the service state the section is taken as already cracked: concrete "
+    md("The Elastic solver takes the section as already cracked: concrete "
        "carries compression only (zero stress where $\\varepsilon\\ge 0$) and the "
        "steel is linear in both directions. The analysis works with a reference "
        "concrete modulus and the modular ratio $n=E_s/E_c$: each bar contributes a "
@@ -964,7 +962,7 @@ def manual_blocks() -> list:
        "tension bars; $b_w$, when not entered, is the smallest solid width sampled "
        "over the middle 80% of the depth (the web of a rectangular / T / box "
        "section -- a curved outline should have $b_w$ entered by hand). $\\sigma_{cp}$ "
-       "uses the plastic (ULS) axial force $N$; since Sector's $N$ is "
+       "uses the Plastic action-set force $N$; since Sector's $N$ is "
        "tension-positive it is negated to the code's compression-positive "
          "convention, exactly as the axial-force flip elsewhere.")
     md("For EN 1992-1-1:2023, the action-dependent factor is\n\n"
@@ -1003,7 +1001,8 @@ def manual_blocks() -> list:
     call("concept", "Rather than the code's $z \\approx 0.9d$ approximation, Sector "
          "uses the **internal lever arm the plastic engine already computes** -- the "
          "separation of the concrete compression resultant and the steel tension "
-         "resultant for bending about the shear axis, at the ULS axial force. It "
+         "resultant for bending about the shear axis, at the Plastic action-set "
+         "axial force. It "
          "falls back to $0.9d$ only when that lever arm is degenerate (no tension "
          "steel, or a fully compressed / non-converged state).")
     md("$V_{Rd,s}$ rises with $\\cot\\theta$ (a flatter strut engages more links) "

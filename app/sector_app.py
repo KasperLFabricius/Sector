@@ -1,7 +1,7 @@
 """Sector - reinforced-concrete cross-section analysis (Streamlit interface).
 
-Define a section by its shape and reinforcement, choose elastic and/or plastic
-analysis, then press Calculate to review the stresses and the ultimate capacity.
+Define a section, select the required solvers and review stresses, capacities
+and acceptance checks.
 """
 
 from __future__ import annotations
@@ -1711,14 +1711,11 @@ def build_inputs(host=st):
              "(N-Mx and N-My), from pure tension to the squash load. Shown in the "
              "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
-    scw.caption("User-defined stress and crack-width criteria, reported with the "
-                "Elastic result. Enter 0 for a limit that is not to be assessed.")
+    scw.caption("User-defined criteria for Elastic results; 0 = not assessed.")
     sls_conc_limit_pct = _seeded_number(
         scw, "Concrete compression limit (% fck, 0 = not assessed)",
         0.0, 100.0, 60.0, 1.0, "sls_conc_limit_pct", disabled=not elastic_on,
-        help="Upper concrete compressive-stress criterion as a percentage of the "
-             "entered characteristic concrete strength fck. The user is responsible "
-             "for confirming the applicable action combination and project basis.")
+        help="Upper concrete compressive stress as a percentage of fck.")
     sls_steel_limit_pct = _seeded_number(
         scw, "Reinforcement tension limit (% fyk, 0 = not assessed)",
         0.0, 100.0, 80.0, 1.0, "sls_steel_limit_pct", disabled=not elastic_on,
@@ -1731,11 +1728,10 @@ def build_inputs(host=st):
              "the entered characteristic tendon strength fpk. It is assessed only "
              "when the section contains tendons.")
     sls_limit_source = scw.text_input(
-        "SLS criteria source",
+        "Acceptance-criteria source",
         value="Project design basis / user-defined criteria",
         key="sls_limit_source", disabled=not elastic_on,
-        help="Document, clause or project requirement supporting the entered limits. "
-             "Sector reports this text verbatim and does not infer exposure class.")
+        help="Document, clause or project requirement supporting the limits.")
     sls_cw = _seeded_checkbox(scw, "Crack width", False, "sls_cw",
                               disabled=not elastic_on,
                               help="Report the EC2 crack width wk for both the long-term "
@@ -1769,24 +1765,16 @@ def build_inputs(host=st):
     sls_code = scw.selectbox(
         "Crack-width code", list(_CRACK_CODES), key="sls_code",
         disabled=not (elastic_on and sls_cw),
-        help="Code edition for the crack-spacing rules. The DK NA makes k3 cover-"
-             "dependent (k3 = 3.4*(25/c)^(2/3)), limits the (h-x)/3 effective-height "
-             "term to slabs and prestressed members, and reports BOTH the fine and "
-             "the coarse crack system: the coarse system (7.3.4(1)) sets the "
-             "effective area to the band whose centroid matches the tension "
-             "reinforcement (figure 7.100 NA) and halves the crack width. "
-             "EN 1992-1-1:2023 uses the refined model (9.2.3): wk = kw*k1/r*sr,m,cal*"
-             "(esm-ecm) with kw = 1.7 and a per-bar curvature factor.")
+        help="Crack-spacing method. The DK NA reports fine and coarse systems; "
+             "the 2023 option uses the refined model in 9.2.3. See the manual "
+             "for equations and applicability.")
     sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
     sls_edition = _CRACK_CODES[sls_code]["edition"]
     sls_member = scw.selectbox(
         "Member type", ["Beam", "Slab"], key="sls_member",
         disabled=not (elastic_on and sls_cw and sls_dk_na),
-        help="Under the DK NA fine system the (h-x)/3 effective-height term applies "
-             "only to slabs (and prestressed members); for a beam it is dropped. It "
-             "affects the fine system only (the coarse system uses the centroid-"
-             "matched effective area, not hc,ef). Ignored for the base EN 1992-1-1 "
-             "code.")
+        help="DK NA fine-system selection for the (h-x)/3 effective-height term. "
+             "Ignored by other methods.")
 
     sts.markdown("**Combined M-V-T interaction**")
     sts.caption("Tie the bending (plastic M), shear (V) and torsion (T) checks "
@@ -2436,18 +2424,11 @@ def build_inputs(host=st):
         st.markdown("### Sector")
         st.caption("Reinforced-concrete and prestressed cross-section analysis.")
         st.markdown(
-            "Sector analyses an arbitrary RC (and optionally prestressed) "
-            "cross-section and reports:\n"
-            "- **Plastic bending capacity** -- the biaxial M-M interaction "
-            "envelope and the load utilisation.\n"
-            "- **Cracked-section elastic stresses** -- concrete and "
-            "reinforcement stresses under the long- and short-term loads.\n"
-            "- **Cracking and crack width** -- cracking threshold, section "
-            "properties, and optional tension stiffening and crack width.")
-        st.markdown("**Workflow**")
-        st.caption("Define the section and materials, choose the analyses, then "
-                   "press Calculate. The section drawing and the stress-strain "
-                   "diagrams update live; the result views update on Calculate.")
+            "- **Plastic:** M-M capacity and utilisation\n"
+            "- **Elastic:** cracked-section stresses\n"
+            "- **Acceptance:** stress and crack-width criteria\n"
+            "- **Capacity checks:** shear, torsion and combined M-V-T")
+        st.caption("Set inputs, Calculate, review Results Overview, then export.")
         st.divider()
         st.markdown(f"**Sector v{APP_VERSION}**")
         st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
@@ -3623,22 +3604,13 @@ def plastic_view(inp, results):
     min_my = p.get("min_my", min(p["my"]))
     assessment = presentation.plastic_action_assessment(p)
     status = assessment["status"]
-    if assessment["assessed"]:
-        util_text = _pct(assessment["util"])
-        margin = assessment["margin"]
-        margin_text = ("not finite" if margin is None else
-                       f"{margin * 100:+.1f} percentage points")
-        verdict = (
-            f"**{status} - Plastic bending.** Applied-action utilisation "
-            f"{util_text} against the 100 % limit; margin {margin_text}. "
-            f"{assessment['detail']}."
-        )
-        (st.success if status == "PASS" else st.error)(verdict)
-    elif status == "INVALID":
-        st.error(f"**INVALID - Plastic bending.** {assessment['detail']}.")
+    verdict = presentation.plastic_assessment_text(assessment)
+    if status == "PASS":
+        st.success(verdict)
+    elif status in {"FAIL", "INVALID"}:
+        st.error(verdict)
     else:
-        st.warning(f"**NOT ASSESSED - Plastic bending.** "
-                   f"{assessment['detail']}.")
+        st.warning(verdict)
 
     st.markdown("#### Applied actions")
     a1, a2, a3 = st.columns(3)
@@ -3814,9 +3786,8 @@ def interaction_view(inp, results):
     d = results["plastic"]["interaction"]
     dx, dy = d["x"], d["y"]
     if not dx.get("converged", True) or not dy.get("converged", True):
-        st.error("**INVALID N-M BOUNDARY** - one or more axial-moment solve points "
-                 "did not converge. The diagrams and numerical boundary below are "
-                 "diagnostic only.")
+        st.error("INVALID - N-M boundary | One or more points did not converge; "
+                 "values are diagnostic only.")
     # The pure-axial extremes (squash load, tension limit) are the same for either
     # bending axis; take them across both boundaries so the metrics are consistent.
     # N is tension-positive, so the squash (compression) load is the minimum and the
@@ -3880,9 +3851,10 @@ def _acceptance_metric(box, label, assessment, unit="MPa"):
     value = assessment.get("value")
     value_text = "-" if value is None else f"{value:.3f} {unit}"
     status = assessment.get("status", "NOT ASSESSED")
+    display_status = presentation.assessment_status_label(status)
     colour = "normal" if status == "OK" else ("inverse" if status in {
         "EXCEEDED", "INVALID"} else "off")
-    box.metric(label, value_text, delta=status, delta_color=colour)
+    box.metric(label, value_text, delta=display_status, delta_color=colour)
     limit = assessment.get("limit")
     limit_text = "not supplied" if limit is None or limit <= 0.0 else f"{limit:.3f} {unit}"
     util = assessment.get("util")
@@ -3898,9 +3870,8 @@ def elastic_view(inp, results):
         return
     e = results["elastic"]
     if not e.get("converged", True):
-        st.error("INVALID ELASTIC RESULT - the cracked-section solver did not "
-                 "converge. Values below are diagnostic only and must not be used "
-                 "as verified acceptance results.")
+        st.error("INVALID - Elastic result | Solver did not converge; values are "
+                 "diagnostic only.")
 
     st.markdown("### Stress-limit assessment")
     checks = e.get("stress_assessments", {})
@@ -3914,9 +3885,8 @@ def elastic_view(inp, results):
     for col, (label, assessment) in zip(metric_cols, enabled):
         _acceptance_metric(col, label, assessment)
     st.caption(
-        f"Criteria source (user supplied): {e.get('sls_limit_source', '-')}. "
-        "The limits are applied to the displayed total elastic action; confirm "
-        "that the entered action set is the combination required by the stated basis.")
+        f"Criteria: {e.get('sls_limit_source', '-')}. "
+        "Limits apply to the total elastic action.")
 
     # Modular ratios are derived (not entered); report the values actually used. Mild
     # steel and prestress differ (Es != Ep), so both pairs are shown when tendons exist.
@@ -3934,9 +3904,9 @@ def elastic_view(inp, results):
     if ps is not None:
         # ps[0] is the tendon tension resultant; the prestress precompresses the
         # section, so as an axial action (tension-positive) it is a compression.
-        st.caption(f"Applied tendon prestress (from the initial strain): "
-                   f"N = {-ps[0]:.3f} kN, $M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm "
-                   f"(N tension-positive; this equivalent action is added to the external N/M).")
+        st.caption(f"Equivalent tendon-prestress action: N = {-ps[0]:.3f} kN, "
+                   f"$M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm "
+                   "(added to external N/M; N tension-positive).")
 
     # The neutral axis and the compression/tension zones only make sense when the
     # concrete actually carries compression; a fully tensile case has none.
@@ -4046,19 +4016,16 @@ def _elastic_sls_section(inp, e):
     st.divider()
     st.markdown("#### Cracking and crack width")
     if not e.get("converged", True):
-        st.error("**Invalid cracking classification** - at least one elastic "
-                 "section solve did not converge. The values below are retained "
-                 "as diagnostics only; no cracked/uncracked verdict is issued.")
+        st.error("INVALID - Cracking classification | Elastic solve did not "
+                 "converge; values are diagnostic only.")
     elif e["cracked"]:
-        st.warning(f"**Cracked** - the uncracked concrete tension reaches $f_{{ctm}}$ "
-                   f"at a load factor $\\lambda_{{cr}}$ = {e['lambda_cr']:.3f} "
-                   f"(governing of the long-term and total actions; "
-                   f"= $M_{{cr}}/M$ for pure bending).")
+        st.warning(f"CRACKED | $\\lambda_{{cr}}$ {e['lambda_cr']:.3f} | "
+                   "governing long-term/total action")
     else:
         lam = "infinite" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}"
-        st.success(f"**Uncracked** - peak concrete tension {e['sigma_ct']:.3f} MPa "
-                   f"< $f_{{ctm}}$ {e['fctm']:.3f} MPa under both the long-term and "
-                   f"the total action ($\\lambda_{{cr}}$ = {lam}).")
+        st.success(f"UNCRACKED | $\\sigma_{{ct}}$ {e['sigma_ct']:.3f} MPa < "
+                   f"$f_{{ctm}}$ {e['fctm']:.3f} MPa | "
+                   f"$\\lambda_{{cr}}$ {lam}")
 
     st.metric(r"Cracking factor $\lambda_{cr}$",
               "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
@@ -4097,21 +4064,20 @@ def _crack_width_panel(e):
     no_results = cl is None and cs is None and clc is None and csc is None
     assessment = e.get("crack_assessment", {})
     status = assessment.get("status", "NOT ASSESSED")
+    display_status = presentation.assessment_status_label(status)
     value = assessment.get("value")
     limit = assessment.get("limit")
     case = assessment.get("case") or "-"
     governing = assessment.get("governing") or "-"
     margin = assessment.get("margin")
     message = (
-        f"**{status}** - governing $w_k$ "
-        f"{'-' if value is None else f'{value:.3f} mm'}; limit "
-        f"{'not supplied' if limit is None or limit <= 0.0 else f'{limit:.3f} mm'}; "
-        f"case {case}; {governing}"
+        f"**{display_status} - Crack width** | governing $w_k$ "
+        f"{'-' if value is None else f'{value:.3f} mm'} | limit "
+        f"{'not supplied' if limit is None or limit <= 0.0 else f'{limit:.3f} mm'} | "
+        f"case {case} | element {governing}"
     )
     if margin is not None:
-        message += f"; margin {margin:+.3f} mm."
-    else:
-        message += "."
+        message += f" | margin {margin:+.3f} mm"
     if status == "OK":
         st.success(message)
     elif status in {"EXCEEDED", "INVALID"}:
@@ -4120,11 +4086,9 @@ def _crack_width_panel(e):
         st.warning(message)
     else:
         st.info(message)
-    st.caption(f"Criteria source (user supplied): "
-               f"{e.get('sls_limit_source', '-')}.")
+    st.caption(f"Criteria: {e.get('sls_limit_source', '-')}.")
     if no_results:
-        st.info("No crack width was calculated: the section is uncracked, or no "
-                "reinforcement element is in tension, under either load case.")
+        st.info("No crack width: section uncracked or no reinforcement in tension.")
         return
     quants = ["wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
               f"{_SIGMA}s (MPa)", f"{_RHO}p,eff", "hc,ef (m)", "cover c (mm)",

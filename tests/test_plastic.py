@@ -1,4 +1,4 @@
-"""Verification of the plastic (ultimate) capacity solver.
+"""Verification of the plastic capacity solver.
 
 The headline case is the "Fundamentsbjaelke" production handcalc run (a rectangular
 mild-steel section, P = 0, swept through four neutral-axis angles), reproduced
