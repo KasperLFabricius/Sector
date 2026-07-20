@@ -382,6 +382,9 @@ def test_partial_sweep_keeps_its_end_angle():
     _set_and_click(at, "calculate", ("number_input", "v_max", 180.0))
     vs = [p["V"] for p in at.session_state["results"]["plastic"]["points"]]
     assert vs[-1] == 180.0
+    assert at.session_state["view"] == "Plastic Results"
+    assert any("NOT ASSESSED - ULS plastic bending" in item.value
+               and "open arc" in item.value for item in at.warning)
 
 
 def test_plastic_sweep_stays_within_requested_bounds():
@@ -415,6 +418,42 @@ def test_full_sweep_reports_utilisation():
     assert at.session_state["results"]["plastic"]["util"] is not None
 
 
+def test_plastic_result_overview_has_explicit_verdict_margin_and_qa_tables():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 20.0),
+        ("number_input", "pl_My", 0.0),
+    )
+    assert at.session_state["view"] == "Plastic Results"
+    assert any("PASS - ULS plastic bending" in item.value for item in at.success)
+    assert any("100 % limit" in item.value and "margin +" in item.value
+               for item in at.success)
+
+    # Three short applied-action cards replace the five cramped capacity cards.
+    labels = [metric.label for metric in at.metric]
+    assert labels == [
+        r"Axial $N_{Ed}$ (tension +)", r"$M_{x,Ed}$", r"$M_{y,Ed}$",
+    ]
+    frames = [frame.value for frame in at.dataframe]
+    assert any("Bending axis" in frame.columns for frame in frames)
+    assert any("State" in frame.columns and "Force (kN)" in frame.columns
+               for frame in frames)
+    assert any("Ring point" in frame.columns and
+               any("Design stress" in str(column) for column in frame.columns)
+               for frame in frames)
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 100000.0),
+    )
+    assert any("FAIL - ULS plastic bending" in item.value for item in at.error)
+    assert any("margin -" in item.value for item in at.error)
+
+
 def test_nm_interaction_is_opt_in_and_renders():
     at = _fresh()
     at.run()
@@ -438,6 +477,10 @@ def test_nm_interaction_is_opt_in_and_renders():
     labels = [mt.label for mt in at.metric]
     assert any("Squash load" in lbl for lbl in labels)       # axial metrics show
     assert any("M_x" in lbl for lbl in labels) and any("M_y" in lbl for lbl in labels)
+    frames = [frame.value for frame in at.dataframe]
+    assert any({"Point", "N, Mx boundary (kN)", "Mx (kNm)",
+                "N, My boundary (kN)", "My (kNm)"} <= set(frame.columns)
+               for frame in frames)
 
 
 def test_axial_force_is_tension_positive():
@@ -1562,6 +1605,10 @@ def test_capacity_only_toggle_locks_moments_and_drops_utilisation():
     assert not at.exception
     pl = at.session_state["results"]["plastic"]
     assert pl["util"] is None and pl["check_util"] is False and pl["applied"] is None
+    assert at.session_state["view"] == "Plastic Results"
+    assert any("NOT ASSESSED - ULS plastic bending" in item.value
+               and "capacity-only run" in item.value.lower()
+               for item in at.warning)
 
 
 def test_2023_shear_keeps_required_moment_editable_without_bending_utilisation():

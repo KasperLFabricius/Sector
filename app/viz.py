@@ -166,29 +166,29 @@ def chord_mrd_label(axis, m_off, conditional):
 
 
 # --- House palette, grouped by role -------------------------------------------
-# Green = tension, red = compression, everywhere (bars, strain wedges, chords).
-# A hue is reused across figures only where the two roles never share a plot
-# (e.g. the red applied-load marker and a red compression bar).
+# Tension and compression use the colour-blind-safe blue / vermillion pair from
+# the Okabe-Ito palette. Section markers also use a plain / x pattern, so sign is
+# never communicated by colour alone.
 # Structure
 CONCRETE_FILL = "rgba(120,130,140,0.18)"
 CONCRETE_LINE = "#5b6770"
 HOLE_FILL = "white"                         # voids punched from the outline
 # Reinforcement / strain state
-BAR_TENSION = "#1d9e75"                      # green
-BAR_COMPRESSION = "#c0392b"                  # red
+BAR_TENSION = "#0072B2"                      # blue; plain marker
+BAR_COMPRESSION = "#D55E00"                  # vermillion; x-pattern marker
 BAR_NEUTRAL = "#534ab7"                      # purple (unstressed / plane marker)
 TENDON = "#0b7285"                           # teal
-COMP_ZONE_FILL = "rgba(192,57,43,0.22)"      # concrete compression zone (red)
-TENS_ZONE_FILL = "rgba(29,158,117,0.12)"     # tension side (green, no concrete stress)
-NA_LINE = "#e08a1e"                          # neutral axis (amber)
+COMP_ZONE_FILL = "rgba(213,94,0,0.22)"       # concrete compression zone
+TENS_ZONE_FILL = "rgba(0,114,178,0.12)"      # tension side (no concrete stress)
+NA_LINE = "#E69F00"                          # neutral axis (amber)
 # Material stress-strain curves
 CURVE_CHAR = "#534ab7"                        # characteristic curve + its input markers
 CURVE_DESIGN = "#9aa3ab"                      # partial-factored design curve (grey reference)
 # Results (interaction envelopes / schematics)
 ENVELOPE = "#534ab7"                          # capacity envelope / limit line (purple)
 ENVELOPE_FILL = "rgba(83,74,183,0.08)"        # shaded safe region under the envelope
-LOAD_POINT = "#c0392b"                        # applied-load marker (red)
-LINK_LINE = "#e08a1e"                         # shear-link ties in the truss schematic
+LOAD_POINT = "#CC79A7"                        # applied-load marker (magenta)
+LINK_LINE = "#56B4E9"                         # shear-link ties in the truss schematic
 # Annotation
 GUIDE_LINE = "#b8bdc4"                        # dotted projection guides
 SCHEMATIC_INK = "#2c2c2a"                     # strong schematic lines + labels
@@ -676,13 +676,16 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
 
     Reinforcement is drawn consistently across the views: bars are circles and
     tendons are diamonds, each coloured by ``bar_colors`` / ``tendon_colors``
-    (e.g. by stress sign) when given, else a neutral colour. ``outer`` / ``holes``
-    / ``bars`` / ``na_line`` / ``zones`` are all given in metres; ``scale`` (and
-    the matching axis ``unit`` label) converts them for display -- e.g. ``1000`` /
-    ``"mm"`` draws the section in millimetres. ``show_labels`` numbers the
-    reinforcement and concrete corners; ``label_scale`` scales the label font and
-    ``label_min_gap`` is the minimum label spacing (fraction of the section size)
-    below which labels are thinned out -- the two are independent.
+    (e.g. by stress sign) when given, else a neutral colour. Compression-state
+    markers receive an x pattern and tension-state markers remain plain, with
+    explicit legend entries, so the state remains readable without colour.
+    ``outer`` / ``holes`` / ``bars`` / ``na_line`` / ``zones`` are all given in
+    metres; ``scale`` (and the matching axis ``unit`` label) converts them for
+    display -- e.g. ``1000`` / ``"mm"`` draws the section in millimetres.
+    ``show_labels`` numbers the reinforcement and concrete corners; ``label_scale``
+    scales the label font and ``label_min_gap`` is the minimum label spacing
+    (fraction of the section size) below which labels are thinned out -- the two
+    are independent.
     """
     # Scale every geometry input once, up front, so the traces and the labels are
     # all drawn in the display units. Guard with ``is None`` rather than a truth
@@ -727,9 +730,11 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         bx = [b[0] for b in bars]
         by = [b[1] for b in bars]
         colors = bar_colors or [BAR_NEUTRAL] * len(bars)
+        symbols = (["circle-x" if color == BAR_COMPRESSION else "circle"
+                    for color in colors] if bar_colors else "circle")
         fig.add_trace(go.Scatter(x=bx, y=by, mode="markers", name="reinforcing bar",
                                  marker=dict(size=_marker_sizes(bars, 9.0, 6.5, 14.0),
-                                             symbol="circle", color=colors,
+                                             symbol=symbols, color=colors,
                                              line=dict(color="white", width=1)),
                                  customdata=_point_hover(bars, 1, "Bar", unit, bar_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
@@ -738,14 +743,31 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         tx = [t[0] for t in tendons]
         ty = [t[1] for t in tendons]
         colors = tendon_colors or [TENDON] * len(tendons)
+        symbols = (["diamond-x" if color == BAR_COMPRESSION else "diamond"
+                    for color in colors] if tendon_colors else "diamond")
         fig.add_trace(go.Scatter(x=tx, y=ty, mode="markers", name="tendon",
                                  marker=dict(size=_marker_sizes(tendons, 11.0, 8.0, 16.0),
-                                             symbol="diamond", color=colors,
+                                             symbol=symbols, color=colors,
                                              line=dict(color="white", width=1)),
                                  customdata=_point_hover(tendons, len(bars) + 1, "Tendon",
                                                          unit, tendon_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
                                  showlegend=True))
+    state_colors = list(bar_colors or []) + list(tendon_colors or [])
+    if BAR_TENSION in state_colors:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers", name="tension (+): plain marker",
+            marker=dict(size=9, symbol="circle", color=BAR_TENSION,
+                        line=dict(color="white", width=1)),
+            hoverinfo="skip", showlegend=True,
+        ))
+    if BAR_COMPRESSION in state_colors:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers", name="compression (-): x marker",
+            marker=dict(size=9, symbol="circle-x", color=BAR_COMPRESSION,
+                        line=dict(color="white", width=1)),
+            hoverinfo="skip", showlegend=True,
+        ))
     if na_line:
         x0, y0, x1, y1 = na_line
         fig.add_trace(go.Scatter(x=[x0, x1], y=[y0, y1], mode="lines",
@@ -1257,8 +1279,8 @@ def halfplane_bar_colors(points, halfplane, kappa=0.0, prestrain=0.0):
     ``(a, b)`` unit-norm so ``a*x + b*y + c`` is the signed distance ``d`` from the
     neutral axis). The section strain at a point (compression positive) is
     ``kappa*d``, so a bar's net strain (tension positive) is ``prestrain - kappa*d``.
-    A non-negative net strain is tension (green), the rest compression (red) --
-    matching the elastic view's stress-sign colouring.
+    A non-negative net strain is tension (blue/plain), the rest compression
+    (vermillion/x-pattern) -- matching the elastic view's stress-sign encoding.
 
     Mild bars pass ``prestrain = 0`` (their colour is just the neutral-axis side);
     tendons pass their locked-in prestrain ``IS`` so a tendon on the compression

@@ -28,6 +28,7 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import project_io  # noqa: E402
+import result_presentation as presentation  # noqa: E402
 import viz  # noqa: E402
 from point_grid import point_grid, _rows_to_df  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
@@ -3351,22 +3352,47 @@ def plastic_view(inp, results):
     # before min_mx/min_my existed (matching inputs -> no recompute) still renders.
     min_mx = p.get("min_mx", min(p["mx"]))
     min_my = p.get("min_my", min(p["my"]))
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Max $M_x$", f"{p['max_mx']:.3f} kNm")
-    m2.metric("Min $M_x$", f"{min_mx:.3f} kNm")
-    m3.metric("Max $M_y$", f"{p['max_my']:.3f} kNm")
-    m4.metric("Min $M_y$", f"{min_my:.3f} kNm")
-    if not p.get("check_util", True):
-        m5.metric("Utilisation", "-",
-                  help="Capacity-only run: the applied moments are not checked. "
-                       "Enable 'Check utilisation against applied moment' to check.")
-    elif p["util"] is None:
-        m5.metric("Utilisation", "-",
-                  help="Only meaningful for a full 0-360 deg sweep; the current "
-                       "sweep is a partial arc.")
+    assessment = presentation.plastic_uls_assessment(p)
+    status = assessment["status"]
+    if assessment["assessed"]:
+        util_text = _pct(assessment["util"])
+        margin = assessment["margin"]
+        margin_text = ("not finite" if margin is None else
+                       f"{margin * 100:+.1f} percentage points")
+        verdict = (
+            f"**{status} - ULS plastic bending.** Applied-action utilisation "
+            f"{util_text} against the 100 % limit; margin {margin_text}. "
+            f"{assessment['detail']}."
+        )
+        (st.success if status == "PASS" else st.error)(verdict)
+    elif status == "INVALID":
+        st.error(f"**INVALID - ULS plastic bending.** {assessment['detail']}.")
     else:
-        m5.metric("Utilisation", f"{p['util']:.3f}",
-                  help="applied / capacity in the load direction")
+        st.warning(f"**NOT ASSESSED - ULS plastic bending.** "
+                   f"{assessment['detail']}.")
+
+    st.markdown("#### Applied actions")
+    a1, a2, a3 = st.columns(3)
+    a1.metric(r"Axial $N_{Ed}$ (tension +)", f"{inp['P_pl']:.3f} kN")
+    applied = p.get("applied")
+    moment_help = ("Applied moment checked against the closed M-M capacity envelope."
+                   if assessment["assessed"] else assessment["detail"].capitalize() + ".")
+    a2.metric(r"$M_{x,Ed}$", "-" if applied is None else f"{applied[0]:.3f} kNm",
+              help=moment_help)
+    a3.metric(r"$M_{y,Ed}$", "-" if applied is None else f"{applied[1]:.3f} kNm",
+              help=moment_help)
+
+    st.markdown("#### Directional capacity extrema")
+    st.dataframe(
+        {
+            "Bending axis": ["Mx", "My"],
+            "Negative capacity (kNm)": [round(min_mx, 3), round(min_my, 3)],
+            "Positive capacity (kNm)": [
+                round(p["max_mx"], 3), round(p["max_my"], 3)],
+        },
+        hide_index=True,
+        width="stretch",
+    )
     st.plotly_chart(
         viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied"),
                                angles=[pt["V"] for pt in p["points"]],
@@ -3412,14 +3438,14 @@ def plastic_view(inp, results):
                                tendon_colors=tendon_colors,
                                zones=viz.compression_zones(inp["outer"], hp),
                                title=f"Section at V = {pt['V']:.0f} deg "
-                                     "(green tension, red compression)",
+                                     "(tension + / compression -)",
                                show_labels=True, label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
                                bar_hover=bar_hover, tendon_hover=tendon_hover),
             width="stretch")
-        st.caption("Hover a bar or tendon for its design stress and strain at this "
-                   "rotation (tension-positive). The summary reports the extreme "
-                   "tensile and compression strains.")
+        st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
+                   "compression (-). Bar circles and tendon diamonds retain the "
+                   "element type. Hover an element for its design stress and strain.")
     with cR:
         # Split the bar strain into its tensile and compression extreme only when
         # there are mild bars that are active in compression (a tendon-only section has
@@ -3451,6 +3477,53 @@ def plastic_view(inp, results):
                    "with N and the stresses -- so a crushing concrete strain reads "
                    "negative.")
 
+    evidence = presentation.plastic_state_evidence(inp, pt)
+    with st.expander("Selected neutral-axis state - QA evidence", expanded=False):
+        st.caption(
+            f"Point-by-point design stress and compatible strain at V = "
+            f"{pt['V']:.0f} deg. Signs are tension positive; reinforcement force "
+            "is stress x entered area."
+        )
+        concrete_rows = evidence["concrete"]
+        if concrete_rows:
+            st.markdown("**Concrete corner response**")
+            st.dataframe(
+                {
+                    "Point": [row["point_no"] for row in concrete_rows],
+                    "Ring": [row["ring"] for row in concrete_rows],
+                    "Ring point": [row["ring_point_no"] for row in concrete_rows],
+                    "x (mm)": [round(row["x_mm"], 2) for row in concrete_rows],
+                    "y (mm)": [round(row["y_mm"], 2) for row in concrete_rows],
+                    f"Strain ({_EPS}, permille)": [
+                        round(row["strain_permille"], 5) for row in concrete_rows],
+                    f"Design stress ({_SIGMA}c, MPa)": [
+                        round(row["stress_mpa"], 3) for row in concrete_rows],
+                },
+                hide_index=True,
+                width="stretch",
+                height=min(35 * (len(concrete_rows) + 1) + 3, 420),
+            )
+        element_rows = evidence["elements"]
+        if element_rows:
+            st.markdown("**Reinforcement and tendon response**")
+            st.dataframe(
+                {
+                    "Element": [row["element_id"] for row in element_rows],
+                    "State": [row["state"] for row in element_rows],
+                    "x (mm)": [round(row["x_mm"], 2) for row in element_rows],
+                    "y (mm)": [round(row["y_mm"], 2) for row in element_rows],
+                    "Area (mm2)": [round(row["area_mm2"], 2) for row in element_rows],
+                    f"Strain ({_EPS}, permille)": [
+                        round(row["strain_permille"], 5) for row in element_rows],
+                    f"Design stress ({_SIGMA}, MPa)": [
+                        round(row["stress_mpa"], 3) for row in element_rows],
+                    "Force (kN)": [round(row["force_kn"], 3) for row in element_rows],
+                },
+                hide_index=True,
+                width="stretch",
+                height=min(35 * (len(element_rows) + 1) + 3, 420),
+            )
+
     with st.expander("Full results table (per neutral-axis angle)"):
         # Size the table to all rows so the page scrolls, not the table itself.
         steel_comp = (inp["steel"].active_in_compression and bool(inp["bars"])
@@ -3471,6 +3544,10 @@ def interaction_view(inp, results):
         return
     d = results["plastic"]["interaction"]
     dx, dy = d["x"], d["y"]
+    if not dx.get("converged", True) or not dy.get("converged", True):
+        st.error("**INVALID N-M BOUNDARY** - one or more axial-moment solve points "
+                 "did not converge. The diagrams and numerical boundary below are "
+                 "diagnostic only.")
     # The pure-axial extremes (squash load, tension limit) are the same for either
     # bending axis; take them across both boundaries so the metrics are consistent.
     # N is tension-positive, so the squash (compression) load is the minimum and the
@@ -3498,6 +3575,35 @@ def interaction_view(inp, results):
                "inside the curve is safe. Concrete carries compression only, so the "
                "tension end is reinforcement-controlled. Hover any point for its "
                "$N$ and $M$.")
+    with st.expander("Numerical N-M boundary (all points)", expanded=False):
+        rows = presentation.nm_boundary_rows(d)
+        display_rows = [
+            {
+                "Point": row["Point"],
+                "N, Mx boundary (kN)": (
+                    None if row["N, Mx boundary (kN)"] is None
+                    else round(row["N, Mx boundary (kN)"], 3)),
+                "Mx (kNm)": (
+                    None if row["Mx (kNm)"] is None
+                    else round(row["Mx (kNm)"], 3)),
+                "N, My boundary (kN)": (
+                    None if row["N, My boundary (kN)"] is None
+                    else round(row["N, My boundary (kN)"], 3)),
+                "My (kNm)": (
+                    None if row["My (kNm)"] is None
+                    else round(row["My (kNm)"], 3)),
+            }
+            for row in rows
+        ]
+        st.dataframe(
+            display_rows,
+            hide_index=True,
+            width="stretch",
+            height=min(35 * (len(display_rows) + 1) + 3, 560),
+        )
+        st.caption("The point order is the exact plotted boundary order. Separate "
+                   "axial-force columns are retained because the Mx and My traces "
+                   "may use different numerical points.")
 
 
 def _sls_metric(box, label, assessment, unit="MPa"):
@@ -3595,8 +3701,11 @@ def elastic_view(inp, results):
                                na_line=na, zones=zones, show_labels=True,
                                label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
-                               title="Elastic state (green tension, red compression)"),
+                               title="Elastic state (tension + / compression -)"),
             width="stretch")
+        st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
+                   "compression (-). Bar circles and tendon diamonds identify the "
+                   "element type, so sign and type remain readable without colour.")
     with strain_col:
         st.plotly_chart(
             viz.elastic_strain_figure(

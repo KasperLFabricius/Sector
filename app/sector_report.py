@@ -37,6 +37,7 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import viz
+import result_presentation as presentation
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
@@ -347,7 +348,9 @@ class ReportBuilder:
     def _status_block(self, text, status):
         """Add a prominent, print-readable assessment banner."""
         palette = {
+            "PASS": ("#E8F5E9", "#1B5E20"),
             "OK": ("#E8F5E9", "#1B5E20"),
+            "FAIL": ("#FDECEC", "#9B1C1C"),
             "EXCEEDED": ("#FDECEC", "#9B1C1C"),
             "INVALID": ("#FDECEC", "#9B1C1C"),
             "NOT ASSESSED": ("#FFF4D6", "#7A4E00"),
@@ -888,18 +891,38 @@ class ReportBuilder:
     def _plastic(self):
         pl = self.out["plastic"]
         self._h1("Ultimate (plastic) capacity")
-        if not pl.get("converged", True):
-            self._small("Warning: not all sweep points converged.")
+        assessment = presentation.plastic_uls_assessment(pl)
+        status = assessment["status"]
+        if assessment["assessed"]:
+            margin = assessment["margin"]
+            margin_text = ("not finite" if margin is None else
+                           f"{margin * 100:+.1f} percentage points")
+            self._status_block(
+                f"{status} - ULS plastic bending. Applied-action utilisation = "
+                f"{_pct(assessment['util'])}; limit = 100 %; margin to limit = "
+                f"{margin_text}. "
+                f"{assessment['detail']}.",
+                status,
+            )
+        else:
+            self._status_block(
+                f"{status} - ULS plastic bending. {assessment['detail']}.",
+                status,
+            )
         applied = pl.get("applied")   # None for a capacity-only run
         self._fig(viz.interaction_figure(
             pl["mx"], pl["my"], applied=applied, title="M-M interaction",
             angles=[pt["V"] for pt in pl["points"]], util=pl.get("util"),
             closed=pl.get("closed", True)), 130, 100)
         rows = [["Quantity", "Value"],
+                ["Applied N<sub>Ed</sub>",
+                 f"{_fmt(self.inp.get('P_pl', 0.0), 3)} kN (tension +)"],
                 ["Max / Min M<sub>x</sub> capacity",
-                 f"{_fmt(pl['max_mx'], 3)} / {_fmt(pl.get('min_mx', min(pl['mx'])),1)} kNm"],
+                 f"{_fmt(pl['max_mx'], 3)} / "
+                 f"{_fmt(pl.get('min_mx', min(pl['mx'])), 3)} kNm"],
                 ["Max / Min M<sub>y</sub> capacity",
-                 f"{_fmt(pl['max_my'], 3)} / {_fmt(pl.get('min_my', min(pl['my'])),1)} kNm"]]
+                 f"{_fmt(pl['max_my'], 3)} / "
+                 f"{_fmt(pl.get('min_my', min(pl['my'])), 3)} kNm"]]
         if not pl.get("check_util", True):
             rows.append(["Utilisation", "not checked (capacity only)"])
         elif pl.get("util") is not None:
@@ -908,6 +931,10 @@ class ReportBuilder:
                              f"{_fmt(applied[0], 3)}, {_fmt(applied[1], 3)} kNm"])
             rows.append(["Utilisation (applied direction)",
                          f"{_fmt(pl['util']*100, 3)} %"])
+            if assessment["margin"] is not None:
+                rows.append(["Margin to 100 % limit",
+                             f"{assessment['margin'] * 100:+.1f} percentage points "
+                             f"({status})"])
         else:
             rows.append(["Utilisation", "open arc (no closed envelope)"])
         self._table(rows, [90 * mm, 60 * mm])
@@ -915,6 +942,17 @@ class ReportBuilder:
         # axis, from pure tension to the squash load.
         nm = pl.get("interaction")
         if nm:
+            nm_valid = all(
+                (nm.get(axis) or {}).get("converged", True)
+                for axis in ("x", "y")
+            )
+            if not nm_valid:
+                self._status_block(
+                    "INVALID N-M BOUNDARY - one or more axial-moment solve points "
+                    "did not converge. The diagrams and numerical boundary are "
+                    "diagnostic only.",
+                    "INVALID",
+                )
             for axis, mlab, mtag in (("x", "M<sub>x</sub>", "Mx"),
                                      ("y", "M<sub>y</sub>", "My")):
                 d = nm[axis]
@@ -927,6 +965,38 @@ class ReportBuilder:
                             "tension to the squash load (concrete carries compression "
                             "only, so the tension end is reinforcement-controlled). "
                             "The marked point is the applied plastic action.")
+            self._h2("Numerical N-M boundary")
+            boundary_rows = presentation.nm_boundary_rows(nm)
+            rows = [[
+                "Point",
+                "N (M<sub>x</sub> curve)",
+                "M<sub>x</sub>",
+                "N (M<sub>y</sub> curve)",
+                "M<sub>y</sub>",
+            ]]
+            for row in boundary_rows:
+                def value(key):
+                    number = row[key]
+                    return "-" if number is None else _fmt(number, 3)
+
+                rows.append([
+                    str(row["Point"]),
+                    value("N, Mx boundary (kN)"),
+                    value("Mx (kNm)"),
+                    value("N, My boundary (kN)"),
+                    value("My (kNm)"),
+                ])
+            self._table(
+                rows,
+                [18 * mm, 38 * mm, 38 * mm, 38 * mm, 38 * mm],
+                font=7.2,
+                keep=False,
+            )
+            self._small(
+                "Point order is the exact plotted boundary order. N in kN; M in "
+                "kNm; N is tension-positive. Separate N columns are retained "
+                "because the two traces may use different numerical points."
+            )
         # Per-angle results tables -- split into readable groups with V repeated as
         # the row key. A single 12-14-column table forced values to wrap digit by
         # digit in the issued PDF.
@@ -1042,19 +1112,95 @@ class ReportBuilder:
         self._small("The tension resultant T = F<sub>c</sub> + N balances the "
                     "section (N tension-positive); the moments above are the "
                     "resultants about the origin.")
+        evidence = presentation.plastic_state_evidence(self.inp, gov)
+        concrete_rows = evidence["concrete"]
+        if concrete_rows:
+            self._h2("Governing concrete corner response")
+            rows = [[
+                "Point", "Ring", "Ring point", "x", "y", "Strain", "Design stress",
+            ]]
+            for row in concrete_rows:
+                rows.append([
+                    str(row["point_no"]),
+                    row["ring"],
+                    str(row["ring_point_no"]),
+                    _fmt(row["x_mm"], 2),
+                    _fmt(row["y_mm"], 2),
+                    _fmt(row["strain_permille"], 5),
+                    _fmt(row["stress_mpa"], 3),
+                ])
+            self._table(
+                rows,
+                [14 * mm, 24 * mm, 19 * mm, 22 * mm, 22 * mm,
+                 32 * mm, 37 * mm],
+                font=6.8,
+                keep=False,
+            )
+            self._small(
+                "Coordinates in mm; strain in permille; design stress in MPa. "
+                "Strain and stress are tension-positive."
+            )
+        element_rows = evidence["elements"]
+        if element_rows:
+            self._h2("Governing reinforcement and tendon response")
+            rows = [[
+                "Element", "State", "x", "y", "Area", "Strain",
+                "Design stress", "Force",
+            ]]
+            for row in element_rows:
+                rows.append([
+                    row["element_id"],
+                    row["state"],
+                    _fmt(row["x_mm"], 2),
+                    _fmt(row["y_mm"], 2),
+                    _fmt(row["area_mm2"], 2),
+                    _fmt(row["strain_permille"], 5),
+                    _fmt(row["stress_mpa"], 3),
+                    _fmt(row["force_kn"], 3),
+                ])
+            self._table(
+                rows,
+                [25 * mm, 18 * mm, 17 * mm, 17 * mm, 21 * mm,
+                 25 * mm, 24 * mm, 23 * mm],
+                font=6.5,
+                keep=False,
+            )
+            self._small(
+                "Coordinates in mm; area in mm<super>2</super>; strain in "
+                "permille; design stress in MPa; force in kN. Signs are "
+                "tension-positive; force = stress x entered area."
+            )
         # Section state at the governing angle (neutral axis + compression zone).
         if self.figures:
             inp = self.inp
-            hp = viz.plastic_halfplane(gov["V"], gov["na_x"], gov["na_y"])
+            hp = evidence["halfplane"]
             na = viz.na_line_at(hp[0], hp[1], hp[2], inp.get("extent", 1.0))
             zones = viz.compression_zones(inp.get("outer", []), hp)
-            bar_xy = [(b[0], b[1]) for b in inp.get("bars", [])]
-            ten_xy = [(t[0], t[1]) for t in inp.get("tendons", [])]
+            bars = inp.get("bars", [])
+            tendons = inp.get("tendons", [])
+            pre = inp.get("prestress")
+            bar_colors = viz.halfplane_bar_colors(
+                bars, hp, kappa=gov["kappa"],
+            )
+            tendon_colors = viz.halfplane_bar_colors(
+                tendons,
+                hp,
+                kappa=gov["kappa"],
+                prestrain=float(getattr(pre, "IS", 0.0)) if pre is not None else 0.0,
+            )
             self._h2("Section state at the governing angle")
             self._fig(viz.section_figure(
-                inp.get("outer", []), inp.get("holes", []), bar_xy, na_line=na,
-                tendons=ten_xy, zones=zones, show_labels=True, scale=_MM, unit="mm",
-                title=f"Compression zone at V = {_fmt(gov['V'],0)} deg"), 150, 100)
+                inp.get("outer", []), inp.get("holes", []), bars,
+                bar_colors=bar_colors, na_line=na, tendons=tendons,
+                tendon_colors=tendon_colors, zones=zones, show_labels=True,
+                scale=_MM, unit="mm",
+                title=f"ULS state at V = {_fmt(gov['V'],0)} deg "
+                      "(tension + / compression -)"), 150, 100)
+            self._small(
+                "Blue/plain markers are tension (+); vermillion/x markers are "
+                "compression (-). Bar circles and tendon diamonds identify the "
+                "element type. Status is therefore not communicated by colour alone."
+            )
 
     def _shear_2023(self, sh, res):
         """The EN 1992-1-1:2023 strain-based tau_Rd,c body (sec. 8.2.2)."""
@@ -1859,7 +2005,12 @@ class ReportBuilder:
                     tendons=[(t[0], t[1]) for t in inp.get("tendons", [])],
                     tendon_colors=[sgn(s) for s in total[nb:]], na_line=na, zones=zones,
                     show_labels=True, scale=_MM, unit="mm",
-                    title="Elastic state (green tension, red compression)"), 150, 100)
+                    title="Elastic state (tension + / compression -)"), 150, 100)
+                self._small(
+                    "Blue/plain markers are tension (+); vermillion/x markers are "
+                    "compression (-). Bar circles and tendon diamonds identify the "
+                    "element type. Sign is not communicated by colour alone."
+                )
         if self.figures and el.get("concrete_corners"):
             self._fig(viz.elastic_strain_figure(
                 el.get("concrete_corners"), el.get("elements"),

@@ -140,6 +140,10 @@ def test_report_pdf_generates():
 def test_report_mirrors_the_views():
     txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
     assert "Comp" in txt and "NA x" in txt         # full plastic table columns
+    assert "PASS - ULS plastic bending" in txt
+    assert "margin to limit = +20.0 percentage points" in txt
+    assert "Governing concrete corner response" in txt
+    assert "Governing reinforcement and tendon response" in txt
     assert "Cracked" in txt                        # cracked transformed-props column
     assert "both load cases" in txt                # full crack-width table
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
@@ -380,6 +384,43 @@ def test_report_includes_the_nm_interaction_when_present():
     assert "interaction" in txt.lower()
     assert "squash" in txt.lower()
     assert "N-M" in txt or ("Mx" in txt and "My" in txt)   # both axes titled
+    assert "Numerical N-M boundary" in txt
+    assert "4000.000" in txt                               # exact boundary values tabulated
+
+
+def test_long_nm_boundary_repeats_its_numeric_traceability_header():
+    out = _out()
+    branch = {
+        "N": [float(index * 25 - 1000) for index in range(90)],
+        "M": [float(300 - abs(index - 45) * 5) for index in range(90)],
+        "applied": (0.0, 80.0),
+        "converged": True,
+    }
+    out["plastic"]["interaction"] = {"x": branch, "y": branch}
+    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+
+    import io
+    import pypdf
+
+    pages = [page.extract_text() or ""
+             for page in pypdf.PdfReader(io.BytesIO(pdf)).pages]
+    table_pages = [page for page in pages if "N (Mx curve)" in page]
+    assert len(table_pages) >= 2
+    assert all("N (My curve)" in page and "Point" in page for page in table_pages)
+
+
+def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
+    failed = _out()
+    failed["plastic"]["util"] = 1.25
+    txt = _pdf_text(sector_report.build_report({}, _inp(), failed, figures=False))
+    assert "FAIL - ULS plastic bending" in txt
+    assert "-25.0 percentage points" in txt
+
+    invalid = _out()
+    invalid["plastic"]["converged"] = False
+    txt = _pdf_text(sector_report.build_report({}, _inp(), invalid, figures=False))
+    assert "INVALID - ULS plastic bending" in txt
+    assert "diagnostic only" in txt
 
 
 def test_report_handles_plastic_only():
