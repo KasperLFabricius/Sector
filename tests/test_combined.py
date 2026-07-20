@@ -146,17 +146,81 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _set(at, *changes):
+    """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    return at.run()
+
+
+def _set_and_click(at, button_key, *changes):
+    """Submit a group of existing inputs with one button-triggered rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    at.button(key=button_key).click()
+    return at.run()
+
+
 def _enable_all(at, mv_independent=False):
-    at.number_input(key="pl_Mx").set_value(100.0).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(150.0).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.checkbox(key="combined_on").set_value(True).run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    second = [
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    ]
     if mv_independent:
-        at.checkbox(key="combined_mv_independent").set_value(True).run()
-    at.button(key="calculate").click().run()
+        second.append(("checkbox", "combined_mv_independent", True))
+    _set_and_click(at, "calculate", *second)
+    return at
+
+
+def _run_member(
+    at,
+    *,
+    mx=0.0,
+    p=0.0,
+    v=0.0,
+    t=0.0,
+    combined_on=True,
+    shear_band=None,
+    torsion_band=None,
+):
+    """Configure a complete M-V-T member with only the reruns needed for reveals."""
+    _set(
+        at,
+        ("number_input", "pl_Mx", mx),
+        ("number_input", "pl_P", p),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", combined_on),
+    )
+    active = [
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", v),
+        ("number_input", "torsion_T", t),
+    ]
+    if shear_band is None and torsion_band is None:
+        _set_and_click(at, "calculate", *active)
+        return at
+    _set(at, *active)
+    bands = []
+    if shear_band is not None:
+        bands.extend([
+            ("number_input", "shear_cot_min", shear_band[0]),
+            ("number_input", "shear_cot_max", shear_band[1]),
+        ])
+    if torsion_band is not None:
+        bands.extend([
+            ("number_input", "torsion_cot_min", torsion_band[0]),
+            ("number_input", "torsion_cot_max", torsion_band[1]),
+        ])
+    _set_and_click(at, "calculate", *bands)
     return at
 
 
@@ -197,8 +261,9 @@ def test_app_combined_longitudinal_biaxial_flagged():
     at = _fresh()
     at.run()
     _enable_all(at)                                # uniaxial first (My_pl = 0)
-    at.number_input(key="pl_My").set_value(100.0).run()   # add an off-axis moment
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "pl_My", 100.0)
+    )  # add an off-axis moment
     lg = at.session_state["results"]["combined"]["longitudinal"]
     assert lg["biaxial"]                           # off-axis moment now non-negligible
     assert lg["off_util"] > 0.05
@@ -215,11 +280,17 @@ def test_app_combined_mv_independent_uses_max():
 def test_app_combined_edition_lock():
     at = _fresh()
     at.run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.checkbox(key="combined_on").set_value(True).run()
-    at.selectbox(key="combined_method").set_value(codes.EC2_2005.label).run()
-    at.button(key="calculate").click().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
     assert not at.exception
     res = at.session_state["results"]
     # both checks follow the shared edition, and their own selectors are locked.
@@ -232,8 +303,9 @@ def test_app_combined_edition_lock():
 def test_app_combined_incomplete_flags_missing():
     at = _fresh()
     at.run()
-    at.checkbox(key="combined_on").set_value(True).run()   # no shear / torsion
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("checkbox", "combined_on", True)
+    )  # no shear / torsion
     assert not at.exception
     assert not at.session_state["results"]["combined"]["valid"]
     at.selectbox(key="view").set_value("M-V-T Combined").run()
@@ -290,10 +362,13 @@ def test_app_strut_angle_responds_to_loads():
     at.checkbox(key="shear_links").set_value(True).run()
 
     def run(v, mx, p):
-        at.number_input(key="shear_V").set_value(v).run()
-        at.number_input(key="pl_Mx").set_value(mx).run()
-        at.number_input(key="pl_P").set_value(p).run()
-        at.button(key="calculate").click().run()
+        _set_and_click(
+            at,
+            "calculate",
+            ("number_input", "shear_V", v),
+            ("number_input", "pl_Mx", mx),
+            ("number_input", "pl_P", p),
+        )
         assert not at.exception
         return at.session_state["results"]["shear"]["links"]
 
@@ -320,10 +395,13 @@ def test_app_chord_check_in_shear_payload_without_torsion():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(150.0).run()
-    at.number_input(key="pl_Mx").set_value(100.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "pl_Mx", 100.0),
+    )
     ch = at.session_state["results"]["shear"]["links"]["chord"]
     assert ch is not None and ch["valid"]
     assert ch["mt"] == pytest.approx(0.0)            # no torsion contribution
@@ -331,14 +409,14 @@ def test_app_chord_check_in_shear_payload_without_torsion():
     assert not ch["has_torsion"]
     # Capacity-only run (utilisation check off): no chord; the scan over the shear
     # utils alone reproduces the resistance-maximising angle (2.5 here).
-    at.checkbox(key="pl_check_util").set_value(False).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("checkbox", "pl_check_util", False)
+    )
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["chord"] is None
     assert lk["res"]["cot"] == pytest.approx(2.5)
     # With NO load at all there is no utilisation to scan -> legacy resistance mode.
-    at.number_input(key="shear_V").set_value(0.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "shear_V", 0.0))
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["theta_mode"] == "resistance"
     assert lk["res"]["cot"] == pytest.approx(2.5)
@@ -351,15 +429,21 @@ def test_app_invalid_tube_does_not_poison_the_member_angle():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(500.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 500.0),
+    )
     base = at.session_state["results"]["shear"]["links"]
     assert base["res"]["cot"] == pytest.approx(2.5) and base["util"] < 1.0
     at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.number_input(key="torsion_tef").set_value(400.0).run()   # tef > section: invalid
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "torsion_T", 40.0),
+        ("number_input", "torsion_tef", 400.0),
+    )  # tef > section: invalid
     r = at.session_state["results"]
     assert not r["torsion"]["valid"]                             # tube rejected
     lk = r["shear"]["links"]
@@ -375,10 +459,13 @@ def test_app_objective_matches_reported_chord_cap():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(500.0).run()
-    at.number_input(key="pl_Mx").set_value(430.0).run()          # ~0.97 MRd
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 500.0),
+        ("number_input", "pl_Mx", 430.0),
+    )  # ~0.97 MRd
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["res"]["cot"] == pytest.approx(2.5, abs=0.05)
     assert lk["util"] < 1.0                                      # stirrups still pass
@@ -391,14 +478,13 @@ def test_app_zero_torsion_does_not_constrain_the_shear_band():
     # forced the shear angle into the intersection.
     at = _fresh()
     at.run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(500.0).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(0.0).run()        # enabled, no load
-    at.number_input(key="torsion_cot_min").set_value(1.0).run()
-    at.number_input(key="torsion_cot_max").set_value(1.2).run()  # narrow band
-    at.button(key="calculate").click().run()
+    _run_member(
+        at,
+        v=500.0,
+        t=0.0,
+        combined_on=False,
+        torsion_band=(1.0, 1.2),
+    )
     r = at.session_state["results"]
     lk = r["shear"]["links"]
     assert lk["res"]["cot"] == pytest.approx(2.5)                # shear band governs
@@ -415,17 +501,15 @@ def test_app_dead_shear_companion_stays_in_its_own_band():
     # The dead links must not be pinned to the torsion-driven angle outside their band.
     at = _fresh()
     at.run()
-    at.number_input(key="pl_Mx").set_value(80.0).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(0.0).run()          # enabled, no load
-    at.number_input(key="shear_cot_min").set_value(2.3).run()
-    at.number_input(key="shear_cot_max").set_value(2.5).run()    # narrow, high band
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.number_input(key="torsion_cot_min").set_value(1.0).run()
-    at.number_input(key="torsion_cot_max").set_value(1.2).run()
-    at.button(key="calculate").click().run()
+    _run_member(
+        at,
+        mx=80.0,
+        v=0.0,
+        t=40.0,
+        combined_on=False,
+        shear_band=(2.3, 2.5),
+        torsion_band=(1.0, 1.2),
+    )
     lk = at.session_state["results"]["shear"]["links"]
     assert 2.3 - 1e-9 <= lk["res"]["cot"] <= 2.5 + 1e-9          # own band, not ~1.1
     assert lk["theta_mode"] == "resistance"
@@ -440,15 +524,14 @@ def test_app_infinite_bending_util_does_not_poison_the_member_angle():
     def run(combined):
         at = _fresh()
         at.run()
-        at.number_input(key="pl_P").set_value(8000.0).run()      # beyond axial capacity
-        at.number_input(key="pl_Mx").set_value(120.0).run()      # -> ray misses envelope
-        at.checkbox(key="shear_on").set_value(True).run()
-        at.checkbox(key="shear_links").set_value(True).run()
-        at.number_input(key="shear_V").set_value(300.0).run()
-        at.checkbox(key="torsion_on").set_value(True).run()
-        at.number_input(key="torsion_T").set_value(60.0).run()
-        at.checkbox(key="combined_on").set_value(combined).run()
-        at.button(key="calculate").click().run()
+        _run_member(
+            at,
+            mx=120.0,
+            p=8000.0,
+            v=300.0,
+            t=60.0,
+            combined_on=combined,
+        )
         return at.session_state["results"]
     r_on = run(True)
     r_off = run(False)
@@ -471,18 +554,15 @@ def test_app_combined_angle_minimises_the_dkna_governing_sum():
     def dkna(pin=None):
         at = _fresh()
         at.run()
-        at.number_input(key="pl_Mx").set_value(150.0).run()
-        at.checkbox(key="shear_on").set_value(True).run()
-        at.checkbox(key="shear_links").set_value(True).run()
-        at.number_input(key="shear_V").set_value(280.0).run()
-        at.checkbox(key="torsion_on").set_value(True).run()
-        at.number_input(key="torsion_T").set_value(100.0).run()
-        at.checkbox(key="combined_on").set_value(True).run()
-        if pin is not None:
-            for k in ("shear_cot_min", "shear_cot_max",
-                      "torsion_cot_min", "torsion_cot_max"):
-                at.number_input(key=k).set_value(pin).run()
-        at.button(key="calculate").click().run()
+        band = (pin, pin) if pin is not None else None
+        _run_member(
+            at,
+            mx=150.0,
+            v=280.0,
+            t=100.0,
+            shear_band=band,
+            torsion_band=band,
+        )
         r = at.session_state["results"]
         return r["shear"]["links"]["res"]["cot"], r["combined"]["dkna_sum"]
     cot_star, dk_star = dkna()
@@ -502,18 +582,14 @@ def test_app_combined_transverse_label_uses_member_angle_when_shear_dead():
     # resistance-optimum cot -- otherwise the reported angle contradicts the numbers.
     at = _fresh()
     at.run()
-    at.number_input(key="pl_Mx").set_value(90.0).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(0.0).run()
-    at.number_input(key="shear_cot_min").set_value(2.3).run()
-    at.number_input(key="shear_cot_max").set_value(2.5).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(60.0).run()
-    at.number_input(key="torsion_cot_min").set_value(1.0).run()
-    at.number_input(key="torsion_cot_max").set_value(1.4).run()
-    at.checkbox(key="combined_on").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _run_member(
+        at,
+        mx=90.0,
+        v=0.0,
+        t=60.0,
+        shear_band=(2.3, 2.5),
+        torsion_band=(1.0, 1.4),
+    )
     r = at.session_state["results"]
     tv = r["combined"]["transverse"]
     assert tv["valid"]
@@ -527,14 +603,7 @@ def test_app_no_load_with_combined_keeps_resistance_mode():
     # the documented no-load fallback (capacities at the resistance-max angles).
     at = _fresh()
     at.run()
-    at.number_input(key="pl_Mx").set_value(100.0).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(0.0).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(0.0).run()
-    at.checkbox(key="combined_on").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _run_member(at, mx=100.0, v=0.0, t=0.0)
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["theta_mode"] == "resistance"
     assert lk["res"]["cot"] == pytest.approx(2.5)
@@ -566,14 +635,7 @@ def test_app_combined_transverse_shear_credit():
     # share is 0 and the whole stirrup serves torsion (Q2).
     at = _fresh()
     at.run()
-    at.number_input(key="pl_Mx").set_value(100.0).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(10.0).run()      # well below VRd,c
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.checkbox(key="combined_on").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _run_member(at, mx=100.0, v=10.0, t=40.0)  # V well below VRd,c
     assert not at.exception
     tr = at.session_state["results"]["combined"]["transverse"]
     assert tr["shear_credited"] is True
@@ -596,14 +658,7 @@ def test_app_combined_transverse_no_credit_when_shear_high():
     # VEd > VRd,c: the stirrup carries both, so the shear share is > 0 and adds.
     at = _fresh()
     at.run()
-    at.number_input(key="pl_Mx").set_value(100.0).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(300.0).run()     # above VRd,c
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.checkbox(key="combined_on").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _run_member(at, mx=100.0, v=300.0, t=40.0)  # V above VRd,c
     assert not at.exception
     tr = at.session_state["results"]["combined"]["transverse"]
     assert tr["shear_credited"] is False
@@ -615,18 +670,14 @@ def test_app_combined_non_overlapping_cot_bands_are_rejected():
     # common angle, so the crushing and shared-stirrup checks are flagged invalid.
     at = _fresh()
     at.run()
-    at.number_input(key="pl_Mx").set_value(100.0).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(100.0).run()
-    at.number_input(key="shear_cot_min").set_value(2.0).run()
-    at.number_input(key="shear_cot_max").set_value(2.5).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.number_input(key="torsion_cot_min").set_value(0.5).run()
-    at.number_input(key="torsion_cot_max").set_value(1.5).run()
-    at.checkbox(key="combined_on").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _run_member(
+        at,
+        mx=100.0,
+        v=100.0,
+        t=40.0,
+        shear_band=(2.0, 2.5),
+        torsion_band=(0.5, 1.5),
+    )
     assert not at.exception
     c = at.session_state["results"]["combined"]
     assert c["transverse"]["valid"] is False

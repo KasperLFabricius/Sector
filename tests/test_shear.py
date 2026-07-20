@@ -384,13 +384,13 @@ def test_horizontal_shear_uses_the_x_coordinate():
 # -- app helper: gross area / centroid --------------------------------------
 
 def test_gross_area_centroid_rect_and_hole():
-    from sector_app import _gross_area_centroid
+    from sector.capacity import gross_area_centroid
     rect = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
-    a, cx, cy = _gross_area_centroid(rect, [])
+    a, cx, cy = gross_area_centroid(rect, [])
     assert a == pytest.approx(0.24)                   # 0.4 x 0.6 m
     assert (cx, cy) == pytest.approx((0.0, 0.0))
     hole = [(-0.05, -0.05), (0.05, -0.05), (0.05, 0.05), (-0.05, 0.05)]
-    a2, cx2, cy2 = _gross_area_centroid(rect, [hole])
+    a2, cx2, cy2 = gross_area_centroid(rect, [hole])
     assert a2 == pytest.approx(0.24 - 0.01)           # void removed
     assert (cx2, cy2) == pytest.approx((0.0, 0.0))    # centred void keeps the centroid
 
@@ -402,12 +402,26 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _set(at, *changes):
+    """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    return at.run()
+
+
+def _set_and_click(at, button_key, *changes):
+    """Submit a group of existing inputs with one button-triggered rerun."""
+    for widget_type, key, value in changes:
+        getattr(at, widget_type)(key=key).set_value(value)
+    at.button(key=button_key).click()
+    return at.run()
+
+
 def test_app_shear_check_produces_a_resistance():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.number_input(key="shear_V").set_value(100.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "shear_V", 100.0))
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     assert sh["res"]["vrd_c"] > 0.0
@@ -422,8 +436,7 @@ def test_app_shear_bw_override_is_used():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.number_input(key="shear_bw").set_value(250.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "shear_bw", 250.0))
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     assert sh["bw"] == pytest.approx(250.0)
@@ -434,8 +447,7 @@ def test_app_shear_view_renders_and_shows_utilisation():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.number_input(key="shear_V").set_value(80.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "shear_V", 80.0))
     at.selectbox(key="view").set_value("Shear").run()
     assert not at.exception
     labels = [m.label for m in at.metric]
@@ -450,15 +462,18 @@ def test_app_shear_axial_input_enabled_in_elastic_mode():
     # N, tension-positive) must raise VRd,c through sigma_cp.
     at = _fresh()
     at.run()
-    at.radio(key="mode").set_value("Elastic").run()
-    at.checkbox(key="shear_on").set_value(True).run()
+    _set(
+        at,
+        ("radio", "mode", "Elastic"),
+        ("checkbox", "shear_on", True),
+    )
     assert not at.number_input(key="pl_P").disabled        # axial input available
-    at.number_input(key="shear_V").set_value(50.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "shear_V", 50.0))
     assert not at.exception
     base = at.session_state["results"]["shear"]["res"]["vrd_c"]
-    at.number_input(key="pl_P").set_value(-400.0).run()    # compression (N tension +)
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("number_input", "pl_P", -400.0)
+    )  # compression (N tension +)
     assert not at.exception
     comp = at.session_state["results"]["shear"]["res"]
     assert comp["sigma_cp"] > 0.0                          # compression -> positive sigma_cp
@@ -471,11 +486,17 @@ def test_app_shear_links_produce_a_resistance():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.number_input(key="shear_V").set_value(200.0).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_link_dia").set_value(10.0).run()
-    at.number_input(key="shear_link_s").set_value(150.0).run()
-    at.button(key="calculate").click().run()
+    _set(
+        at,
+        ("number_input", "shear_V", 200.0),
+        ("checkbox", "shear_links", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_link_dia", 10.0),
+        ("number_input", "shear_link_s", 150.0),
+    )
     assert not at.exception
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["res"]["valid"]
@@ -491,8 +512,7 @@ def test_app_shear_links_use_the_plastic_lever_arm():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("checkbox", "shear_links", True))
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     lk = sh["links"]
@@ -502,8 +522,8 @@ def test_app_shear_links_use_the_plastic_lever_arm():
 
 
 def test_shear_lever_arm_falls_back_without_a_section():
-    from sector_app import _shear_lever_arm
-    z, src = _shear_lever_arm({"section": None}, "x", True, 550.0)
+    from sector.capacity import shear_lever_arm
+    z, src = shear_lever_arm({"section": None}, "x", True, 550.0)
     assert z == pytest.approx(0.9 * 550.0)
     assert "fallback" in src
 
@@ -515,8 +535,7 @@ def test_app_shear_links_flag_out_of_code_bounds():
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
     at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_cot_max").set_value(3.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "shear_cot_max", 3.0))
     assert not at.exception
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["out_of_limits"] is True
@@ -531,11 +550,13 @@ def test_app_shear_links_flag_out_of_code_bounds():
 def test_app_shear_uses_final_material_factors():
     at = _fresh()
     at.run()
-    at.number_input(key="conc_gamma_c").set_value(1.80).run()
-    at.number_input(key="mild_gamma_y").set_value(1.35).run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set(
+        at,
+        ("number_input", "conc_gamma_c", 1.80),
+        ("number_input", "mild_gamma_y", 1.35),
+        ("checkbox", "shear_on", True),
+    )
+    _set_and_click(at, "calculate", ("checkbox", "shear_links", True))
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     assert sh["res"]["gamma_c"] == pytest.approx(1.80)
@@ -553,9 +574,12 @@ def test_app_shear_2023_method_uses_tau_rdc():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
-    at.number_input(key="shear_V").set_value(50.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("number_input", "shear_V", 50.0),
+    )
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     assert sh["model_2023"]
@@ -571,8 +595,9 @@ def test_app_shear_2023_fyd_from_yield_parameters():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at, "calculate", ("selectbox", "shear_method", codes.EC2_2023.label)
+    )
     sh = at.session_state["results"]["shear"]
     fytk = at.session_state["mild_fytk"]
     gy = at.session_state["mild_gamma_y"]
@@ -584,9 +609,12 @@ def test_app_shear_2023_skips_links_with_a_note():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+    )
     assert not at.exception
     assert "links" not in at.session_state["results"]["shear"]   # not for 2023
     at.selectbox(key="view").set_value("Shear").run()
@@ -620,7 +648,7 @@ def test_app_shear_is_saved_and_restored():
 def test_prestress_resultants_helper():
     # The helper reproduces the locked-in tendon force sum(Ep*IS*Ap) and its
     # eccentric moments about the concrete centroid.
-    import sector_app
+    from sector import capacity
     from sector import material_presets as mp
     kw = dict(mp.PRESTRESS_PRESETS["EN 1992-1-1:2005"])
     kw["IS"] = 5.0                                       # permille -> a real prestrain
@@ -629,19 +657,19 @@ def test_prestress_resultants_helper():
     tendons = [(0.0, -0.40, 1000.0), (0.10, -0.40, 500.0)]   # 1500 mm2 total
     expected = pre.Es * pre.IS * 1000.0 * (1500.0 / 1.0e6)   # kN
     assert expected > 0.0
-    p_res, mx_res, my_res = sector_app._prestress_resultants(
+    p_res, mx_res, my_res = capacity.prestress_resultants(
         {"prestress": pre, "tendons": tendons}, cx=0.0, cy=0.0)
     assert p_res == pytest.approx(expected)
     # Mx = sum(P_i*(y_i-cy)); My = sum(P_i*(x_i-cx)).
     assert mx_res == pytest.approx(-0.40 * expected)
     assert my_res == pytest.approx(expected / 3.0 * 0.10)
-    assert sector_app._prestress_axial(
+    assert capacity.prestress_axial(
         {"prestress": pre, "tendons": tendons}) == pytest.approx(expected)
     # No tendons or no prestress material -> no precompression.
-    assert sector_app._prestress_resultants(
+    assert capacity.prestress_resultants(
         {"prestress": pre, "tendons": []}, 0.0, 0.0
     ) == (0.0, 0.0, 0.0)
-    assert sector_app._prestress_resultants(
+    assert capacity.prestress_resultants(
         {"prestress": None, "tendons": tendons}, 0.0, 0.0
     ) == (0.0, 0.0, 0.0)
 
@@ -653,15 +681,21 @@ def _qs_prestressed_shear(pre_is, *, method=None):
     at.run()
     at.session_state["_qs_open"] = True
     at.run()
-    at.number_input(key="tnd_n").set_value(4).run()
-    at.number_input(key="tnd_a").set_value(1000.0).run()
-    at.button(key="qs_apply").click().run()
-    at.number_input(key="pre_IS").set_value(pre_is).run()
-    at.checkbox(key="shear_on").set_value(True).run()
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "tnd_n", 4),
+        ("number_input", "tnd_a", 1000.0),
+    )
+    _set(
+        at,
+        ("number_input", "pre_IS", pre_is),
+        ("checkbox", "shear_on", True),
+    )
+    changes = [("number_input", "shear_V", 50.0)]
     if method is not None:
-        at.selectbox(key="shear_method").set_value(method).run()
-    at.number_input(key="shear_V").set_value(50.0).run()
-    at.button(key="calculate").click().run()
+        changes.append(("selectbox", "shear_method", method))
+    _set_and_click(at, "calculate", *changes)
     return at
 
 
@@ -692,15 +726,17 @@ def test_app_shear_2023_applies_axial_factor():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.selectbox(key="shear_method").set_value(m2023).run()
-    at.number_input(key="shear_V").set_value(100.0).run()
-    at.number_input(key="pl_Mx").set_value(110.0).run()
-    at.number_input(key="pl_P").set_value(0.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_method", m2023),
+        ("number_input", "shear_V", 100.0),
+        ("number_input", "pl_Mx", 110.0),
+        ("number_input", "pl_P", 0.0),
+    )
     neutral = at.session_state["results"]["shear"]["res"]
 
-    at.number_input(key="pl_P").set_value(200.0).run()        # tension +
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "pl_P", 200.0))  # tension +
     assert not at.exception
     tension = at.session_state["results"]["shear"]["res"]
     assert tension["k_vp"] > 1.0
@@ -709,8 +745,7 @@ def test_app_shear_2023_applies_axial_factor():
     assert not any("UNCONSERVATIVE" in w.value for w in at.warning)
 
     # Net compression reverses the effect.
-    at.number_input(key="pl_P").set_value(-200.0).run()
-    at.button(key="calculate").click().run()
+    _set_and_click(at, "calculate", ("number_input", "pl_P", -200.0))
     compression = at.session_state["results"]["shear"]["res"]
     assert compression["k_vp"] < 1.0
     assert compression["tau_basic"] > neutral["tau_basic"]
