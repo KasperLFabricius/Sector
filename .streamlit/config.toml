@@ -4,3 +4,14 @@
 # SECTOR_PORT environment variable).
 [server]
 port = 8502
+address = "127.0.0.1"
+
+[client]
+# Sector is an engineering application, not a Streamlit development console.
+# Keep print/theme controls while hiding deploy, rerun, and clear-cache actions.
+toolbarMode = "viewer"
+# Show the exception type without exposing local paths, input values, or traces.
+showErrorDetails = "type"
+
+[browser]
+gatherUsageStats = false

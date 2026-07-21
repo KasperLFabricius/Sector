@@ -36,9 +36,16 @@ the user unzips it anywhere and runs `Sector.exe`.
 does (`packaging/run_sector.py` is the entry point) and opens the browser at the
 local URL. A console window stays open to show that URL and any messages.
 
-Sector serves on **port 8502** (`http://localhost:8502`) instead of Streamlit's
-default 8501, so it can run alongside BriCoS (which uses 8501) without a clash.
-Set the `SECTOR_PORT` environment variable to use a different port.
+Sector serves only on this computer at **127.0.0.1:8502**
+(`http://127.0.0.1:8502`) instead of Streamlit's default 8501, so it can run
+alongside BriCoS (which uses 8501) without a clash. Set the `SECTOR_PORT`
+environment variable to use a different port.
+
+The packaged launcher disables usage telemetry. The application toolbar keeps
+viewer actions such as print and theme selection, but hides Streamlit's deploy,
+rerun, and clear-cache developer actions. Browser errors show the exception type
+without exposing local paths or tracebacks; full diagnostics remain available in
+the console for support.
 
 ## Files
 
