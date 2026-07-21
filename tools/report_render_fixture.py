@@ -45,6 +45,34 @@ class _FixedDateTime(datetime.datetime):
         return value if tz is None else value.replace(tzinfo=tz)
 
 
+def validate_outline_destinations(reader: pypdf.PdfReader) -> list[tuple[str, int]]:
+    """Return outline titles/pages after proving every link reaches its heading."""
+    entries = []
+
+    def visit(items):
+        for item in items:
+            if isinstance(item, list):
+                visit(item)
+                continue
+            title = str(getattr(item, "title", item))
+            page = reader.get_destination_page_number(item) + 1
+            if page < 1 or page > len(reader.pages):
+                raise AssertionError(
+                    f"outline destination is invalid: {title!r} -> page {page}"
+                )
+            page_text = reader.pages[page - 1].extract_text() or ""
+            if title not in page_text:
+                raise AssertionError(
+                    f"outline destination misses its heading: {title!r} -> page {page}"
+                )
+            entries.append((title, page))
+
+    visit(reader.outline)
+    if not entries:
+        raise AssertionError("the PDF contains no outline destinations")
+    return entries
+
+
 def _inputs() -> dict:
     plastic_cases = [
         {
@@ -401,7 +429,7 @@ def validate_pdf_content(pdf: bytes) -> str:
             f"found {images}"
         )
 
-    outlines = reader.outline
+    outlines = validate_outline_destinations(reader)
     if len(outlines) < 6:
         raise AssertionError(
             f"expected navigable section bookmarks, found {len(outlines)}"

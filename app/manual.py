@@ -1411,6 +1411,7 @@ def build_manual_pdf(buffer, figures=True):
     from reportlab.lib.units import cm
     from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                     SimpleDocTemplate, Spacer, Table, TableStyle)
+    from reportlab.platypus.tableofcontents import TableOfContents
 
     report._styles()                 # ensure the Greek-capable font is registered
     font, font_b = report._FONT, report._FONT_BOLD
@@ -1433,6 +1434,10 @@ def build_manual_pdf(buffer, figures=True):
     _add("MMath", fontSize=11, leading=15, alignment=TA_CENTER, spaceBefore=6,
          spaceAfter=6, fontName=font)
     _add("MSmall", fontSize=8, leading=10, textColor=colors.grey, fontName=font)
+    toc_style = ParagraphStyle(
+        "MTOCPart", parent=styles["MBody"], fontSize=9.5, leading=12,
+        leftIndent=0, firstLineIndent=0, spaceBefore=5, spaceAfter=3,
+    )
 
     class _ManualDocTemplate(SimpleDocTemplate):
         def afterFlowable(self, flowable):
@@ -1445,16 +1450,28 @@ def build_manual_pdf(buffer, figures=True):
                     level=getattr(flowable, "_manual_level", 0),
                     closed=False,
                 )
+                if getattr(flowable, "_manual_toc_entry", False):
+                    title = getattr(flowable, "_manual_outline", key)
+                    summary = _PART_SUMMARIES.get(title, "")
+                    entry = (
+                        f"<b>{_inline_md_to_rl(title)}</b><br/>"
+                        f"<font size=\"8\" color=\"#666666\">"
+                        f"{_inline_md_to_rl(summary)}</font>"
+                    )
+                    self.notify(
+                        "TOCEntry", (0, entry, self.page, key)
+                    )
 
     bookmark_no = 0
 
-    def _heading(text, style, outline, level):
+    def _heading(text, style, outline, level, toc_entry=False):
         nonlocal bookmark_no
         bookmark_no += 1
         paragraph = Paragraph(text, style)
         paragraph._manual_bookmark = f"manual-section-{bookmark_no}"
         paragraph._manual_outline = _strip_num(outline)
         paragraph._manual_level = level
+        paragraph._manual_toc_entry = toc_entry
         return paragraph
 
     page_w = 16.5 * cm
@@ -1467,28 +1484,15 @@ def build_manual_pdf(buffer, figures=True):
                   "how to use it.", styles["MBody"]),
         Spacer(1, 0.4 * cm),
     ]
-    contents = [[
-        Paragraph("<b>Part</b>", styles["MSmall"]),
-        Paragraph("<b>Contents</b>", styles["MSmall"]),
-    ]]
-    contents.extend([
-        [Paragraph(part, styles["MSmall"]),
-         Paragraph(summary, styles["MSmall"])]
-        for part, summary in _PART_SUMMARIES.items()
-    ])
-    contents_table = Table(contents, colWidths=[6.2 * cm, 10.3 * cm])
-    contents_table.setStyle(TableStyle([
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
+    contents = TableOfContents(
+        levelStyles=[toc_style], dotsMinLevel=0, rightColumnWidth=1.2 * cm
+    )
     flow.extend([
         Paragraph("Contents", styles["MH1"]),
-        contents_table,
+        Paragraph(
+            "Select a part name or page number to open it.", styles["MSmall"]
+        ),
+        contents,
         PageBreak(),
     ])
 
@@ -1507,7 +1511,8 @@ def build_manual_pdf(buffer, figures=True):
         if kind == "part":
             flow.append(Spacer(1, 0.3 * cm))
             flow.append(_heading(
-                _inline_md_to_rl(block[1]), styles["MPart"], block[1], 0
+                _inline_md_to_rl(block[1]), styles["MPart"], block[1], 0,
+                toc_entry=True,
             ))
             n1 = n2 = 0
         elif kind == "h1":
@@ -1581,7 +1586,7 @@ def build_manual_pdf(buffer, figures=True):
                              rightMargin=2.2 * cm, topMargin=2 * cm,
                              bottomMargin=2 * cm,
                              title=f"Sector user manual v{APP_VERSION}")
-    doc.build(flow, canvasmaker=lambda *a, **k: report._NumberedCanvas(
+    doc.multiBuild(flow, canvasmaker=lambda *a, **k: report._NumberedCanvas(
         *a, footer=footer, **k))
 
 

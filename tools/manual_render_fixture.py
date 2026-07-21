@@ -21,20 +21,11 @@ import manual  # noqa: E402
 from sector import __version__  # noqa: E402
 from tools.report_render_fixture import (  # noqa: E402
     render_pdf,
+    validate_outline_destinations,
     validate_rendered_pages,
 )
 
 _EXPECTED_FIGURE_COUNT = 14
-
-
-def _outline_titles(items) -> list[str]:
-    titles = []
-    for item in items:
-        if isinstance(item, list):
-            titles.extend(_outline_titles(item))
-        else:
-            titles.append(str(getattr(item, "title", item)))
-    return titles
 
 
 @functools.lru_cache(maxsize=1)
@@ -65,13 +56,33 @@ def validate_pdf_content(pdf: bytes) -> str:
             f"expected {_EXPECTED_FIGURE_COUNT} manual figures, found {images}"
         )
 
-    outline_titles = _outline_titles(reader.outline)
+    outline_entries = validate_outline_destinations(reader)
+    outline_titles = [title for title, _ in outline_entries]
     for part in manual._PART_SUMMARIES:
         if part not in outline_titles:
             raise AssertionError(f"manual bookmark is missing: {part}")
     if len(outline_titles) < 25:
         raise AssertionError(
             f"expected detailed manual bookmarks, found {len(outline_titles)}"
+        )
+
+    page_ids = {
+        page.indirect_reference.idnum: number
+        for number, page in enumerate(reader.pages, start=1)
+    }
+    contents_links = set()
+    for reference in reader.pages[0].get("/Annots") or []:
+        annotation = reference.get_object()
+        destination = annotation.get("/Dest")
+        if annotation.get("/Subtype") == "/Link" and destination:
+            contents_links.add(page_ids.get(destination[0].idnum))
+    part_pages = {
+        page for title, page in outline_entries
+        if title in manual._PART_SUMMARIES
+    }
+    if not part_pages.issubset(contents_links):
+        raise AssertionError(
+            "the visible manual contents does not link to every part"
         )
 
     for number, page in enumerate(reader.pages, start=1):

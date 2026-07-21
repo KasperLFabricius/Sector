@@ -300,9 +300,29 @@ def test_call_with_timeout_guards_slow_and_failing_work():
 def test_manual_pdf_builds_tables_only():
     # Build without the Plotly-to-PNG export (no kaleido/browser needed): a valid,
     # non-trivial PDF over all the content blocks.
+    import pypdf
+
     pdf = manual.build_manual_pdf_bytes(figures=False)
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 8000
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    part_destinations = [
+        item for item in reader.outline
+        if not isinstance(item, list)
+        and getattr(item, "title", "") in manual._PART_SUMMARIES
+    ]
+    expected_pages = {
+        reader.pages[reader.get_destination_page_number(item)].indirect_reference.idnum
+        for item in part_destinations
+    }
+    linked_pages = {
+        annotation.get_object()["/Dest"][0].idnum
+        for annotation in (reader.pages[0].get("/Annots") or [])
+        if annotation.get_object().get("/Subtype") == "/Link"
+        and annotation.get_object().get("/Dest")
+    }
+    assert len(part_destinations) == len(manual._PART_SUMMARIES)
+    assert expected_pages <= linked_pages
 
 
 def test_manual_pdf_exports_each_repeated_figure_only_once(monkeypatch):

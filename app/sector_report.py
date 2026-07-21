@@ -153,9 +153,23 @@ class _NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, footer="", header="", revision="", **kwargs):
         super().__init__(*args, **kwargs)
         self._saved = []
+        self._bookmark_specs = {}
         self._footer = footer
         self._header = header
         self._revision = revision
+
+    def bookmarkPage(
+        self, key, fit="Fit", left=None, top=None, bottom=None, right=None,
+        zoom=None,
+    ):
+        """Record bookmarks so delayed pages receive their real destinations."""
+        self._bookmark_specs.setdefault(self._pageNumber, []).append((
+            key, fit, left, top, bottom, right, zoom,
+        ))
+        return super().bookmarkPage(
+            key, fit=fit, left=left, top=top, bottom=bottom, right=right,
+            zoom=zoom,
+        )
 
     def showPage(self):
         self._saved.append(dict(self.__dict__))
@@ -165,6 +179,11 @@ class _NumberedCanvas(canvas.Canvas):
         n = len(self._saved)
         for state in self._saved:
             self.__dict__.update(state)
+            for spec in self._bookmark_specs.get(self._pageNumber, ()):
+                canvas.Canvas.bookmarkPage(
+                    self, spec[0], fit=spec[1], left=spec[2], top=spec[3],
+                    bottom=spec[4], right=spec[5], zoom=spec[6],
+                )
             self._draw_furniture(n)
             super().showPage()
         super().save()
