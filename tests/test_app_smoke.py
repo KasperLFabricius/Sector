@@ -1223,7 +1223,7 @@ def test_void_buttons_preserve_unsaved_edits():
     at.session_state["hole_base"] = pd.DataFrame({
         "x (mm)": [-100.0, -40.0, -70.0], "y (mm)": [-50.0, -50.0, 50.0]})
     # The fourth row is an unsaved corner reported by the current grid seed.
-    at.session_state["ed_hole"] = {
+    at.session_state["ed_hole"] = {"payload": {
         "data_version": str(at.session_state["ed_hole_ver"]),
         "rows": [
             {"x (mm)": -100.0, "y (mm)": -50.0},
@@ -1231,7 +1231,7 @@ def test_void_buttons_preserve_unsaved_edits():
             {"x (mm)": -70.0, "y (mm)": 50.0},
             {"x (mm)": 80.0, "y (mm)": -50.0},
         ],
-    }
+    }}
     at.button(key="add_void").click().run()   # handler reads the live rows before re-render
     assert not at.exception
     hb = at.session_state["hole_base"]
