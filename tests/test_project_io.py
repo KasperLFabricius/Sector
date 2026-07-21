@@ -101,8 +101,12 @@ def test_round_trip_tables_and_scalars():
                "pl_case_source": "Load model LM-4",
                "el_case_id": "EL-08", "el_case_type": "FLS",
                "el_case_source": "Combination register C2"}
-    rt, rs = project_io.parse_project(project_io.dump_project(tables, scalars))
+    text = project_io.dump_project(tables, scalars)
+    rt, rs = project_io.parse_project(text)
     assert rs == scalars
+    assert project_io.input_sha256(rt, rs) == (
+        json.loads(text)["provenance"]["input_sha256"]
+    )
     for key, df in tables.items():
         pd.testing.assert_frame_equal(
             rt[key].reset_index(drop=True),

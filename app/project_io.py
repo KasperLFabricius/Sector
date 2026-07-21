@@ -172,7 +172,10 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         # compatibility fields from their first rows. This makes save -> load ->
         # hash stable for table-native callers without overwriting lossless legacy
         # classification/source fields supplied by the current interface.
-        if all(key in tables for key in load_cases.CASE_TABLE_KEYS):
+        if (
+            all(key in tables for key in load_cases.CASE_TABLE_KEYS)
+            and not any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
+        ):
             compatibility = load_cases.legacy_scalars_from_tables(tables)
             for key, value in compatibility.items():
                 if key in SCALAR_KEYS:
