@@ -4956,6 +4956,11 @@ def _analysis_workspace(inp):
     widget for those interactions. An input edit still causes a normal full rerun
     and invokes this function with a freshly built input payload.
     """
+    # This must live inside the fragment: Calculate, View and plot-label changes
+    # rerun only this function, not the top-level page dispatcher.  Quick Section
+    # and the manual do not invoke the fragment, so their exclusion is preserved.
+    _maybe_autosave()
+
     # Plot-label controls sit inline in the main viewport, directly above the View
     # dropdown (not tucked inside a submenu). They only affect the drawings, so they
     # are not part of the result-staleness signature.
@@ -5150,11 +5155,6 @@ if main_page == "Inputs":
     _generate_report(inp)
 else:
     inp = st.session_state.get("_latest_inputs")
-    # Ordinary Analysis interactions still service a due autosave.  The durable
-    # input mirror makes this safe even though the input widgets are not mounted.
-    # Manual and Quick Section retain their intentional autosave exclusion.
-    if not manual_open and not quick_section_open:
-        _maybe_autosave()
     if manual_open:
         if st.button("Back to analysis", type="primary",
                      width="stretch", key="manual_back"):

@@ -1555,14 +1555,17 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
 
 
 def test_due_autosave_runs_from_analysis_page(tmp_path, monkeypatch):
-    # Analysis interactions must continue to service a due autosave even though
-    # input widgets are lazily unmounted (independent Codex review P2).
+    # A genuine Analysis-fragment interaction must service a due autosave even
+    # though input widgets and the top-level dispatcher are not rerun (second
+    # independent Codex review P2).
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
     at.number_input(key="conc_fck").set_value(42.0).run()
-    at.session_state["_autosave_t"] = 0.0
     _goto_page(at, "Analysis")
+    assert not (tmp_path / "autosave.json").exists()
+    at.session_state["_autosave_t"] = 0.0
+    at.number_input(key="label_scale").set_value(1.1).run()
 
     saved = tmp_path / "autosave.json"
     assert saved.exists()
