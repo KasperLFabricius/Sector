@@ -18,15 +18,17 @@ cross-section and reports, for the same section:
   supported by the selected Eurocode method.
 
 Plastic and Elastic identify the calculation method, not the limit state. Each
-action set carries the user's project-defined classification (for example ULS,
-ALS, SLS or FLS).
+named row carries the user's project-defined description or classification (for
+example ULS, ALS, SLS or FLS). Plastic/capacity rows contain NEd, MxEd, MyEd,
+VEd and TEd. Elastic rows contain long- and short-term NEd/MxEd/MyEd components
+and select stress-limit and crack-width acceptance per row.
 
 ## Goals
 
 A fast, modern tool with the rigour engineers expect: define a section by its
 shape and reinforcement (not by typing coordinates), choose the analysis, press
-**Calculate**, and review the stresses, the capacity envelope, and the governing
-results visually. Reports and an in-app manual round it out.
+**Calculate**, and review every named case, the stresses, the capacity envelope,
+and the governing results visually. Reports and an in-app manual round it out.
 
 The numerical core is covered by independent hand checks, regression fixtures
 and automated tests. The project engineer remains responsible for inputs,
@@ -43,9 +45,10 @@ Sector uses port 8502 so it can run alongside BriCoS on Streamlit's default
 port 8501. Both launch methods bind to `127.0.0.1`, so the application is
 accessible only from the computer running Sector.
 
-Define the section (shape, dimensions, reinforcement), set the materials and
-loads, pick the analysis mode, and press **Calculate**. The section drawing
-updates live as you type; results update when you calculate.
+Define the section (shape, dimensions, reinforcement), set the materials, add
+named rows to the Plastic/capacity and Elastic load tables, pick the analysis
+mode, and press **Calculate**. The section drawing updates live as you type;
+results update when you calculate.
 
 The solver's inner loops are compiled with Numba, which the app warms up once at
 startup (a few seconds, cached on disk thereafter) so every calculation after

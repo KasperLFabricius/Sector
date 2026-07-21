@@ -2,8 +2,8 @@
 
 Single source of truth for the manual content. The content is authored as a
 list of structured blocks (headings, markdown, callouts, figures, tables) so it
-can be rendered both in the app (:func:`render_manual_streamlit`) and -- in a
-later step -- to a downloadable PDF over the same blocks.
+can be rendered both in the app (:func:`render_manual_streamlit`) and as a
+downloadable PDF over the same blocks.
 
 Two worked examples are threaded through the manual and their section drawings
 are generated live from the same plotting code the app uses, so they always
@@ -402,8 +402,10 @@ def manual_blocks() -> list:
        "(tension-ignored) section, with creep through the modular ratio.\n"
        "- **Acceptance criteria.** User-defined stress limits, cracking threshold, "
        "transformed section properties and crack width.\n"
-       "- **Reporting.** A one-click QA PDF with the worked formulas and their "
-       "code references, plus a project file that saves the whole input set.")
+       "- **Multi-case review and reporting.** Named Plastic/capacity and Elastic "
+       "rows are summarised together, remain selectable individually, and are "
+       "included in a QA PDF with worked formulas and code references. A project "
+       "file saves the whole input set.")
 
     h1("Quick start")
     md("1. **Define the section.** Open the *Section* panel and either edit the "
@@ -412,11 +414,12 @@ def manual_blocks() -> list:
        "2. **Set the materials.** In *Material parameters* pick or enter the "
        "concrete, mild steel and (if any) prestress.\n"
        "3. **Choose the analyses.** In *Analysis settings* pick Plastic, "
-       "Elastic or Both, and toggle the crack-width check.\n"
-       "4. **Enter the loads.** Give each solver's axial force and moments, with "
-       "the project action-set ID and optional classification.\n"
-       "5. **Calculate.** Open *Analysis* and use the *View* dropdown for the "
-       "results overview, plastic envelope and elastic stresses.\n"
+       "Elastic or Both and set the applicable global acceptance limits.\n"
+       "4. **Enter the cases.** Add uniquely named rows to the Plastic/capacity "
+       "and Elastic tables. Select stress and/or crack-width acceptance on each "
+       "Elastic row.\n"
+       "5. **Calculate.** Open *Analysis*, review *Results Overview*, then select "
+       "a case in each detailed result view.\n"
        "6. **Export.** Generate the PDF report or download the project file.")
     fig(fig_beam_section, "The rectangular worked example as Sector draws it: the "
         "concrete corners and bars are numbered. Use the *Display* controls beside "
@@ -468,10 +471,13 @@ def manual_blocks() -> list:
        "parameters. These previews update live. The **Analysis** page contains only "
        "calculated results selected with the **View** dropdown.")
     table(["View", "Shows"],
-          [["Results Overview", "Status and utilisation summary for the requested checks"],
-           ["Plastic Results", "The M-M envelope and the utilisation (on Calculate)"],
-           ["Elastic Results", "The cracked-section stresses and crack width (on Calculate)"],
-           ["Shear", "The shear resistance $V_{Rd,c}$ and the utilisation (on Calculate)"]])
+          [["Results Overview", "All cases, statuses, criteria and governing checks"],
+           ["Plastic Results", "Selected case: M-M envelope and utilisation"],
+           ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
+           ["Elastic Results", "Selected case: stresses, cracking and crack width"],
+           ["Shear", "Selected Plastic case: shear resistance and utilisation"],
+           ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
+           ["M-V-T Combined", "Selected Plastic case: combined interactions"]])
     call("tip", "*Auto-calc all derived values* (in Material parameters) "
          "recomputes every auto quantity from the current grade at once: the concrete "
          "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
@@ -573,8 +579,9 @@ def manual_blocks() -> list:
     fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the "
         "applied load; the sweep from 0 to 360 degrees closes the curve.")
     h2("Crack width")
-    md("With **Crack width** on, the elastic analysis also computes the crack "
-       "width. The bar diameter $\\phi$ (0 = derived from the bar area), the "
+    md("Tick **Crack width** on each Elastic table row that requires acceptance. "
+       "If any row is ticked, the global crack settings apply to every ticked row. "
+       "The bar diameter $\\phi$ (0 = derived from the bar area), the "
        "mild-steel bond coefficient $k_1$ (0.8 ribbed, 1.6 plain), the code edition "
        "and -- for the DK NA -- the member type are the inputs.")
     table(["Crack-width code", "What it changes"],
@@ -587,8 +594,9 @@ def manual_blocks() -> list:
     h2("Shear (VRd,c, no shear reinforcement)")
     md("With **Check shear capacity** on, Sector computes the design shear "
        "resistance $V_{Rd,c}$ of a member **not** requiring shear reinforcement "
-       "(EN 1992-1-1 6.2.2) and the utilisation $V_{Ed}/V_{Rd,c}$. The inputs are "
-       "the applied shear $V_{Ed}$, the shear direction (vertical, bending about "
+       "(EN 1992-1-1 6.2.2) and the utilisation $V_{Ed}/V_{Rd,c}$. The signed "
+       "$V_{Ed}$ is entered per Plastic/capacity row; zero means not evaluated for "
+       "that row. The shared settings are the shear direction (vertical, bending about "
        "$x$; or horizontal, about $y$), the tension face, the method edition, and "
        "the web width $b_w$ (0 = derived). The effective depth $d$, the tension "
        "reinforcement $A_{sl}$ and, when $b_w = 0$, the web width are all derived "
@@ -635,7 +643,8 @@ def manual_blocks() -> list:
        "thin-walled closed tube (6.3) and reports the closed-stirrup resistance "
        "$T_{Rd,s}$, the strut-crushing $T_{Rd,max}$, the cracking $T_{Rd,c}$, the "
        "utilisation $T_{Ed}/T_{Rd}$ and the required longitudinal steel "
-       "$\\sum A_{sl}$. The inputs are the applied torsion $T_{Ed}$, an optional "
+       "$\\sum A_{sl}$. The signed $T_{Ed}$ is entered per Plastic/capacity row; "
+       "zero means not evaluated for that row. The shared inputs include an optional "
        "wall-thickness override $t_{ef}$ (0 = auto), and the strut-angle bounds. "
        "The tube $A$, $u$, $t_{ef}$, $A_k$ and $u_k$ are derived from the outline. "
        "The **stirrup is the shared closed stirrup** (defined once under Links / "
@@ -664,7 +673,8 @@ def manual_blocks() -> list:
        "the concrete-crushing interaction (6.29) and the DK NA "
        "$\\sum(S_{Ed}/S_{Rd}) \\leq 1$ rule (6.3.2(6)), and lists the additional "
        "longitudinal steel that shear and torsion demand. All three checks (Plastic, "
-       "Shear, Torsion) must be enabled.")
+       "Shear, Torsion) must be enabled, and the row must have nonzero $V_{Ed}$ and "
+       "$T_{Ed}$; otherwise the combined check is not applicable to that row.")
     call("standard", "DK NA 6.3.2(6): $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ sums each "
          "action's utilisation (the axial $N$ is folded into the bending term). If "
          "the longitudinal steel for shear beyond bending is provided, tick **M & V "
@@ -680,23 +690,40 @@ def manual_blocks() -> list:
        "$n = E_p/E_c$. Both pairs are reported in the Loads panel and in the report.")
 
     h1("Loads")
-    md("The plastic check uses one action set (axial force $N$, positive in "
-       "tension, and moments $M_x$ / $M_y$). The elastic check uses a long-term "
-       "and a short-term set, so creep and load duration are captured. The crack "
-       "width is evaluated for both.")
-    table(["Load set", "Feeds"],
-          [["Plastic $N$, $M_x$, $M_y$", "The utilisation against the envelope"],
-           ["Long-term $N$, $M_x$, $M_y$ + $\\varphi$", "The creep (long-term) elastic stresses"],
-           ["Short-term $N$, $M_x$, $M_y$", "The instantaneous (total) elastic stresses"]])
+    md("Loads are entered in two editable tables. Every active row needs a name, "
+       "and names are unique across both tables; use the optional description for "
+       "the project classification, combination or source. Add, delete, paste and "
+       "reorder rows directly in the tables.")
+    table(["Table", "Per-row fields", "Row-specific rule"],
+          [["Plastic / capacity", "$N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$, $V_{Ed}$, $T_{Ed}$",
+            "Zero $V_{Ed}$ or $T_{Ed}$ skips that check for the row"],
+           ["Elastic", "Long- and short-term $N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$",
+            "Tick Stress limits and/or Crack width for the row"]])
+    md("The Elastic long-term and short-term components are solved together. The "
+       "single global creep coefficient $\\varphi$ applies to all Elastic rows. "
+       "Stress limits (percent of $f_{ck}$ / $f_{yk}$ / $f_{pk}$), the crack-width "
+       "limit (mm) and their stated source are also global; the row tick marks decide "
+       "which acceptance checks are issued. Crack width includes both the long-term "
+       "and total long-plus-short response for each selected row.")
+    call("tip", "Use stable case names from the project combination register. They "
+         "appear unchanged in the result selector, summary and PDF.")
 
     h1("Reading the results")
+    h2("Results overview")
+    md("The overview is the calculation register: one row per evaluated check and "
+       "case, with result, criterion and status. **Governing** marks the highest "
+       "assessed utilisation for each check (ties remain marked). A zero row action "
+       "is shown as **Not applicable**, not as a pass. Headline counts separate "
+       "failures, invalid results and checks that were not evaluated.")
     h2("Plastic results")
-    md("The $M_x$-$M_y$ envelope is drawn with the applied load marked; the "
+    md("Select a Plastic/capacity case at the top of the view. The "
+       "$M_x$-$M_y$ envelope is drawn with the applied load marked; the "
        "**Neutral-axis state** selector steps through the swept angles and reports "
        "the strains, the compression resultant and lever arm, and the neutral-axis "
        "intercepts at each. The full per-angle table sits below.")
     h2("Elastic results")
-    md("The cracked-section stresses are reported per bar for the long-term, "
+    md("Select an Elastic case at the top of the view. The cracked-section "
+       "stresses are reported per bar for the long-term, "
        "short-term and total states, with the peak concrete compression and the "
        "neutral-axis position. When cracking is checked the section properties "
        "(uncracked and cracked) and the crack width follow.")
@@ -714,6 +741,12 @@ def manual_blocks() -> list:
     md("The **M-V-T Combined** view shows the $M$, $V$ and $T$ utilisations, the "
        "DK NA $\\sum(S_{Ed}/S_{Rd})$ sum, the concrete-crushing interaction with a "
        "$V$-$T$ envelope diagram, and the additional longitudinal steel demand.")
+    h2("PDF report")
+    md("The report reproduces the complete named case register, descriptions, "
+       "signed actions and per-Elastic-row acceptance selections. Its overview "
+       "uses the same statuses and governing rules as the UI. Every computed case "
+       "then receives its own bookmarked detail chapters; zero-action checks remain "
+       "visible as not applicable in the overview and are not given a false result.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -1204,6 +1237,27 @@ def manual_blocks() -> list:
     return blocks
 
 
+_PART_SUMMARIES = {
+    "Part A - Get started": "Purpose, quick start, examples and common uses.",
+    "Part B - Features & options": "Inputs, settings, load tables and result views.",
+    "Part C - Theory & methodology": "Engineering models, equations and worked examples.",
+    "Part D - Reference": "Standards, assumptions, limitations and glossary.",
+}
+
+
+def manual_parts() -> dict[str, list]:
+    """Return the manual blocks grouped into their four navigable parts."""
+    parts: dict[str, list] = {}
+    current = None
+    for block in manual_blocks():
+        if block[0] == "part":
+            current = block[1]
+            parts[current] = [block]
+        elif current is not None:
+            parts[current].append(block)
+    return parts
+
+
 # ==========================================================================
 # PDF RENDERER -- same content blocks, rendered with ReportLab
 # ==========================================================================
@@ -1355,8 +1409,8 @@ def build_manual_pdf(buffer, figures=True):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import cm
-    from reportlab.platypus import (Image, KeepTogether, Paragraph, SimpleDocTemplate,
-                                    Spacer, Table, TableStyle)
+    from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
+                                    SimpleDocTemplate, Spacer, Table, TableStyle)
 
     report._styles()                 # ensure the Greek-capable font is registered
     font, font_b = report._FONT, report._FONT_BOLD
@@ -1368,15 +1422,40 @@ def build_manual_pdf(buffer, figures=True):
 
     _add("MTitle", fontSize=20, spaceAfter=6, fontName=font_b)
     _add("MPart", fontSize=17, spaceBefore=18, spaceAfter=8, fontName=font_b,
-         textColor=colors.HexColor("#0d2440"))
+         textColor=colors.HexColor("#0d2440"), keepWithNext=1)
     _add("MH1", fontSize=15, spaceBefore=14, spaceAfter=6, fontName=font_b,
-         textColor=colors.HexColor("#1f3b66"))
-    _add("MH2", fontSize=12.5, spaceBefore=9, spaceAfter=4, fontName=font_b)
-    _add("MH3", fontSize=11, spaceBefore=6, spaceAfter=3, fontName=font_b)
+         textColor=colors.HexColor("#1f3b66"), keepWithNext=1)
+    _add("MH2", fontSize=12.5, spaceBefore=9, spaceAfter=4, fontName=font_b,
+         keepWithNext=1)
+    _add("MH3", fontSize=11, spaceBefore=6, spaceAfter=3, fontName=font_b,
+         keepWithNext=1)
     _add("MBody", fontSize=9.5, leading=13, spaceAfter=4, fontName=font)
     _add("MMath", fontSize=11, leading=15, alignment=TA_CENTER, spaceBefore=6,
          spaceAfter=6, fontName=font)
     _add("MSmall", fontSize=8, leading=10, textColor=colors.grey, fontName=font)
+
+    class _ManualDocTemplate(SimpleDocTemplate):
+        def afterFlowable(self, flowable):
+            key = getattr(flowable, "_manual_bookmark", None)
+            if key:
+                self.canv.bookmarkPage(key)
+                self.canv.addOutlineEntry(
+                    getattr(flowable, "_manual_outline", key),
+                    key,
+                    level=getattr(flowable, "_manual_level", 0),
+                    closed=False,
+                )
+
+    bookmark_no = 0
+
+    def _heading(text, style, outline, level):
+        nonlocal bookmark_no
+        bookmark_no += 1
+        paragraph = Paragraph(text, style)
+        paragraph._manual_bookmark = f"manual-section-{bookmark_no}"
+        paragraph._manual_outline = _strip_num(outline)
+        paragraph._manual_level = level
+        return paragraph
 
     page_w = 16.5 * cm
     flow = [
@@ -1388,12 +1467,37 @@ def build_manual_pdf(buffer, figures=True):
                   "how to use it.", styles["MBody"]),
         Spacer(1, 0.4 * cm),
     ]
+    contents = [[
+        Paragraph("<b>Part</b>", styles["MSmall"]),
+        Paragraph("<b>Contents</b>", styles["MSmall"]),
+    ]]
+    contents.extend([
+        [Paragraph(part, styles["MSmall"]),
+         Paragraph(summary, styles["MSmall"])]
+        for part, summary in _PART_SUMMARIES.items()
+    ])
+    contents_table = Table(contents, colWidths=[6.2 * cm, 10.3 * cm])
+    contents_table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    flow.extend([
+        Paragraph("Contents", styles["MH1"]),
+        contents_table,
+        PageBreak(),
+    ])
 
     # One shared kaleido server for all figures. Start it behind the same timeout
     # as the figure renders, so a wedged browser startup cannot hang the build;
     # if it times out, drop to tables-only. Skipped entirely when figures are off.
     n1 = n2 = 0
     figures_hung = False
+    figure_cache = {}
     if figures:
         if _call_with_timeout(report.ensure_image_server,
                               _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
@@ -1402,19 +1506,24 @@ def build_manual_pdf(buffer, figures=True):
         kind = block[0]
         if kind == "part":
             flow.append(Spacer(1, 0.3 * cm))
-            flow.append(Paragraph(_inline_md_to_rl(block[1]), styles["MPart"]))
+            flow.append(_heading(
+                _inline_md_to_rl(block[1]), styles["MPart"], block[1], 0
+            ))
             n1 = n2 = 0
         elif kind == "h1":
             n1 += 1
             n2 = 0
-            flow.append(Paragraph(f"{n1}. " + _inline_md_to_rl(_strip_num(block[1])),
-                                  styles["MH1"]))
+            title = f"{n1}. " + _inline_md_to_rl(_strip_num(block[1]))
+            flow.append(_heading(title, styles["MH1"], block[1], 1))
         elif kind == "h2":
             n2 += 1
-            flow.append(Paragraph(f"{n1}.{n2} "
-                                  + _inline_md_to_rl(_strip_num(block[1])), styles["MH2"]))
+            title = f"{n1}.{n2} " + _inline_md_to_rl(_strip_num(block[1]))
+            flow.append(_heading(title, styles["MH2"], block[1], 2))
         elif kind == "h3":
-            flow.append(Paragraph(_inline_md_to_rl(_strip_num(block[1])), styles["MH3"]))
+            flow.append(_heading(
+                _inline_md_to_rl(_strip_num(block[1])),
+                styles["MH3"], block[1], 3,
+            ))
         elif kind == "md":
             _render_md_pdf(block[1], flow, styles, Paragraph)
         elif kind == "callout":
@@ -1430,12 +1539,16 @@ def build_manual_pdf(buffer, figures=True):
             flow.append(KeepTogether([t]))
             flow.append(Spacer(1, 0.15 * cm))
         elif kind == "figure":
-            png = None
-            if figures and not figures_hung:
-                png = _fig_to_png(block[1])
-                if png is _FIG_TIMED_OUT:
-                    figures_hung = True   # kaleido wedged: skip the rest promptly
-                    png = None
+            if block[1] in figure_cache:
+                png = figure_cache[block[1]]
+            else:
+                png = None
+                if figures and not figures_hung:
+                    png = _fig_to_png(block[1])
+                    if png is _FIG_TIMED_OUT:
+                        figures_hung = True   # kaleido wedged: skip the rest promptly
+                        png = None
+                figure_cache[block[1]] = png
             if png:
                 w, h = _png_size(png)
                 img_h = page_w * (h / w) if w else 8 * cm
@@ -1464,9 +1577,10 @@ def build_manual_pdf(buffer, figures=True):
             flow.append(Spacer(1, 0.2 * cm))
 
     footer = f"Sector v{APP_VERSION} - user manual"
-    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2.2 * cm,
-                            rightMargin=2.2 * cm, topMargin=2 * cm, bottomMargin=2 * cm,
-                            title=f"Sector user manual v{APP_VERSION}")
+    doc = _ManualDocTemplate(buffer, pagesize=A4, leftMargin=2.2 * cm,
+                             rightMargin=2.2 * cm, topMargin=2 * cm,
+                             bottomMargin=2 * cm,
+                             title=f"Sector user manual v{APP_VERSION}")
     doc.build(flow, canvasmaker=lambda *a, **k: report._NumberedCanvas(
         *a, footer=footer, **k))
 
@@ -1508,8 +1622,17 @@ def render_manual_streamlit():
     st.caption("What Sector computes, the theory it applies, its features, and how "
                "to use it.")
 
+    parts = manual_parts()
+    selected_part = st.selectbox(
+        "Manual part",
+        list(parts),
+        key="manual_part",
+        help="Only the selected part is rendered; the PDF contains the full manual.",
+    )
+    st.caption(_PART_SUMMARIES[selected_part])
+
     n1 = n2 = 0
-    for i, block in enumerate(manual_blocks()):
+    for i, block in enumerate(parts[selected_part]):
         kind = block[0]
         if kind == "part":
             st.divider()

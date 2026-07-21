@@ -39,12 +39,13 @@ def test_supported_python_runtime_is_pinned():
     assert (ROOT / ".python-version").read_text(encoding="ascii").strip() == "3.13.0"
 
 
-def test_ci_runs_full_tests_report_render_and_windows_build():
+def test_ci_runs_full_tests_artifact_renders_and_windows_build():
     workflow = (ROOT / ".github" / "workflows" / "qa.yml").read_text(
         encoding="utf-8"
     )
     assert "runs-on: windows-latest" in workflow
     assert "python -m pytest tests" in workflow
     assert "tools/report_render_fixture.py" in workflow
+    assert "tools/manual_render_fixture.py" in workflow
     assert "python -m PyInstaller" in workflow
     assert workflow.count("--require-hashes") == 2
