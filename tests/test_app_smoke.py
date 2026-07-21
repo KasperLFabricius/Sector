@@ -1554,6 +1554,25 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     assert at.session_state["_autosave_last"]      # the panel records the time
 
 
+def test_due_autosave_runs_from_analysis_page(tmp_path, monkeypatch):
+    # Analysis interactions must continue to service a due autosave even though
+    # input widgets are lazily unmounted (independent Codex review P2).
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_fck").set_value(42.0).run()
+    at.session_state["_autosave_t"] = 0.0
+    _goto_page(at, "Analysis")
+
+    saved = tmp_path / "autosave.json"
+    assert saved.exists()
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
+    import project_io  # noqa: E402
+    _, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
+    assert scalars["conc_fck"] == pytest.approx(42.0)
+
+
 def test_autosave_restores_last_session_on_next_launch(tmp_path, monkeypatch):
     # The BriCoS principle: a pre-existing autosave is loaded automatically on the
     # next launch, so the section resumes where the user left off.

@@ -5150,6 +5150,11 @@ if main_page == "Inputs":
     _generate_report(inp)
 else:
     inp = st.session_state.get("_latest_inputs")
+    # Ordinary Analysis interactions still service a due autosave.  The durable
+    # input mirror makes this safe even though the input widgets are not mounted.
+    # Manual and Quick Section retain their intentional autosave exclusion.
+    if not manual_open and not quick_section_open:
+        _maybe_autosave()
     if manual_open:
         if st.button("Back to analysis", type="primary",
                      width="stretch", key="manual_back"):
