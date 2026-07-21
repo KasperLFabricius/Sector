@@ -168,10 +168,11 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             for table_key, payload_key in _CASE_PAYLOAD_KEYS.items()
         }
         # During the staged UI migration, v4 files retain the former scalar API.
-        # If both canonical tables are already authoritative, seed any missing
-        # compatibility fields from their first rows. This makes save -> load ->
-        # hash stable for table-native callers without overwriting lossless legacy
-        # classification/source fields supplied by the current interface.
+        # If at least one canonical table is already authoritative, seed missing
+        # compatibility fields from the canonical/default first rows. This makes
+        # save -> load -> hash stable for table-native callers without overwriting
+        # lossless legacy classification/source fields supplied by the current
+        # interface.
         if (
             any(key in tables for key in load_cases.CASE_TABLE_KEYS)
             and not any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
