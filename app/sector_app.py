@@ -1727,10 +1727,10 @@ def build_inputs(host=st):
         help="Upper prestressing-steel tensile-stress criterion as a percentage of "
              "the entered characteristic tendon strength fpk. It is assessed only "
              "when the section contains tendons.")
-    sls_limit_source = scw.text_input(
-        "Acceptance-criteria source",
-        value="Project design basis / user-defined criteria",
-        key="sls_limit_source", disabled=not elastic_on,
+    sls_limit_source = _seeded_text(
+        scw, "Acceptance-criteria source",
+        "Project design basis / user-defined criteria", "sls_limit_source",
+        disabled=not elastic_on,
         help="Document, clause or project requirement supporting the limits.")
     sls_cw = _seeded_checkbox(scw, "Crack width", False, "sls_cw",
                               disabled=not elastic_on,
