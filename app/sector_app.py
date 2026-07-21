@@ -744,6 +744,52 @@ _PROJECT_TABLES = (
     ("tendons_base", "ed_tendons", _REBAR_COLS),
 )
 
+# Input widgets are not rendered on the Analysis page. Streamlit consequently
+# removes their widget-owned keys at the end of that run, so keep a durable copy
+# outside the widget namespace and restore it before either page is rendered.
+# Autosave preferences are session settings rather than project inputs, but they
+# need the same treatment while their Project & report controls are off-screen.
+_DURABLE_INPUT_SCALARS = tuple(project_io.SCALAR_KEYS) + (
+    "autosave_on", "autosave_min",
+)
+_INPUT_STATE_KEY = "_durable_input_scalars"
+
+
+def _snapshot_input_state(inp=None) -> None:
+    """Keep live input values available while their widgets are not mounted."""
+    saved = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
+    for key in _DURABLE_INPUT_SCALARS:
+        if key in st.session_state:
+            saved[key] = st.session_state[key]
+    st.session_state[_INPUT_STATE_KEY] = saved
+
+    # A component grid's payload is widget-owned too. Commit its latest rows to
+    # the stable base DataFrame before navigation can trigger widget cleanup.
+    for base, ed, cols in _PROJECT_TABLES:
+        if base in st.session_state:
+            st.session_state[base] = _current_table(base, ed, cols).copy(deep=True)
+    if inp is not None:
+        st.session_state["_latest_inputs"] = inp
+
+
+def _restore_input_state() -> None:
+    """Restore missing input keys from the durable navigation-state mirror."""
+    for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items():
+        st.session_state.setdefault(key, value)
+
+
+def _open_analysis_content(flag: str) -> None:
+    """Open a full-width auxiliary view from an input-page button callback."""
+    _snapshot_input_state()
+    st.session_state["_manual_open"] = flag == "manual"
+    st.session_state["_qs_open"] = flag == "quick_section"
+    st.session_state["_main_page"] = "Analysis"
+
+
+def _set_main_page(page: str) -> None:
+    """Select a top-level page from a button callback."""
+    st.session_state["_main_page"] = page
+
 
 def _section_table_snapshot():
     """Copy the four live point tables for one-step Clear Section recovery."""
@@ -788,8 +834,12 @@ def _project_state():
     """Return the canonical table/scalar inputs behind a project download."""
     tables = {base: _current_table(base, ed, cols)
               for base, ed, cols in _PROJECT_TABLES if base in st.session_state}
-    scalars = {k: st.session_state[k] for k in project_io.SCALAR_KEYS
-               if k in st.session_state}
+    durable = st.session_state.get(_INPUT_STATE_KEY, {})
+    scalars = {
+        key: st.session_state[key] if key in st.session_state else durable[key]
+        for key in project_io.SCALAR_KEYS
+        if key in st.session_state or key in durable
+    }
     return tables, scalars
 
 
@@ -953,6 +1003,9 @@ def _apply_pending_project() -> None:
         _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
     for key, value in scalars.items():
         st.session_state[key] = value
+    durable = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
+    durable.update(scalars)
+    st.session_state[_INPUT_STATE_KEY] = durable
     # Keep each preset's change-marker in step with the loaded preset so the panel
     # does not re-prefill over the loaded field values.
     for marker, src in project_io.PREV_MARKERS.items():
@@ -1572,6 +1625,7 @@ def _quick_section_viewport():
 
     if back:
         st.session_state["_qs_open"] = False
+        st.session_state["_next_main_page"] = "Inputs"
         st.rerun()
     if apply:
         _discard_clear_recovery()
@@ -1585,6 +1639,7 @@ def _quick_section_viewport():
             [(float(p[0]), float(p[1]), float(p[2])) for p in tendons])))
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
+        st.session_state["_next_main_page"] = "Inputs"
         st.rerun()
 
 
@@ -2068,14 +2123,13 @@ def build_inputs(host=st):
                 _reseed_table(base_key, ed_key, _corners_df([]) if cols is _CORNER_COLS
                               else _rebar_df([]))
 
-    if sec.button("Open Quick Section...", key="open_qs", width="stretch",
-                  help="Open a full-width builder: pick a shape, dimensions and "
-                       "reinforcement with a live preview, then Apply to fill the "
-                       "point tables."):
-        # Complete build_inputs before changing the analysis-page content so report
-        # metadata and every other input widget remain mounted on this run.
-        st.session_state["_qs_open"] = True
-        st.toast("Quick Section is in the Analysis workspace tab.")
+    sec.button(
+        "Open Quick Section...", key="open_qs", width="stretch",
+        help="Open a full-width builder: pick a shape, dimensions and "
+             "reinforcement with a live preview, then Apply to fill the "
+             "point tables.",
+        on_click=_open_analysis_content, args=("quick_section",),
+    )
 
     if sec.button("Clear section...", key="clear_pts", width="stretch",
                   disabled=_section_tables_are_empty(),
@@ -2442,13 +2496,12 @@ def build_inputs(host=st):
         st.markdown(f"**Sector v{APP_VERSION}**")
         st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
         st.caption("Proprietary internal engineering tool, Sweco.")
-        if st.button("User manual", key="open_manual", width="stretch",
-                     help="Open the full-width user manual: what Sector computes, "
-                          "the theory it applies, its features, and how to use it."):
-            # No rerun: build_inputs completes so every input stays mounted, and the
-            # analysis page renders the manual during this same full-app run.
-            st.session_state["_manual_open"] = True
-            st.toast("Manual is in the Analysis workspace tab.")
+        st.button(
+            "User manual", key="open_manual", width="stretch",
+            help="Open the full-width user manual: what Sector computes, the theory "
+                 "it applies, its features, and how to use it.",
+            on_click=_open_analysis_content, args=("manual",),
+        )
     return dict(section=section, void_error=void_error, steel_error=steel_error,
                 concrete=concrete, steel=steel,
                 concrete_preset=concrete_preset,
@@ -5059,24 +5112,44 @@ def _analysis_workspace(inp):
 
 _autosave_startup()        # restore the last autosaved session (BriCoS-style) on launch
 _apply_pending_project()   # restore an uploaded project before any widget is built
-# The two main pages are tabs rather than a long sidebar. Streamlit renders both tab
-# trees on every run, so all inputs remain mounted while the analysis page or Quick
-# Section is active. This preserves widget state without squeezing the point grids
-# and load definitions into a narrow column.
-inputs_page, analysis_page = st.tabs(["Inputs", "Analysis workspace"])
-with inputs_page:
-    inp = build_inputs(st)
-
+# Migrate renamed workspace choices even while Inputs is selected; otherwise an old
+# widget value can survive indefinitely until the engineer first opens Analysis.
+if st.session_state.get("view") in _VIEW_ALIASES:
+    st.session_state["view"] = _VIEW_ALIASES[st.session_state["view"]]
 manual_open = bool(st.session_state.get("_manual_open"))
 quick_section_open = bool(st.session_state.get("_qs_open"))
+# Fragment exit buttons cannot modify an already-instantiated navigation widget.
+# They queue the destination instead; a full rerun applies it here, before the
+# widget is created again.
+next_main_page = st.session_state.pop("_next_main_page", None)
+if next_main_page in {"Inputs", "Analysis"}:
+    st.session_state["_main_page"] = next_main_page
+# A stored auxiliary-view flag is a deep link to the Analysis page (also useful for
+# restoring a Streamlit session and for AppTest). Do this before the keyed navigation
+# widget is created; modifying it afterwards is not allowed by Streamlit.
+if manual_open or quick_section_open:
+    st.session_state["_main_page"] = "Analysis"
+st.session_state.setdefault("_main_page", "Inputs")
+_restore_input_state()
 
-# Autosave rides a normal input/edit rerun once the interval has elapsed. Applying
-# Quick Section closes its fragment and reruns, so the applied geometry is saved on
-# that next normal run rather than while the builder still holds a preview.
-if not manual_open and not quick_section_open:
+main_page = st.segmented_control(
+    "Workspace",
+    ["Inputs", "Analysis"],
+    key="_main_page",
+    on_change=_snapshot_input_state,
+    required=True,
+    width="stretch",
+    label_visibility="collapsed",
+)
+
+if main_page == "Inputs":
+    inp = build_inputs(st)
+    _snapshot_input_state(inp)
+    # Autosave rides a normal input/edit rerun once the interval has elapsed.
     _maybe_autosave()
-
-with analysis_page:
+    _generate_report(inp)
+else:
+    inp = st.session_state.get("_latest_inputs")
     if manual_open:
         if st.button("Back to analysis", type="primary",
                      width="stretch", key="manual_back"):
@@ -5086,7 +5159,11 @@ with analysis_page:
         manual.render_manual_streamlit()
     elif quick_section_open:
         _quick_section_viewport()
+    elif inp is None:
+        st.info("Open Inputs once to initialise the section and analysis settings.")
+        st.button(
+            "Open Inputs", type="primary", key="initialise_inputs",
+            on_click=_set_main_page, args=("Inputs",),
+        )
     else:
         _analysis_workspace(inp)
-
-_generate_report(inp)   # builds the PDF when the Report panel's Generate was pressed

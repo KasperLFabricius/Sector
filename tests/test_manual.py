@@ -295,8 +295,8 @@ def test_manual_opens_from_about_and_closes_from_the_analysis_page():
 
 
 def test_opening_and_closing_the_manual_keeps_inputs():
-    # Both full-width pages remain rendered, so opening and closing the manual must
-    # not drop input widget state.
+    # Inputs are mirrored while the Analysis page is selected, so opening and
+    # closing the manual must not drop input state.
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()   # a non-default input

@@ -463,7 +463,7 @@ def manual_blocks() -> list:
     h1("The workspace")
     md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
        "parameters*, *Loads* and *Project & report* in full-width tabs. The "
-       "**Analysis workspace** page contains the drawings and results selected "
+       "**Analysis** page contains the drawings and results selected "
        "with the **View** dropdown. The section drawing and material-law diagrams "
        "update live; result views recompute on **Calculate**.")
     table(["View", "Shows"],
@@ -1487,7 +1487,7 @@ def render_manual_streamlit():
 
     Mirrors the Quick Section builder: a session flag (``_manual_open``) makes the
     app render this instead of the normal views. Exiting is via the *Back to
-    analysis* button above the manual on the Analysis workspace page, so it is
+    analysis* button above the manual on the Analysis page, so it is
     reachable without scrolling the manual.
     """
     c_gen, c_dl, _ = st.columns([1, 1, 4])

@@ -146,17 +146,50 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _goto_page(at, page):
+    try:
+        current = at.session_state["_main_page"]
+    except KeyError:
+        current = None
+    if current != page:
+        at.segmented_control(key="_main_page").set_value(page).run()
+    return at
+
+
+def _calculate(at):
+    _goto_page(at, "Analysis")
+    at.button(key="calculate").click().run()
+    return at
+
+
+def _select_view(at, value):
+    _goto_page(at, "Analysis")
+    at.selectbox(key="view").set_value(value).run()
+    return at
+
+
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    if changes:
+        widget_type, key, _value = changes[0]
+        try:
+            getattr(at, widget_type)(key=key)
+        except KeyError:
+            _goto_page(at, "Analysis" if key == "view" else "Inputs")
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     return at.run()
 
 
 def _set_and_click(at, button_key, *changes):
-    """Submit a group of existing inputs with one button-triggered rerun."""
+    """Submit inputs, navigate if needed, then click the page-local action."""
+    if button_key == "calculate" and changes:
+        _set(at, *changes)
+        changes = ()
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
+    if button_key == "calculate":
+        _goto_page(at, "Analysis")
     at.button(key=button_key).click()
     return at.run()
 
@@ -192,6 +225,7 @@ def _run_member(
     torsion_band=None,
 ):
     """Configure a complete M-V-T member with only the reruns needed for reveals."""
+    _goto_page(at, "Inputs")
     # Once a shared AppTest has revealed every conditional member input, later load
     # cases can update all values and calculate in one rerun. This keeps repeated
     # engineering comparisons independent at result level without rebuilding the
@@ -326,6 +360,7 @@ def test_app_combined_edition_lock():
     # both checks follow the shared edition, and their own selectors are locked.
     assert res["shear"]["method"] == codes.EC2_2005.label
     assert res["torsion"]["method"] == codes.EC2_2005.label
+    _goto_page(at, "Inputs")
     assert at.selectbox(key="shear_method").disabled
     assert at.selectbox(key="torsion_method").disabled
 
@@ -338,7 +373,7 @@ def test_app_combined_incomplete_flags_missing():
     )  # no shear / torsion
     assert not at.exception
     assert not at.session_state["results"]["combined"]["valid"]
-    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    _select_view(at, "M-V-T Combined")
     assert any("needs all three" in w.value for w in at.warning)
 
 
@@ -346,7 +381,7 @@ def test_app_combined_view_renders():
     at = _fresh()
     at.run()
     _enable_all(at)
-    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    _select_view(at, "M-V-T Combined")
     assert not at.exception
     labels = [m.label for m in at.metric]
     assert any("Bending" in lbl for lbl in labels)
@@ -369,7 +404,7 @@ def test_app_combined_out_of_range_withholds_dependent_verdicts():
     assert c["code_applicable"] is False
     assert c["crushing"]["code_applicable"] is False
     assert c["longitudinal"]["code_applicable"] is False
-    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    _select_view(at, "M-V-T Combined")
     assert any("NO CODE VERDICT" in w.value for w in at.warning)
     verdict_labels = (
         chr(0x03A3) + "(SEd/SRd)", "Sum", "MEd,total/MRd",
@@ -467,7 +502,7 @@ def test_app_invalid_tube_does_not_poison_the_member_angle():
     )
     base = at.session_state["results"]["shear"]["links"]
     assert base["res"]["cot"] == pytest.approx(2.5) and base["util"] < 1.0
-    at.checkbox(key="torsion_on").set_value(True).run()
+    _set(at, ("checkbox", "torsion_on", True))
     _set_and_click(
         at,
         "calculate",
@@ -642,7 +677,7 @@ def test_app_no_load_with_combined_keeps_resistance_mode():
     # disjoint bands -- the bands overlap fine here; there is simply no load to optimise.
     ch = lk["chord"]
     assert ch is not None and ch["valid"] and ch["theta_mode"] == "resistance"
-    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    _select_view(at, "M-V-T Combined")
     caps = " ".join(cap.value for cap in at.caption)
     assert "do not overlap" not in caps
     assert "No shear or torsion is acting" in caps
@@ -719,7 +754,7 @@ def test_app_combined_non_overlapping_cot_bands_are_rejected():
     assert c["longitudinal"]["theta_mode"] == "disjoint"
     # The chord note is actually rendered in this state, so the report wording matters.
     assert c["longitudinal"]["valid"] is True
-    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    _select_view(at, "M-V-T Combined")
     assert any("do not overlap" in w.value for w in at.warning)
     caps = " ".join(cap.value for cap in at.caption)
     assert "bands do not overlap" in caps and "minimise the governing" not in caps
