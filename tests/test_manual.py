@@ -1,13 +1,14 @@
 """Tests for the in-app user manual (content blocks, worked examples, figures).
 
-The manual authors its content as typed blocks rendered both in the app and (in
-a later step) to a PDF, so the block list and the worked-example models are
+The manual authors its content as typed blocks rendered both in the app and to
+a PDF, so the block list and the worked-example models are
 tested directly. The examples are also run through the engine, so a manual
 figure or worked number can never reference a section the solver cannot handle.
 """
 
 from __future__ import annotations
 
+import io
 import pathlib
 import sys
 
@@ -99,7 +100,7 @@ def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     assert "Material laws" in text
     assert "Stress-Strain diagrams" not in text
     assert "the section, the material-law diagrams" not in text
-    assert "Open *Analysis* and use the *View* dropdown" in text
+    assert "Open *Analysis*, review *Results Overview*" in text
     for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{sw}/s",
                  "TOTAL", "LONG", "DIF", "RST1", "F_c"):
         assert term in text
@@ -110,6 +111,13 @@ def test_manual_has_the_expected_parts_in_order():
     parts = [b[1] for b in manual.manual_blocks() if b[0] == "part"]
     assert parts == ["Part A - Get started", "Part B - Features & options",
                      "Part C - Theory & methodology", "Part D - Reference"]
+
+
+def test_manual_part_navigation_preserves_every_block_in_order():
+    parts = manual.manual_parts()
+    assert list(parts) == list(manual._PART_SUMMARIES)
+    assert [block for blocks in parts.values() for block in blocks] == \
+        manual.manual_blocks()
 
 
 def test_every_figure_block_builds():
@@ -206,6 +214,23 @@ def test_manual_describes_solvers_without_assigning_limit_states():
         assert stale not in text
 
 
+def test_manual_documents_native_case_tables_results_and_report():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "Plastic / capacity",
+        "names are unique across both tables",
+        "Stress limits and/or Crack width",
+        "zero means not evaluated",
+        "single global creep coefficient",
+        "Results overview",
+        "Select a Plastic/capacity case",
+        "Select an Elastic case",
+        "Every computed case",
+        "bookmarked detail chapters",
+    ):
+        assert expected in text
+
+
 def test_latex_to_rl_converts_the_subset():
     # The PDF converter turns the LaTeX subset into ReportLab markup: Greek and
     # operators to entities, sub/superscripts to tags, fractions to a/b, and it
@@ -275,9 +300,51 @@ def test_call_with_timeout_guards_slow_and_failing_work():
 def test_manual_pdf_builds_tables_only():
     # Build without the Plotly-to-PNG export (no kaleido/browser needed): a valid,
     # non-trivial PDF over all the content blocks.
+    import pypdf
+
     pdf = manual.build_manual_pdf_bytes(figures=False)
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 8000
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    part_destinations = [
+        item for item in reader.outline
+        if not isinstance(item, list)
+        and getattr(item, "title", "") in manual._PART_SUMMARIES
+    ]
+    expected_pages = {
+        reader.pages[reader.get_destination_page_number(item)].indirect_reference.idnum
+        for item in part_destinations
+    }
+    linked_pages = {
+        annotation.get_object()["/Dest"][0].idnum
+        for annotation in (reader.pages[0].get("/Annots") or [])
+        if annotation.get_object().get("/Subtype") == "/Link"
+        and annotation.get_object().get("/Dest")
+    }
+    assert len(part_destinations) == len(manual._PART_SUMMARIES)
+    assert expected_pages <= linked_pages
+
+
+def test_manual_pdf_exports_each_repeated_figure_only_once(monkeypatch):
+    from PIL import Image
+    import sector_report
+
+    png = io.BytesIO()
+    Image.new("RGB", (20, 12), "white").save(png, format="PNG")
+    calls = []
+
+    def fake_export(builder, timeout=manual._FIG_EXPORT_TIMEOUT_S):
+        calls.append(builder)
+        return png.getvalue()
+
+    monkeypatch.setattr(sector_report, "ensure_image_server", lambda: None)
+    monkeypatch.setattr(manual, "_fig_to_png", fake_export)
+    pdf = manual.build_manual_pdf_bytes(figures=True)
+    unique_figures = {
+        block[1] for block in manual.manual_blocks() if block[0] == "figure"
+    }
+    assert pdf[:4] == b"%PDF"
+    assert len(calls) == len(unique_figures)
 
 
 def test_manual_opens_from_about_and_closes_from_the_analysis_page():
@@ -290,6 +357,14 @@ def test_manual_opens_from_about_and_closes_from_the_analysis_page():
     assert not at.exception
     assert at.session_state["_manual_open"] is True
     assert any("Sector user manual" in m.value for m in at.markdown)
+    selector = next(item for item in at.selectbox if item.key == "manual_part")
+    assert selector.value == "Part A - Get started"
+    assert any("Part A - Get started" in m.value for m in at.markdown)
+    assert not any("Part B - Features & options" in m.value for m in at.markdown)
+    selector.select("Part B - Features & options").run()
+    assert not at.exception
+    assert any("Part B - Features & options" in m.value for m in at.markdown)
+    assert not any("Part A - Get started" in m.value for m in at.markdown)
     # The "Back to analysis" button is above the manual in the analysis page.
     at.button(key="manual_back").click().run()
     assert not at.exception

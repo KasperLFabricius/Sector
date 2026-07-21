@@ -153,9 +153,23 @@ class _NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, footer="", header="", revision="", **kwargs):
         super().__init__(*args, **kwargs)
         self._saved = []
+        self._bookmark_specs = {}
         self._footer = footer
         self._header = header
         self._revision = revision
+
+    def bookmarkPage(
+        self, key, fit="Fit", left=None, top=None, bottom=None, right=None,
+        zoom=None,
+    ):
+        """Record bookmarks so delayed pages receive their real destinations."""
+        self._bookmark_specs.setdefault(self._pageNumber, []).append((
+            key, fit, left, top, bottom, right, zoom,
+        ))
+        return super().bookmarkPage(
+            key, fit=fit, left=left, top=top, bottom=bottom, right=right,
+            zoom=zoom,
+        )
 
     def showPage(self):
         self._saved.append(dict(self.__dict__))
@@ -165,6 +179,11 @@ class _NumberedCanvas(canvas.Canvas):
         n = len(self._saved)
         for state in self._saved:
             self.__dict__.update(state)
+            for spec in self._bookmark_specs.get(self._pageNumber, ()):
+                canvas.Canvas.bookmarkPage(
+                    self, spec[0], fit=spec[1], left=spec[2], top=spec[3],
+                    bottom=spec[4], right=spec[5], zoom=spec[6],
+                )
             self._draw_furniture(n)
             super().showPage()
         super().save()
@@ -358,6 +377,7 @@ class ReportBuilder:
                     case_inp = case_analysis.elastic_case_input(
                         self._base_inp, actions
                     )
+                case_inp["_report_case_actions"] = dict(actions)
                 contexts.append((case_inp, entry.get("results") or {}))
             return contexts
 
@@ -442,8 +462,53 @@ class ReportBuilder:
         self._gap(4)
 
     def _case_line(self, family):
-        self._small("<b>Action set:</b> "
-                    + _report_action_set_text(self.inp, family))
+        self._small("<b>Case:</b> " + _report_action_set_text(self.inp, family))
+        actions = self.inp.get("_report_case_actions") or {}
+        if family == "plastic" and actions:
+            self._table(
+                [[
+                    "N<sub>Ed</sub> (kN)", "M<sub>x,Ed</sub> (kNm)",
+                    "M<sub>y,Ed</sub> (kNm)", "V<sub>Ed</sub> (kN)",
+                    "T<sub>Ed</sub> (kNm)",
+                ], [
+                    _fmt(actions.get("n_ed_kn"), 3),
+                    _fmt(actions.get("mx_ed_knm"), 3),
+                    _fmt(actions.get("my_ed_knm"), 3),
+                    _fmt(actions.get("v_ed_kn"), 3),
+                    _fmt(actions.get("t_ed_knm"), 3),
+                ]],
+                [34 * mm] * 5,
+                font=7.2,
+            )
+        elif family == "elastic" and actions:
+            self._table(
+                [[
+                    "Part", "N<sub>Ed</sub> (kN)",
+                    "M<sub>x,Ed</sub> (kNm)", "M<sub>y,Ed</sub> (kNm)",
+                ], [
+                    "Long-term", _fmt(actions.get("n_long_ed_kn"), 3),
+                    _fmt(actions.get("mx_long_ed_knm"), 3),
+                    _fmt(actions.get("my_long_ed_knm"), 3),
+                ], [
+                    "Short-term", _fmt(actions.get("n_short_ed_kn"), 3),
+                    _fmt(actions.get("mx_short_ed_knm"), 3),
+                    _fmt(actions.get("my_short_ed_knm"), 3),
+                ]],
+                [28 * mm, 47 * mm, 47 * mm, 47 * mm],
+                font=7.2,
+            )
+            self._small(
+                "<b>Acceptance:</b> stress limits "
+                f"{'on' if actions.get('check_stress') else 'off'}; crack width "
+                f"{'on' if actions.get('check_crack_width') else 'off'}."
+            )
+
+    def _case_heading(self, title, family):
+        start = len(self.flow)
+        case_id = presentation.action_set(self.inp, family)["id"] or "ID NOT SET"
+        self._h1(f"{title} - {_html_escape(case_id)}")
+        self._case_line(family)
+        self._keep_from(start + 1)
 
     def _results_overview(self):
         rows = presentation.multi_case_summary_rows(
@@ -502,6 +567,10 @@ class ReportBuilder:
                 style.append(("BACKGROUND", (2, row_index), (2, row_index), fill))
         table.setStyle(TableStyle(style))
         self.flow.append(table)
+        self._small(
+            "Gov. marks the highest PASS/FAIL utilisation for each check; ties "
+            "remain marked. NOT APPLICABLE means the row action is zero."
+        )
         self._gap(4)
 
     def _gap(self, h=4):
@@ -610,23 +679,26 @@ class ReportBuilder:
                     continue
                 if key == "combined" and not case_out[key].get("valid"):
                     continue
-                jobs.append((case_inp, case_out, f"{label} - {case_id}...", method))
+                jobs.append((
+                    case_inp, case_out, f"{label} - {case_id}...", method, True
+                ))
         for case_inp, case_out in self._case_contexts("elastic"):
             case_id = presentation.action_set(case_inp, "elastic")["id"] or "-"
             if "elastic" in case_out:
                 jobs.extend([
                     (case_inp, case_out,
-                     f"Elastic stresses - {case_id}...", "_elastic"),
+                     f"Elastic stresses - {case_id}...", "_elastic", True),
                     (case_inp, case_out,
-                     f"Cracking - {case_id}...", "_cracking"),
+                     f"Cracking - {case_id}...", "_cracking", False),
                 ])
 
         try:
-            for index, (case_inp, case_out, label, method) in enumerate(jobs):
+            for index, (case_inp, case_out, label, method, new_page) in enumerate(jobs):
                 self.inp, self.out = case_inp, case_out
                 fraction = 0.42 + 0.5 * (index / max(len(jobs), 1))
                 self._tick(fraction, label)
-                self.flow.append(PageBreak())
+                if new_page:
+                    self.flow.append(PageBreak())
                 getattr(self, method)()
         finally:
             self.inp, self.out = self._base_inp, self._base_out
@@ -1151,8 +1223,7 @@ class ReportBuilder:
 
     def _plastic(self):
         pl = self.out["plastic"]
-        self._h1("Plastic section capacity")
-        self._case_line("plastic")
+        self._case_heading("Plastic section capacity", "plastic")
         assessment = presentation.plastic_action_assessment(pl)
         status = assessment["status"]
         self._status_block(
@@ -1537,8 +1608,7 @@ class ReportBuilder:
     def _shear(self):
         sh = self.out["shear"]
         res = sh["res"]
-        self._h1("Shear resistance without shear reinforcement")
-        self._case_line("plastic")
+        self._case_heading("Shear resistance", "plastic")
         axis = ("vertical shear (bending about x)" if sh["axis"] == "x"
                 else "horizontal shear (bending about y)")
         face = viz.tension_face_label(sh["tension_low"])
@@ -1779,8 +1849,9 @@ class ReportBuilder:
 
     def _combined(self):
         c = self.out["combined"]
-        self._h1("Combined bending + shear + torsion (M-V-T)")
-        self._case_line("plastic")
+        self._case_heading(
+            "Combined bending + shear + torsion (M-V-T)", "plastic"
+        )
         self._p("The three checks tied together under the shared edition <b>"
                 + str(c["method"]) + "</b>. The bending utilisation is the plastic "
                 "M-M envelope at the applied N; the shear and torsion utilisations "
@@ -2064,8 +2135,7 @@ class ReportBuilder:
     def _torsion(self):
         t = self.out["torsion"]
         tube = t["tube"]
-        self._h1("Torsion (thin-walled tube)")
-        self._case_line("plastic")
+        self._case_heading("Torsion (thin-walled tube)", "plastic")
         self._p("Torsion resistance from the thin-walled closed-tube idealisation "
                 "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
                 "tube is derived from the outline; the closed stirrups and the "
@@ -2206,8 +2276,9 @@ class ReportBuilder:
 
     def _elastic(self):
         el = self.out["elastic"]
-        self._h1("Elastic section response and stress limits")
-        self._case_line("elastic")
+        self._case_heading(
+            "Elastic section response and stress limits", "elastic"
+        )
         valid = el.get("converged", True)
         if not valid:
             self._status_block(
@@ -2384,14 +2455,14 @@ class ReportBuilder:
                 ["Max steel-element tension", f"{_fmt(el.get('max_steel'), 3)} MPa "
                  f"({el.get('max_steel_element') or 'not in tension'})"]]
         self._table(rows, [70 * mm, 90 * mm])
-        self._p("Stresses are the transformed-section result, sigma = "
-                "n &#183; (N/A<sub>t</sub> + M&#183;z/I<sub>t</sub>), summed over "
-                "the long- and short-term actions at their modular ratios.")
 
     def _cracking(self):
         el = self.out["elastic"]
-        self._h1("Cracking and crack width" if el.get("show_cw")
-                 else "Cracking threshold")
+        self._case_heading(
+            "Cracking and crack width" if el.get("show_cw")
+            else "Cracking threshold",
+            "elastic",
+        )
         # Threshold.
         if el.get("show_cw"):
             self._h2("Cracking threshold")

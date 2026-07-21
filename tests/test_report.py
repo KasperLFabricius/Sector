@@ -236,6 +236,11 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     assert "Governing combination" in flat and "Frequent response" in flat
     assert flat.count(". Plastic section capacity") == 2
     assert flat.count(". Elastic section response and stress limits") == 2
+    assert "Plastic section capacity - PL-02" in flat
+    assert "Elastic section response and stress limits - EL-02" in flat
+    assert "Cracking threshold - EL-02" in flat
+    assert "Acceptance: stress limits on; crack width off." in flat
+    assert "Gov. marks the highest PASS/FAIL utilisation" in flat
     assert "125.0 %" in flat
     assert "456.000 MPa" in flat
 

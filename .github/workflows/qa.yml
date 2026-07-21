@@ -45,6 +45,10 @@ jobs:
         if: always()
         run: python tools/report_render_fixture.py --output qa-artifacts/report
 
+      - name: Render manual fixture with real figures
+        if: always()
+        run: python tools/manual_render_fixture.py --output qa-artifacts/manual
+
       - name: Upload QA evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
