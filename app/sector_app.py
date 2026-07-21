@@ -104,7 +104,7 @@ def _warm_solver():
     """Compile the solver kernels in a background thread, so the ~1 s JIT warm-up
     does not block the first paint.
 
-    The live Section and Material laws views never call the kernels, so the page is
+    The live section and material previews never call the kernels, so the page is
     interactive while the thread compiles; by the time a section is defined and
     Calculate is pressed the warm-up is normally finished. A Calculate that races
     the thread is safe -- numba's per-dispatcher compile lock makes the second
@@ -318,8 +318,8 @@ def _clamp_eut(box, vals, fields):
             vals["eut"] = ey
 
 
-def concrete_panel(box, locked=False, lock_elastic=False):
-    """Concrete material: preset and editable parameters (diagram is in the main view).
+def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
+    """Concrete material: preset, editable parameters and adjacent preview.
 
     ``locked`` (elastic-only mode) disables the parameters that do not affect the
     elastic results: gamma_c and alpha_cc set the design strength fcd, which is a
@@ -328,7 +328,8 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     ``lock_elastic`` (plastic-only mode) disables fctm and Ec, which only affect
     the elastic results.
     """
-    box.markdown("**Concrete**")
+    if heading:
+        box.markdown("**Concrete**")
     presets = mp.CONCRETE_PRESETS
     labels = list(presets)
     preset = _seeded_selectbox(box, "Preset", labels, _DEFAULT_PRESET,
@@ -472,8 +473,8 @@ def concrete_panel(box, locked=False, lock_elastic=False):
     return concrete, fctm_val, Ec, preset, k_tc, eta_cc
 
 
-def mild_panel(box, locked=False):
-    """Mild-steel material: preset and editable parameters (diagram is in the main view).
+def mild_panel(box, locked=False, *, heading=True):
+    """Mild-steel material: preset, editable parameters and adjacent preview.
 
     A flat form on the general two-yield law: every parameter is always shown
     and live, so the inputs never change with the preset. A preset only prefills
@@ -484,7 +485,8 @@ def mild_panel(box, locked=False):
     which do not affect the elastic results -- except ``Es``, which sets the
     crack-width mean strain and so stays editable.
     """
-    box.markdown("**Mild steel**")
+    if heading:
+        box.markdown("**Mild steel**")
     presets = mp.MILD_PRESETS
     labels = list(presets)
     preset = _seeded_selectbox(box, "Preset", labels, _DEFAULT_PRESET,
@@ -520,8 +522,8 @@ def mild_panel(box, locked=False):
     return steel
 
 
-def prestress_panel(box, locked=False):
-    """Prestressing-steel material: preset and editable parameters (diagram is in the main view).
+def prestress_panel(box, locked=False, *, heading=True):
+    """Prestressing-steel material: preset, editable parameters and adjacent preview.
 
     A flat form: the user-defined and Eurocode presets build the general
     two-yield law, so every parameter is live. The built-in characteristic
@@ -532,7 +534,8 @@ def prestress_panel(box, locked=False):
     ``Es`` (Ep) stay editable: the elastic analysis applies the tendon prestress
     ``Ep*IS`` as a force and uses ``Ep/Ec`` for the tendon's modular ratio.
     """
-    box.markdown("**Prestressing steel**")
+    if heading:
+        box.markdown("**Prestressing steel**")
     presets = mp.PRESTRESS_PRESETS
     labels = list(presets)
     preset = _seeded_selectbox(box, "Preset", labels, "EN 1992-1-1:2005",
@@ -747,10 +750,11 @@ _PROJECT_TABLES = (
 # Input widgets are not rendered on the Analysis page. Streamlit consequently
 # removes their widget-owned keys at the end of that run, so keep a durable copy
 # outside the widget namespace and restore it before either page is rendered.
-# Autosave preferences are session settings rather than project inputs, but they
-# need the same treatment while their Project & report controls are off-screen.
+# Autosave preferences and tracked input-tab choices are session settings rather
+# than project inputs, but they need the same treatment while their controls are
+# off-screen.
 _DURABLE_INPUT_SCALARS = tuple(project_io.SCALAR_KEYS) + (
-    "autosave_on", "autosave_min",
+    "autosave_on", "autosave_min", "_input_tab", "_material_tab",
 )
 _INPUT_STATE_KEY = "_durable_input_scalars"
 
@@ -1717,10 +1721,9 @@ _PROVENANCE_SIG_KEYS = (
 def build_inputs(host=st):
     """Render staged, full-width input tabs and return the analysis payload.
 
-    All tabs are built on every run so Streamlit preserves every widget value while
-    the engineer moves between Analysis settings, Section, Materials, Loads and
-    Project/report. The containers are created in workflow order but filled below
-    in dependency order.
+    All input widgets are built on every run so their values survive tab changes.
+    The active tab is tracked only to avoid serialising hidden Plotly previews.
+    Containers are created in workflow order but filled below in dependency order.
     """
     s = host
 
@@ -1728,13 +1731,24 @@ def build_inputs(host=st):
     # the calculation methodology (Elastic / Plastic), not a limit state -- the
     # same analysis can serve several load combinations.
     _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
-    aset, sec, mat, loads, project = s.tabs([
+    input_tab_labels = [
         f"1 {_dot} Analysis settings",
         f"2 {_dot} Section",
         f"3 {_dot} Material parameters",
         f"4 {_dot} Loads",
         "Project & report",
-    ])
+    ]
+    stored_input_tab = st.session_state.get("_input_tab")
+    if stored_input_tab is not None and stored_input_tab not in input_tab_labels:
+        st.session_state.pop("_input_tab", None)
+    aset, sec_tab, mat_tab, loads, project = s.tabs(
+        input_tab_labels,
+        key="_input_tab",
+        on_change=_snapshot_input_state,
+    )
+    # Geometry tables and their drawing remain visible together. The wider input
+    # column keeps the four editable point grids practical on a normal laptop.
+    sec, sec_preview = sec_tab.columns([1.15, 0.85], gap="large")
     scw = aset.expander("Stress and crack-width criteria (Elastic)", expanded=False)
     sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
     about_slot = project.container()
@@ -2219,6 +2233,14 @@ def build_inputs(host=st):
     tendons_mm = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS,
                                len(bars) + 1)
     tendons = _pts_to_m(tendons_mm)
+    label_scale, label_min_gap = _section_input_preview(
+        sec_preview,
+        outer,
+        holes,
+        bars,
+        tendons,
+        visible=bool(sec_tab.open),
+    )
 
     # In a purely elastic-bending calculation the design stress-strain laws do not
     # enter the result, so lock their inactive parameters. Independent shear,
@@ -2229,27 +2251,73 @@ def build_inputs(host=st):
     lock_mats = mode == "Elastic" and not capacity_checks_on
     lock_elastic = mode == "Plastic"   # fctm + Ec are elastic-only inputs
     if lock_mats:
-        mat.caption("Elastic-only mode: the stress-strain laws do not affect the "
-                    "elastic results and are locked. Only fck (feeds fctm) and the "
-                    "steel modulus Es (crack width) stay editable; switch to "
-                    "Plastic or Both to edit the full laws.")
+        mat_tab.caption("Elastic-only mode: the stress-strain laws do not affect the "
+                        "elastic results and are locked. Only fck (feeds fctm) and the "
+                        "steel modulus Es (crack width) stay editable; switch to "
+                        "Plastic or Both to edit the full laws.")
     elif mode == "Elastic" and capacity_checks_on:
-        mat.caption(
+        mat_tab.caption(
             "Elastic bending is selected, but an independent shear/torsion "
             "capacity check is active. Design material strengths and final partial "
             "factors therefore remain editable."
         )
+
+    # Keep the derived-value action with the material inputs. It sets a one-shot
+    # flag that the concrete panel consumes on the following run.
+    if mat_tab.button(
+        "Auto-calc all derived values",
+        key="auto_all_btn",
+        width="stretch",
+        help="Recompute all auto values from the current grade: the concrete "
+             "strain limits eps_c2/eps_cu2/n, fctm and Ec. The modular ratios "
+             "n_l/n_s follow from Ec, Es, Ep and creep automatically.",
+    ):
+        st.session_state["_auto_all"] = True
+        st.rerun()
+
+    material_tab_labels = ["Concrete", "Mild steel", "Prestressing steel"]
+    stored_material_tab = st.session_state.get("_material_tab")
+    if stored_material_tab is not None and stored_material_tab not in material_tab_labels:
+        st.session_state.pop("_material_tab", None)
+    conc_tab, mild_tab, pre_tab = mat_tab.tabs(
+        material_tab_labels,
+        key="_material_tab",
+        on_change=_snapshot_input_state,
+    )
+    conc_inputs, conc_preview = conc_tab.columns([1.1, 0.9], gap="large")
+    mild_inputs, mild_preview = mild_tab.columns([1.1, 0.9], gap="large")
+    pre_inputs, pre_preview = pre_tab.columns([1.1, 0.9], gap="large")
+
     (concrete, sls_fctm, conc_Ec, concrete_preset,
      concrete_k_tc, concrete_eta_cc) = concrete_panel(
-         mat, locked=lock_mats, lock_elastic=lock_elastic
+         conc_inputs, locked=lock_mats, lock_elastic=lock_elastic, heading=False
      )
-    mat.divider()
-    steel = mild_panel(mat, locked=lock_mats)
+    _material_input_preview(
+        conc_preview,
+        "concrete",
+        concrete,
+        viz.concrete_curve_figure,
+        visible=bool(mat_tab.open and conc_tab.open),
+    )
+    steel = mild_panel(mild_inputs, locked=lock_mats, heading=False)
+    _material_input_preview(
+        mild_preview,
+        "steel",
+        steel,
+        viz.steel_curve_figure,
+        visible=bool(mat_tab.open and mild_tab.open),
+    )
     mild_preset = st.session_state.get("mild_preset", "")
     # The reinforcement laws are always definable; whether each is used follows from
     # the section (mild steel when bars exist, prestress when tendons exist).
-    mat.divider()
-    prestress = prestress_panel(mat, locked=lock_mats)
+    prestress = prestress_panel(pre_inputs, locked=lock_mats, heading=False)
+    _material_input_preview(
+        pre_preview,
+        "prestress",
+        prestress,
+        viz.prestress_curve_figure,
+        visible=bool(mat_tab.open and pre_tab.open),
+    )
     prestress_preset = st.session_state.get("pre_preset", "")
 
     effective_shear_method = (
@@ -2282,17 +2350,6 @@ def build_inputs(host=st):
     )
     for limitation in design_basis["limitations"]:
         design_basis_slot.warning(limitation)
-
-    # Auto-calc all derived material values lives here (with the values it computes),
-    # not next to Calculate -- which it was being mistaken for. It sets a one-shot
-    # flag that concrete_panel applies on the rerun (before this button re-renders).
-    mat.divider()
-    if mat.button("Auto-calc all derived values", key="auto_all_btn", width="stretch",
-                  help="Recompute all auto values from the current grade: the concrete "
-                       "strain limits eps_c2/eps_cu2/n, fctm and Ec. The modular ratios "
-                       "n_l/n_s follow from Ec, Es, Ep and creep automatically."):
-        st.session_state["_auto_all"] = True
-        st.rerun()
 
     # Loads: the plastic and elastic analyses take their own action sets, so they
     # can represent any project-defined limit state or combination without
@@ -2553,7 +2610,9 @@ def build_inputs(host=st):
                 torsion_cot_min=torsion_cot_min, torsion_cot_max=torsion_cot_max,
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
-                mode=mode, extent=extent, signature=sig,
+                mode=mode, extent=extent,
+                label_scale=label_scale, label_min_gap=label_min_gap,
+                signature=sig,
                 plastic_sig=plastic_sig, elastic_sig=elastic_sig)
 
 
@@ -3452,29 +3511,22 @@ def _run_capacity_checks(inp, out):
 
 
 # ---------------------------------------------------------------------------
-# Views (main area). A "View" dropdown selects what fills the main viewport,
-# the way BriCoS switches between its result diagrams. The Section drawing and
-# the material-law diagrams reflect the inputs live; the Plastic and Elastic
-# result views need a Calculate.
+# Input previews and result views. Geometry and material laws stay beside their
+# source inputs; the Analysis page therefore contains calculated results only.
 # ---------------------------------------------------------------------------
 
-# View order follows the results workflow: the live input previews first, then the
-# plastic bending results (envelope + its N-M diagram kept adjacent), then elastic,
-# then the shear/torsion/combined checks.
-VIEWS = ["Section", "Material laws", "Results Overview",
-         "Plastic Results", "N-M Interaction", "Elastic Results",
-         "Shear", "Torsion", "M-V-T Combined"]
-# The result views (everything except the two live input previews) -- used for the
-# staleness banner and to know which views need a Calculate.
-_RESULT_VIEWS = tuple(v for v in VIEWS
-                      if v not in ("Section", "Material laws"))
+# View order follows the checking workflow: consolidated status first, then the
+# plastic, elastic, shear, torsion and combined details.
+VIEWS = ["Results Overview", "Plastic Results", "N-M Interaction",
+         "Elastic Results", "Shear", "Torsion", "M-V-T Combined"]
+_RESULT_VIEWS = tuple(VIEWS)
 
 
 def _memo_fig(name, sig, build):
     """Return a cached live figure, rebuilding only when its inputs change.
 
-    Streamlit reruns the whole script on every widget change, so the live Section
-    and Material laws views would otherwise re-run the ~10-20 ms plotly figure
+    Streamlit reruns the whole script on every widget change, so the live section
+    and material previews would otherwise re-run the ~10-20 ms Plotly figure
     construction each time -- e.g. rebuilding the material curves when the user
     only touched a load. One slot per figure kind is kept in session state, keyed
     by ``sig`` (compared by value); the figure is reused in place rather than
@@ -3490,42 +3542,55 @@ def _memo_fig(name, sig, build):
     return entry[1]
 
 
-def section_view(inp):
-    """The input geometry: concrete outline, reinforcement and tendons.
+def _section_input_preview(box, outer, holes, bars, tendons, *, visible):
+    """Render the section beside its point tables and return label settings.
 
-    This view is only for verifying the section. Analysis results -- the neutral
-    axis, the compression zone, stresses -- are shown in the result views.
+    Controls remain mounted with the other inputs. The Plotly payload is emitted
+    only while the Section tab is open, which avoids hidden-chart overhead on load
+    and material edits.
     """
-    if inp["section"] is None:
-        st.info("The section has no concrete outline yet -- add at least 3 corners "
-                "in the Section panel, or open the Quick Section builder. Any "
-                "reinforcement you have added is still drawn below.")
-    bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
-    tendon_xy = [(t[0], t[1], t[2]) for t in inp["tendons"]]
-    sig = (inp["outer"], inp["holes"], bar_xy, tendon_xy,
-           inp["label_scale"], inp["label_min_gap"])
-    fig = _memo_fig("section", sig, lambda: viz.section_figure(
-        inp["outer"], inp["holes"], bar_xy, title="Section", tendons=tendon_xy,
-        show_labels=True, label_scale=inp["label_scale"],
-        label_min_gap=inp["label_min_gap"], height=640, scale=_MM, unit="mm"))
-    st.plotly_chart(fig, width="stretch")
+    box.markdown("**Display**")
+    lc1, lc2 = box.columns(2)
+    label_scale = _seeded_number(
+        lc1, "Label size", 0.5, 3.0,
+        st.session_state.get("_workspace_label_scale", 1.0),
+        0.1, "label_scale",
+        help="Scales corner, bar and tendon number labels.",
+    )
+    label_min_gap = _seeded_number(
+        lc2, "Label spacing", 0.0, 0.5,
+        st.session_state.get("_workspace_label_min_gap", 0.04),
+        0.01, "label_min_gap",
+        help="Hides labels closer together than this fraction of the section size; "
+             "0 shows every label.",
+    )
+    st.session_state["_workspace_label_scale"] = label_scale
+    st.session_state["_workspace_label_min_gap"] = label_min_gap
+
+    box.caption(
+        f"{len(outer)} corners | {len(holes)} voids | "
+        f"{len(bars)} bars | {len(tendons)} tendons"
+    )
+    if visible:
+        bar_xy = [(b[0], b[1], b[2]) for b in bars]
+        tendon_xy = [(t[0], t[1], t[2]) for t in tendons]
+        sig = (outer, holes, bar_xy, tendon_xy, label_scale, label_min_gap)
+        fig = _memo_fig("section", sig, lambda: viz.section_figure(
+            outer, holes, bar_xy, title="Section preview", tendons=tendon_xy,
+            show_labels=True, label_scale=label_scale,
+            label_min_gap=label_min_gap, height=640, scale=_MM, unit="mm",
+        ))
+        box.plotly_chart(fig, width="stretch")
+    return label_scale, label_min_gap
 
 
-def materials_view(inp):
-    """Stress-strain diagrams for the chosen materials (live, no Calculate).
-
-    One diagram per row (full width) so each curve is large and easy to read. The
-    material objects are value-comparable (frozen dataclasses), so the figures are
-    memoised on them and only rebuilt when a material parameter actually changes.
-    """
-    conc, steel, pre = inp["concrete"], inp["steel"], inp["prestress"]
-    st.plotly_chart(_memo_fig("concrete", conc, lambda: viz.concrete_curve_figure(conc)),
-                    width="stretch")
-    st.plotly_chart(_memo_fig("steel", steel, lambda: viz.steel_curve_figure(steel)),
-                    width="stretch")
-    if pre is not None:
-        st.plotly_chart(_memo_fig("prestress", pre, lambda: viz.prestress_curve_figure(pre)),
-                        width="stretch")
+def _material_input_preview(box, cache_name, material, figure_builder, *, visible):
+    """Render one live material law only when its nested input tab is visible."""
+    if visible:
+        box.plotly_chart(
+            _memo_fig(cache_name, material, lambda: figure_builder(material)),
+            width="stretch",
+        )
 
 
 def results_overview_view(inp, results, *, stale=False):
@@ -4943,7 +5008,9 @@ def combined_view(inp, results):
 
 _VIEW_ALIASES = {
     "M-V-T Interaction": "M-V-T Combined",
-    "Stress-Strain diagrams": "Material laws",
+    "Section": "Results Overview",
+    "Material laws": "Results Overview",
+    "Stress-Strain diagrams": "Results Overview",
 }
 
 
@@ -4951,39 +5018,15 @@ _VIEW_ALIASES = {
 def _analysis_workspace(inp):
     """Render and operate the main analysis workspace independently.
 
-    View switches, result-detail controls and plot-label changes do not alter the
-    input tabs. Keeping them in a fragment avoids rebuilding every input
-    widget for those interactions. An input edit still causes a normal full rerun
-    and invokes this function with a freshly built input payload.
+    View switches and result-detail controls do not alter the input tabs. Keeping
+    them in a fragment avoids rebuilding every input widget for those interactions.
+    An input edit still causes a normal full rerun and invokes this function with a
+    freshly built input payload.
     """
-    # This must live inside the fragment: Calculate, View and plot-label changes
+    # This must live inside the fragment: Calculate, View and result-detail changes
     # rerun only this function, not the top-level page dispatcher.  Quick Section
     # and the manual do not invoke the fragment, so their exclusion is preserved.
     _maybe_autosave()
-
-    # Plot-label controls sit inline in the main viewport, directly above the View
-    # dropdown (not tucked inside a submenu). They only affect the drawings, so they
-    # are not part of the result-staleness signature.
-    # Keep a non-widget copy because opening Quick Section or the manual temporarily
-    # removes the workspace widgets. Streamlit then cleans up their widget keys; the
-    # durable copies restore the user's choices when the workspace returns.
-    st.markdown("**Plot labels**")
-    lc1, lc2 = st.columns(2)
-    inp["label_scale"] = _seeded_number(
-        lc1, "Label size", 0.5, 3.0,
-        st.session_state.get("_workspace_label_scale", 1.0),
-        0.1, "label_scale",
-        help="Scales the corner / bar / tendon number labels on the section "
-             "drawings.")
-    inp["label_min_gap"] = _seeded_number(
-        lc2, "Label spacing (hide threshold)", 0.0, 0.5,
-        st.session_state.get("_workspace_label_min_gap", 0.04),
-        0.01, "label_min_gap",
-        help="Labels closer together than this fraction of the section size are "
-             "hidden to avoid overlap. Lower shows more (0 shows every label); "
-             "raise it for dense outlines like a circular section.")
-    st.session_state["_workspace_label_scale"] = inp["label_scale"]
-    st.session_state["_workspace_label_min_gap"] = inp["label_min_gap"]
 
     # Migrate a renamed view label before either workspace control renders. A keyed
     # selectbox otherwise keeps returning the stale string, which the dispatch no
@@ -4997,9 +5040,7 @@ def _analysis_workspace(inp):
     st.session_state["view"] = current_view
 
     c_view, c_calc = st.columns([3, 1])
-    # Create Calculate before View (the containers preserve their visual order).
-    # This lets a successful calculation set the destination view before the keyed
-    # selectbox is instantiated, avoiding the former second full-app rerun.
+    # Create Calculate before View; the containers preserve their visual order.
     c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
     calc = c_calc.button(
         "Calculate", type="primary", key="calculate", width="stretch",
@@ -5044,19 +5085,11 @@ def _analysis_workspace(inp):
         # Re-default the Plastic view's neutral-axis state to this result's governing
         # angle. The user can still pick another rotation until the next Calculate.
         st.session_state.pop("pl_state", None)
-        # A valid calculation from a live input view moves directly to its natural
-        # result view in this same run. An invalid section returns {}, so it stays put.
-        if (
-            current_view in ("Section", "Material laws")
-            and st.session_state["results"]
-        ):
-            current_view = "Results Overview"
-            st.session_state["view"] = current_view
 
     view = c_view.selectbox(
         "View", VIEWS, key="view",
-        help="What to show in the main area. Section and Material laws "
-             "update live; the result views need a Calculate.",
+        help="Calculated result view. Geometry and material-law previews are beside "
+             "their inputs; press Calculate to update these results.",
     )
     st.session_state["_workspace_view"] = view
 
@@ -5091,11 +5124,7 @@ def _analysis_workspace(inp):
     if family:
         st.caption("Action set: " + presentation.action_set_text(inp, family))
 
-    if view == "Section":
-        section_view(inp)
-    elif view == "Material laws":
-        materials_view(inp)
-    elif view == "Results Overview":
+    if view == "Results Overview":
         results_overview_view(inp, results, stale=stale)
     elif view == "Plastic Results":
         plastic_view(inp, results)

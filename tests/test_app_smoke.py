@@ -28,7 +28,7 @@ def _fresh_qs(**state):
 
     The app always builds the input tabs before entering the builder, so the first
     run still exercises complete input construction. Skipping an otherwise disposable
-    initial Section-view run saves one full AppTest rerun per builder scenario.
+    initial Inputs-page run saves one full AppTest rerun per builder scenario.
     """
     at = _fresh()
     for key, value in state.items():
@@ -46,6 +46,41 @@ def _goto_page(at, page):
         current = None
     if current != page:
         at.segmented_control(key="_main_page").set_value(page).run()
+    return at
+
+
+def _goto_input_tab(at, name):
+    """Select one tracked input tab by its short engineering name."""
+    _goto_page(at, "Inputs")
+    d = chr(0x00B7)
+    labels = {
+        "Analysis settings": f"1 {d} Analysis settings",
+        "Section": f"2 {d} Section",
+        "Material parameters": f"3 {d} Material parameters",
+        "Loads": f"4 {d} Loads",
+        "Project & report": "Project & report",
+    }
+    label = labels[name]
+    try:
+        current = at.session_state["_input_tab"]
+    except KeyError:
+        current = None
+    if current != label:
+        at.session_state["_input_tab"] = label
+        at.run()
+    return at
+
+
+def _goto_material_tab(at, name):
+    """Open Material parameters and select one material subtab."""
+    _goto_input_tab(at, "Material parameters")
+    try:
+        current = at.session_state["_material_tab"]
+    except KeyError:
+        current = None
+    if current != name:
+        at.session_state["_material_tab"] = name
+        at.run()
     return at
 
 
@@ -98,9 +133,7 @@ def _set(at, *changes):
         try:
             getattr(at, widget_type)(key=key)
         except KeyError:
-            _goto_page(at, "Analysis" if key in {
-                "view", "label_scale", "label_min_gap",
-            } else "Inputs")
+            _goto_page(at, "Analysis" if key == "view" else "Inputs")
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     return at.run()
@@ -160,7 +193,9 @@ def test_app_loads_without_error():
 @pytest.mark.parametrize(
     ("old", "new"),
     [("M-V-T Interaction", "M-V-T Combined"),
-     ("Stress-Strain diagrams", "Material laws")],
+     ("Stress-Strain diagrams", "Results Overview"),
+     ("Material laws", "Results Overview"),
+     ("Section", "Results Overview")],
 )
 def test_app_migrates_legacy_view_label(old, new):
     # Stored pre-rename view labels migrate before the keyed selectbox renders.
@@ -185,19 +220,32 @@ def test_app_empty_result_reads_not_calculated():
 
 
 def test_live_curve_figures_are_memoised():
-    # The Material laws figures are rebuilt only when a material actually
-    # changes -- an unrelated rerun reuses the cached figure (perf: skip the
-    # ~20 ms plotly construction).
+    # The co-located concrete preview is rebuilt only when its material actually
+    # changes; an unrelated rerun reuses the cached figure.
     at = _fresh()
     at.run()
-    _select_view(at, "Material laws")
+    _goto_material_tab(at, "Concrete")
     conc_id = id(at.session_state["_fig_cache"]["concrete"][1])
     _set(at, ("number_input", "el_phi", 2.0))  # unrelated to the concrete law
-    _select_view(at, "Material laws")
+    _goto_material_tab(at, "Concrete")
     assert id(at.session_state["_fig_cache"]["concrete"][1]) == conc_id     # reused
     _set(at, ("number_input", "conc_fck", 45.0))  # changes the concrete law
-    _select_view(at, "Material laws")
+    _goto_material_tab(at, "Concrete")
     assert id(at.session_state["_fig_cache"]["concrete"][1]) != conc_id     # rebuilt
+
+
+def test_hidden_input_previews_do_not_emit_plotly_figures():
+    # Tracked tabs keep every input mounted but build only the visible preview.
+    at = _fresh()
+    at.run()
+    assert "_fig_cache" not in at.session_state
+
+    _goto_input_tab(at, "Section")
+    assert set(at.session_state["_fig_cache"]) == {"section"}
+
+    _goto_material_tab(at, "Concrete")
+    assert set(at.session_state["_fig_cache"]) == {"section", "concrete"}
+    assert not at.exception
 
 
 def test_ui_hot_paths_are_isolated_streamlit_fragments():
@@ -1209,12 +1257,12 @@ def test_unversioned_pre_upgrade_grid_value_cannot_cancel_clear_undo():
 
 def test_cleared_section_does_not_fall_back_to_quick_section():
     # After Clear Section the source-of-truth outline is genuinely empty -- it must
-    # not revert to the Quick Section. The Section view and a Calculate run without
-    # error, and no results are produced (the section is blank).
+    # not revert to the Quick Section. The co-located preview and a Calculate run
+    # without error, and no results are produced (the section is blank).
     at = _fresh()
     at.run()
     _clear_section(at)
-    _select_view(at, "Section")
+    _goto_input_tab(at, "Section")
     assert not at.exception
     _calculate(at)
     assert not at.exception
@@ -1565,7 +1613,7 @@ def test_due_autosave_runs_from_analysis_page(tmp_path, monkeypatch):
     _goto_page(at, "Analysis")
     assert not (tmp_path / "autosave.json").exists()
     at.session_state["_autosave_t"] = 0.0
-    at.number_input(key="label_scale").set_value(1.1).run()
+    at.selectbox(key="view").set_value("Plastic Results").run()
 
     saved = tmp_path / "autosave.json"
     assert saved.exists()
@@ -2185,12 +2233,11 @@ def _widget(seq, key):
     return None
 
 
-def test_label_controls_live_in_the_main_view():
-    # The label size and spacing controls are in the main viewport (not the
-    # input page) and changing them re-renders without error.
+def test_label_controls_live_beside_the_section_inputs():
+    # Drawing controls stay with the co-located section preview.
     at = _fresh()
     at.run()
-    _goto_page(at, "Analysis")
+    _goto_input_tab(at, "Section")
     keys = {ni.key for ni in at.number_input}
     assert "label_scale" in keys and "label_min_gap" in keys
     at.number_input(key="label_min_gap").set_value(0.2).run()
@@ -2215,27 +2262,27 @@ def test_workspace_choices_survive_quick_section_viewport():
     at.button(key="qs_back").click().run()
     _goto_page(at, "Analysis")
     assert at.session_state["view"] == "Results Overview"
+    _goto_input_tab(at, "Section")
     assert at.number_input(key="label_scale").value == pytest.approx(1.5)
     assert at.number_input(key="label_min_gap").value == pytest.approx(0.2)
     assert not at.exception
 
 
 def test_view_dropdown_switches_without_error():
-    # Every view must render. The live views (Section, Material laws) need no
-    # Calculate; the result views show a prompt until one is run.
+    # Analysis contains calculated result views only; each renders before a run.
     at = _fresh()
     at.run()
-    for v in ["Section", "Material laws", "Results Overview",
-              "Plastic Results", "Elastic Results"]:
+    for v in ["Results Overview", "Plastic Results", "Elastic Results"]:
         _select_view(at, v)
         assert not at.exception, v
 
 
-def test_stress_strain_view_includes_prestress_when_enabled():
+def test_prestress_curve_is_co_located_with_its_inputs():
     at = _fresh_qs()
     at.number_input(key="tnd_n").set_value(4).run()
     _apply_qs(at)                            # put tendons in the section
-    _select_view(at, "Material laws")
+    _goto_material_tab(at, "Prestressing steel")
+    assert "prestress" in at.session_state["_fig_cache"]
     assert not at.exception
 
 
@@ -2326,13 +2373,20 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     d = chr(0x00B7)   # the step-number middle dot (v0.63)
     nav = at.segmented_control(key="_main_page")
     assert nav.options == ["Inputs", "Analysis"] and nav.value == "Inputs"
-    assert [tab.label for tab in at.tabs] == [
+    expected_outer = [
         f"1 {d} Analysis settings",
         f"2 {d} Section",
         f"3 {d} Material parameters",
         f"4 {d} Loads",
         "Project & report",
     ]
+    labels = [tab.label for tab in at.tabs]
+    assert labels == [
+        *expected_outer[:3],
+        "Concrete", "Mild steel", "Prestressing steel",
+        *expected_outer[3:],
+    ]
+    assert at.session_state["_input_tab"] == expected_outer[0]
     labels = [ex.label for ex in at.expander]
     assert labels == [
         "Stress and crack-width criteria (Elastic)",
@@ -2343,12 +2397,13 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     ]
 
 
-def test_calculate_from_a_live_view_switches_to_the_results_overview():
-    # Calculating from a live view opens the consolidated QA overview first.
+def test_analysis_defaults_to_results_overview_and_excludes_input_previews():
     at = _fresh()
     at.run()
     _goto_page(at, "Analysis")
-    assert at.session_state["view"] == "Section"
+    assert at.session_state["view"] == "Results Overview"
+    assert "Section" not in at.selectbox(key="view").options
+    assert "Material laws" not in at.selectbox(key="view").options
     _calculate(at)
     assert at.session_state["view"] == "Results Overview"
 
@@ -2405,17 +2460,16 @@ def test_combined_view_renamed_to_m_v_t_combined():
     assert not at.exception
 
 
-def test_section_view_is_geometry_only():
-    # The Section view shows input geometry only -- no neutral axis, no stale
-    # notice -- even after a calculation and an input change. Results (incl. the
-    # neutral axis) live in the result views.
+def test_section_input_preview_is_geometry_only():
+    # The Section-tab preview shows input geometry only; result annotations remain
+    # on the Analysis page after a calculation and subsequent input change.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
     _calculate(at)
-    _select_view(at, "Section")
+    _goto_input_tab(at, "Section")
     _set(at, ("number_input", "conc_fck", 40.0))  # change an input after calc
-    _select_view(at, "Section")
+    _goto_input_tab(at, "Section")
     assert not at.exception
     assert not any("neutral axis" in w.value for w in at.warning)
 
