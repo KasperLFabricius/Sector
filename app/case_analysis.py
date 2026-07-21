@@ -168,7 +168,7 @@ def _entry(record: dict, key: str, result: dict, *, evaluated: bool,
 
 
 def _first_results(entries: Sequence[Mapping], keys: Sequence[str]) -> dict:
-    """Compatibility view for the existing one-case UI and PDF path."""
+    """Compatibility view for legacy callers that consume one flat result."""
     if not entries:
         return {}
     result = entries[0].get("results") or {}

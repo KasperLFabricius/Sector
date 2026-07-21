@@ -1,8 +1,8 @@
 """Generate a QA-able PDF report of a Sector cross-section analysis.
 
 Modelled on the BriCoS report: a sectioned reportlab document with a numbered
-footer, the governing case worked in full and the remainder summarised in tables,
-and every computed quantity tied to its formula and the selected
+footer, every case summarised and each computed case reported in detail, and
+every computed quantity tied to its formula and the selected
 ``EN 1992-1-1`` edition.
 
 The builder is fed the same two objects the result views use -- the collected
@@ -37,6 +37,7 @@ from reportlab.pdfgen import canvas
 from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
+import case_analysis
 import viz
 import result_presentation as presentation
 from sector.build_info import short_revision
@@ -328,6 +329,12 @@ class ReportBuilder:
         self.meta = meta or {}
         self.inp = inp
         self.out = out or {}
+        # Keep the complete table-level payload available while the existing
+        # detail renderers are temporarily pointed at one canonical case.  This
+        # preserves their well-tested single-case contract without allowing the
+        # first-row compatibility projection to hide later cases in the PDF.
+        self._base_inp = inp
+        self._base_out = out or {}
         self.version = version
         self.figures = figures
         self._progress = progress
@@ -335,6 +342,53 @@ class ReportBuilder:
         self.flow = []
         self._chapter = 0
         self._export_hung = False   # set once a kaleido export hits the join timeout
+
+    def _case_contexts(self, family):
+        """Return ordered ``(case_input, case_results)`` report contexts."""
+        entries = self._base_out.get(f"{family}_cases")
+        if entries is not None:
+            contexts = []
+            for entry in entries:
+                actions = entry.get("actions") or {}
+                if family == "plastic":
+                    case_inp = case_analysis.plastic_case_input(
+                        self._base_inp, actions
+                    )
+                else:
+                    case_inp = case_analysis.elastic_case_input(
+                        self._base_inp, actions
+                    )
+                contexts.append((case_inp, entry.get("results") or {}))
+            return contexts
+
+        # Legacy callers still provide one scalar action set and one flat result
+        # mapping.  Keep that API fully supported.
+        result_key = "elastic" if family == "elastic" else None
+        active = (
+            result_key in self._base_out
+            if result_key is not None
+            else any(
+                key in self._base_out
+                for key in ("plastic", "shear", "torsion", "combined")
+            )
+        )
+        return [(self._base_inp, self._base_out)] if active else []
+
+    def _result_values(self, key):
+        family = "elastic" if key == "elastic" else "plastic"
+        return [
+            result[key]
+            for _, result in self._case_contexts(family)
+            if key in result
+        ]
+
+    def _case_register(self, family):
+        """Escaped case register for cover-page document control."""
+        contexts = self._case_contexts(family)
+        return "; ".join(
+            _report_action_set_text(case_inp, family)
+            for case_inp, _ in contexts
+        )
 
     def _tick(self, frac, text):
         if self._progress is not None:
@@ -392,16 +446,21 @@ class ReportBuilder:
                     + _report_action_set_text(self.inp, family))
 
     def _results_overview(self):
-        rows = presentation.result_summary_rows(self.inp, self.out)
+        rows = presentation.multi_case_summary_rows(
+            self._base_inp, self._base_out
+        )
+        governing = presentation.summary_governing_case_flags(rows)
         overall = presentation.overall_summary_status(rows)
         self._h2(f"Results overview - {overall}")
-        data = [["Check", "Action set", "Status", "Result", "Criterion"]]
+        data = [[
+            "Check", "Action set", "Status", "Result", "Criterion", "Gov."
+        ]]
         data.extend([
             [
                 row["check"], _html_escape(row["case"]), row["status"],
-                row["result"], row["criterion"],
+                row["result"], row["criterion"], "YES" if is_governing else "-",
             ]
-            for row in rows
+            for row, is_governing in zip(rows, governing)
         ])
         body = ParagraphStyle(
             "summary-cell", parent=self.s["body"], fontSize=7.2,
@@ -418,7 +477,7 @@ class ReportBuilder:
             ])
         table = Table(
             formatted,
-            colWidths=[48 * mm, 27 * mm, 25 * mm, 35 * mm, 35 * mm],
+            colWidths=[42 * mm, 25 * mm, 23 * mm, 31 * mm, 36 * mm, 13 * mm],
             repeatRows=1,
             hAlign="LEFT",
         )
@@ -538,27 +597,39 @@ class ReportBuilder:
         self._theory()
         self._tick(0.2, "Section and materials...")
         self._inputs()
-        if "plastic" in self.out:
-            self._tick(0.45, "Plastic capacity...")
-            self.flow.append(PageBreak())
-            self._plastic()
-        if "elastic" in self.out:
-            self._tick(0.7, "Elastic stresses and crack width...")
-            self.flow.append(PageBreak())
-            self._elastic()
-            self._cracking()
-        if "shear" in self.out:
-            self._tick(0.86, "Shear resistance...")
-            self.flow.append(PageBreak())
-            self._shear()
-        if "torsion" in self.out:
-            self._tick(0.9, "Torsion resistance...")
-            self.flow.append(PageBreak())
-            self._torsion()
-        if self.out.get("combined", {}).get("valid"):
-            self._tick(0.93, "Combined M-V-T...")
-            self.flow.append(PageBreak())
-            self._combined()
+        jobs = []
+        for case_inp, case_out in self._case_contexts("plastic"):
+            case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
+            for key, label, method in (
+                ("plastic", "Plastic capacity", "_plastic"),
+                ("shear", "Shear resistance", "_shear"),
+                ("torsion", "Torsion resistance", "_torsion"),
+                ("combined", "Combined M-V-T", "_combined"),
+            ):
+                if key not in case_out:
+                    continue
+                if key == "combined" and not case_out[key].get("valid"):
+                    continue
+                jobs.append((case_inp, case_out, f"{label} - {case_id}...", method))
+        for case_inp, case_out in self._case_contexts("elastic"):
+            case_id = presentation.action_set(case_inp, "elastic")["id"] or "-"
+            if "elastic" in case_out:
+                jobs.extend([
+                    (case_inp, case_out,
+                     f"Elastic stresses - {case_id}...", "_elastic"),
+                    (case_inp, case_out,
+                     f"Cracking - {case_id}...", "_cracking"),
+                ])
+
+        try:
+            for index, (case_inp, case_out, label, method) in enumerate(jobs):
+                self.inp, self.out = case_inp, case_out
+                fraction = 0.42 + 0.5 * (index / max(len(jobs), 1))
+                self._tick(fraction, label)
+                self.flow.append(PageBreak())
+                getattr(self, method)()
+        finally:
+            self.inp, self.out = self._base_inp, self._base_out
         self._appendix()
         self._tick(0.92, "Writing PDF...")
         revision_id = short_revision(self.meta.get("source_revision"))
@@ -566,15 +637,16 @@ class ReportBuilder:
         project = str(self.meta.get("proj_no", "")).strip() or "-"
         section = str(self.meta.get("section", "")).strip() or "-"
         revision = str(self.meta.get("rev", "")).strip()
-        active_families = []
-        if any(key in self.out for key in ("plastic", "shear", "torsion", "combined")):
-            active_families.append("plastic")
-        if "elastic" in self.out:
-            active_families.append("elastic")
+        active_families = [
+            family
+            for family in ("plastic", "elastic")
+            if self._case_contexts(family)
+        ]
         cases = [
-            presentation.action_set(self.inp, family)["id"]
+            presentation.action_set(case_inp, family)["id"]
             for family in active_families
-            if presentation.action_set(self.inp, family)["id"]
+            for case_inp, _ in self._case_contexts(family)
+            if presentation.action_set(case_inp, family)["id"]
         ]
         case_text = " / ".join(cases) or "-"
         header = (
@@ -614,32 +686,32 @@ class ReportBuilder:
                 ["Date", date],
                 ["Tool version", self.version or "-"],
                 ["Source revision", short_revision(m.get("source_revision"))]]
-        if any(key in self.out for key in ("plastic", "shear", "torsion", "combined")):
+        if self._case_contexts("plastic"):
             rows.append([
-                "Plastic analysis action set",
-                _report_action_set_text(self.inp, "plastic"),
+                "Plastic analysis cases",
+                self._case_register("plastic"),
             ])
-        if "elastic" in self.out:
+        if self._case_contexts("elastic"):
             rows.append([
-                "Elastic analysis action set",
-                _report_action_set_text(self.inp, "elastic"),
+                "Elastic analysis cases",
+                self._case_register("elastic"),
             ])
         self._table(rows, [55 * mm, 110 * mm])
         if m.get("comments"):
             self._h2("Comments")
             self._p(str(m["comments"]))
         mode = self.inp.get("mode", "")
-        labels = [
-            label
-            for key, label in (
-                ("plastic", "plastic bending"),
-                ("elastic", "elastic stresses / cracking"),
-                ("shear", "shear"),
-                ("torsion", "torsion"),
-            )
-            if key in self.out
-        ]
-        if self.out.get("combined", {}).get("valid"):
+        labels = []
+        for key, label in (
+            ("plastic", "plastic bending"),
+            ("elastic", "elastic stresses / cracking"),
+            ("shear", "shear"),
+            ("torsion", "torsion"),
+        ):
+            count = len(self._result_values(key))
+            if count:
+                labels.append(f"{label} ({count} case{'s' if count != 1 else ''})")
+        if any(result.get("valid") for result in self._result_values("combined")):
             labels.append("combined M-V-T")
         ran = ", ".join(labels) or "none"
         self._small(f"Analysis mode: {mode}. Result sections included: {ran}.")
@@ -847,12 +919,89 @@ class ReportBuilder:
             self._fig(viz.prestress_curve_figure(p), 130, 80)
 
     def _loads_block(self):
-        inp = self.inp
+        inp = self._base_inp
+        out = self._base_out
+        if "plastic_cases" in inp or "elastic_cases" in inp:
+            plastic = (
+                case_analysis.case_records(inp, "plastic")
+                if self._case_contexts("plastic") else []
+            )
+            if plastic:
+                self._small("<b>Plastic / capacity cases</b>")
+                rows = [[
+                    "Case", "Description", "N<sub>Ed</sub>",
+                    "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
+                    "V<sub>Ed</sub>", "T<sub>Ed</sub>",
+                ]]
+                rows.extend([
+                    [
+                        _html_escape(row["name"]),
+                        _html_escape(row["description"]),
+                        _fmt(row["n_ed_kn"], 3),
+                        _fmt(row["mx_ed_knm"], 3),
+                        _fmt(row["my_ed_knm"], 3),
+                        _fmt(row["v_ed_kn"], 3),
+                        _fmt(row["t_ed_knm"], 3),
+                    ]
+                    for row in plastic
+                ])
+                self._table(
+                    rows,
+                    [20 * mm, 40 * mm] + [22 * mm] * 5,
+                    font=6.7,
+                    keep=False,
+                )
+                self._small("N and V in kN; M and T in kNm. A zero V or T is "
+                            "not evaluated for that case.")
+
+            elastic = (
+                case_analysis.case_records(inp, "elastic")
+                if self._case_contexts("elastic") else []
+            )
+            if elastic:
+                self._small("<b>Elastic cases</b>")
+                rows = [[
+                    "Case", "Description", "Part", "N<sub>Ed</sub>",
+                    "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
+                    "Stress", "Crack",
+                ]]
+                for row in elastic:
+                    common = [
+                        _html_escape(row["name"]),
+                        _html_escape(row["description"]),
+                    ]
+                    flags = [
+                        "yes" if row["check_stress"] else "no",
+                        "yes" if row["check_crack_width"] else "no",
+                    ]
+                    rows.append(common + [
+                        "Long",
+                        _fmt(row["n_long_ed_kn"], 3),
+                        _fmt(row["mx_long_ed_knm"], 3),
+                        _fmt(row["my_long_ed_knm"], 3),
+                    ] + flags)
+                    rows.append(["", "", "Short",
+                                 _fmt(row["n_short_ed_kn"], 3),
+                                 _fmt(row["mx_short_ed_knm"], 3),
+                                 _fmt(row["my_short_ed_knm"], 3), "", ""])
+                self._table(
+                    rows,
+                    [20 * mm, 35 * mm, 17 * mm, 22 * mm, 24 * mm,
+                     24 * mm, 14 * mm, 14 * mm],
+                    font=6.7,
+                    keep=False,
+                )
+                self._small("N in kN; M in kNm. Stress and crack acceptance are "
+                            "selected per case; their limits are global.")
+            if not plastic and not elastic:
+                self._small("No active load cases.")
+            return
+
         rows = [["Load case", "N (kN)", "M<sub>x</sub> (kNm)", "M<sub>y</sub> (kNm)"]]
-        if "plastic" in self.out:
+        if "plastic" in out:
             # In a capacity-only run the applied moments are ignored, so only the
             # axial force (which defines the envelope) is listed.
-            cap_only = not self.out["plastic"].get("check_util", True)
+            cap_only = not out["plastic"].get("check_util", True)
             case = _html_escape(
                 presentation.action_set(inp, "plastic")["id"] or "-"
             )
@@ -863,7 +1012,7 @@ class ReportBuilder:
             mx = "-" if cap_only else _fmt(inp.get("Mx_pl"), 3)
             my = "-" if cap_only else _fmt(inp.get("My_pl"), 3)
             rows.append([label, _fmt(inp.get("P_pl"), 3), mx, my])
-        if "elastic" in self.out:
+        if "elastic" in out:
             case = _html_escape(
                 presentation.action_set(inp, "elastic")["id"] or "-"
             )
@@ -889,15 +1038,16 @@ class ReportBuilder:
                 ])
             for limitation in basis.get("limitations", []):
                 rows.append(["Scope limitation", str(limitation)])
-        if "plastic" in self.out:
+        plastic_results = self._result_values("plastic")
+        if plastic_results:
             rows.append(["Sweep start V.min", f"{_fmt(inp.get('v_min'),0)} deg"])
             rows.append(["Sweep end V.max", f"{_fmt(inp.get('v_max'),0)} deg"])
             rows.append(["Sweep increment V.inc", f"max {_fmt(inp.get('v_inc'),0)} deg"])
-            checked = self.out["plastic"].get("check_util", True)
+            checked = plastic_results[0].get("check_util", True)
             rows.append(["Utilisation check",
                          "applied moment checked" if checked else "capacity only"])
-        if "elastic" in self.out:
-            el = self.out["elastic"]
+        elastic_results = self._result_values("elastic")
+        if elastic_results:
             # Modular ratios are derived from the elastic moduli and creep, not entered;
             # document the inputs (Ec, phi) and the derived mild + prestress ratios.
             if inp.get("conc_Ec") is not None:
@@ -931,14 +1081,17 @@ class ReportBuilder:
                              if inp.get("sls_pre_limit_pct") else "not assessed"])
             rows.append(["Acceptance-criteria source",
                          str(inp.get("sls_limit_source") or "not stated")])
-            rows.append(["Crack width checked", "yes" if inp.get("sls_cw") else "no"])
-            if inp.get("sls_cw"):
-                rows.append(["Crack-width code", str(el.get("crack_code", "-"))])
+            crack_results = [item for item in elastic_results if item.get("show_cw")]
+            rows.append(["Crack width checked",
+                         "yes" if crack_results else "no"])
+            if crack_results:
+                crack_el = crack_results[0]
+                rows.append(["Crack-width code", str(crack_el.get("crack_code", "-"))])
                 rows.append(["Crack-width criterion",
                              f"{_fmt(inp.get('sls_wk_limit'), 3)} mm"
                              if inp.get("sls_wk_limit") else "not assessed"])
-                if el.get("crack_member"):
-                    rows.append(["Member type", str(el["crack_member"])])
+                if crack_el.get("crack_member"):
+                    rows.append(["Member type", str(crack_el["crack_member"])])
                 dia = inp.get("sls_phi") or 0.0
                 rows.append(["Crack-width element diameter",
                              "auto (from geometry)" if not dia else f"{_fmt(dia, 3)} mm"])
@@ -948,7 +1101,9 @@ class ReportBuilder:
 
     def _theory(self):
         self._h1("Basis of analysis")
-        if "plastic" in self.out:
+        plastic_results = self._result_values("plastic")
+        elastic_results = self._result_values("elastic")
+        if plastic_results:
             material_2023 = "2023" in str(self.inp.get("concrete_preset", ""))
             steel_2023 = "2023" in str(self.inp.get("mild_preset", ""))
             concrete_ref = (
@@ -974,7 +1129,7 @@ class ReportBuilder:
                     "the moments follow from the force resultants:")
             self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
                           "M = sum( F<sub>i</sub> &#183; d<sub>i</sub> )")
-        if "elastic" in self.out:
+        if elastic_results:
             self._p("<b>Cracked-section elastic stresses.</b> Transformed section "
                     "(reinforcement weighted by the modular ratio), concrete tension "
                     "ignored once cracked; long-term and short-term actions are "
@@ -987,10 +1142,10 @@ class ReportBuilder:
                     "E<sub>c</sub>/(1+&#966;) for the long-term state.")
             self._p("<b>Cracking threshold.</b> The Stage-I extreme tensile stress "
                     "is compared with f<sub>ct,eff</sub>.")
-            if self.out["elastic"].get("show_cw"):
+            if any(result.get("show_cw") for result in elastic_results):
                 self._p("<b>Crack width.</b> The requested crack-width calculation "
                         "follows the selected code method and is worked below.")
-        if not any(k in self.out for k in ("plastic", "elastic")):
+        if not plastic_results and not elastic_results:
             self._p("No bending-capacity or elastic-stress result was included in "
                     "this report.")
 
@@ -2491,7 +2646,12 @@ class ReportBuilder:
         self.flow.append(PageBreak())
         self._h1("References and notes")
         lines = []
-        if "plastic" in self.out:
+        plastic_results = self._result_values("plastic")
+        elastic_results = self._result_values("elastic")
+        shear_results = self._result_values("shear")
+        torsion_results = self._result_values("torsion")
+        combined_results = self._result_values("combined")
+        if plastic_results:
             if "2023" in str(self.inp.get("concrete_preset", "")):
                 lines.append(
                     "Selected concrete material - EN 1992-1-1:2023: &#167;5.1.6 "
@@ -2520,8 +2680,8 @@ class ReportBuilder:
                 "The capacity solver is covered by independent hand-calculation "
                 "regression cases."
             )
-        if "elastic" in self.out:
-            elastic = self.out["elastic"]
+        if elastic_results:
+            elastic = elastic_results[0]
             crack_2023 = (
                 elastic.get("crack_edition") == "2023"
                 or "2023" in str(elastic.get("crack_code", ""))
@@ -2531,7 +2691,7 @@ class ReportBuilder:
                 if crack_2023 else
                 "&#167;7.1-7.2 (stress limitations and cracking threshold)"
             )
-            if elastic.get("show_cw"):
+            if any(result.get("show_cw") for result in elastic_results):
                 clauses += (
                     " and &#167;9.2.3 (refined crack control)"
                     if crack_2023 else
@@ -2544,13 +2704,16 @@ class ReportBuilder:
                 "user-entered project criteria printed with the result; Sector "
                 "does not infer exposure class or action-combination applicability."
             )
-            if "DK NA" in str(elastic.get("crack_code", "")):
+            if any(
+                "DK NA" in str(result.get("crack_code", ""))
+                for result in elastic_results
+            ):
                 lines.append(
                     "The Danish National Annex modifications to crack spacing and "
                     "effective tension-area height are stated with the calculation."
                 )
-        if "shear" in self.out:
-            sh = self.out["shear"]
+        if shear_results:
+            sh = shear_results[0]
             if sh.get("model_2023"):
                 lines.append(
                     "EN 1992-1-1:2023 &#167;8.2.1-8.2.2: Formulae (8.18), "
@@ -2569,8 +2732,8 @@ class ReportBuilder:
                     "The selected shear method and its clause references are stated "
                     "with the shear-resistance calculation."
                 )
-        if "torsion" in self.out:
-            tor = self.out["torsion"]
+        if torsion_results:
+            tor = torsion_results[0]
             if "DK NA" in str(tor.get("method", "")):
                 lines.append(
                     "The Danish torsion method applies the reported DK NA:2024 "
@@ -2582,7 +2745,7 @@ class ReportBuilder:
                     "The selected torsion method and its clause references are "
                     "stated with the torsion-resistance calculation."
                 )
-        if self.out.get("combined", {}).get("valid"):
+        if any(result.get("valid") for result in combined_results):
             lines.append(
                 "The combined M-V-T chapter states the selected edition, the common "
                 "strut-angle basis and the applicable interaction expressions."

@@ -291,9 +291,8 @@ def tables_from_legacy_scalars(scalars: Mapping | None) -> dict[str, pd.DataFram
 def legacy_scalars_from_tables(tables: Mapping | None) -> dict:
     """Expose the first row through the verified single-case compatibility API.
 
-    The table UI remains authoritative. The current report path and a few older
-    callers still consume the first row through scalar names until their own
-    multi-case presentation is introduced; ``description`` is retained losslessly.
+    The table UI remains authoritative. A few older callers still consume the
+    first row through scalar names; ``description`` is retained losslessly.
     """
     tables = tables or {}
     defaults = tables_from_legacy_scalars({})
