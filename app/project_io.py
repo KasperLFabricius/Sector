@@ -374,9 +374,21 @@ def parse_project(text: str):
                 scalars[new] = float(val)
 
     if raw_load_cases is None:
-        # Build the migrated rows only after every historical scalar migration,
-        # especially the pre-v2 axial-force sign conversion above.
-        case_tables = load_cases.tables_from_legacy_scalars(scalars)
+        if (
+            data.get("version", 1) >= 4
+            and not any(
+                key in raw_scalars for key in load_cases.LEGACY_SCALAR_KEYS
+            )
+        ):
+            # A partial v4 project may intentionally carry no load data. Preserve
+            # that absence so parsing and re-saving cannot invent default cases or
+            # change the recorded input hash. The mounted UI supplies its normal
+            # widget defaults independently when such a partial file is applied.
+            case_tables = {}
+        else:
+            # Build migrated rows only after every historical scalar migration,
+            # especially the pre-v2 axial-force sign conversion above.
+            case_tables = load_cases.tables_from_legacy_scalars(scalars)
     else:
         # During the staged migration old scalar controls remain operational. Files
         # written by that UI contain the transitional keys already; preserve them

@@ -180,6 +180,20 @@ def test_v4_partial_case_table_keeps_hash_stable_after_reload():
     )
 
 
+def test_v4_partial_project_without_loads_preserves_absence_and_hash():
+    tables = {"hole_base": _tables()["hole_base"]}
+
+    text = project_io.dump_project(tables, {})
+    payload = json.loads(text)
+    restored, scalars = project_io.parse_project(text)
+
+    assert "load_cases" not in payload
+    assert not any(key in restored for key in load_cases.CASE_TABLE_KEYS)
+    assert project_io.input_sha256(restored, scalars) == (
+        payload["provenance"]["input_sha256"]
+    )
+
+
 def test_v3_single_case_scalars_migrate_after_axial_sign_conversion():
     text = json.dumps({
         "format": project_io.FORMAT,
