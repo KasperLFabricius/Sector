@@ -354,6 +354,8 @@ def test_app_combined_edition_lock():
         at,
         "calculate",
         ("selectbox", "combined_method", codes.EC2_2005.label),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
     )
     assert not at.exception
     res = at.session_state["results"]
@@ -372,9 +374,9 @@ def test_app_combined_incomplete_flags_missing():
         at, "calculate", ("checkbox", "combined_on", True)
     )  # no shear / torsion
     assert not at.exception
-    assert not at.session_state["results"]["combined"]["valid"]
+    assert "combined" not in at.session_state["results"]
     _select_view(at, "M-V-T Combined")
-    assert any("needs all three" in w.value for w in at.warning)
+    assert any("VEd and TEd are zero" in item.value for item in at.info)
 
 
 def test_app_combined_view_renders():
@@ -480,11 +482,11 @@ def test_app_chord_check_in_shear_payload_without_torsion():
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["chord"] is None
     assert lk["res"]["cot"] == pytest.approx(2.5)
-    # With NO load at all there is no utilisation to scan -> legacy resistance mode.
+    # A zero action is not evaluated for that load case.
     _set_and_click(at, "calculate", ("number_input", "shear_V", 0.0))
-    lk = at.session_state["results"]["shear"]["links"]
-    assert lk["theta_mode"] == "resistance"
-    assert lk["res"]["cot"] == pytest.approx(2.5)
+    assert "shear" not in at.session_state["results"]
+    _select_view(at, "Shear")
+    assert any("VEd = 0" in item.value for item in at.info)
 
 
 def test_app_invalid_tube_does_not_poison_the_member_angle():
@@ -538,9 +540,7 @@ def test_app_objective_matches_reported_chord_cap():
 
 
 def test_app_zero_torsion_does_not_constrain_the_shear_band():
-    # Workflow finding: a companion with ZERO load must not constrain the member
-    # angle -- torsion enabled with TEd = 0 and a narrow torsion band previously
-    # forced the shear angle into the intersection.
+    # A zero torsion action is skipped and therefore cannot constrain shear.
     at = _fresh()
     at.run()
     _run_member(
@@ -553,17 +553,11 @@ def test_app_zero_torsion_does_not_constrain_the_shear_band():
     r = at.session_state["results"]
     lk = r["shear"]["links"]
     assert lk["res"]["cot"] == pytest.approx(2.5)                # shear band governs
-    # Codex: the dead torsion companion (TEd = 0) must NOT be pinned to the shear
-    # angle -- it stays inside its own [1.0, 1.2] band at its own resistance-optimum,
-    # not reported at cot = 2.5 (which the user excluded for torsion).
-    t = r["torsion"]
-    assert 1.0 - 1e-9 <= t["cot"] <= 1.2 + 1e-9
-    assert t["theta_mode"] == "resistance"
+    assert "torsion" not in r
 
 
 def test_app_dead_shear_companion_stays_in_its_own_band():
-    # Mirror of the T=0 case: shear links enabled but VEd = 0 while torsion is live.
-    # The dead links must not be pinned to the torsion-driven angle outside their band.
+    # Mirror of the T=0 case: zero shear is skipped while torsion remains live.
     at = _fresh()
     at.run()
     _run_member(
@@ -575,9 +569,9 @@ def test_app_dead_shear_companion_stays_in_its_own_band():
         shear_band=(2.3, 2.5),
         torsion_band=(1.0, 1.2),
     )
-    lk = at.session_state["results"]["shear"]["links"]
-    assert 2.3 - 1e-9 <= lk["res"]["cot"] <= 2.5 + 1e-9          # own band, not ~1.1
-    assert lk["theta_mode"] == "resistance"
+    r = at.session_state["results"]
+    assert "shear" not in r
+    assert 1.0 - 1e-9 <= r["torsion"]["cot"] <= 1.2 + 1e-9
 
 
 def test_app_infinite_bending_util_does_not_poison_the_member_angle():
@@ -641,11 +635,8 @@ def test_app_combined_angle_minimises_the_dkna_governing_sum():
         assert dk_star < dk_pin, f"cot*={cot_star} dkna*={dk_star} !< pin {pin}: {dk_pin}"
 
 
-def test_app_combined_transverse_label_uses_member_angle_when_shear_dead():
-    # Focused review: with VEd = 0 and live torsion the links are de-pinned to their
-    # own band, so the shared-stirrup transverse check must be LABELLED with the member
-    # angle its numbers actually use (the 6.29 interaction cot), not the links' own
-    # resistance-optimum cot -- otherwise the reported angle contradicts the numbers.
+def test_app_combined_is_skipped_when_shear_is_zero():
+    # VEd = 0 disables the shear and dependent combined checks for this case.
     at = _fresh()
     at.run()
     _run_member(
@@ -657,30 +648,22 @@ def test_app_combined_transverse_label_uses_member_angle_when_shear_dead():
         torsion_band=(1.0, 1.4),
     )
     r = at.session_state["results"]
-    tv = r["combined"]["transverse"]
-    assert tv["valid"]
-    assert tv["cot"] == pytest.approx(r["torsion"]["interaction"]["cot"])
-    assert tv["cot"] < 1.5                                        # torsion angle, not 2.5
-    assert r["shear"]["links"]["res"]["cot"] == pytest.approx(2.5)  # links de-pinned
+    assert "shear" not in r
+    assert "combined" not in r
+    assert "torsion" in r
 
 
-def test_app_no_load_with_combined_keeps_resistance_mode():
-    # Workflow finding: with V = 0 and T = 0 the constant DK NA term must not defeat
-    # the documented no-load fallback (capacities at the resistance-max angles).
+def test_app_no_transverse_load_skips_capacity_and_combined_checks():
+    # VEd = TEd = 0 means neither transverse check is evaluated for this case.
     at = _fresh()
     at.run()
     _run_member(at, mx=100.0, v=0.0, t=0.0)
-    lk = at.session_state["results"]["shear"]["links"]
-    assert lk["theta_mode"] == "resistance"
-    assert lk["res"]["cot"] == pytest.approx(2.5)
-    # Codex: the no-load fallback (theta_mode == "resistance") must NOT be labelled as
-    # disjoint bands -- the bands overlap fine here; there is simply no load to optimise.
-    ch = lk["chord"]
-    assert ch is not None and ch["valid"] and ch["theta_mode"] == "resistance"
+    r = at.session_state["results"]
+    assert "shear" not in r
+    assert "torsion" not in r
+    assert "combined" not in r
     _select_view(at, "M-V-T Combined")
-    caps = " ".join(cap.value for cap in at.caption)
-    assert "do not overlap" not in caps
-    assert "No shear or torsion is acting" in caps
+    assert any("VEd and TEd are zero" in item.value for item in at.info)
 
 
 def test_app_combined_longitudinal_matches_shear_chord():

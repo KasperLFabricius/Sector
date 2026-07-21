@@ -326,8 +326,16 @@ def legacy_scalars_from_tables(tables: Mapping | None) -> dict:
 def overlay_legacy_head(value, key: str, scalars: Mapping | None) -> pd.DataFrame:
     """Update only the first migrated row while preserving any later rows."""
     key = _kind(key)
+    scalars = scalars or {}
     frame = normalise_table(value, key)
-    legacy = tables_from_legacy_scalars(scalars)[key].iloc[0]
+    legacy = tables_from_legacy_scalars(scalars)[key].iloc[0].copy()
+    # Migration defaults a genuinely absent historical identifier to PL/EL-01.
+    # A mounted text widget is different: if its key is present and the engineer
+    # deliberately clears it, preserve the blank so required-name validation can
+    # block calculation instead of silently restoring a default.
+    name_key = "pl_case_id" if key == PLASTIC_TABLE_KEY else "el_case_id"
+    if name_key in scalars:
+        legacy[NAME] = _text(scalars.get(name_key))
     if frame.empty:
         return normalise_table([legacy.to_dict()], key)
     for column in TABLE_COLUMNS[key]:

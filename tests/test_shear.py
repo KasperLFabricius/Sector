@@ -484,7 +484,12 @@ def test_app_shear_bw_override_is_used():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    _set_and_click(at, "calculate", ("number_input", "shear_bw", 250.0))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_bw", 250.0),
+        ("number_input", "shear_V", 100.0),
+    )
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     assert sh["bw"] == pytest.approx(250.0)
@@ -561,7 +566,12 @@ def test_app_shear_links_use_the_plastic_lever_arm():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    _set_and_click(at, "calculate", ("checkbox", "shear_links", True))
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 100.0),
+    )
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     lk = sh["links"]
@@ -584,7 +594,12 @@ def test_app_shear_links_flag_out_of_code_bounds():
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
     at.checkbox(key="shear_links").set_value(True).run()
-    _set_and_click(at, "calculate", ("number_input", "shear_cot_max", 3.0))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_cot_max", 3.0),
+        ("number_input", "shear_V", 100.0),
+    )
     assert not at.exception
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["out_of_limits"] is True
@@ -605,7 +620,12 @@ def test_app_shear_uses_final_material_factors():
         ("number_input", "mild_gamma_y", 1.35),
         ("checkbox", "shear_on", True),
     )
-    _set_and_click(at, "calculate", ("checkbox", "shear_links", True))
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 100.0),
+    )
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     assert sh["res"]["gamma_c"] == pytest.approx(1.80)
@@ -645,7 +665,10 @@ def test_app_shear_2023_fyd_from_yield_parameters():
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
-        at, "calculate", ("selectbox", "shear_method", codes.EC2_2023.label)
+        at,
+        "calculate",
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("number_input", "shear_V", 50.0),
     )
     sh = at.session_state["results"]["shear"]
     fytk = at.session_state["mild_fytk"]
@@ -663,6 +686,7 @@ def test_app_shear_2023_skips_links_with_a_note():
         "calculate",
         ("selectbox", "shear_method", codes.EC2_2023.label),
         ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 50.0),
     )
     assert not at.exception
     assert "links" not in at.session_state["results"]["shear"]   # not for 2023

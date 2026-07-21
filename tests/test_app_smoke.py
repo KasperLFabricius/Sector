@@ -1610,6 +1610,80 @@ def test_v4_case_tables_follow_current_controls_and_preserve_later_rows():
     assert not at.exception
 
 
+def test_v4_multiple_case_rows_each_run_through_verified_solvers():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Both"))
+    plastic = at.session_state[load_cases.PLASTIC_TABLE_KEY]
+    elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY]
+    first_plastic_name = str(plastic.loc[0, "name"])
+    first_elastic_name = str(elastic.loc[0, "name"])
+    at.session_state[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+        *plastic.to_dict("records"),
+        {
+            "name": "PL-SECOND",
+            "description": "Second plastic row",
+            "n_ed_kn": -100.0,
+            "mx_ed_knm": 75.0,
+            "my_ed_knm": -10.0,
+        },
+    ], load_cases.PLASTIC_TABLE_KEY)
+    at.session_state[load_cases.ELASTIC_TABLE_KEY] = load_cases.normalise_table([
+        *elastic.to_dict("records"),
+        {
+            "name": "EL-SECOND",
+            "description": "Second elastic row",
+            "mx_long_ed_knm": 35.0,
+            "mx_short_ed_knm": 10.0,
+            "check_stress": True,
+            "check_crack_width": False,
+        },
+    ], load_cases.ELASTIC_TABLE_KEY)
+    at.run()
+
+    _calculate(at)
+    results = at.session_state["results"]
+
+    assert [entry["name"] for entry in results["plastic_cases"]] == [
+        first_plastic_name, "PL-SECOND"
+    ]
+    assert [entry["name"] for entry in results["elastic_cases"]] == [
+        first_elastic_name, "EL-SECOND"
+    ]
+    assert all("plastic" in entry["results"]
+               for entry in results["plastic_cases"])
+    assert all("elastic" in entry["results"]
+               for entry in results["elastic_cases"])
+    assert results["plastic_cases"][1]["results"]["plastic"]["applied"] == (
+        75.0, -10.0
+    )
+    assert not at.exception
+
+
+def test_invalid_hidden_case_row_is_reported_before_calculation():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Both"))
+    plastic = at.session_state[load_cases.PLASTIC_TABLE_KEY]
+    elastic_name = str(
+        at.session_state[load_cases.ELASTIC_TABLE_KEY].loc[0, "name"]
+    )
+    at.session_state[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+        *plastic.to_dict("records"),
+        {"name": elastic_name.swapcase(), "mx_ed_knm": 20.0},
+    ], load_cases.PLASTIC_TABLE_KEY)
+    at.run()
+
+    _calculate(at)
+
+    assert any("duplicated" in error.value for error in at.error)
+    assert not at.exception
+
+
 def test_fresh_session_project_captures_default_section():
     # The download must reflect the live section even on a fresh session (the panel
     # is filled after the tables are seeded), not an empty one.
@@ -2398,7 +2472,7 @@ def test_calculate_requires_active_action_set_identifiers():
     _set_and_click(at, "calculate", ("text_input", "pl_case_id", ""))
     assert "results" not in at.session_state
     assert any(
-        "Plastic action-set ID is required" in error.value
+        "At least one Plastic case is required" in error.value
         for error in at.error
     )
 

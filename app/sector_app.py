@@ -27,6 +27,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
+import case_analysis  # noqa: E402
 import load_cases  # noqa: E402
 import project_io  # noqa: E402
 import result_presentation as presentation  # noqa: E402
@@ -1244,7 +1245,11 @@ def _generate_report(inp):
                                            "resolve any void or reinforcement error) "
                                            "before generating a report.")
         st.rerun()
-    case_errors = presentation.required_action_set_errors(inp)
+    case_errors = (
+        case_analysis.validation_errors(inp)
+        if "plastic_cases" in inp or "elastic_cases" in inp
+        else presentation.required_action_set_errors(inp)
+    )
     if case_errors:
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
@@ -2531,6 +2536,40 @@ def build_inputs(host=st):
         extent = 0.75 * max(max(xs) - min(xs), max(ys) - min(ys), 1e-6)
     else:
         extent = 1.0
+    # During the staged table migration, route the existing one-row controls through
+    # the canonical case engine. Until native table widgets replace this overlay,
+    # the visible scalar widgets remain authoritative for row 1 while later v4 rows
+    # loaded from a project are preserved.
+    case_scalars = {
+        "pl_case_id": pl_case_id,
+        "pl_case_type": pl_case_type,
+        "pl_case_source": pl_case_source,
+        "pl_P": P_pl,
+        "pl_Mx": Mx_pl,
+        "pl_My": My_pl,
+        "shear_V": shear_V,
+        "torsion_T": torsion_T,
+        "el_case_id": el_case_id,
+        "el_case_type": el_case_type,
+        "el_case_source": el_case_source,
+        "el_long_P": P_el_l,
+        "el_long_Mx": Mx_el_l,
+        "el_long_My": My_el_l,
+        "el_short_P": P_el_s,
+        "el_short_Mx": Mx_el_s,
+        "el_short_My": My_el_s,
+        "sls_cw": sls_cw,
+        "sls_conc_limit_pct": sls_conc_limit_pct,
+        "sls_steel_limit_pct": sls_steel_limit_pct,
+        "sls_pre_limit_pct": sls_pre_limit_pct,
+    }
+    case_frames = {}
+    for case_key in load_cases.CASE_TABLE_KEYS:
+        frame = load_cases.overlay_legacy_head(
+            st.session_state.get(case_key), case_key, case_scalars
+        )
+        st.session_state[case_key] = frame.copy(deep=True)
+        case_frames[case_key] = load_cases.active_table(frame, case_key)
     # The geometry signature is the point tables themselves (the source of truth),
     # so editing a point marks the results stale; Quick Section inputs do not, as
     # they only prefill on demand.
@@ -2543,9 +2582,11 @@ def build_inputs(host=st):
     shared_sig = geom_sig + _get(_SHARED_SIG_KEYS)
     plastic_sig = shared_sig + _get(_PLASTIC_SIG_KEYS)
     elastic_sig = shared_sig + _get(_ELASTIC_SIG_KEYS)
+    capacity_sig = _get(_SHEAR_SIG_KEYS)
+    plastic_case_context_sig = plastic_sig + capacity_sig
     sig = (
         plastic_sig + elastic_sig
-        + _get(_SHEAR_SIG_KEYS) + _get(_PROVENANCE_SIG_KEYS)
+        + capacity_sig + _get(_PROVENANCE_SIG_KEYS)
     )
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
@@ -2591,6 +2632,8 @@ def build_inputs(host=st):
                     "type": el_case_type,
                     "source": str(el_case_source).strip(),
                 },
+                plastic_cases=case_frames[load_cases.PLASTIC_TABLE_KEY],
+                elastic_cases=case_frames[load_cases.ELASTIC_TABLE_KEY],
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 check_util=check_util,
@@ -2627,7 +2670,8 @@ def build_inputs(host=st):
                 mode=mode, extent=extent,
                 label_scale=label_scale, label_min_gap=label_min_gap,
                 signature=sig,
-                plastic_sig=plastic_sig, elastic_sig=elastic_sig)
+                plastic_sig=plastic_sig, elastic_sig=elastic_sig,
+                plastic_case_context_sig=plastic_case_context_sig)
 
 
 # ---------------------------------------------------------------------------
@@ -2719,8 +2763,8 @@ _shear_face_mrd = capacity.shear_face_mrd
 _tube_torsion = capacity.tube_torsion
 
 
-def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
-    """Run the selected analyses for ``inp`` and return the results payload.
+def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
+    """Run one Plastic/Elastic action pair and return the results payload.
 
     ``reuse_plastic`` / ``reuse_elastic`` let the caller pass a previously computed
     plastic / elastic sub-result whose inputs are unchanged (its split signature
@@ -3032,6 +3076,44 @@ def run_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         )
     _run_capacity_checks(inp, out)
     return out
+
+
+def run_analysis(
+    inp,
+    *,
+    reuse_plastic=None,
+    reuse_elastic=None,
+    reuse_plastic_cases=None,
+    reuse_plastic_bending_cases=None,
+    reuse_elastic_cases=None,
+):
+    """Run legacy scalar inputs or every row in the canonical case tables.
+
+    The one-case compatibility path remains available for manual examples and
+    older callers. Current app inputs include typed tables, so each named row is
+    mapped onto the verified single-case calculation above. Shared-context cache
+    gating remains the caller's responsibility; matching rows are then reused by
+    name and exact action signature.
+    """
+    if inp["section"] is None or inp.get("void_error") or inp.get("steel_error"):
+        return {}
+    if "plastic_cases" not in inp and "elastic_cases" not in inp:
+        return _run_single_analysis(
+            inp,
+            reuse_plastic=reuse_plastic,
+            reuse_elastic=reuse_elastic,
+        )
+
+    def _runner(case_inp, *, reuse_plastic=None):
+        return _run_single_analysis(case_inp, reuse_plastic=reuse_plastic)
+
+    return case_analysis.run_case_tables(
+        inp,
+        _runner,
+        reuse_plastic=reuse_plastic_cases,
+        reuse_plastic_bending=reuse_plastic_bending_cases,
+        reuse_elastic=reuse_elastic_cases,
+    )
 
 
 def _run_capacity_checks(inp, out):
@@ -4333,6 +4415,8 @@ def shear_view(inp, results):
         if not inp.get("shear_on"):
             st.info("Enable 'Check shear capacity' in Analysis settings, "
                     "then press Calculate.")
+        elif abs(float(inp.get("shear_V", 0.0))) <= 0.0:
+            st.info("VEd = 0 for this action set; shear is not evaluated.")
         else:
             st.info("Press Calculate to run the shear check.")
         return
@@ -4610,6 +4694,8 @@ def torsion_view(inp, results):
         if not inp.get("torsion_on"):
             st.info("Enable 'Check torsion capacity' in Analysis settings, "
                     "then press Calculate.")
+        elif abs(float(inp.get("torsion_T", 0.0))) <= 0.0:
+            st.info("TEd = 0 for this action set; torsion is not evaluated.")
         else:
             st.info("Press Calculate to run the torsion check.")
         return
@@ -4833,8 +4919,24 @@ def combined_view(inp, results):
             st.info("Enable 'Check combined M-V-T' in Analysis settings "
                     "(with Plastic, the shear check and the torsion check), then "
                     "press Calculate.")
+        elif (
+            abs(float(inp.get("shear_V", 0.0))) <= 0.0
+            or abs(float(inp.get("torsion_T", 0.0))) <= 0.0
+        ):
+            zero = []
+            if abs(float(inp.get("shear_V", 0.0))) <= 0.0:
+                zero.append("VEd")
+            if abs(float(inp.get("torsion_T", 0.0))) <= 0.0:
+                zero.append("TEd")
+            st.info(
+                "Combined M-V-T is not evaluated because "
+                + " and ".join(zero)
+                + (" are" if len(zero) > 1 else " is")
+                + " zero for this action set."
+            )
         else:
-            st.info("Press Calculate to run the combined check.")
+            st.info("Enable Plastic utilisation, shear and torsion, then press "
+                    "Calculate to run the combined check.")
         return
     c = results["combined"]
     if not c["valid"]:
@@ -5060,7 +5162,11 @@ def _analysis_workspace(inp):
         "Calculate", type="primary", key="calculate", width="stretch",
         help="Run the selected analysis for the current inputs.",
     )
-    case_errors = presentation.required_action_set_errors(inp)
+    case_errors = (
+        case_analysis.validation_errors(inp)
+        if "plastic_cases" in inp or "elastic_cases" in inp
+        else presentation.required_action_set_errors(inp)
+    )
     if calc and case_errors:
         st.session_state["_case_error"] = "; ".join(case_errors) + "."
         calc = False
@@ -5081,12 +5187,36 @@ def _analysis_workspace(inp):
             if st.session_state.get("result_elastic_sig") == inp["elastic_sig"]
             else None
         )
+        reuse_plastic_cases = (
+            prev.get("plastic_cases")
+            if st.session_state.get("result_plastic_case_context_sig")
+            == inp["plastic_case_context_sig"]
+            else None
+        )
+        reuse_elastic_cases = (
+            prev.get("elastic_cases")
+            if st.session_state.get("result_elastic_sig") == inp["elastic_sig"]
+            else None
+        )
+        reuse_plastic_bending_cases = (
+            prev.get("plastic_cases")
+            if st.session_state.get("result_plastic_sig") == inp["plastic_sig"]
+            else None
+        )
         st.session_state["results"] = run_analysis(
-            inp, reuse_plastic=reuse_plastic, reuse_elastic=reuse_elastic
+            inp,
+            reuse_plastic=reuse_plastic,
+            reuse_elastic=reuse_elastic,
+            reuse_plastic_cases=reuse_plastic_cases,
+            reuse_plastic_bending_cases=reuse_plastic_bending_cases,
+            reuse_elastic_cases=reuse_elastic_cases,
         )
         st.session_state["result_sig"] = inp["signature"]
         st.session_state["result_plastic_sig"] = inp["plastic_sig"]
         st.session_state["result_elastic_sig"] = inp["elastic_sig"]
+        st.session_state["result_plastic_case_context_sig"] = inp[
+            "plastic_case_context_sig"
+        ]
         if st.session_state["results"]:
             st.session_state["calculation_record"] = {
                 "performed_at_utc": datetime.now(timezone.utc).isoformat(
