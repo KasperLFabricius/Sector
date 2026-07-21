@@ -2397,6 +2397,30 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     ]
 
 
+def test_tracked_input_tabs_survive_page_and_auxiliary_view_lifecycle():
+    # Both tracked selections are session preferences, not project inputs. Keep
+    # them through runs where the tab widgets are absent and Streamlit cleans up
+    # widget-owned state.
+    at = _fresh()
+    at.run()
+    _goto_material_tab(at, "Prestressing steel")
+    outer = f"3 {chr(0x00B7)} Material parameters"
+    assert at.session_state["_input_tab"] == outer
+    assert at.session_state["_material_tab"] == "Prestressing steel"
+
+    _goto_page(at, "Analysis")
+    _goto_page(at, "Inputs")
+    assert at.session_state["_input_tab"] == outer
+    assert at.session_state["_material_tab"] == "Prestressing steel"
+
+    _open_qs(at)
+    at.button(key="qs_back").click().run()
+    assert at.session_state["_main_page"] == "Inputs"
+    assert at.session_state["_input_tab"] == outer
+    assert at.session_state["_material_tab"] == "Prestressing steel"
+    assert not at.exception
+
+
 def test_analysis_defaults_to_results_overview_and_excludes_input_previews():
     at = _fresh()
     at.run()

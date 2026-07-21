@@ -415,12 +415,12 @@ def manual_blocks() -> list:
        "Elastic or Both, and toggle the crack-width check.\n"
        "4. **Enter the loads.** Give each solver's axial force and moments, with "
        "the project action-set ID and optional classification.\n"
-       "5. **Calculate.** Read the results in the *View* dropdown: the section, the "
-       "material-law diagrams, the plastic envelope and the elastic stresses.\n"
+       "5. **Calculate.** Open *Analysis* and use the *View* dropdown for the "
+       "results overview, plastic envelope and elastic stresses.\n"
        "6. **Export.** Generate the PDF report or download the project file.")
     fig(fig_beam_section, "The rectangular worked example as Sector draws it: the "
-        "concrete corners and the bars are numbered. Turn on the point labels to "
-        "see the numbering on your own section.")
+        "concrete corners and bars are numbered. Use the *Display* controls beside "
+        "your Section inputs to adjust label size and spacing.")
 
     h1("The worked examples")
     md("Two sections are threaded through this manual. Every worked derivation in "

@@ -98,6 +98,8 @@ def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     text = "\n".join(str(block) for block in blocks)
     assert "Material laws" in text
     assert "Stress-Strain diagrams" not in text
+    assert "the section, the material-law diagrams" not in text
+    assert "Open *Analysis* and use the *View* dropdown" in text
     for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{sw}/s",
                  "TOTAL", "LONG", "DIF", "RST1", "F_c"):
         assert term in text
