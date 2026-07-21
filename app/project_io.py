@@ -149,17 +149,23 @@ def _obj_to_table(obj) -> pd.DataFrame:
 
 def _canonical_inputs(tables: dict, scalars: dict) -> dict:
     """Return the JSON-native input payload used by both save and hash checks."""
+    has_load_inputs = (
+        any(key in tables for key in load_cases.CASE_TABLE_KEYS)
+        or any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
+    )
     scalar_payload = {
-        k: _scalar(scalars[k]) for k in SCALAR_KEYS if k in scalars
+        k: _scalar(scalars[k])
+        for k in SCALAR_KEYS
+        if (
+            k in scalars
+            and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
+        )
     }
     content = {
         "tables": {k: _table_to_obj(tables.get(k)) for k in TABLE_KEYS},
         "scalars": scalar_payload,
     }
-    if (
-        any(key in tables for key in load_cases.CASE_TABLE_KEYS)
-        or any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
-    ):
+    if has_load_inputs:
         legacy = load_cases.tables_from_legacy_scalars(scalars)
         content["load_cases"] = {
             payload_key: load_cases.table_records(
@@ -167,20 +173,6 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             )
             for table_key, payload_key in _CASE_PAYLOAD_KEYS.items()
         }
-        # During the staged UI migration, v4 files retain the former scalar API.
-        # If at least one canonical table is already authoritative, seed missing
-        # compatibility fields from the canonical/default first rows. This makes
-        # save -> load -> hash stable for table-native callers without overwriting
-        # lossless legacy classification/source fields supplied by the current
-        # interface.
-        if (
-            any(key in tables for key in load_cases.CASE_TABLE_KEYS)
-            and not any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
-        ):
-            compatibility = load_cases.legacy_scalars_from_tables(tables)
-            for key, value in compatibility.items():
-                if key in SCALAR_KEYS:
-                    scalar_payload.setdefault(key, _scalar(value))
     return content
 
 
@@ -389,12 +381,5 @@ def parse_project(text: str):
             # Build migrated rows only after every historical scalar migration,
             # especially the pre-v2 axial-force sign conversion above.
             case_tables = load_cases.tables_from_legacy_scalars(scalars)
-    else:
-        # During the staged migration old scalar controls remain operational. Files
-        # written by that UI contain the transitional keys already; preserve them
-        # losslessly. A table-native file omits them, so expose its first row through
-        # the compatibility adapter for older app revisions.
-        if not any(key in raw_scalars for key in load_cases.LEGACY_SCALAR_KEYS):
-            scalars.update(load_cases.legacy_scalars_from_tables(case_tables))
     tables.update(case_tables)
     return tables, scalars

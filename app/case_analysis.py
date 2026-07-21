@@ -43,6 +43,18 @@ def _rows(value, key: str) -> list[dict]:
     return [_case_record(row, key) for row in frame.to_dict("records")]
 
 
+def case_records(inp: Mapping, family: str) -> list[dict]:
+    """Return canonical records for one solver family for presentation."""
+    keys = {
+        "plastic": load_cases.PLASTIC_TABLE_KEY,
+        "elastic": load_cases.ELASTIC_TABLE_KEY,
+    }
+    if family not in keys:
+        raise ValueError(f"unknown case family: {family}")
+    key = keys[family]
+    return _rows(inp.get(f"{family}_cases"), key)
+
+
 def case_signature(record: Mapping, key: str) -> tuple:
     """Stable per-row signature used only after shared inputs have matched."""
     return tuple(record[column] for column in load_cases.TABLE_COLUMNS[key])
@@ -86,6 +98,9 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
         My_pl=float(record["my_ed_knm"]),
         shear_V=abs(v_ed),
         torsion_T=abs(t_ed),
+        shear_requested=bool(base.get("shear_on")),
+        torsion_requested=bool(base.get("torsion_on")),
+        combined_requested=bool(base.get("combined_on")),
         shear_on=shear_live,
         torsion_on=torsion_live,
         combined_on=(
@@ -99,16 +114,19 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
     """Map one Elastic row and its per-case acceptance selections."""
     out = dict(base)
     check_stress = bool(record["check_stress"])
+    check_crack_width = bool(record["check_crack_width"])
     out.update(
         mode="Elastic",
         elastic_case=_metadata(record),
+        check_stress=check_stress,
+        check_crack_width=check_crack_width,
         P_el_l=float(record["n_long_ed_kn"]),
         Mx_el_l=float(record["mx_long_ed_knm"]),
         My_el_l=float(record["my_long_ed_knm"]),
         P_el_s=float(record["n_short_ed_kn"]),
         Mx_el_s=float(record["mx_short_ed_knm"]),
         My_el_s=float(record["my_short_ed_knm"]),
-        sls_cw=bool(record["check_crack_width"]),
+        sls_cw=check_crack_width,
         sls_conc_limit_pct=(
             float(base.get("sls_conc_limit_pct", 0.0)) if check_stress else 0.0
         ),

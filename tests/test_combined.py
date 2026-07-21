@@ -14,6 +14,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 APP = str(ROOT / "app" / "sector_app.py")
 
+from app_case_inputs import apply_case_changes  # noqa: E402
+
 
 # -- engine -----------------------------------------------------------------
 
@@ -170,6 +172,9 @@ def _select_view(at, value):
 
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    changes, case_changed = apply_case_changes(at, changes)
+    if case_changed:
+        _goto_page(at, "Inputs")
     if changes:
         widget_type, key, _value = changes[0]
         try:

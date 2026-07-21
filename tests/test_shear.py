@@ -19,6 +19,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works standalone
 APP = str(ROOT / "app" / "sector_app.py")
 
+from app_case_inputs import apply_case_changes, first_case_value  # noqa: E402
+
 
 # -- design-code shear NDPs -------------------------------------------------
 
@@ -437,6 +439,9 @@ def _select_view(at, value):
 
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    changes, case_changed = apply_case_changes(at, changes)
+    if case_changed:
+        _goto_page(at, "Inputs")
     if changes:
         widget_type, key, _value = changes[0]
         try:
@@ -509,11 +514,9 @@ def test_app_shear_view_renders_and_shows_utilisation():
 
 
 def test_app_shear_axial_input_enabled_in_elastic_mode():
-    # Codex P2: in Elastic-only mode the shear sigma_cp still uses the plastic axial
-    # force, so that input must stay enabled when the shear check is on (else the user
-    # cannot enter the Plastic action-set force the result depends on). A compression
-    # axial (negative
-    # N, tension-positive) must raise VRd,c through sigma_cp.
+    # In Elastic-only mode the Plastic case table remains editable because its axial
+    # force drives shear sigma_cp. Compression (negative N, tension-positive) must
+    # raise VRd,c through sigma_cp.
     at = _fresh()
     at.run()
     _set(
@@ -521,7 +524,7 @@ def test_app_shear_axial_input_enabled_in_elastic_mode():
         ("radio", "mode", "Elastic"),
         ("checkbox", "shear_on", True),
     )
-    assert not at.number_input(key="pl_P").disabled        # axial input available
+    assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     _set_and_click(at, "calculate", ("number_input", "shear_V", 50.0))
     assert not at.exception
     base = at.session_state["results"]["shear"]["res"]["vrd_c"]
@@ -695,24 +698,28 @@ def test_app_shear_2023_skips_links_with_a_note():
 
 
 def test_app_shear_is_saved_and_restored():
-    # The shear inputs are persisted (SCALAR_KEYS); a project round trip keeps them.
+    # The check settings remain scalars; the row-specific action is canonical table
+    # data. A project round trip must preserve both without compatibility scalars.
     import project_io
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    at.number_input(key="shear_V").set_value(123.0).run()
+    _set(at, ("number_input", "shear_V", 123.0))
     at.selectbox(key="shear_axis").set_value("Horizontal shear (bending about y)").run()
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
-    assert scalars["shear_on"] is True and scalars["shear_V"] == 123.0
+    tables = {k: at.session_state[k] for k in project_io.PROJECT_TABLE_KEYS
+              if k in at.session_state}
+    assert scalars["shear_on"] is True and "shear_V" not in scalars
+    assert first_case_value(at, "shear_V") == pytest.approx(123.0)
 
     at2 = _fresh()
     at2.run()
-    at2.session_state["_pending_project"] = project_io.dump_project({}, scalars)
+    at2.session_state["_pending_project"] = project_io.dump_project(tables, scalars)
     at2.run()
     assert not at2.exception
     assert at2.session_state["shear_on"] is True
-    assert at2.session_state["shear_V"] == 123.0
+    assert first_case_value(at2, "shear_V") == pytest.approx(123.0)
     assert at2.session_state["shear_axis"] == "Horizontal shear (bending about y)"
 
 

@@ -749,6 +749,150 @@ _PROJECT_TABLES = (
     ("tendons_base", "ed_tendons", _REBAR_COLS),
 )
 
+_CASE_EDITOR_KEYS = {
+    load_cases.PLASTIC_TABLE_KEY: "plastic_cases_editor",
+    load_cases.ELASTIC_TABLE_KEY: "elastic_cases_editor",
+}
+
+
+def _reseed_case_table(key, value):
+    """Replace one canonical load table and reset its native editor seed."""
+    st.session_state[key] = load_cases.normalise_table(value, key)
+    st.session_state.pop(_CASE_EDITOR_KEYS[key], None)
+    st.session_state.pop(f"_{key}_editor_seed", None)
+
+
+def _case_column_config(key):
+    """Readable engineering labels and strict types for one load-case editor."""
+    text = {
+        load_cases.NAME: st.column_config.TextColumn(
+            "Name *", help="Required and unique across both case tables.",
+            required=True, pinned=True, width="small",
+        ),
+        load_cases.DESCRIPTION: st.column_config.TextColumn(
+            "Description", help="Project-defined combination or case description.",
+            pinned=True, width="medium",
+        ),
+    }
+
+    def force(label, help_text):
+        return st.column_config.NumberColumn(
+            label, help=help_text, format="%.3f", required=True,
+            min_value=-100000.0, max_value=100000.0, step=10.0,
+            width="small",
+        )
+
+    if key == load_cases.PLASTIC_TABLE_KEY:
+        return {
+            **text,
+            "n_ed_kn": force("N_Ed [kN]", "Axial force; tension is positive."),
+            "mx_ed_knm": force("Mx_Ed [kNm]", "Moment about the x-axis."),
+            "my_ed_knm": force("My_Ed [kNm]", "Moment about the y-axis."),
+            "v_ed_kn": force(
+                "V_Ed [kN]", "Signed shear action; zero skips shear for this case."
+            ),
+            "t_ed_knm": force(
+                "T_Ed [kNm]", "Signed torsion action; zero skips torsion for this case."
+            ),
+        }
+    return {
+        **text,
+        "n_long_ed_kn": force("N_Ed,long [kN]", "Sustained axial force; tension is positive."),
+        "mx_long_ed_knm": force("Mx_Ed,long [kNm]", "Sustained moment about x."),
+        "my_long_ed_knm": force("My_Ed,long [kNm]", "Sustained moment about y."),
+        "n_short_ed_kn": force("N_Ed,short [kN]", "Instantaneous axial-force part."),
+        "mx_short_ed_knm": force("Mx_Ed,short [kNm]", "Instantaneous moment part about x."),
+        "my_short_ed_knm": force("My_Ed,short [kNm]", "Instantaneous moment part about y."),
+        "check_stress": st.column_config.CheckboxColumn(
+            "Stress limits", help="Assess this case against the global stress limits.",
+            default=True, width="small",
+        ),
+        "check_crack_width": st.column_config.CheckboxColumn(
+            "Crack width", help="Assess crack width for this case.",
+            default=False, width="small",
+        ),
+    }
+
+
+def _case_table_editor(box, key):
+    """Render one native editor while keeping its input seed immutable.
+
+    The editor result is written to the canonical base DataFrame, but the widget
+    continues to receive a separate frozen seed for its mounted lifetime. This
+    avoids the Streamlit data-editor feedback loop where assigning the returned
+    frame back to the frame used as widget input can drop every other edit.
+    """
+    editor_key = _CASE_EDITOR_KEYS[key]
+    seed_key = f"_{key}_editor_seed"
+    if editor_key not in st.session_state or seed_key not in st.session_state:
+        st.session_state[seed_key] = load_cases.normalise_table(
+            st.session_state.get(key), key
+        )
+    seed = load_cases.normalise_table(st.session_state[seed_key], key)
+    edited = box.data_editor(
+        seed,
+        key=editor_key,
+        num_rows="dynamic",
+        hide_index=True,
+        width="stretch",
+        height="auto",
+        column_config=_case_column_config(key),
+        column_order=load_cases.TABLE_COLUMNS[key],
+    )
+    current = load_cases.normalise_table(edited, key)
+    st.session_state[key] = current.copy(deep=True)
+    return load_cases.active_table(current, key)
+
+
+def _load_case_editors(box):
+    """Render and return the authoritative Plastic and Elastic case tables."""
+    legacy = {
+        key: st.session_state[key]
+        for key in load_cases.LEGACY_SCALAR_KEYS
+        if key in st.session_state
+    }
+    defaults = load_cases.tables_from_legacy_scalars(legacy)
+    for key in load_cases.CASE_TABLE_KEYS:
+        if key not in st.session_state:
+            st.session_state[key] = defaults[key]
+
+    box.markdown("**Plastic and capacity cases**")
+    box.caption(
+        "One row per named case. N, M, V and T retain their signs; a zero V_Ed or "
+        "T_Ed skips that check for the row. Paste rectangular ranges directly."
+    )
+    plastic = _case_table_editor(box, load_cases.PLASTIC_TABLE_KEY)
+    box.markdown("**Elastic cases**")
+    box.caption(
+        "Long and short action parts share the global creep coefficient below. "
+        "Select stress and crack-width acceptance independently for each row."
+    )
+    elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
+    return {
+        load_cases.PLASTIC_TABLE_KEY: plastic,
+        load_cases.ELASTIC_TABLE_KEY: elastic,
+    }
+
+
+def _case_table_signature(value, key):
+    """Stable hashable table content, including deterministic invalid sentinels."""
+    frame = load_cases.active_table(value, key)
+    rows = []
+    for record in frame.to_dict("records"):
+        row = []
+        for column in load_cases.TABLE_COLUMNS[key]:
+            cell = record[column]
+            if column in load_cases.NUMERIC_COLUMNS[key]:
+                number = float(cell)
+                cell = number if math.isfinite(number) else "<invalid>"
+            elif column in load_cases.FLAG_COLUMNS[key]:
+                cell = bool(cell)
+            else:
+                cell = str(cell)
+            row.append(cell)
+        rows.append(tuple(row))
+    return tuple(rows)
+
 # Input widgets are not rendered on the Analysis page. Streamlit consequently
 # removes their widget-owned keys at the end of that run, so keep a durable copy
 # outside the widget namespace and restore it before either page is rendered.
@@ -844,17 +988,15 @@ def _project_state():
     scalars = {
         key: st.session_state[key] if key in st.session_state else durable[key]
         for key in project_io.SCALAR_KEYS
-        if key in st.session_state or key in durable
-    }
-    # Until the table UI replaces the legacy scalar widgets, keep the first row in
-    # sync with those widgets while retaining any later rows already present in a
-    # v4 project. The next PR makes the tables directly editable and authoritative.
-    for key in load_cases.CASE_TABLE_KEYS:
-        frame = load_cases.overlay_legacy_head(
-            st.session_state.get(key), key, scalars
+        if (
+            key not in load_cases.LEGACY_SCALAR_KEYS
+            and (key in st.session_state or key in durable)
         )
-        st.session_state[key] = frame.copy(deep=True)
-        tables[key] = frame
+    }
+    for key in load_cases.CASE_TABLE_KEYS:
+        tables[key] = load_cases.normalise_table(
+            st.session_state.get(key), key
+        )
     return tables, scalars
 
 
@@ -1010,19 +1152,40 @@ def _apply_pending_project() -> None:
     except ValueError as exc:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
         return
+    # Parsing retains historical scalar loads for compatibility with non-UI callers,
+    # but the table-native app must not keep them in live or durable state. The
+    # migrated canonical tables above contain the same information.
+    scalars = {
+        key: value
+        for key, value in scalars.items()
+        if key not in load_cases.LEGACY_SCALAR_KEYS
+    }
+    for key in load_cases.LEGACY_SCALAR_KEYS:
+        st.session_state.pop(key, None)
     _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
+    # Missing load tables in a partial project must not inherit cases from the
+    # project that happened to be open before it. The Inputs page will seed its
+    # normal defaults when a table is genuinely absent.
+    for key in load_cases.CASE_TABLE_KEYS:
+        if key not in tables:
+            st.session_state.pop(key, None)
+            st.session_state.pop(_CASE_EDITOR_KEYS[key], None)
+            st.session_state.pop(f"_{key}_editor_seed", None)
     for key, df in tables.items():
         if key in load_cases.CASE_TABLE_KEYS:
-            st.session_state[key] = load_cases.normalise_table(df, key)
-            st.session_state.pop(key + "_ed", None)
+            _reseed_case_table(key, df)
             continue
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.
         _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
     for key, value in scalars.items():
         st.session_state[key] = value
-    durable = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
+    durable = {
+        key: value
+        for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
+        if key not in load_cases.LEGACY_SCALAR_KEYS
+    }
     durable.update(scalars)
     st.session_state[_INPUT_STATE_KEY] = durable
     # Keep each preset's change-marker in step with the loaded preset so the panel
@@ -1048,6 +1211,8 @@ def _apply_pending_project() -> None:
     # evidence belonging to the newly loaded section.
     for key in (
         "results", "result_sig", "result_plastic_sig", "result_elastic_sig",
+        "result_plastic_case_context_sig", "result_elastic_case_context_sig",
+        "result_plastic_bending_context_sig",
         "report_bytes", "report_signature", "report_filename", "report_generated_on",
     ):
         st.session_state.pop(key, None)
@@ -1700,15 +1865,13 @@ _SHARED_SIG_KEYS = (
     "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
     "mode",
 )
-_PLASTIC_SIG_KEYS = (
-    "pl_P", "pl_Mx", "pl_My", "v_min", "v_max", "v_inc",
+_PLASTIC_CONTEXT_SIG_KEYS = (
+    "v_min", "v_max", "v_inc",
     "pl_check_util", "pl_interaction",
 )
-_ELASTIC_SIG_KEYS = (
-    "el_long_P", "el_long_Mx", "el_long_My",
-    "el_short_P", "el_short_Mx", "el_short_My",
+_ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
-    "sls_cw", "sls_fctm", "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_fctm", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
 )
@@ -1731,12 +1894,9 @@ _SHEAR_SIG_KEYS = (
     "torsion_sub_b2", "torsion_sub_h2", "torsion_sub_b3", "torsion_sub_h3",
     "combined_on", "combined_method", "combined_mv_independent",
 )
-_PROVENANCE_SIG_KEYS = (
-    "pl_case_id", "pl_case_type", "pl_case_source",
-    "el_case_id", "el_case_type", "el_case_source",
+_CAPACITY_CONTEXT_SIG_KEYS = tuple(
+    key for key in _SHEAR_SIG_KEYS if key not in {"shear_V", "torsion_T"}
 )
-
-
 def build_inputs(host=st):
     """Render staged, full-width input tabs and return the analysis payload.
 
@@ -1781,6 +1941,40 @@ def build_inputs(host=st):
                            "run the two.")
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
+    # Load tables are rendered before the acceptance controls so their per-case
+    # checkboxes can enable the relevant crack-width settings in the same rerun.
+    case_frames = _load_case_editors(loads)
+    case_head = load_cases.legacy_scalars_from_tables(case_frames)
+    pl_case_id = case_head["pl_case_id"]
+    pl_case_type = case_head["pl_case_type"]
+    pl_case_source = ""
+    el_case_id = case_head["el_case_id"]
+    el_case_type = case_head["el_case_type"]
+    el_case_source = ""
+    P_pl = case_head["pl_P"]
+    Mx_pl = case_head["pl_Mx"]
+    My_pl = case_head["pl_My"]
+    shear_V = case_head["shear_V"]
+    torsion_T = case_head["torsion_T"]
+    P_el_l = case_head["el_long_P"]
+    Mx_el_l = case_head["el_long_Mx"]
+    My_el_l = case_head["el_long_My"]
+    P_el_s = case_head["el_short_P"]
+    Mx_el_s = case_head["el_short_Mx"]
+    My_el_s = case_head["el_short_My"]
+    sls_cw = bool(
+        not case_frames[load_cases.ELASTIC_TABLE_KEY].empty
+        and case_frames[load_cases.ELASTIC_TABLE_KEY][
+            "check_crack_width"
+        ].any()
+    )
+    loads.markdown("**Global Elastic parameter**")
+    phi_creep = _seeded_number(
+        loads, r"Creep coefficient $\varphi$", 0.0, 5.0, 3.0, 0.1,
+        "el_phi", disabled=not elastic_on,
+        help="One global final creep coefficient. Sustained actions use "
+             "Ec,eff = Ec/(1+phi).",
+    )
     aset.markdown("**Design-basis alignment**")
     design_basis_slot = aset.container()
 
@@ -1829,11 +2023,10 @@ def build_inputs(host=st):
         "Project design basis / user-defined criteria", "sls_limit_source",
         disabled=not elastic_on,
         help="Document, clause or project requirement supporting the limits.")
-    sls_cw = _seeded_checkbox(scw, "Crack width", False, "sls_cw",
-                              disabled=not elastic_on,
-                              help="Report the EC2 crack width wk for both the long-term "
-                                   "and the short-term (instantaneous) load. Each bar's "
-                                   "clear cover is taken from the geometry.")
+    scw.caption(
+        "Stress and crack-width checks are selected per Elastic case in the "
+        "Loads table."
+    )
     sls_wk_limit = _seeded_number(
         scw, r"Crack-width limit $w_{lim}$ (mm, 0 = not assessed)",
         0.0, 5.0, 0.30, 0.05, "sls_wk_limit",
@@ -2370,125 +2563,6 @@ def build_inputs(host=st):
     for limitation in design_basis["limitations"]:
         design_basis_slot.warning(limitation)
 
-    # Loads: the plastic and elastic analyses take their own action sets, so they
-    # can represent any project-defined limit state or combination without
-    # overwriting each other. The plastic axial force fixes the
-    # M-M envelope; its moments are the point checked against it. Both sets stay
-    # mounted (the inactive one is disabled) so their values survive a mode
-    # switch instead of being reset when Streamlit drops unrendered widgets.
-    loads.markdown("**Action-set identification**")
-    loads.caption("Active action-set IDs are required and are "
-                  "repeated in results, saved projects and reports.")
-    pl_case_id = _seeded_text(
-        loads, "Plastic action-set ID *", "PL-01", "pl_case_id",
-        disabled=not (plastic_on or shear_on or torsion_on),
-        help="External load-case or combination identifier used for plastic "
-             "bending, shear, torsion and combined checks.",
-    )
-    pl_case_type = _seeded_text(
-        loads, "Plastic classification (optional)", "", "pl_case_type",
-        disabled=not (plastic_on or shear_on or torsion_on),
-        help="Optional project classification, combination or limit state; "
-             "for example ALS, ULS fundamental or a custom designation.",
-    )
-    pl_case_source = _seeded_text(
-        loads, "Plastic source (optional)", "", "pl_case_source",
-        disabled=not (plastic_on or shear_on or torsion_on),
-        help="Model, load-combination table, calculation note or clause reference.",
-    )
-    el_case_id = _seeded_text(
-        loads, "Elastic action-set ID *", "EL-01", "el_case_id",
-        disabled=not elastic_on,
-        help="Identifier for the complete elastic action set. The long- and "
-             "short-term entries below are its sustained and instantaneous parts.",
-    )
-    el_case_type = _seeded_text(
-        loads, "Elastic classification (optional)", "", "el_case_type",
-        disabled=not elastic_on,
-        help="Optional project classification, combination or limit state; "
-             "for example SLS characteristic, FLS or a custom designation.",
-    )
-    el_case_source = _seeded_text(
-        loads, "Elastic source (optional)", "", "el_case_source",
-        disabled=not elastic_on,
-        help="Model, load-combination table, calculation note or clause reference.",
-    )
-    loads.divider()
-
-    def _load_set(prefix, n_help, m_help, active, mx_default=0.0, moments_active=None):
-        # ``moments_active`` lets the moments lock independently of the axial force
-        # (the plastic capacity-only mode keeps N but disables the applied moments).
-        moments_active = active if moments_active is None else moments_active
-        P = _seeded_number(loads, r"Axial force $N$ (kN, + = tension)", -50000.0,
-                           50000.0, 0.0, 50.0, f"{prefix}_P", help=n_help,
-                           disabled=not active)
-        Mx = _seeded_number(loads, r"Applied $M_x$ (kNm)", -100000.0, 100000.0,
-                            mx_default, 10.0, f"{prefix}_Mx", disabled=not moments_active,
-                            help=f"{m_help} Bending moment about the x-axis "
-                                 "(its stress varies with y).")
-        My = _seeded_number(loads, r"Applied $M_y$ (kNm)", -100000.0, 100000.0, 0.0,
-                            10.0, f"{prefix}_My", disabled=not moments_active,
-                            help="Bending moment about the y-axis (its stress "
-                                 "varies with x); biaxial bending.")
-        return P, Mx, My
-
-    loads.markdown("**Bending & axial (Plastic)**")
-    # The plastic axial force N is also the axial used by the shear and torsion
-    # checks (their sigma_cp / alpha_cw), so its input stays enabled whenever any of
-    # those checks is on -- even in Elastic-only mode, where the rest of the plastic
-    # set is disabled -- so the user can always enter the axial force the result
-    # depends on. The moments stay gated on the plastic analysis (envelope only).
-    shear_2023_actions = (
-        shear_on and "2023" in str(effective_shear_method or "")
-    )
-    P_pl, Mx_pl, My_pl = _load_set(
-        "pl", "External axial force for the plastic M-M capacity envelope; also the "
-        "axial N used by the shear and torsion checks (sigma_cp / alpha_cw). Enter "
-        "the external force only -- any tendon precompression is added automatically "
-        "from the prestress initial strain. Enabled whenever a plastic, shear or "
-        "torsion check is active.",
-        "Applied moment checked against the plastic envelope (utilisation). For "
-        "EN 1992-1-1:2023 shear, the moment about the selected shear axis also "
-        "defines a_cs in Formula (8.30), so it remains editable even when bending "
-        "utilisation is not being checked.",
-        plastic_on or shear_on or torsion_on,
-        moments_active=(plastic_on and check_util) or shear_2023_actions)
-
-    # The applied shear VEd and torsion TEd sit with the other capacity actions here
-    # (enable each check in Analysis settings to make its input live).
-    loads.markdown("**Shear / torsion (Plastic)**")
-    shear_V = _seeded_number(
-        loads, r"Applied shear $V_{Ed}$ (kN)", 0.0, 100000.0, 0.0, 10.0, "shear_V",
-        disabled=not shear_on, help="Design shear force at the section (magnitude). "
-        "Enable 'Check shear capacity' in Analysis settings.")
-    torsion_T = _seeded_number(
-        loads, r"Applied torsion $T_{Ed}$ (kNm)", 0.0, 100000.0, 0.0, 5.0, "torsion_T",
-        disabled=not torsion_on, help="Design torsional moment at the section. Enable "
-        "'Check torsion capacity' in Analysis settings.")
-
-    loads.divider()
-    loads.markdown("**Elastic stresses (long + short term)**")
-    loads.caption("A sustained (long-term) and an instantaneous (short-term) action, "
-                  "each carried at its own modular ratio so creep is explicit. For an "
-                  "instantaneous-only check put the load in the short-term set and "
-                  "leave the long-term at zero; set the creep coefficient to zero to "
-                  "drop creep for a single load case.")
-    loads.markdown("_Long-term_")
-    P_el_l, Mx_el_l, My_el_l = _load_set(
-        "el_long", "Sustained external axial force (long-term). A tendon's prestress "
-        "is applied automatically from its initial strain, so N is the external "
-        "force only -- as in the plastic solver; do not add the prestress force here.",
-        "Sustained moment (long-term).", elastic_on)
-    phi_creep = _seeded_number(loads, r"Creep coefficient $\varphi$ (long-term)", 0.0, 5.0,
-                               3.0, 0.1, "el_phi", disabled=not elastic_on,
-                               help="Final creep coefficient. The long-term modular "
-                                    "ratios use the effective modulus "
-                                    "Ec,eff = Ec/(1+phi).")
-    loads.markdown("_Short-term_")
-    P_el_s, Mx_el_s, My_el_s = _load_set(
-        "el_short", "Instantaneous (variable) external axial force (prestress is "
-        "applied automatically from the tendon initial strain).",
-        "Instantaneous (variable) moment.", elastic_on, mx_default=0.0)
     # The modular ratios are derived from the elastic moduli, not entered: mild steel
     # uses n = Es/Ec and prestress n = Ep/Ec (independent ratios, since Es != Ep), each
     # creep-reduced to E/Ec,eff = E(1+phi)/Ec for the sustained (long-term) state. The
@@ -2499,6 +2573,7 @@ def build_inputs(host=st):
     nl = steel.Es * (1.0 + phi_creep) / ec_mpa
     ns_p = prestress.Es / ec_mpa
     nl_p = prestress.Es * (1.0 + phi_creep) / ec_mpa
+    loads.markdown("**Derived modular ratios**")
     _modular_ratio_readout(loads, ns, nl, ns_p, nl_p, has_tendons=bool(tendons))
 
     section = (Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
@@ -2536,58 +2611,33 @@ def build_inputs(host=st):
         extent = 0.75 * max(max(xs) - min(xs), max(ys) - min(ys), 1e-6)
     else:
         extent = 1.0
-    # During the staged table migration, route the existing one-row controls through
-    # the canonical case engine. Until native table widgets replace this overlay,
-    # the visible scalar widgets remain authoritative for row 1 while later v4 rows
-    # loaded from a project are preserved.
-    case_scalars = {
-        "pl_case_id": pl_case_id,
-        "pl_case_type": pl_case_type,
-        "pl_case_source": pl_case_source,
-        "pl_P": P_pl,
-        "pl_Mx": Mx_pl,
-        "pl_My": My_pl,
-        "shear_V": shear_V,
-        "torsion_T": torsion_T,
-        "el_case_id": el_case_id,
-        "el_case_type": el_case_type,
-        "el_case_source": el_case_source,
-        "el_long_P": P_el_l,
-        "el_long_Mx": Mx_el_l,
-        "el_long_My": My_el_l,
-        "el_short_P": P_el_s,
-        "el_short_Mx": Mx_el_s,
-        "el_short_My": My_el_s,
-        "sls_cw": sls_cw,
-        "sls_conc_limit_pct": sls_conc_limit_pct,
-        "sls_steel_limit_pct": sls_steel_limit_pct,
-        "sls_pre_limit_pct": sls_pre_limit_pct,
-    }
-    case_frames = {}
-    for case_key in load_cases.CASE_TABLE_KEYS:
-        frame = load_cases.overlay_legacy_head(
-            st.session_state.get(case_key), case_key, case_scalars
-        )
-        st.session_state[case_key] = frame.copy(deep=True)
-        case_frames[case_key] = load_cases.active_table(frame, case_key)
     # The geometry signature is the point tables themselves (the source of truth),
     # so editing a point marks the results stale; Quick Section inputs do not, as
     # they only prefill on demand.
     geom_sig = (tuple(outer), tuple(bars), tuple(tendons),
                 tuple(tuple(r) for r in holes))
-    # Split the signature so a change to only the plastic (or only the elastic)
-    # inputs recomputes just that analysis; the shared part (geometry, materials,
-    # mode) forces both. The overall signature is the pair, so any change is stale.
+    # Table actions live in their canonical frames, while the shared calculation
+    # context excludes row values. Exact row signatures then let the case engine
+    # reuse unchanged rows when another row is edited.
     _get = lambda keys: tuple(st.session_state.get(k) for k in keys)
     shared_sig = geom_sig + _get(_SHARED_SIG_KEYS)
-    plastic_sig = shared_sig + _get(_PLASTIC_SIG_KEYS)
-    elastic_sig = shared_sig + _get(_ELASTIC_SIG_KEYS)
-    capacity_sig = _get(_SHEAR_SIG_KEYS)
-    plastic_case_context_sig = plastic_sig + capacity_sig
-    sig = (
-        plastic_sig + elastic_sig
-        + capacity_sig + _get(_PROVENANCE_SIG_KEYS)
+    plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
+    elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
+    capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS)
+    plastic_case_context_sig = (
+        plastic_bending_context_sig + capacity_context_sig
     )
+    plastic_table_sig = _case_table_signature(
+        case_frames[load_cases.PLASTIC_TABLE_KEY],
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+    elastic_table_sig = _case_table_signature(
+        case_frames[load_cases.ELASTIC_TABLE_KEY],
+        load_cases.ELASTIC_TABLE_KEY,
+    )
+    plastic_sig = plastic_case_context_sig + (plastic_table_sig,)
+    elastic_sig = elastic_case_context_sig + (elastic_table_sig,)
+    sig = plastic_sig + elastic_sig
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
@@ -2671,7 +2721,9 @@ def build_inputs(host=st):
                 label_scale=label_scale, label_min_gap=label_min_gap,
                 signature=sig,
                 plastic_sig=plastic_sig, elastic_sig=elastic_sig,
-                plastic_case_context_sig=plastic_case_context_sig)
+                plastic_case_context_sig=plastic_case_context_sig,
+                elastic_case_context_sig=elastic_case_context_sig,
+                plastic_bending_context_sig=plastic_bending_context_sig)
 
 
 # ---------------------------------------------------------------------------
@@ -3691,13 +3743,51 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
 
 def results_overview_view(inp, results, *, stale=False):
     """One-screen status and provenance register for every requested check."""
-    rows = presentation.result_summary_rows(inp, results, stale=stale)
+    rows = presentation.multi_case_summary_rows(inp, results, stale=stale)
     overall = presentation.overall_summary_status(rows)
     counts = {status: sum(row["status"] == status for row in rows)
               for status in {
                   "PASS", "FAIL", "INVALID", "NOT ASSESSED", "NOT RUN", "STALE",
+                  "NOT APPLICABLE",
               }}
-    headline = f"{overall} - {len(rows)} result checks"
+    case_register = []
+    for family, label in (("plastic", "Plastic / capacity"),
+                          ("elastic", "Elastic")):
+        family_requested = (
+            inp.get("mode") in {"Plastic", "Both"}
+            or bool(inp.get("shear_on"))
+            or bool(inp.get("torsion_on"))
+            or bool(inp.get("combined_on"))
+        ) if family == "plastic" else inp.get("mode") in {"Elastic", "Both"}
+        if not family_requested:
+            continue
+        result_entries = (results or {}).get(f"{family}_cases")
+        if result_entries is None:
+            entries = [
+                {"actions": record, "evaluated": False, "results": {}}
+                for record in case_analysis.case_records(inp, family)
+            ]
+        else:
+            entries = result_entries
+        for entry in entries:
+            record = entry.get("actions") or {}
+            has_result = bool(entry.get("results"))
+            state = (
+                "Stale" if stale and has_result
+                else "Calculated" if entry.get("evaluated") and has_result
+                else "Not evaluated" if result_entries is not None
+                else "Not calculated"
+            )
+            case_register.append({
+                "Analysis": label,
+                "Case": entry.get("name") or record.get("name") or "-",
+                "Description": (
+                    entry.get("description") or record.get("description") or "-"
+                ),
+                "Result state": state,
+            })
+
+    headline = f"{overall} - {len(rows)} checks across {len(case_register)} cases"
     if overall == "PASS":
         st.success(headline)
     elif overall in {"FAIL", "INVALID"}:
@@ -3705,29 +3795,21 @@ def results_overview_view(inp, results, *, stale=False):
     else:
         st.warning(headline)
 
-    action_rows = []
-    for family, label in (("plastic", "Plastic analysis"),
-                          ("elastic", "Elastic analysis")):
-        record = presentation.action_set(inp, family)
-        active = any(row["family"] == family for row in rows)
-        if active:
-            action_rows.append({
-                "Action set": label,
-                "ID": record["id"] or "-",
-                "Combination type": record["type"] or "-",
-                "Source": record["source"] or "-",
-            })
-    if action_rows:
-        st.dataframe(action_rows, hide_index=True, width="stretch")
+    if case_register:
+        st.dataframe(case_register, hide_index=True, width="stretch")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Pass", counts.get("PASS", 0))
     c2.metric("Fail / invalid", counts.get("FAIL", 0) + counts.get("INVALID", 0))
-    c3.metric("Not assessed / run",
-              counts.get("NOT ASSESSED", 0) + counts.get("NOT RUN", 0))
+    c3.metric(
+        "Not evaluated",
+        counts.get("NOT ASSESSED", 0)
+        + counts.get("NOT RUN", 0)
+        + counts.get("NOT APPLICABLE", 0),
+    )
     c4.metric("Stale", counts.get("STALE", 0))
 
-    governing_flags = presentation.summary_governing_flags(rows)
+    governing_flags = presentation.summary_governing_case_flags(rows)
     display = []
     for row, is_governing in zip(rows, governing_flags):
         display.append({
@@ -4412,7 +4494,7 @@ def shear_view(inp, results):
     6.2.2(1), then the utilisation VEd/VRd,c.
     """
     if not results or "shear" not in results:
-        if not inp.get("shear_on"):
+        if not inp.get("shear_requested", inp.get("shear_on")):
             st.info("Enable 'Check shear capacity' in Analysis settings, "
                     "then press Calculate.")
         elif abs(float(inp.get("shear_V", 0.0))) <= 0.0:
@@ -4691,7 +4773,7 @@ def torsion_view(inp, results):
     """Torsion resistance from the thin-walled tube (TRd,s / TRd,max / TRd,c), the
     required longitudinal steel, and the combined shear+torsion crushing check."""
     if not results or "torsion" not in results:
-        if not inp.get("torsion_on"):
+        if not inp.get("torsion_requested", inp.get("torsion_on")):
             st.info("Enable 'Check torsion capacity' in Analysis settings, "
                     "then press Calculate.")
         elif abs(float(inp.get("torsion_T", 0.0))) <= 0.0:
@@ -4915,7 +4997,7 @@ def combined_view(inp, results):
     """Combined M-V-T interaction: the concrete-crushing (6.29) and DK NA
     sum(SEd/SRd) checks across the plastic (M), shear (V) and torsion (T) results."""
     if not results or "combined" not in results:
-        if not inp.get("combined_on"):
+        if not inp.get("combined_requested", inp.get("combined_on")):
             st.info("Enable 'Check combined M-V-T' in Analysis settings "
                     "(with Plastic, the shear check and the torsion check), then "
                     "press Calculate.")
@@ -5130,6 +5212,100 @@ _VIEW_ALIASES = {
 }
 
 
+def _case_entries_for_view(inp, results, family):
+    """Return calculated entries, or current input rows before calculation."""
+    entries = (results or {}).get(f"{family}_cases")
+    if entries is not None:
+        return entries
+    return [
+        {
+            "name": record[load_cases.NAME],
+            "description": record[load_cases.DESCRIPTION],
+            "actions": record,
+            "evaluated": False,
+            "results": {},
+        }
+        for record in case_analysis.case_records(inp, family)
+    ]
+
+
+def _render_selected_case_actions(family, actions):
+    """Compact, consistently named action evidence for the selected case."""
+    if family == "plastic":
+        st.dataframe(
+            [{
+                "N_Ed [kN]": actions.get("n_ed_kn", 0.0),
+                "Mx_Ed [kNm]": actions.get("mx_ed_knm", 0.0),
+                "My_Ed [kNm]": actions.get("my_ed_knm", 0.0),
+                "V_Ed [kN]": actions.get("v_ed_kn", 0.0),
+                "T_Ed [kNm]": actions.get("t_ed_knm", 0.0),
+            }],
+            hide_index=True,
+            width="stretch",
+        )
+        return
+    st.dataframe(
+        [
+            {
+                "Action part": "Long-term",
+                "N_Ed [kN]": actions.get("n_long_ed_kn", 0.0),
+                "Mx_Ed [kNm]": actions.get("mx_long_ed_knm", 0.0),
+                "My_Ed [kNm]": actions.get("my_long_ed_knm", 0.0),
+            },
+            {
+                "Action part": "Short-term",
+                "N_Ed [kN]": actions.get("n_short_ed_kn", 0.0),
+                "Mx_Ed [kNm]": actions.get("mx_short_ed_knm", 0.0),
+                "My_Ed [kNm]": actions.get("my_short_ed_knm", 0.0),
+            },
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+    selected = []
+    if actions.get("check_stress"):
+        selected.append("stress limits")
+    if actions.get("check_crack_width"):
+        selected.append("crack width")
+    st.caption(
+        "Acceptance: " + (", ".join(selected) if selected else "none selected")
+    )
+
+
+def _selected_case_context(inp, results, family):
+    """Render a persistent case picker and return its input/result slice."""
+    entries = _case_entries_for_view(inp, results, family)
+    if not entries:
+        return inp, {}, None
+    key = f"_{family}_result_case_index"
+    if not isinstance(st.session_state.get(key), int):
+        st.session_state[key] = 0
+    st.session_state[key] = min(st.session_state[key], len(entries) - 1)
+
+    def label(index):
+        entry = entries[index]
+        name = entry.get("name") or f"Row {index + 1}"
+        description = entry.get("description") or ""
+        return f"{name} - {description}" if description else name
+
+    index = st.selectbox(
+        "Case",
+        range(len(entries)),
+        key=key,
+        format_func=label,
+        persist_state="session",
+        help="Select the named case shown in this result view.",
+    )
+    entry = entries[index]
+    actions = entry.get("actions") or {}
+    _render_selected_case_actions(family, actions)
+    if family == "elastic":
+        case_inp = case_analysis.elastic_case_input(inp, actions)
+    else:
+        case_inp = case_analysis.plastic_case_input(inp, actions)
+    return case_inp, entry.get("results") or {}, entry
+
+
 @st.fragment
 def _analysis_workspace(inp):
     """Render and operate the main analysis workspace independently.
@@ -5195,12 +5371,14 @@ def _analysis_workspace(inp):
         )
         reuse_elastic_cases = (
             prev.get("elastic_cases")
-            if st.session_state.get("result_elastic_sig") == inp["elastic_sig"]
+            if st.session_state.get("result_elastic_case_context_sig")
+            == inp["elastic_case_context_sig"]
             else None
         )
         reuse_plastic_bending_cases = (
             prev.get("plastic_cases")
-            if st.session_state.get("result_plastic_sig") == inp["plastic_sig"]
+            if st.session_state.get("result_plastic_bending_context_sig")
+            == inp["plastic_bending_context_sig"]
             else None
         )
         st.session_state["results"] = run_analysis(
@@ -5216,6 +5394,12 @@ def _analysis_workspace(inp):
         st.session_state["result_elastic_sig"] = inp["elastic_sig"]
         st.session_state["result_plastic_case_context_sig"] = inp[
             "plastic_case_context_sig"
+        ]
+        st.session_state["result_elastic_case_context_sig"] = inp[
+            "elastic_case_context_sig"
+        ]
+        st.session_state["result_plastic_bending_context_sig"] = inp[
+            "plastic_bending_context_sig"
         ]
         if st.session_state["results"]:
             st.session_state["calculation_record"] = {
@@ -5265,23 +5449,26 @@ def _analysis_workspace(inp):
         }
         else None
     )
+    view_inp, view_results = inp, results
     if family:
-        st.caption("Action set: " + presentation.action_set_text(inp, family))
+        view_inp, view_results, _entry = _selected_case_context(
+            inp, results, family
+        )
 
     if view == "Results Overview":
         results_overview_view(inp, results, stale=stale)
     elif view == "Plastic Results":
-        plastic_view(inp, results)
+        plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
-        interaction_view(inp, results)
+        interaction_view(view_inp, view_results)
     elif view == "Shear":
-        shear_view(inp, results)
+        shear_view(view_inp, view_results)
     elif view == "Torsion":
-        torsion_view(inp, results)
+        torsion_view(view_inp, view_results)
     elif view == "M-V-T Combined":
-        combined_view(inp, results)
+        combined_view(view_inp, view_results)
     else:
-        elastic_view(inp, results)
+        elastic_view(view_inp, view_results)
 
 
 # ---------------------------------------------------------------------------

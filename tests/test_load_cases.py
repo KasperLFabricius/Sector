@@ -55,6 +55,13 @@ def test_legacy_scalars_migrate_to_typed_solver_tables():
     assert bool(elastic.loc[0, "check_crack_width"]) is True
 
 
+def test_default_case_preserves_stress_acceptance_and_opts_out_of_crack_width():
+    elastic = lc.tables_from_legacy_scalars({})[lc.ELASTIC_TABLE_KEY]
+
+    assert bool(elastic.loc[0, "check_stress"]) is True
+    assert bool(elastic.loc[0, "check_crack_width"]) is False
+
+
 def test_case_records_roundtrip_signed_values_text_and_flags_without_nan():
     source = pd.DataFrame([
         {

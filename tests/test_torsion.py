@@ -269,6 +269,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 APP = str(ROOT / "app" / "sector_app.py")
 
+from app_case_inputs import apply_case_changes, first_case_value  # noqa: E402
+
 
 def _fresh():
     from streamlit.testing.v1 import AppTest
@@ -299,6 +301,9 @@ def _select_view(at, value):
 
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    changes, case_changed = apply_case_changes(at, changes)
+    if case_changed:
+        _goto_page(at, "Inputs")
     if changes:
         widget_type, key, _value = changes[0]
         try:
@@ -615,9 +620,8 @@ def test_combined_vrdmax_uses_shear_method_not_torsion():
 
 
 def test_app_torsion_only_axial_input_enabled():
-    # Codex P2: in an Elastic-only torsion check the plastic axial input still drives
-    # alpha_cw, so it must be enabled (not disabled) when only torsion is on, and a
-    # compression axial force must raise TRd,max.
+    # In an Elastic-only torsion check the Plastic case table remains editable because
+    # its axial force drives alpha_cw. Compression must raise TRd,max.
     at = _fresh()
     at.run()
     _set(
@@ -626,7 +630,7 @@ def test_app_torsion_only_axial_input_enabled():
         ("checkbox", "torsion_on", True),
     )
     _set(at, ("number_input", "torsion_T", 30.0))
-    assert not at.number_input(key="pl_P").disabled
+    assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     _calculate(at)
     base = at.session_state["results"]["torsion"]["trd_max"]
     _set_and_click(
@@ -783,14 +787,17 @@ def test_app_torsion_is_saved_and_restored():
     _set(at, ("number_input", "torsion_T", 55.0))
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
-    assert scalars["torsion_on"] is True and scalars["torsion_T"] == 55.0
+    tables = {k: at.session_state[k] for k in project_io.PROJECT_TABLE_KEYS
+              if k in at.session_state}
+    assert scalars["torsion_on"] is True and "torsion_T" not in scalars
+    assert first_case_value(at, "torsion_T") == pytest.approx(55.0)
     at2 = _fresh()
     at2.run()
-    at2.session_state["_pending_project"] = project_io.dump_project({}, scalars)
+    at2.session_state["_pending_project"] = project_io.dump_project(tables, scalars)
     at2.run()
     assert not at2.exception
     assert at2.session_state["torsion_on"] is True
-    assert at2.session_state["torsion_T"] == 55.0
+    assert first_case_value(at2, "torsion_T") == pytest.approx(55.0)
 
 
 def test_torsion_nu_v_detailing_allowance():

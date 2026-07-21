@@ -18,6 +18,8 @@ sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` 
 
 APP = str(ROOT / "app" / "sector_app.py")
 
+from app_case_inputs import apply_case_changes, first_case_value  # noqa: E402
+
 
 def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
@@ -126,8 +128,30 @@ def _replace_base_table(at, base_key, value):
     return at
 
 
+def _replace_case_table(at, base_key, value):
+    """Reseed one canonical load-case editor after replacing its backing table."""
+    import load_cases
+
+    _goto_page(at, "Inputs")
+    editor = {
+        load_cases.PLASTIC_TABLE_KEY: "plastic_cases_editor",
+        load_cases.ELASTIC_TABLE_KEY: "elastic_cases_editor",
+    }[base_key]
+    at.session_state[base_key] = load_cases.normalise_table(value, base_key)
+    for state_key in (editor, f"_{base_key}_editor_seed"):
+        try:
+            del at.session_state[state_key]
+        except KeyError:
+            pass
+    at.run()
+    return at
+
+
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    changes, case_changed = apply_case_changes(at, changes)
+    if case_changed:
+        _goto_page(at, "Inputs")
     if changes:
         widget_type, key, _value = changes[0]
         try:
@@ -296,10 +320,8 @@ def test_persisted_settings_use_the_seeded_number_helper():
     # clamps by hand -- but still passes no value=, so it does not warn.)
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
                 "label_scale", "label_min_gap",                # seeded number inputs
-                "pl_check_util", "pl_interaction", "sls_cw",    # seeded checkboxes
+                "pl_check_util", "pl_interaction",              # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
-                "pl_case_id", "pl_case_type", "pl_case_source",  # seeded text inputs
-                "el_case_id", "el_case_type", "el_case_source",
                 "sls_limit_source",
                 "ring_d", "bot_d", "top_d",                     # QS diameter inputs
                 "qs_cover_to_edge", "bot_off_d", "top_off_d",   # QS toggle + interleave
@@ -828,8 +850,7 @@ def test_recalculate_reuses_the_unchanged_analysis_half():
 
 
 def test_load_sets_survive_a_mode_switch():
-    # Both sets stay mounted (inactive one disabled), so values are not lost when
-    # toggling modes hides them for a few reruns.
+    # Both tables remain authoritative across mode changes, so values are not lost.
     at = _fresh()
     at.run()
     _set(
@@ -838,11 +859,11 @@ def test_load_sets_survive_a_mode_switch():
         ("number_input", "pl_Mx", 175.0),
         ("number_input", "el_long_Mx", 60.0),
     )
-    at.radio(key="mode").set_value("Elastic").run()   # plastic set disabled
-    at.run()                                            # extra rerun
-    at.radio(key="mode").set_value("Both").run()        # plastic set active again
-    assert at.number_input(key="pl_Mx").value == pytest.approx(175.0)
-    assert at.number_input(key="el_long_Mx").value == pytest.approx(60.0)
+    at.radio(key="mode").set_value("Elastic").run()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    assert first_case_value(at, "pl_Mx") == pytest.approx(175.0)
+    assert first_case_value(at, "el_long_Mx") == pytest.approx(60.0)
 
 
 def test_circular_shape_calculates():
@@ -1548,15 +1569,17 @@ def test_save_load_round_trip_through_the_app():
     _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
     import project_io  # noqa: E402  (app dir is on sys.path once the app has run)
     text = project_io.dump_project(
-        {k: at.session_state[k] for k in project_io.TABLE_KEYS if k in at.session_state},
+        {k: at.session_state[k] for k in project_io.PROJECT_TABLE_KEYS
+         if k in at.session_state},
         {k: at.session_state[k] for k in project_io.SCALAR_KEYS if k in at.session_state})
     assert '"format": "sector-project"' in text
     at.number_input(key="conc_fck").set_value(20.0).run()
     at.session_state["_pending_project"] = text
     at.run()
     assert at.session_state["conc_fck"] == 48.0
-    assert at.session_state["pl_case_id"] == "PL-ROUNDTRIP"
-    assert at.session_state["pl_case_source"] == "Register C7"
+    plastic = at.session_state["plastic_cases_base"]
+    assert plastic.loc[0, "name"] == "PL-ROUNDTRIP"
+    assert plastic.loc[0, "description"] == "Source: Register C7"
     assert at.session_state["_loaded_project_provenance"]["input_hash_valid"] is True
     assert any("hash verified" in caption.value for caption in at.caption)
 
@@ -1606,7 +1629,7 @@ def test_v4_case_tables_follow_current_controls_and_preserve_later_rows():
     assert at.session_state[load_cases.PLASTIC_TABLE_KEY]["name"].tolist() == [
         "PL-CURRENT", "PL-LATER"
     ]
-    assert at.session_state["pl_case_id"] == "PL-CURRENT"
+    assert at.session_state[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == "PL-CURRENT"
     assert not at.exception
 
 
@@ -1620,7 +1643,7 @@ def test_v4_multiple_case_rows_each_run_through_verified_solvers():
     elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY]
     first_plastic_name = str(plastic.loc[0, "name"])
     first_elastic_name = str(elastic.loc[0, "name"])
-    at.session_state[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+    _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [
         *plastic.to_dict("records"),
         {
             "name": "PL-SECOND",
@@ -1629,8 +1652,8 @@ def test_v4_multiple_case_rows_each_run_through_verified_solvers():
             "mx_ed_knm": 75.0,
             "my_ed_knm": -10.0,
         },
-    ], load_cases.PLASTIC_TABLE_KEY)
-    at.session_state[load_cases.ELASTIC_TABLE_KEY] = load_cases.normalise_table([
+    ])
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, [
         *elastic.to_dict("records"),
         {
             "name": "EL-SECOND",
@@ -1640,8 +1663,7 @@ def test_v4_multiple_case_rows_each_run_through_verified_solvers():
             "check_stress": True,
             "check_crack_width": False,
         },
-    ], load_cases.ELASTIC_TABLE_KEY)
-    at.run()
+    ])
 
     _calculate(at)
     results = at.session_state["results"]
@@ -1672,11 +1694,10 @@ def test_invalid_hidden_case_row_is_reported_before_calculation():
     elastic_name = str(
         at.session_state[load_cases.ELASTIC_TABLE_KEY].loc[0, "name"]
     )
-    at.session_state[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+    _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [
         *plastic.to_dict("records"),
         {"name": elastic_name.swapcase(), "mx_ed_knm": 20.0},
-    ], load_cases.PLASTIC_TABLE_KEY)
-    at.run()
+    ])
 
     _calculate(at)
 
@@ -1927,7 +1948,7 @@ def test_report_download_becomes_stale_after_analysis_input_change():
     at.button(key="gen_report").click().run()
     assert not any("Report out of date" in w.value for w in at.warning)
 
-    at.number_input(key="pl_Mx").set_value(123.0).run()
+    _set(at, ("number_input", "pl_Mx", 123.0))
     assert any("Report out of date" in w.value for w in at.warning)
 
 
@@ -1951,15 +1972,38 @@ def test_load_project_without_tendon_table_does_not_crash():
     assert len(at.session_state["tendons_base"]) == 0
 
 
-def test_capacity_only_toggle_locks_moments_and_drops_utilisation():
-    # With utilisation checking off, the applied plastic moments lock and the result
-    # carries no utilisation (capacity only); the axial force stays editable.
+def test_partial_v4_project_does_not_inherit_previous_case_tables():
+    import json
+
+    at = _fresh()
+    at.run()
+    _set(at, ("text_input", "pl_case_id", "PL-PREVIOUS"))
+    project = {
+        "format": "sector-project",
+        "version": 4,
+        "tables": {},
+        "scalars": {"mode": "Plastic"},
+    }
+    at.session_state["_pending_project"] = json.dumps(project)
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["plastic_cases_base"].loc[0, "name"] == "PL-01"
+    assert not any(
+        key in at.session_state
+        for key in (
+            "pl_case_id", "pl_P", "pl_Mx", "pl_My", "shear_V", "torsion_T"
+        )
+    )
+
+
+def test_capacity_only_toggle_drops_utilisation_without_locking_case_table():
+    # With utilisation checking off, the result is capacity-only. The case table
+    # stays editable because its actions may still feed other requested checks.
     at = _fresh()
     at.run()
     at.checkbox(key="pl_check_util").set_value(False).run()
-    assert at.number_input(key="pl_Mx").disabled is True
-    assert at.number_input(key="pl_My").disabled is True
-    assert at.number_input(key="pl_P").disabled is False
+    assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     _calculate(at)
     assert not at.exception
     pl = at.session_state["results"]["plastic"]
@@ -1971,29 +2015,26 @@ def test_capacity_only_toggle_locks_moments_and_drops_utilisation():
                for item in at.warning)
 
 
-def test_2023_shear_keeps_required_moment_editable_without_bending_utilisation():
+def test_shear_method_changes_do_not_lock_the_case_table():
     from sector import codes
 
-    # Elastic-only normally locks the Plastic bending moments, but the 2023 shear
-    # method needs the selected-axis MEd for Formula 8.30.
+    # The Plastic table remains editable in any solver mode. The 2023 shear method
+    # consumes MEd, while the 2005 method simply ignores that component.
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
     at.checkbox(key="shear_on").set_value(True).run()
     at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
-    assert at.number_input(key="pl_Mx").disabled is False
-    assert at.number_input(key="pl_My").disabled is False
+    assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     assert at.number_input(key="conc_gamma_c").disabled is False
     assert at.number_input(key="mild_gamma_y").disabled is False
-    at.number_input(key="pl_Mx").set_value(110.0).run()
+    _set(at, ("number_input", "pl_Mx", 110.0))
     assert not at.exception
 
-    # The 2005 method has no action-moment term, so those fields return to their
-    # normal locked state. Its capacity factors remain editable because VRd,c uses
-    # gamma_c.
+    # The 2005 method has no action-moment term, but changing method must not imply
+    # that the table belongs to a particular limit state or solver.
     at.selectbox(key="shear_method").set_value(codes.EC2_2005_DKNA.label).run()
-    assert at.number_input(key="pl_Mx").disabled is True
-    assert at.number_input(key="pl_My").disabled is True
+    assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     assert at.number_input(key="conc_gamma_c").disabled is False
 
 
@@ -2335,7 +2376,7 @@ def test_inputs_carry_help_tooltips():
     # Inputs across the panels expose hover help (the "?" tooltip).
     at = _fresh()
     at.run()
-    for key in ("conc_fck", "mild_fytk", "mild_eut", "pl_P", "pl_Mx", "el_phi"):
+    for key in ("conc_fck", "mild_fytk", "mild_eut", "el_phi"):
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
@@ -2418,6 +2459,115 @@ def test_results_views_render_after_calculate():
         assert not at.exception, v
 
 
+def test_native_load_case_editors_use_consistent_ed_columns():
+    at = _fresh()
+    at.run()
+
+    plastic = _widget(at.dataframe, "plastic_cases_editor").value
+    elastic = _widget(at.dataframe, "elastic_cases_editor").value
+    assert list(plastic.columns) == [
+        "name", "description", "n_ed_kn", "mx_ed_knm", "my_ed_knm",
+        "v_ed_kn", "t_ed_knm",
+    ]
+    assert list(elastic.columns) == [
+        "name", "description",
+        "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
+        "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
+        "check_stress", "check_crack_width",
+    ]
+    rendered_keys = {
+        widget.key
+        for widgets in (at.number_input, at.text_input, at.checkbox)
+        for widget in widgets
+    }
+    assert not rendered_keys.intersection({
+        "pl_P", "pl_Mx", "pl_My", "shear_V", "torsion_T",
+        "el_long_P", "el_long_Mx", "el_long_My",
+        "el_short_P", "el_short_Mx", "el_short_My", "sls_cw",
+    })
+
+
+def test_multi_case_overview_and_result_picker_show_selected_actions():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [
+        {
+            "name": "PL-LOW",
+            "description": "Lower action",
+            "mx_ed_knm": 20.0,
+        },
+        {
+            "name": "PL-HIGH",
+            "description": "Higher action",
+            "mx_ed_knm": 80.0,
+        },
+    ])
+    _calculate(at)
+    assert not at.exception
+
+    summary = next(
+        frame.value for frame in at.dataframe if "Governing" in frame.value.columns
+    )
+    bending = summary.loc[summary["Check"] == "Plastic bending"]
+    assert bending["Action set"].tolist() == ["PL-LOW", "PL-HIGH"]
+    assert bending.loc[bending["Governing"] == "Yes", "Action set"].tolist() == [
+        "PL-HIGH"
+    ]
+
+    _select_view(at, "Plastic Results")
+    picker = at.selectbox(key="_plastic_result_case_index")
+    assert picker.options == ["PL-LOW - Lower action", "PL-HIGH - Higher action"]
+    picker.set_value(1).run()
+    actions = next(
+        frame.value for frame in at.dataframe
+        if list(frame.value.columns) == [
+            "N_Ed [kN]", "Mx_Ed [kNm]", "My_Ed [kNm]",
+            "V_Ed [kN]", "T_Ed [kNm]",
+        ]
+    )
+    assert actions.iloc[0]["Mx_Ed [kNm]"] == pytest.approx(80.0)
+    assert not at.exception
+
+
+def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Elastic"))
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, [
+        {
+            "name": "EL-STRESS",
+            "description": "Characteristic",
+            "mx_long_ed_knm": 40.0,
+            "check_stress": True,
+        },
+        {
+            "name": "EL-CRACK",
+            "description": "Frequent",
+            "mx_long_ed_knm": 120.0,
+            "mx_short_ed_knm": 30.0,
+            "check_crack_width": True,
+        },
+    ])
+    _select_view(at, "Elastic Results")
+    picker = at.selectbox(key="_elastic_result_case_index")
+    assert picker.options == [
+        "EL-STRESS - Characteristic", "EL-CRACK - Frequent"
+    ]
+    picker.set_value(1).run()
+    actions = next(
+        frame.value for frame in at.dataframe
+        if "Action part" in frame.value.columns
+    )
+    assert actions["Action part"].tolist() == ["Long-term", "Short-term"]
+    assert actions["Mx_Ed [kNm]"].tolist() == pytest.approx([120.0, 30.0])
+    assert any("Acceptance: crack width" in caption.value for caption in at.caption)
+    assert not at.exception
+
+
 def test_results_overview_shows_action_provenance_and_explicit_states():
     at = _fresh()
     at.run()
@@ -2434,15 +2584,16 @@ def test_results_overview_shows_action_provenance_and_explicit_states():
         ("text_input", "pl_case_id", "PL-GOV-04"),
         ("text_input", "pl_case_source", "Combination register C1"),
     )
-    actions = next(
+    register = next(
         frame.value for frame in at.dataframe
-        if "Combination type" in frame.value.columns
+        if "Result state" in frame.value.columns
     )
     status = next(
         frame.value for frame in at.dataframe if "Status" in frame.value.columns
     )
-    assert actions.iloc[0]["ID"] == "PL-GOV-04"
-    assert actions.iloc[0]["Source"] == "Combination register C1"
+    assert register.iloc[0]["Case"] == "PL-GOV-04"
+    assert register.iloc[0]["Description"] == "Source: Combination register C1"
+    assert register.iloc[0]["Result state"] == "Calculated"
     assert set(status["Status"]) == {"PASS"}
 
     _set(at, ("text_input", "pl_case_id", "PL-GOV-05"))
@@ -2454,7 +2605,7 @@ def test_results_overview_shows_action_provenance_and_explicit_states():
     assert any("inputs changed" in warning.value.lower() for warning in at.warning)
 
 
-def test_action_classification_is_free_text_for_any_limit_state():
+def test_case_descriptions_accept_user_defined_limit_state_text():
     at = _fresh()
     at.run()
     _set(
@@ -2462,8 +2613,8 @@ def test_action_classification_is_free_text_for_any_limit_state():
         ("text_input", "pl_case_type", "ALS"),
         ("text_input", "el_case_type", "FLS"),
     )
-    assert at.session_state["pl_case_type"] == "ALS"
-    assert at.session_state["el_case_type"] == "FLS"
+    assert at.session_state["plastic_cases_base"].loc[0, "description"] == "ALS"
+    assert at.session_state["elastic_cases_base"].loc[0, "description"] == "FLS"
 
 
 def test_calculate_requires_active_action_set_identifiers():
@@ -2483,8 +2634,8 @@ def test_applied_moments_default_to_zero():
     # a made-up utilisation.
     at = _fresh()
     at.run()
-    assert at.session_state["pl_Mx"] == 0.0
-    assert at.session_state["el_long_Mx"] == 0.0
+    assert first_case_value(at, "pl_Mx") == 0.0
+    assert first_case_value(at, "el_long_Mx") == 0.0
 
 
 def test_page_navigation_and_input_tabs_follow_the_workflow_order():
@@ -2646,8 +2797,11 @@ def test_elastic_fully_tensile_case_renders_without_phantom_zone():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_P").set_value(5000.0).run()   # large tension (+ = tension)
-    at.number_input(key="el_long_Mx").set_value(0.0).run()
+    _set(
+        at,
+        ("number_input", "el_long_P", 5000.0),  # large tension (+ = tension)
+        ("number_input", "el_long_Mx", 0.0),
+    )
     _calculate(at)
     _select_view(at, "Elastic Results")
     assert not at.exception
@@ -2728,7 +2882,7 @@ def test_elastic_reports_cracking_and_section_properties():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.number_input(key="el_long_Mx").set_value(400.0).run()  # force cracking
+    _set(at, ("number_input", "el_long_Mx", 400.0))  # force cracking
     _calculate(at)
     assert not at.exception
     e = at.session_state["results"]["elastic"]

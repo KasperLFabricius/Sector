@@ -103,7 +103,16 @@ def test_round_trip_tables_and_scalars():
                "el_case_source": "Combination register C2"}
     text = project_io.dump_project(tables, scalars)
     rt, rs = project_io.parse_project(text)
-    assert rs == scalars
+    expected_scalars = {
+        key: value for key, value in scalars.items()
+        if key not in load_cases.LEGACY_SCALAR_KEYS
+    }
+    assert rs == expected_scalars
+    assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == "PL-17"
+    assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "description"] == (
+        "ALS | Source: Load model LM-4"
+    )
+    assert rt[load_cases.ELASTIC_TABLE_KEY].loc[0, "name"] == "EL-08"
     assert project_io.input_sha256(rt, rs) == (
         json.loads(text)["provenance"]["input_sha256"]
     )
@@ -140,11 +149,7 @@ def test_v4_round_trip_preserves_multiple_typed_load_cases():
     ]
     for key in load_cases.CASE_TABLE_KEYS:
         pd.testing.assert_frame_equal(restored[key], tables[key], check_dtype=True)
-    # A table-native file remains usable during the staged scalar transition.
-    assert scalars["pl_case_id"] == "PL-01"
-    assert scalars["pl_P"] == -100.0
-    assert scalars["el_case_id"] == "EL-CHAR"
-    assert scalars["sls_cw"] is False
+    assert not any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
     assert project_io.input_sha256(restored, scalars) == (
         payload["provenance"]["input_sha256"]
     )
@@ -173,8 +178,9 @@ def test_v4_partial_case_table_keeps_hash_stable_after_reload():
     payload = json.loads(text)
     restored, scalars = project_io.parse_project(text)
 
-    assert scalars["pl_case_id"] == "PL-ONLY"
-    assert scalars["pl_P"] == -250.0
+    assert not any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
+    assert restored[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == "PL-ONLY"
+    assert restored[load_cases.PLASTIC_TABLE_KEY].loc[0, "n_ed_kn"] == -250.0
     assert project_io.input_sha256(restored, scalars) == (
         payload["provenance"]["input_sha256"]
     )
@@ -341,9 +347,14 @@ def test_current_axial_force_loads_unchanged():
     # A current (version-2) file is already tension-positive, so it must not be
     # re-negated on load.
     text = project_io.dump_project({}, {"pl_P": -1500.0, "el_long_P": 800.0})
-    _, scalars = project_io.parse_project(text)
-    assert scalars["pl_P"] == pytest.approx(-1500.0)
-    assert scalars["el_long_P"] == pytest.approx(800.0)
+    tables, scalars = project_io.parse_project(text)
+    assert not any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
+    assert tables[load_cases.PLASTIC_TABLE_KEY].loc[0, "n_ed_kn"] == pytest.approx(
+        -1500.0
+    )
+    assert tables[load_cases.ELASTIC_TABLE_KEY].loc[
+        0, "n_long_ed_kn"
+    ] == pytest.approx(800.0)
 
 
 def test_legacy_quick_section_rebar_settings_migrate():
