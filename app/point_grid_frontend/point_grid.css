@@ -1,0 +1,131 @@
+:host {
+  color: var(--st-text-color);
+  font-family: var(--st-font);
+  font-size: var(--st-base-font-size);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+.pg-wrap {
+  width: 100%;
+  padding: 1px;
+}
+
+.tabulator {
+  border: 1px solid var(--st-border-color);
+  border-radius: var(--st-base-radius);
+  background: var(--st-background-color);
+  color: var(--st-text-color);
+  font-family: var(--st-font);
+  font-size: 0.875rem;
+  overflow: hidden;
+}
+
+.tabulator .tabulator-header,
+.tabulator .tabulator-header .tabulator-col,
+.tabulator .tabulator-tableholder .tabulator-table {
+  background: var(--st-background-color);
+  color: var(--st-text-color);
+}
+
+.tabulator .tabulator-header {
+  border-bottom-color: var(--st-border-color);
+}
+
+.tabulator .tabulator-header .tabulator-col {
+  border-right-color: var(--st-border-color);
+}
+
+.tabulator .tabulator-header .tabulator-col .tabulator-col-content {
+  background: var(--st-dataframe-header-background-color,
+                  var(--st-secondary-background-color));
+}
+
+.tabulator-row,
+.tabulator-row.tabulator-row-even,
+.tabulator-row.tabulator-selectable:hover {
+  background: var(--st-background-color);
+  color: var(--st-text-color);
+}
+
+.tabulator-row.tabulator-row-even,
+.tabulator-row.tabulator-selectable:hover {
+  background: var(--st-secondary-background-color);
+}
+
+.tabulator-row .tabulator-cell {
+  border-right-color: var(--st-border-color-light);
+}
+
+.tabulator-row .tabulator-cell.tabulator-editing {
+  border-color: var(--st-primary-color);
+}
+
+.tabulator-row .tabulator-cell input {
+  background: var(--st-background-color);
+  color: var(--st-text-color);
+  font-family: var(--st-font);
+}
+
+/* The frozen ID column reads as a muted, non-editable row header. */
+.tabulator .tabulator-cell.pg-id {
+  background: var(--st-secondary-background-color);
+  color: var(--st-gray-text-color, var(--st-text-color));
+  font-variant-numeric: tabular-nums;
+}
+
+.tabulator .tabulator-cell.pg-del {
+  padding: 2px;
+  text-align: center;
+}
+
+.pg-delete-button {
+  width: 100%;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--st-button-radius);
+  background: transparent;
+  color: var(--st-red-text-color, #b91c1c);
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.pg-delete-button:hover {
+  background: var(--st-red-background-color, #fee2e2);
+}
+
+.pg-delete-button:focus-visible,
+.pg-add-row:focus-visible {
+  outline: 2px solid var(--st-primary-color);
+  outline-offset: 2px;
+}
+
+.pg-actions {
+  margin-top: 0.375rem;
+}
+
+.pg-add-row {
+  padding: 0.25rem 0.625rem;
+  border: 1px solid var(--st-widget-border-color, var(--st-border-color));
+  border-radius: var(--st-button-radius);
+  background: var(--st-background-color);
+  color: var(--st-text-color);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.pg-add-row:hover {
+  background: var(--st-secondary-background-color);
+}
+
+.pg-warning {
+  margin: 0.375rem 0 0;
+  color: var(--st-red-text-color, #b91c1c);
+  font-size: 0.8125rem;
+}

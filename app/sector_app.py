@@ -631,6 +631,13 @@ def _pts_from_df(df, cols):
 
 _MAX_VOIDS = 10   # arbitrary cap on the number of separate voids
 
+_POINT_TABLE_LABELS = {
+    "corners_base": "Concrete corner points",
+    "hole_base": "Concrete void points",
+    "bars_base": "Reinforcing bar points",
+    "tendons_base": "Tendon points",
+}
+
 
 def _reseed_table(base_key, ed_key, df):
     """Replace a point table's contents and make its grid re-seed from them.
@@ -657,7 +664,9 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     version = st.session_state.get(ed_key + "_ver", 0)
     with box:
         return point_grid(st.session_state[base_key], cols, key=ed_key,
-                          id_start=id_start, data_version=version)
+                          id_start=id_start, data_version=version,
+                          label=_POINT_TABLE_LABELS.get(base_key,
+                                                        "Editable section points"))
 
 
 def _point_editor(box, base_key, ed_key, cols, id_start=1):

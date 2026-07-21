@@ -94,11 +94,40 @@ def test_point_grid_sends_only_strict_json_to_streamlit(monkeypatch):
 
     result = point_grid_module.point_grid(df, _CORNERS, key="test-grid")
 
-    assert captured["data"][1]["x (mm)"] is None
-    assert captured["default"]["rows"] == captured["data"]
+    assert captured["data"]["rows"][1]["x (mm)"] is None
+    assert captured["default"]["payload"]["rows"] == captured["data"]["rows"]
+    assert callable(captured["on_payload_change"])
+    assert captured["width"] == "stretch"
+    assert captured["height"] == "content"
     json.dumps({"data": captured["data"], "default": captured["default"]},
                allow_nan=False)
     assert np.isnan(result.iloc[1]["x (mm)"])
+
+
+def test_component_registration_is_cached_per_streamlit_runtime(monkeypatch):
+    class Manager:
+        pass
+
+    manager = Manager()
+    registrations = []
+
+    def fake_registration(*args, **kwargs):
+        registrations.append((args, kwargs))
+        return lambda **mount_kwargs: mount_kwargs
+
+    monkeypatch.setattr(point_grid_module, "get_bidi_component_manager",
+                        lambda: manager)
+    monkeypatch.setattr(point_grid_module.st.components.v2, "component",
+                        fake_registration)
+    point_grid_module._COMPONENT_RENDERERS.clear()
+
+    first = point_grid_module._component(key="one")
+    second = point_grid_module._component(key="two")
+
+    assert first["key"] == "one" and second["key"] == "two"
+    assert len(registrations) == 1
+    assert registrations[0][0] == ("sector.point_grid",)
+    point_grid_module._COMPONENT_RENDERERS.clear()
 
 
 def test_versioned_rows_rejects_a_stale_reseed_payload():
@@ -109,7 +138,54 @@ def test_versioned_rows_rejects_a_stale_reseed_payload():
     assert _versioned_rows(
         {"data_version": "3", "rows": rows}, 4
     ) is None
+    assert _versioned_rows(
+        {"payload": {"data_version": "4", "rows": rows}}, 4
+    ) == rows
     assert _versioned_rows(rows, 4) is None       # old frontend: seed is unknowable
+
+
+def test_frontend_uses_only_components_v2_state_api():
+    frontend = pathlib.Path(point_grid_module.__file__).resolve().parent / "point_grid_frontend"
+    renderer = (frontend / "point_grid.js").read_text(encoding="utf-8")
+    wrapper = pathlib.Path(point_grid_module.__file__).read_text(encoding="utf-8")
+
+    assert "export default function renderPointGrid" in renderer
+    assert "setStateValue(\"payload\"" in renderer
+    assert "new WeakMap()" in renderer       # separate state for all four tables
+    assert "st.components.v2.component" in wrapper
+    for banned in (
+        "components.v1",
+        "declare_component",
+        "Streamlit.setComponentValue",
+        "setFrameHeight",
+        "componentReady",
+        "window.parent",
+        "postMessage",
+    ):
+        assert banned not in renderer
+        assert banned not in wrapper
+
+
+def test_frontend_is_scoped_accessible_and_theme_aware():
+    frontend = pathlib.Path(point_grid_module.__file__).resolve().parent / "point_grid_frontend"
+    renderer = (frontend / "point_grid.js").read_text(encoding="utf-8")
+    markup = (frontend / "point_grid.html").read_text(encoding="utf-8")
+    styles = (frontend / "point_grid.css").read_text(encoding="utf-8")
+
+    assert '<button class="pg-add-row"' in markup
+    assert 'role="alert"' in markup and 'aria-live="polite"' in markup
+    assert 'document.createElement("button")' in renderer
+    assert 'className = "pg-delete-button"' in renderer
+    assert 'wrap.addEventListener("paste"' in renderer
+    assert 'document.addEventListener("paste"' not in renderer
+    for token in (
+        "--st-background-color",
+        "--st-text-color",
+        "--st-border-color",
+        "--st-primary-color",
+        "--st-dataframe-header-background-color",
+    ):
+        assert token in styles
 
 
 def test_app_feeds_grid_points_to_the_analysis():
