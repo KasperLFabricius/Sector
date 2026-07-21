@@ -150,6 +150,19 @@ def test_v4_round_trip_preserves_multiple_typed_load_cases():
     )
 
 
+def test_v4_project_rejects_nonfinite_load_case_instead_of_rewriting_it():
+    tables = _tables()
+    tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+        {"name": "PL-BAD", "mx_ed_knm": "invalid"},
+    ], load_cases.PLASTIC_TABLE_KEY)
+    tables[load_cases.ELASTIC_TABLE_KEY] = load_cases.empty_table(
+        load_cases.ELASTIC_TABLE_KEY
+    )
+
+    with pytest.raises(ValueError, match=r"mx_ed_knm must be a finite number"):
+        project_io.dump_project(tables, {"mode": "Plastic"})
+
+
 def test_v3_single_case_scalars_migrate_after_axial_sign_conversion():
     text = json.dumps({
         "format": project_io.FORMAT,

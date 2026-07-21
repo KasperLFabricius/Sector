@@ -7,6 +7,7 @@ import pathlib
 import sys
 
 import pandas as pd
+import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
@@ -78,6 +79,18 @@ def test_case_records_roundtrip_signed_values_text_and_flags_without_nan():
         lc.normalise_table(source, lc.ELASTIC_TABLE_KEY),
         check_dtype=True,
     )
+
+
+def test_case_serialisation_rejects_invalid_numeric_cells():
+    source = lc.normalise_table([
+        {"name": "PL-BAD", "mx_ed_knm": "not a number"},
+    ], lc.PLASTIC_TABLE_KEY)
+
+    with pytest.raises(
+        ValueError,
+        match=r"plastic_cases_base row 1: mx_ed_knm must be a finite number",
+    ):
+        lc.table_records(source, lc.PLASTIC_TABLE_KEY)
 
 
 def test_validation_requires_globally_unique_names_and_finite_forces():

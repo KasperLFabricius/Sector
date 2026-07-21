@@ -197,14 +197,28 @@ def active_table(value, key: str) -> pd.DataFrame:
 
 
 def table_records(value, key: str) -> list[dict]:
-    """Return strict-JSON-safe records for one canonical case table."""
+    """Return strict-JSON-safe records for one canonical case table.
+
+    An invalid active force is rejected rather than converted to a JSON blank:
+    blanks intentionally reload as zero, so that conversion would silently alter
+    the action and invalidate the recorded project-input hash.
+    """
     frame = active_table(value, key)
     records = []
-    for row in frame.to_dict("records"):
+    for row_number, row in enumerate(frame.to_dict("records"), start=1):
         record = {NAME: _text(row[NAME]), DESCRIPTION: _text(row[DESCRIPTION])}
-        record.update({column: (_number(row[column])
-                                if math.isfinite(_number(row[column])) else None)
-                       for column in NUMERIC_COLUMNS[key]})
+        for column in NUMERIC_COLUMNS[key]:
+            try:
+                number = float(row[column])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{key} row {row_number}: {column} must be a finite number"
+                ) from exc
+            if not math.isfinite(number):
+                raise ValueError(
+                    f"{key} row {row_number}: {column} must be a finite number"
+                )
+            record[column] = number
         record.update({column: _flag(row[column]) for column in FLAG_COLUMNS[key]})
         records.append(record)
     return records
