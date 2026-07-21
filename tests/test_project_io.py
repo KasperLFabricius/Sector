@@ -13,6 +13,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
+import load_cases  # noqa: E402
 import project_io  # noqa: E402
 
 
@@ -100,12 +101,120 @@ def test_round_trip_tables_and_scalars():
                "pl_case_source": "Load model LM-4",
                "el_case_id": "EL-08", "el_case_type": "FLS",
                "el_case_source": "Combination register C2"}
-    rt, rs = project_io.parse_project(project_io.dump_project(tables, scalars))
+    text = project_io.dump_project(tables, scalars)
+    rt, rs = project_io.parse_project(text)
     assert rs == scalars
+    assert project_io.input_sha256(rt, rs) == (
+        json.loads(text)["provenance"]["input_sha256"]
+    )
     for key, df in tables.items():
         pd.testing.assert_frame_equal(
             rt[key].reset_index(drop=True),
             df.astype("float64").reset_index(drop=True), check_dtype=False)
+
+
+def test_v4_round_trip_preserves_multiple_typed_load_cases():
+    tables = _tables()
+    tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+        {"name": "PL-01", "description": "Fundamental A",
+         "n_ed_kn": -100.0, "mx_ed_knm": 20.0, "v_ed_kn": -12.0},
+        {"name": "PL-02", "description": "Accidental",
+         "n_ed_kn": 50.0, "my_ed_knm": -8.0, "t_ed_knm": 3.5},
+    ], load_cases.PLASTIC_TABLE_KEY)
+    tables[load_cases.ELASTIC_TABLE_KEY] = load_cases.normalise_table([
+        {"name": "EL-CHAR", "description": "Characteristic stresses",
+         "mx_long_ed_knm": 30.0, "mx_short_ed_knm": 15.0,
+         "check_stress": True, "check_crack_width": False},
+        {"name": "EL-FREQ", "description": "Frequent crack width",
+         "mx_long_ed_knm": 25.0, "mx_short_ed_knm": 5.0,
+         "check_stress": False, "check_crack_width": True},
+    ], load_cases.ELASTIC_TABLE_KEY)
+
+    text = project_io.dump_project(tables, {"mode": "Both"})
+    payload = json.loads(text)
+    restored, scalars = project_io.parse_project(text)
+
+    assert payload["version"] == 4
+    assert [row["name"] for row in payload["load_cases"]["plastic"]] == [
+        "PL-01", "PL-02"
+    ]
+    for key in load_cases.CASE_TABLE_KEYS:
+        pd.testing.assert_frame_equal(restored[key], tables[key], check_dtype=True)
+    # A table-native file remains usable during the staged scalar transition.
+    assert scalars["pl_case_id"] == "PL-01"
+    assert scalars["pl_P"] == -100.0
+    assert scalars["el_case_id"] == "EL-CHAR"
+    assert scalars["sls_cw"] is False
+    assert project_io.input_sha256(restored, scalars) == (
+        payload["provenance"]["input_sha256"]
+    )
+
+
+def test_v4_project_rejects_nonfinite_load_case_instead_of_rewriting_it():
+    tables = _tables()
+    tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+        {"name": "PL-BAD", "mx_ed_knm": "invalid"},
+    ], load_cases.PLASTIC_TABLE_KEY)
+    tables[load_cases.ELASTIC_TABLE_KEY] = load_cases.empty_table(
+        load_cases.ELASTIC_TABLE_KEY
+    )
+
+    with pytest.raises(ValueError, match=r"mx_ed_knm must be a finite number"):
+        project_io.dump_project(tables, {"mode": "Plastic"})
+
+
+def test_v4_partial_case_table_keeps_hash_stable_after_reload():
+    tables = _tables()
+    tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+        {"name": "PL-ONLY", "n_ed_kn": -250.0, "mx_ed_knm": 80.0},
+    ], load_cases.PLASTIC_TABLE_KEY)
+
+    text = project_io.dump_project(tables, {"mode": "Plastic"})
+    payload = json.loads(text)
+    restored, scalars = project_io.parse_project(text)
+
+    assert scalars["pl_case_id"] == "PL-ONLY"
+    assert scalars["pl_P"] == -250.0
+    assert project_io.input_sha256(restored, scalars) == (
+        payload["provenance"]["input_sha256"]
+    )
+
+
+def test_v4_partial_project_without_loads_preserves_absence_and_hash():
+    tables = {"hole_base": _tables()["hole_base"]}
+
+    text = project_io.dump_project(tables, {})
+    payload = json.loads(text)
+    restored, scalars = project_io.parse_project(text)
+
+    assert "load_cases" not in payload
+    assert not any(key in restored for key in load_cases.CASE_TABLE_KEYS)
+    assert project_io.input_sha256(restored, scalars) == (
+        payload["provenance"]["input_sha256"]
+    )
+
+
+def test_v3_single_case_scalars_migrate_after_axial_sign_conversion():
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 1,
+        "tables": {},
+        "scalars": {
+            "pl_case_id": "OLD-PL",
+            "pl_P": 1200.0,
+            "pl_Mx": 90.0,
+            "el_case_id": "OLD-EL",
+            "el_long_P": -300.0,
+            "sls_cw": True,
+        },
+    })
+    tables, scalars = project_io.parse_project(text)
+    plastic = tables[load_cases.PLASTIC_TABLE_KEY]
+    elastic = tables[load_cases.ELASTIC_TABLE_KEY]
+    assert scalars["pl_P"] == -1200.0
+    assert plastic.loc[0, "n_ed_kn"] == -1200.0
+    assert elastic.loc[0, "n_long_ed_kn"] == 300.0
+    assert bool(elastic.loc[0, "check_crack_width"]) is True
 
 
 def test_legacy_2023_project_defaults_to_general_k_tc():
@@ -149,7 +258,7 @@ def test_project_provenance_records_and_verifies_exact_inputs():
     payload = json.loads(text)
     provenance = project_io.project_provenance(text)
 
-    assert payload["version"] == 3
+    assert payload["version"] == 4
     assert provenance["sector_version"] == "0.78"
     assert provenance["source_revision"] == "a" * 40
     assert provenance["saved_at_utc"].endswith("+00:00")
@@ -286,6 +395,10 @@ def test_parse_rejects_non_object_sections():
         project_io.parse_project(bad_tables)
     with pytest.raises(ValueError):
         project_io.parse_project(bad_scalars)
+    bad_cases = ('{"format": "%s", "tables": {}, "load_cases": [1, 2], '
+                 '"scalars": {}}' % project_io.FORMAT)
+    with pytest.raises(ValueError):
+        project_io.parse_project(bad_cases)
 
 
 def test_parse_rejects_non_tabular_table_rows():

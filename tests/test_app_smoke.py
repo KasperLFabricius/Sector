@@ -1561,6 +1561,55 @@ def test_save_load_round_trip_through_the_app():
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
+def test_v4_case_tables_follow_current_controls_and_preserve_later_rows():
+    import sys as _sys
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Both"))
+    _set(
+        at,
+        ("text_input", "pl_case_id", "PL-CURRENT"),
+        ("number_input", "pl_Mx", -125.0),
+        ("text_input", "el_case_id", "EL-CURRENT"),
+        ("checkbox", "sls_cw", True),
+    )
+    _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
+    import load_cases  # noqa: E402
+    import project_io  # noqa: E402
+
+    plastic = at.session_state[load_cases.PLASTIC_TABLE_KEY]
+    elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY]
+    assert plastic.loc[0, "name"] == "PL-CURRENT"
+    assert plastic.loc[0, "mx_ed_knm"] == pytest.approx(-125.0)
+    assert elastic.loc[0, "name"] == "EL-CURRENT"
+    assert bool(elastic.loc[0, "check_crack_width"]) is True
+
+    plastic = load_cases.normalise_table([
+        *plastic.to_dict("records"),
+        {"name": "PL-LATER", "mx_ed_knm": 75.0},
+    ], load_cases.PLASTIC_TABLE_KEY)
+    text = project_io.dump_project(
+        {
+            **{key: at.session_state[key] for key in project_io.TABLE_KEYS},
+            load_cases.PLASTIC_TABLE_KEY: plastic,
+            load_cases.ELASTIC_TABLE_KEY: elastic,
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    at.session_state["_pending_project"] = text
+    at.run()
+    assert at.session_state[load_cases.PLASTIC_TABLE_KEY]["name"].tolist() == [
+        "PL-CURRENT", "PL-LATER"
+    ]
+    assert at.session_state["pl_case_id"] == "PL-CURRENT"
+    assert not at.exception
+
+
 def test_fresh_session_project_captures_default_section():
     # The download must reflect the live section even on a fresh session (the panel
     # is filled after the tables are seeded), not an empty one.

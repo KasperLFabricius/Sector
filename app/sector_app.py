@@ -27,6 +27,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
+import load_cases  # noqa: E402
 import project_io  # noqa: E402
 import result_presentation as presentation  # noqa: E402
 import viz  # noqa: E402
@@ -844,6 +845,15 @@ def _project_state():
         for key in project_io.SCALAR_KEYS
         if key in st.session_state or key in durable
     }
+    # Until the table UI replaces the legacy scalar widgets, keep the first row in
+    # sync with those widgets while retaining any later rows already present in a
+    # v4 project. The next PR makes the tables directly editable and authoritative.
+    for key in load_cases.CASE_TABLE_KEYS:
+        frame = load_cases.overlay_legacy_head(
+            st.session_state.get(key), key, scalars
+        )
+        st.session_state[key] = frame.copy(deep=True)
+        tables[key] = frame
     return tables, scalars
 
 
@@ -1002,6 +1012,10 @@ def _apply_pending_project() -> None:
     _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
     for key, df in tables.items():
+        if key in load_cases.CASE_TABLE_KEYS:
+            st.session_state[key] = load_cases.normalise_table(df, key)
+            st.session_state.pop(key + "_ed", None)
+            continue
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.
         _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)

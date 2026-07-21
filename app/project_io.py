@@ -1,10 +1,10 @@
 """Serialise the full input set to a project file and read it back (Save / Load).
 
 A project file is JSON: the four point tables (concrete corners, voids, bars and
-tendons, all in millimetres) plus the material, load and analysis-setting inputs.
-The geometry tables are the source of truth, so saving them and the scalar inputs
-captures everything needed to reproduce a section. Only the *inputs* are stored --
-the results are recomputed on load.
+tendons, all in millimetres), the Plastic and Elastic load-case tables, and the
+remaining material and analysis-setting inputs. The geometry and load-case tables
+are the source of truth. Only the *inputs* are stored -- results are recomputed on
+load.
 
 The functions here are pure (no Streamlit), so the round trip is unit-tested
 directly; the app wires the download / upload widgets to them.
@@ -19,14 +19,21 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+import load_cases
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 3   # v3: application/source provenance and canonical input hash
+VERSION = 4   # v4: canonical Plastic and Elastic load-case tables
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
+CASE_TABLE_KEYS = list(load_cases.CASE_TABLE_KEYS)
+PROJECT_TABLE_KEYS = TABLE_KEYS + CASE_TABLE_KEYS
+_CASE_PAYLOAD_KEYS = {
+    load_cases.PLASTIC_TABLE_KEY: "plastic",
+    load_cases.ELASTIC_TABLE_KEY: "elastic",
+}
 
 # Every scalar / string input that makes up a project. Missing keys are skipped on
 # save, so an older or partial file still loads what it has.
@@ -142,10 +149,39 @@ def _obj_to_table(obj) -> pd.DataFrame:
 
 def _canonical_inputs(tables: dict, scalars: dict) -> dict:
     """Return the JSON-native input payload used by both save and hash checks."""
-    return {
-        "tables": {k: _table_to_obj(tables.get(k)) for k in TABLE_KEYS},
-        "scalars": {k: _scalar(scalars[k]) for k in SCALAR_KEYS if k in scalars},
+    scalar_payload = {
+        k: _scalar(scalars[k]) for k in SCALAR_KEYS if k in scalars
     }
+    content = {
+        "tables": {k: _table_to_obj(tables.get(k)) for k in TABLE_KEYS},
+        "scalars": scalar_payload,
+    }
+    if (
+        any(key in tables for key in load_cases.CASE_TABLE_KEYS)
+        or any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
+    ):
+        legacy = load_cases.tables_from_legacy_scalars(scalars)
+        content["load_cases"] = {
+            payload_key: load_cases.table_records(
+                tables.get(table_key, legacy[table_key]), table_key
+            )
+            for table_key, payload_key in _CASE_PAYLOAD_KEYS.items()
+        }
+        # During the staged UI migration, v4 files retain the former scalar API.
+        # If at least one canonical table is already authoritative, seed missing
+        # compatibility fields from the canonical/default first rows. This makes
+        # save -> load -> hash stable for table-native callers without overwriting
+        # lossless legacy classification/source fields supplied by the current
+        # interface.
+        if (
+            any(key in tables for key in load_cases.CASE_TABLE_KEYS)
+            and not any(key in scalars for key in load_cases.LEGACY_SCALAR_KEYS)
+        ):
+            compatibility = load_cases.legacy_scalars_from_tables(tables)
+            for key, value in compatibility.items():
+                if key in SCALAR_KEYS:
+                    scalar_payload.setdefault(key, _scalar(value))
+    return content
 
 
 def input_sha256(tables: dict, scalars: dict) -> str:
@@ -215,11 +251,17 @@ def project_provenance(text: str) -> dict:
             "calculation": None,
         }
     raw_tables = data.get("tables") or {}
+    raw_load_cases = data.get("load_cases")
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
+    if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
+        raise ValueError("malformed 'load_cases' section")
+    canonical_inputs = {"tables": raw_tables, "scalars": raw_scalars}
+    if raw_load_cases is not None:
+        canonical_inputs["load_cases"] = raw_load_cases
     canonical = json.dumps(
-        {"tables": raw_tables, "scalars": raw_scalars},
+        canonical_inputs,
         sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         allow_nan=False,
     )
@@ -258,11 +300,21 @@ def parse_project(text: str):
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError("not a Sector project file")
     raw_tables = data.get("tables") or {}
+    raw_load_cases = data.get("load_cases")
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
+    if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
+        raise ValueError("malformed 'load_cases' section")
     tables = {k: _obj_to_table(raw_tables[k]) for k in TABLE_KEYS if k in raw_tables}
     scalars = {k: v for k, v in raw_scalars.items() if k in SCALAR_KEYS}
+    if raw_load_cases is not None:
+        case_tables = {
+            table_key: load_cases.table_from_records(
+                raw_load_cases.get(payload_key, []), table_key
+            )
+            for table_key, payload_key in _CASE_PAYLOAD_KEYS.items()
+        }
     # Files saved before the explicit EN 1992-1-1:2023 applicability selector have
     # no k_tc field. Migrate those deterministically to the general/other-case value
     # instead of letting an unrelated preset value already in session state leak
@@ -320,4 +372,29 @@ def parse_project(text: str):
             val = raw_scalars.get(old)
             if isinstance(val, (int, float)):
                 scalars[new] = float(val)
+
+    if raw_load_cases is None:
+        if (
+            data.get("version", 1) >= 4
+            and not any(
+                key in raw_scalars for key in load_cases.LEGACY_SCALAR_KEYS
+            )
+        ):
+            # A partial v4 project may intentionally carry no load data. Preserve
+            # that absence so parsing and re-saving cannot invent default cases or
+            # change the recorded input hash. The mounted UI supplies its normal
+            # widget defaults independently when such a partial file is applied.
+            case_tables = {}
+        else:
+            # Build migrated rows only after every historical scalar migration,
+            # especially the pre-v2 axial-force sign conversion above.
+            case_tables = load_cases.tables_from_legacy_scalars(scalars)
+    else:
+        # During the staged migration old scalar controls remain operational. Files
+        # written by that UI contain the transitional keys already; preserve them
+        # losslessly. A table-native file omits them, so expose its first row through
+        # the compatibility adapter for older app revisions.
+        if not any(key in raw_scalars for key in load_cases.LEGACY_SCALAR_KEYS):
+            scalars.update(load_cases.legacy_scalars_from_tables(case_tables))
+    tables.update(case_tables)
     return tables, scalars
