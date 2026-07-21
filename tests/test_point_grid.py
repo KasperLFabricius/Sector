@@ -201,6 +201,8 @@ def test_app_feeds_grid_points_to_the_analysis():
     at.session_state["corners_base"] = pd.DataFrame(
         {"x (mm)": [-200.0, -200.0, 200.0, 200.0],
          "y (mm)": [-300.0, 300.0, 300.0, -300.0]})
+    at.run()  # rebuild the durable input payload from the edited base table
+    at.segmented_control(key="_main_page").set_value("Analysis").run()
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]

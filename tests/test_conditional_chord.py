@@ -309,8 +309,36 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=120)
 
 
+def _goto_page(at, page):
+    try:
+        current = at.session_state["_main_page"]
+    except KeyError:
+        current = None
+    if current != page:
+        at.segmented_control(key="_main_page").set_value(page).run()
+    return at
+
+
+def _calculate(at):
+    _goto_page(at, "Analysis")
+    at.button(key="calculate").click().run()
+    return at
+
+
+def _select_view(at, value):
+    _goto_page(at, "Analysis")
+    at.selectbox(key="view").set_value(value).run()
+    return at
+
+
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    if changes:
+        widget_type, key, _value = changes[0]
+        try:
+            getattr(at, widget_type)(key=key)
+        except KeyError:
+            _goto_page(at, "Analysis" if key == "view" else "Inputs")
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     return at.run()
@@ -321,8 +349,13 @@ def _set_and_click(at, button_key, *changes):
     if button_key in {"qs_apply", "qs_back"} and changes:
         _set(at, *changes)
         changes = ()
+    elif button_key == "calculate" and changes:
+        _set(at, *changes)
+        changes = ()
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
+    if button_key == "calculate":
+        _goto_page(at, "Analysis")
     at.button(key=button_key).click()
     return at.run()
 
@@ -391,8 +424,8 @@ def test_app_chord_mrd_conditional_under_biaxial():
     lg_uni = at.session_state["results"]["combined"]["longitudinal"]
     assert lg_uni["conditional"] and lg_uni["m_off"] == 0.0
     m_rd_uni = lg_uni["m_rd"]
-    at.number_input(key="pl_My").set_value(_MY).run()
-    at.button(key="calculate").click().run()
+    _set(at, ("number_input", "pl_My", _MY))
+    _calculate(at)
     lg = at.session_state["results"]["combined"]["longitudinal"]
     assert lg["biaxial"] and lg["conditional"]
     assert lg["axis"] == "x"                        # vertical shear -> chord about x
@@ -433,7 +466,7 @@ def test_app_shear_compression_face_governs_under_hogging():
     at.checkbox(key="torsion_on").set_value(True).run()
     at.number_input(key="torsion_T").set_value(40.0).run()
     at.checkbox(key="combined_on").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     lg = at.session_state["results"]["combined"]["longitudinal"]
     assert lg["gets_shift"] is False               # the torsion-only compression face
@@ -482,8 +515,8 @@ def test_app_zero_capacity_chord_does_not_poison_the_scan():
     at = _fresh(); at.run()
     _mvt(at)
     my_max = at.session_state["results"]["plastic"]["max_my"]
-    at.number_input(key="pl_My").set_value(float(my_max) * 1.5).run()
-    at.button(key="calculate").click().run()
+    _set(at, ("number_input", "pl_My", float(my_max) * 1.5))
+    _calculate(at)
     assert not at.exception
     res = at.session_state["results"]
     lg = res["combined"]["longitudinal"]

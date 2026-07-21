@@ -413,8 +413,36 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _goto_page(at, page):
+    try:
+        current = at.session_state["_main_page"]
+    except KeyError:
+        current = None
+    if current != page:
+        at.segmented_control(key="_main_page").set_value(page).run()
+    return at
+
+
+def _calculate(at):
+    _goto_page(at, "Analysis")
+    at.button(key="calculate").click().run()
+    return at
+
+
+def _select_view(at, value):
+    _goto_page(at, "Analysis")
+    at.selectbox(key="view").set_value(value).run()
+    return at
+
+
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    if changes:
+        widget_type, key, _value = changes[0]
+        try:
+            getattr(at, widget_type)(key=key)
+        except KeyError:
+            _goto_page(at, "Analysis" if key == "view" else "Inputs")
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     return at.run()
@@ -425,8 +453,13 @@ def _set_and_click(at, button_key, *changes):
     if button_key in {"qs_apply", "qs_back"} and changes:
         _set(at, *changes)
         changes = ()
+    elif button_key == "calculate" and changes:
+        _set(at, *changes)
+        changes = ()
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
+    if button_key == "calculate":
+        _goto_page(at, "Analysis")
     at.button(key=button_key).click()
     return at.run()
 
@@ -463,7 +496,7 @@ def test_app_shear_view_renders_and_shows_utilisation():
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(at, "calculate", ("number_input", "shear_V", 80.0))
-    at.selectbox(key="view").set_value("Shear").run()
+    _select_view(at, "Shear")
     assert not at.exception
     labels = [m.label for m in at.metric]
     assert any("Utilisation" in lbl for lbl in labels)
@@ -556,7 +589,7 @@ def test_app_shear_links_flag_out_of_code_bounds():
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["out_of_limits"] is True
     assert lk["code_applicable"] is False
-    at.selectbox(key="view").set_value("Shear").run()
+    _select_view(at, "Shear")
     assert not at.exception
     assert any("NO CODE VERDICT" in w.value for w in at.warning)
     util_metric = next(m for m in at.metric if m.label == "Utilisation VEd/VRd")
@@ -601,7 +634,7 @@ def test_app_shear_2023_method_uses_tau_rdc():
     assert sh["model_2023"]
     assert sh["ddg"] == pytest.approx(32.0)             # default Dlower = 16
     assert sh["res"]["tau_rdc"] > 0.0 and sh["res"]["vrd_c"] > 0.0
-    at.selectbox(key="view").set_value("Shear").run()
+    _select_view(at, "Shear")
     assert not at.exception
 
 
@@ -633,7 +666,7 @@ def test_app_shear_2023_skips_links_with_a_note():
     )
     assert not at.exception
     assert "links" not in at.session_state["results"]["shear"]   # not for 2023
-    at.selectbox(key="view").set_value("Shear").run()
+    _select_view(at, "Shear")
     assert any("8.2.3" in m.value for m in at.info)
 
 
@@ -756,7 +789,7 @@ def test_app_shear_2023_applies_axial_factor():
     tension = at.session_state["results"]["shear"]["res"]
     assert tension["k_vp"] > 1.0
     assert tension["tau_basic"] < neutral["tau_basic"]
-    at.selectbox(key="view").set_value("Shear").run()
+    _select_view(at, "Shear")
     assert not any("UNCONSERVATIVE" in w.value for w in at.warning)
 
     # Net compression reverses the effect.

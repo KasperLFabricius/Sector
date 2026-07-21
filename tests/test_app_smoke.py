@@ -34,11 +34,73 @@ def _fresh_qs(**state):
     for key, value in state.items():
         at.session_state[key] = value
     at.session_state["_qs_open"] = True
+    at.session_state["_main_page"] = "Analysis"
     return at.run()
+
+
+def _goto_page(at, page):
+    """Navigate only when needed, preserving the page-local AppTest tree."""
+    try:
+        current = at.session_state["_main_page"]
+    except KeyError:
+        current = None
+    if current != page:
+        at.segmented_control(key="_main_page").set_value(page).run()
+    return at
+
+
+def _calculate(at):
+    _goto_page(at, "Analysis")
+    if not any(button.key == "calculate" for button in at.button):
+        _goto_page(at, "Inputs")
+        _goto_page(at, "Analysis")
+    at.button(key="calculate").click().run()
+    return at
+
+
+def _select_view(at, value):
+    _goto_page(at, "Analysis")
+    if not any(box.key == "view" for box in at.selectbox):
+        _goto_page(at, "Inputs")
+        _goto_page(at, "Analysis")
+    at.selectbox(key="view").set_value(value).run()
+    return at
+
+
+def _replace_base_table(at, base_key, value):
+    """Reseed a point-grid base exactly as the application does on project load."""
+    _goto_page(at, "Inputs")
+    editors = {
+        "corners_base": "ed_corners",
+        "hole_base": "ed_hole",
+        "bars_base": "ed_bars",
+        "tendons_base": "ed_tendons",
+    }
+    editor = editors[base_key]
+    try:
+        version = at.session_state[editor + "_ver"]
+    except KeyError:
+        version = 0
+    at.session_state[base_key] = value
+    at.session_state[editor + "_ver"] = version + 1
+    try:
+        del at.session_state[editor]
+    except KeyError:
+        pass
+    at.run()
+    return at
 
 
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    if changes:
+        widget_type, key, _value = changes[0]
+        try:
+            getattr(at, widget_type)(key=key)
+        except KeyError:
+            _goto_page(at, "Analysis" if key in {
+                "view", "label_scale", "label_min_gap",
+            } else "Inputs")
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     return at.run()
@@ -53,8 +115,15 @@ def _set_and_click(at, button_key, *changes):
     if button_key in {"qs_apply", "qs_back"} and changes:
         _set(at, *changes)
         changes = ()
+    elif button_key == "calculate" and changes:
+        _set(at, *changes)
+        changes = ()
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
+    if button_key == "calculate":
+        # Submit the edited input page first, then calculate from the independently
+        # rendered Analysis page.
+        _goto_page(at, "Analysis")
     at.button(key=button_key).click()
     return at.run()
 
@@ -62,6 +131,7 @@ def _set_and_click(at, button_key, *changes):
 def _open_qs(at):
     """Open the full-width Quick Section builder so its widgets render."""
     at.session_state["_qs_open"] = True
+    at.session_state["_main_page"] = "Analysis"
     at.run()
     return at
 
@@ -107,7 +177,7 @@ def test_app_empty_result_reads_not_calculated():
     at = _fresh()
     at.run()
     _clear_section(at)                           # empty the section -> no valid points
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert ("results" in at.session_state) and at.session_state["results"] == {}
     caps = [c.value for c in at.caption]
     assert any("Not calculated yet" in c for c in caps)
@@ -120,11 +190,13 @@ def test_live_curve_figures_are_memoised():
     # ~20 ms plotly construction).
     at = _fresh()
     at.run()
-    at.selectbox(key="view").set_value("Material laws").run()
+    _select_view(at, "Material laws")
     conc_id = id(at.session_state["_fig_cache"]["concrete"][1])
-    at.number_input(key="el_phi").set_value(2.0).run()     # unrelated to the concrete law
+    _set(at, ("number_input", "el_phi", 2.0))  # unrelated to the concrete law
+    _select_view(at, "Material laws")
     assert id(at.session_state["_fig_cache"]["concrete"][1]) == conc_id     # reused
-    at.number_input(key="conc_fck").set_value(45.0).run()  # changes the concrete law
+    _set(at, ("number_input", "conc_fck", 45.0))  # changes the concrete law
+    _select_view(at, "Material laws")
     assert id(at.session_state["_fig_cache"]["concrete"][1]) != conc_id     # rebuilt
 
 
@@ -302,7 +374,7 @@ def test_about_panel_shows_version_and_author():
 def test_calculate_plastic_produces_an_envelope():
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     res = at.session_state["results"]
     assert "plastic" in res
@@ -320,10 +392,10 @@ def test_plastic_view_tolerates_legacy_results_without_min_fields():
     # from the envelope rather than raising a KeyError.
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     at.session_state["results"]["plastic"].pop("min_mx", None)
     at.session_state["results"]["plastic"].pop("min_my", None)
-    at.selectbox(key="view").set_value("Plastic Results").run()
+    _select_view(at, "Plastic Results")
     assert not at.exception
 
 
@@ -371,7 +443,7 @@ def test_short_term_load_and_ratio_change_the_combined_result():
 def test_plastic_sweep_increment_changes_point_count():
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     n_default = len(at.session_state["results"]["plastic"]["points"])
     _set_and_click(
         at, "calculate", ("number_input", "v_inc", 5.0)
@@ -386,7 +458,7 @@ def test_full_sweep_drops_the_duplicate_360_point():
     # reported, but the result is still a closed envelope (utilisation available).
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()            # default 0-360, 15 deg
+    _calculate(at)            # default 0-360, 15 deg
     vs = [p["V"] for p in at.session_state["results"]["plastic"]["points"]]
     assert vs[0] == 0.0 and vs[-1] == 345.0             # stops before the wrap-around
     assert 360.0 not in vs                              # the duplicate of 0 deg is gone
@@ -401,7 +473,7 @@ def test_partial_sweep_keeps_its_end_angle():
     vs = [p["V"] for p in at.session_state["results"]["plastic"]["points"]]
     assert vs[-1] == 180.0
     assert at.session_state["view"] == "Results Overview"
-    at.selectbox(key="view").set_value("Plastic Results").run()
+    _select_view(at, "Plastic Results")
     assert any("NOT ASSESSED - Plastic bending" in item.value
                and "open arc" in item.value.lower() for item in at.warning)
 
@@ -433,7 +505,7 @@ def test_plastic_sweep_stays_within_requested_bounds():
 def test_full_sweep_reports_utilisation():
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()  # default 0-360 sweep
+    _calculate(at)  # default 0-360 sweep
     assert at.session_state["results"]["plastic"]["util"] is not None
 
 
@@ -447,7 +519,7 @@ def test_plastic_result_overview_has_explicit_verdict_margin_and_qa_tables():
         ("number_input", "pl_My", 0.0),
     )
     assert at.session_state["view"] == "Results Overview"
-    at.selectbox(key="view").set_value("Plastic Results").run()
+    _select_view(at, "Plastic Results")
     assert any("PASS - Plastic bending" in item.value for item in at.success)
     assert any("limit 100 %" in item.value and "margin +" in item.value
                and " pp" in item.value
@@ -526,12 +598,12 @@ def test_nm_squash_is_negative_and_tension_limit_positive():
     at = _fresh()
     at.run()
     at.checkbox(key="pl_interaction").set_value(True).run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     d = at.session_state["results"]["plastic"]["interaction"]
     all_n = list(d["x"]["N"]) + list(d["y"]["N"])
     assert min(all_n) < 0.0            # squash load is a compression (negative)
     assert max(all_n) > 0.0            # tension limit is a tension (positive)
-    at.selectbox(key="view").set_value("N-M Interaction").run()
+    _select_view(at, "N-M Interaction")
     squash = next(m for m in at.metric if "Squash" in m.label)
     tens = next(m for m in at.metric if "Tension limit" in m.label)
     assert float(squash.value.split()[0]) < 0.0
@@ -551,7 +623,7 @@ def test_plastic_view_defaults_to_the_governing_rotation_each_calculate():
         ("number_input", "pl_Mx", 200.0),
         ("number_input", "pl_My", 0.0),
     )  # pure Mx -> governs near V=90
-    at.selectbox(key="view").set_value("Plastic Results").run()
+    _select_view(at, "Plastic Results")
     res = at.session_state["results"]["plastic"]
     assert at.session_state["pl_state"] == res["util_gov"]
     # A biaxial load governs at a different rotation; recalculating must follow it.
@@ -595,7 +667,7 @@ def test_plastic_table_splits_steel_strain_when_active_in_compression():
     from sector_app import _plastic_table
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     pts = at.session_state["results"]["plastic"]["points"]
     assert "eps_s_comp" in pts[0]
     active = _plastic_table(pts, False, True)
@@ -612,12 +684,12 @@ def test_plastic_view_tolerates_a_pre_split_payload():
     # raising a KeyError.
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     res = at.session_state["results"]
     for p in res["plastic"]["points"]:
         p.pop("eps_s_comp", None)             # simulate a pre-v0.40 reused payload
     at.session_state["results"] = res
-    at.selectbox(key="view").set_value("Plastic Results").run()
+    _select_view(at, "Plastic Results")
     assert not at.exception
 
 
@@ -729,7 +801,7 @@ def test_circular_shape_calculates():
     at = _fresh_qs()
     at.selectbox(key="shape").set_value("Circular").run()
     _apply_qs(at)                            # apply the builder to the points
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -742,7 +814,7 @@ def test_builder_does_not_touch_points_until_applied():
 
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     base_mx = at.session_state["results"]["plastic"]["max_mx"]
     base_tables = {
         key: at.session_state[key].copy(deep=True)
@@ -770,7 +842,7 @@ def test_builder_does_not_touch_points_until_applied():
     post_back = _fresh()
     post_back.session_state["_pending_project"] = post_back_project
     post_back.run()
-    post_back.button(key="calculate").click().run()
+    _calculate(post_back)
     assert (
         post_back.session_state["results"]["plastic"]["max_mx"]
         == pytest.approx(base_mx)
@@ -780,7 +852,7 @@ def test_builder_does_not_touch_points_until_applied():
     _set_and_click(
         applied, "qs_apply", ("number_input", "h_mm", 1000.0)
     )  # now applied
-    applied.button(key="calculate").click().run()
+    _calculate(applied)
     assert applied.session_state["results"]["plastic"]["max_mx"] > base_mx
 
 
@@ -829,7 +901,7 @@ def test_quick_section_interleave_skips_the_box_girder_void():
         ("number_input", "layer_s", 300.0),
         ("number_input", "bot_off_d", 16.0),
     )  # 2nd layer rises into the hollow
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]        # no bar in the void -> valid section
 
@@ -899,7 +971,7 @@ def test_quick_section_builder_places_bars_by_spacing():
     assert not at.exception
     # 1 m slab, 50 mm cover -> a 0.9 m face at 150 mm gives 7 bars per row (14 total).
     assert len(at.session_state["bars_base"]) == 14
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
 
 
@@ -919,7 +991,7 @@ def test_quick_section_builder_stacks_multiple_bar_layers():
     ys = sorted(round(float(y), 1) for y in set(bars["y (mm)"]))
     # 600 mm section, 50 mm cover: bottom rows at -250 and -190 mm, top at 250 mm.
     assert ys == [-250.0, -190.0, 250.0]
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
 
 
@@ -939,7 +1011,7 @@ def test_quick_section_builder_stacks_tendon_layers():
     ys = sorted(round(float(y), 1) for y in set(tendons["y (mm)"]))
     # 100 mm tendon cover from the -300 mm bottom face -> -200, then +60 -> -140.
     assert ys == [-200.0, -140.0]
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
 
 
@@ -964,7 +1036,7 @@ def test_quick_section_box_tendon_layer_splits_into_walls():
     hollow = tendons[(tendons["y (mm)"] > -260) & (tendons["y (mm)"] < -240)]
     assert len(hollow) == 3                           # the hollow layer keeps its 3
     assert (hollow["x (mm)"].abs() >= 200).all()      # in the side walls, not the cavity
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -983,7 +1055,7 @@ def test_quick_section_circular_zero_cover_keeps_all_bars():
     assert not at.exception
     assert len(at.session_state["bars_base"]) == 10            # all 10 placed
     assert not any("within the concrete" in (e.value or "") for e in at.error)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -1005,7 +1077,7 @@ def test_quick_section_tsection_lower_top_layer_fits_the_web():
     lower_top = bars[(bars["y (mm)"] > 50) & (bars["y (mm)"] < 150)]   # the y=100 mm row
     assert len(lower_top) >= 1
     assert lower_top["x (mm)"].abs().max() <= 110           # within the web (bw/2 - cover)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -1142,9 +1214,9 @@ def test_cleared_section_does_not_fall_back_to_quick_section():
     at = _fresh()
     at.run()
     _clear_section(at)
-    at.selectbox(key="view").set_value("Section").run()
+    _select_view(at, "Section")
     assert not at.exception
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert at.session_state["results"] == {}
 
@@ -1156,11 +1228,11 @@ def test_blank_and_partial_point_rows_are_skipped():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.session_state["bars_base"] = pd.DataFrame(
+    _replace_base_table(at, "bars_base", pd.DataFrame(
         {"x (mm)": [50.0, None, 150.0, "oops"],   # row 2 blank, row 4 non-numeric
          "y (mm)": [50.0, 50.0, None, 50.0],       # row 3 half-typed (no y)
-         "area (mm2)": [491.0, 491.0, 491.0, 491.0]})
-    at.button(key="calculate").click().run()
+         "area (mm2)": [491.0, 491.0, 491.0, 491.0]}))
+    _calculate(at)
     assert not at.exception
     assert len(at.session_state["results"]["elastic"]["total"]) == 1   # one valid bar
 
@@ -1173,7 +1245,7 @@ def test_box_girder_void_loads_and_calculates():
     _apply_qs(at)
     hb = at.session_state["hole_base"]
     assert len(hb) >= 3 and list(hb.columns) == ["x (mm)", "y (mm)"]
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -1193,7 +1265,7 @@ def test_two_voids_separated_by_blank_row():
     at = _fresh()
     at.run()
     at.session_state["hole_base"] = _two_void_table()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
     hb = at.session_state["hole_base"]
@@ -1313,13 +1385,12 @@ def test_injected_void_changes_the_capacity():
     import pandas as pd
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     solid_mx = at.session_state["results"]["plastic"]["max_mx"]
-    at.session_state["hole_base"] = pd.DataFrame(
+    _replace_base_table(at, "hole_base", pd.DataFrame(
         {"x (mm)": [-150.0, 150.0, 150.0, -150.0],
-         "y (mm)": [100.0, 100.0, 280.0, 280.0]})   # void in the (compression) top
-    at.run()
-    at.button(key="calculate").click().run()
+         "y (mm)": [100.0, 100.0, 280.0, 280.0]}))  # void in the compression top
+    _calculate(at)
     assert not at.exception
     assert at.session_state["results"]["plastic"]["max_mx"] != pytest.approx(solid_mx)
 
@@ -1330,12 +1401,12 @@ def test_void_slicing_the_section_is_rejected():
     import pandas as pd
     at = _fresh()
     at.run()
-    at.session_state["hole_base"] = pd.DataFrame(
+    _replace_base_table(at, "hole_base", pd.DataFrame(
         {"x (mm)": [-250.0, 250.0, 250.0, -250.0],
-         "y (mm)": [-20.0, -20.0, 20.0, 20.0]})       # full-width slot at mid-height
-    at.run()
+         "y (mm)": [-20.0, -20.0, 20.0, 20.0]}))      # full-width slot at mid-height
+    _goto_page(at, "Analysis")
     assert any("disconnected" in e.value for e in at.error)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" not in at.session_state["results"]
 
@@ -1346,11 +1417,11 @@ def test_bar_outside_the_concrete_is_rejected():
     import pandas as pd
     at = _fresh()
     at.run()
-    at.session_state["bars_base"] = pd.DataFrame(
-        {"x (mm)": [0.0], "y (mm)": [1000.0], "area (mm2)": [314.0]})
-    at.run()
+    _replace_base_table(at, "bars_base", pd.DataFrame(
+        {"x (mm)": [0.0], "y (mm)": [1000.0], "area (mm2)": [314.0]}))
+    _goto_page(at, "Analysis")
     assert any("within the concrete" in e.value for e in at.error)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" not in at.session_state["results"]
 
@@ -1364,7 +1435,7 @@ def test_high_grade_concrete_auto_strain_calculates():
     at.button(key="conc_strain_auto").click().run()
     assert at.session_state["conc_eps_cu2"] == pytest.approx(2.66, abs=0.05)
     assert at.session_state["conc_n"] == pytest.approx(1.44, abs=0.02)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -1378,7 +1449,7 @@ def test_invalid_concrete_strain_order_is_recoverable():
     assert not at.exception
     assert any("must be at least" in w.value and "peak strain" in w.value
                for w in at.warning)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -1389,7 +1460,7 @@ def test_load_project_restores_section_and_calculates():
     import json
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert "results" in at.session_state
     project = {
         "format": "sector-project", "version": 1,
@@ -1410,7 +1481,7 @@ def test_load_project_restores_section_and_calculates():
     assert at.session_state["conc_fck"] == 55.0
     assert list(at.session_state["corners_base"]["x (mm)"]) == [-100.0, 100.0, 100.0, -100.0]
     assert "results" not in at.session_state
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -1481,6 +1552,28 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     tables, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
     assert len(tables["corners_base"]) >= 3        # the live section, not blank
     assert at.session_state["_autosave_last"]      # the panel records the time
+
+
+def test_due_autosave_runs_from_analysis_page(tmp_path, monkeypatch):
+    # A genuine Analysis-fragment interaction must service a due autosave even
+    # though input widgets and the top-level dispatcher are not rerun (second
+    # independent Codex review P2).
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_fck").set_value(42.0).run()
+    _goto_page(at, "Analysis")
+    assert not (tmp_path / "autosave.json").exists()
+    at.session_state["_autosave_t"] = 0.0
+    at.number_input(key="label_scale").set_value(1.1).run()
+
+    saved = tmp_path / "autosave.json"
+    assert saved.exists()
+    import sys as _sys
+    _sys.path.insert(0, str(pathlib.Path(APP).resolve().parent))
+    import project_io  # noqa: E402
+    _, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
+    assert scalars["conc_fck"] == pytest.approx(42.0)
 
 
 def test_autosave_restores_last_session_on_next_launch(tmp_path, monkeypatch):
@@ -1696,12 +1789,12 @@ def test_capacity_only_toggle_locks_moments_and_drops_utilisation():
     assert at.number_input(key="pl_Mx").disabled is True
     assert at.number_input(key="pl_My").disabled is True
     assert at.number_input(key="pl_P").disabled is False
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     pl = at.session_state["results"]["plastic"]
     assert pl["util"] is None and pl["check_util"] is False and pl["applied"] is None
     assert at.session_state["view"] == "Results Overview"
-    at.selectbox(key="view").set_value("Plastic Results").run()
+    _select_view(at, "Plastic Results")
     assert any("NOT ASSESSED - Plastic bending" in item.value
                and "capacity only" in item.value.lower()
                for item in at.warning)
@@ -1895,7 +1988,7 @@ def test_es_field_present_and_editable():
     assert "mild_Es" in keys and "pre_Es" in keys
     at.number_input(key="mild_Es").set_value(210.0).run()   # GPa
     assert not at.exception
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -1907,7 +2000,7 @@ def test_eut_below_yield_strain_warns_and_calculates():
     at.run()
     at.number_input(key="mild_eut").set_value(0.5).run()  # 0.5 permille, below ey ~ 2.5
     assert any("yield strain" in w.value for w in at.warning)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
 
 
@@ -1919,7 +2012,7 @@ def test_two_yield_fields_live_under_default_preset():
     at.number_input(key="mild_k").set_value(0.8).run()
     at.number_input(key="mild_ey0t").set_value(3.0).run()  # 3 permille
     assert not at.exception
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
 
 
@@ -1930,7 +2023,7 @@ def test_mild_fyck_zero_is_allowed_and_calculates():
     at.run()
     at.number_input(key="mild_fyck").set_value(0.0).run()
     assert not at.exception
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -2036,11 +2129,11 @@ def test_active_in_compression_toggle_changes_plastic_capacity():
     # contribution, lowering the sagging moment capacity. fyck/ey0c also lock.
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     base = at.session_state["results"]["plastic"]["max_mx"]
-    at.checkbox(key="mild_active_comp").set_value(False).run()
+    _set(at, ("checkbox", "mild_active_comp", False))
     assert at.number_input(key="mild_fyck").disabled is True
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert at.session_state["results"]["plastic"]["max_mx"] < base
 
@@ -2050,7 +2143,7 @@ def test_elastic_calculates_with_locked_materials():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "elastic" in at.session_state["results"]
 
@@ -2063,7 +2156,7 @@ def test_degenerate_rupture_stress_does_not_crash():
     at.selectbox(key="mild_preset").set_value("Curve 1 (bilinear hardening)").run()
     at.number_input(key="mild_futk").set_value(0.0).run()
     assert not at.exception
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
 
 
@@ -2071,11 +2164,13 @@ def test_inputs_carry_help_tooltips():
     # Inputs across the panels expose hover help (the "?" tooltip).
     at = _fresh()
     at.run()
-    for key in ("conc_fck", "mild_fytk", "mild_eut", "pl_P", "pl_Mx", "el_phi", "view"):
+    for key in ("conc_fck", "mild_fytk", "mild_eut", "pl_P", "pl_Mx", "el_phi"):
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
     assert at.radio(key="mode").help
+    _goto_page(at, "Analysis")
+    assert at.selectbox(key="view").help
     # The Quick Section builder inputs carry help too.
     _open_qs(at)
     for key in ("shape", "b_mm", "h_mm", "bot_c_mm", "top_c_mm"):
@@ -2095,6 +2190,7 @@ def test_label_controls_live_in_the_main_view():
     # input page) and changing them re-renders without error.
     at = _fresh()
     at.run()
+    _goto_page(at, "Analysis")
     keys = {ni.key for ni in at.number_input}
     assert "label_scale" in keys and "label_min_gap" in keys
     at.number_input(key="label_min_gap").set_value(0.2).run()
@@ -2117,6 +2213,7 @@ def test_workspace_choices_survive_quick_section_viewport():
     assert at.session_state["view"] == "Results Overview"
     _open_qs(at)
     at.button(key="qs_back").click().run()
+    _goto_page(at, "Analysis")
     assert at.session_state["view"] == "Results Overview"
     assert at.number_input(key="label_scale").value == pytest.approx(1.5)
     assert at.number_input(key="label_min_gap").value == pytest.approx(0.2)
@@ -2130,7 +2227,7 @@ def test_view_dropdown_switches_without_error():
     at.run()
     for v in ["Section", "Material laws", "Results Overview",
               "Plastic Results", "Elastic Results"]:
-        at.selectbox(key="view").set_value(v).run()
+        _select_view(at, v)
         assert not at.exception, v
 
 
@@ -2138,7 +2235,7 @@ def test_stress_strain_view_includes_prestress_when_enabled():
     at = _fresh_qs()
     at.number_input(key="tnd_n").set_value(4).run()
     _apply_qs(at)                            # put tendons in the section
-    at.selectbox(key="view").set_value("Material laws").run()
+    _select_view(at, "Material laws")
     assert not at.exception
 
 
@@ -2147,14 +2244,14 @@ def test_results_views_render_after_calculate():
     at.run()
     _set_and_click(at, "calculate", ("radio", "mode", "Both"))
     for v in ["Results Overview", "Plastic Results", "Elastic Results"]:
-        at.selectbox(key="view").set_value(v).run()
+        _select_view(at, v)
         assert not at.exception, v
 
 
 def test_results_overview_shows_action_provenance_and_explicit_states():
     at = _fresh()
     at.run()
-    at.selectbox(key="view").set_value("Results Overview").run()
+    _select_view(at, "Results Overview")
     status = next(
         frame.value for frame in at.dataframe if "Status" in frame.value.columns
     )
@@ -2178,7 +2275,8 @@ def test_results_overview_shows_action_provenance_and_explicit_states():
     assert actions.iloc[0]["Source"] == "Combination register C1"
     assert set(status["Status"]) == {"PASS"}
 
-    at.text_input(key="pl_case_id").set_value("PL-GOV-05").run()
+    _set(at, ("text_input", "pl_case_id", "PL-GOV-05"))
+    _select_view(at, "Results Overview")
     stale = next(
         frame.value for frame in at.dataframe if "Status" in frame.value.columns
     )
@@ -2219,21 +2317,21 @@ def test_applied_moments_default_to_zero():
     assert at.session_state["el_long_Mx"] == 0.0
 
 
-def test_full_width_input_tabs_follow_the_workflow_order():
-    # Inputs and analysis are separate full-width pages. The input page stages the
-    # four engineering steps plus project/report, without tying Plastic or Elastic
-    # to a limit state.
+def test_page_navigation_and_input_tabs_follow_the_workflow_order():
+    # Only the selected top-level page renders. The Inputs page stages the four
+    # engineering steps plus project/report without tying either solver to a limit
+    # state.
     at = _fresh()
     at.run()
     d = chr(0x00B7)   # the step-number middle dot (v0.63)
+    nav = at.segmented_control(key="_main_page")
+    assert nav.options == ["Inputs", "Analysis"] and nav.value == "Inputs"
     assert [tab.label for tab in at.tabs] == [
-        "Inputs",
         f"1 {d} Analysis settings",
         f"2 {d} Section",
         f"3 {d} Material parameters",
         f"4 {d} Loads",
         "Project & report",
-        "Analysis workspace",
     ]
     labels = [ex.label for ex in at.expander]
     assert labels == [
@@ -2249,16 +2347,17 @@ def test_calculate_from_a_live_view_switches_to_the_results_overview():
     # Calculating from a live view opens the consolidated QA overview first.
     at = _fresh()
     at.run()
+    _goto_page(at, "Analysis")
     assert at.session_state["view"] == "Section"
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert at.session_state["view"] == "Results Overview"
 
 
 def test_calculate_from_a_result_view_stays_put():
     at = _fresh()
     at.run()
-    at.selectbox(key="view").set_value("Plastic Results").run()
-    at.button(key="calculate").click().run()
+    _select_view(at, "Plastic Results")
+    _calculate(at)
     assert at.session_state["view"] == "Plastic Results"
 
 
@@ -2267,10 +2366,12 @@ def test_staleness_badge_reflects_result_state():
     at = _fresh()
     at.run()
     caps = lambda: [c.value for c in at.caption]
+    _goto_page(at, "Analysis")
     assert any("Not calculated yet" in c for c in caps())
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert any("Results up to date" in c for c in caps())
-    at.number_input(key="pl_Mx").set_value(55.0).run()
+    _set(at, ("number_input", "pl_Mx", 55.0))
+    _goto_page(at, "Analysis")
     assert any("recalculate" in c for c in caps())
 
 
@@ -2300,7 +2401,7 @@ def test_combined_view_renamed_to_m_v_t_combined():
     assert "M-V-T Interaction" not in sector_app.VIEWS
     at = _fresh()
     at.run()
-    at.selectbox(key="view").set_value("M-V-T Combined").run()
+    _select_view(at, "M-V-T Combined")
     assert not at.exception
 
 
@@ -2311,9 +2412,10 @@ def test_section_view_is_geometry_only():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.button(key="calculate").click().run()
-    at.selectbox(key="view").set_value("Section").run()
-    at.number_input(key="conc_fck").set_value(40.0).run()  # change an input after calc
+    _calculate(at)
+    _select_view(at, "Section")
+    _set(at, ("number_input", "conc_fck", 40.0))  # change an input after calc
+    _select_view(at, "Section")
     assert not at.exception
     assert not any("neutral axis" in w.value for w in at.warning)
 
@@ -2322,8 +2424,8 @@ def test_plastic_results_table_and_state_selector():
     # The plastic view exposes the per-angle table data and a state selector.
     at = _fresh()
     at.run()
-    at.button(key="calculate").click().run()
-    at.selectbox(key="view").set_value("Plastic Results").run()
+    _calculate(at)
+    _select_view(at, "Plastic Results")
     assert not at.exception
     p = at.session_state["results"]["plastic"]
     assert len(p["points"]) > 0
@@ -2345,8 +2447,8 @@ def test_elastic_fully_tensile_case_renders_without_phantom_zone():
     at.radio(key="mode").set_value("Elastic").run()
     at.number_input(key="el_long_P").set_value(5000.0).run()   # large tension (+ = tension)
     at.number_input(key="el_long_Mx").set_value(0.0).run()
-    at.button(key="calculate").click().run()
-    at.selectbox(key="view").set_value("Elastic Results").run()
+    _calculate(at)
+    _select_view(at, "Elastic Results")
     assert not at.exception
     assert at.session_state["results"]["elastic"]["max_conc"] == pytest.approx(0.0)
     assert any("no compression" in c.value for c in at.caption)
@@ -2356,8 +2458,8 @@ def test_elastic_results_show_neutral_axis_and_max_steel():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    at.button(key="calculate").click().run()
-    at.selectbox(key="view").set_value("Elastic Results").run()
+    _calculate(at)
+    _select_view(at, "Elastic Results")
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert "max_steel" in e and "max_conc_xy" in e and "na_x" in e
@@ -2367,7 +2469,7 @@ def test_prestress_plastic_increases_capacity():
     # Enabling tendons in the tension zone must raise the plastic +Mx capacity.
     base = _fresh()
     base.run()
-    base.button(key="calculate").click().run()
+    _calculate(base)
     assert not base.exception
     mx0 = base.session_state["results"]["plastic"]["max_mx"]
 
@@ -2375,7 +2477,7 @@ def test_prestress_plastic_increases_capacity():
     _set_and_click(
         at, "qs_apply", ("number_input", "tnd_n", 4)
     )  # put the tendons in the section
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     res = at.session_state["results"]
     assert "plastic" in res
@@ -2414,7 +2516,7 @@ def test_material_manual_override_calculates():
     at.number_input(key="conc_fck").set_value(45.0).run()
     at.number_input(key="mild_gamma_y").set_value(1.3).run()
     assert not at.exception
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
 
@@ -2426,7 +2528,7 @@ def test_elastic_reports_cracking_and_section_properties():
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
     at.number_input(key="el_long_Mx").set_value(400.0).run()  # force cracking
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True
@@ -2525,7 +2627,7 @@ def test_crack_limit_verdict_and_candidate_table_are_retained():
     assert {"element_id", "x_mm", "y_mm", "area_mm2", "cover",
             "sigma_s", "ac_eff", "esm_ecm", "sr_max", "wk"} <= \
         e["crack"]["candidates"][0].keys()
-    at.selectbox(key="view").set_value("Elastic Results").run()
+    _select_view(at, "Elastic Results")
     assert any(
         "FAIL - Crack width" in item.value
         and "governing" in item.value
@@ -2553,7 +2655,7 @@ def test_crack_limit_and_source_are_retained_when_no_width_is_calculated():
     assert e["crack_assessment"]["status"] == "NOT APPLICABLE"
     assert e["crack_assessment"]["limit"] == pytest.approx(0.25)
     assert e["sls_limit_source"] == "Project no-crack criterion"
-    at.selectbox(key="view").set_value("Elastic Results").run()
+    _select_view(at, "Elastic Results")
     assert any("No crack width:" in item.value for item in at.info)
     assert any(
         "Project no-crack criterion" in item.value for item in at.caption
@@ -2746,8 +2848,8 @@ def test_elastic_view_renders_with_sls_subsection():
         ("radio", "mode", "Elastic"),
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
-        ("selectbox", "view", "Elastic Results"),
     )
+    _select_view(at, "Elastic Results")
     assert not at.exception
 
 
@@ -2912,7 +3014,7 @@ def test_tendon_stress_limit_uses_fpk_not_proof_stress():
     # The user-facing tendon stress criterion is explicitly a percentage of fpk.
     at = _fresh_qs(mode="Elastic")
     _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 3))
-    at.button(key="calculate").click().run()
+    _calculate(at)
     check = at.session_state["results"]["elastic"]["stress_assessments"]["prestress"]
     assert check["limit"] == pytest.approx(0.75 * 1860.0)
     assert check["criterion"] == "75% fpk"
@@ -2948,13 +3050,15 @@ def test_editing_ec_or_creep_marks_elastic_results_stale():
         at,
         "calculate",
         ("radio", "mode", "Elastic"),
-        ("selectbox", "view", "Elastic Results"),
     )
+    _select_view(at, "Elastic Results")
     assert not any("press Calculate" in w.value for w in at.warning)   # fresh, not stale
-    at.number_input(key="conc_Ec").set_value(20.0).run()              # changes n_s and n_l
+    _set(at, ("number_input", "conc_Ec", 20.0))                       # changes n_s and n_l
+    _select_view(at, "Elastic Results")
     assert any("press Calculate" in w.value for w in at.warning)      # now stale
-    at.button(key="calculate").click().run()
-    at.number_input(key="el_phi").set_value(1.0).run()               # changes n_l (creep)
+    _calculate(at)
+    _set(at, ("number_input", "el_phi", 1.0))                        # changes n_l (creep)
+    _select_view(at, "Elastic Results")
     assert any("press Calculate" in w.value for w in at.warning)
 
 

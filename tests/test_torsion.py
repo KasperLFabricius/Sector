@@ -177,8 +177,8 @@ def test_app_nu_v_detailing_flag_gated_to_dk_na():
         ("checkbox", "torsion_nu_v", True),
     )
     assert at.session_state["results"]["torsion"]["nu_v_detailing"] is True   # DK NA
-    at.selectbox(key="torsion_method").set_value(codes.EC2_2005.label).run()
-    at.button(key="calculate").click().run()
+    _set(at, ("selectbox", "torsion_method", codes.EC2_2005.label))
+    _calculate(at)
     # Recommended edition: the allowance did not apply, so the flag must be False.
     assert at.session_state["results"]["torsion"]["nu_v_detailing"] is False
 
@@ -273,8 +273,36 @@ def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
 
 
+def _goto_page(at, page):
+    try:
+        current = at.session_state["_main_page"]
+    except KeyError:
+        current = None
+    if current != page:
+        at.segmented_control(key="_main_page").set_value(page).run()
+    return at
+
+
+def _calculate(at):
+    _goto_page(at, "Analysis")
+    at.button(key="calculate").click().run()
+    return at
+
+
+def _select_view(at, value):
+    _goto_page(at, "Analysis")
+    at.selectbox(key="view").set_value(value).run()
+    return at
+
+
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    if changes:
+        widget_type, key, _value = changes[0]
+        try:
+            getattr(at, widget_type)(key=key)
+        except KeyError:
+            _goto_page(at, "Analysis" if key == "view" else "Inputs")
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
     return at.run()
@@ -285,8 +313,13 @@ def _set_and_click(at, button_key, *changes):
     if button_key in {"qs_apply", "qs_back"} and changes:
         _set(at, *changes)
         changes = ()
+    elif button_key == "calculate" and changes:
+        _set(at, *changes)
+        changes = ()
     for widget_type, key, value in changes:
         getattr(at, widget_type)(key=key).set_value(value)
+    if button_key == "calculate":
+        _goto_page(at, "Analysis")
     at.button(key=button_key).click()
     return at.run()
 
@@ -329,7 +362,7 @@ def test_app_torsion_uses_final_material_factors():
         ("number_input", "mild_gamma_y", 1.35),
         ("checkbox", "torsion_on", True),
     )
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["gamma_c"] == pytest.approx(1.80)
@@ -346,7 +379,7 @@ def test_app_torsion_view_renders():
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 30.0))
-    at.selectbox(key="view").set_value("Torsion").run()
+    _select_view(at, "Torsion")
     assert not at.exception
     labels = [m.label for m in at.metric]
     assert any("Utilisation" in lbl for lbl in labels)
@@ -377,7 +410,7 @@ def _subdivided(at, b0=300.0, h0=600.0, b1=1000.0, h1=200.0, T=40.0):
 
 def test_app_torsion_subdivided_sums_capacities():
     at = _fresh(); at.run(); _subdivided(at)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["subdivided"] and len(t["subtubes"]) == 2
@@ -403,7 +436,7 @@ def test_app_compound_torsion_requires_subdivision():
     assert t["compound_detected"] is True
     assert t["valid"] is False
     assert t["reason"] == "compound outline requires subdivision"
-    at.selectbox(key="view").set_value("Torsion").run()
+    _select_view(at, "Torsion")
     assert any("compound" in w.value and "Subdivide" in w.value
                for w in at.warning)
 
@@ -412,7 +445,7 @@ def test_app_compound_torsion_is_valid_after_subdivision():
     at = _fresh()
     at.run()
     _subdivided(at)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["compound_detected"] is True
@@ -436,14 +469,14 @@ def test_app_invalid_subtube_partition_withholds_torsion_verdict():
     assert t["valid"] is False
     assert t["subtubes"] is None
     assert t["reason"].startswith("invalid sub-tube partition:")
-    at.selectbox(key="view").set_value("Torsion").run()
+    _select_view(at, "Torsion")
     assert any("do not form the concrete section" in w.value for w in at.warning)
     assert not any("Utilisation TEd/TRd" in m.label for m in at.metric)
 
 
 def test_app_torsion_subdivided_distributes_by_stiffness():
     at = _fresh(); at.run(); _subdivided(at)
-    at.button(key="calculate").click().run()
+    _calculate(at)
     t = at.session_state["results"]["torsion"]
     cw = torsion.rectangle_torsion_constant(0.3, 0.6)
     cf = torsion.rectangle_torsion_constant(1.0, 0.2)
@@ -453,8 +486,8 @@ def test_app_torsion_subdivided_distributes_by_stiffness():
 
 def test_app_torsion_subdivided_view_renders():
     at = _fresh(); at.run(); _subdivided(at)
-    at.button(key="calculate").click().run()
-    at.selectbox(key="view").set_value("Torsion").run()
+    _calculate(at)
+    _select_view(at, "Torsion")
     assert not at.exception
     labels = [m.label for m in at.metric]
     assert any("TRd" in lbl for lbl in labels)
@@ -486,7 +519,7 @@ def test_app_torsion_subdivided_caption_not_shared_angle_when_disjoint():
     assert t["theta_mode"] == "disjoint"
     cots = [s["cot"] for s in t["subtubes"]]
     assert abs(cots[0] - cots[1]) > 0.01                         # each at its own angle
-    at.selectbox(key="view").set_value("Torsion").run()
+    _select_view(at, "Torsion")
     caps = " ".join(c.value for c in at.caption)
     assert "each sub-tube is at its OWN" in caps
     assert "ONE member strut angle" not in caps
@@ -591,7 +624,7 @@ def test_app_torsion_only_axial_input_enabled():
     )
     _set(at, ("number_input", "torsion_T", 30.0))
     assert not at.number_input(key="pl_P").disabled
-    at.button(key="calculate").click().run()
+    _calculate(at)
     base = at.session_state["results"]["torsion"]["trd_max"]
     _set_and_click(
         at, "calculate", ("number_input", "pl_P", -1500.0)
@@ -614,7 +647,7 @@ def test_app_torsion_multi_void_rejected():
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
     assert not at.exception
     assert not at.session_state["results"]["torsion"]["valid"]
-    at.selectbox(key="view").set_value("Torsion").run()
+    _select_view(at, "Torsion")
     assert any("multi-cell" in w.value for w in at.warning)
 
 
@@ -702,7 +735,7 @@ def test_app_min_reinf_screen_evaluated():
                                         + mr["v_ed"] / mr["vrd_c"])
     assert mr["ok"] is (mr["value"] <= 1.0 + 1e-9)
     assert mr["solid"] is True                          # default section has no void
-    at.selectbox(key="view").set_value("Torsion").run()
+    _select_view(at, "Torsion")
     assert not at.exception
 
 
@@ -714,7 +747,7 @@ def test_app_min_reinf_screen_needs_shear():
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 15.0))
     mr = at.session_state["results"]["torsion"]["min_reinf"]
     assert mr["applicable"] is False
-    at.selectbox(key="view").set_value("Torsion").run()
+    _select_view(at, "Torsion")
     assert not at.exception
 
 
@@ -802,7 +835,7 @@ def test_app_torsion_out_of_range_withholds_verdict():
     t = at.session_state["results"]["torsion"]
     assert t["out_of_limits"] is True
     assert t["code_applicable"] is False
-    at.selectbox(key="view").set_value("Torsion").run()
+    _select_view(at, "Torsion")
     assert any("NO CODE VERDICT" in w.value for w in at.warning)
     util_metric = next(m for m in at.metric if m.label == "Utilisation TEd/TRd")
     assert not util_metric.delta
