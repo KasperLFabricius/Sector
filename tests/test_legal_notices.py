@@ -13,6 +13,10 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_proprietary_notice_grants_no_public_licence():
     text = (ROOT / "LICENSE").read_text(encoding="ascii")
     assert "proprietary software" in text.lower()
+    assert "Kasper Lindskov Fabricius" in text
+    assert "Sweco Danmark A/S, CVR 48233511, Denmark" in text
+    assert "does not grant any person a personal licence" in text
+    assert "public or external distribution" in text
     assert "No permission is granted" in text
     assert "Third-party components" in text
 

@@ -92,6 +92,7 @@ def validate_pdf_content(pdf: bytes) -> str:
 
     for expected in (
         "Sector user manual",
+        "Sweco Danmark A/S",
         "Contents",
         "Plastic / capacity",
         "Stress limits and/or Crack width",

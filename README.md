@@ -2,7 +2,7 @@
 
 **Reinforced-concrete cross-section analysis for structural engineering.**
 
-Current release: **Sector 0.80**. See [CHANGELOG.md](CHANGELOG.md).
+Current release: **Sector 0.90**. See [CHANGELOG.md](CHANGELOG.md).
 
 Sector analyses a polygonal reinforced (and optionally prestressed) concrete
 cross-section and reports, for the same section:
@@ -103,7 +103,8 @@ hand.
 
 ## Distribution
 
-Sector is proprietary internal software; access to the repository or application
-does not grant a licence. See [LICENSE](LICENSE). Windows builds include a
-generated third-party notice bundle beside `Sector.exe`; the source process is
-documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Sector is proprietary software authored by Kasper Lindskov Fabricius and licensed
+to Sweco Danmark A/S for internal use. Access to the repository or application
+does not grant a personal or public licence. See [LICENSE](LICENSE). Windows builds
+include a generated third-party notice bundle beside `Sector.exe`; the source
+process is documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -429,8 +429,8 @@ def test_loading_a_project_applies_a_seeded_setting(tmp_path):
     assert "_clear_section_undo" not in at.session_state
 
 
-def test_about_panel_shows_version_and_author():
-    # The About panel carries the single-source version plus the author/email block.
+def test_about_panel_shows_version_author_and_licensee():
+    # The About panel carries the single-source release and ownership metadata.
     at = _fresh()
     at.run()
     blob = " | ".join(m.value for m in at.markdown) + \
@@ -439,6 +439,7 @@ def test_about_panel_shows_version_and_author():
     assert version in blob and f"v{version}" in (at.title[0].value if at.title else "")
     assert "Kasper Lindskov Fabricius" in blob
     assert "Kasper.LindskovFabricius@sweco.dk" in blob
+    assert "Sweco Danmark A/S" in blob
 
 
 def test_calculate_plastic_produces_an_envelope():

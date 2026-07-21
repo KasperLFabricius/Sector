@@ -33,6 +33,8 @@ import project_io  # noqa: E402
 import result_presentation as presentation  # noqa: E402
 import viz  # noqa: E402
 from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
+from sector import __author__ as sector_author  # noqa: E402
+from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import (capacity, codes, combined, geometry, kernels,  # noqa: E402
                     material_presets as mp, shear, templates, torsion)
@@ -47,7 +49,8 @@ from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa:
 # The tool version comes from the sector package (the single source of truth); it
 # shows in the title, the browser tab, the About panel and the report footer.
 APP_VERSION = sector_version
-APP_AUTHOR = "Kasper Lindskov Fabricius"
+APP_AUTHOR = sector_author
+APP_LICENSEE = sector_licensee
 APP_EMAIL = "Kasper.LindskovFabricius@sweco.dk"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -1089,7 +1092,7 @@ def _maybe_autosave() -> None:
         return
     st.session_state["_autosave_t"] = time.time()    # reset whether or not it writes
     if _perform_autosave():
-        st.toast("Session autosaved.")
+        st.toast("Autosaved.")
 
 
 def _autosave_startup() -> None:
@@ -1122,18 +1125,18 @@ def _autosave_startup() -> None:
 
 def _autosave_panel(box) -> None:
     """Autosave toggle, interval and status inside the Save / Load panel."""
-    enabled = box.checkbox(
-        "Autosave", value=True, key="autosave_on",
-        help="Save the section, materials, loads and settings to a local file and "
-             "restore them on the next launch. Saving happens as you work (on edits "
-             "and clicks) once the interval has passed, not while the app is idle.")
-    box.number_input(
-        "Autosave interval (min)", 1, 120, _AUTOSAVE_DEFAULT_MIN, 1, key="autosave_min",
+    enabled = _seeded_checkbox(
+        box, "Autosave", True, "autosave_on",
+        help="Save inputs locally and restore them on the next launch. A due save "
+             "runs on the next interaction.")
+    _seeded_number(
+        box, "Autosave interval (min)", 1, 120, _AUTOSAVE_DEFAULT_MIN, 1,
+        "autosave_min",
         disabled=not enabled, on_change=_reset_autosave_clock,
         help="Minutes between automatic saves.")
     last = st.session_state.get("_autosave_last")
     box.caption(f"Autosaved at {last}." if last
-                else "Autosaves as you work; restored on the next launch.")
+                else "Local recovery is restored on the next launch.")
 
 
 def _apply_pending_project() -> None:
@@ -1222,7 +1225,7 @@ def _apply_pending_project() -> None:
     st.session_state.pop("qs_shape_prev", None)
     st.session_state["pts_init"] = True   # do not re-seed the tables from a template
     if st.session_state.pop("_autosave_restoring", False):
-        st.session_state["_project_msg"] = ("success", "Restored your last autosaved session.")
+        st.session_state["_project_msg"] = ("success", "Restored autosaved session.")
     else:
         version = provenance.get("sector_version")
         revision = short_revision(provenance.get("source_revision"))
@@ -2657,11 +2660,10 @@ def build_inputs(host=st):
         st.divider()
         st.markdown(f"**Sector v{APP_VERSION}**")
         st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
-        st.caption("Proprietary internal engineering tool, Sweco.")
+        st.caption(f"Proprietary software; licensed to {APP_LICENSEE} for internal use.")
         st.button(
             "User manual", key="open_manual", width="stretch",
-            help="Open the full-width user manual: what Sector computes, the theory "
-                 "it applies, its features, and how to use it.",
+            help="Open the user manual.",
             on_click=_open_analysis_content, args=("manual",),
         )
     return dict(section=section, void_error=void_error, steel_error=steel_error,

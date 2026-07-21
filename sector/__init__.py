@@ -60,6 +60,8 @@ __all__ = [
     "solve_interaction",
 ]
 
-# Single source of truth for the Sector release shown by the app, reports,
-# manuals, saved-project provenance and packaged-build manifest.
-__version__ = "0.80"
+# Single source of truth for release and ownership metadata shown by the app,
+# reports, manuals, saved-project provenance and packaged-build manifest.
+__version__ = "0.90"
+__author__ = "Kasper Lindskov Fabricius"
+__licensee__ = "Sweco Danmark A/S"

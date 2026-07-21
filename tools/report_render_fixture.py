@@ -472,6 +472,7 @@ def validate_pdf_content(pdf: bytes) -> str:
 
     for expected in (
         "QA-REFERENCE",
+        "Sweco Danmark A/S",
         "Rendered report regression",
         "Results overview - FAIL",
         "Governing combination",

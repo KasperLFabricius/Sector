@@ -150,6 +150,17 @@ def test_report_pdf_generates():
     assert len(pdf) > 3000
 
 
+def test_report_footer_identifies_the_organisational_licensee():
+    txt = _pdf_text(sector_report.build_report(
+        {"source_revision": "abcdef1234567890"},
+        _inp(),
+        _out(),
+        version="0.90",
+        figures=False,
+    ))
+    assert "Sector 0.90 - abcdef123456 - Sweco Danmark A/S" in " ".join(txt.split())
+
+
 def test_report_front_matter_identifies_action_sets_and_result_statuses():
     txt = _pdf_text(sector_report.build_report(
         {"source_revision": "abcdef1234567890"},
