@@ -40,6 +40,7 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
 import case_analysis
 import viz
 import result_presentation as presentation
+from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
 
 _MM = 1000.0                       # metres -> millimetres for display
@@ -705,7 +706,7 @@ class ReportBuilder:
         self._appendix()
         self._tick(0.92, "Writing PDF...")
         revision_id = short_revision(self.meta.get("source_revision"))
-        footer = f"Sector {self.version}  -  {revision_id}  -  Sweco".strip()
+        footer = f"Sector {self.version}  -  {revision_id}  -  {SECTOR_LICENSEE}".strip()
         project = str(self.meta.get("proj_no", "")).strip() or "-"
         section = str(self.meta.get("section", "")).strip() or "-"
         revision = str(self.meta.get("rev", "")).strip()

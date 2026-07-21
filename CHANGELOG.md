@@ -1,5 +1,24 @@
 # Sector changelog
 
+## 0.90 - 2026-07-22
+
+Sector 0.90 completes the interface and multi-case workflow review.
+
+- Restricted the Streamlit service to the local computer and migrated point
+  tables to Streamlit Components v2 with reliable state transport.
+- Reduced unnecessary reruns, preserved input state across workspace navigation,
+  and co-located section and material-law previews with their inputs.
+- Replaced scalar actions with uniquely named Plastic/capacity and Elastic case
+  tables, including descriptions and per-case stress/crack acceptance selections.
+- Ran every case through the verified solvers and added combined summaries plus
+  individual-case navigation in the UI and PDF report.
+- Added complete multi-case report chapters and working manual contents links,
+  and corrected report/manual bookmark destinations.
+- Clarified project recovery, ownership and distribution: Kasper Lindskov
+  Fabricius remains the author, and Sweco Danmark A/S is the internal licensee.
+
+Plastic and Elastic remain solver names and do not prescribe a limit state.
+
 ## 0.80 - 2026-07-20
 
 Sector 0.80 is the holistic QA remediation release.

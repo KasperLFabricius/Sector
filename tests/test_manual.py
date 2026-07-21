@@ -180,6 +180,22 @@ def test_part_b_documents_the_panels_and_options():
         assert token in text, token
 
 
+def test_manual_documents_project_recovery_and_ownership():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "Project files and autosave",
+        "five-minute interval",
+        "autosave is recovery",
+    ):
+        assert expected in text
+    import pypdf
+    reader = pypdf.PdfReader(io.BytesIO(manual.build_manual_pdf_bytes(figures=False)))
+    pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert "Author: Kasper Lindskov Fabricius" in pdf_text
+    assert "licensed to Sweco Danmark A/S for internal use" in pdf_text
+    assert "*" not in pdf_text
+
+
 def test_manual_documents_shared_strut_angle_and_stirrup():
     # F6-doc (v0.69): the manual states (a) shear and torsion share ONE strut angle,
     # chosen to minimise the governing utilisation, and (b) one closed stirrup serves
@@ -251,6 +267,9 @@ def test_latex_to_rl_converts_the_subset():
         r"\rho_{p,eff})}{E_s}")
     assert "frac" not in nested and "\\" not in nested
     assert nested.endswith("/E<sub>s</sub>")             # outer division survived
+
+    emphasis = manual._inline_md_to_rl("Open *Analysis* and press **Calculate**.")
+    assert emphasis == "Open <i>Analysis</i> and press <b>Calculate</b>."
 
     # \text{...} labels (e.g. the prestress total strain) keep their content.
     txt = manual._latex_to_rl(r"\varepsilon_c(\text{tendon})")

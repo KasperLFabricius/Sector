@@ -29,6 +29,8 @@ import threading
 import plotly.graph_objects as go
 import streamlit as st
 
+from sector import __author__ as APP_AUTHOR
+from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
 from sector import templates
 from sector.codes import fctm
@@ -482,6 +484,16 @@ def manual_blocks() -> list:
          "recomputes every auto quantity from the current grade at once: the concrete "
          "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
          "$E_s$, $E_p$ and creep automatically.")
+
+    h1("Project files and autosave")
+    md("A downloaded project file stores the section, materials, settings, named "
+       "load cases and provenance. Loading a project restores its inputs and clears "
+       "earlier results; press *Calculate* to create current results. Compatible "
+       "older files are migrated when loaded.")
+    md("Local autosave is enabled by default at a five-minute interval. A due save "
+       "runs on the next interaction and is restored on the next launch. Keep the "
+       "issued project file with the calculation record; autosave is recovery, not "
+       "an issued deliverable.")
 
     h1("Defining the section")
     md("A section is a set of explicit points in millimetres -- the concrete "
@@ -1307,12 +1319,13 @@ def _latex_to_rl(s: str) -> str:
 
 
 def _inline_md_to_rl(text: str) -> str:
-    """Inline Markdown (``**bold**``, ``$math$``) -> ReportLab inline markup.
+    """Inline Markdown (emphasis, bold and math) -> ReportLab inline markup.
     The literal ``<``/``>``/``&`` are escaped first so the introduced tags stay
-    valid, then the math and bold spans reintroduce real markup."""
+    valid, then the supported spans reintroduce real markup."""
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = re.sub(r"\$([^$]+)\$", lambda m: _latex_to_rl(m.group(1)), text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
     return text
 
 
@@ -1478,7 +1491,9 @@ def build_manual_pdf(buffer, figures=True):
     flow = [
         Paragraph("Sector user manual", styles["MTitle"]),
         Paragraph(f"Version {APP_VERSION}", styles["MSmall"]),
-        Paragraph("Proprietary internal engineering tool", styles["MSmall"]),
+        Paragraph(f"Author: {APP_AUTHOR}", styles["MSmall"]),
+        Paragraph(f"Proprietary software; licensed to {APP_LICENSEE} for internal use.",
+                  styles["MSmall"]),
         Spacer(1, 0.3 * cm),
         Paragraph("What Sector computes, the theory it applies, its features, and "
                   "how to use it.", styles["MBody"]),
@@ -1559,10 +1574,11 @@ def build_manual_pdf(buffer, figures=True):
                 img_h = page_w * (h / w) if w else 8 * cm
                 flow.append(KeepTogether([
                     Image(io.BytesIO(png), width=page_w, height=img_h),
-                    Paragraph(block[2], styles["MSmall"])]))
+                    Paragraph(_inline_md_to_rl(block[2]), styles["MSmall"])]))
             else:
-                flow.append(Paragraph(f"[figure unavailable] {block[2]}",
-                                      styles["MSmall"]))
+                flow.append(Paragraph(
+                    _inline_md_to_rl(f"[figure unavailable] {block[2]}"),
+                    styles["MSmall"]))
             flow.append(Spacer(1, 0.2 * cm))
         elif kind == "table":
             headers, rows = block[1], block[2]
