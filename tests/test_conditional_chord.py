@@ -30,6 +30,8 @@ from sector.plastic import (  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 
+from app_case_inputs import apply_case_changes  # noqa: E402
+
 
 def _beam():
     ex = manual.example_beam()
@@ -333,6 +335,9 @@ def _select_view(at, value):
 
 def _set(at, *changes):
     """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    changes, case_changed = apply_case_changes(at, changes)
+    if case_changed:
+        _goto_page(at, "Inputs")
     if changes:
         widget_type, key, _value = changes[0]
         try:
@@ -459,13 +464,16 @@ def test_app_shear_compression_face_governs_under_hogging():
     # governs the longitudinal chord. The old shear-tension-face-only check would
     # have seen only the relieved bottom face and missed this failure entirely.
     at = _fresh(); at.run()
-    at.number_input(key="pl_Mx").set_value(-150.0).run()   # hogging
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.number_input(key="shear_V").set_value(150.0).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.number_input(key="torsion_T").set_value(40.0).run()
-    at.checkbox(key="combined_on").set_value(True).run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", -150.0),  # hogging
+        ("checkbox", "shear_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 40.0),
+        ("checkbox", "combined_on", True),
+    )
     _calculate(at)
     assert not at.exception
     lg = at.session_state["results"]["combined"]["longitudinal"]

@@ -26,8 +26,8 @@ PLASTIC_TABLE_KEY = "plastic_cases_base"
 ELASTIC_TABLE_KEY = "elastic_cases_base"
 CASE_TABLE_KEYS = (PLASTIC_TABLE_KEY, ELASTIC_TABLE_KEY)
 
-# Transitional scalar fields used by project versions 1-3 and by the current
-# single-case controls while the table UI is introduced in stages.
+# Historical scalar fields used by project versions 1-3. They remain here only
+# for lossless migration into the canonical load-case tables.
 LEGACY_SCALAR_KEYS = (
     "pl_case_id", "pl_case_type", "pl_case_source",
     "el_case_id", "el_case_type", "el_case_source",
@@ -246,13 +246,19 @@ def _description(classification, source) -> str:
 def tables_from_legacy_scalars(scalars: Mapping | None) -> dict[str, pd.DataFrame]:
     """Migrate the former single-action scalar fields to one row per solver."""
     scalars = scalars or {}
-    stress_enabled = any(
-        _number(scalars.get(key, 0.0)) > 0.0
-        for key in (
-            "sls_conc_limit_pct",
-            "sls_steel_limit_pct",
-            "sls_pre_limit_pct",
-        )
+    stress_keys = (
+        "sls_conc_limit_pct",
+        "sls_steel_limit_pct",
+        "sls_pre_limit_pct",
+    )
+    supplied_limits = [scalars[key] for key in stress_keys if key in scalars]
+    # Before per-case flags, stress acceptance was always active whenever the
+    # applicable global limit was nonzero. Preserve that behaviour for default and
+    # historical rows; an explicit set of all-zero legacy limits remains off.
+    stress_enabled = (
+        True
+        if not supplied_limits
+        else any(_number(value) > 0.0 for value in supplied_limits)
     )
     plastic = normalise_table([{
         NAME: _text(scalars.get("pl_case_id")) or "PL-01",
@@ -283,11 +289,10 @@ def tables_from_legacy_scalars(scalars: Mapping | None) -> dict[str, pd.DataFram
 
 
 def legacy_scalars_from_tables(tables: Mapping | None) -> dict:
-    """Expose the first row through the former scalar API during migration.
+    """Expose the first row through the verified single-case compatibility API.
 
-    This compatibility adapter is intentionally one-way: the final table UI uses
-    ``description`` directly, while a pre-table panel receives it in its optional
-    classification field. No description text is lost.
+    The table UI remains authoritative. A few older callers still consume the
+    first row through scalar names; ``description`` is retained losslessly.
     """
     tables = tables or {}
     defaults = tables_from_legacy_scalars({})

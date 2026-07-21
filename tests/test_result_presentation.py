@@ -359,3 +359,62 @@ def test_infinite_failure_governs_while_nan_and_non_applicable_do_not():
     assert presentation.summary_governing_flags(rows) == [
         False, True, False, False,
     ]
+
+
+def _plastic_case_entry(name, util, *, v=0.0, t=0.0):
+    actions = {
+        "name": name,
+        "description": f"Description {name}",
+        "n_ed_kn": 0.0,
+        "mx_ed_knm": 10.0,
+        "my_ed_knm": 0.0,
+        "v_ed_kn": v,
+        "t_ed_knm": t,
+    }
+    return {
+        "name": name,
+        "description": actions["description"],
+        "actions": actions,
+        "evaluated": True,
+        "results": {"plastic": _plastic(util=util)},
+    }
+
+
+def test_multi_case_summary_marks_governing_case_for_each_check():
+    inp = _inp(
+        mode="Plastic",
+        plastic_cases=[],
+        elastic_cases=[],
+        shear_on=False,
+        torsion_on=False,
+        combined_on=False,
+    )
+    rows = presentation.multi_case_summary_rows(inp, {
+        "plastic_cases": [
+            _plastic_case_entry("PL-A", 0.60),
+            _plastic_case_entry("PL-B", 0.90),
+        ],
+    })
+
+    assert [row["case"] for row in rows] == ["PL-A", "PL-B"]
+    assert presentation.summary_governing_case_flags(rows) == [False, True]
+
+
+def test_multi_case_summary_records_zero_actions_as_not_evaluated():
+    inp = _inp(
+        mode="Plastic",
+        plastic_cases=[],
+        elastic_cases=[],
+        shear_on=True,
+        torsion_on=True,
+        combined_on=True,
+    )
+    rows = presentation.multi_case_summary_rows(inp, {
+        "plastic_cases": [_plastic_case_entry("PL-ZERO", 0.50)],
+    })
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Shear"]["status"] == "NOT APPLICABLE"
+    assert by_check["Shear"]["result"] == "VEd = 0"
+    assert by_check["Torsion"]["status"] == "NOT APPLICABLE"
+    assert by_check["Combined M-V-T"]["result"] == "VEd and TEd = 0"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 
+import case_analysis
 import viz
 
 _MM = 1000.0
@@ -651,6 +652,79 @@ def result_summary_rows(inp, results, *, stale=False):
     return rows
 
 
+def multi_case_summary_rows(inp, results, *, stale=False):
+    """Build one ordered result register across every canonical case row."""
+    inp = inp or {}
+    results = results or {}
+    if "plastic_cases" not in inp and "elastic_cases" not in inp:
+        return result_summary_rows(inp, results, stale=stale)
+
+    mode = str(inp.get("mode") or "")
+    requested = {
+        "plastic": (
+            mode in {"Plastic", "Both"}
+            or bool(inp.get("shear_on"))
+            or bool(inp.get("torsion_on"))
+            or bool(inp.get("combined_on"))
+        ),
+        "elastic": mode in {"Elastic", "Both"},
+    }
+    rows = []
+    for family in ("plastic", "elastic"):
+        if not requested[family]:
+            continue
+        result_key = f"{family}_cases"
+        entries = results.get(result_key)
+        if entries is None:
+            entries = [
+                {
+                    "actions": record,
+                    "results": {},
+                    "evaluated": False,
+                }
+                for record in case_analysis.case_records(inp, family)
+            ]
+        for entry in entries:
+            actions = entry.get("actions") or {}
+            if family == "plastic":
+                case_inp = case_analysis.plastic_case_input(inp, actions)
+            else:
+                case_inp = case_analysis.elastic_case_input(inp, actions)
+            case_results = entry.get("results") or {}
+            rows.extend(
+                result_summary_rows(case_inp, case_results, stale=stale)
+            )
+            if family != "plastic":
+                continue
+
+            v_zero = abs(float(actions.get("v_ed_kn", 0.0))) <= 0.0
+            t_zero = abs(float(actions.get("t_ed_knm", 0.0))) <= 0.0
+            if inp.get("shear_on") and v_zero:
+                rows.append(_summary_row(
+                    "Shear", "plastic", "NOT APPLICABLE",
+                    result="VEd = 0", view="Shear",
+                    note="Zero action; not evaluated", inp=case_inp,
+                ))
+            if inp.get("torsion_on") and t_zero:
+                rows.append(_summary_row(
+                    "Torsion", "plastic", "NOT APPLICABLE",
+                    result="TEd = 0", view="Torsion",
+                    note="Zero action; not evaluated", inp=case_inp,
+                ))
+            if inp.get("combined_on") and (v_zero or t_zero):
+                zero = " and ".join(
+                    label
+                    for label, is_zero in (("VEd", v_zero), ("TEd", t_zero))
+                    if is_zero
+                )
+                rows.append(_summary_row(
+                    "Combined M-V-T", "plastic", "NOT APPLICABLE",
+                    result=f"{zero} = 0", view="M-V-T Combined",
+                    note="Zero action; not evaluated", inp=case_inp,
+                ))
+    return rows
+
+
 def overall_summary_status(rows):
     """Return the most conservative state represented in a summary table."""
     states = {row.get("status") for row in rows}
@@ -689,3 +763,34 @@ def summary_governing_flags(rows):
         )
         for row in rows
     ]
+
+
+def summary_governing_case_flags(rows):
+    """Mark the highest accepted utilisation for each check across cases."""
+    eligible = {}
+    for row in rows:
+        util = row.get("util")
+        if (
+            row.get("status") in {"PASS", "FAIL"}
+            and util is not None
+            and (math.isfinite(util) or util == math.inf)
+        ):
+            eligible.setdefault(row.get("check"), []).append(util)
+    governing = {
+        check: max(values) for check, values in eligible.items() if values
+    }
+    flags = []
+    for row in rows:
+        value = governing.get(row.get("check"))
+        util = row.get("util")
+        flags.append(bool(
+            value is not None
+            and row.get("status") in {"PASS", "FAIL"}
+            and util is not None
+            and (
+                util == value
+                if value == math.inf
+                else math.isclose(util, value, rel_tol=1e-12, abs_tol=1e-12)
+            )
+        ))
+    return flags

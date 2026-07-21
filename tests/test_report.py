@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import pathlib
 import sys
 
@@ -162,6 +163,81 @@ def test_report_front_matter_identifies_action_sets_and_result_statuses():
     assert "Combination register C2" in txt
     assert "abcdef123456" in txt
     assert "Concrete stress" in txt and "Crack width" in txt
+
+
+def test_multi_case_report_includes_later_governing_case_and_all_details():
+    inp = _inp()
+    plastic_rows = [
+        {
+            "name": "PL-01", "description": "Routine combination",
+            "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
+            "v_ed_kn": 0.0, "t_ed_knm": 0.0,
+        },
+        {
+            "name": "PL-02", "description": "Governing combination",
+            "n_ed_kn": 0.0, "mx_ed_knm": 125.0, "my_ed_knm": 0.0,
+            "v_ed_kn": 0.0, "t_ed_knm": 0.0,
+        },
+    ]
+    elastic_rows = [
+        {
+            "name": "EL-01", "description": "Characteristic stresses",
+            "n_long_ed_kn": 0.0, "mx_long_ed_knm": 80.0,
+            "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 20.0, "my_short_ed_knm": 0.0,
+            "check_stress": True, "check_crack_width": True,
+        },
+        {
+            "name": "EL-02", "description": "Frequent response",
+            "n_long_ed_kn": 0.0, "mx_long_ed_knm": 45.0,
+            "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 10.0, "my_short_ed_knm": 0.0,
+            "check_stress": True, "check_crack_width": False,
+        },
+    ]
+    inp["plastic_cases"] = plastic_rows
+    inp["elastic_cases"] = elastic_rows
+
+    first = _out()
+    second_plastic = copy.deepcopy(first["plastic"])
+    second_plastic["util"] = 1.25
+    second_plastic["applied"] = (125.0, 0.0)
+    second_elastic = copy.deepcopy(first["elastic"])
+    second_elastic["show_cw"] = False
+    second_elastic["max_steel"] = 456.0
+    second_elastic["max_steel_element"] = "bar 1"
+    second_elastic["elements"][0]["total_mpa"] = 456.0
+
+    out = {
+        # Deliberately retain only the first case in the compatibility projection.
+        # The report must consume the canonical entries below instead.
+        "plastic": first["plastic"],
+        "elastic": first["elastic"],
+        "plastic_cases": [
+            {"name": row["name"], "actions": row, "evaluated": True,
+             "results": {"plastic": result}}
+            for row, result in zip(
+                plastic_rows, (first["plastic"], second_plastic)
+            )
+        ],
+        "elastic_cases": [
+            {"name": row["name"], "actions": row, "evaluated": True,
+             "results": {"elastic": result}}
+            for row, result in zip(
+                elastic_rows, (first["elastic"], second_elastic)
+            )
+        ],
+    }
+
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    flat = " ".join(txt.split())
+    assert "Results overview - FAIL" in flat
+    assert all(case in flat for case in ("PL-01", "PL-02", "EL-01", "EL-02"))
+    assert "Governing combination" in flat and "Frequent response" in flat
+    assert flat.count(". Plastic section capacity") == 2
+    assert flat.count(". Elastic section response and stress limits") == 2
+    assert "125.0 %" in flat
+    assert "456.000 MPa" in flat
 
 
 def test_report_escapes_user_entered_action_provenance():
