@@ -45,9 +45,12 @@ def _streamlit_argv(app_path, port) -> list:
     return [
         "streamlit", "run", str(app_path),
         f"--server.port={port}",
+        "--server.address=127.0.0.1",      # desktop app: never expose on the LAN
         "--global.developmentMode=false",
         "--server.headless=false",          # open the browser on launch
         "--browser.gatherUsageStats=false",
+        "--client.toolbarMode=viewer",
+        "--client.showErrorDetails=type",
     ]
 
 

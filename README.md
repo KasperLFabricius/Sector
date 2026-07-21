@@ -39,6 +39,10 @@ pip install --require-hashes -r requirements.txt
 python run_app.py          # or: streamlit run app/sector_app.py
 ```
 
+Sector uses port 8502 so it can run alongside BriCoS on Streamlit's default
+port 8501. Both launch methods bind to `127.0.0.1`, so the application is
+accessible only from the computer running Sector.
+
 Define the section (shape, dimensions, reinforcement), set the materials and
 loads, pick the analysis mode, and press **Calculate**. The section drawing
 updates live as you type; results update when you calculate.

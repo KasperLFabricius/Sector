@@ -18,9 +18,21 @@ def _port() -> str:
     return os.environ.get("SECTOR_PORT") or "8502"
 
 
+def _streamlit_argv(app_path, port) -> list:
+    """Return the local-only development launcher arguments."""
+    return [
+        "streamlit", "run", str(app_path),
+        "--server.port", port,
+        "--server.address", "127.0.0.1",
+        "--server.headless", "true",
+        "--browser.gatherUsageStats", "false",
+        "--client.toolbarMode", "viewer",
+        "--client.showErrorDetails", "type",
+    ]
+
+
 def main():
-    sys.argv = ["streamlit", "run", str(APP), "--server.port", _port(),
-                "--server.headless", "true"]
+    sys.argv = _streamlit_argv(APP, _port())
     sys.exit(stcli.main())
 
 

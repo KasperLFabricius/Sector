@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import tomllib
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "packaging"))
 
@@ -90,6 +91,10 @@ def test_default_port_is_8502_so_it_does_not_clash_with_bricos(monkeypatch):
     assert run_sector._port() == "8502"
     argv = run_sector._streamlit_argv("app/sector_app.py", run_sector._port())
     assert "--server.port=8502" in argv
+    assert "--server.address=127.0.0.1" in argv
+    assert "--browser.gatherUsageStats=false" in argv
+    assert "--client.toolbarMode=viewer" in argv
+    assert "--client.showErrorDetails=type" in argv
     assert argv[:3] == ["streamlit", "run", "app/sector_app.py"]
 
 
@@ -99,12 +104,21 @@ def test_port_is_overridable_via_env(monkeypatch):
     assert "--server.port=8600" in run_sector._streamlit_argv("x", run_sector._port())
 
 
-def test_dev_streamlit_config_pins_the_same_port():
-    # The dev-run config (streamlit run app/sector_app.py) must pin the same port
-    # as the packaged launcher, so both paths serve on 8502.
+def _dev_streamlit_config():
     cfg = pathlib.Path(__file__).resolve().parent.parent / ".streamlit" / "config.toml"
     assert cfg.is_file()
-    assert "port = 8502" in cfg.read_text(encoding="utf-8")
+    with cfg.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def test_dev_streamlit_config_is_local_and_production_safe():
+    # Direct `streamlit run` must retain the packaged launcher's local-only and
+    # user-facing behavior instead of exposing a developer console on the LAN.
+    cfg = _dev_streamlit_config()
+    assert cfg["server"] == {"port": 8502, "address": "127.0.0.1"}
+    assert cfg["client"]["toolbarMode"] == "viewer"
+    assert cfg["client"]["showErrorDetails"] == "type"
+    assert cfg["browser"]["gatherUsageStats"] is False
 
 
 def _run_app():
@@ -125,3 +139,12 @@ def test_root_launcher_defaults_to_8502(monkeypatch):
 def test_root_launcher_port_is_overridable(monkeypatch):
     monkeypatch.setenv("SECTOR_PORT", "8600")
     assert _run_app()._port() == "8600"
+
+
+def test_root_launcher_is_local_only_and_disables_telemetry():
+    argv = _run_app()._streamlit_argv("app/sector_app.py", "8502")
+    assert argv[:3] == ["streamlit", "run", "app/sector_app.py"]
+    assert argv[argv.index("--server.address") + 1] == "127.0.0.1"
+    assert argv[argv.index("--browser.gatherUsageStats") + 1] == "false"
+    assert argv[argv.index("--client.toolbarMode") + 1] == "viewer"
+    assert argv[argv.index("--client.showErrorDetails") + 1] == "type"
