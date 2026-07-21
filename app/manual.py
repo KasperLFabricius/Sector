@@ -415,12 +415,12 @@ def manual_blocks() -> list:
        "Elastic or Both, and toggle the crack-width check.\n"
        "4. **Enter the loads.** Give each solver's axial force and moments, with "
        "the project action-set ID and optional classification.\n"
-       "5. **Calculate.** Read the results in the *View* dropdown: the section, the "
-       "material-law diagrams, the plastic envelope and the elastic stresses.\n"
+       "5. **Calculate.** Open *Analysis* and use the *View* dropdown for the "
+       "results overview, plastic envelope and elastic stresses.\n"
        "6. **Export.** Generate the PDF report or download the project file.")
     fig(fig_beam_section, "The rectangular worked example as Sector draws it: the "
-        "concrete corners and the bars are numbered. Turn on the point labels to "
-        "see the numbering on your own section.")
+        "concrete corners and bars are numbered. Use the *Display* controls beside "
+        "your Section inputs to adjust label size and spacing.")
 
     h1("The worked examples")
     md("Two sections are threaded through this manual. Every worked derivation in "
@@ -463,16 +463,16 @@ def manual_blocks() -> list:
     h1("The workspace")
     md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
        "parameters*, *Loads* and *Project & report* in full-width tabs. The "
-       "**Analysis** page contains the drawings and results selected "
-       "with the **View** dropdown. The section drawing and material-law diagrams "
-       "update live; result views recompute on **Calculate**.")
+       "*Section* tab places the section drawing beside its point tables, and each "
+       "material subtab places its stress-strain diagram beside the corresponding "
+       "parameters. These previews update live. The **Analysis** page contains only "
+       "calculated results selected with the **View** dropdown.")
     table(["View", "Shows"],
-          [["Section", "The concrete outline, voids and reinforcement (live)"],
-           ["Material laws", "Concrete, mild-steel and tendon input laws (live)"],
+          [["Results Overview", "Status and utilisation summary for the requested checks"],
            ["Plastic Results", "The M-M envelope and the utilisation (on Calculate)"],
            ["Elastic Results", "The cracked-section stresses and crack width (on Calculate)"],
            ["Shear", "The shear resistance $V_{Rd,c}$ and the utilisation (on Calculate)"]])
-    call("tip", "*Auto-calc all derived values* (in Analysis settings) "
+    call("tip", "*Auto-calc all derived values* (in Material parameters) "
          "recomputes every auto quantity from the current grade at once: the concrete "
          "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
          "$E_s$, $E_p$ and creep automatically.")
@@ -539,8 +539,8 @@ def manual_blocks() -> list:
          "default is **0.85** (general / other cases). Selecting **1.00** explicitly "
          "assumes the reference-age and at-least-three-month delayed design-loading "
          "conditions stated in 5.1.6(1); that assumption is repeated in the PDF.")
-    fig(fig_beam_concrete_law, "The concrete law for the rectangular example "
-        "(C40/50), as the Material laws view draws it.")
+    fig(fig_beam_concrete_law, "The concrete-law preview for the rectangular "
+        "example (C40/50).")
     h2("Mild steel")
     md("The mild steel is bilinear (optionally with hardening). The inputs are the "
        "yield and ultimate strengths $f_{yk}$ / $f_{tk}$, the ultimate strain "
