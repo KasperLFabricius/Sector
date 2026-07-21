@@ -143,6 +143,19 @@ def test_legacy_overlay_updates_first_row_and_preserves_later_cases():
     assert updated["mx_ed_knm"].tolist() == [9.0, 2.0]
 
 
+def test_legacy_overlay_preserves_an_explicitly_cleared_name_for_validation():
+    updated = lc.overlay_legacy_head(
+        None,
+        lc.PLASTIC_TABLE_KEY,
+        {"pl_case_id": "", "pl_Mx": 9.0},
+    )
+
+    assert updated.loc[0, "name"] == ""
+    assert "Plastic row 1: Name is required" in lc.validation_errors(
+        updated, lc.empty_table(lc.ELASTIC_TABLE_KEY), require_plastic=True
+    )
+
+
 def test_first_rows_remain_available_through_legacy_scalar_adapter():
     tables = {
         lc.PLASTIC_TABLE_KEY: lc.normalise_table([

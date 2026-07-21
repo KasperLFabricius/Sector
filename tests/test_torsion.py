@@ -178,7 +178,9 @@ def test_app_nu_v_detailing_flag_gated_to_dk_na():
     )
     assert at.session_state["results"]["torsion"]["nu_v_detailing"] is True   # DK NA
     _set(at, ("selectbox", "torsion_method", codes.EC2_2005.label))
-    _calculate(at)
+    _set_and_click(
+        at, "calculate", ("number_input", "torsion_T", 40.0)
+    )
     # Recommended edition: the allowance did not apply, so the flag must be False.
     assert at.session_state["results"]["torsion"]["nu_v_detailing"] is False
 
@@ -361,6 +363,7 @@ def test_app_torsion_uses_final_material_factors():
         ("number_input", "conc_gamma_c", 1.80),
         ("number_input", "mild_gamma_y", 1.35),
         ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 40.0),
     )
     _calculate(at)
     assert not at.exception
