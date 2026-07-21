@@ -163,6 +163,23 @@ def test_v4_project_rejects_nonfinite_load_case_instead_of_rewriting_it():
         project_io.dump_project(tables, {"mode": "Plastic"})
 
 
+def test_v4_partial_case_table_keeps_hash_stable_after_reload():
+    tables = _tables()
+    tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
+        {"name": "PL-ONLY", "n_ed_kn": -250.0, "mx_ed_knm": 80.0},
+    ], load_cases.PLASTIC_TABLE_KEY)
+
+    text = project_io.dump_project(tables, {"mode": "Plastic"})
+    payload = json.loads(text)
+    restored, scalars = project_io.parse_project(text)
+
+    assert scalars["pl_case_id"] == "PL-ONLY"
+    assert scalars["pl_P"] == -250.0
+    assert project_io.input_sha256(restored, scalars) == (
+        payload["provenance"]["input_sha256"]
+    )
+
+
 def test_v3_single_case_scalars_migrate_after_axial_sign_conversion():
     text = json.dumps({
         "format": project_io.FORMAT,
