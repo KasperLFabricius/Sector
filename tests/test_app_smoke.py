@@ -180,6 +180,7 @@ def test_persisted_settings_use_the_seeded_number_helper():
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
                 "pl_case_id", "pl_case_type", "pl_case_source",  # seeded text inputs
                 "el_case_id", "el_case_type", "el_case_source",
+                "sls_limit_source",
                 "ring_d", "bot_d", "top_d",                     # QS diameter inputs
                 "qs_cover_to_edge", "bot_off_d", "top_off_d",   # QS toggle + interleave
                 "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "dia_mm",  # QS dims

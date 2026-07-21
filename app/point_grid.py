@@ -15,6 +15,7 @@ keystroke ever resetting or lagging the table.
 
 from __future__ import annotations
 
+import math
 import os
 
 import pandas as pd
@@ -23,6 +24,32 @@ import streamlit.components.v1 as components
 _FRONTEND = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "point_grid_frontend")
 _component = components.declare_component("sector_point_grid", path=_FRONTEND)
+
+
+def _component_records(df: pd.DataFrame, columns) -> list[dict]:
+    """Return strict-JSON-safe rows for the component seed.
+
+    Pandas keeps a numeric column's dtype when ``where(..., None)`` is used, so
+    the apparent ``None`` values are coerced straight back to ``NaN``.  Streamlit
+    then serialises that non-standard value into the component payload and the
+    browser's JSON parser rejects it.  Convert cell-by-cell instead: every finite
+    numeric value is retained and every blank or non-finite value becomes JSON
+    ``null``.
+    """
+    cols = list(columns)
+    base = (df.reindex(columns=cols)
+            if df is not None else pd.DataFrame(columns=cols))
+    records = []
+    for row in base.itertuples(index=False, name=None):
+        record = {}
+        for column, value in zip(cols, row):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                number = math.nan
+            record[column] = number if math.isfinite(number) else None
+        records.append(record)
+    return records
 
 
 def _rows_to_df(rows, columns) -> pd.DataFrame:
@@ -72,11 +99,10 @@ def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
     etc.). Bump ``data_version`` to make the grid re-seed from ``df``.
     """
     cols = list(columns)
-    base = df.reindex(columns=cols) if df is not None else pd.DataFrame(columns=cols)
     # NaN is not valid JSON, so send blanks as null; this is also the default the
     # component returns before the frontend first reports (and under AppTest, which
     # does not run the frontend) -- i.e. the seeded table flows straight through.
-    records = base.where(pd.notnull(base), None).to_dict("records")
+    records = _component_records(df, cols)
     default = {"data_version": str(data_version), "rows": records}
     value = _component(columns=cols, data=records, id_start=int(id_start),
                        data_version=str(data_version), key=key, default=default)
