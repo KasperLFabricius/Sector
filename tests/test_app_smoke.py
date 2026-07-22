@@ -1187,17 +1187,23 @@ def test_builder_settings_persist_between_openings():
     assert at.number_input(key="bf_mm").value == pytest.approx(1500.0)
 
 
-def test_point_tables_are_data_only_and_hold_loaded_points():
-    # The point tables hold just the coordinate columns (no stored ID -- the plot
-    # numbers points by row order); the builder Apply fills them.
+def test_section_tables_hold_loaded_points_and_stable_reinforcement_schema():
+    # Geometry remains coordinate-only. Reinforcement additionally retains stable
+    # IDs, its declared size basis, and assignment metadata for later checks.
+    import reinforcement_table as rt
+
     at = _fresh_qs()
     _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
     assert list(at.session_state["corners_base"].columns) == ["x (mm)", "y (mm)"]
-    assert list(at.session_state["bars_base"].columns) == \
-        ["x (mm)", "y (mm)", "area (mm2)"]
+    assert list(at.session_state["bars_base"].columns) == rt.COLUMNS
+    assert list(at.session_state["tendons_base"].columns) == rt.COLUMNS
     assert len(at.session_state["corners_base"]) >= 3
     assert len(at.session_state["bars_base"]) >= 1
     assert len(at.session_state["tendons_base"]) >= 1
+    assert at.session_state["bars_base"][rt.ELEMENT_ID].is_unique
+    assert at.session_state["bars_base"][rt.ELEMENT_ID].str.fullmatch(r"R\d+").all()
+    assert set(at.session_state["bars_base"][rt.SIZE_MODE]) == {rt.DIAMETER_MODE}
+    assert set(at.session_state["tendons_base"][rt.SIZE_MODE]) == {rt.AREA_MODE}
 
 
 def test_coordinates_are_in_millimetres():
@@ -2977,7 +2983,7 @@ def test_crack_limit_verdict_and_candidate_table_are_retained():
     assert e["crack_assessment"]["status"] == "EXCEEDED"
     assert e["crack_assessment"]["limit"] == pytest.approx(0.01)
     assert e["crack_assessment"]["case"] in {"Long-term", "Short-term"}
-    assert e["crack_assessment"]["governing"].startswith(("bar ", "tendon "))
+    assert e["crack_assessment"]["governing"].startswith(("R", "P"))
     assert e["crack"]["candidates"]
     assert e["crack"]["candidates"][0]["wk"] == pytest.approx(e["crack"]["wk"])
     assert {"element_id", "x_mm", "y_mm", "area_mm2", "cover",

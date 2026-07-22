@@ -20,14 +20,16 @@ from datetime import datetime, timezone
 import pandas as pd
 
 import load_cases
+import reinforcement_table as rebar_table
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 4   # v4: canonical Plastic and Elastic load-case tables
+VERSION = 5   # v5: stable, mixed-type reinforcement element records
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
+REINFORCEMENT_TABLE_KEYS = {"bars_base": "bar", "tendons_base": "tendon"}
 CASE_TABLE_KEYS = list(load_cases.CASE_TABLE_KEYS)
 PROJECT_TABLE_KEYS = TABLE_KEYS + CASE_TABLE_KEYS
 _CASE_PAYLOAD_KEYS = {
@@ -118,17 +120,30 @@ def _cell(v):
     return None if math.isnan(f) else f
 
 
-def _table_to_obj(df) -> dict:
+def _table_to_obj(df, table_key=None) -> dict:
     """A DataFrame as ``{columns, rows}`` with blanks / stray cells stored as null."""
+    kind = REINFORCEMENT_TABLE_KEYS.get(table_key)
     if df is None:
-        return {"columns": [], "rows": []}
+        if not kind:
+            return {"columns": [], "rows": []}
+        df = rebar_table.empty_table()
+    if kind:
+        df = rebar_table.normalise_table(df, kind)
     cols = [str(c) for c in df.columns]
-    rows = [[_cell(v) for v in row] for row in df.itertuples(index=False, name=None)]
+    rows = []
+    for row in df.itertuples(index=False, name=None):
+        values = []
+        for column, value in zip(cols, row):
+            if kind and column in rebar_table.TEXT_COLUMNS:
+                values.append(rebar_table.text_cell(value))
+            else:
+                values.append(_cell(value))
+        rows.append(values)
     return {"columns": cols, "rows": rows}
 
 
-def _obj_to_table(obj) -> pd.DataFrame:
-    """Rebuild a numeric (``float64``) DataFrame from ``{columns, rows}``.
+def _obj_to_table(obj, table_key=None) -> pd.DataFrame:
+    """Rebuild a canonical DataFrame from ``{columns, rows}``.
 
     Raises :class:`ValueError` on a malformed table object (not a ``{columns,
     rows}`` mapping) so the caller can report it rather than crash on an
@@ -142,6 +157,9 @@ def _obj_to_table(obj) -> pd.DataFrame:
         df = pd.DataFrame(rows, columns=cols)
     except (ValueError, TypeError) as exc:      # ragged / non-tabular rows
         raise ValueError("table rows are not tabular") from exc
+    kind = REINFORCEMENT_TABLE_KEYS.get(table_key)
+    if kind:
+        return rebar_table.normalise_table(df, kind)
     for c in cols:
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df.astype("float64") if cols else df
@@ -162,7 +180,7 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         )
     }
     content = {
-        "tables": {k: _table_to_obj(tables.get(k)) for k in TABLE_KEYS},
+        "tables": {k: _table_to_obj(tables.get(k), k) for k in TABLE_KEYS},
         "scalars": scalar_payload,
     }
     if has_load_inputs:
@@ -298,7 +316,10 @@ def parse_project(text: str):
         raise ValueError("malformed 'tables' or 'scalars' section")
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
-    tables = {k: _obj_to_table(raw_tables[k]) for k in TABLE_KEYS if k in raw_tables}
+    tables = {
+        k: _obj_to_table(raw_tables[k], k)
+        for k in TABLE_KEYS if k in raw_tables
+    }
     scalars = {k: v for k, v in raw_scalars.items() if k in SCALAR_KEYS}
     if raw_load_cases is not None:
         case_tables = {

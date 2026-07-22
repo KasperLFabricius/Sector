@@ -97,6 +97,21 @@ def test_crack_width_retains_sorted_per_bar_candidates():
         sec.bar_arrays()[0][crack.gov_bar])
 
 
+@pytest.mark.parametrize("edition", ["2004", "2023"])
+def test_crack_width_uses_one_diameter_per_element(edition):
+    sec = beam_section()
+    diameters = [12.0, 20.0, 32.0]
+
+    result = analyse_cracking(
+        sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0),
+        bar_diameter=diameters, edition=edition,
+    )
+
+    assert result.crack is not None
+    by_index = {candidate.bar_index: candidate for candidate in result.crack.candidates}
+    assert [by_index[index].phi for index in range(3)] == pytest.approx(diameters)
+
+
 def test_auto_per_bar_cover_matches_hand_calc():
     # With no explicit cover, each bar's clear cover is taken from the geometry:
     # the bars sit 0.05 m above the bottom face, so c = 50 - 25/2 = 37.5 mm, which

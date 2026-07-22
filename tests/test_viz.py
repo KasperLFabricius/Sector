@@ -176,6 +176,23 @@ def test_section_figure_numbers_rebar_and_corners():
     assert any(list(t.text) == ["1", "2", "3", "4"] for t in texts)
 
 
+def test_section_figure_uses_stable_element_ids_when_supplied():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(
+        outer,
+        bars=[(-0.1, -0.25, 314.0), (0.1, -0.25, 314.0)],
+        tendons=[(0.0, 0.27, 150.0)],
+        bar_ids=["R1", "R3"], tendon_ids=["P2"], show_labels=True,
+    )
+
+    labels = [trace for trace in fig.data if getattr(trace, "mode", None) == "text"]
+    assert any(list(trace.text) == ["R1", "R3", "P2"] for trace in labels)
+    bar = next(t for t in fig.data if getattr(t, "name", None) == "reinforcing bar")
+    tendon = next(t for t in fig.data if getattr(t, "name", None) == "tendon")
+    assert "Bar R3" in str(bar.customdata[1])
+    assert "Tendon P2" in str(tendon.customdata[0])
+
+
 def _corner_hover(fig):
     # The invisible corner hover trace: a markers trace whose fill is transparent.
     return next(t for t in fig.data

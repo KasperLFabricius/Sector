@@ -830,7 +830,9 @@ class ReportBuilder:
         ten_xy = [(t[0], t[1]) for t in inp.get("tendons", [])]
         fig = viz.section_figure(inp.get("outer", []), inp.get("holes", []), bar_xy,
                                  title="Section", tendons=ten_xy, show_labels=True,
-                                 scale=_MM, unit="mm", height=420)
+                                 scale=_MM, unit="mm", height=420,
+                                 bar_ids=[item.get("id") for item in inp.get("bar_elements", [])],
+                                 tendon_ids=[item.get("id") for item in inp.get("tendon_elements", [])])
         self._fig(fig, 150, 100)
         self._geometry_tables()
         # Materials are reported only when the section actually uses them: mild
@@ -873,22 +875,45 @@ class ReportBuilder:
                 rows.append([i, _fmt(p[0] * _MM, 3), _fmt(p[1] * _MM, 3)])
             self._h2(f"Void {hi}")
             self._table(rows, [15 * mm, 40 * mm, 40 * mm])
-        bars = inp.get("bars", [])
-        if bars:
-            rows = [["#", "x (mm)", "y (mm)", "Area (mm<super>2</super>)"]]
-            for i, b in enumerate(bars, 1):
-                rows.append([i, _fmt(b[0] * _MM, 3), _fmt(b[1] * _MM, 3),
-                             _fmt(b[2], 3)])
-            self._h2("Reinforcing bars")
-            self._table(rows, [15 * mm, 35 * mm, 35 * mm, 40 * mm])
-        tendons = inp.get("tendons", [])
-        if tendons:
-            rows = [["#", "x (mm)", "y (mm)", "Area (mm<super>2</super>)"]]
-            for i, t in enumerate(tendons, 1):
-                rows.append([i, _fmt(t[0] * _MM, 3), _fmt(t[1] * _MM, 3),
-                             _fmt(t[2], 3)])
-            self._h2("Tendons")
-            self._table(rows, [15 * mm, 35 * mm, 35 * mm, 40 * mm])
+        def reinforcement_tables(title, points, elements, prefix):
+            if not points:
+                return
+            records = list(elements or [])
+            if len(records) != len(points):
+                records = [
+                    {
+                        "id": f"{prefix}{index}", "x_mm": point[0] * _MM,
+                        "y_mm": point[1] * _MM, "area_mm2": point[2],
+                        "diameter_mm": math.sqrt(4.0 * point[2] / math.pi),
+                        "size_mode": "Area", "material_id": "-",
+                        "fatigue_detail_id": "", "group_id": "",
+                    }
+                    for index, point in enumerate(points, 1)
+                ]
+            self._h2(title)
+            rows = [["ID", "x (mm)", "y (mm)", "Area (mm<super>2</super>)",
+                     "Diameter (mm)", "Size basis"]]
+            rows.extend([
+                [record.get("id", "-"), _fmt(record.get("x_mm"), 3),
+                 _fmt(record.get("y_mm"), 3), _fmt(record.get("area_mm2"), 3),
+                 _fmt(record.get("diameter_mm"), 3), record.get("size_mode", "-")]
+                for record in records
+            ])
+            self._table(rows, [18 * mm, 26 * mm, 26 * mm, 31 * mm,
+                               31 * mm, 31 * mm], font=7.2, keep=False)
+            assignments = [["ID", "Material ID", "Fatigue detail ID", "Group ID"]]
+            assignments.extend([
+                [record.get("id", "-"), record.get("material_id", "-"),
+                 record.get("fatigue_detail_id") or "-", record.get("group_id") or "-"]
+                for record in records
+            ])
+            self._table(assignments, [24 * mm, 42 * mm, 52 * mm, 42 * mm],
+                        font=7.2, keep=False)
+
+        reinforcement_tables("Reinforcing bars", inp.get("bars", []),
+                             inp.get("bar_elements", []), "R")
+        reinforcement_tables("Tendons", inp.get("tendons", []),
+                             inp.get("tendon_elements", []), "P")
 
     def _concrete_block(self):
         c = self.inp["concrete"]
@@ -1167,7 +1192,8 @@ class ReportBuilder:
                     rows.append(["Member type", str(crack_el["crack_member"])])
                 dia = inp.get("sls_phi") or 0.0
                 rows.append(["Crack-width element diameter",
-                             "auto (from geometry)" if not dia else f"{_fmt(dia, 3)} mm"])
+                             ("per-element table values" if not dia
+                              else f"{_fmt(dia, 3)} mm global override")])
                 rows.append(["Mild-steel bond coefficient k<sub>1</sub>",
                              _fmt(inp.get("sls_k1"), 3)])
         self._table(rows, [110 * mm, 55 * mm])
@@ -1517,6 +1543,8 @@ class ReportBuilder:
                 bar_colors=bar_colors, na_line=na, tendons=tendons,
                 tendon_colors=tendon_colors, zones=zones, show_labels=True,
                 scale=_MM, unit="mm",
+                bar_ids=[item.get("id") for item in inp.get("bar_elements", [])],
+                tendon_ids=[item.get("id") for item in inp.get("tendon_elements", [])],
                 title=f"Plastic state at NA angle = {_fmt(gov['V'],0)} deg "
                       "(tension + / compression -)"), 150, 100)
             self._small(
@@ -2350,11 +2378,13 @@ class ReportBuilder:
                 sgn = lambda s: viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
                 self._fig(viz.section_figure(
                     inp.get("outer", []), inp.get("holes", []),
-                    [(b[0], b[1]) for b in inp.get("bars", [])],
+                    inp.get("bars", []),
                     bar_colors=[sgn(s) for s in total[:nb]],
-                    tendons=[(t[0], t[1]) for t in inp.get("tendons", [])],
+                    tendons=inp.get("tendons", []),
                     tendon_colors=[sgn(s) for s in total[nb:]], na_line=na, zones=zones,
                     show_labels=True, scale=_MM, unit="mm",
+                    bar_ids=[item.get("id") for item in inp.get("bar_elements", [])],
+                    tendon_ids=[item.get("id") for item in inp.get("tendon_elements", [])],
                     title="Elastic state (tension + / compression -)"), 150, 100)
                 self._small(
                     "Blue/plain markers are tension (+); vermillion/x markers are "

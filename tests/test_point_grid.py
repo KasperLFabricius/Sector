@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "app"))
 
 import point_grid as point_grid_module  # noqa: E402
+import reinforcement_table as rebar_table  # noqa: E402
 from point_grid import _component_records, _rows_to_df, _versioned_rows  # noqa: E402
 
 _CORNERS = ["x (mm)", "y (mm)"]
@@ -79,6 +80,25 @@ def test_component_records_keep_columns_and_half_typed_rows():
     ]
 
 
+def test_mixed_grid_round_trip_preserves_ids_text_and_numeric_blanks():
+    specs = rebar_table.point_grid_specs("bar")
+    frame = rebar_table.normalise_table([{
+        "ID": "R7", "x (mm)": 10.0, "y (mm)": -20.0,
+        "size mode": "Independent", "area (mm2)": 400.0,
+        "diameter (mm)": 25.0, "material ID": "M2",
+        "fatigue detail ID": "FD1", "group ID": "G1",
+    }], "bar")
+
+    records = _component_records(frame, rebar_table.COLUMNS, specs)
+    restored = _rows_to_df(records, rebar_table.COLUMNS, specs)
+
+    assert records[0]["ID"] == "R7"
+    assert records[0]["material ID"] == "M2"
+    assert restored.iloc[0]["size mode"] == "Independent"
+    assert restored.iloc[0]["area (mm2)"] == 400.0
+    json.dumps(records, allow_nan=False)
+
+
 def test_point_grid_sends_only_strict_json_to_streamlit(monkeypatch):
     captured = {}
 
@@ -104,6 +124,27 @@ def test_point_grid_sends_only_strict_json_to_streamlit(monkeypatch):
     assert np.isnan(result.iloc[1]["x (mm)"])
 
 
+def test_point_grid_sends_persistent_id_and_derivation_contract(monkeypatch):
+    captured = {}
+
+    def fake_component(**kwargs):
+        captured.update(kwargs)
+        return kwargs["default"]
+
+    monkeypatch.setattr(point_grid_module, "_component", fake_component)
+    frame = rebar_table.table_from_points([(0.0, -100.0, 314.0)], "bar")
+    result = point_grid_module.point_grid(
+        frame, rebar_table.COLUMNS, key="bars",
+        column_specs=rebar_table.point_grid_specs("bar"),
+        component_options=rebar_table.point_grid_options("bar"),
+    )
+
+    assert captured["data"]["id_column"] == "ID"
+    assert captured["data"]["id_prefix"] == "R"
+    assert captured["data"]["derived_size"]["area"] == "area (mm2)"
+    assert result.iloc[0]["ID"] == "R1"
+
+
 def test_component_registration_is_cached_per_streamlit_runtime(monkeypatch):
     class Manager:
         pass
@@ -126,7 +167,7 @@ def test_component_registration_is_cached_per_streamlit_runtime(monkeypatch):
 
     assert first["key"] == "one" and second["key"] == "two"
     assert len(registrations) == 1
-    assert registrations[0][0] == ("sector.point_grid",)
+    assert registrations[0][0] == ("sector.point_grid_rich_v1",)
     point_grid_module._COMPONENT_RENDERERS.clear()
 
 
@@ -152,6 +193,26 @@ def test_frontend_uses_only_components_v2_state_api():
     assert "export default function renderPointGrid" in renderer
     assert "setStateValue(\"payload\"" in renderer
     assert "new WeakMap()" in renderer       # separate state for all four tables
+    assert "preparePersistentIds" in renderer
+    assert "normaliseSizeRow" in renderer
+    assert 'document.createElement("select")' in renderer
+    assert "definition.editor = state.selectEditor" in renderer
+    assert 'definition.editor = "list"' not in renderer
+    assert "new ResizeObserver" in renderer
+    assert "table.redraw(true)" in renderer
+    assert "state.visibilityObserver.disconnect()" in renderer
+    assert "cancelAnimationFrame(state.redrawFrame)" in renderer
+    assert "state.tableReady" in renderer
+    assert "if (table) table.destroy()" in renderer
+    assert "pointGridInstances.delete(parentElement)" in renderer
+    assert 'removeEventListener("click", state.handleAddRow)' in renderer
+    assert 'removeEventListener("paste", state.handlePaste, true)' in renderer
+    assert "return state.cleanup" in renderer
+    assert "frozen: true" in renderer
+    assert "frozen: isId" in renderer
+    assert 'setAttribute("data-size-mode", value)' in renderer
+    assert "pg-${spec.derived_role}" in renderer
+    assert "spec.type === \"select\"" in renderer
     assert "st.components.v2.component" in wrapper
     for banned in (
         "components.v1",
@@ -176,6 +237,7 @@ def test_frontend_is_scoped_accessible_and_theme_aware():
     assert 'role="alert"' in markup and 'aria-live="polite"' in markup
     assert 'document.createElement("button")' in renderer
     assert 'className = "pg-delete-button"' in renderer
+    assert 'className = "pg-select-editor"' in renderer
     assert 'wrap.addEventListener("paste"' in renderer
     assert 'document.addEventListener("paste"' not in renderer
     for token in (

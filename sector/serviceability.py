@@ -243,7 +243,7 @@ def _crack_width(
     k2: float,
     k3: float,
     k4: float,
-    bar_diameter: Optional[float],
+    bar_diameter: Optional[Union[float, Sequence[float]]],
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
     coarse: bool = False,
@@ -252,8 +252,9 @@ def _crack_width(
 ) -> Optional[CrackWidthResult]:
     """EC2 7.3.4 crack width, evaluated per bar, retaining every candidate.
 
-    ``fctm`` and ``Es`` are in MPa. ``bar_diameter`` (mm) overrides the diameter
-    derived from each bar's area. ``cover`` (mm), when given, is used for every
+    ``fctm`` and ``Es`` are in MPa. ``bar_diameter`` (mm) can be one override for
+    every element or one value per element; otherwise diameter follows area.
+    ``cover`` (mm), when given, is used for every
     bar; when ``None`` each bar's clear cover is taken from the geometry as the
     distance to the nearest concrete face minus half its diameter. The effective
     tension area, height and reinforcement ratio are section quantities (defined
@@ -338,6 +339,18 @@ def _crack_width(
     # k1 (bond) may be a scalar (all reinforcement) or one value per bar -- e.g.
     # the mild-steel value for ordinary bars and 1.6 for prestressing tendons.
     k1_arr = np.broadcast_to(np.asarray(k1, dtype=float), (bx.size,))
+    derived_phi = np.sqrt(4.0 * ba * 1.0e6 / math.pi)
+    if bar_diameter is None:
+        phi_arr = derived_phi
+    else:
+        supplied_phi = np.broadcast_to(
+            np.asarray(bar_diameter, dtype=float), (bx.size,),
+        )
+        phi_arr = np.where(
+            np.isfinite(supplied_phi) & (supplied_phi > 0.0),
+            supplied_phi,
+            derived_phi,
+        )
 
     # Per-bar crack width: each tension bar in the band uses its own cover,
     # diameter and Stage II stress; the largest wk governs.
@@ -348,10 +361,7 @@ def _crack_width(
         if not in_band[i] or sigma[i] <= 0.0:
             continue
         sigma_s = float(sigma[i])
-        if bar_diameter is not None and bar_diameter > 0.0:
-            phi = float(bar_diameter)
-        else:
-            phi = math.sqrt(4.0 * float(ba[i]) * 1.0e6 / math.pi)  # m^2 -> mm
+        phi = float(phi_arr[i])
         if cover is not None:
             c_i = float(cover)
         else:
@@ -406,7 +416,7 @@ def _crack_width_2023(
     cover: Optional[float],
     kt: float,
     k1: Union[float, Sequence[float]],
-    bar_diameter: Optional[float],
+    bar_diameter: Optional[Union[float, Sequence[float]]],
     n_mult: Optional[np.ndarray] = None,
 ) -> Optional[CrackWidthResult]:
     """EN 1992-1-1:2023 refined crack width (9.2.3), per bar, largest-wk governs.
@@ -419,8 +429,8 @@ def _crack_width_2023(
     mean crack spacing ``sr,m,cal`` (9.15) with the flexural coefficient ``kfl``
     (9.17) and bond factor ``kb`` (9.18); the effective height ``hc,eff`` (figure
     9.3, single layer); and the mean strain (9.11) whose lower bound is now
-    ``(1 - kt) * sigma_s / Es``. ``bar_diameter`` (mm) overrides the area-derived
-    diameter; ``cover`` (mm) overrides the per-bar geometric cover. The ``k1`` bond
+    ``(1 - kt) * sigma_s / Es``. ``bar_diameter`` (mm) may provide one override or
+    one value per element; ``cover`` (mm) overrides per-bar geometric cover. The ``k1`` bond
     values map to ``kb`` (good bond -> 0.9, poor -> 1.2). Returns ``None`` when no
     tension bar sits in the effective zone or there is no bending gradient.
     """
@@ -453,10 +463,21 @@ def _crack_width_2023(
     if not tens.any():
         return None
 
+    derived_phi = np.sqrt(4.0 * ba * 1.0e6 / math.pi)
+    if bar_diameter is None:
+        phi_arr = derived_phi
+    else:
+        supplied_phi = np.broadcast_to(
+            np.asarray(bar_diameter, dtype=float), (bx.size,),
+        )
+        phi_arr = np.where(
+            np.isfinite(supplied_phi) & (supplied_phi > 0.0),
+            supplied_phi,
+            derived_phi,
+        )
+
     def _phi(i):
-        if bar_diameter is not None and bar_diameter > 0.0:
-            return float(bar_diameter)
-        return math.sqrt(4.0 * float(ba[i]) * 1.0e6 / math.pi)   # m^2 -> mm
+        return float(phi_arr[i])
 
     # hc,eff (figure 9.3, bending): the single-layer band min{ay+5phi, 10phi, 3.5ay}
     # (phi in mm -> m) is built from the reinforcement nearest the tension face, then
@@ -545,7 +566,7 @@ def analyse_cracking(
     beta: float = 1.0,
     kt: float = 0.6,
     cover: Optional[float] = None,
-    bar_diameter: Optional[float] = None,
+    bar_diameter: Optional[Union[float, Sequence[float]]] = None,
     k1: Union[float, Sequence[float]] = 0.8,
     k2: float = 0.5,
     k3: float = 3.4,
@@ -581,8 +602,8 @@ def analyse_cracking(
         concrete face minus the bar radius). Crack width is computed whenever the
         section is cracked.
     bar_diameter:
-        Governing bar diameter (mm); defaults to the equivalent circular
-        diameter of the governing bar's area.
+        One governing diameter (mm), or one diameter per element. Missing or
+        non-positive entries default to the equivalent circular area diameter.
     k1, k2, k3, k4:
         EC2 crack-spacing coefficients (recommended values by default). ``k1``
         (the bond coefficient) may be a single value or one per bar -- e.g. the
@@ -691,7 +712,7 @@ def crack_width(
     Es: float = 200_000.0,
     kt: float = 0.6,
     cover: Optional[float] = None,
-    bar_diameter: Optional[float] = None,
+    bar_diameter: Optional[Union[float, Sequence[float]]] = None,
     k1: Union[float, Sequence[float]] = 0.8,
     k2: float = 0.5,
     k3: float = 3.4,

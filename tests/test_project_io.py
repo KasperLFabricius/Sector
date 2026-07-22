@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import load_cases  # noqa: E402
 import project_io  # noqa: E402
+import reinforcement_table as rebar_table  # noqa: E402
 
 
 def test_migrate_legacy_torsion_only_stirrup():
@@ -81,9 +82,10 @@ def _tables():
         "corners_base": pd.DataFrame({"x (mm)": [-100.0, 100.0, 100.0, -100.0],
                                       "y (mm)": [-150.0, -150.0, 150.0, 150.0]}),
         "hole_base": pd.DataFrame({"x (mm)": [], "y (mm)": []}),
-        "bars_base": pd.DataFrame({"x (mm)": [0.0], "y (mm)": [-120.0],
-                                   "area (mm2)": [500.0]}),
-        "tendons_base": pd.DataFrame({"x (mm)": [], "y (mm)": [], "area (mm2)": []}),
+        "bars_base": rebar_table.table_from_points(
+            [(0.0, -120.0, 500.0)], "bar",
+        ),
+        "tendons_base": rebar_table.empty_table(),
     }
 
 
@@ -117,9 +119,72 @@ def test_round_trip_tables_and_scalars():
         json.loads(text)["provenance"]["input_sha256"]
     )
     for key, df in tables.items():
+        expected = (df if key in project_io.REINFORCEMENT_TABLE_KEYS
+                    else df.astype("float64"))
         pd.testing.assert_frame_equal(
             rt[key].reset_index(drop=True),
-            df.astype("float64").reset_index(drop=True), check_dtype=False)
+            expected.reset_index(drop=True), check_dtype=False)
+
+
+def test_v4_reinforcement_rows_migrate_to_stable_area_based_elements():
+    project = {
+        "format": "sector-project",
+        "version": 4,
+        "tables": {
+            "bars_base": {
+                "columns": ["x (mm)", "y (mm)", "area (mm2)"],
+                "rows": [[0.0, -120.0, 314.159265]],
+            },
+            "tendons_base": {
+                "columns": ["x (mm)", "y (mm)", "area (mm2)"],
+                "rows": [[0.0, 100.0, 150.0]],
+            },
+        },
+        "scalars": {},
+    }
+
+    tables, _ = project_io.parse_project(json.dumps(project))
+
+    bar = tables["bars_base"].iloc[0]
+    tendon = tables["tendons_base"].iloc[0]
+    assert list(tables["bars_base"].columns) == rebar_table.COLUMNS
+    assert (bar["ID"], bar["size mode"], bar["material ID"]) == (
+        "R1", "Area", "M1"
+    )
+    assert bar["diameter (mm)"] == pytest.approx(20.0)
+    assert (tendon["ID"], tendon["size mode"], tendon["material ID"]) == (
+        "P1", "Area", "P1"
+    )
+
+
+def test_v5_round_trip_preserves_size_basis_and_element_assignments():
+    tables = _tables()
+    tables["bars_base"] = rebar_table.normalise_table([
+        {
+            "ID": "R7", "x (mm)": 10.0, "y (mm)": -80.0,
+            "size mode": "Independent", "area (mm2)": 420.0,
+            "diameter (mm)": 25.0, "material ID": "M2",
+            "fatigue detail ID": "FD-BENT", "group ID": "B1",
+        },
+        {
+            "ID": "R9", "x (mm)": -10.0, "y (mm)": -80.0,
+            "size mode": "Diameter", "diameter (mm)": 20.0,
+            "material ID": "M1",
+        },
+    ], "bar")
+
+    text = project_io.dump_project(tables, {"mode": "Both"})
+    restored, scalars = project_io.parse_project(text)
+
+    payload = json.loads(text)
+    assert payload["version"] == 5
+    pd.testing.assert_frame_equal(restored["bars_base"], tables["bars_base"])
+    assert restored["bars_base"].iloc[1]["area (mm2)"] == pytest.approx(
+        np.pi * 20.0**2 / 4.0
+    )
+    assert project_io.input_sha256(restored, scalars) == (
+        payload["provenance"]["input_sha256"]
+    )
 
 
 def test_v4_round_trip_preserves_multiple_typed_load_cases():
@@ -143,7 +208,7 @@ def test_v4_round_trip_preserves_multiple_typed_load_cases():
     payload = json.loads(text)
     restored, scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 4
+    assert payload["version"] == 5
     assert [row["name"] for row in payload["load_cases"]["plastic"]] == [
         "PL-01", "PL-02"
     ]
@@ -264,7 +329,7 @@ def test_project_provenance_records_and_verifies_exact_inputs():
     payload = json.loads(text)
     provenance = project_io.project_provenance(text)
 
-    assert payload["version"] == 4
+    assert payload["version"] == project_io.VERSION
     assert provenance["sector_version"] == "0.78"
     assert provenance["source_revision"] == "a" * 40
     assert provenance["saved_at_utc"].endswith("+00:00")
