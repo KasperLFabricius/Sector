@@ -7,7 +7,8 @@
 - Added material IDs, names, definitions, assignment evidence and individual
   stress-strain curves to the UI, project files and PDF report.
 - Added per-case longitudinal minimum-reinforcement checks for the 2005/DK NA
-  and 2023 Eurocode methods, with ordinary-bar material assignments retained.
+  and 2023 Eurocode methods, including resultant biaxial tension-zone geometry
+  and retained ordinary-bar material assignments.
 - Added a section-wide clear-spacing check, explicit tendon-envelope opt-in and
   lap/bundle review flags, plus matching UI, figures, report and manual evidence.
 

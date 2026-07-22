@@ -447,7 +447,11 @@ def result_summary_rows(inp, results, *, stale=False):
             util = check.get("utilisation")
             face = check.get("face")
             axis = check.get("axis")
-            suffix = f" M{axis} {face}" if axis and face else ""
+            suffix = (
+                " Mx+My resultant"
+                if axis == "xy"
+                else f" M{axis} {face}" if axis and face else ""
+            )
             if check.get("as_min_mm2") is not None:
                 result_text = (
                     f"As,prov {check.get('as_provided_mm2', 0.0):.1f} mm2; "

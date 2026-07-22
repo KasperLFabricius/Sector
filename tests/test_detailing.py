@@ -124,6 +124,49 @@ def test_origin_moment_transfer_uses_tension_positive_axial_sign():
     assert check["status"] == "FAIL"
 
 
+def test_2005_biaxial_check_uses_resultant_tension_zone_not_axis_halves():
+    bars = [
+        (0.25, -0.25, 1000.0),
+        (-0.25, 0.25, 1000.0),
+    ]
+    section = Section.from_polygon(
+        [(-0.30, -0.30), (0.30, -0.30), (0.30, 0.30), (-0.30, 0.30)],
+        bars,
+    )
+    elements = [
+        {
+            "id": f"R{index + 1}",
+            "kind": "bar",
+            "x_mm": x * 1000.0,
+            "y_mm": y * 1000.0,
+            "diameter_mm": 36.0,
+            "material_id": "M1",
+            "spacing_group_id": "",
+        }
+        for index, (x, y, _area) in enumerate(bars)
+    ]
+
+    result = detailing.minimum_reinforcement_2005(
+        section,
+        elements,
+        [_steel(), _steel()],
+        fctm_mpa=2.9,
+        n_ed_tension_kn=0.0,
+        mx_ed_knm=100.0,
+        my_ed_knm=100.0,
+    )
+
+    check = result["checks"][0]
+    assert result["status"] == "FAIL"
+    assert check["axis"] == "xy"
+    assert check["face"] == "resultant tension zone"
+    assert check["bar_ids"] == []
+    assert check["as_min_mm2"] is None
+    assert check["tension_direction"] == pytest.approx(
+        [-math.sqrt(0.5), -math.sqrt(0.5)]
+    )
+
+
 def test_2005_formula_uses_conservative_face_fyk_and_flags_missing_face():
     section, elements, materials = _rectangle()
     materials = [_steel(400.0), _steel(500.0), *materials[2:]]

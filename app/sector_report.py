@@ -1495,8 +1495,9 @@ class ReportBuilder:
                 )
             else:
                 self._p(
-                    "<b>Longitudinal minimum reinforcement.</b> Each active tension "
-                    "face is checked using A<sub>s,min</sub> = max(0.26 "
+                    "<b>Longitudinal minimum reinforcement.</b> The resultant "
+                    "gross-concrete tension zone is checked using "
+                    "A<sub>s,min</sub> = max(0.26 "
                     "f<sub>ctm</sub>/f<sub>yk</sub>, 0.0013) b<sub>t</sub>d."
                 )
                 self._small(
@@ -1552,6 +1553,7 @@ class ReportBuilder:
             bar_elements=self.inp.get("bar_elements") or [],
             tendon_elements=self.inp.get("tendon_elements") or [],
             highlight_ids=highlight_ids,
+            tension_zone=checks[0] if checks else None,
             title="Minimum-reinforcement geometry",
         ), 150, 108)
 
@@ -1569,7 +1571,11 @@ class ReportBuilder:
             ]]
             rows.extend([
                 [
-                    f"M{check.get('axis', '-')}", check.get("face", "-"),
+                    (
+                        "Mx + My" if check.get("axis") == "xy"
+                        else f"M{check.get('axis', '-')}"
+                    ),
+                    check.get("face", "-"),
                     _fmt(check.get("as_provided_mm2"), 1),
                     _fmt(check.get("as_min_mm2"), 1),
                     _pct(check.get("utilisation")),
@@ -1583,8 +1589,8 @@ class ReportBuilder:
             ])
             self._table(
                 rows,
-                [10 * mm, 16 * mm, 18 * mm, 18 * mm, 15 * mm,
-                 15 * mm, 15 * mm, 14 * mm, 14 * mm, 20 * mm, 15 * mm],
+                [14 * mm, 22 * mm, 17 * mm, 17 * mm, 14 * mm,
+                 14 * mm, 14 * mm, 13 * mm, 13 * mm, 18 * mm, 14 * mm],
                 font=5.9,
                 keep=False,
             )

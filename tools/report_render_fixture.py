@@ -410,6 +410,9 @@ def _results() -> dict:
             "as_provided_mm2": 500.0, "as_min_mm2": 320.0,
             "utilisation": 0.64, "bt_mm": 200.0, "d_mm": 270.0,
             "fctm_mpa": 2.9, "fyk_mpa": 500.0, "bar_ids": ["R1"],
+            "tension_direction": [0.0, -1.0], "neutral_c_m": 0.0,
+            "neutral_point_m": [0.0, 0.0],
+            "model": "gross-concrete resultant tension half-plane",
         }],
         "limitations": [
             "Prestressing tendons are not credited.",

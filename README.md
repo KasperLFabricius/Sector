@@ -16,8 +16,9 @@ cross-section and reports, for the same section:
   the elastic result.
 * **Section capacity checks** - shear, torsion and combined M-V-T checks where
   supported by the selected Eurocode method.
-* **Longitudinal detailing checks** - per-case minimum reinforcement and a
-  section-wide clear-spacing review with stable element IDs.
+* **Longitudinal detailing checks** - per-case minimum reinforcement, including
+  resultant biaxial tension zones, and a section-wide clear-spacing review with
+  stable element IDs.
 
 Plastic and Elastic identify the calculation method, not the limit state. Each
 named row carries the user's project-defined description or classification (for

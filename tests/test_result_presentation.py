@@ -602,6 +602,33 @@ def test_detailing_summary_reports_values_status_and_target_view():
     assert presentation.overall_summary_status(rows) == "REVIEW"
 
 
+def test_detailing_summary_labels_one_biaxial_resultant_check():
+    minimum = {
+        "status": "PASS",
+        "clause": "9.2.1.1(1), Formula (9.1N)",
+        "checks": [{
+            "status": "PASS", "axis": "xy",
+            "face": "resultant tension zone",
+            "as_provided_mm2": 800.0, "as_min_mm2": 500.0,
+            "utilisation": 0.625,
+        }],
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", minimum_reinforcement_on=True),
+        {"minimum_reinforcement": minimum},
+    )
+
+    biaxial = next(
+        row for row in rows
+        if row["check"].startswith("Longitudinal minimum reinforcement")
+    )
+    assert biaxial["check"] == (
+        "Longitudinal minimum reinforcement Mx+My resultant"
+    )
+    assert biaxial["status"] == "PASS"
+
+
 def test_multi_case_summary_adds_section_wide_spacing_only_once():
     inp = _inp(
         mode="Plastic",

@@ -620,7 +620,7 @@ def manual_blocks() -> list:
        "the detailing envelope or duct diameter.")
     table(["Edition", "Minimum-reinforcement method"],
           [["EN 1992-1-1:2005 / DK NA:2024",
-            "$A_{s,prov} \\geq A_{s,min}$ on each active bending-tension face (9.1N)"],
+            "$A_{s,prov} \\geq A_{s,min}$ in the resultant bending-tension zone (9.1N)"],
            ["EN 1992-1-1:2023",
             "Nominal section resistance at characteristic bar yield compared with the cracking action (12.1/12.2)"]])
     call("limit", "Prestressing tendons are not credited in the minimum-"
@@ -960,14 +960,14 @@ def manual_blocks() -> list:
 
     h1("Minimum reinforcement and clear spacing")
     h2("EN 1992-1-1:2005 and DK NA:2024")
-    md("For every bending axis active in the selected case, Sector identifies the "
-       "tension face from the moment transferred to the gross-concrete centroid "
-       "and checks:\n\n"
+    md("Sector transfers the moments to the gross-concrete centroid and derives "
+       "the uncracked gross-concrete strain plane for the complete $M_x$-$M_y$ "
+       "action. Its tensile half-plane is checked using:\n\n"
        "$$A_{s,min}=\\max\\!\\left(0.26\\frac{f_{ctm}}{f_{yk}},\\,0.0013\\right)"
        "b_t d, \\qquad A_{s,prov}\\ge A_{s,min}. $$\n\n"
-       "$b_t$ is the exact mean width of the gross-centroid tension half, and $d$ "
-       "is measured from the opposite extreme concrete fibre to the centroid of "
-       "the bars on that face. If several assigned materials occur on the face, "
+       "$b_t$ is the exact mean width of that resultant tension half, and $d$ "
+       "is measured normal to its neutral line from the opposite extreme concrete "
+       "fibre to the centroid of the bars in tension. If several assigned materials occur, "
        "the lowest $f_{yk}$ is used. Reference: 9.2.1.1(1), Formula (9.1N).")
     call("limit", "The DK NA:2024 side-face reinforcement requirement for high "
          "beam webs is separate from Formula (9.1N) and is not included.")

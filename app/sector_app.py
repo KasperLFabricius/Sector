@@ -5069,6 +5069,10 @@ def detailing_view(inp, results, *, global_results=None):
                 tendon_elements=inp.get("tendon_elements") or [],
                 highlight_ids=highlight_ids,
                 spacing_pair=(spacing or {}).get("governing"),
+                tension_zone=(
+                    (minimum.get("checks") or [None])[0]
+                    if minimum and minimum.get("checks") else None
+                ),
                 title="Detailing check geometry",
             ),
             width="stretch",
@@ -5079,7 +5083,10 @@ def detailing_view(inp, results, *, global_results=None):
         checks = minimum.get("checks") or []
         if checks and checks[0].get("as_min_mm2") is not None:
             rows = [{
-                "Axis": f"M{check.get('axis', '-')}",
+                "Axis": (
+                    "Mx + My" if check.get("axis") == "xy"
+                    else f"M{check.get('axis', '-')}"
+                ),
                 "Tension face": check.get("face", "-"),
                 "As,provided [mm2]": check.get("as_provided_mm2"),
                 "As,min [mm2]": check.get("as_min_mm2"),

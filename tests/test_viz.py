@@ -814,11 +814,16 @@ def test_detailing_figure_highlights_checked_bars_and_dimensions_spacing_pair():
         bar_elements=elements,
         highlight_ids=["R1"],
         spacing_pair=pair,
+        tension_zone={
+            "tension_direction": [-2 ** -0.5, -2 ** -0.5],
+            "neutral_c_m": 0.0,
+        },
     )
 
     names = [getattr(trace, "name", None) for trace in fig.data]
     assert "included reinforcement" in names
     assert "governing spacing pair" in names
+    assert "resultant tension boundary" in names
     included = _named_trace(fig, "included reinforcement")
     assert list(included.text) == ["R1"]
     governing = _named_trace(fig, "governing spacing pair")
@@ -828,3 +833,4 @@ def test_detailing_figure_highlights_checked_bars_and_dimensions_spacing_pair():
     )
     assert "c = 180.0 mm" in annotation_text
     assert "required = 205.0 mm" in annotation_text
+    assert "tension" in annotation_text

@@ -122,55 +122,102 @@ def tension_zone_mean_width(
     return clipped_area / depth * 1000.0, depth * 1000.0
 
 
-def _face_bar_indices(
-    section: Section, axis: str, tension_low: bool
-) -> list[int]:
-    cx, cy = _centroid(section)
-    cut = cy if axis == "x" else cx
-    return [
-        index
-        for index, bar in enumerate(section.bars)
-        if (
-            _coord((bar.x, bar.y), axis) < cut
-            if tension_low
-            else _coord((bar.x, bar.y), axis) > cut
-        )
-    ]
-
-
-def _face_bar_data(
+def _resultant_tension_zone(
     section: Section,
     elements: Sequence[Mapping],
     materials: Sequence[MildSteel],
-    axis: str,
-    tension_low: bool,
+    mx_centroid_knm: float,
+    my_centroid_knm: float,
 ) -> dict:
+    """Derive the gross-concrete tension half-plane for resultant bending.
+
+    The uncracked, concrete-only strain plane accounts for biaxial bending and
+    product-of-inertia coupling.  Its zero-strain line defines the actual
+    resultant tension zone; bars on a separate Cartesian face are not credited.
+    """
     if len(elements) != len(section.bars) or len(materials) != len(section.bars):
         raise ValueError("one element record and material are required per bar")
-    indices = _face_bar_indices(section, axis, tension_low)
+    plain = Section([np.asarray(ring, dtype=float).copy()
+                     for ring in section.concrete])
+    bending = solve_elastic_uncracked(
+        plain, 0.0, float(mx_centroid_knm), float(my_centroid_knm), 1.0
+    )
+    gradient = np.array([bending.kx, bending.ky], dtype=float)
+    norm = float(np.linalg.norm(gradient))
+    if not bending.converged or not math.isfinite(norm) or norm <= _TOL:
+        return {
+            "valid": False,
+            "reason": "gross-concrete resultant tension plane could not be derived",
+        }
+
+    direction = gradient / norm
+    neutral_c = float(bending.eps0) / norm
+    vertices = section.concrete_vertices()
+    signed_vertices = vertices @ direction + neutral_c
+    tension_depth = float(np.max(signed_vertices))
+    compression_extreme = float(np.min(signed_vertices))
+    clipped_area = 0.0
+    for ring in section.integration_rings():
+        clipped = geometry.clip_halfplane(
+            ring, float(direction[0]), float(direction[1]), neutral_c
+        )
+        clipped_area += geometry.area_moments(clipped).area
+
+    indices = [
+        index
+        for index, bar in enumerate(section.bars)
+        if (
+            float(direction[0]) * bar.x
+            + float(direction[1]) * bar.y
+            + neutral_c
+        ) > _TOL
+    ]
     areas = [section.bars[index].area * 1.0e6 for index in indices]
     area = sum(areas)
     if area > 0.0:
-        cg = sum(
-            areas[pos]
-            * _coord((section.bars[index].x, section.bars[index].y), axis)
-            for pos, index in enumerate(indices)
+        bar_level = sum(
+            areas[position]
+            * (
+                float(direction[0]) * section.bars[index].x
+                + float(direction[1]) * section.bars[index].y
+                + neutral_c
+            )
+            for position, index in enumerate(indices)
         ) / area
-        outer_coords = [_coord(point, axis) for point in section.concrete[0]]
-        compression_fibre = max(outer_coords) if tension_low else min(outer_coords)
-        d_mm = abs(compression_fibre - cg) * 1000.0
+        d_mm = (bar_level - compression_extreme) * 1000.0
     else:
-        cg = None
+        bar_level = None
         d_mm = 0.0
+    bt_mm = (
+        clipped_area / tension_depth * 1000.0
+        if clipped_area > 0.0 and tension_depth > _TOL
+        else 0.0
+    )
     return {
+        "valid": bool(
+            clipped_area > 0.0
+            and tension_depth > _TOL
+            and compression_extreme < -_TOL
+        ),
+        "reason": None,
         "indices": indices,
-        "bar_ids": [str(elements[index].get("id") or index + 1) for index in indices],
-        "as_provided_mm2": area,
-        "centroid_m": cg,
-        "d_mm": d_mm,
-        "fyk_values_mpa": [float(materials[index].fytk) for index in indices],
+        "bar_ids": [
+            str(elements[index].get("id") or index + 1) for index in indices
+        ],
         "material_ids": [
             str(elements[index].get("material_id") or "") for index in indices
+        ],
+        "fyk_values_mpa": [float(materials[index].fytk) for index in indices],
+        "as_provided_mm2": area,
+        "bar_level_m": bar_level,
+        "bt_mm": bt_mm,
+        "tension_zone_depth_mm": tension_depth * 1000.0,
+        "d_mm": d_mm,
+        "tension_direction": [float(direction[0]), float(direction[1])],
+        "neutral_c_m": neutral_c,
+        "neutral_point_m": [
+            -neutral_c * float(direction[0]),
+            -neutral_c * float(direction[1]),
         ],
     }
 
@@ -186,74 +233,89 @@ def minimum_reinforcement_2005(
     my_ed_knm: float,
     edition: str = EC2_2005,
 ) -> dict:
-    """Check Formula (9.1N) on every tension face active in the case."""
+    """Check Formula (9.1N) in the resultant bending tension zone."""
     if edition not in {EC2_2005, EC2_2005_DKNA}:
         raise ValueError("a 2005-family edition is required")
     mx_c, my_c = _centroid_moments(
         section, n_ed_tension_kn, mx_ed_knm, my_ed_knm
     )
-    actions = (("x", mx_c), ("y", my_c))
-    rows = []
-    for axis, moment in actions:
-        if abs(moment) <= _TOL:
-            continue
-        tension_low = moment > 0.0
-        face = _face_bar_data(
-            section, elements, materials, axis, tension_low
-        )
-        bt_mm, tension_depth_mm = tension_zone_mean_width(
-            section, axis, tension_low
-        )
-        fyk = min(face["fyk_values_mpa"], default=0.0)
-        valid = bool(
-            face["as_provided_mm2"] > 0.0
-            and face["d_mm"] > 0.0
-            and bt_mm > 0.0
-            and fyk > 0.0
-            and fctm_mpa > 0.0
-        )
-        as_min = (
-            max(0.26 * float(fctm_mpa) / fyk, 0.0013)
-            * bt_mm
-            * face["d_mm"]
-            if valid
-            else None
-        )
-        utilisation = (
-            as_min / face["as_provided_mm2"]
-            if as_min is not None and face["as_provided_mm2"] > 0.0
-            else math.inf
-        )
-        row_status = "PASS" if valid and utilisation <= 1.0 + _TOL else "FAIL"
-        rows.append({
-            "status": row_status,
-            "axis": axis,
-            "face": _face_name(axis, tension_low),
-            "tension_low": tension_low,
-            "moment_centroid_knm": moment,
-            "as_provided_mm2": face["as_provided_mm2"],
-            "as_min_mm2": as_min,
-            "utilisation": utilisation if math.isfinite(utilisation) else None,
-            "bt_mm": bt_mm,
-            "tension_zone_depth_mm": tension_depth_mm,
-            "d_mm": face["d_mm"],
-            "fctm_mpa": float(fctm_mpa),
-            "fyk_mpa": fyk if fyk > 0.0 else None,
-            "bar_ids": face["bar_ids"],
-            "material_ids": face["material_ids"],
-            "reason": None if valid else "no usable tension reinforcement or geometry",
-        })
-    if rows:
-        status = _status([row["status"] for row in rows])
-        reason = None
-    else:
+    if math.hypot(mx_c, my_c) <= _TOL:
+        rows = []
         status = "NOT ASSESSED"
         reason = (
             "Formula (9.1N) needs a bending tension face; the selected case has "
             "no moment about the concrete centroid"
         )
+    else:
+        zone = _resultant_tension_zone(
+            section, elements, materials, mx_c, my_c
+        )
+        fyk = min(zone.get("fyk_values_mpa") or [], default=0.0)
+        valid = bool(
+            zone.get("valid")
+            and zone.get("as_provided_mm2", 0.0) > 0.0
+            and zone.get("d_mm", 0.0) > 0.0
+            and zone.get("bt_mm", 0.0) > 0.0
+            and fyk > 0.0
+            and fctm_mpa > 0.0
+        )
+        as_min = (
+            max(0.26 * float(fctm_mpa) / fyk, 0.0013)
+            * float(zone["bt_mm"])
+            * float(zone["d_mm"])
+            if valid
+            else None
+        )
+        utilisation = (
+            as_min / float(zone["as_provided_mm2"])
+            if as_min is not None and zone.get("as_provided_mm2", 0.0) > 0.0
+            else math.inf
+        )
+        biaxial = abs(mx_c) > _TOL and abs(my_c) > _TOL
+        if biaxial:
+            axis = "xy"
+            face_name = "resultant tension zone"
+            tension_low = None
+        else:
+            axis = "x" if abs(mx_c) > _TOL else "y"
+            direction_component = (
+                zone["tension_direction"][1]
+                if axis == "x" else zone["tension_direction"][0]
+            )
+            tension_low = direction_component < 0.0
+            face_name = _face_name(axis, tension_low)
+        row_status = "PASS" if valid and utilisation <= 1.0 + _TOL else "FAIL"
+        rows = [{
+            "status": row_status,
+            "axis": axis,
+            "face": face_name,
+            "tension_low": tension_low,
+            "moment_centroid_knm": math.hypot(mx_c, my_c),
+            "mx_centroid_knm": mx_c,
+            "my_centroid_knm": my_c,
+            "as_provided_mm2": zone.get("as_provided_mm2", 0.0),
+            "as_min_mm2": as_min,
+            "utilisation": utilisation if math.isfinite(utilisation) else None,
+            "bt_mm": zone.get("bt_mm"),
+            "tension_zone_depth_mm": zone.get("tension_zone_depth_mm"),
+            "d_mm": zone.get("d_mm"),
+            "fctm_mpa": float(fctm_mpa),
+            "fyk_mpa": fyk if fyk > 0.0 else None,
+            "bar_ids": zone.get("bar_ids") or [],
+            "material_ids": zone.get("material_ids") or [],
+            "tension_direction": zone.get("tension_direction"),
+            "neutral_c_m": zone.get("neutral_c_m"),
+            "neutral_point_m": zone.get("neutral_point_m"),
+            "model": "gross-concrete resultant tension half-plane",
+            "reason": (
+                None if valid
+                else zone.get("reason") or "no usable tension reinforcement or geometry"
+            ),
+        }]
+        status = row_status
+        reason = None if valid else rows[0]["reason"]
     limitations = [
-        "The automatic bt is the exact mean width of the gross-centroid tension half.",
+        "The resultant gross-concrete uncracked strain plane defines the tension half; bt is its exact mean width.",
         "Prestressing tendons are not credited in this ordinary-reinforcement check.",
         "Ordinary reinforcement is assumed anchored to develop the entered fyk; reduce fyk where it cannot.",
     ]

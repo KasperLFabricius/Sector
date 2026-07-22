@@ -254,6 +254,7 @@ def test_manual_documents_longitudinal_minimum_reinforcement_and_spacing_scope()
         "Minimum reinforcement and clear spacing",
         "9.2.1.1(1)",
         "Formula (9.1N)",
+        "uncracked gross-concrete strain plane",
         "12.2(2)",
         "D_{upper}",
         "Lap / bundle ID",

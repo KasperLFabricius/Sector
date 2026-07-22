@@ -824,6 +824,7 @@ def detailing_geometry_figure(
     tendon_elements=None,
     highlight_ids=None,
     spacing_pair=None,
+    tension_zone=None,
     title="Detailing geometry",
 ):
     """Publication-ready section figure for minimum steel and spacing evidence.
@@ -872,6 +873,70 @@ def detailing_geometry_figure(
             text=[str(item.get("id")) for item in selected],
             hovertemplate="%{text}<br>included in check<extra></extra>",
         ))
+
+    zone = tension_zone or {}
+    direction = zone.get("tension_direction") or []
+    if len(direction) == 2 and zone.get("neutral_c_m") is not None and outer:
+        ux, uy = float(direction[0]), float(direction[1])
+        c_mm = float(zone["neutral_c_m"]) * 1000.0
+        outer_x = [float(point[0]) * 1000.0 for point in outer]
+        outer_y = [float(point[1]) * 1000.0 for point in outer]
+        xmin, xmax = min(outer_x), max(outer_x)
+        ymin, ymax = min(outer_y), max(outer_y)
+        span = max(xmax - xmin, ymax - ymin, 1.0)
+        tolerance = 1.0e-9 * span
+        intersections = []
+        if abs(uy) > 1.0e-12:
+            for x_value in (xmin, xmax):
+                y_value = (-c_mm - ux * x_value) / uy
+                if ymin - tolerance <= y_value <= ymax + tolerance:
+                    intersections.append((x_value, y_value))
+        if abs(ux) > 1.0e-12:
+            for y_value in (ymin, ymax):
+                x_value = (-c_mm - uy * y_value) / ux
+                if xmin - tolerance <= x_value <= xmax + tolerance:
+                    intersections.append((x_value, y_value))
+        unique = []
+        for point in intersections:
+            if not any(math.hypot(point[0] - other[0], point[1] - other[1])
+                       <= tolerance for other in unique):
+                unique.append(point)
+        if len(unique) >= 2:
+            first, second = max(
+                ((first, second) for index, first in enumerate(unique)
+                 for second in unique[index + 1:]),
+                key=lambda pair: math.hypot(
+                    pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]
+                ),
+            )
+            fig.add_trace(go.Scatter(
+                x=[first[0], second[0]],
+                y=[first[1], second[1]],
+                mode="lines",
+                name="resultant tension boundary",
+                line=dict(color="#4B5563", width=2.0, dash="dash"),
+                hovertemplate="gross-concrete zero-strain line<extra></extra>",
+            ))
+            mid_x = 0.5 * (first[0] + second[0])
+            mid_y = 0.5 * (first[1] + second[1])
+            fig.add_annotation(
+                x=mid_x + ux * 0.16 * span,
+                y=mid_y + uy * 0.16 * span,
+                ax=mid_x,
+                ay=mid_y,
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                text="tension",
+                showarrow=True,
+                arrowhead=3,
+                arrowsize=1.0,
+                arrowwidth=1.8,
+                arrowcolor="#4B5563",
+                font=dict(color="#4B5563", size=11),
+                bgcolor="rgba(255,255,255,0.82)",
+            )
 
     pair = spacing_pair or {}
     first = records.get(str(pair.get("first_id")))

@@ -183,7 +183,8 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
         "edition": inp["detailing_edition"],
         "clause": "9.2.1.1(1), Formula (9.1N)",
         "checks": [{
-            "status": "PASS", "axis": "x", "face": "bottom",
+            "status": "PASS", "axis": "xy",
+            "face": "resultant tension zone",
             "as_provided_mm2": 628.0, "as_min_mm2": 410.0,
             "utilisation": 410.0 / 628.0, "bt_mm": 200.0,
             "d_mm": 270.0, "fctm_mpa": 2.9, "fyk_mpa": 500.0,
@@ -212,6 +213,8 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     )).split())
 
     assert "Longitudinal minimum reinforcement" in text
+    assert "Mx + My" in text
+    assert "resultant tension zone" in text
     assert "A s,min" in text or "As,min" in text
     assert "Reinforcement clear spacing" in text
     assert "R1 - R2" in text
