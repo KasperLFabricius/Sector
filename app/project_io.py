@@ -428,19 +428,21 @@ def parse_project(text: str):
             scalars["capacity_steel_material_id"] = available[0]
     # v7 replaces the former global direction, face, web-width override and link
     # leg count. Preserve the configured historical direction exactly; the other
-    # direction receives the app's normal defaults when mounted.
+    # direction is written explicitly with the app defaults so loading into a
+    # reused Streamlit session cannot retain values from the previous project.
     if data.get("version", 1) < 7:
+        for direction in ("vx", "vy"):
+            scalars.setdefault(f"shear_{direction}_bw", 0.0)
+            scalars.setdefault(f"shear_{direction}_link_legs", 2.0)
         component = load_cases.legacy_shear_component(
             raw_scalars.get("shear_axis")
         )
         old_bw = raw_scalars.get("shear_bw")
         if isinstance(old_bw, (int, float)):
-            scalars.setdefault(f"shear_{component}_bw", float(old_bw))
+            scalars[f"shear_{component}_bw"] = float(old_bw)
         old_legs = raw_scalars.get("shear_link_legs")
         if isinstance(old_legs, (int, float)):
-            scalars.setdefault(
-                f"shear_{component}_link_legs", float(old_legs)
-            )
+            scalars[f"shear_{component}_link_legs"] = float(old_legs)
     # The axial force N is now tension-positive; files written before that (version
     # < 2) stored it compression-positive, so negate their axial values to preserve
     # the physical loads. Moments are unchanged.

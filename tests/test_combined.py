@@ -287,6 +287,43 @@ def test_biaxial_combined_fails_when_torsion_drives_a_directional_failure():
     assert governing["status"] == "FAIL"
 
 
+def test_biaxial_directional_vt_table_withholds_out_of_range_verdicts():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 20.0),
+        ("number_input", "pl_My", 15.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_cot_max", 3.0),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+
+    assert not at.exception
+    interactions = at.session_state["results"]["torsion"][
+        "directional_interactions"
+    ]
+    assert all(
+        not item["interaction"]["code_applicable"]
+        for item in interactions.values()
+    )
+    _select_view(at, "Torsion")
+    table = next(
+        frame.value for frame in at.dataframe
+        if "Directional screen" in frame.value.columns
+    )
+    assert set(table["Status"]) == {"NOT ASSESSED"}
+
+
 
 def _run_member(
     at,

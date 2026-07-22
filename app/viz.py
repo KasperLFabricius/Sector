@@ -808,6 +808,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
 def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                           centroid, asl_bar_ids, asl_cg_m, asl_mm2,
                           d_mm, z_mm, bw_mm, bw_source,
+                          signed_v_ed=None,
                           title="Shear geometry"):
     """Annotated section used to audit the geometry behind a shear check.
 
@@ -827,7 +828,14 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
     )
     if not outer:
         return fig
-    action_label = "V<sub>y,Ed</sub>" if axis == "x" else "V<sub>x,Ed</sub>"
+    action_symbol = "V<sub>y,Ed</sub>" if axis == "x" else "V<sub>x,Ed</sub>"
+    signed_action = None if signed_v_ed is None else float(signed_v_ed)
+    action_label = (
+        action_symbol
+        if signed_action is None
+        else f"{action_symbol} = {signed_action:.3g} kN"
+    )
+    positive_action = signed_action is None or signed_action >= 0.0
 
     xs = [float(p[0]) * 1000.0 for p in outer]
     ys = [float(p[1]) * 1000.0 for p in outer]
@@ -862,8 +870,11 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                            yshift=6 if tension_low else -6,
                            font=dict(size=10, color=SCHEMATIC_INK))
         # VEd arrow in the physical shear direction.
-        fig.add_annotation(x=xmin - 0.12 * span_x, y=ymax,
-                           ax=xmin - 0.12 * span_x, ay=ymin,
+        arrow_y0, arrow_y1 = (
+            (ymin, ymax) if positive_action else (ymax, ymin)
+        )
+        fig.add_annotation(x=xmin - 0.12 * span_x, y=arrow_y1,
+                           ax=xmin - 0.12 * span_x, ay=arrow_y0,
                            axref="x", ayref="y", text="", showarrow=True,
                            arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
                            font=dict(size=11, color=SCHEMATIC_INK))
@@ -907,8 +918,11 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                            xanchor="left" if tension_low else "right",
                            xshift=6 if tension_low else -6, yanchor="bottom",
                            font=dict(size=10, color=SCHEMATIC_INK))
-        fig.add_annotation(x=xmax, y=ymax + 0.12 * span_y,
-                           ax=xmin, ay=ymax + 0.12 * span_y,
+        arrow_x0, arrow_x1 = (
+            (xmin, xmax) if positive_action else (xmax, xmin)
+        )
+        fig.add_annotation(x=arrow_x1, y=ymax + 0.12 * span_y,
+                           ax=arrow_x0, ay=ymax + 0.12 * span_y,
                            axref="x", ayref="y", text="", showarrow=True,
                            arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
                            font=dict(size=11, color=SCHEMATIC_INK))

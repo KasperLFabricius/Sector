@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from sector import codes, shear
+from sector import capacity, codes, shear
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works standalone
@@ -524,6 +524,19 @@ def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     assert vy["both_faces_evaluated"] is True
     assert len(vy["face_candidates"]) == 2
     assert vy["governing_face"] in {"negative", "positive"}
+    candidates = vy["face_candidates"]
+    governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["shear_status"], item["shear_metric"]
+        ),
+    )
+    assert vy["status"] == capacity.aggregate_assessment_status(
+        item["shear_status"] for item in candidates
+    )
+    assert vy["governing_face"] == (
+        "negative" if governing["tension_low"] else "positive"
+    )
 
 
 def test_app_shear_bw_override_is_used():

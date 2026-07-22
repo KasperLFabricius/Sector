@@ -101,6 +101,25 @@ def test_acceptance_status_label_uses_common_report_vocabulary(source, label):
     assert presentation.assessment_status_label(source) == label
 
 
+@pytest.mark.parametrize(
+    ("interaction", "applicable", "expected"),
+    [
+        ({"valid": True, "value": 0.8, "code_applicable": True}, True, "PASS"),
+        ({"valid": True, "value": 1.2, "code_applicable": True}, True, "FAIL"),
+        ({"valid": True, "value": 0.8, "code_applicable": False}, True,
+         "NOT ASSESSED"),
+        ({"valid": True, "value": 0.8}, False, "NOT ASSESSED"),
+        ({"valid": False, "value": None}, True, "NOT ASSESSED"),
+    ],
+)
+def test_vt_interaction_status_withholds_verdict_outside_applicability(
+    interaction, applicable, expected
+):
+    assert presentation.interaction_assessment_status(
+        interaction, applicable=applicable
+    ) == expected
+
+
 def test_plastic_state_evidence_is_tension_positive_and_uses_mm2_area():
     steel = MildSteel(
         fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,

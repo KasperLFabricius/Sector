@@ -1822,7 +1822,7 @@ class ReportBuilder:
         util_txt = _pct(util)
         verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         self._h2("Utilisation")
-        self._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
+        self._formula("|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
                       result=f"{util_txt}  ({verdict})")
         self._small(
@@ -1874,7 +1874,7 @@ class ReportBuilder:
             utilisation = links.get("util") if self.inp.get("shear_links") else item.get("util")
             rows.append([
                 "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
-                f"{_fmt(item.get('v_ed'), 3)} kN",
+                f"{_fmt(item.get('signed_v_ed', item.get('v_ed')), 3)} kN",
                 f"{_fmt(resistance, 3)} kN",
                 _pct(utilisation), item.get("status", "NOT ASSESSED"),
                 viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
@@ -1916,13 +1916,25 @@ class ReportBuilder:
                 f"shear reinforcement (EN 1992-1-1 sec. {clause}), method "
                 f"<b>{sh['method']}</b>. {axis}, with the "
                 f"tension reinforcement on the {face} face.")
+        signed_action = float(sh.get("signed_v_ed", sh.get("v_ed", 0.0)))
+        self._small(
+            f"Entered {action} = {_fmt(signed_action, 3)} kN; resistance and "
+            f"utilisation use |{action}| = {_fmt(abs(signed_action), 3)} kN."
+        )
+        if sh.get("face_mode") == "auto":
+            self._small(
+                "Automatic face selection uses the associated moment at the "
+                "concrete centroid: "
+                f"{_fmt(sh.get('associated_moment'), 3)} kNm."
+            )
         if not res["valid"]:
             self._small("Warning: V<sub>Rd,c</sub> is zero -- no tension "
                         "reinforcement on the chosen face, or a zero effective depth "
                         "/ web width.")
         if sh.get("both_faces_evaluated"):
             face_rows = [["Candidate face", "V<sub>Rd,c</sub>",
-                          "V<sub>Ed</sub>/V<sub>Rd,c</sub>", "Governing"]]
+                          "|V<sub>Ed</sub>|/V<sub>Rd,c</sub>",
+                          "Shear status", "Combined status", "Governing"]]
             for candidate in sh.get("face_candidates", []):
                 candidate_shear = candidate.get("shear") or {}
                 face_rows.append([
@@ -1931,6 +1943,8 @@ class ReportBuilder:
                     ),
                     f"{_fmt((candidate_shear.get('res') or {}).get('vrd_c'), 3)} kN",
                     _pct(candidate_shear.get("util")),
+                    candidate.get("shear_status", "NOT ASSESSED"),
+                    candidate.get("combined_status", "NOT RUN"),
                     ("Yes" if bool(candidate.get("tension_low"))
                      == bool(sh.get("tension_low")) else ""),
                 ])
@@ -1938,7 +1952,11 @@ class ReportBuilder:
                 "The associated bending moment is effectively zero; both faces are "
                 "evaluated and the governing candidate is used."
             )
-            self._table(face_rows, [52 * mm, 35 * mm, 45 * mm, 30 * mm], font=7.0)
+            self._table(
+                face_rows,
+                [38 * mm, 25 * mm, 34 * mm, 27 * mm, 25 * mm, 21 * mm],
+                font=6.5,
+            )
         links_payload = sh.get("links") or {}
         link_res = links_payload.get("res") or {}
         z_geometry = float(link_res.get("z", res.get("z", 0.9 * sh["d"])))
@@ -1955,6 +1973,7 @@ class ReportBuilder:
                     asl_cg_m=sh.get("asl_cg"), asl_mm2=sh["asl"],
                     d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
                     bw_source=bw_src,
+                    signed_v_ed=sh.get("signed_v_ed", sh.get("v_ed")),
                     title=f"{action} geometry - {face} tension",
                 ),
                 145,
@@ -2021,7 +2040,7 @@ class ReportBuilder:
         util_txt = _pct(util)
         verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         self._h2("Utilisation")
-        self._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
+        self._formula("|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
                       result=f"{util_txt}  ({verdict})")
         self._small("A<sub>sl</sub> is the tension reinforcement on the chosen face, "
@@ -2095,7 +2114,7 @@ class ReportBuilder:
         verdict = _code_verdict(
             viz.util_ok(util), links.get("code_applicable", True)
         )
-        self._formula("V<sub>Ed</sub> / V<sub>Rd</sub>",
+        self._formula("|V<sub>Ed</sub>| / V<sub>Rd</sub>",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
                       result=f"{util_txt}  ({verdict})")
         if links.get("theta_mode") == "utilisation":
@@ -2547,9 +2566,12 @@ class ReportBuilder:
                 rows.append([
                     "Vx+T" if component == "vx" else "Vy+T",
                     _pct(item.get("util")), _pct(value),
-                    ("NOT ASSESSED" if not interaction.get("valid")
-                     else "PASS" if value is not None and value <= 1.0 + 1.0e-9
-                     else "FAIL"),
+                    item.get("directional_interaction_status") or (
+                        presentation.interaction_assessment_status(
+                            interaction,
+                            applicable=item.get("code_applicable", True),
+                        )
+                    ),
                 ])
             self._table(rows, [42 * mm, 42 * mm, 42 * mm, 42 * mm])
         if not t["valid"]:

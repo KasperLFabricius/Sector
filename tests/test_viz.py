@@ -750,6 +750,25 @@ def test_horizontal_shear_geometry_uses_left_tension_face():
     assert "user input" in text
 
 
+def test_uniaxial_shear_geometry_preserves_negative_action_direction():
+    fig = viz.shear_geometry_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)], [],
+        [(-0.1, -0.25, 300.0), (0.1, -0.25, 300.0)],
+        axis="x", tension_low=True, centroid=(0.0, 0.0),
+        asl_bar_ids=[1, 2], asl_cg_m=-0.25, asl_mm2=600.0,
+        d_mm=550.0, z_mm=495.0, bw_mm=400.0, bw_source="auto",
+        signed_v_ed=-25.0,
+    )
+    load_arrow = next(
+        annotation for annotation in fig.layout.annotations
+        if annotation.showarrow and annotation.arrowcolor == viz.LOAD_POINT
+    )
+    text = " ".join((annotation.text or "") for annotation in fig.layout.annotations)
+
+    assert load_arrow.y < load_arrow.ay
+    assert "V<sub>y,Ed</sub> = -25 kN" in text
+
+
 def test_biaxial_shear_overview_has_signed_coordinate_arrows_without_resultant():
     fig = viz.biaxial_shear_overview_figure(
         [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],

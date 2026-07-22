@@ -143,6 +143,59 @@ def test_auto_face_checks_both_faces_at_zero_moment_and_override_is_explicit():
         capacity.shear_face_candidates("sideways", 0.0)
 
 
+def test_auto_face_uses_centroid_adjusted_moment_not_origin_moment():
+    inp = _member_input(
+        # The concrete centroid is y = 0.30 m. The positive 10 kNm origin
+        # moment becomes -20 kNm at the centroid under 100 kN tension.
+        P_pl=100.0,
+        Mx_pl=10.0,
+        My_pl=0.0,
+        shear_Vy=-25.0,
+        shear_face_y="auto",
+    )
+    spec = capacity.shear_direction_specs(inp)["vy"]
+
+    assert spec["moment_origin"] == pytest.approx(10.0)
+    assert spec["moment"] == pytest.approx(-20.0)
+    assert spec["signed_v_ed"] == pytest.approx(-25.0)
+    assert spec["v_ed"] == pytest.approx(25.0)
+    assert capacity.shear_face_candidates(spec["face"], spec["moment"]) == (False,)
+
+
+def test_mandatory_faces_are_governed_independently_for_shear_and_combined():
+    candidates = [
+        {
+            "shear_status": "FAIL", "shear_metric": 1.05,
+            "combined_status": "PASS", "combined_metric": 0.80,
+        },
+        {
+            "shear_status": "PASS", "shear_metric": 0.70,
+            "combined_status": "FAIL", "combined_metric": 1.20,
+        },
+    ]
+    shear_governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["shear_status"], item["shear_metric"]
+        ),
+    )
+    combined_governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["combined_status"], item["combined_metric"]
+        ),
+    )
+
+    assert shear_governing is candidates[0]
+    assert combined_governing is candidates[1]
+    assert capacity.aggregate_assessment_status(
+        item["shear_status"] for item in candidates
+    ) == "FAIL"
+    assert capacity.aggregate_assessment_status(
+        item["combined_status"] for item in candidates
+    ) == "FAIL"
+
+
 def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     valid = _member_input(
         torsion_on=True,

@@ -1052,13 +1052,13 @@ def _case_column_config(key):
             ),
             "vx_face": st.column_config.SelectboxColumn(
                 "Vx face",
-                help="Auto uses the sign of My. Negative = left (-x); positive = right (+x).",
+                help="Auto uses centroid-adjusted My. Negative = left (-x); positive = right (+x).",
                 options=list(load_cases.FACE_OPTIONS), default=load_cases.FACE_AUTO,
                 required=True, width="small",
             ),
             "vy_face": st.column_config.SelectboxColumn(
                 "Vy face",
-                help="Auto uses the sign of Mx. Negative = bottom (-y); positive = top (+y).",
+                help="Auto uses centroid-adjusted Mx. Negative = bottom (-y); positive = top (+y).",
                 options=list(load_cases.FACE_OPTIONS), default=load_cases.FACE_AUTO,
                 required=True, width="small",
             ),
@@ -4226,29 +4226,30 @@ def _directional_shear_status(inp, shear_out):
     return "PASS" if float(util) <= 1.0 + 1.0e-9 else "FAIL"
 
 
-def _directional_candidate_metric(inp, candidate_out):
-    """Conservative ordering used when automatic face selection checks both faces."""
+def _shear_candidate_assessment(inp, candidate_out):
+    """Return the status and shear-only metric for one candidate face."""
     shear_out = candidate_out.get("shear") or {}
     status = _directional_shear_status(inp, shear_out)
-    if status == "INVALID":
-        return math.inf
     values = [float(shear_out.get("util") or 0.0)]
     links = shear_out.get("links") or {}
     if links:
         values.append(float(links.get("util") or 0.0))
-        for key in ("chord", "chord_off"):
-            check = links.get(key) or {}
-            if check.get("valid") and check.get("util") is not None:
-                values.append(float(check["util"]))
-    combined_out = candidate_out.get("combined") or {}
-    for key in ("dkna_sum", "r_m", "r_v", "r_t"):
-        value = combined_out.get(key)
-        if value is not None:
-            values.append(float(value))
-    transverse = combined_out.get("transverse") or {}
-    if transverse.get("valid") and transverse.get("governing") is not None:
-        values.append(float(transverse["governing"]))
-    return max(values)
+    metric = max(values)
+    return status, (math.inf if status == "INVALID" else metric)
+
+
+def _torsion_interaction_assessment(torsion_out):
+    """Return the acceptance state of one face-specific V+T crushing screen."""
+    torsion_out = torsion_out or {}
+    interaction = torsion_out.get("interaction") or {}
+    value = interaction.get("value")
+    status = presentation.interaction_assessment_status(
+        interaction, applicable=torsion_out.get("code_applicable", True)
+    )
+    metric = float(value or 0.0)
+    if not math.isfinite(metric):
+        metric = math.inf
+    return status, metric
 
 
 def _combined_direction_assessment(inp, candidate_out):
@@ -4268,18 +4269,6 @@ def _combined_direction_assessment(inp, candidate_out):
         if row.get("util") is not None
     ]
     return status, max(utilisations, default=0.0)
-
-
-def _assessment_priority(status):
-    """Ordering for selecting the directional result that needs most attention."""
-    return {
-        "INVALID": 4,
-        "FAIL": 3,
-        "NOT ASSESSED": 2,
-        "NOT RUN": 2,
-        "PASS": 1,
-        "NOT APPLICABLE": 0,
-    }.get(str(status or "").upper(), 2)
 
 
 def _direction_input(inp, component, tension_low, spec=None):
@@ -4331,49 +4320,112 @@ def _run_capacity_checks(inp, out):
                 if key in {"plastic", "elastic"}
             }
             _run_uniaxial_capacity_checks(candidate_inp, candidate_out)
+            shear_status, shear_metric = _shear_candidate_assessment(
+                candidate_inp, candidate_out
+            )
+            torsion_status, torsion_metric = _torsion_interaction_assessment(
+                candidate_out.get("torsion")
+            )
+            if candidate_out.get("combined") is not None:
+                combined_status, combined_metric = _combined_direction_assessment(
+                    candidate_inp, candidate_out
+                )
+            else:
+                combined_status, combined_metric = "NOT RUN", 0.0
             candidates.append({
                 "tension_low": bool(tension_low),
                 "input": candidate_inp,
                 "results": candidate_out,
-                "metric": _directional_candidate_metric(candidate_inp, candidate_out),
+                "shear_status": shear_status,
+                "shear_metric": shear_metric,
+                "torsion_status": torsion_status,
+                "torsion_metric": torsion_metric,
+                "combined_status": combined_status,
+                "combined_metric": combined_metric,
             })
-        governing = max(candidates, key=lambda candidate: candidate["metric"])
-        shear_out = dict(governing["results"]["shear"])
+        shear_governing = max(
+            candidates,
+            key=lambda candidate: capacity.assessment_key(
+                candidate["shear_status"], candidate["shear_metric"]
+            ),
+        )
+        torsion_governing = max(
+            candidates,
+            key=lambda candidate: capacity.assessment_key(
+                candidate["torsion_status"], candidate["torsion_metric"]
+            ),
+        )
+        combined_governing = max(
+            candidates,
+            key=lambda candidate: capacity.assessment_key(
+                candidate["combined_status"], candidate["combined_metric"]
+            ),
+        )
+        shear_out = dict(shear_governing["results"]["shear"])
+        shear_status = capacity.aggregate_assessment_status(
+            candidate["shear_status"] for candidate in candidates
+        )
         shear_out.update(
             face_mode=str(inp.get(face_key, "auto")),
             both_faces_evaluated=len(candidates) == 2,
-            governing_face=("negative" if governing["tension_low"] else "positive"),
-            status=_directional_shear_status(governing["input"], shear_out),
+            governing_face=(
+                "negative" if shear_governing["tension_low"] else "positive"
+            ),
+            associated_moment=spec["moment"],
+            associated_moment_origin=spec["moment_origin"],
+            signed_v_ed=spec["signed_v_ed"],
+            status=shear_status,
             face_candidates=[{
                 "tension_low": candidate["tension_low"],
-                "metric": candidate["metric"],
+                "shear_status": candidate["shear_status"],
+                "shear_metric": candidate["shear_metric"],
+                "torsion_status": candidate["torsion_status"],
+                "torsion_metric": candidate["torsion_metric"],
+                "combined_status": candidate["combined_status"],
+                "combined_metric": candidate["combined_metric"],
                 "shear": candidate["results"].get("shear"),
                 "torsion": candidate["results"].get("torsion"),
                 "combined": candidate["results"].get("combined"),
             } for candidate in candidates],
         )
-        combined_out = governing["results"].get("combined")
+        combined_out = combined_governing["results"].get("combined")
         if combined_out is not None:
-            combined_status, combined_util = _combined_direction_assessment(
-                governing["input"], governing["results"]
-            )
             combined_out = dict(
                 combined_out,
                 component=component,
-                status=combined_status,
-                governing_util=combined_util,
+                status=capacity.aggregate_assessment_status(
+                    candidate["combined_status"] for candidate in candidates
+                ),
+                governing_util=combined_governing["combined_metric"],
+                governing_face=(
+                    "negative" if combined_governing["tension_low"] else "positive"
+                ),
+            )
+        torsion_out = torsion_governing["results"].get("torsion")
+        if torsion_out is not None:
+            torsion_out = dict(
+                torsion_out,
+                directional_interaction_status=capacity.aggregate_assessment_status(
+                    candidate["torsion_status"] for candidate in candidates
+                ),
+                directional_governing_face=(
+                    "negative" if torsion_governing["tension_low"] else "positive"
+                ),
             )
         directions[component] = {
             "component": component,
             "shear": shear_out,
-            "torsion": governing["results"].get("torsion"),
+            "torsion": torsion_out,
             "combined": combined_out,
             "status": shear_out["status"],
-            "metric": governing["metric"],
+            "metric": shear_governing["shear_metric"],
         }
 
     governing_component = max(
-        directions, key=lambda component: directions[component]["metric"]
+        directions,
+        key=lambda component: capacity.assessment_key(
+            directions[component]["status"], directions[component]["metric"]
+        ),
     )
     aggregate = dict(directions[governing_component]["shear"])
     statuses = [directions[component]["status"] for component in active]
@@ -4427,9 +4479,9 @@ def _run_capacity_checks(inp, out):
         }
         combined_governing_component = max(
             candidates,
-            key=lambda key: (
-                _assessment_priority(candidates[key].get("status")),
-                float(candidates[key].get("governing_util") or 0.0),
+            key=lambda key: capacity.assessment_key(
+                candidates[key].get("status"),
+                candidates[key].get("governing_util"),
             ),
         ) if candidates else governing_component
         governing_combined = candidates.get(combined_governing_component, {})
@@ -5422,7 +5474,7 @@ def shear_view(inp, results):
             )
             summary.append({
                 "Component": "Vx,Ed" if component == "vx" else "Vy,Ed",
-                "VEd [kN]": item.get("v_ed"),
+                "VEd [kN]": item.get("signed_v_ed", item.get("v_ed")),
                 "VRd [kN]": (
                     ((item.get("links") or {}).get("res") or {}).get("vrd")
                     if inp.get("shear_links")
@@ -5489,10 +5541,11 @@ def shear_view(inp, results):
     util = sh["util"]
     ok = viz.util_ok(util)
     m1, m2, m3 = st.columns(3)
-    m1.metric(f"Applied {action_label}", f"{sh['v_ed']:.3f} kN")
+    signed_v_ed = float(sh.get("signed_v_ed", sh["v_ed"]))
+    m1.metric(f"Applied {action_label}", f"{signed_v_ed:.3f} kN")
     m2.metric("Resistance VRd,c", f"{res['vrd_c']:.3f} kN")
     util_txt = _pct(util)
-    m3.metric(f"Utilisation {action_label}/VRd,c", util_txt,
+    m3.metric(f"Utilisation |{action_label}|/VRd,c", util_txt,
               delta=("OK" if ok else "Over limit"),
               delta_color=("normal" if ok else "inverse"))
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
@@ -5500,6 +5553,11 @@ def shear_view(inp, results):
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
                f"{sh['method']}. The axial action uses the plastic axial force "
                f"N = {sh['n_ed']:.1f} kN (tension-positive){pre_note}.")
+    if sh.get("face_mode") == "auto":
+        st.caption(
+            "Automatic face selection uses the associated moment at the concrete "
+            f"centroid: {float(sh.get('associated_moment', 0.0)):.3f} kNm."
+        )
 
     if sh.get("both_faces_evaluated"):
         candidate_rows = []
@@ -5511,8 +5569,10 @@ def shear_view(inp, results):
                     candidate.get("tension_low", True), sh["axis"]
                 ),
                 "VRd,c [kN]": (candidate_shear.get("res") or {}).get("vrd_c"),
-                "VEd/VRd,c": candidate_shear.get("util"),
-                "VEd/VRd": candidate_links.get("util"),
+                "|VEd|/VRd,c": candidate_shear.get("util"),
+                "|VEd|/VRd": candidate_links.get("util"),
+                "Shear status": candidate.get("shear_status"),
+                "Combined status": candidate.get("combined_status"),
                 "Governing": (
                     "Yes" if bool(candidate.get("tension_low"))
                     == bool(sh.get("tension_low")) else ""
@@ -5533,6 +5593,7 @@ def shear_view(inp, results):
             asl_cg_m=sh.get("asl_cg"), asl_mm2=sh["asl"],
             d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
             bw_source=bw_source,
+            signed_v_ed=signed_v_ed,
             title=f"{action_label} geometry - {face_lbl} tension",
         ),
         width="stretch",
@@ -5796,10 +5857,10 @@ def torsion_view(inp, results):
                 continue
             interaction = item.get("interaction") or {}
             value = interaction.get("value")
-            status = (
-                "NOT ASSESSED" if not interaction.get("valid")
-                else "PASS" if value is not None and value <= 1.0 + 1.0e-9
-                else "FAIL"
+            status = item.get("directional_interaction_status") or (
+                presentation.interaction_assessment_status(
+                    interaction, applicable=item.get("code_applicable", True)
+                )
             )
             rows.append({
                 "Directional screen": "Vx,Ed + TEd" if component == "vx"

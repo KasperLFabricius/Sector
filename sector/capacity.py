@@ -201,21 +201,62 @@ def shear_face_candidates(face, associated_moment, *, zero_tolerance=1.0e-9):
     return (True, False)
 
 
+def assessment_key(status, utilisation):
+    """Conservative ordering shared by mandatory directional candidates."""
+    priority = {
+        "INVALID": 4,
+        "FAIL": 3,
+        "NOT ASSESSED": 2,
+        "NOT RUN": 2,
+        "PASS": 1,
+        "NOT APPLICABLE": 0,
+    }.get(str(status or "").upper(), 2)
+    value = float(utilisation or 0.0)
+    if not math.isfinite(value):
+        value = math.inf
+    return priority, value
+
+
+def aggregate_assessment_status(statuses):
+    """Return the conservative status across every required candidate."""
+    values = {str(status or "").upper() for status in statuses}
+    for status in ("INVALID", "FAIL", "NOT ASSESSED", "NOT RUN", "PASS"):
+        if status in values:
+            return status
+    return "NOT ASSESSED"
+
+
 def shear_direction_specs(inp):
     """Canonical mapping from Vx/Vy inputs to the existing bending-axis model."""
+    _, cx, cy = gross_area_centroid(
+        inp.get("outer", []), inp.get("holes", [])
+    )
+    _, mx_prestress, my_prestress = prestress_resultants(inp, cx, cy)
+    axial = float(inp.get("P_pl", 0.0))
+    mx_origin = float(inp.get("Mx_pl", 0.0))
+    my_origin = float(inp.get("My_pl", 0.0))
+    # Section forces are entered about the coordinate origin. Face selection must
+    # follow the bending at the physical concrete centroid, including the locked-in
+    # tendon moment, exactly like the action-dependent shear calculation below.
+    mx_centroid = mx_origin - axial * cy - mx_prestress
+    my_centroid = my_origin - axial * cx - my_prestress
     return {
         "vx": {
             "axis": "y",
-            "moment": float(inp.get("My_pl", 0.0)),
+            "moment": my_centroid,
+            "moment_origin": my_origin,
             "v_ed": abs(float(inp.get("shear_Vx", 0.0))),
+            "signed_v_ed": float(inp.get("shear_Vx", 0.0)),
             "face": inp.get("shear_face_x", "auto"),
             "bw": float(inp.get("shear_vx_bw", 0.0)),
             "legs": float(inp.get("shear_vx_link_legs", 2.0)),
         },
         "vy": {
             "axis": "x",
-            "moment": float(inp.get("Mx_pl", 0.0)),
+            "moment": mx_centroid,
+            "moment_origin": mx_origin,
             "v_ed": abs(float(inp.get("shear_Vy", 0.0))),
+            "signed_v_ed": float(inp.get("shear_Vy", 0.0)),
             "face": inp.get("shear_face_y", "auto"),
             "bw": float(inp.get("shear_vy_bw", 0.0)),
             "legs": float(inp.get("shear_vy_link_legs", 2.0)),

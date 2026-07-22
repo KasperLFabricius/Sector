@@ -981,6 +981,25 @@ def test_report_includes_torsion_section():
     assert "1176" in txt                            # required Asl
 
 
+def test_report_directional_vt_table_withholds_out_of_range_verdict():
+    out = _out()
+    torsion = _torsion_out(interaction=True)
+    directional = copy.deepcopy(torsion)
+    directional["interaction"]["code_applicable"] = False
+    torsion["directional_interactions"] = {
+        "vx": directional,
+        "vy": copy.deepcopy(directional),
+    }
+    out["torsion"] = torsion
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+    for label in ("Vx+T", "Vy+T"):
+        start = text.index(label)
+        assert "NOT ASSESSED" in text[start:start + 120]
+
+
 def test_report_compound_torsion_requires_subdivision():
     out = _out()
     t = _torsion_out()

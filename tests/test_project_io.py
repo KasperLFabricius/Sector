@@ -323,6 +323,8 @@ def test_v6_shear_direction_migrates_without_changing_the_active_component(
     assert row[f"{component}_face"] == face
     assert scalars[bw_key] == 275.0
     assert scalars[legs_key] == 4.0
+    assert scalars[f"shear_{other}_bw"] == 0.0
+    assert scalars[f"shear_{other}_link_legs"] == 2.0
 
 
 def test_v4_project_rejects_nonfinite_load_case_instead_of_rewriting_it():

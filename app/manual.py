@@ -628,8 +628,10 @@ def manual_blocks() -> list:
     table(["Component", "Geometry and associated bending"],
           [["$V_{x,Ed}$", "Along x; depth in x; left/right faces; paired with $M_{y,Ed}$"],
            ["$V_{y,Ed}$", "Along y; depth in y; bottom/top faces; paired with $M_{x,Ed}$"]])
-    md("Face selection is **Auto** by default: a positive associated moment selects "
-       "the negative-coordinate face; a negative moment selects the positive face. "
+    md("Face selection is **Auto** by default. Sector transfers the associated "
+       "moment to the concrete centroid and includes the locked-in tendon moment; "
+       "a positive adjusted moment selects the negative-coordinate face and a "
+       "negative adjusted moment selects the positive face. "
        "If that moment is zero, both faces are checked and the governing result is "
        "reported. The row can override either face. The sign of shear does not select "
        "the tension face. Web-width overrides and effective link-leg counts are "

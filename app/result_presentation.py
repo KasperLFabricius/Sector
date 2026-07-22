@@ -307,6 +307,21 @@ def assessment_status_label(status):
     return _map_assessment_status(status)
 
 
+def interaction_assessment_status(interaction, *, applicable=True):
+    """Acceptance state for a V+T interaction without issuing an invalid verdict."""
+    interaction = interaction or {}
+    code_applicable = bool(
+        interaction.get("code_applicable", applicable) and applicable
+    )
+    value = interaction.get("value")
+    if not interaction.get("valid") or not code_applicable or value is None:
+        return "NOT ASSESSED"
+    value = float(value)
+    if not math.isfinite(value):
+        return "FAIL"
+    return "PASS" if value <= 1.0 + 1.0e-9 else "FAIL"
+
+
 def _percent(util):
     if util is None:
         return "-"
