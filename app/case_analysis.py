@@ -15,7 +15,9 @@ from collections.abc import Callable, Mapping, Sequence
 import load_cases
 
 
-_PLASTIC_RESULT_KEYS = ("plastic", "shear", "torsion", "combined")
+_PLASTIC_RESULT_KEYS = (
+    "plastic", "shear", "torsion", "combined", "minimum_reinforcement"
+)
 _ELASTIC_RESULT_KEYS = ("elastic",)
 
 
@@ -101,6 +103,10 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
     shear_live = vx_live or vy_live
     torsion_live = bool(base.get("torsion_on")) and abs(t_ed) > 0.0
     bending_live = str(base.get("mode") or "") in {"Plastic", "Both"}
+    minimum_reinforcement_live = bool(
+        base.get("minimum_reinforcement_on")
+        and record.get("check_minimum_reinforcement")
+    )
     out.update(
         mode="Plastic" if bending_live else "Capacity",
         plastic_case=_metadata(record),
@@ -139,6 +145,7 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
         shear_on=shear_live,
         torsion_on=torsion_live,
         combined_on=bool(base.get("combined_on")) and shear_live and torsion_live,
+        minimum_reinforcement_on=minimum_reinforcement_live,
     )
     return out
 
@@ -216,6 +223,7 @@ def validation_errors(inp: Mapping) -> list[str]:
         or bool(inp.get("shear_on"))
         or bool(inp.get("torsion_on"))
         or bool(inp.get("combined_on"))
+        or bool(inp.get("minimum_reinforcement_on"))
     )
     elastic_required = mode in {"Elastic", "Both"}
     return load_cases.validation_errors(
@@ -249,6 +257,7 @@ def run_case_tables(
         or bool(inp.get("shear_on"))
         or bool(inp.get("torsion_on"))
         or bool(inp.get("combined_on"))
+        or bool(inp.get("minimum_reinforcement_on"))
     )
     elastic_required = mode in {"Elastic", "Both"}
     errors = validation_errors(inp)
@@ -284,6 +293,7 @@ def run_case_tables(
                 bending_live
                 or bool(case_inp["shear_on"])
                 or bool(case_inp["torsion_on"])
+                or bool(case_inp["minimum_reinforcement_on"])
             )
             previous = cached_plastic_bending.get(record[load_cases.NAME])
             previous_plastic = None

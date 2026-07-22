@@ -560,3 +560,90 @@ def test_multi_case_summary_records_zero_actions_as_not_evaluated():
     assert by_check["Shear Vy"]["result"] == "Vy,Ed = 0"
     assert by_check["Torsion"]["status"] == "NOT APPLICABLE"
     assert by_check["Combined M-V-T"]["result"] == "Vx,Ed = Vy,Ed = TEd = 0"
+
+
+def test_detailing_summary_reports_values_status_and_target_view():
+    minimum = {
+        "status": "PASS",
+        "clause": "9.2.1.1(1), Formula (9.1N)",
+        "checks": [{
+            "status": "PASS", "axis": "x", "face": "bottom",
+            "as_provided_mm2": 628.0, "as_min_mm2": 410.0,
+            "utilisation": 410.0 / 628.0,
+        }],
+    }
+    spacing = {
+        "status": "REVIEW", "clause": "8.2(2)",
+        "governing": {
+            "first_id": "R1", "second_id": "R2", "clear_mm": 18.0,
+            "required_mm": 25.0, "declared_exception": True,
+            "spacing_group_id": "LAP-A",
+        },
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            minimum_reinforcement_on=True,
+            clear_spacing_on=True,
+        ),
+        {"minimum_reinforcement": minimum, "clear_spacing": spacing},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    minimum_row = by_check["Longitudinal minimum reinforcement Mx bottom"]
+    assert minimum_row["status"] == "PASS"
+    assert "As,prov 628.0" in minimum_row["result"]
+    assert minimum_row["view"] == "Detailing"
+    spacing_row = by_check["Reinforcement clear spacing"]
+    assert spacing_row["status"] == "REVIEW"
+    assert spacing_row["result"] == "18.0 mm (R1-R2)"
+    assert "LAP-A" in spacing_row["note"]
+    assert presentation.overall_summary_status(rows) == "REVIEW"
+
+
+def test_multi_case_summary_adds_section_wide_spacing_only_once():
+    inp = _inp(
+        mode="Plastic",
+        plastic_cases=[],
+        elastic_cases=[],
+        minimum_reinforcement_on=True,
+        clear_spacing_on=True,
+        shear_on=False,
+        torsion_on=False,
+        combined_on=False,
+    )
+    first = _plastic_case_entry("PL-A", 0.60)
+    second = _plastic_case_entry("PL-B", 0.70)
+    for entry in (first, second):
+        entry["actions"]["check_minimum_reinforcement"] = True
+        entry["results"]["minimum_reinforcement"] = {
+            "status": "PASS",
+            "clause": "9.2.1.1(1)",
+            "checks": [{
+                "status": "PASS", "axis": "x", "face": "bottom",
+                "as_provided_mm2": 600.0, "as_min_mm2": 400.0,
+                "utilisation": 2.0 / 3.0,
+            }],
+        }
+    spacing = {
+        "status": "PASS", "clause": "8.2(2)",
+        "governing": {
+            "first_id": "R1", "second_id": "R2", "clear_mm": 40.0,
+            "required_mm": 25.0,
+        },
+    }
+
+    rows = presentation.multi_case_summary_rows(inp, {
+        "plastic_cases": [first, second],
+        "clear_spacing": spacing,
+    })
+
+    assert sum(
+        row["check"] == "Reinforcement clear spacing" for row in rows
+    ) == 1
+    minimum_rows = [
+        row for row in rows
+        if row["check"].startswith("Longitudinal minimum reinforcement")
+    ]
+    assert [row["case"] for row in minimum_rows] == ["PL-A", "PL-B"]

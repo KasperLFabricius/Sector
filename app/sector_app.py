@@ -38,7 +38,7 @@ from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import (capacity, codes, combined, geometry, kernels,  # noqa: E402
+from sector import (capacity, codes, combined, detailing, geometry, kernels,  # noqa: E402
                     material_presets as mp, shear, templates, torsion)
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
@@ -167,7 +167,8 @@ def _design_basis_summary(*, concrete_preset, mild_preset=None,
                           prestress_preset=None, mild_materials=None,
                           prestress_materials=None,
                           crack_code=None, shear_method=None, shear_links=False,
-                          torsion_method=None, combined_method=None):
+                          torsion_method=None, combined_method=None,
+                          detailing_method=None):
     """Whole-calculation edition map and any material hybrid/coverage qualification.
 
     Sector intentionally permits independent expert choices. This summary makes
@@ -197,6 +198,8 @@ def _design_basis_summary(*, concrete_preset, mild_preset=None,
         selections.append(("Torsion", torsion_method))
     if combined_method:
         selections.append(("Combined M-V-T", combined_method))
+    if detailing_method:
+        selections.append(("Longitudinal detailing", detailing_method))
 
     components = [
         {"role": role, "selection": str(selection),
@@ -1065,6 +1068,12 @@ def _case_column_config(key):
             "t_ed_knm": force(
                 "T_Ed [kNm]", "Signed torsion action; zero skips torsion for this case."
             ),
+            "check_minimum_reinforcement": st.column_config.CheckboxColumn(
+                "Min. reinforcement",
+                help="Assess longitudinal minimum reinforcement for this case.",
+                default=False,
+                width="small",
+            ),
         }
     return {
         **text,
@@ -1130,7 +1139,9 @@ def _load_case_editors(box):
     box.markdown("**Plastic and capacity cases**")
     box.caption(
         "One row per named case. Section forces retain their signs. Zero Vx,Ed, "
-        "Vy,Ed or TEd skips that component. Paste rectangular ranges directly."
+        "Vy,Ed or TEd skips that component. Select minimum reinforcement only "
+        "for cases with the design situation required by the chosen detailing "
+        "method. Paste rectangular ranges directly."
     )
     plastic = _case_table_editor(box, load_cases.PLASTIC_TABLE_KEY)
     box.markdown("**Elastic cases**")
@@ -2171,7 +2182,7 @@ _SHARED_SIG_KEYS = (
     "mild_ey0t", "mild_ey0c", "mild_Es", "mild_active_comp",
     "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut", "pre_gamma_y",
     "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t", "pre_Es",
-    "mode",
+    "mode", "sls_fctm",
 )
 _PLASTIC_CONTEXT_SIG_KEYS = (
     "v_min", "v_max", "v_inc",
@@ -2179,7 +2190,7 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
-    "sls_fctm", "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
 )
@@ -2206,6 +2217,9 @@ _SHEAR_SIG_KEYS = (
 )
 _CAPACITY_CONTEXT_SIG_KEYS = tuple(
     key for key in _SHEAR_SIG_KEYS if key not in {"shear_V", "torsion_T"}
+) + (
+    "minimum_reinforcement_on", "clear_spacing_on", "detailing_edition",
+    "detailing_d_upper", "detailing_include_tendons",
 )
 def build_inputs(host=st):
     """Render staged, full-width input tabs and return the analysis payload.
@@ -2250,6 +2264,9 @@ def build_inputs(host=st):
     # column keeps the four editable point grids practical on a normal laptop.
     sec, sec_preview = sec_tab.columns([1.15, 0.85], gap="large")
     scw = aset.expander("Stress and crack-width criteria (Elastic)", expanded=False)
+    det = aset.expander(
+        "Longitudinal reinforcement & clear spacing", expanded=False
+    )
     sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
     about_slot = project.container()
     report_slot = project.container()
@@ -2387,6 +2404,70 @@ def build_inputs(host=st):
         disabled=not (elastic_on and sls_cw and sls_dk_na),
         help="DK NA fine-system selection for the (h-x)/3 effective-height term. "
              "Ignored by other methods.")
+
+    minimum_reinforcement_on = _seeded_checkbox(
+        det,
+        "Check longitudinal minimum reinforcement",
+        False,
+        "minimum_reinforcement_on",
+        help="Run the selected edition's longitudinal minimum-reinforcement "
+             "criterion for each Plastic/capacity row whose Min. reinforcement "
+             "box is selected.",
+    )
+    clear_spacing_on = _seeded_checkbox(
+        det,
+        "Check reinforcement clear spacing",
+        False,
+        "clear_spacing_on",
+        help="Check pairwise edge-to-edge clear distances from the entered bar "
+             "coordinates and diameters.",
+    )
+    detailing_edition = _seeded_selectbox(
+        det,
+        "Detailing edition",
+        list(detailing.EDITIONS),
+        detailing.EC2_2005_DKNA,
+        "detailing_edition",
+        disabled=not (minimum_reinforcement_on or clear_spacing_on),
+        help="Selects the edition-specific minimum-reinforcement and spacing "
+             "clauses. EC2:2023 is assessed as a valid selectable method.",
+    )
+    detailing_d_upper = _seeded_number(
+        det,
+        "Maximum aggregate size Dupper (mm)",
+        0.0,
+        100.0,
+        16.0,
+        1.0,
+        "detailing_d_upper",
+        disabled=not clear_spacing_on,
+        help="Upper aggregate size used in max(phi, Dupper + 5 mm, 20 mm).",
+    )
+    detailing_include_tendons = _seeded_checkbox(
+        det,
+        "Include tendons in spacing check",
+        False,
+        "detailing_include_tendons",
+        disabled=not clear_spacing_on,
+        help="Use a tendon's entered diameter as its detailing envelope. For a "
+             "ducted tendon, enter the duct/envelope diameter before enabling.",
+    )
+    selected_minimum_cases = (
+        int(case_frames[load_cases.PLASTIC_TABLE_KEY][
+            "check_minimum_reinforcement"
+        ].sum())
+        if not case_frames[load_cases.PLASTIC_TABLE_KEY].empty
+        else 0
+    )
+    if minimum_reinforcement_on:
+        det.caption(
+            f"Selected Plastic/capacity cases: {selected_minimum_cases}. "
+            "The case must represent the design situation required by the clause."
+        )
+    det.caption(
+        "Bars sharing a Lap / bundle ID are reported as REVIEW when ordinary "
+        "clear spacing is not met; the declaration is never an automatic pass."
+    )
 
     sts.markdown("**Combined M-V-T interaction**")
     sts.caption("Tie the bending (plastic M), shear (V) and torsion (T) checks "
@@ -2841,9 +2922,12 @@ def build_inputs(host=st):
     # torsion and combined capacity checks do use characteristic/design strengths
     # and the user's final partial factors even when bending is Elastic-only; keep
     # the material laws editable whenever one of those checks is active.
-    capacity_checks_on = shear_on or torsion_on or combined_on
+    capacity_checks_on = (
+        shear_on or torsion_on or combined_on or minimum_reinforcement_on
+    )
     lock_mats = mode == "Elastic" and not capacity_checks_on
-    lock_elastic = mode == "Plastic"   # fctm + Ec are elastic-only inputs
+    # fctm also enters both generations of the minimum-reinforcement check.
+    lock_elastic = mode == "Plastic" and not minimum_reinforcement_on
     if lock_mats:
         mat_tab.caption("Elastic-only mode: the stress-strain laws do not affect the "
                         "elastic results and are locked. Only fck (feeds fctm) and the "
@@ -3011,6 +3095,10 @@ def build_inputs(host=st):
         shear_links=bool(shear_links),
         torsion_method=effective_torsion_method,
         combined_method=combined_method if combined_on else None,
+        detailing_method=(
+            detailing_edition
+            if minimum_reinforcement_on or clear_spacing_on else None
+        ),
     )
     if design_basis["mixed"] or design_basis["limitations"]:
         design_basis_slot.warning(design_basis["status"])
@@ -3079,7 +3167,8 @@ def build_inputs(host=st):
     # they only prefill on demand.
     def _element_signature(elements):
         keys = ("id", "x_mm", "y_mm", "area_mm2", "diameter_mm", "size_mode",
-                "material_id", "fatigue_detail_id", "group_id")
+                "material_id", "fatigue_detail_id", "group_id",
+                "spacing_group_id")
         return tuple(tuple(item.get(key) for key in keys) for item in elements)
 
     geom_sig = (tuple(outer), tuple(bars), tuple(tendons),
@@ -3212,6 +3301,11 @@ def build_inputs(host=st):
                 torsion_cot_min=torsion_cot_min, torsion_cot_max=torsion_cot_max,
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
+                minimum_reinforcement_on=minimum_reinforcement_on,
+                clear_spacing_on=clear_spacing_on,
+                detailing_edition=detailing_edition,
+                detailing_d_upper=detailing_d_upper,
+                detailing_include_tendons=detailing_include_tendons,
                 mode=mode, extent=extent,
                 label_scale=label_scale, label_min_gap=label_min_gap,
                 signature=sig,
@@ -3675,6 +3769,18 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             limit_mm=inp["sls_wk_limit"],
             valid=eout["converged"],
         )
+    if inp.get("minimum_reinforcement_on"):
+        out["minimum_reinforcement"] = detailing.minimum_reinforcement(
+            inp["section"],
+            inp.get("bar_elements") or [],
+            inp.get("bar_materials") or [],
+            inp["concrete"],
+            edition=inp["detailing_edition"],
+            fctm_mpa=inp["sls_fctm"],
+            n_ed_tension_kn=inp["P_pl"],
+            mx_ed_knm=inp["Mx_pl"],
+            my_ed_knm=inp["My_pl"],
+        )
     _run_capacity_checks(inp, out)
     return out
 
@@ -3700,22 +3806,40 @@ def run_analysis(
             or inp.get("steel_error") or inp.get("material_error")):
         return {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
-        return _run_single_analysis(
+        result = _run_single_analysis(
             inp,
             reuse_plastic=reuse_plastic,
             reuse_elastic=reuse_elastic,
         )
+        if inp.get("clear_spacing_on"):
+            result["clear_spacing"] = detailing.clear_spacing(
+                list(inp.get("bar_elements") or [])
+                + list(inp.get("tendon_elements") or []),
+                d_upper_mm=inp["detailing_d_upper"],
+                edition=inp["detailing_edition"],
+                include_tendons=inp.get("detailing_include_tendons", False),
+            )
+        return result
 
     def _runner(case_inp, *, reuse_plastic=None):
         return _run_single_analysis(case_inp, reuse_plastic=reuse_plastic)
 
-    return case_analysis.run_case_tables(
+    result = case_analysis.run_case_tables(
         inp,
         _runner,
         reuse_plastic=reuse_plastic_cases,
         reuse_plastic_bending=reuse_plastic_bending_cases,
         reuse_elastic=reuse_elastic_cases,
     )
+    if inp.get("clear_spacing_on"):
+        result["clear_spacing"] = detailing.clear_spacing(
+            list(inp.get("bar_elements") or [])
+            + list(inp.get("tendon_elements") or []),
+            d_upper_mm=inp["detailing_d_upper"],
+            edition=inp["detailing_edition"],
+            include_tendons=inp.get("detailing_include_tendons", False),
+        )
+    return result
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -4649,7 +4773,7 @@ def _run_capacity_checks(inp, out):
 # View order follows the checking workflow: consolidated status first, then the
 # plastic, elastic, shear, torsion and combined details.
 VIEWS = ["Results Overview", "Plastic Results", "N-M Interaction",
-         "Elastic Results", "Shear", "Torsion", "M-V-T Combined"]
+         "Elastic Results", "Detailing", "Shear", "Torsion", "M-V-T Combined"]
 _RESULT_VIEWS = tuple(VIEWS)
 
 
@@ -4764,7 +4888,7 @@ def results_overview_view(inp, results, *, stale=False):
     counts = {status: sum(row["status"] == status for row in rows)
               for status in {
                   "PASS", "FAIL", "INVALID", "NOT ASSESSED", "NOT RUN", "STALE",
-                  "NOT APPLICABLE",
+                  "NOT APPLICABLE", "REVIEW",
               }}
     case_register = []
     for family, label in (("plastic", "Plastic / capacity"),
@@ -4774,6 +4898,7 @@ def results_overview_view(inp, results, *, stale=False):
             or bool(inp.get("shear_on"))
             or bool(inp.get("torsion_on"))
             or bool(inp.get("combined_on"))
+            or bool(inp.get("minimum_reinforcement_on"))
         ) if family == "plastic" else inp.get("mode") in {"Elastic", "Both"}
         if not family_requested:
             continue
@@ -4818,8 +4943,9 @@ def results_overview_view(inp, results, *, stale=False):
     c1.metric("Pass", counts.get("PASS", 0))
     c2.metric("Fail / invalid", counts.get("FAIL", 0) + counts.get("INVALID", 0))
     c3.metric(
-        "Not evaluated",
-        counts.get("NOT ASSESSED", 0)
+        "Review / not evaluated",
+        counts.get("REVIEW", 0)
+        + counts.get("NOT ASSESSED", 0)
         + counts.get("NOT RUN", 0)
         + counts.get("NOT APPLICABLE", 0),
     )
@@ -4848,6 +4974,7 @@ def results_overview_view(inp, results, *, stale=False):
         ),
         "NOT RUN": "background-color: #EEF2F6; color: #374151; font-weight: 600",
         "STALE": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
+        "REVIEW": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
         "NOT APPLICABLE": "background-color: #EEF2F6; color: #374151",
     }
     styled = summary.style.map(
@@ -4856,6 +4983,193 @@ def results_overview_view(inp, results, *, stale=False):
     )
     st.dataframe(styled, hide_index=True, width="stretch",
                  height=min(35 * (len(display) + 1) + 3, 560))
+
+
+def _detailing_status_callout(status, message):
+    """Render one concise detailing verdict with the shared status vocabulary."""
+    status = str(status or "NOT ASSESSED").upper()
+    text = f"{status} - {message}"
+    if status == "PASS":
+        st.success(text)
+    elif status in {"FAIL", "INVALID"}:
+        st.error(text)
+    elif status == "NOT APPLICABLE":
+        st.info(text)
+    else:
+        st.warning(text)
+
+
+def detailing_view(inp, results, *, global_results=None):
+    """Longitudinal minimum-reinforcement and section-wide spacing evidence."""
+    results = results or {}
+    global_results = global_results or results
+    minimum = results.get("minimum_reinforcement")
+    spacing = global_results.get("clear_spacing")
+
+    st.subheader("Detailing")
+    min_card, spacing_card = st.columns(2)
+    with min_card.container(border=True):
+        st.markdown("**Longitudinal minimum reinforcement**")
+        if not inp.get("minimum_reinforcement_on"):
+            st.caption("Not selected for this case.")
+        elif minimum is None:
+            st.info("Calculate to evaluate this case.")
+        else:
+            checks = minimum.get("checks") or []
+            utilisations = [
+                float(check["utilisation"])
+                for check in checks
+                if check.get("utilisation") is not None
+                and math.isfinite(float(check["utilisation"]))
+            ]
+            result_text = (
+                f"governing utilisation {100.0 * max(utilisations):.1f} %"
+                if utilisations else str(minimum.get("reason") or "not evaluated")
+            )
+            _detailing_status_callout(minimum.get("status"), result_text)
+            st.caption(
+                f"{minimum.get('edition', '-')} | {minimum.get('clause', '-')}"
+            )
+
+    with spacing_card.container(border=True):
+        st.markdown("**Clear spacing**")
+        if not inp.get("clear_spacing_on"):
+            st.caption("Not selected.")
+        elif spacing is None:
+            st.info("Calculate to evaluate the section.")
+        else:
+            governing = spacing.get("governing") or {}
+            if governing:
+                result_text = (
+                    f"{governing.get('clear_mm', 0.0):.1f} mm clear; "
+                    f"{governing.get('required_mm', 0.0):.1f} mm required"
+                )
+            else:
+                result_text = str(spacing.get("reason") or "not evaluated")
+            _detailing_status_callout(spacing.get("status"), result_text)
+            st.caption(
+                f"{spacing.get('edition', '-')} | {spacing.get('clause', '-')}"
+            )
+
+    highlight_ids = []
+    if minimum:
+        highlight_ids = sorted({
+            str(element_id)
+            for check in minimum.get("checks") or []
+            for element_id in check.get("bar_ids") or []
+        })
+    if minimum is not None or spacing is not None:
+        st.plotly_chart(
+            viz.detailing_geometry_figure(
+                inp.get("outer") or [],
+                inp.get("holes") or [],
+                inp.get("bars") or [],
+                inp.get("tendons") or [],
+                bar_elements=inp.get("bar_elements") or [],
+                tendon_elements=inp.get("tendon_elements") or [],
+                highlight_ids=highlight_ids,
+                spacing_pair=(spacing or {}).get("governing"),
+                title="Detailing check geometry",
+            ),
+            width="stretch",
+        )
+
+    if minimum is not None:
+        st.markdown("**Minimum-reinforcement evidence**")
+        checks = minimum.get("checks") or []
+        if checks and checks[0].get("as_min_mm2") is not None:
+            rows = [{
+                "Axis": f"M{check.get('axis', '-')}",
+                "Tension face": check.get("face", "-"),
+                "As,provided [mm2]": check.get("as_provided_mm2"),
+                "As,min [mm2]": check.get("as_min_mm2"),
+                "Utilisation [%]": (
+                    100.0 * float(check["utilisation"])
+                    if check.get("utilisation") is not None else None
+                ),
+                "bt [mm]": check.get("bt_mm"),
+                "d [mm]": check.get("d_mm"),
+                "fctm [MPa]": check.get("fctm_mpa"),
+                "fyk [MPa]": check.get("fyk_mpa"),
+                "Bars": ", ".join(check.get("bar_ids") or []),
+                "Status": check.get("status"),
+            } for check in checks]
+        elif checks and checks[0].get("type") == "pure tension":
+            rows = [{
+                "Check": "Pure tension",
+                "Rcr [kN]": check.get("demand_kn"),
+                "Rnom [kN]": check.get("resistance_kn"),
+                "Utilisation [%]": (
+                    100.0 * float(check["utilisation"])
+                    if check.get("utilisation") is not None else None
+                ),
+                "As,provided [mm2]": check.get("as_provided_mm2"),
+                "Bars": ", ".join(check.get("bar_ids") or []),
+                "Status": check.get("status"),
+            } for check in checks]
+        else:
+            rows = [{
+                "Check": "Bending with axial force",
+                "Mcr [kNm]": check.get("m_cr_knm"),
+                "MR,nom [kNm]": check.get("mr_nom_knm"),
+                "Utilisation [%]": (
+                    100.0 * float(check["utilisation"])
+                    if check.get("utilisation") is not None else None
+                ),
+                "Model": check.get("model"),
+                "Nnom,tension [kN]": check.get("nominal_axial_resistance_kn"),
+                "Axial equilibrium": (
+                    "Yes" if check.get("axial_feasible") is True
+                    else "No" if check.get("axial_feasible") is False
+                    else "-"
+                ),
+                "As,provided [mm2]": check.get("as_provided_mm2"),
+                "Bars": ", ".join(check.get("bar_ids") or []),
+                "Status": check.get("status"),
+            } for check in checks]
+        if rows:
+            st.dataframe(
+                rows,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Utilisation [%]": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+        elif minimum.get("reason"):
+            st.caption(str(minimum["reason"]))
+        if minimum.get("limitations"):
+            with st.expander("Minimum-reinforcement method notes"):
+                for note in minimum["limitations"]:
+                    st.markdown(f"- {note}")
+
+    if spacing is not None:
+        st.markdown("**Clear-spacing evidence**")
+        pair_rows = [{
+            "Pair": f"{pair.get('first_id', '?')} - {pair.get('second_id', '?')}",
+            "Clear [mm]": pair.get("clear_mm"),
+            "Required [mm]": pair.get("required_mm"),
+            "Margin [mm]": pair.get("margin_mm"),
+            "Lap / bundle ID": pair.get("spacing_group_id") or "",
+            "Status": pair.get("status"),
+        } for pair in spacing.get("pairs") or []]
+        if pair_rows:
+            st.dataframe(
+                pair_rows,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Clear [mm]": st.column_config.NumberColumn(format="%.1f"),
+                    "Required [mm]": st.column_config.NumberColumn(format="%.1f"),
+                    "Margin [mm]": st.column_config.NumberColumn(format="%+.1f"),
+                },
+            )
+        elif spacing.get("reason"):
+            st.caption(str(spacing["reason"]))
+        if spacing.get("limitations"):
+            with st.expander("Clear-spacing method notes"):
+                for note in spacing["limitations"]:
+                    st.markdown(f"- {note}")
 
 
 def _fmt(v):
@@ -6595,6 +6909,9 @@ def _render_selected_case_actions(family, actions):
                 "Vx face": actions.get("vx_face", "auto"),
                 "Vy face": actions.get("vy_face", "auto"),
                 "T_Ed [kNm]": actions.get("t_ed_knm", 0.0),
+                "Minimum reinforcement": (
+                    "Yes" if actions.get("check_minimum_reinforcement") else ""
+                ),
             }],
             hide_index=True,
             width="stretch",
@@ -6801,6 +7118,9 @@ def _analysis_workspace(inp):
 
     family = (
         "elastic" if view == "Elastic Results"
+        else "plastic" if (
+            view == "Detailing" and inp.get("minimum_reinforcement_on")
+        )
         else "plastic" if view in {
             "Plastic Results", "N-M Interaction", "Shear", "Torsion",
             "M-V-T Combined",
@@ -6819,6 +7139,8 @@ def _analysis_workspace(inp):
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
         interaction_view(view_inp, view_results)
+    elif view == "Detailing":
+        detailing_view(view_inp, view_results, global_results=results)
     elif view == "Shear":
         shear_view(view_inp, view_results)
     elif view == "Torsion":

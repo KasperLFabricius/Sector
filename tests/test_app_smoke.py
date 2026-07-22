@@ -2527,7 +2527,9 @@ def test_view_dropdown_switches_without_error():
     # Analysis contains calculated result views only; each renders before a run.
     at = _fresh()
     at.run()
-    for v in ["Results Overview", "Plastic Results", "Elastic Results"]:
+    for v in [
+        "Results Overview", "Plastic Results", "Elastic Results", "Detailing"
+    ]:
         _select_view(at, v)
         assert not at.exception, v
 
@@ -2545,7 +2547,9 @@ def test_results_views_render_after_calculate():
     at = _fresh()
     at.run()
     _set_and_click(at, "calculate", ("radio", "mode", "Both"))
-    for v in ["Results Overview", "Plastic Results", "Elastic Results"]:
+    for v in [
+        "Results Overview", "Plastic Results", "Elastic Results", "Detailing"
+    ]:
         _select_view(at, v)
         assert not at.exception, v
 
@@ -2559,6 +2563,7 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     assert list(plastic.columns) == [
         "name", "description", "n_ed_kn", "mx_ed_knm", "my_ed_knm",
         "vx_ed_kn", "vy_ed_kn", "vx_face", "vy_face", "t_ed_knm",
+        "check_minimum_reinforcement",
     ]
     assert list(elastic.columns) == [
         "name", "description",
@@ -2576,6 +2581,40 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "el_long_P", "el_long_Mx", "el_long_My",
         "el_short_P", "el_short_Mx", "el_short_My", "sls_cw",
     })
+
+
+def test_detailing_controls_run_selected_case_and_section_wide_spacing():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [{
+        "name": "PL-DETAIL",
+        "mx_ed_knm": 50.0,
+        "check_minimum_reinforcement": True,
+    }])
+    _set(
+        at,
+        ("checkbox", "minimum_reinforcement_on", True),
+        ("checkbox", "clear_spacing_on", True),
+    )
+    _calculate(at)
+
+    results = at.session_state["results"]
+    assert "clear_spacing" in results
+    assert "minimum_reinforcement" in results["plastic_cases"][0]["results"]
+    _select_view(at, "Detailing")
+    minimum = next(
+        frame.value for frame in at.dataframe
+        if "As,min [mm2]" in frame.value.columns
+    )
+    spacing = next(
+        frame.value for frame in at.dataframe
+        if "Required [mm]" in frame.value.columns
+    )
+    assert not minimum.empty
+    assert not spacing.empty
+    assert not at.exception
 
 
 def test_multi_case_overview_and_result_picker_show_selected_actions():
@@ -2616,7 +2655,7 @@ def test_multi_case_overview_and_result_picker_show_selected_actions():
         if list(frame.value.columns) == [
             "N_Ed [kN]", "Mx_Ed [kNm]", "My_Ed [kNm]",
             "Vx_Ed [kN]", "Vy_Ed [kN]", "Vx face", "Vy face",
-            "T_Ed [kNm]",
+            "T_Ed [kNm]", "Minimum reinforcement",
         ]
     )
     assert actions.iloc[0]["Mx_Ed [kNm]"] == pytest.approx(80.0)
@@ -2756,6 +2795,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     labels = [ex.label for ex in at.expander]
     assert labels == [
         "Stress and crack-width criteria (Elastic)",
+        "Longitudinal reinforcement & clear spacing",
         "Shear, torsion & combined (Plastic)",
         "About",
         "Report",

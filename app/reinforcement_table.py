@@ -23,6 +23,7 @@ DIAMETER = "diameter (mm)"
 MATERIAL_ID = "material ID"
 FATIGUE_DETAIL_ID = "fatigue detail ID"
 GROUP_ID = "group ID"
+SPACING_GROUP_ID = "spacing group ID"
 
 COLUMNS = [
     ELEMENT_ID,
@@ -34,6 +35,7 @@ COLUMNS = [
     MATERIAL_ID,
     FATIGUE_DETAIL_ID,
     GROUP_ID,
+    SPACING_GROUP_ID,
 ]
 NUMERIC_COLUMNS = {X, Y, AREA, DIAMETER}
 TEXT_COLUMNS = set(COLUMNS) - NUMERIC_COLUMNS
@@ -185,6 +187,7 @@ def normalise_table(value, kind: str, *, default_mode: str = AREA_MODE) -> pd.Da
                          or default_material_id(kind),
             FATIGUE_DETAIL_ID: text_cell(raw.get(FATIGUE_DETAIL_ID)),
             GROUP_ID: text_cell(raw.get(GROUP_ID)),
+            SPACING_GROUP_ID: text_cell(raw.get(SPACING_GROUP_ID)),
         })
 
     if not rows:
@@ -248,6 +251,7 @@ def valid_elements(value, kind: str) -> list[dict]:
             "material_id": str(row[MATERIAL_ID]),
             "fatigue_detail_id": str(row[FATIGUE_DETAIL_ID]),
             "group_id": str(row[GROUP_ID]),
+            "spacing_group_id": str(row[SPACING_GROUP_ID]),
         })
     return out
 
@@ -279,6 +283,8 @@ def point_grid_specs(kind: str, material_ids: Iterable[str] | None = None) -> li
         {"field": FATIGUE_DETAIL_ID, "title": "Fatigue detail ID", "type": "text",
          "width": 128},
         {"field": GROUP_ID, "title": "Group ID", "type": "text", "width": 92},
+        {"field": SPACING_GROUP_ID, "title": "Lap / bundle ID", "type": "text",
+         "width": 128},
     ]
 
 
@@ -295,6 +301,7 @@ def point_grid_options(kind: str, material_ids: Iterable[str] | None = None) -> 
             MATERIAL_ID: (available[0] if available else default_material_id(kind)),
             FATIGUE_DETAIL_ID: "",
             GROUP_ID: "",
+            SPACING_GROUP_ID: "",
         },
         "compact_paste_fields": [X, Y, AREA],
         "derived_size": {

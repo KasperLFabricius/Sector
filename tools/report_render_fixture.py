@@ -34,9 +34,10 @@ from sector import codes, shear  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
 
 # Geometry, concrete law, steel law, two plastic interactions, two plastic
-# states, two elastic states, two elastic strain profiles and one derived shear
-# geometry. An intentional fixture change must update this explicit contract.
-_EXPECTED_FIGURE_COUNT = 13
+# states, two elastic states, two elastic strain profiles, one derived shear
+# geometry, one minimum-reinforcement figure and one clear-spacing figure. An
+# intentional fixture change must update this explicit contract.
+_EXPECTED_FIGURE_COUNT = 15
 
 
 class _FixedDateTime(datetime.datetime):
@@ -84,6 +85,7 @@ def _inputs() -> dict:
             "my_ed_knm": 0.0,
             "v_ed_kn": 30.0,
             "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": True,
         },
         {
             "name": "PL-QA-2",
@@ -93,6 +95,7 @@ def _inputs() -> dict:
             "my_ed_knm": 0.0,
             "v_ed_kn": 0.0,
             "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": False,
         },
     ]
     elastic_cases = [
@@ -146,6 +149,11 @@ def _inputs() -> dict:
         "shear_on": True,
         "torsion_on": False,
         "combined_on": False,
+        "minimum_reinforcement_on": True,
+        "clear_spacing_on": True,
+        "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "detailing_d_upper": 16.0,
+        "detailing_include_tendons": False,
         "plastic_case": {
             "id": "PL-QA-1",
             "type": plastic_cases[0]["description"],
@@ -166,12 +174,14 @@ def _inputs() -> dict:
                 "area_mm2": 500.0, "diameter_mm": 25.23,
                 "size_mode": "Area", "material_id": "M1",
                 "fatigue_detail_id": "", "group_id": "B1",
+                "spacing_group_id": "",
             },
             {
                 "id": "R2", "x_mm": 0.0, "y_mm": 120.0,
                 "area_mm2": 400.0, "diameter_mm": 22.57,
                 "size_mode": "Area", "material_id": second_id,
                 "fatigue_detail_id": "", "group_id": "B2",
+                "spacing_group_id": "",
             },
         ],
         "tendon_elements": [],
@@ -391,6 +401,37 @@ def _results() -> dict:
     elastic_2["stress_assessments"]["reinforcement"].update(
         value=245.0, util=245.0 / 400.0, margin=155.0
     )
+    minimum = {
+        "status": "PASS",
+        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "clause": "9.2.1.1(1), Formula (9.1N)",
+        "checks": [{
+            "status": "PASS", "axis": "x", "face": "bottom",
+            "as_provided_mm2": 500.0, "as_min_mm2": 320.0,
+            "utilisation": 0.64, "bt_mm": 200.0, "d_mm": 270.0,
+            "fctm_mpa": 2.9, "fyk_mpa": 500.0, "bar_ids": ["R1"],
+        }],
+        "limitations": [
+            "Prestressing tendons are not credited.",
+            "Ordinary reinforcement is assumed anchored to develop the entered fyk.",
+        ],
+    }
+    spacing_pair = {
+        "status": "PASS", "first_id": "R1", "second_id": "R2",
+        "first_kind": "bar", "second_kind": "bar", "clear_mm": 216.1,
+        "required_mm": 25.23, "margin_mm": 190.87,
+        "centre_distance_mm": 240.0, "phi_first_mm": 25.23,
+        "phi_second_mm": 22.57, "spacing_group_id": "",
+        "declared_exception": False,
+    }
+    spacing = {
+        "status": "PASS",
+        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "clause": "8.2(2)", "d_upper_mm": 16.0,
+        "include_tendons": False, "pairs": [spacing_pair],
+        "governing": spacing_pair, "reason": None,
+        "limitations": ["Pairwise edge-to-edge distance is checked."],
+    }
     inputs = _inputs()
     plastic_rows = inputs["plastic_cases"]
     elastic_rows = inputs["elastic_cases"]
@@ -398,9 +439,13 @@ def _results() -> dict:
         "plastic": plastic,
         "elastic": elastic,
         "shear": shear_payload,
+        "clear_spacing": spacing,
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
-             "results": {"plastic": plastic, "shear": shear_payload}},
+             "results": {
+                 "plastic": plastic, "shear": shear_payload,
+                 "minimum_reinforcement": minimum,
+             }},
             {"name": "PL-QA-2", "actions": plastic_rows[1], "evaluated": True,
              "results": {"plastic": plastic_2}},
         ],
@@ -529,6 +574,9 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Vy,Ed = 0",
         "Plastic section capacity - PL-QA-1",
         "Plastic section capacity - PL-QA-2",
+        "Longitudinal minimum reinforcement - PL-QA-1",
+        "Reinforcement clear spacing",
+        "R1 - R2",
         "Elastic section response and stress limits - EL-QA-1",
         "Elastic section response and stress limits - EL-QA-2",
         "Cracking and crack width - EL-QA-1",

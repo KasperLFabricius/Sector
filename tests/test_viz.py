@@ -781,3 +781,50 @@ def test_biaxial_shear_overview_has_signed_coordinate_arrows_without_resultant()
     assert "V<sub>y,Ed</sub> = 25" in text
     assert len(arrows) == 2
     assert "resultant" not in text.casefold()
+
+
+def test_detailing_figure_highlights_checked_bars_and_dimensions_spacing_pair():
+    outer = [(-0.20, -0.30), (0.20, -0.30), (0.20, 0.30), (-0.20, 0.30)]
+    bars = [(-0.10, -0.25, 314.0), (0.10, -0.25, 314.0)]
+    elements = [
+        {
+            "id": "R1", "x_mm": -100.0, "y_mm": -250.0,
+            "diameter_mm": 20.0,
+        },
+        {
+            "id": "R2", "x_mm": 100.0, "y_mm": -250.0,
+            "diameter_mm": 20.0,
+        },
+    ]
+    pair = {
+        "status": "FAIL",
+        "first_id": "R1",
+        "second_id": "R2",
+        "phi_first_mm": 20.0,
+        "phi_second_mm": 20.0,
+        "clear_mm": 180.0,
+        "required_mm": 205.0,
+    }
+
+    fig = viz.detailing_geometry_figure(
+        outer,
+        [],
+        bars,
+        [],
+        bar_elements=elements,
+        highlight_ids=["R1"],
+        spacing_pair=pair,
+    )
+
+    names = [getattr(trace, "name", None) for trace in fig.data]
+    assert "included reinforcement" in names
+    assert "governing spacing pair" in names
+    included = _named_trace(fig, "included reinforcement")
+    assert list(included.text) == ["R1"]
+    governing = _named_trace(fig, "governing spacing pair")
+    assert governing.marker.color == "#D55E00"
+    annotation_text = " ".join(
+        str(annotation.text) for annotation in fig.layout.annotations
+    )
+    assert "c = 180.0 mm" in annotation_text
+    assert "required = 205.0 mm" in annotation_text

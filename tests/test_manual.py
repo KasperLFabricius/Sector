@@ -101,7 +101,8 @@ def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     assert "Stress-Strain diagrams" not in text
     assert "the section, the material-law diagrams" not in text
     assert "Open *Analysis*, review *Results Overview*" in text
-    for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{sw}/s",
+    for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{s,min}",
+                 "D_{upper}", "A_{sw}/s",
                  "TOTAL", "LONG", "DIF", "RST1", "F_c"):
         assert term in text
     assert "No shear, torsion" not in text
@@ -243,6 +244,22 @@ def test_manual_documents_native_case_tables_results_and_report():
         "Select an Elastic case",
         "Every computed case",
         "bookmarked detail chapters",
+    ):
+        assert expected in text
+
+
+def test_manual_documents_longitudinal_minimum_reinforcement_and_spacing_scope():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "Minimum reinforcement and clear spacing",
+        "9.2.1.1(1)",
+        "Formula (9.1N)",
+        "12.2(2)",
+        "D_{upper}",
+        "Lap / bundle ID",
+        "high beam webs",
+        "Prestressing tendons are not credited",
+        "section-plane geometry",
     ):
         assert expected in text
 

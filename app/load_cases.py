@@ -57,6 +57,7 @@ PLASTIC_COLUMNS = (
     "vy_ed_kn",
     *PLASTIC_FACE_COLUMNS,
     "t_ed_knm",
+    "check_minimum_reinforcement",
 )
 PLASTIC_NUMERIC = (
     "n_ed_kn",
@@ -91,7 +92,7 @@ NUMERIC_COLUMNS = {
     ELASTIC_TABLE_KEY: ELASTIC_NUMERIC,
 }
 FLAG_COLUMNS = {
-    PLASTIC_TABLE_KEY: (),
+    PLASTIC_TABLE_KEY: ("check_minimum_reinforcement",),
     ELASTIC_TABLE_KEY: ELASTIC_FLAGS,
 }
 TEXT_COLUMNS = {

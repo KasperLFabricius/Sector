@@ -158,7 +158,7 @@ def test_v4_reinforcement_rows_migrate_to_stable_area_based_elements():
     )
 
 
-def test_v7_round_trip_preserves_size_basis_and_element_assignments():
+def test_v8_round_trip_preserves_size_basis_and_element_assignments():
     tables = _tables()
     tables["bars_base"] = rebar_table.normalise_table([
         {
@@ -166,6 +166,7 @@ def test_v7_round_trip_preserves_size_basis_and_element_assignments():
             "size mode": "Independent", "area (mm2)": 420.0,
             "diameter (mm)": 25.0, "material ID": "M2",
             "fatigue detail ID": "FD-BENT", "group ID": "B1",
+            "spacing group ID": "LAP-1",
         },
         {
             "ID": "R9", "x (mm)": -10.0, "y (mm)": -80.0,
@@ -178,7 +179,7 @@ def test_v7_round_trip_preserves_size_basis_and_element_assignments():
     restored, scalars = project_io.parse_project(text)
 
     payload = json.loads(text)
-    assert payload["version"] == 7
+    assert payload["version"] == 8
     pd.testing.assert_frame_equal(restored["bars_base"], tables["bars_base"])
     assert restored["bars_base"].iloc[1]["area (mm2)"] == pytest.approx(
         np.pi * 20.0**2 / 4.0
@@ -188,7 +189,7 @@ def test_v7_round_trip_preserves_size_basis_and_element_assignments():
     )
 
 
-def test_v7_round_trip_preserves_multiple_materials_without_flat_duplicates():
+def test_v8_round_trip_preserves_multiple_materials_without_flat_duplicates():
     mild, material_id = material_catalog.add_entry(
         material_catalog.default_catalog("mild"), "mild"
     )
@@ -206,7 +207,7 @@ def test_v7_round_trip_preserves_multiple_materials_without_flat_duplicates():
     payload = json.loads(text)
     _, scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 7
+    assert payload["version"] == 8
     assert "mild_fytk" not in payload["scalars"]
     assert [item["id"] for item in scalars[
         material_catalog.MILD_CATALOG_KEY]["items"]] == ["M1", "M2"]
@@ -220,12 +221,12 @@ def test_v5_material_ids_migrate_to_cloned_laws_without_changing_behaviour():
         "version": 5,
         "tables": {
             "bars_base": {
-                "columns": rebar_table.COLUMNS,
+                "columns": rebar_table.COLUMNS[:-1],
                 "rows": [["R1", 0.0, -100.0, "Area", 500.0, 25.23,
                           "M2", "", ""]],
             },
             "tendons_base": {
-                "columns": rebar_table.COLUMNS,
+                "columns": rebar_table.COLUMNS[:-1],
                 "rows": [["P1", 0.0, 100.0, "Area", 150.0, 13.82,
                           "P3", "", ""]],
             },
@@ -246,7 +247,7 @@ def test_v5_material_ids_migrate_to_cloned_laws_without_changing_behaviour():
     assert [item["fytk"] for item in prestress] == [1500.0, 1500.0]
 
 
-def test_v7_round_trip_preserves_multiple_typed_load_cases():
+def test_v8_round_trip_preserves_multiple_typed_load_cases():
     tables = _tables()
     tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
         {"name": "PL-01", "description": "Fundamental A",
@@ -269,7 +270,7 @@ def test_v7_round_trip_preserves_multiple_typed_load_cases():
     payload = json.loads(text)
     restored, scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 7
+    assert payload["version"] == 8
     assert [row["name"] for row in payload["load_cases"]["plastic"]] == [
         "PL-01", "PL-02"
     ]
@@ -410,6 +411,23 @@ def test_legacy_2023_project_defaults_to_general_k_tc():
     })
     _, scalars = project_io.parse_project(text)
     assert scalars["conc_k_tc"] == pytest.approx(0.85)
+
+
+def test_v7_project_clears_new_detailing_settings_deterministically():
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 7,
+        "tables": {},
+        "scalars": {"mode": "Plastic"},
+    })
+
+    _, scalars = project_io.parse_project(text)
+
+    assert scalars["minimum_reinforcement_on"] is False
+    assert scalars["clear_spacing_on"] is False
+    assert scalars["detailing_edition"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
+    assert scalars["detailing_d_upper"] == pytest.approx(16.0)
+    assert scalars["detailing_include_tendons"] is False
 
 
 def test_blank_separator_row_survives_round_trip():
