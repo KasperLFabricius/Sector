@@ -668,13 +668,16 @@ def _ensure_material_catalog_state():
 
     # M1/P1 retain the historical widget keys. This keeps keyboard habits and
     # existing integrations stable, while the revision gate ensures a loaded
-    # project overwrites stale widget state before the widgets are created.
+    # project overwrites stale widget state before the widgets are created. The
+    # catalogue order is user/project data, so bind aliases by ID, never position.
     if st.session_state.get("_material_alias_revision") != revision:
         for kind, prefix in (("mild", "mild"), ("prestress", "pre")):
-            first = mat_catalog.entries(
+            alias_id = "M1" if kind == "mild" else "P1"
+            entry = mat_catalog.entry_map(
                 st.session_state[mat_catalog.catalog_key(kind)], kind
-            )[0]
-            _seed_material_entry_widgets(first, kind, prefix, overwrite=True)
+            ).get(alias_id)
+            if entry is not None:
+                _seed_material_entry_widgets(entry, kind, prefix, overwrite=True)
         st.session_state["_material_alias_revision"] = revision
 
 

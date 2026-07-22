@@ -2158,6 +2158,50 @@ def test_material_catalogue_add_duplicate_delete_and_assignment_guard():
         "mild_material_catalog"]["items"]] == ["M1", "M2"]
 
 
+def test_reordered_catalogues_keep_historical_aliases_bound_by_material_id():
+    import material_catalog
+
+    mild, _ = material_catalog.add_entry(
+        material_catalog.default_catalog("mild"), "mild"
+    )
+    mild["items"][0].update(name="Primary mild", fytk=550.0)
+    mild["items"][1].update(name="Secondary mild", fytk=235.0)
+    mild["items"] = [mild["items"][1], mild["items"][0]]
+
+    prestress, _ = material_catalog.add_entry(
+        material_catalog.default_catalog("prestress"), "prestress"
+    )
+    prestress["items"][0].update(name="Primary tendon", fytk=1640.0)
+    prestress["items"][1].update(name="Secondary tendon", fytk=1200.0)
+    prestress["items"] = [prestress["items"][1], prestress["items"][0]]
+
+    at = _fresh()
+    at.session_state["mild_material_catalog"] = mild
+    at.session_state["prestress_material_catalog"] = prestress
+    at.run()
+
+    # The first catalogue rows are M2/P2, but the historical widget aliases must
+    # still be seeded from M1/P1 and must not overwrite them on panel mount.
+    assert at.session_state["mild_fytk"] == pytest.approx(550.0)
+    assert at.session_state["pre_fytk"] == pytest.approx(1640.0)
+    _goto_material_tab(at, "Mild steel")
+    at.selectbox(key="_mild_catalog_selected").set_value("M1").run()
+    _goto_material_tab(at, "Prestressing steel")
+    at.selectbox(key="_prestress_catalog_selected").set_value("P1").run()
+
+    mild_by_id = material_catalog.entry_map(
+        at.session_state["mild_material_catalog"], "mild"
+    )
+    prestress_by_id = material_catalog.entry_map(
+        at.session_state["prestress_material_catalog"], "prestress"
+    )
+    assert mild_by_id["M1"]["fytk"] == pytest.approx(550.0)
+    assert mild_by_id["M2"]["fytk"] == pytest.approx(235.0)
+    assert prestress_by_id["P1"]["fytk"] == pytest.approx(1640.0)
+    assert prestress_by_id["P2"]["fytk"] == pytest.approx(1200.0)
+    assert not at.exception
+
+
 def test_2023_concrete_fck_edit_calculates():
     # Editing fck under the strength-dependent 2023 preset (alpha_cc tracks fck).
     at = _fresh()

@@ -145,6 +145,40 @@ def test_point_grid_sends_persistent_id_and_derivation_contract(monkeypatch):
     assert result.iloc[0]["ID"] == "R1"
 
 
+def test_material_select_preserves_an_unresolved_import_until_user_replaces_it(
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_component(**kwargs):
+        captured.update(kwargs)
+        return kwargs["default"]
+
+    monkeypatch.setattr(point_grid_module, "_component", fake_component)
+    specs = rebar_table.point_grid_specs("bar", ["M1", "M2"])
+    frame = rebar_table.normalise_table([{
+        "ID": "R1", "x (mm)": 0.0, "y (mm)": 0.0,
+        "size mode": "Area", "area (mm2)": 314.0,
+        "material ID": "M9",
+    }], "bar")
+
+    result = point_grid_module.point_grid(
+        frame, rebar_table.COLUMNS, key="bars-unresolved",
+        column_specs=specs,
+        component_options=rebar_table.point_grid_options("bar", ["M1", "M2"]),
+    )
+
+    assert captured["data"]["rows"][0]["material ID"] == "M9"
+    assert result.iloc[0]["material ID"] == "M9"
+    renderer = (pathlib.Path(point_grid_module.__file__).resolve().parent
+                / "point_grid_frontend" / "point_grid.js").read_text(
+                    encoding="utf-8"
+                )
+    assert "choice === undefined ? text : String(choice)" in renderer
+    assert "`${current} (undefined)`" in renderer
+    assert "unresolved.disabled = true" in renderer
+
+
 def test_component_registration_is_cached_per_streamlit_runtime(monkeypatch):
     class Manager:
         pass

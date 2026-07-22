@@ -40,6 +40,7 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
 import case_analysis
 import viz
 import result_presentation as presentation
+from sector import codes as ec2_codes
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
 
@@ -60,6 +61,34 @@ _CRACK_CANDIDATE_COL_WIDTHS = tuple(
 # the report still generates). BriCoS uses Helvetica -- DejaVuSans keeps the same
 # clean sans-serif look while adding the Greek the engineering notation needs.
 _FONT, _FONT_BOLD = "Helvetica", "Helvetica-Bold"
+
+
+def _steel_standard_reference(preset):
+    """Return a normative steel-law reference only for a recognised EC2 preset."""
+    code = ec2_codes.CODES.get(str(preset))
+    if code is None:
+        return None
+    if code.key == "EC2-2023":
+        return "EN 1992-1-1:2023 &#167;5.2.4"
+    return f"{code.label} &#167;3.2.7"
+
+
+def _steel_reference_set(presets):
+    references = [_steel_standard_reference(value) for value in presets]
+    known = list(dict.fromkeys(value for value in references if value))
+    return known, any(value is None for value in references)
+
+
+def _steel_theory_reference(presets):
+    known, has_unassigned = _steel_reference_set(presets)
+    if not has_unassigned and len(known) == 1:
+        return known[0]
+    if not has_unassigned:
+        return "material-specific catalogue references (mixed recognised editions)"
+    if known:
+        return ("material-specific catalogue references; custom/generic laws "
+                "have no assigned normative source")
+    return "custom/generic constitutive laws; no normative source assigned"
 
 
 def _register_fonts():
@@ -1043,10 +1072,11 @@ class ReportBuilder:
                      "yes" if st.active_in_compression else "no"],
                     ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]]
             self._table(rows, [60 * mm, 35 * mm, 50 * mm])
+            source_ref = _steel_standard_reference(item.get("preset"))
             self._formula("f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>y</sub>",
-                          ref=("EN 1992-1-1:2023 &#167;5.2.4(1), Formula (5.11)"
-                               if "2023" in str(item.get("preset", "")) else
-                               "DS/EN 1992-1-1 &#167;3.2.7"),
+                          ref=(source_ref or
+                               "User-defined or generic constitutive law; no "
+                               "normative curve source assigned."),
                           subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
                           result=f"= {_fmt(fyd, 3)} MPa")
             if self.figures:
@@ -1091,7 +1121,27 @@ class ReportBuilder:
                 self._small(_html_escape(item["description"]))
             rows = [["Parameter", "Symbol", "Value"],
                     ["Initial prestrain", "eps<sub>p</sub><super>(0)</super>",
-                     f"{_fmt(p.IS*1000, 3)} permille"],
+                     f"{_fmt(p.IS*1000, 3)} permille"]]
+            if p.curve in (1, 2, 3, 4, 5):
+                characteristic_at_rupture = p.stress(
+                    p.rupture_strain, design=False
+                )
+                rows.extend([
+                    ["Curve definition", "-", f"Built-in fixed curve {p.curve}"],
+                    ["Curve source", "-", "Sector fixed polynomial; normative "
+                     "source not assigned"],
+                    ["Characteristic stress at rupture strain",
+                     "sigma<sub>p</sub>(eps<sub>ut</sub>)",
+                     f"{_fmt(characteristic_at_rupture, 3)} MPa"],
+                    ["Elastic-analysis modulus", "E<sub>p</sub>",
+                     f"{_fmt(p.Es/1000, 1)} GPa"],
+                    ["Fixed rupture strain", "eps<sub>ut</sub>",
+                     f"{_fmt(p.rupture_strain*1000, 3)} permille"],
+                    ["Design factor on fixed workline", "gamma<sub>y</sub>",
+                     _fmt(p.gamma_y, 3)],
+                ])
+            else:
+                rows.extend([
                     ["Proof strength", "f<sub>p0.1k</sub>",
                      f"{_fmt(p.fytk, 3)} MPa"],
                     ["Ultimate strength", "f<sub>pk</sub>",
@@ -1105,7 +1155,8 @@ class ReportBuilder:
                     ["Ultimate partial factor", "gamma<sub>u</sub>",
                      _fmt(p.gamma_u, 3)],
                     ["Modulus factor", "gamma<sub>E</sub>",
-                     _fmt(p.gamma_E, 3)]]
+                     _fmt(p.gamma_E, 3)],
+                ])
             self._table(rows, [60 * mm, 35 * mm, 50 * mm])
             if self.figures:
                 self._fig(viz.prestress_curve_figure(
@@ -1336,20 +1387,12 @@ class ReportBuilder:
                     for element in self.inp.get("bar_elements", [])
                 }
             ] or [str(self.inp.get("mild_preset", ""))]
-            steel_2023 = all("2023" in value for value in steel_presets)
-            steel_mixed = any("2023" in value for value in steel_presets) and not steel_2023
             concrete_ref = (
                 "EN 1992-1-1:2023 &#167;8.1.1-8.1.2 and &#167;5.1.6"
                 if material_2023 else
                 "DS/EN 1992-1-1 &#167;6.1 and &#167;3.1.7"
             )
-            steel_ref = (
-                "the material-specific catalogue references (mixed editions)"
-                if steel_mixed else
-                "EN 1992-1-1:2023 &#167;5.2.4"
-                if steel_2023 else
-                "DS/EN 1992-1-1 &#167;3.2.7"
-            )
+            steel_ref = _steel_theory_reference(steel_presets)
             self._p("<b>Plastic section capacity.</b> Plane sections; concrete in "
                     "compression follows the design curve above, reinforcement the "
                     "design stress-strain law. For a trial neutral axis the strain "
@@ -2923,21 +2966,31 @@ class ReportBuilder:
                         for element in self.inp.get("bar_elements", [])
                     }
                 ] or [str(self.inp.get("mild_preset", ""))]
-                if all("2023" in value for value in steel_presets):
+                standard_refs, has_unassigned = _steel_reference_set(steel_presets)
+                if not has_unassigned and len(standard_refs) == 1:
                     lines.append(
-                        "Selected reinforcing-steel material - EN 1992-1-1:2023 "
-                        "&#167;5.2.4 and Formula (5.11)."
+                        "Selected reinforcing-steel material - "
+                        f"{standard_refs[0]}."
                     )
-                elif not any("2023" in value for value in steel_presets):
+                elif not has_unassigned:
                     lines.append(
-                        "Selected reinforcing-steel material - DS/EN 1992-1-1 "
-                        "&#167;3.2.7."
+                        "Reinforcing-steel catalogue uses mixed recognised "
+                        "editions; each material definition and source is listed "
+                        "in Section and materials."
+                    )
+                elif standard_refs:
+                    lines.append(
+                        "Reinforcing-steel catalogue includes recognised standard "
+                        "presets and custom/generic laws. Standard references: "
+                        + "; ".join(standard_refs)
+                        + ". Custom/generic laws have no assigned normative curve "
+                        "source; use the material description as project evidence."
                     )
                 else:
                     lines.append(
-                        "Reinforcing-steel catalogue uses mixed editions; each "
-                        "material definition and source is listed in Section and "
-                        "materials."
+                        "Reinforcing-steel catalogue uses custom/generic "
+                        "constitutive laws; no normative curve source is assigned. "
+                        "Use the material description as project evidence."
                     )
             lines.append(
                 "The capacity solver is covered by independent hand-calculation "

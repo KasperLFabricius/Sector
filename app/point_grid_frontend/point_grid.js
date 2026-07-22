@@ -112,7 +112,11 @@ function createPointGridInstance(parentElement) {
       const choice = spec.options.find(
         option => String(option).toLowerCase() === text.toLowerCase(),
       )
-      return choice === undefined ? String(spec.options[0] ?? "") : String(choice)
+      // An imported project may deliberately retain an unresolved catalogue ID
+      // so the Python validation can block calculation and tell the user what to
+      // repair. Never turn that evidence into the first valid option merely
+      // because another cell was edited.
+      return choice === undefined ? text : String(choice)
     }
     return text
   }
@@ -214,13 +218,25 @@ function createPointGridInstance(parentElement) {
       String(cell.getColumn().getDefinition().title || "Select value"),
     )
     const values = params.values || []
+    const current = String(cell.getValue() ?? "")
+    const currentIsKnown = values.some(
+      value => String(value).toLowerCase() === current.toLowerCase(),
+    )
+    if (current && !currentIsKnown) {
+      const unresolved = document.createElement("option")
+      unresolved.value = current
+      unresolved.textContent = `${current} (undefined)`
+      unresolved.disabled = true
+      unresolved.selected = true
+      select.appendChild(unresolved)
+    }
     values.forEach(value => {
       const option = document.createElement("option")
       option.value = String(value)
       option.textContent = String(value)
       select.appendChild(option)
     })
-    select.value = String(cell.getValue() ?? "")
+    select.value = current
 
     let finished = false
     const commit = () => {
