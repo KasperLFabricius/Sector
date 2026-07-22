@@ -56,7 +56,7 @@ def _component(**kwargs):
     renderer = _COMPONENT_RENDERERS.get(manager)
     if renderer is None:
         renderer = st.components.v2.component(
-            "sector.point_grid",
+            "sector.point_grid_rich_v1",
             html=_COMPONENT_HTML,
             css=_COMPONENT_CSS,
             js=_COMPONENT_JS,
@@ -66,7 +66,26 @@ def _component(**kwargs):
     return renderer(**kwargs)
 
 
-def _component_records(df: pd.DataFrame, columns) -> list[dict]:
+def _normalise_specs(columns, column_specs=None) -> list[dict]:
+    """Return strict, ordered frontend metadata for every persisted column."""
+    cols = list(columns)
+    supplied = {
+        str(spec.get("field")): dict(spec)
+        for spec in (column_specs or [])
+        if isinstance(spec, dict) and spec.get("field") is not None
+    }
+    specs = []
+    for column in cols:
+        spec = supplied.get(column, {"field": column, "title": column,
+                                     "type": "number"})
+        spec["field"] = column
+        spec.setdefault("title", column)
+        spec.setdefault("type", "number")
+        specs.append(spec)
+    return specs
+
+
+def _component_records(df: pd.DataFrame, columns, column_specs=None) -> list[dict]:
     """Return strict-JSON-safe rows for the component seed.
 
     Pandas keeps a numeric column's dtype when ``where(..., None)`` is used, so
@@ -77,38 +96,61 @@ def _component_records(df: pd.DataFrame, columns) -> list[dict]:
     ``null``.
     """
     cols = list(columns)
+    specs = _normalise_specs(cols, column_specs)
     base = (df.reindex(columns=cols)
             if df is not None else pd.DataFrame(columns=cols))
     records = []
     for row in base.itertuples(index=False, name=None):
         record = {}
-        for column, value in zip(cols, row):
-            try:
-                number = float(value)
-            except (TypeError, ValueError):
-                number = math.nan
-            record[column] = number if math.isfinite(number) else None
+        for column, spec, value in zip(cols, specs, row):
+            if spec["type"] == "number":
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    number = math.nan
+                record[column] = number if math.isfinite(number) else None
+            else:
+                try:
+                    blank = value is None or bool(pd.isna(value))
+                except (TypeError, ValueError):
+                    blank = True
+                record[column] = "" if blank else str(value).strip()
         records.append(record)
     return records
 
 
-def _rows_to_df(rows, columns) -> pd.DataFrame:
-    """The grid's returned rows as a numeric DataFrame with exactly ``columns``.
+def _rows_to_df(rows, columns, column_specs=None) -> pd.DataFrame:
+    """The grid's returned rows as a typed DataFrame with exactly ``columns``.
 
-    Blank and non-numeric cells become ``NaN`` (the downstream point parsing skips
-    them), so a half-typed row or a void's blank separator survives the round trip.
+    Numeric blanks become ``NaN``; text blanks become empty strings. A half-typed
+    row or a void's blank separator therefore survives the round trip.
     """
     cols = list(columns)
+    specs = _normalise_specs(cols, column_specs)
     if not rows:
-        return pd.DataFrame({c: pd.Series(dtype="float64") for c in cols})
+        return pd.DataFrame({
+            column: pd.Series(dtype=("float64" if spec["type"] == "number"
+                                     else "object"))
+            for column, spec in zip(cols, specs)
+        })
     df = pd.DataFrame(rows)
     for c in cols:
         if c not in df.columns:
             df[c] = None
     df = df[cols]
-    for c in cols:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df.astype("float64")
+    for column, spec in zip(cols, specs):
+        if spec["type"] == "number":
+            df[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
+        else:
+            def _text(value):
+                try:
+                    blank = value is None or bool(pd.isna(value))
+                except (TypeError, ValueError):
+                    blank = True
+                return "" if blank else str(value).strip()
+
+            df[column] = df[column].map(_text).astype("object")
+    return df
 
 
 def _versioned_rows(value, data_version):
@@ -137,29 +179,33 @@ def _versioned_rows(value, data_version):
 
 
 def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
-               data_version: int = 0, label: str | None = None) -> pd.DataFrame:
+               data_version: int = 0, label: str | None = None,
+               column_specs=None, component_options=None) -> pd.DataFrame:
     """Render the editable grid for ``df`` and return the edited rows.
 
-    ``columns`` are the editable column names (``["x (mm)", "y (mm)"]`` or with an
-    ``"area (mm2)"``). ``id_start`` offsets the auto-numbered ID column so each
-    table continues the plot's numbering (bars from 1, tendons after the bars,
-    etc.). Bump ``data_version`` to make the grid re-seed from ``df``.
+    Numeric-only geometry tables use the legacy auto-numbered display ID. Rich
+    reinforcement tables pass ``column_specs`` plus persistent-ID/derived-size
+    ``component_options``. Bump ``data_version`` to re-seed from ``df``.
     """
     cols = list(columns)
+    specs = _normalise_specs(cols, column_specs)
     # NaN is not valid JSON, so send blanks as null; this is also the default the
     # component returns before the frontend first reports (and under AppTest, which
     # does not run the frontend) -- i.e. the seeded table flows straight through.
-    records = _component_records(df, cols)
+    records = _component_records(df, cols, specs)
     default = {"data_version": str(data_version), "rows": records}
+    data = {
+        "columns": cols,
+        "column_specs": specs,
+        "rows": records,
+        "id_start": int(id_start),
+        "data_version": str(data_version),
+        "label": label or "Editable section points",
+    }
+    data.update(dict(component_options or {}))
     result = _component(
         key=key,
-        data={
-            "columns": cols,
-            "rows": records,
-            "id_start": int(id_start),
-            "data_version": str(data_version),
-            "label": label or "Editable section points",
-        },
+        data=data,
         default={"payload": default},
         on_payload_change=lambda: None,
         width="stretch",
@@ -167,4 +213,4 @@ def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
     )
     value = result.get("payload") if hasattr(result, "get") else None
     rows = _versioned_rows(value, data_version)
-    return _rows_to_df(records if rows is None else rows, cols)
+    return _rows_to_df(records if rows is None else rows, cols, specs)

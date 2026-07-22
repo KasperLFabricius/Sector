@@ -38,6 +38,26 @@ def test_stress_assessments_separate_bars_and_tendons():
     assert checks["prestress"]["limit"] == pytest.approx(1350.0)
 
 
+def test_stress_assessments_use_stable_element_ids_when_supplied():
+    checks = sls.stress_assessments(
+        [350.0, 420.0],
+        n_bars=1,
+        max_concrete_compression=12.0,
+        fck=30.0,
+        fyk=500.0,
+        fpk=1800.0,
+        concrete_limit_pct=60.0,
+        reinforcement_limit_pct=80.0,
+        prestress_limit_pct=75.0,
+        valid=True,
+        bar_ids=["R7"],
+        tendon_ids=["P3"],
+    )
+
+    assert checks["reinforcement"]["governing"] == "R7"
+    assert checks["prestress"]["governing"] == "P3"
+
+
 def test_element_rows_are_typed_and_include_geometry_strain():
     rows = sls.element_rows(
         [(0.1, -0.2, 314.0)],
@@ -54,6 +74,23 @@ def test_element_rows_are_typed_and_include_geometry_strain():
     assert rows[0]["area_mm2"] == pytest.approx(314.0)
     assert rows[0]["strain_permille"] == pytest.approx(1.0)
     assert rows[1]["strain_permille"] == pytest.approx(5.0)
+
+
+def test_element_rows_use_stable_element_ids_when_supplied():
+    rows = sls.element_rows(
+        [(0.1, -0.2, 314.0)],
+        [(-0.1, 0.2, 150.0)],
+        total=[200.0, 975.0],
+        long=[150.0, 900.0],
+        dif=[50.0, 75.0],
+        rst1=[40.0, 60.0],
+        es_mpa=200_000.0,
+        ep_mpa=195_000.0,
+        bar_ids=["R7"],
+        tendon_ids=["P3"],
+    )
+
+    assert [row["element_id"] for row in rows] == ["R7", "P3"]
 
 
 def test_concrete_corner_rows_use_public_one_based_points():

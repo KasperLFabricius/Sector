@@ -30,6 +30,7 @@ import streamlit as st  # noqa: E402
 import case_analysis  # noqa: E402
 import load_cases  # noqa: E402
 import project_io  # noqa: E402
+import reinforcement_table as rebar_table  # noqa: E402
 import result_presentation as presentation  # noqa: E402
 import viz  # noqa: E402
 from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
@@ -571,7 +572,7 @@ def prestress_panel(box, locked=False, *, heading=True):
 # are converted at the table/plot boundary.
 _MM = 1000.0   # millimetres per metre
 _CORNER_COLS = ["x (mm)", "y (mm)"]
-_REBAR_COLS = ["x (mm)", "y (mm)", "area (mm2)"]
+_REBAR_COLS = list(rebar_table.COLUMNS)
 
 
 def _pts_to_m(pts):
@@ -601,12 +602,9 @@ def _corners_df(pts):
         columns=_CORNER_COLS).astype("float64")
 
 
-def _rebar_df(pts):
-    """Reinforcement DataFrame ``(x, y, area)`` in mm/mm2 from mm/mm2 points."""
-    return pd.DataFrame(
-        [{_REBAR_COLS[0]: float(p[0]), _REBAR_COLS[1]: float(p[1]),
-          _REBAR_COLS[2]: float(p[2])} for p in pts],
-        columns=_REBAR_COLS).astype("float64")
+def _rebar_df(pts, kind="bar", *, size_mode=rebar_table.AREA_MODE):
+    """Canonical stable-ID table from ``(x, y, area)`` mm/mm2 points."""
+    return rebar_table.table_from_points(pts, kind, size_mode=size_mode)
 
 
 def _to_number(v):
@@ -670,11 +668,15 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     typed or pasted value sticks on the first keystroke instead of lagging behind.
     """
     version = st.session_state.get(ed_key + "_ver", 0)
+    kind = _reinforcement_kind(base_key)
+    specs = rebar_table.point_grid_specs(kind) if kind else None
+    options = rebar_table.point_grid_options(kind) if kind else None
     with box:
         return point_grid(st.session_state[base_key], cols, key=ed_key,
                           id_start=id_start, data_version=version,
                           label=_POINT_TABLE_LABELS.get(base_key,
-                                                        "Editable section points"))
+                                                        "Editable section points"),
+                          column_specs=specs, component_options=options)
 
 
 def _point_editor(box, base_key, ed_key, cols, id_start=1):
@@ -683,6 +685,32 @@ def _point_editor(box, base_key, ed_key, cols, id_start=1):
     valid points, numbered by position (the order they appear)."""
     return _pts_from_df(_render_point_table(box, base_key, ed_key, cols, id_start),
                         cols)
+
+
+def _reinforcement_kind(base_key):
+    if base_key == "bars_base":
+        return "bar"
+    if base_key == "tendons_base":
+        return "tendon"
+    return None
+
+
+def _reinforcement_editor(box, base_key, ed_key):
+    """Render one rich element table and return its frame, metadata and points."""
+    kind = _reinforcement_kind(base_key)
+    frame = rebar_table.normalise_table(
+        _render_point_table(box, base_key, ed_key, _REBAR_COLS), kind,
+    )
+    elements = rebar_table.valid_elements(frame, kind)
+    issues = rebar_table.row_issues(frame, kind)
+    if issues:
+        details = "; ".join(f"{element_id}: {reason}" for element_id, reason in issues)
+        box.warning(f"Incomplete element rows are not analysed ({details}).")
+    points_mm = [
+        (item["x_mm"], item["y_mm"], item["area_mm2"])
+        for item in elements
+    ]
+    return frame, elements, points_mm
 
 
 def _void_groups(df, cols):
@@ -740,9 +768,13 @@ def _current_table(base_key, ed_key, cols):
     value = st.session_state.get(ed_key)
     version = st.session_state.get(ed_key + "_ver", 0)
     rows = _versioned_rows(value, version)
+    kind = _reinforcement_kind(base_key)
     if rows is None:   # absent, malformed or stale -- use the current base
-        return st.session_state[base_key].copy().reset_index(drop=True)
-    return _rows_to_df(rows, cols)   # an empty list is a valid (cleared) grid
+        frame = st.session_state[base_key].copy().reset_index(drop=True)
+    else:
+        specs = rebar_table.point_grid_specs(kind) if kind else None
+        frame = _rows_to_df(rows, cols, specs)
+    return (rebar_table.normalise_table(frame, kind) if kind else frame)
 
 
 _PROJECT_TABLES = (
@@ -962,14 +994,20 @@ def _reseed_section_tables(tables):
     for base, ed, cols in _PROJECT_TABLES:
         df = tables.get(base)
         if not isinstance(df, pd.DataFrame):
-            df = pd.DataFrame(columns=cols, dtype="float64")
-        _reseed_table(base, ed, df.reindex(columns=cols).copy(deep=True))
+            kind = _reinforcement_kind(base)
+            df = (rebar_table.empty_table() if kind
+                  else pd.DataFrame(columns=cols, dtype="float64"))
+        kind = _reinforcement_kind(base)
+        canonical = (rebar_table.normalise_table(df, kind) if kind
+                     else df.reindex(columns=cols).copy(deep=True))
+        _reseed_table(base, ed, canonical)
 
 
 def _clear_section_tables():
     """Empty every point table through the same grid-safe reseed path."""
     _reseed_section_tables({
-        base: pd.DataFrame(columns=cols, dtype="float64")
+        base: (rebar_table.empty_table() if _reinforcement_kind(base)
+               else pd.DataFrame(columns=cols, dtype="float64"))
         for base, _ed, cols in _PROJECT_TABLES
     })
 
@@ -1830,9 +1868,11 @@ def _quick_section_viewport():
             [(float(p[0]), float(p[1])) for p in outer])))
         _reseed_table("hole_base", "ed_hole", _corners_df(_pts_to_mm(qs_hole)))
         _reseed_table("bars_base", "ed_bars", _rebar_df(_pts_to_mm(
-            [(float(p[0]), float(p[1]), float(p[2])) for p in bars])))
+            [(float(p[0]), float(p[1]), float(p[2])) for p in bars]),
+            "bar", size_mode=rebar_table.DIAMETER_MODE))
         _reseed_table("tendons_base", "ed_tendons", _rebar_df(_pts_to_mm(
-            [(float(p[0]), float(p[1]), float(p[2])) for p in tendons])))
+            [(float(p[0]), float(p[1]), float(p[2])) for p in tendons]),
+            "tendon", size_mode=rebar_table.AREA_MODE))
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
@@ -2047,7 +2087,8 @@ def build_inputs(host=st):
         0.0, 60.0, 0.0, 1.0, "sls_phi",
         disabled=not (elastic_on and sls_cw),
         help="Diameter override for crack spacing, applied to each reinforcement "
-             "element; 0 derives it from each bar or tendon's area.")
+             "element; 0 uses each bar or tendon's table diameter (which may itself "
+             "be area-derived).")
     # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
     sls_bond = scw.selectbox(
@@ -2328,9 +2369,11 @@ def build_inputs(host=st):
             [(float(p[0]), float(p[1])) for p in d_outer])))
         _reseed_table("hole_base", "ed_hole", _corners_df(_pts_to_mm(d_hole)))
         _reseed_table("bars_base", "ed_bars", _rebar_df(_pts_to_mm(
-            [(float(p[0]), float(p[1]), float(p[2])) for p in d_bars])))
+            [(float(p[0]), float(p[1]), float(p[2])) for p in d_bars]),
+            "bar", size_mode=rebar_table.DIAMETER_MODE))
         _reseed_table("tendons_base", "ed_tendons", _rebar_df(_pts_to_mm(
-            [(float(p[0]), float(p[1]), float(p[2])) for p in d_tendons])))
+            [(float(p[0]), float(p[1]), float(p[2])) for p in d_tendons]),
+            "tendon", size_mode=rebar_table.AREA_MODE))
         st.session_state["pts_init"] = True
     # Migrate a session that predates the void table (or the ID-column tables): seed
     # hole_base, and coerce any stored table to the current data-only schema.
@@ -2347,15 +2390,21 @@ def build_inputs(host=st):
             # A loaded or partial project may omit a table (e.g. a non-prestressed
             # project has no tendon table); seed it empty so the always-mounted
             # grid has a base to read.
-            st.session_state[base_key] = (_corners_df([]) if cols is _CORNER_COLS
-                                          else _rebar_df([]))
+            kind = _reinforcement_kind(base_key)
+            st.session_state[base_key] = (_corners_df([]) if not kind
+                                          else rebar_table.empty_table())
+            continue
+        kind = _reinforcement_kind(base_key)
+        if kind:
+            canonical = rebar_table.normalise_table(df, kind)
+            if list(df.columns) != _REBAR_COLS or not canonical.equals(df):
+                _reseed_table(base_key, ed_key, canonical)
             continue
         if list(df.columns) != cols:
             if set(cols).issubset(df.columns):
                 _reseed_table(base_key, ed_key, df.reindex(columns=cols))
             else:
-                _reseed_table(base_key, ed_key, _corners_df([]) if cols is _CORNER_COLS
-                              else _rebar_df([]))
+                _reseed_table(base_key, ed_key, _corners_df([]))
 
     sec.button(
         "Open Quick Section...", key="open_qs", width="stretch",
@@ -2408,12 +2457,10 @@ def build_inputs(host=st):
             undo_slot.empty()
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
-    sec.caption("Concrete corners define the outline (3 or more, in order); the "
-                "voids are optional inner rings. Bars and tendons are points with an "
-                "area (mm2). Type or paste values (a block copied from a spreadsheet "
-                "auto-grows the table); a point is used once all its cells are "
-                "filled. The frozen ID column numbers the points to match the plots. "
-                "Use the Quick Section builder to refill the tables.")
+    sec.caption("Concrete corners define the outline; voids are optional inner "
+                "rings. Reinforcement IDs remain fixed. Choose Area, Diameter or "
+                "Independent; derived cells are shaded. Paste x/y/area or all "
+                "editable columns.")
     sec.markdown("_Concrete corners_")
     outer_mm = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS, 1)
     outer = _pts_to_m(outer_mm)
@@ -2445,20 +2492,33 @@ def build_inputs(host=st):
     holes_mm = _void_editor(sec, "hole_base", "ed_hole", len(outer) + 1)
     holes = [_pts_to_m(ring) for ring in holes_mm]
     sec.markdown("_Reinforcing bars_")
-    bars_mm = _point_editor(sec, "bars_base", "ed_bars", _REBAR_COLS, 1)
+    _bar_frame, bar_elements, bars_mm = _reinforcement_editor(
+        sec, "bars_base", "ed_bars",
+    )
     bars = _pts_to_m(bars_mm)
+    bar_elements = [
+        {**item, "x": item["x_mm"] / _MM, "y": item["y_mm"] / _MM}
+        for item in bar_elements
+    ]
     # Tendons are always definable; they only enter the analysis and the report when
     # at least one is present (a section with no tendons is simply not prestressed).
     sec.markdown("_Tendons_")
-    tendons_mm = _point_editor(sec, "tendons_base", "ed_tendons", _REBAR_COLS,
-                               len(bars) + 1)
+    _tendon_frame, tendon_elements, tendons_mm = _reinforcement_editor(
+        sec, "tendons_base", "ed_tendons",
+    )
     tendons = _pts_to_m(tendons_mm)
+    tendon_elements = [
+        {**item, "x": item["x_mm"] / _MM, "y": item["y_mm"] / _MM}
+        for item in tendon_elements
+    ]
     label_scale, label_min_gap = _section_input_preview(
         sec_preview,
         outer,
         holes,
         bars,
         tendons,
+        bar_elements,
+        tendon_elements,
         visible=bool(sec_tab.open),
     )
 
@@ -2602,8 +2662,9 @@ def build_inputs(host=st):
         if steel_pts:
             ok = geometry.points_inside_concrete(steel_pts, outer, holes)
             nb = len(bars)
-            bad_bars = [i + 1 for i in range(nb) if not ok[i]]
-            bad_tendons = [i - nb + 1 for i in range(nb, len(steel_pts)) if not ok[i]]
+            bad_bars = [bar_elements[i]["id"] for i in range(nb) if not ok[i]]
+            bad_tendons = [tendon_elements[i - nb]["id"]
+                           for i in range(nb, len(steel_pts)) if not ok[i]]
             parts = []
             if bad_bars:
                 parts.append(f"bar(s) {', '.join(map(str, bad_bars))}")
@@ -2622,8 +2683,15 @@ def build_inputs(host=st):
     # The geometry signature is the point tables themselves (the source of truth),
     # so editing a point marks the results stale; Quick Section inputs do not, as
     # they only prefill on demand.
+    def _element_signature(elements):
+        keys = ("id", "x_mm", "y_mm", "area_mm2", "diameter_mm", "size_mode",
+                "material_id", "fatigue_detail_id", "group_id")
+        return tuple(tuple(item.get(key) for key in keys) for item in elements)
+
     geom_sig = (tuple(outer), tuple(bars), tuple(tendons),
-                tuple(tuple(r) for r in holes))
+                tuple(tuple(r) for r in holes),
+                _element_signature(bar_elements),
+                _element_signature(tendon_elements))
     # Table actions live in their canonical frames, while the shared calculation
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.
@@ -2692,6 +2760,7 @@ def build_inputs(host=st):
                 plastic_cases=case_frames[load_cases.PLASTIC_TABLE_KEY],
                 elastic_cases=case_frames[load_cases.ELASTIC_TABLE_KEY],
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
+                bar_elements=bar_elements, tendon_elements=tendon_elements,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 check_util=check_util,
                 interaction=interaction,
@@ -2758,21 +2827,31 @@ def _props_dict(p):
     return dict(area=p.area, cx=p.cx, cy=p.cy, Ix=p.Ix, Iy=p.Iy, Ixy=p.Ixy)
 
 
-def _crack_dict(cw, n_bars=0):
+def _crack_dict(cw, bar_ids=None, tendon_ids=None):
     """Flatten a CrackWidthResult (or None) for the results payload."""
     if cw is None:
         return None
 
+    bar_ids = list(bar_ids or [])
+    tendon_ids = list(tendon_ids or [])
+    n_bars = len(bar_ids)
+
     def element(index):
         if index < n_bars:
-            return "Bar", index + 1
-        return "Tendon", index - n_bars + 1
+            number = index + 1
+            element_id = bar_ids[index] if index < len(bar_ids) else f"bar {number}"
+            return "Bar", number, element_id
+        number = index - n_bars + 1
+        tendon_index = index - n_bars
+        element_id = (tendon_ids[tendon_index]
+                      if tendon_index < len(tendon_ids) else f"tendon {number}")
+        return "Tendon", number, element_id
 
     def candidate(c):
-        kind, number = element(c.bar_index)
+        kind, number, element_id = element(c.bar_index)
         return dict(
             element_type=kind, element_no=number,
-            element_id=f"{kind.lower()} {number}",
+            element_id=element_id,
             x_mm=c.x * _MM, y_mm=c.y * _MM, area_mm2=c.area,
             wk=c.wk, sr_max=c.sr_max, esm_ecm=c.esm_ecm,
             sigma_s=c.sigma_s, rho_p_eff=c.rho_p_eff, ac_eff=c.ac_eff,
@@ -2781,13 +2860,13 @@ def _crack_dict(cw, n_bars=0):
             sr_max_geometric=c.sr_max_geometric,
         )
 
-    kind, number = element(cw.gov_bar)
+    kind, number, element_id = element(cw.gov_bar)
     return dict(
         wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm,
         sigma_s=cw.sigma_s, rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff,
         hc_ef=cw.hc_ef, phi=cw.phi, cover=cw.cover,
         gov_bar=cw.gov_bar + 1, element_type=kind, element_no=number,
-        element_id=f"{kind.lower()} {number}", coarse=cw.coarse,
+        element_id=element_id, coarse=cw.coarse,
         edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
         sr_max_geometric=cw.sr_max_geometric,
         candidates=[candidate(c) for c in cw.candidates],
@@ -2930,12 +3009,15 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                                    n_mult=n_mult, prestress_stress=prestress_stress)
         mpa = lambda arr: [s / 1000.0 for s in arr]  # kN/m2 -> MPa
         total = mpa(r.bar_stress_total)
+        bar_ids = [item["id"] for item in inp.get("bar_elements", [])]
+        tendon_ids = [item["id"] for item in inp.get("tendon_elements", [])]
         elements = sls_core.element_rows(
             inp["bars"], inp["tendons"],
             total=total, long=mpa(r.bar_stress_long),
             dif=mpa(r.bar_stress_dif), rst1=mpa(r.bar_stress_rst1),
             es_mpa=inp["steel"].Es,
             ep_mpa=(pre_mat.Es if pre_mat is not None else None),
+            bar_ids=bar_ids, tendon_ids=tendon_ids,
         )
         corners = sls_core.concrete_corner_rows(
             inp["outer"], inp["holes"],
@@ -2961,6 +3043,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             reinforcement_limit_pct=inp["sls_steel_limit_pct"],
             prestress_limit_pct=inp["sls_pre_limit_pct"],
             valid=r.converged,
+            bar_ids=bar_ids, tendon_ids=tendon_ids,
         )
         out["elastic"] = dict(
             total=total, long=mpa(r.bar_stress_long), dif=mpa(r.bar_stress_dif),
@@ -3000,7 +3083,14 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # section properties and tension stiffening; the short-term (instantaneous)
         # state -- the total long+short load at ns (beta/kt = 1.0/0.6) -- gives the
         # short-term crack width. Crack width is reported for both loads.
-        phi = inp["sls_phi"] if inp["sls_phi"] > 0.0 else None
+        if inp["sls_phi"] > 0.0:
+            phi = inp["sls_phi"]
+        else:
+            phi = [
+                item["diameter_mm"]
+                for item in (inp.get("bar_elements", [])
+                             + inp.get("tendon_elements", []))
+            ]
         # k1 per bar: the mild reinforcement uses the selected bond value; any
         # prestressing tendons (folded into the bar set after the bars) always
         # use 1.6. Order matches sec.bar_arrays() (bars first, then tendons).
@@ -3093,10 +3183,10 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             out["elastic"].update(
                 crack=_crack_dict(
                     _cw(cr_l.cracked_state, inp["nl"], 0.4, False),
-                    len(inp["bars"])),
+                    bar_ids, tendon_ids),
                 crack_short=_crack_dict(
                     _cw(short_state, inp["ns"], 0.6, False),
-                    len(inp["bars"])),
+                    bar_ids, tendon_ids),
                 crack_code=inp["sls_code"],
                 crack_edition=inp["sls_edition"],
                 crack_member=(inp["sls_member"] if dk_na else None),
@@ -3107,10 +3197,10 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 out["elastic"].update(
                     crack_coarse=_crack_dict(
                         _cw(cr_l.cracked_state, inp["nl"], 0.4, True),
-                        len(inp["bars"])),
+                        bar_ids, tendon_ids),
                     crack_short_coarse=_crack_dict(
                         _cw(short_state, inp["ns"], 0.6, True),
-                        len(inp["bars"])),
+                        bar_ids, tendon_ids),
                 )
         eout = out["elastic"]
         if (
@@ -3697,7 +3787,8 @@ def _memo_fig(name, sig, build):
     return entry[1]
 
 
-def _section_input_preview(box, outer, holes, bars, tendons, *, visible):
+def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
+                           tendon_elements=None, *, visible):
     """Render the section beside its point tables and return label settings.
 
     Controls remain mounted with the other inputs. The Plotly payload is emitted
@@ -3729,11 +3820,15 @@ def _section_input_preview(box, outer, holes, bars, tendons, *, visible):
     if visible:
         bar_xy = [(b[0], b[1], b[2]) for b in bars]
         tendon_xy = [(t[0], t[1], t[2]) for t in tendons]
-        sig = (outer, holes, bar_xy, tendon_xy, label_scale, label_min_gap)
+        bar_ids = [item["id"] for item in (bar_elements or [])]
+        tendon_ids = [item["id"] for item in (tendon_elements or [])]
+        sig = (outer, holes, bar_xy, tendon_xy, tuple(bar_ids), tuple(tendon_ids),
+               label_scale, label_min_gap)
         fig = _memo_fig("section", sig, lambda: viz.section_figure(
             outer, holes, bar_xy, title="Section preview", tendons=tendon_xy,
             show_labels=True, label_scale=label_scale,
             label_min_gap=label_min_gap, height=640, scale=_MM, unit="mm",
+            bar_ids=bar_ids, tendon_ids=tendon_ids,
         ))
         box.plotly_chart(fig, width="stretch")
     return label_scale, label_min_gap
@@ -3996,7 +4091,9 @@ def plastic_view(inp, results):
                                      "(tension + / compression -)",
                                show_labels=True, label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
-                               bar_hover=bar_hover, tendon_hover=tendon_hover),
+                               bar_hover=bar_hover, tendon_hover=tendon_hover,
+                               bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
+                               tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])]),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds retain the "
@@ -4254,7 +4351,9 @@ def elastic_view(inp, results):
                                na_line=na, zones=zones, show_labels=True,
                                label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
-                               title="Elastic state (tension + / compression -)"),
+                               title="Elastic state (tension + / compression -)",
+                               bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
+                               tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])]),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds identify the "

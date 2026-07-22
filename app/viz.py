@@ -541,7 +541,7 @@ _LABEL_BASE_SIZE = 11.0   # default point-label font (px), scaled by label_scale
 
 
 def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
-                      label_min_gap=0.04):
+                      label_min_gap=0.04, bar_ids=None, tendon_ids=None):
     """Number the reinforcement (bars then tendons, continuously) and the
     concrete corners, so the drawing cross-references the result tables.
 
@@ -560,10 +560,13 @@ def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
 
     rebar = list(bars or []) + list(tendons or [])
     if rebar:
+        labels = (list(bar_ids or []) + list(tendon_ids or []))
+        if len(labels) != len(rebar):
+            labels = [str(i + 1) for i in range(len(rebar))]
         keep = _decimate(rebar, min_dist)
         fig.add_trace(go.Scatter(
             x=[rebar[i][0] for i in keep], y=[rebar[i][1] for i in keep], mode="text",
-            text=[str(i + 1) for i in keep], textposition="top center",
+            text=[labels[i] for i in keep], textposition="top center",
             textfont=dict(size=size, color=POINT_LABEL),
             hoverinfo="skip", showlegend=False))
 
@@ -602,7 +605,7 @@ def _legend_y(height: float) -> float:
     return -_LEGEND_GAP_PX / plot_h
 
 
-def _point_hover(points, first_number, kind, unit, extra=None):
+def _point_hover(points, first_number, kind, unit, extra=None, ids=None):
     """Per-point hover strings ``'Kind N<br>x, y[<br>area][<br>extra]'`` for the
     section drawing.
 
@@ -616,7 +619,9 @@ def _point_hover(points, first_number, kind, unit, extra=None):
     dec = 3 if unit == "m" else 0
     lines = []
     for i, p in enumerate(points):
-        s = (f"{kind} {first_number + i}<br>"
+        point_id = (str(ids[i]) if ids is not None and i < len(ids)
+                    else str(first_number + i))
+        s = (f"{kind} {point_id}<br>"
              f"x = {p[0]:.{dec}f} {unit}, y = {p[1]:.{dec}f} {unit}")
         if len(p) > 2 and p[2] is not None:
             s += f"<br>area = {p[2]:.0f} mm<sup>2</sup>"
@@ -671,7 +676,8 @@ def _marker_sizes(points, base, lo, hi):
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
-                   height=440, scale=1.0, unit="m", bar_hover=None, tendon_hover=None):
+                   height=440, scale=1.0, unit="m", bar_hover=None, tendon_hover=None,
+                   bar_ids=None, tendon_ids=None):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     Reinforcement is drawn consistently across the views: bars are circles and
@@ -736,7 +742,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                                  marker=dict(size=_marker_sizes(bars, 9.0, 6.5, 14.0),
                                              symbol=symbols, color=colors,
                                              line=dict(color="white", width=1)),
-                                 customdata=_point_hover(bars, 1, "Bar", unit, bar_hover),
+                                 customdata=_point_hover(
+                                     bars, 1, "Bar", unit, bar_hover, bar_ids),
                                  hovertemplate="%{customdata}<extra></extra>",
                                  showlegend=True))
     if tendons:
@@ -749,8 +756,9 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                                  marker=dict(size=_marker_sizes(tendons, 11.0, 8.0, 16.0),
                                              symbol=symbols, color=colors,
                                              line=dict(color="white", width=1)),
-                                 customdata=_point_hover(tendons, len(bars) + 1, "Tendon",
-                                                         unit, tendon_hover),
+                                 customdata=_point_hover(
+                                     tendons, len(bars) + 1, "Tendon", unit,
+                                     tendon_hover, tendon_ids),
                                  hovertemplate="%{customdata}<extra></extra>",
                                  showlegend=True))
     state_colors = list(bar_colors or []) + list(tendon_colors or [])
@@ -774,7 +782,10 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                                  line=dict(color=NA_LINE, width=2, dash="dash"),
                                  name="neutral axis"))
     if show_labels:
-        _add_point_labels(fig, outer, holes, bars, tendons, label_scale, label_min_gap)
+        _add_point_labels(
+            fig, outer, holes, bars, tendons, label_scale, label_min_gap,
+            bar_ids, tendon_ids,
+        )
     fig.update_layout(
         title=title, template=_TEMPLATE, height=height,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),

@@ -126,7 +126,7 @@ def plastic_state_evidence(inp, point):
 
     element_rows = []
 
-    def append_elements(points, element_type, material, prestrain=0.0):
+    def append_elements(points, element_type, material, prestrain=0.0, ids=None):
         if material is None:
             return
         for element_no, element in enumerate(points or [], start=1):
@@ -139,7 +139,9 @@ def plastic_state_evidence(inp, point):
             element_rows.append({
                 "element_type": element_type,
                 "element_no": element_no,
-                "element_id": f"{element_type.lower()} {element_no}",
+                "element_id": (str(ids[element_no - 1])
+                               if ids and element_no <= len(ids)
+                               else f"{element_type.lower()} {element_no}"),
                 "state": state,
                 "x_mm": x * _MM,
                 "y_mm": y * _MM,
@@ -149,13 +151,16 @@ def plastic_state_evidence(inp, point):
                 "force_kn": stress * area / _MM,
             })
 
-    append_elements(inp.get("bars"), "Bar", inp.get("steel"))
+    bar_ids = [item.get("id") for item in inp.get("bar_elements", [])]
+    tendon_ids = [item.get("id") for item in inp.get("tendon_elements", [])]
+    append_elements(inp.get("bars"), "Bar", inp.get("steel"), ids=bar_ids)
     prestress = inp.get("prestress")
     append_elements(
         inp.get("tendons"),
         "Tendon",
         prestress,
         float(getattr(prestress, "IS", 0.0)) if prestress is not None else 0.0,
+        ids=tendon_ids,
     )
     return {
         "halfplane": hp,

@@ -502,12 +502,18 @@ def manual_blocks() -> list:
        "into them.")
     h2("The point tables")
     md("Four editable tables hold the concrete corners, the voids, the bars "
-       "($x$, $y$, area) and the tendons ($x$, $y$, area). Coordinates are in "
-       "millimetres and the bar and tendon **areas are in square millimetres** "
-       "(the *area (mm2)* column) -- enter 314 for a 20 mm bar, not 20. A void is a "
-       "closed ring of corners; several voids are separated by a blank row. "
-       "Half-typed rows are ignored until complete, so the tables are "
-       "paste-friendly.")
+       "and the tendons. Coordinates and diameters are in millimetres; areas are "
+       "in square millimetres. Each reinforcement element has a fixed ID used by "
+       "the figures, results and report. Deleting another row does not renumber it.")
+    table(["Size basis", "Entered", "Calculated"],
+          [["Area", "Area", "Equivalent circular diameter"],
+           ["Diameter", "Diameter", "Area of one circular element"],
+           ["Independent", "Area and diameter", "Neither"]])
+    md("Area controls section stiffness and resistance; diameter controls detailing "
+       "and crack-spacing geometry. *Independent* is therefore appropriate when "
+       "one point represents a non-circular or grouped steel area. Material, fatigue-"
+       "detail and group IDs are assignments carried with the element; blank optional "
+       "assignments are reported as such. Half-typed rows are ignored until complete.")
     call("concept", "Everything downstream reads these points. The builder, the "
          "presets and the save file all end up as rows in these four tables, so you "
          "can always edit the geometry by hand.")

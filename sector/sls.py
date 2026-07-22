@@ -11,6 +11,15 @@ import math
 from typing import Iterable, Mapping, Sequence
 
 
+def _element_id(ids: Sequence[str] | None, index: int, fallback: str) -> str:
+    """Return a non-blank stable ID when supplied, otherwise ``fallback``."""
+    if ids is not None and index < len(ids):
+        value = str(ids[index]).strip()
+        if value:
+            return value
+    return fallback
+
+
 def upper_limit_assessment(
     value: float | None,
     limit: float | None,
@@ -66,6 +75,8 @@ def stress_assessments(
     reinforcement_limit_pct: float,
     prestress_limit_pct: float,
     valid: bool,
+    bar_ids: Sequence[str] | None = None,
+    tendon_ids: Sequence[str] | None = None,
 ) -> dict:
     """Build separate concrete, mild-steel and tendon stress assessments."""
     total = [float(v) for v in total_stress]
@@ -104,12 +115,14 @@ def stress_assessments(
     )
     reinforcement.update(
         criterion=f"{float(reinforcement_limit_pct):g}% fyk",
-        governing=(f"bar {mild_no}" if mild_no is not None else None),
+        governing=(_element_id(bar_ids, mild_no - 1, f"bar {mild_no}")
+                   if mild_no is not None else None),
         element_no=mild_no,
     )
     prestressing.update(
         criterion=f"{float(prestress_limit_pct):g}% fpk",
-        governing=(f"tendon {pre_no}" if pre_no is not None else None),
+        governing=(_element_id(tendon_ids, pre_no - 1, f"tendon {pre_no}")
+                   if pre_no is not None else None),
         element_no=pre_no,
     )
     return {
@@ -153,26 +166,32 @@ def element_rows(
     rst1: Sequence[float],
     es_mpa: float,
     ep_mpa: float | None,
+    bar_ids: Sequence[str] | None = None,
+    tendon_ids: Sequence[str] | None = None,
 ) -> list[dict]:
     """Return a complete, explicitly typed SLS row for every bar and tendon."""
     rows: list[dict] = []
     elements = [
-        ("Bar", i + 1, p, float(es_mpa))
+        ("Bar", i + 1,
+         _element_id(bar_ids, i, f"bar {i + 1}"),
+         p, float(es_mpa))
         for i, p in enumerate(bars)
     ]
     tendon_modulus = float(ep_mpa) if ep_mpa is not None else float(es_mpa)
     elements.extend(
-        ("Tendon", i + 1, p, tendon_modulus)
+        ("Tendon", i + 1,
+         _element_id(tendon_ids, i, f"tendon {i + 1}"),
+         p, tendon_modulus)
         for i, p in enumerate(tendons)
     )
     arrays = ([float(v) for v in total], [float(v) for v in long],
               [float(v) for v in dif], [float(v) for v in rst1])
-    for i, (kind, number, point, modulus) in enumerate(elements):
+    for i, (kind, number, element_id, point, modulus) in enumerate(elements):
         stress = arrays[0][i]
         rows.append({
             "element_type": kind,
             "element_no": number,
-            "element_id": f"{kind.lower()} {number}",
+            "element_id": element_id,
             "x_mm": float(point[0]) * 1000.0,
             "y_mm": float(point[1]) * 1000.0,
             "area_mm2": float(point[2]),
