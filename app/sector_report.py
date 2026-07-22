@@ -470,6 +470,7 @@ class ReportBuilder:
             "FAIL": ("#FDECEC", "#9B1C1C"),
             "EXCEEDED": ("#FDECEC", "#9B1C1C"),
             "INVALID": ("#FDECEC", "#9B1C1C"),
+            "REVIEW": ("#FFF4D6", "#7A4E00"),
             "NOT ASSESSED": ("#FFF4D6", "#7A4E00"),
             "NOT APPLICABLE": ("#EEF2F6", "#374151"),
         }
@@ -498,17 +499,25 @@ class ReportBuilder:
             self._table(
                 [[
                     "N<sub>Ed</sub> (kN)", "M<sub>x,Ed</sub> (kNm)",
-                    "M<sub>y,Ed</sub> (kNm)", "V<sub>Ed</sub> (kN)",
+                    "M<sub>y,Ed</sub> (kNm)", "V<sub>x,Ed</sub> (kN)",
+                    "V<sub>y,Ed</sub> (kN)",
                     "T<sub>Ed</sub> (kNm)",
                 ], [
                     _fmt(actions.get("n_ed_kn"), 3),
                     _fmt(actions.get("mx_ed_knm"), 3),
                     _fmt(actions.get("my_ed_knm"), 3),
-                    _fmt(actions.get("v_ed_kn"), 3),
+                    _fmt(actions.get("vx_ed_kn"), 3),
+                    _fmt(actions.get("vy_ed_kn"), 3),
                     _fmt(actions.get("t_ed_knm"), 3),
                 ]],
-                [34 * mm] * 5,
-                font=7.2,
+                [28 * mm] * 6,
+                font=6.9,
+            )
+            self._small(
+                "Tension-face selection: V<sub>x,Ed</sub> = "
+                f"{_html_escape(actions.get('vx_face', 'auto'))}; "
+                "V<sub>y,Ed</sub> = "
+                f"{_html_escape(actions.get('vy_face', 'auto'))}."
             )
         elif family == "elastic" and actions:
             self._table(
@@ -587,6 +596,7 @@ class ReportBuilder:
             "PASS": colors.HexColor("#E8F5E9"),
             "FAIL": colors.HexColor("#FDECEC"),
             "INVALID": colors.HexColor("#FDECEC"),
+            "REVIEW": colors.HexColor("#FFF4D6"),
             "NOT ASSESSED": colors.HexColor("#FFF4D6"),
             "NOT RUN": colors.HexColor("#EEF2F6"),
             "NOT APPLICABLE": colors.HexColor("#EEF2F6"),
@@ -1177,7 +1187,8 @@ class ReportBuilder:
                 rows = [[
                     "Case", "Description", "N<sub>Ed</sub>",
                     "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
-                    "V<sub>Ed</sub>", "T<sub>Ed</sub>",
+                    "V<sub>x,Ed</sub>", "V<sub>y,Ed</sub>",
+                    "T<sub>Ed</sub>", "Faces",
                 ]]
                 rows.extend([
                     [
@@ -1186,19 +1197,21 @@ class ReportBuilder:
                         _fmt(row["n_ed_kn"], 3),
                         _fmt(row["mx_ed_knm"], 3),
                         _fmt(row["my_ed_knm"], 3),
-                        _fmt(row["v_ed_kn"], 3),
+                        _fmt(row["vx_ed_kn"], 3),
+                        _fmt(row["vy_ed_kn"], 3),
                         _fmt(row["t_ed_knm"], 3),
+                        f"Vx {row['vx_face']}; Vy {row['vy_face']}",
                     ]
                     for row in plastic
                 ])
                 self._table(
                     rows,
-                    [20 * mm, 40 * mm] + [22 * mm] * 5,
-                    font=6.7,
+                    [15 * mm, 28 * mm] + [17 * mm] * 6 + [25 * mm],
+                    font=6.1,
                     keep=False,
                 )
-                self._small("N and V in kN; M and T in kNm. A zero V or T is "
-                            "not evaluated for that case.")
+                self._small("N, Vx and Vy in kN; M and T in kNm. A zero shear "
+                            "component or torsion is not evaluated for that case.")
 
             elastic = (
                 case_analysis.case_records(inp, "elastic")
@@ -1823,21 +1836,109 @@ class ReportBuilder:
         )
 
     def _shear(self):
-        sh = self.out["shear"]
-        res = sh["res"]
+        aggregate = self.out["shear"]
+        directions = aggregate.get("directions") or {}
+        if not directions:
+            self._shear_direction(aggregate)
+            return
+
         self._case_heading("Shear resistance", "plastic")
-        axis = ("vertical shear (bending about x)" if sh["axis"] == "x"
-                else "horizontal shear (bending about y)")
-        face = viz.tension_face_label(sh["tension_low"])
+        if aggregate.get("biaxial") and self.figures:
+            components = self.inp.get("shear_components") or {}
+            self._fig(
+                viz.biaxial_shear_overview_figure(
+                    self.inp.get("outer", []), self.inp.get("holes", []),
+                    self.inp.get("bars", []),
+                    vx_ed=(components.get("vx") or {}).get(
+                        "signed_v_ed", self.inp.get("shear_Vx", 0.0)
+                    ),
+                    vy_ed=(components.get("vy") or {}).get(
+                        "signed_v_ed", self.inp.get("shear_Vy", 0.0)
+                    ),
+                    title="Directional shear actions",
+                ),
+                145,
+                100,
+            )
+        rows = [["Direction", "V<sub>Ed</sub>", "V<sub>Rd</sub>",
+                 "Utilisation", "Status", "Tension face"]]
+        for component in ("vx", "vy"):
+            if component not in directions:
+                continue
+            item = directions[component]
+            links = item.get("links") or {}
+            resistance = (
+                (links.get("res") or {}).get("vrd")
+                if self.inp.get("shear_links") else (item.get("res") or {}).get("vrd_c")
+            )
+            utilisation = links.get("util") if self.inp.get("shear_links") else item.get("util")
+            rows.append([
+                "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
+                f"{_fmt(item.get('v_ed'), 3)} kN",
+                f"{_fmt(resistance, 3)} kN",
+                _pct(utilisation), item.get("status", "NOT ASSESSED"),
+                viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
+            ])
+        self._table(rows, [25 * mm, 27 * mm, 27 * mm, 27 * mm, 28 * mm, 38 * mm])
+        if aggregate.get("biaxial"):
+            self._status_block(
+                f"{aggregate.get('status', 'REVIEW')} - independent Vx/Vy checks",
+                aggregate.get("status", "REVIEW"),
+            )
+            self._small(
+                "Biaxial interaction: <b>NOT ASSESSED</b>. Sector performs two "
+                "directional checks and does not apply a resultant or an undocumented "
+                "interaction expression. If both directions pass, the overall shear "
+                "status remains REVIEW."
+            )
+        for component in ("vx", "vy"):
+            if component in directions:
+                label = "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>"
+                self._h2(f"{label} directional check")
+                self._shear_direction(
+                    directions[component], include_case_heading=False,
+                    component=component,
+                )
+
+    def _shear_direction(self, sh, *, include_case_heading=True, component=None):
+        res = sh["res"]
+        if include_case_heading:
+            self._case_heading("Shear resistance", "plastic")
+        component = component or sh.get("component") or (
+            "vy" if sh["axis"] == "x" else "vx"
+        )
+        axis = ("Vy along y, paired with Mx" if component == "vy"
+                else "Vx along x, paired with My")
+        action = "V<sub>y,Ed</sub>" if component == "vy" else "V<sub>x,Ed</sub>"
+        face = viz.tension_face_label(sh["tension_low"], sh["axis"])
         clause = "8.2.2" if sh.get("model_2023") else "6.2.2(1)"
         self._p(f"Design shear resistance V<sub>Rd,c</sub> of a member not requiring "
                 f"shear reinforcement (EN 1992-1-1 sec. {clause}), method "
-                f"<b>{sh['method']}</b>. {axis[0].upper() + axis[1:]}, with the "
+                f"<b>{sh['method']}</b>. {axis}, with the "
                 f"tension reinforcement on the {face} face.")
         if not res["valid"]:
             self._small("Warning: V<sub>Rd,c</sub> is zero -- no tension "
                         "reinforcement on the chosen face, or a zero effective depth "
                         "/ web width.")
+        if sh.get("both_faces_evaluated"):
+            face_rows = [["Candidate face", "V<sub>Rd,c</sub>",
+                          "V<sub>Ed</sub>/V<sub>Rd,c</sub>", "Governing"]]
+            for candidate in sh.get("face_candidates", []):
+                candidate_shear = candidate.get("shear") or {}
+                face_rows.append([
+                    viz.tension_face_label(
+                        candidate.get("tension_low", True), sh["axis"]
+                    ),
+                    f"{_fmt((candidate_shear.get('res') or {}).get('vrd_c'), 3)} kN",
+                    _pct(candidate_shear.get("util")),
+                    ("Yes" if bool(candidate.get("tension_low"))
+                     == bool(sh.get("tension_low")) else ""),
+                ])
+            self._small(
+                "The associated bending moment is effectively zero; both faces are "
+                "evaluated and the governing candidate is used."
+            )
+            self._table(face_rows, [52 * mm, 35 * mm, 45 * mm, 30 * mm], font=7.0)
         links_payload = sh.get("links") or {}
         link_res = links_payload.get("res") or {}
         z_geometry = float(link_res.get("z", res.get("z", 0.9 * sh["d"])))
@@ -1854,7 +1955,7 @@ class ReportBuilder:
                     asl_cg_m=sh.get("asl_cg"), asl_mm2=sh["asl"],
                     d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
                     bw_source=bw_src,
-                    title=f"Shear geometry - {face} tension",
+                    title=f"{action} geometry - {face} tension",
                 ),
                 145,
                 103,
@@ -2019,7 +2120,9 @@ class ReportBuilder:
             self._h2("Longitudinal chord: bending + shear"
                      + (" + torsion" if ch.get("has_torsion") else "") + " tension")
             vv = _code_verdict(ch["ok"], ch.get("code_applicable", True))
-            face = viz.tension_face_label(ch.get("tension_low", True))
+            face = viz.tension_face_label(
+                ch.get("tension_low", True), ch.get("axis")
+            )
             self._formula(
                 "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>"
                 "&#183;z + F<sub>td,T</sub>&#183;z/2",
@@ -2065,10 +2168,67 @@ class ReportBuilder:
             self._chord_off_block(links.get("chord_off"))
 
     def _combined(self):
-        c = self.out["combined"]
+        aggregate = self.out["combined"]
+        directions = aggregate.get("directions") or {}
+        if not aggregate.get("biaxial") or not directions:
+            self._combined_direction(aggregate)
+            return
+
         self._case_heading(
-            "Combined bending + shear + torsion (M-V-T)", "plastic"
+            "Combined bending + directional shear + torsion", "plastic"
         )
+        self._status_block(
+            f"{aggregate.get('status', 'REVIEW')} - Vx+T and Vy+T screens",
+            aggregate.get("status", "REVIEW"),
+        )
+        self._small(
+            "The simultaneous V<sub>x,Ed</sub> + V<sub>y,Ed</sub> + "
+            "T<sub>Ed</sub> interaction is <b>NOT ASSESSED</b>. The following "
+            "directional screens are independent; no three-component interaction "
+            "expression is inferred."
+        )
+        rows = [["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
+                 "r<sub>T</sub>", "DK NA sum", "Status"]]
+        for component in ("vx", "vy"):
+            item = directions.get(component)
+            if not item:
+                continue
+            rows.append([
+                "Vx+T" if component == "vx" else "Vy+T",
+                _pct(item.get("r_m")), _pct(item.get("r_v")),
+                _pct(item.get("r_t")), _pct(item.get("dkna_sum")),
+                item.get("status", (
+                    "NOT ASSESSED" if not item.get("valid")
+                    else "PASS" if item.get("dkna_ok") else "FAIL"
+                )),
+            ])
+        self._table(rows, [27 * mm, 25 * mm, 25 * mm, 25 * mm, 32 * mm, 35 * mm])
+        for component in ("vx", "vy"):
+            if component in directions:
+                label = "V<sub>x,Ed</sub> + T<sub>Ed</sub>" if component == "vx" \
+                    else "V<sub>y,Ed</sub> + T<sub>Ed</sub>"
+                self._h2(f"Directional screen: {label}")
+                self._combined_direction(
+                    directions[component], include_case_heading=False,
+                    component=component,
+                )
+
+    def _combined_direction(self, c, *, include_case_heading=True, component=None):
+        if include_case_heading:
+            self._case_heading(
+                "Combined bending + shear + torsion (M-V-T)", "plastic"
+            )
+        if not c.get("valid"):
+            missing = []
+            if not c.get("have_m", True):
+                missing.append("bending")
+            if not c.get("have_v", True):
+                missing.append("shear")
+            if not c.get("have_t", True):
+                missing.append("torsion")
+            detail = ", ".join(missing) or "one or more component checks"
+            self._small(f"Directional combined check not evaluated: {detail} missing or invalid.")
+            return
         self._p("The three checks tied together under the shared edition <b>"
                 + str(c["method"]) + "</b>. The bending utilisation is the plastic "
                 "M-M envelope at the applied N; the shear and torsion utilisations "
@@ -2150,7 +2310,9 @@ class ReportBuilder:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
             vv = _code_verdict(lg["ok"], applicable)
             ax = lg["axis"]
-            face = viz.tension_face_label(lg.get("tension_low", True))
+            face = viz.tension_face_label(
+                lg.get("tension_low", True), lg.get("axis")
+            )
             face_desc = (f"the shear tension face ({face})" if lg.get("gets_shift", True)
                          else f"the shear compression face ({face}) -- the torsion "
                          "tension governs there, with no shear shift and the bending "
@@ -2237,7 +2399,9 @@ class ReportBuilder:
         self._h2(f"Off-axis chord (about {och['axis']}, governing face): "
                  "bending + torsion tension")
         vv = _code_verdict(och["ok"], och.get("code_applicable", True))
-        face = viz.tension_face_label(och.get("tension_low", True))
+        face = viz.tension_face_label(
+            och.get("tension_low", True), och.get("axis")
+        )
         self._p(
             f"The governing tension chord is the {face} face about the "
             f"{och['axis']}-axis (the axis the shear does not act on; the torsion "
@@ -2361,6 +2525,33 @@ class ReportBuilder:
                    "minimise the governing utilisation)."
                    if t.get("theta_mode") == "utilisation"
                    else "(auto-optimised for the torsion resistance)."))
+        directional = t.get("directional_interactions") or {}
+        if directional:
+            self._status_block(
+                "REVIEW - directional shear-torsion screens",
+                "REVIEW",
+            )
+            self._small(
+                "V<sub>x,Ed</sub> + V<sub>y,Ed</sub> + T<sub>Ed</sub> "
+                "interaction is <b>NOT ASSESSED</b>. Standalone torsion is reported "
+                "below; Vx+T and Vy+T are screened separately."
+            )
+            rows = [["Screen", "T<sub>Ed</sub>/T<sub>Rd</sub>",
+                     "6.29 V+T", "Status"]]
+            for component in ("vx", "vy"):
+                item = directional.get(component)
+                if not item:
+                    continue
+                interaction = item.get("interaction") or {}
+                value = interaction.get("value")
+                rows.append([
+                    "Vx+T" if component == "vx" else "Vy+T",
+                    _pct(item.get("util")), _pct(value),
+                    ("NOT ASSESSED" if not interaction.get("valid")
+                     else "PASS" if value is not None and value <= 1.0 + 1.0e-9
+                     else "FAIL"),
+                ])
+            self._table(rows, [42 * mm, 42 * mm, 42 * mm, 42 * mm])
         if not t["valid"]:
             if t.get("reason") == "multi-cell (2+ voids)":
                 self._small("Torsion not evaluated: a multi-cell section (two or "

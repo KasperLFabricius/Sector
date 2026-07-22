@@ -43,7 +43,9 @@ def test_legacy_scalars_migrate_to_typed_solver_tables():
         "Accidental combination | Source: Model envelope E4"
     )
     assert plastic.loc[0, "n_ed_kn"] == -1250.0
-    assert plastic.loc[0, "v_ed_kn"] == -85.0
+    assert plastic.loc[0, "vx_ed_kn"] == 0.0
+    assert plastic.loc[0, "vy_ed_kn"] == -85.0
+    assert plastic.loc[0, "vy_face"] == lc.FACE_NEGATIVE
     assert plastic.loc[0, "t_ed_knm"] == 12.5
 
     elastic = tables[lc.ELASTIC_TABLE_KEY]
@@ -86,6 +88,28 @@ def test_case_records_roundtrip_signed_values_text_and_flags_without_nan():
         lc.normalise_table(source, lc.ELASTIC_TABLE_KEY),
         check_dtype=True,
     )
+
+
+def test_directional_shear_faces_roundtrip_and_validate():
+    source = lc.normalise_table([{
+        "name": "PL-BI",
+        "vx_ed_kn": -30.0,
+        "vy_ed_kn": 45.0,
+        "vx_face": "negative",
+        "vy_face": "positive",
+    }], lc.PLASTIC_TABLE_KEY)
+    restored = lc.table_from_records(
+        lc.table_records(source, lc.PLASTIC_TABLE_KEY), lc.PLASTIC_TABLE_KEY
+    )
+    pd.testing.assert_frame_equal(restored, source)
+
+    invalid = source.copy()
+    invalid.at[0, "vx_face"] = "somewhere"
+    assert any("vx_face must be" in error for error in lc.validation_errors(
+        invalid, lc.empty_table(lc.ELASTIC_TABLE_KEY)
+    ))
+    with pytest.raises(ValueError, match="vx_face must be"):
+        lc.table_records(invalid, lc.PLASTIC_TABLE_KEY)
 
 
 def test_case_serialisation_rejects_invalid_numeric_cells():
@@ -167,7 +191,7 @@ def test_first_rows_remain_available_through_legacy_scalar_adapter():
     tables = {
         lc.PLASTIC_TABLE_KEY: lc.normalise_table([
             {"name": "PL-X", "description": "Description", "n_ed_kn": -42.0,
-             "mx_ed_knm": 1.0, "my_ed_knm": 2.0, "v_ed_kn": 3.0,
+             "mx_ed_knm": 1.0, "my_ed_knm": 2.0, "vy_ed_kn": 3.0,
              "t_ed_knm": 4.0},
         ], lc.PLASTIC_TABLE_KEY),
         lc.ELASTIC_TABLE_KEY: lc.normalise_table([
@@ -182,6 +206,8 @@ def test_first_rows_remain_available_through_legacy_scalar_adapter():
     assert scalars["pl_case_id"] == "PL-X"
     assert scalars["pl_case_type"] == "Description"
     assert scalars["pl_P"] == -42.0
+    assert scalars["shear_Vx"] == 0.0
+    assert scalars["shear_Vy"] == 3.0
     assert scalars["torsion_T"] == 4.0
     assert scalars["el_case_id"] == "EL-X"
     assert scalars["el_short_My"] == 10.0

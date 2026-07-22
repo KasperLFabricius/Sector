@@ -39,16 +39,33 @@ LEGACY_SCALAR_KEYS = (
 NAME = "name"
 DESCRIPTION = "description"
 
+# The stored values are deliberately coordinate-neutral.  The UI presents the
+# matching physical face for each component (Vx: left/right; Vy: bottom/top).
+FACE_AUTO = "auto"
+FACE_NEGATIVE = "negative"
+FACE_POSITIVE = "positive"
+FACE_OPTIONS = (FACE_AUTO, FACE_NEGATIVE, FACE_POSITIVE)
+PLASTIC_FACE_COLUMNS = ("vx_face", "vy_face")
+
 PLASTIC_COLUMNS = (
     NAME,
     DESCRIPTION,
     "n_ed_kn",
     "mx_ed_knm",
     "my_ed_knm",
-    "v_ed_kn",
+    "vx_ed_kn",
+    "vy_ed_kn",
+    *PLASTIC_FACE_COLUMNS,
     "t_ed_knm",
 )
-PLASTIC_NUMERIC = PLASTIC_COLUMNS[2:]
+PLASTIC_NUMERIC = (
+    "n_ed_kn",
+    "mx_ed_knm",
+    "my_ed_knm",
+    "vx_ed_kn",
+    "vy_ed_kn",
+    "t_ed_knm",
+)
 
 ELASTIC_COLUMNS = (
     NAME,
@@ -76,6 +93,10 @@ NUMERIC_COLUMNS = {
 FLAG_COLUMNS = {
     PLASTIC_TABLE_KEY: (),
     ELASTIC_TABLE_KEY: ELASTIC_FLAGS,
+}
+TEXT_COLUMNS = {
+    PLASTIC_TABLE_KEY: (NAME, DESCRIPTION, *PLASTIC_FACE_COLUMNS),
+    ELASTIC_TABLE_KEY: (NAME, DESCRIPTION),
 }
 
 
@@ -120,6 +141,60 @@ def _flag(value) -> bool:
         return False
 
 
+def _face(value) -> str:
+    """Return a canonical face token while retaining invalid text for validation."""
+    if isinstance(value, bool):
+        return FACE_NEGATIVE if value else FACE_POSITIVE
+    text = _text(value).casefold()
+    if not text or text == FACE_AUTO:
+        return FACE_AUTO
+    if text in {
+        FACE_NEGATIVE, "low", "lower", "bottom", "left",
+        "bottom / left face", "negative-coordinate face", "true", "1",
+    }:
+        return FACE_NEGATIVE
+    if text in {
+        FACE_POSITIVE, "high", "upper", "top", "right",
+        "top / right face", "positive-coordinate face", "false", "0",
+    }:
+        return FACE_POSITIVE
+    return _text(value)
+
+
+def legacy_shear_component(axis) -> str:
+    """Map the former shear-axis selection to ``vx`` or ``vy``.
+
+    The historical internal axis named the bending axis: ``x`` meant vertical
+    shear and therefore maps to Vy; ``y`` meant horizontal shear and maps to Vx.
+    UI-label variants are accepted because project files persist widget values.
+    """
+    text = _text(axis).casefold()
+    if text == "y" or "horizontal" in text or "about y" in text:
+        return "vx"
+    return "vy"
+
+
+def migrate_legacy_plastic_records(records, *, axis=None, tension=None) -> list[dict]:
+    """Convert v4-v6 one-direction plastic rows to the directional schema."""
+    component = legacy_shear_component(axis)
+    face = _face(FACE_NEGATIVE if tension is None else tension)
+    migrated = []
+    for source in records or []:
+        row = dict(source)
+        if "vx_ed_kn" not in row and "vy_ed_kn" not in row:
+            v_ed = row.pop("v_ed_kn", 0.0)
+            row["vx_ed_kn"] = v_ed if component == "vx" else 0.0
+            row["vy_ed_kn"] = v_ed if component == "vy" else 0.0
+        row.setdefault(
+            "vx_face", face if component == "vx" else FACE_AUTO
+        )
+        row.setdefault(
+            "vy_face", face if component == "vy" else FACE_AUTO
+        )
+        migrated.append(row)
+    return migrated
+
+
 def empty_table(key: str) -> pd.DataFrame:
     """Return an empty table with stable text, numeric and boolean dtypes."""
     key = _kind(key)
@@ -129,6 +204,8 @@ def empty_table(key: str) -> pd.DataFrame:
     }
     data.update({column: pd.Series(dtype="float64")
                  for column in NUMERIC_COLUMNS[key]})
+    for column in TEXT_COLUMNS[key]:
+        data.setdefault(column, pd.Series(dtype="string"))
     data.update({column: pd.Series(dtype="bool")
                  for column in FLAG_COLUMNS[key]})
     frame = pd.DataFrame(data, columns=TABLE_COLUMNS[key])
@@ -156,11 +233,27 @@ def normalise_table(value, key: str) -> pd.DataFrame:
         frame = value.copy(deep=True) if isinstance(value, pd.DataFrame) else pd.DataFrame(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} is not tabular") from exc
+    # Programmatic callers may still supply the former one-direction column. A
+    # project file uses the axis-aware v7 migration; without that metadata the
+    # historical/default vertical direction is the only deterministic mapping.
+    if (
+        key == PLASTIC_TABLE_KEY
+        and "v_ed_kn" in frame
+        and "vx_ed_kn" not in frame
+        and "vy_ed_kn" not in frame
+    ):
+        frame["vy_ed_kn"] = frame["v_ed_kn"]
 
     result = pd.DataFrame(index=frame.index)
-    for column in (NAME, DESCRIPTION):
-        source = frame[column] if column in frame else pd.Series("", index=frame.index)
-        result[column] = source.map(_text).astype("string")
+    for column in TEXT_COLUMNS[key]:
+        default = FACE_AUTO if column in PLASTIC_FACE_COLUMNS else ""
+        source = (
+            frame[column]
+            if column in frame
+            else pd.Series(default, index=frame.index)
+        )
+        mapper = _face if column in PLASTIC_FACE_COLUMNS else _text
+        result[column] = source.map(mapper).astype("string")
     for column in NUMERIC_COLUMNS[key]:
         source = frame[column] if column in frame else pd.Series(0.0, index=frame.index)
         result[column] = source.map(_number).astype("float64")
@@ -185,6 +278,8 @@ def _row_is_blank(row: Mapping, key: str) -> bool:
         and not _text(row.get(DESCRIPTION))
         and all(_is_finite_zero(row.get(column))
                 for column in NUMERIC_COLUMNS[key])
+        and all(_face(row.get(column)) == FACE_AUTO
+                for column in PLASTIC_FACE_COLUMNS if column in TABLE_COLUMNS[key])
         and not any(_flag(row.get(column)) for column in FLAG_COLUMNS[key])
     )
 
@@ -206,7 +301,19 @@ def table_records(value, key: str) -> list[dict]:
     frame = active_table(value, key)
     records = []
     for row_number, row in enumerate(frame.to_dict("records"), start=1):
-        record = {NAME: _text(row[NAME]), DESCRIPTION: _text(row[DESCRIPTION])}
+        record = {
+            column: (
+                _face(row[column])
+                if column in PLASTIC_FACE_COLUMNS else _text(row[column])
+            )
+            for column in TEXT_COLUMNS[key]
+        }
+        for column in PLASTIC_FACE_COLUMNS:
+            if column in record and record[column] not in FACE_OPTIONS:
+                raise ValueError(
+                    f"{key} row {row_number}: {column} must be auto, "
+                    "negative or positive"
+                )
         for column in NUMERIC_COLUMNS[key]:
             try:
                 number = float(row[column])
@@ -260,6 +367,12 @@ def tables_from_legacy_scalars(scalars: Mapping | None) -> dict[str, pd.DataFram
         if not supplied_limits
         else any(_number(value) > 0.0 for value in supplied_limits)
     )
+    shear_component = legacy_shear_component(scalars.get("shear_axis"))
+    legacy_v = _number(scalars.get("shear_V", 0.0))
+    # A new table defaults to automatic face selection. Project I/O supplies the
+    # historical negative-face default explicitly when migrating pre-v7 scalars.
+    default_face = FACE_NEGATIVE if "shear_V" in scalars else FACE_AUTO
+    legacy_face = _face(scalars.get("shear_tension", default_face))
     plastic = normalise_table([{
         NAME: _text(scalars.get("pl_case_id")) or "PL-01",
         DESCRIPTION: _description(
@@ -268,7 +381,10 @@ def tables_from_legacy_scalars(scalars: Mapping | None) -> dict[str, pd.DataFram
         "n_ed_kn": _number(scalars.get("pl_P", 0.0)),
         "mx_ed_knm": _number(scalars.get("pl_Mx", 0.0)),
         "my_ed_knm": _number(scalars.get("pl_My", 0.0)),
-        "v_ed_kn": _number(scalars.get("shear_V", 0.0)),
+        "vx_ed_kn": legacy_v if shear_component == "vx" else 0.0,
+        "vy_ed_kn": legacy_v if shear_component == "vy" else 0.0,
+        "vx_face": legacy_face if shear_component == "vx" else FACE_AUTO,
+        "vy_face": legacy_face if shear_component == "vy" else FACE_AUTO,
         "t_ed_knm": _number(scalars.get("torsion_T", 0.0)),
     }], PLASTIC_TABLE_KEY)
     elastic = normalise_table([{
@@ -313,7 +429,13 @@ def legacy_scalars_from_tables(tables: Mapping | None) -> dict:
         "pl_P": float(p["n_ed_kn"]),
         "pl_Mx": float(p["mx_ed_knm"]),
         "pl_My": float(p["my_ed_knm"]),
-        "shear_V": float(p["v_ed_kn"]),
+        # Compatibility only: new calculations consume both directional fields.
+        # Prefer the historical default Vy when both happen to be populated.
+        "shear_V": float(
+            p["vy_ed_kn"] if float(p["vy_ed_kn"]) != 0.0 else p["vx_ed_kn"]
+        ),
+        "shear_Vx": float(p["vx_ed_kn"]),
+        "shear_Vy": float(p["vy_ed_kn"]),
         "torsion_T": float(p["t_ed_knm"]),
         "el_case_id": _text(e[NAME]),
         "el_case_type": _text(e[DESCRIPTION]),
@@ -385,4 +507,11 @@ def validation_errors(plastic, elastic, *, require_plastic=False,
                     errors.append(
                         f"{label} row {number}: {column} must be a finite number"
                     )
+            if key == PLASTIC_TABLE_KEY:
+                for column in PLASTIC_FACE_COLUMNS:
+                    if _face(row[column]) not in FACE_OPTIONS:
+                        errors.append(
+                            f"{label} row {number}: {column} must be auto, "
+                            "negative or positive"
+                        )
     return errors

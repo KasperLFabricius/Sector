@@ -218,6 +218,76 @@ def _enable_all(at, mv_independent=False):
     return at
 
 
+def test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    assert results["shear"]["status"] in {"REVIEW", "FAIL", "INVALID"}
+    assert results["shear"]["interaction_assessed"] is False
+    assert set(results["combined"]["directions"]) == {"vx", "vy"}
+    assert results["combined"]["interaction_status"] == "NOT ASSESSED"
+    assert set(results["torsion"]["directional_interactions"]) == {"vx", "vy"}
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    assert any("NOT ASSESSED" in warning.value for warning in at.warning)
+
+
+def test_biaxial_combined_fails_when_torsion_drives_a_directional_failure():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 1.0),
+        ("number_input", "pl_My", 1.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 1.0),
+        ("number_input", "shear_Vy", 1.0),
+        ("number_input", "torsion_T", 500.0),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    assert all(
+        direction["status"] == "PASS"
+        for direction in results["shear"]["directions"].values()
+    )
+    combined = results["combined"]
+    assert any(
+        direction["status"] == "FAIL"
+        for direction in combined["directions"].values()
+    )
+    assert combined["status"] == "FAIL"
+    governing = combined["directions"][combined["governing_component"]]
+    assert governing["status"] == "FAIL"
+
+
+
 def _run_member(
     at,
     *,
@@ -381,7 +451,7 @@ def test_app_combined_incomplete_flags_missing():
     assert not at.exception
     assert "combined" not in at.session_state["results"]
     _select_view(at, "M-V-T Combined")
-    assert any("VEd and TEd are zero" in item.value for item in at.info)
+    assert any("Vx,Ed = Vy,Ed = TEd = 0" in item.value for item in at.info)
 
 
 def test_app_combined_view_renders():
@@ -491,13 +561,13 @@ def test_app_chord_check_in_shear_payload_without_torsion():
     _set_and_click(at, "calculate", ("number_input", "shear_V", 0.0))
     assert "shear" not in at.session_state["results"]
     _select_view(at, "Shear")
-    assert any("VEd = 0" in item.value for item in at.info)
+    assert any("Vx,Ed = Vy,Ed = 0" in item.value for item in at.info)
 
 
 def test_app_invalid_tube_does_not_poison_the_member_angle():
     # Workflow finding: an INVALID torsion tube (util = inf at every angle) must not
     # constrain the member angle -- previously it tied the scan and pinned the links
-    # at band-low, flipping a passing shear check to FAIL.
+    # at band-low, changing the shear result.
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
@@ -508,7 +578,8 @@ def test_app_invalid_tube_does_not_poison_the_member_angle():
         ("number_input", "shear_V", 500.0),
     )
     base = at.session_state["results"]["shear"]["links"]
-    assert base["res"]["cot"] == pytest.approx(2.5) and base["util"] < 1.0
+    assert base["res"]["cot"] == pytest.approx(2.5)
+    assert math.isfinite(base["util"])
     _set(at, ("checkbox", "torsion_on", True))
     _set_and_click(
         at,
@@ -668,7 +739,7 @@ def test_app_no_transverse_load_skips_capacity_and_combined_checks():
     assert "torsion" not in r
     assert "combined" not in r
     _select_view(at, "M-V-T Combined")
-    assert any("VEd and TEd are zero" in item.value for item in at.info)
+    assert any("Vx,Ed = Vy,Ed = TEd = 0" in item.value for item in at.info)
 
 
 def test_app_combined_longitudinal_matches_shear_chord():

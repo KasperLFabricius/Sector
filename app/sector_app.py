@@ -91,14 +91,6 @@ _CRACK_CODE_ALIASES = {
 # without links. Default is the DK NA:2024 edition (the house default material code).
 _SHEAR_CODES = capacity.SHEAR_CODES
 _SHEAR_METHODS = capacity.SHEAR_METHODS
-# Shear direction -> the bending axis passed to the engine ("x" = vertical shear,
-# stress varies with y; "y" = horizontal shear, stress varies with x).
-_SHEAR_AXES = {
-    "Vertical shear (bending about x)": "x",
-    "Horizontal shear (bending about y)": "y",
-}
-# Tension face -> tension_low (True when the tension face is the low-coordinate side).
-_SHEAR_TENSION = {"Bottom / left face": True, "Top / right face": False}
 
 st.set_page_config(
     layout="wide",
@@ -1050,8 +1042,25 @@ def _case_column_config(key):
             "n_ed_kn": force("N_Ed [kN]", "Axial force; tension is positive."),
             "mx_ed_knm": force("Mx_Ed [kNm]", "Moment about the x-axis."),
             "my_ed_knm": force("My_Ed [kNm]", "Moment about the y-axis."),
-            "v_ed_kn": force(
-                "V_Ed [kN]", "Signed shear action; zero skips shear for this case."
+            "vx_ed_kn": force(
+                "Vx_Ed [kN]",
+                "Signed shear along x; pairs with My. Zero skips Vx for this case.",
+            ),
+            "vy_ed_kn": force(
+                "Vy_Ed [kN]",
+                "Signed shear along y; pairs with Mx. Zero skips Vy for this case.",
+            ),
+            "vx_face": st.column_config.SelectboxColumn(
+                "Vx face",
+                help="Auto uses the sign of My. Negative = left (-x); positive = right (+x).",
+                options=list(load_cases.FACE_OPTIONS), default=load_cases.FACE_AUTO,
+                required=True, width="small",
+            ),
+            "vy_face": st.column_config.SelectboxColumn(
+                "Vy face",
+                help="Auto uses the sign of Mx. Negative = bottom (-y); positive = top (+y).",
+                options=list(load_cases.FACE_OPTIONS), default=load_cases.FACE_AUTO,
+                required=True, width="small",
             ),
             "t_ed_knm": force(
                 "T_Ed [kNm]", "Signed torsion action; zero skips torsion for this case."
@@ -1120,8 +1129,8 @@ def _load_case_editors(box):
 
     box.markdown("**Plastic and capacity cases**")
     box.caption(
-        "One row per named case. N, M, V and T retain their signs; a zero V_Ed or "
-        "T_Ed skips that check for the row. Paste rectangular ranges directly."
+        "One row per named case. Section forces retain their signs. Zero Vx,Ed, "
+        "Vy,Ed or TEd skips that component. Paste rectangular ranges directly."
     )
     plastic = _case_table_editor(box, load_cases.PLASTIC_TABLE_KEY)
     box.markdown("**Elastic cases**")
@@ -2180,9 +2189,11 @@ _ELASTIC_CONTEXT_SIG_KEYS = (
 # every Calculate. Its geometry/fck/axial dependencies already sit in the shared
 # and plastic parts of the signature.
 _SHEAR_SIG_KEYS = (
-    "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
+    "shear_on", "shear_method", "shear_Vx", "shear_Vy",
+    "shear_face_x", "shear_face_y", "shear_vx_bw", "shear_vy_bw",
     "shear_dlower",
-    "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
+    "shear_links", "shear_vx_link_legs", "shear_vy_link_legs",
+    "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_cot_min", "shear_cot_max",
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
     "torsion_cot_min", "torsion_cot_max",
@@ -2401,18 +2412,13 @@ def build_inputs(host=st):
     # here, right under the toggle, instead of only after Calculate.
     combined_warn = sts.container()
 
-    sts.markdown("**Shear without shear reinforcement (VRd,c)**")
-    sts.caption("Design shear resistance of a member not requiring shear "
-                 "reinforcement (EN 1992-1-1 sec. 6.2.2). A capacity check of the "
-                 "applied shear VEd; the axial term uses the axial force N from the "
-                 "Plastic capacity load set, and the 2023 method also uses its "
-                 "selected-axis moment for Formula (8.30). Required N/M inputs stay "
-                 "enabled here even in Elastic-only mode.")
+    sts.markdown("**Shear capacity**")
+    sts.caption("Directional resistance for Vx,Ed and Vy,Ed. Loads and optional "
+                "tension-face overrides are entered per Plastic/capacity case.")
     shear_on = _seeded_checkbox(
         sts, "Check shear capacity", False, "shear_on",
-        help="Compute VRd,c and the utilisation VEd/VRd,c. Members that need "
-             "designed shear reinforcement (VEd > VRd,c) are covered in a later "
-             "addition.")
+        help="Compute directional VRd,c and utilisation. Enable links below when "
+             "shear reinforcement is present.")
     shear_method = _seeded_selectbox(
         sts, "Shear method", list(_SHEAR_METHODS), codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
@@ -2430,25 +2436,17 @@ def build_inputs(host=st):
              "ddg = 16 + Dlower (<= 40 mm) for fck <= 60 (8.2.1(4)).")
     if combined_on:
         sts.caption(f"Shear method set by Combined: {combined_method}")
-    shear_axis = _seeded_selectbox(
-        sts, "Shear direction", list(_SHEAR_AXES),
-        next(iter(_SHEAR_AXES)), key="shear_axis", disabled=not shear_on,
-        help="The plane the shear acts in. Vertical shear (bending about x) uses "
-             "the section depth in y; horizontal shear (about y) uses the width in "
-             "x. Sector derives the effective depth d and the web width from this.")
-    shear_tension = _seeded_selectbox(
-        sts, "Tension face", list(_SHEAR_TENSION), next(iter(_SHEAR_TENSION)),
-        key="shear_tension", disabled=not shear_on,
-        help="Which face carries tension under the accompanying bending. The "
-             "tension reinforcement Asl is the longitudinal bars on that side of "
-             "the section centroid, and d is measured from the opposite fibre.")
-    sts.caption("The applied shear VEd is entered in the Loads panel.")
-    shear_bw = _seeded_number(
-        sts, r"Web width $b_w$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0, "shear_bw",
-        disabled=not shear_on,
-        help="Smallest web width in the tension zone. 0 derives it from the outline "
-             "(minimum solid width over the effective depth); enter a value for a "
-             "curved section, where the automatic width is unreliable.")
+    bwx, bwy = sts.columns(2)
+    shear_vx_bw = _seeded_number(
+        bwx, r"$b_{w,Vx}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
+        "shear_vx_bw", disabled=not shear_on,
+        help="Web width for Vx,Ed (depth along x; left/right faces).",
+    )
+    shear_vy_bw = _seeded_number(
+        bwy, r"$b_{w,Vy}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
+        "shear_vy_bw", disabled=not shear_on,
+        help="Web width for Vy,Ed (depth along y; bottom/top faces).",
+    )
     # Shear reinforcement (vertical links). When present, the member's resistance is
     # the variable-strut VRd = min(VRd,s, VRd,max) (sec. 6.2.3) rather than VRd,c; the
     # strut angle theta is auto-optimised within the cot(theta) bounds below.
@@ -2597,11 +2595,17 @@ def build_inputs(host=st):
              "for shear/torsion member checks. Element-level bending and stress "
              "calculations use each bar's assigned material.",
     )
-    shear_link_legs = _seeded_number(
-        sts, "Stirrup legs (n, for shear)", 1.0, 20.0, 2.0, 1.0, "shear_link_legs",
-        disabled=not _stirrups,
-        help="Number of vertical legs crossing the shear plane (a single closed "
-             "stirrup = 2 legs). Torsion always uses one leg of the closed loop.")
+    legs_x, legs_y = sts.columns(2)
+    shear_vx_link_legs = _seeded_number(
+        legs_x, "Effective legs for Vx", 1.0, 20.0, 2.0, 1.0,
+        "shear_vx_link_legs", disabled=not _links,
+        help="Number of stirrup legs crossing the Vx shear plane.",
+    )
+    shear_vy_link_legs = _seeded_number(
+        legs_y, "Effective legs for Vy", 1.0, 20.0, 2.0, 1.0,
+        "shear_vy_link_legs", disabled=not _links,
+        help="Number of stirrup legs crossing the Vy shear plane.",
+    )
     shear_link_dia = _seeded_number(
         sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
         disabled=not _stirrups, help="Stirrup bar diameter; the leg area is pi/4*dia^2.")
@@ -3181,10 +3185,22 @@ def build_inputs(host=st):
                 sls_limit_source=sls_limit_source,
                 shear_on=shear_on,
                 shear_method=(combined_method if combined_on else shear_method),
-                shear_axis=_SHEAR_AXES[shear_axis],
-                shear_tension=_SHEAR_TENSION[shear_tension],
-                shear_V=shear_V, shear_bw=shear_bw, shear_dlower=shear_dlower,
-                shear_links=shear_links, shear_link_legs=shear_link_legs,
+                shear_Vx=case_head["shear_Vx"], shear_Vy=case_head["shear_Vy"],
+                shear_face_x=(
+                    str(case_frames[load_cases.PLASTIC_TABLE_KEY].iloc[0]["vx_face"])
+                    if not case_frames[load_cases.PLASTIC_TABLE_KEY].empty
+                    else load_cases.FACE_AUTO
+                ),
+                shear_face_y=(
+                    str(case_frames[load_cases.PLASTIC_TABLE_KEY].iloc[0]["vy_face"])
+                    if not case_frames[load_cases.PLASTIC_TABLE_KEY].empty
+                    else load_cases.FACE_AUTO
+                ),
+                shear_vx_bw=shear_vx_bw, shear_vy_bw=shear_vy_bw,
+                shear_dlower=shear_dlower,
+                shear_links=shear_links,
+                shear_vx_link_legs=shear_vx_link_legs,
+                shear_vy_link_legs=shear_vy_link_legs,
                 shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
                 shear_fywk=shear_fywk, shear_cot_min=shear_cot_min,
                 shear_cot_max=shear_cot_max,
@@ -3702,7 +3718,7 @@ def run_analysis(
     )
 
 
-def _run_capacity_checks(inp, out):
+def _run_uniaxial_capacity_checks(inp, out):
     """Shear, torsion and the combined M-V-T checks for ``inp``; mutates ``out``.
 
     Runs after the independent plastic and elastic analyses. Reads ``inp`` and the
@@ -4190,6 +4206,256 @@ def _run_capacity_checks(inp, out):
                         ))
 
     capacity.finalize_combined(inp, out)
+
+
+def _directional_shear_status(inp, shear_out):
+    """Acceptance state for one directional shear calculation."""
+    if not shear_out or not (shear_out.get("res") or {}).get("valid"):
+        return "INVALID"
+    if inp.get("shear_links"):
+        links = shear_out.get("links")
+        if links is None or not (links.get("res") or {}).get("valid"):
+            return "NOT ASSESSED"
+        if not links.get("code_applicable", True):
+            return "NOT ASSESSED"
+        util = links.get("util")
+    else:
+        util = shear_out.get("util")
+    if util is None or not math.isfinite(float(util)):
+        return "INVALID"
+    return "PASS" if float(util) <= 1.0 + 1.0e-9 else "FAIL"
+
+
+def _directional_candidate_metric(inp, candidate_out):
+    """Conservative ordering used when automatic face selection checks both faces."""
+    shear_out = candidate_out.get("shear") or {}
+    status = _directional_shear_status(inp, shear_out)
+    if status == "INVALID":
+        return math.inf
+    values = [float(shear_out.get("util") or 0.0)]
+    links = shear_out.get("links") or {}
+    if links:
+        values.append(float(links.get("util") or 0.0))
+        for key in ("chord", "chord_off"):
+            check = links.get(key) or {}
+            if check.get("valid") and check.get("util") is not None:
+                values.append(float(check["util"]))
+    combined_out = candidate_out.get("combined") or {}
+    for key in ("dkna_sum", "r_m", "r_v", "r_t"):
+        value = combined_out.get(key)
+        if value is not None:
+            values.append(float(value))
+    transverse = combined_out.get("transverse") or {}
+    if transverse.get("valid") and transverse.get("governing") is not None:
+        values.append(float(transverse["governing"]))
+    return max(values)
+
+
+def _combined_direction_assessment(inp, candidate_out):
+    """Return the conservative status and utilisation for one V+T screen.
+
+    Reuse the same acceptance rows as the application summary so the aggregate,
+    results view and report cannot disagree about an invalid or failed sub-check.
+    """
+    rows = [
+        row for row in presentation.result_summary_rows(inp, candidate_out)
+        if row.get("view") == "M-V-T Combined"
+    ]
+    status = presentation.overall_summary_status(rows)
+    utilisations = [
+        float(row["util"])
+        for row in rows
+        if row.get("util") is not None
+    ]
+    return status, max(utilisations, default=0.0)
+
+
+def _assessment_priority(status):
+    """Ordering for selecting the directional result that needs most attention."""
+    return {
+        "INVALID": 4,
+        "FAIL": 3,
+        "NOT ASSESSED": 2,
+        "NOT RUN": 2,
+        "PASS": 1,
+        "NOT APPLICABLE": 0,
+    }.get(str(status or "").upper(), 2)
+
+
+def _direction_input(inp, component, tension_low, spec=None):
+    """Translate one v7 component/face onto the verified uniaxial v6 contract."""
+    spec = spec or capacity.shear_direction_specs(inp)[component]
+    translated = dict(inp)
+    translated.update(
+        shear_axis=spec["axis"],
+        shear_tension=bool(tension_low),
+        shear_V=spec["v_ed"],
+        shear_bw=spec["bw"],
+        shear_link_legs=spec["legs"],
+    )
+    return translated
+
+
+def _run_capacity_checks(inp, out):
+    """Run directional Vx/Vy checks without claiming a biaxial interaction law.
+
+    Each direction is passed independently through the existing verified shear and
+    shear-torsion implementation.  If both components are present, both directional
+    screens are retained and the aggregate state is REVIEW unless either fails.
+    """
+    directional_contract = (
+        "shear_Vx" in inp or "shear_Vy" in inp or "shear_components" in inp
+    )
+    if not directional_contract:
+        _run_uniaxial_capacity_checks(inp, out)
+        return
+
+    specs = capacity.shear_direction_specs(inp)
+    active = [component for component in ("vx", "vy")
+              if inp.get("shear_on") and specs[component]["v_ed"] > 0.0]
+    if not active:
+        base = dict(inp, shear_on=False, combined_on=False)
+        _run_uniaxial_capacity_checks(base, out)
+        return
+
+    directions = {}
+    for component in active:
+        spec = specs[component]
+        face_key = "shear_face_x" if component == "vx" else "shear_face_y"
+        faces = capacity.shear_face_candidates(spec["face"], spec["moment"])
+        candidates = []
+        for tension_low in faces:
+            candidate_inp = _direction_input(inp, component, tension_low, spec)
+            candidate_out = {
+                key: value for key, value in out.items()
+                if key in {"plastic", "elastic"}
+            }
+            _run_uniaxial_capacity_checks(candidate_inp, candidate_out)
+            candidates.append({
+                "tension_low": bool(tension_low),
+                "input": candidate_inp,
+                "results": candidate_out,
+                "metric": _directional_candidate_metric(candidate_inp, candidate_out),
+            })
+        governing = max(candidates, key=lambda candidate: candidate["metric"])
+        shear_out = dict(governing["results"]["shear"])
+        shear_out.update(
+            face_mode=str(inp.get(face_key, "auto")),
+            both_faces_evaluated=len(candidates) == 2,
+            governing_face=("negative" if governing["tension_low"] else "positive"),
+            status=_directional_shear_status(governing["input"], shear_out),
+            face_candidates=[{
+                "tension_low": candidate["tension_low"],
+                "metric": candidate["metric"],
+                "shear": candidate["results"].get("shear"),
+                "torsion": candidate["results"].get("torsion"),
+                "combined": candidate["results"].get("combined"),
+            } for candidate in candidates],
+        )
+        combined_out = governing["results"].get("combined")
+        if combined_out is not None:
+            combined_status, combined_util = _combined_direction_assessment(
+                governing["input"], governing["results"]
+            )
+            combined_out = dict(
+                combined_out,
+                component=component,
+                status=combined_status,
+                governing_util=combined_util,
+            )
+        directions[component] = {
+            "component": component,
+            "shear": shear_out,
+            "torsion": governing["results"].get("torsion"),
+            "combined": combined_out,
+            "status": shear_out["status"],
+            "metric": governing["metric"],
+        }
+
+    governing_component = max(
+        directions, key=lambda component: directions[component]["metric"]
+    )
+    aggregate = dict(directions[governing_component]["shear"])
+    statuses = [directions[component]["status"] for component in active]
+    if "INVALID" in statuses:
+        overall_status = "INVALID"
+    elif "FAIL" in statuses:
+        overall_status = "FAIL"
+    elif len(active) > 1:
+        overall_status = "REVIEW"
+    else:
+        overall_status = statuses[0]
+    aggregate.update(
+        directions={key: value["shear"] for key, value in directions.items()},
+        active_directions=active,
+        governing_component=governing_component,
+        biaxial=len(active) > 1,
+        interaction_assessed=len(active) == 1,
+        interaction_status=("NOT ASSESSED" if len(active) > 1 else "NOT APPLICABLE"),
+        status=overall_status,
+    )
+    out["shear"] = aggregate
+
+    if len(active) == 1:
+        chosen = directions[active[0]]
+        if chosen["torsion"] is not None:
+            out["torsion"] = chosen["torsion"]
+        if chosen["combined"] is not None:
+            out["combined"] = chosen["combined"]
+        return
+
+    # Torsion on its own remains fully assessable.  The directional V+T screens
+    # above are retained separately; no Vx+Vy+T interaction is inferred.
+    if inp.get("torsion_on"):
+        torsion_only_inp = dict(inp, shear_on=False, combined_on=False)
+        torsion_only_out = {key: value for key, value in out.items()
+                            if key in {"plastic", "elastic"}}
+        _run_uniaxial_capacity_checks(torsion_only_inp, torsion_only_out)
+        if torsion_only_out.get("torsion") is not None:
+            out["torsion"] = dict(
+                torsion_only_out["torsion"],
+                directional_interactions={
+                    key: value["torsion"] for key, value in directions.items()
+                },
+            )
+    if inp.get("combined_on"):
+        directional_combined = {
+            key: value["combined"] for key, value in directions.items()
+        }
+        candidates = {
+            key: value for key, value in directional_combined.items() if value
+        }
+        combined_governing_component = max(
+            candidates,
+            key=lambda key: (
+                _assessment_priority(candidates[key].get("status")),
+                float(candidates[key].get("governing_util") or 0.0),
+            ),
+        ) if candidates else governing_component
+        governing_combined = candidates.get(combined_governing_component, {})
+        combined_statuses = [
+            value.get("status", "NOT ASSESSED") for value in candidates.values()
+        ]
+        if "INVALID" in combined_statuses:
+            combined_status = "INVALID"
+        elif "FAIL" in combined_statuses:
+            combined_status = "FAIL"
+        else:
+            combined_status = "REVIEW"
+        out["combined"] = dict(
+            governing_combined,
+            valid=(
+                bool(candidates)
+                and all(bool(value.get("valid")) for value in candidates.values())
+            ),
+            directions=directional_combined,
+            governing_component=combined_governing_component,
+            biaxial=True,
+            interaction_assessed=False,
+            interaction_status="NOT ASSESSED",
+            status=combined_status,
+            reason="Vx+Vy+T interaction is not established",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -5134,17 +5400,88 @@ def shear_view(inp, results):
         if not inp.get("shear_requested", inp.get("shear_on")):
             st.info("Enable 'Check shear capacity' in Analysis settings, "
                     "then press Calculate.")
-        elif abs(float(inp.get("shear_V", 0.0))) <= 0.0:
-            st.info("VEd = 0 for this action set; shear is not evaluated.")
+        elif (
+            abs(float(inp.get("shear_Vx", 0.0))) <= 0.0
+            and abs(float(inp.get("shear_Vy", 0.0))) <= 0.0
+        ):
+            st.info("Vx,Ed = Vy,Ed = 0; shear is not evaluated for this case.")
         else:
             st.info("Press Calculate to run the shear check.")
         return
-    sh = results["shear"]
+    aggregate = results["shear"]
+    directions = aggregate.get("directions") or {}
+    if directions:
+        summary = []
+        for component in ("vx", "vy"):
+            if component not in directions:
+                continue
+            item = directions[component]
+            governing_util = (
+                (item.get("links") or {}).get("util")
+                if inp.get("shear_links") else item.get("util")
+            )
+            summary.append({
+                "Component": "Vx,Ed" if component == "vx" else "Vy,Ed",
+                "VEd [kN]": item.get("v_ed"),
+                "VRd [kN]": (
+                    ((item.get("links") or {}).get("res") or {}).get("vrd")
+                    if inp.get("shear_links")
+                    else (item.get("res") or {}).get("vrd_c")
+                ),
+                "Utilisation": governing_util,
+                "Status": item.get("status"),
+                "Tension face": viz.tension_face_label(
+                    item.get("tension_low", True), item.get("axis")
+                ),
+            })
+        if aggregate.get("biaxial"):
+            message = (
+                f"{aggregate.get('status', 'REVIEW')}: Vx,Ed and Vy,Ed are checked "
+                "independently; biaxial interaction is not assessed."
+            )
+            (st.error if aggregate.get("status") in {"FAIL", "INVALID"}
+             else st.warning)(message)
+            components = inp.get("shear_components") or {}
+            st.plotly_chart(
+                viz.biaxial_shear_overview_figure(
+                    inp.get("outer", []), inp.get("holes", []), inp.get("bars", []),
+                    vx_ed=(components.get("vx") or {}).get(
+                        "signed_v_ed", inp.get("shear_Vx", 0.0)
+                    ),
+                    vy_ed=(components.get("vy") or {}).get(
+                        "signed_v_ed", inp.get("shear_Vy", 0.0)
+                    ),
+                    title="Directional shear actions",
+                ),
+                width="stretch",
+            )
+        st.dataframe(summary, hide_index=True, width="stretch")
+        options = [component for component in ("vx", "vy") if component in directions]
+        if len(options) > 1:
+            preferred = aggregate.get("governing_component", options[0])
+            if preferred not in options:
+                preferred = options[0]
+            if st.session_state.get("shear_direction_view") not in options:
+                st.session_state["shear_direction_view"] = preferred
+            selected = st.segmented_control(
+                "Directional result",
+                options,
+                format_func=lambda value: "Vx,Ed" if value == "vx" else "Vy,Ed",
+                key="shear_direction_view",
+                required=True,
+            )
+        else:
+            selected = options[0]
+        sh = directions[selected or options[0]]
+    else:
+        sh = aggregate
     _member_material_note(inp)
     res = sh["res"]
-    axis_lbl = ("Vertical (bending about x)" if sh["axis"] == "x"
-                else "Horizontal (bending about y)")
-    face_lbl = viz.tension_face_label(sh["tension_low"])
+    component = sh.get("component") or ("vy" if sh["axis"] == "x" else "vx")
+    action_label = "Vx,Ed" if component == "vx" else "Vy,Ed"
+    axis_lbl = ("Vy along y; paired with Mx" if component == "vy"
+                else "Vx along x; paired with My")
+    face_lbl = viz.tension_face_label(sh["tension_low"], sh["axis"])
     if not res["valid"]:
         st.warning("VRd,c is zero -- there is no tension reinforcement on the chosen "
                    "face, or the derived effective depth / web width is zero. Add "
@@ -5152,16 +5489,37 @@ def shear_view(inp, results):
     util = sh["util"]
     ok = viz.util_ok(util)
     m1, m2, m3 = st.columns(3)
-    m1.metric("Applied VEd", f"{sh['v_ed']:.3f} kN")
+    m1.metric(f"Applied {action_label}", f"{sh['v_ed']:.3f} kN")
     m2.metric("Resistance VRd,c", f"{res['vrd_c']:.3f} kN")
     util_txt = _pct(util)
-    m3.metric("Utilisation VEd/VRd,c", util_txt, delta=("OK" if ok else "Over limit"),
+    m3.metric(f"Utilisation {action_label}/VRd,c", util_txt,
+              delta=("OK" if ok else "Over limit"),
               delta_color=("normal" if ok else "inverse"))
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
                  "prestress initial strain)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
                f"{sh['method']}. The axial action uses the plastic axial force "
                f"N = {sh['n_ed']:.1f} kN (tension-positive){pre_note}.")
+
+    if sh.get("both_faces_evaluated"):
+        candidate_rows = []
+        for candidate in sh.get("face_candidates", []):
+            candidate_shear = candidate.get("shear") or {}
+            candidate_links = candidate_shear.get("links") or {}
+            candidate_rows.append({
+                "Face": viz.tension_face_label(
+                    candidate.get("tension_low", True), sh["axis"]
+                ),
+                "VRd,c [kN]": (candidate_shear.get("res") or {}).get("vrd_c"),
+                "VEd/VRd,c": candidate_shear.get("util"),
+                "VEd/VRd": candidate_links.get("util"),
+                "Governing": (
+                    "Yes" if bool(candidate.get("tension_low"))
+                    == bool(sh.get("tension_low")) else ""
+                ),
+            })
+        st.caption("Associated bending moment is zero; both faces were evaluated.")
+        st.dataframe(candidate_rows, hide_index=True, width="stretch")
 
     links_payload = sh.get("links") or {}
     link_res = links_payload.get("res") or {}
@@ -5175,7 +5533,7 @@ def shear_view(inp, results):
             asl_cg_m=sh.get("asl_cg"), asl_mm2=sh["asl"],
             d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
             bw_source=bw_source,
-            title=f"Shear geometry - {face_lbl} tension",
+            title=f"{action_label} geometry - {face_lbl} tension",
         ),
         width="stretch",
     )
@@ -5304,7 +5662,9 @@ def shear_view(inp, results):
             st.markdown("**Longitudinal chord: bending + shear"
                         + (" + torsion" if ch.get("has_torsion") else "")
                         + " tension**")
-            face_lbl = viz.tension_face_label(ch.get("tension_low", True))
+            face_lbl = viz.tension_face_label(
+                ch.get("tension_low", True), ch.get("axis")
+            )
             gets_shift = ch.get("gets_shift", True)
             face_desc = (f"the shear tension face ({face_lbl})" if gets_shift else
                          f"the shear COMPRESSION face ({face_lbl}) -- the torsion "
@@ -5381,7 +5741,9 @@ def _render_chord_off(och):
     """
     if och is None or not och.get("valid"):
         return
-    face_lbl = viz.tension_face_label(och.get("tension_low", True))
+    face_lbl = viz.tension_face_label(
+        och.get("tension_low", True), och.get("axis")
+    )
     st.markdown(f"**Off-axis chord (about {och['axis']}, governing face): bending "
                 "+ torsion tension**")
     g1, g2, g3 = st.columns(3)
@@ -5421,6 +5783,32 @@ def torsion_view(inp, results):
         return
     t = results["torsion"]
     _member_material_note(inp)
+    directional_interactions = t.get("directional_interactions") or {}
+    if directional_interactions:
+        st.warning(
+            "Vx,Ed + Vy,Ed + TEd interaction is not assessed. The table shows "
+            "separate Vx+T and Vy+T screens; the torsion result below is standalone."
+        )
+        rows = []
+        for component in ("vx", "vy"):
+            item = directional_interactions.get(component)
+            if not item:
+                continue
+            interaction = item.get("interaction") or {}
+            value = interaction.get("value")
+            status = (
+                "NOT ASSESSED" if not interaction.get("valid")
+                else "PASS" if value is not None and value <= 1.0 + 1.0e-9
+                else "FAIL"
+            )
+            rows.append({
+                "Directional screen": "Vx,Ed + TEd" if component == "vx"
+                else "Vy,Ed + TEd",
+                "TEd/TRd": item.get("util"),
+                "6.29 V+T": value,
+                "Status": status,
+            })
+        st.dataframe(rows, hide_index=True, width="stretch")
     tube = t["tube"]
     if not t["valid"]:
         if t.get("reason") == "multi-cell (2+ voids)":
@@ -5641,26 +6029,75 @@ def combined_view(inp, results):
                     "(with Plastic, the shear check and the torsion check), then "
                     "press Calculate.")
         elif (
-            abs(float(inp.get("shear_V", 0.0))) <= 0.0
+            (
+                abs(float(inp.get("shear_Vx", 0.0))) <= 0.0
+                and abs(float(inp.get("shear_Vy", 0.0))) <= 0.0
+            )
             or abs(float(inp.get("torsion_T", 0.0))) <= 0.0
         ):
-            zero = []
-            if abs(float(inp.get("shear_V", 0.0))) <= 0.0:
-                zero.append("VEd")
-            if abs(float(inp.get("torsion_T", 0.0))) <= 0.0:
-                zero.append("TEd")
+            shear_zero = (
+                abs(float(inp.get("shear_Vx", 0.0))) <= 0.0
+                and abs(float(inp.get("shear_Vy", 0.0))) <= 0.0
+            )
+            torsion_zero = abs(float(inp.get("torsion_T", 0.0))) <= 0.0
+            if shear_zero and torsion_zero:
+                zero_text = "Vx,Ed = Vy,Ed = TEd = 0"
+            elif shear_zero:
+                zero_text = "Vx,Ed = Vy,Ed = 0"
+            else:
+                zero_text = "TEd = 0"
             st.info(
-                "Combined M-V-T is not evaluated because "
-                + " and ".join(zero)
-                + (" are" if len(zero) > 1 else " is")
-                + " zero for this action set."
+                f"Combined M-V-T is not evaluated because {zero_text} for this case."
             )
         else:
             st.info("Enable Plastic utilisation, shear and torsion, then press "
                     "Calculate to run the combined check.")
         return
-    c = results["combined"]
+    aggregate = results["combined"]
     _member_material_note(inp)
+    if aggregate.get("biaxial"):
+        aggregate_status = aggregate.get("status", "REVIEW")
+        message = (
+            f"{aggregate_status}: Vx+T and Vy+T are checked separately. The "
+            "simultaneous Vx+Vy+T interaction is NOT ASSESSED."
+        )
+        (st.error if aggregate_status in {"FAIL", "INVALID"}
+         else st.warning)(message)
+        directions = aggregate.get("directions") or {}
+        rows = []
+        for component in ("vx", "vy"):
+            item = directions.get(component) or {}
+            rows.append({
+                "Directional screen": "Vx,Ed + TEd" if component == "vx"
+                else "Vy,Ed + TEd",
+                "Bending util.": item.get("r_m"),
+                "Shear util.": item.get("r_v"),
+                "Torsion util.": item.get("r_t"),
+                "DK NA sum": item.get("dkna_sum"),
+                "Status": item.get("status", (
+                    "NOT ASSESSED" if not item.get("valid")
+                    else "PASS" if item.get("dkna_ok") else "FAIL"
+                )),
+            })
+        st.dataframe(rows, hide_index=True, width="stretch")
+        options = [component for component in ("vx", "vy") if directions.get(component)]
+        if not options:
+            return
+        preferred = aggregate.get("governing_component", options[0])
+        if preferred not in options:
+            preferred = options[0]
+        if st.session_state.get("combined_direction_view") not in options:
+            st.session_state["combined_direction_view"] = preferred
+        selected = st.segmented_control(
+            "Directional combined result",
+            options,
+            format_func=lambda value: "Vx,Ed + TEd" if value == "vx" else "Vy,Ed + TEd",
+            key="combined_direction_view",
+            required=True,
+        )
+        c = directions[selected or options[0]]
+    else:
+        c = aggregate
     if not c["valid"]:
         missing = []
         if not c.get("have_m"):
@@ -5763,7 +6200,9 @@ def combined_view(inp, results):
     lg = c.get("longitudinal")
     if lg is not None and lg["valid"]:
         ax_lbl = lg["axis"]
-        face_lbl = viz.tension_face_label(lg.get("tension_low", True))
+        face_lbl = viz.tension_face_label(
+            lg.get("tension_low", True), lg.get("axis")
+        )
         gets_shift = lg.get("gets_shift", True)
         face_desc = (f"the shear tension face ({face_lbl})" if gets_shift else
                      f"the shear COMPRESSION face ({face_lbl}) -- the torsion "
@@ -5877,7 +6316,10 @@ def _render_selected_case_actions(family, actions):
                 "N_Ed [kN]": actions.get("n_ed_kn", 0.0),
                 "Mx_Ed [kNm]": actions.get("mx_ed_knm", 0.0),
                 "My_Ed [kNm]": actions.get("my_ed_knm", 0.0),
-                "V_Ed [kN]": actions.get("v_ed_kn", 0.0),
+                "Vx_Ed [kN]": actions.get("vx_ed_kn", 0.0),
+                "Vy_Ed [kN]": actions.get("vy_ed_kn", 0.0),
+                "Vx face": actions.get("vx_face", "auto"),
+                "Vy face": actions.get("vy_face", "auto"),
                 "T_Ed [kNm]": actions.get("t_ed_knm", 0.0),
             }],
             hide_index=True,

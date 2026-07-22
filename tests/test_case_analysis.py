@@ -38,7 +38,8 @@ def _base(**overrides):
                 "n_ed_kn": -500.0,
                 "mx_ed_knm": -120.0,
                 "my_ed_knm": 35.0,
-                "v_ed_kn": -40.0,
+                "vx_ed_kn": -40.0,
+                "vx_face": "negative",
                 "t_ed_knm": 0.0,
             },
             {
@@ -47,7 +48,9 @@ def _base(**overrides):
                 "n_ed_kn": 25.0,
                 "mx_ed_knm": 80.0,
                 "my_ed_knm": -15.0,
-                "v_ed_kn": 30.0,
+                "vx_ed_kn": 30.0,
+                "vy_ed_kn": -12.0,
+                "vx_face": "positive",
                 "t_ed_knm": -8.0,
             },
         ]),
@@ -108,10 +111,15 @@ def test_maps_signed_cases_flags_and_zero_capacity_actions():
         -500.0, -120.0, 35.0
     )
     assert pl_a["shear_V"] == 40.0
+    assert pl_a["shear_Vx"] == 40.0
+    assert pl_a["shear_Vy"] == 0.0
+    assert pl_a["shear_components"]["vx"]["signed_v_ed"] == -40.0
+    assert pl_a["shear_face_x"] == "negative"
     assert pl_a["shear_on"] is True
     assert pl_a["torsion_on"] is False
     assert pl_a["combined_on"] is False
-    assert result["plastic_cases"][0]["actions"]["v_ed_kn"] == -40.0
+    assert result["plastic_cases"][0]["actions"]["vx_ed_kn"] == -40.0
+    assert pl_b["shear_Vx"] == 30.0 and pl_b["shear_Vy"] == 12.0
     assert pl_b["torsion_T"] == 8.0
     assert pl_b["combined_on"] is True
     assert el_stress["sls_cw"] is False
@@ -129,7 +137,7 @@ def test_capacity_only_zero_action_case_is_recorded_but_not_run():
         mode="Elastic",
         torsion_on=False,
         combined_on=False,
-        plastic_cases=_plastic([{"name": "PL-ZERO", "v_ed_kn": 0.0}]),
+        plastic_cases=_plastic([{"name": "PL-ZERO", "vy_ed_kn": 0.0}]),
         elastic_cases=_elastic([{"name": "EL-01"}]),
     )
 
@@ -197,14 +205,14 @@ def test_capacity_change_reuses_matching_plastic_bending_subresult():
         torsion_on=False,
         combined_on=False,
         plastic_cases=_plastic([
-            {"name": "PL-A", "mx_ed_knm": 50.0, "v_ed_kn": 20.0},
+            {"name": "PL-A", "mx_ed_knm": 50.0, "vy_ed_kn": 20.0},
         ]),
         elastic_cases=load_cases.empty_table(load_cases.ELASTIC_TABLE_KEY),
     )
     first = case_analysis.run_case_tables(first_inp, runner)
     changed = first_inp.copy()
     changed["plastic_cases"] = _plastic([
-        {"name": "PL-A", "mx_ed_knm": 50.0, "v_ed_kn": 30.0},
+        {"name": "PL-A", "mx_ed_knm": 50.0, "vy_ed_kn": 30.0},
     ])
 
     seen_reuse.clear()

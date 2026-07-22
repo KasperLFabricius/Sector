@@ -413,6 +413,61 @@ def test_shear_without_links_retains_concrete_screening_verdict():
     assert presentation.overall_summary_status(rows) == "FAIL"
 
 
+def test_biaxial_shear_summary_keeps_directional_verdicts_and_limitation():
+    vx = {
+        "res": {"valid": True, "vrd_c": 100.0},
+        "util": 0.60,
+        "method": "DK NA",
+        "status": "PASS",
+    }
+    vy = {
+        "res": {"valid": True, "vrd_c": 80.0},
+        "util": 0.75,
+        "method": "DK NA",
+        "status": "PASS",
+    }
+    aggregate = dict(
+        vx,
+        directions={"vx": vx, "vy": vy},
+        biaxial=True,
+        status="REVIEW",
+        interaction_assessed=False,
+    )
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", shear_on=True, shear_links=False),
+        {"plastic": _plastic(), "shear": aggregate},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Shear Vx without links"]["status"] == "PASS"
+    assert by_check["Shear Vy without links"]["status"] == "PASS"
+    assert by_check["Biaxial shear interaction"]["status"] == "NOT ASSESSED"
+    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
+
+
+def test_biaxial_combined_summary_reports_directions_and_withholds_three_way_verdict():
+    combined = {
+        "biaxial": True,
+        "directions": {
+            "vx": {"status": "PASS", "governing_util": 0.72},
+            "vy": {"status": "FAIL", "governing_util": 1.14},
+        },
+        "status": "FAIL",
+        "interaction_assessed": False,
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Combined Vx+T directional screen"]["status"] == "PASS"
+    assert by_check["Combined Vy+T directional screen"]["status"] == "FAIL"
+    assert by_check["Combined Vx-Vy-T interaction"]["status"] == "NOT ASSESSED"
+    assert presentation.overall_summary_status(rows) == "FAIL"
+
+
 def test_infinite_failure_governs_while_nan_and_non_applicable_do_not():
     rows = [
         {"status": "PASS", "util": 0.80},
@@ -426,14 +481,17 @@ def test_infinite_failure_governs_while_nan_and_non_applicable_do_not():
     ]
 
 
-def _plastic_case_entry(name, util, *, v=0.0, t=0.0):
+def _plastic_case_entry(name, util, *, vx=0.0, vy=0.0, t=0.0):
     actions = {
         "name": name,
         "description": f"Description {name}",
         "n_ed_kn": 0.0,
         "mx_ed_knm": 10.0,
         "my_ed_knm": 0.0,
-        "v_ed_kn": v,
+        "vx_ed_kn": vx,
+        "vy_ed_kn": vy,
+        "vx_face": "auto",
+        "vy_face": "auto",
         "t_ed_knm": t,
     }
     return {
@@ -479,7 +537,7 @@ def test_multi_case_summary_records_zero_actions_as_not_evaluated():
     })
     by_check = {row["check"]: row for row in rows}
 
-    assert by_check["Shear"]["status"] == "NOT APPLICABLE"
-    assert by_check["Shear"]["result"] == "VEd = 0"
+    assert by_check["Shear Vx"]["status"] == "NOT APPLICABLE"
+    assert by_check["Shear Vy"]["result"] == "Vy,Ed = 0"
     assert by_check["Torsion"]["status"] == "NOT APPLICABLE"
-    assert by_check["Combined M-V-T"]["result"] == "VEd and TEd = 0"
+    assert by_check["Combined M-V-T"]["result"] == "Vx,Ed = Vy,Ed = TEd = 0"

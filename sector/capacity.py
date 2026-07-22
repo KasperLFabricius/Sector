@@ -178,17 +178,67 @@ def tube_torsion(
     }
 
 
-def build_shear_context(inp, n_prestress, n_ed_comp):
-    """Return ``(shear payload, links context)`` for the active shear check.
+def shear_face_candidates(face, associated_moment, *, zero_tolerance=1.0e-9):
+    """Return the low/high-coordinate faces required by one directional check.
 
-    The links context contains the angle-dependent builder used later by the shared
-    shear/torsion member-angle scan. No Streamlit state is read or written.
+    Positive Mx tensions the bottom (negative-y) face and positive My tensions the
+    left (negative-x) face.  An automatic selection at effectively zero associated
+    moment checks both faces because shear sign alone cannot identify the tension
+    reinforcement.
     """
-    if not inp.get("shear_on"):
-        return None, None
+    token = str(face or "auto").strip().casefold()
+    if token == "negative":
+        return (True,)
+    if token == "positive":
+        return (False,)
+    if token != "auto":
+        raise ValueError("shear face must be auto, negative or positive")
+    moment = float(associated_moment)
+    if moment > zero_tolerance:
+        return (True,)
+    if moment < -zero_tolerance:
+        return (False,)
+    return (True, False)
+
+
+def shear_direction_specs(inp):
+    """Canonical mapping from Vx/Vy inputs to the existing bending-axis model."""
+    return {
+        "vx": {
+            "axis": "y",
+            "moment": float(inp.get("My_pl", 0.0)),
+            "v_ed": abs(float(inp.get("shear_Vx", 0.0))),
+            "face": inp.get("shear_face_x", "auto"),
+            "bw": float(inp.get("shear_vx_bw", 0.0)),
+            "legs": float(inp.get("shear_vx_link_legs", 2.0)),
+        },
+        "vy": {
+            "axis": "x",
+            "moment": float(inp.get("Mx_pl", 0.0)),
+            "v_ed": abs(float(inp.get("shear_Vy", 0.0))),
+            "face": inp.get("shear_face_y", "auto"),
+            "bw": float(inp.get("shear_vy_bw", 0.0)),
+            "legs": float(inp.get("shear_vy_link_legs", 2.0)),
+        },
+    }
+
+
+def _build_shear_face_context(
+    inp,
+    n_prestress,
+    n_ed_comp,
+    *,
+    component,
+    axis,
+    tension_low,
+    v_ed,
+    bw_override,
+    link_legs,
+    face_mode,
+):
+    """Build one face candidate for one physical shear component."""
     code = SHEAR_METHODS.get(inp["shear_method"], codes.EC2_2005_DKNA)
     model_2023 = getattr(code, "shear_model", "2005") == "2023"
-    axis, tension_low = inp["shear_axis"], inp["shear_tension"]
     area, cx, cy = gross_area_centroid(inp["outer"], inp["holes"])
     _, mx_prestress, my_prestress = prestress_resultants(inp, cx, cy)
     centroid_coord = cy if axis == "x" else cx
@@ -197,11 +247,10 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
     )
     d_mm = shear.effective_depth(inp["outer"], axis, tension_low, cg)
     bw_auto = shear.min_web_width(inp["outer"], inp["holes"], axis)
-    bw_mm = inp["shear_bw"] if inp["shear_bw"] > 0.0 else bw_auto
+    bw_mm = bw_override if bw_override > 0.0 else bw_auto
     fck = inp["concrete"].fck
     fyd_flex = design_yield(inp["steel"])
     ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
-    v_ed = inp["shear_V"]
     if axis == "x":
         m_ed_2023 = inp["Mx_pl"] - inp["P_pl"] * cy - mx_prestress
         m_prestress = mx_prestress
@@ -220,11 +269,13 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
         "res": result,
         "v_ed": v_ed,
         "util": util,
+        "component": component,
         "axis": axis,
         "tension_low": tension_low,
+        "face_mode": face_mode,
         "bw": bw_mm,
         "bw_auto": bw_auto,
-        "bw_user": bool(inp["shear_bw"] > 0.0),
+        "bw_user": bool(bw_override > 0.0),
         "d": d_mm,
         "asl": asl,
         "asl_bar_ids": asl_bar_ids,
@@ -247,7 +298,7 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
 
     cot_min = min(inp["shear_cot_min"], inp["shear_cot_max"])
     cot_max = max(inp["shear_cot_min"], inp["shear_cot_max"])
-    asw = inp["shear_link_legs"] * templates.bar_area(inp["shear_link_dia"])
+    asw = link_legs * templates.bar_area(inp["shear_link_dia"])
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
     z_mm, z_source = shear_lever_arm(inp, axis, tension_low, d_mm)
 
@@ -282,8 +333,75 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
         "vrd_c": result["vrd_c"],
         "axis": axis,
         "tension_low": tension_low,
+        "component": component,
+        "link_legs": link_legs,
     }
     return payload, context
+
+
+def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
+    """Return every required face candidate for active Vx,Ed and Vy,Ed checks.
+
+    The result maps ``vx``/``vy`` to a candidate list. No interaction between the
+    two components is introduced here or elsewhere; each candidate remains a
+    normal uniaxial shear calculation in its physical plane.
+    """
+    if not inp.get("shear_on"):
+        return {}
+    definitions = shear_direction_specs(inp)
+    contexts = {}
+    for component, definition in definitions.items():
+        if definition["v_ed"] <= 0.0:
+            continue
+        faces = shear_face_candidates(definition["face"], definition["moment"])
+        candidates = [
+            _build_shear_face_context(
+                inp,
+                n_prestress,
+                n_ed_comp,
+                component=component,
+                axis=definition["axis"],
+                tension_low=tension_low,
+                v_ed=definition["v_ed"],
+                bw_override=definition["bw"],
+                link_legs=definition["legs"],
+                face_mode=str(definition["face"]),
+            )
+            for tension_low in faces
+        ]
+        contexts[component] = {
+            "component": component,
+            "axis": definition["axis"],
+            "associated_moment": definition["moment"],
+            "face_mode": str(definition["face"]),
+            "both_faces_evaluated": len(candidates) == 2,
+            "candidates": candidates,
+        }
+    return contexts
+
+
+def build_shear_context(inp, n_prestress, n_ed_comp):
+    """Backward-compatible one-direction context builder.
+
+    The application reuses :func:`shear_direction_specs` while passing each face
+    through the complete verified uniaxial pipeline. This wrapper preserves the
+    v6 headless API for callers and migration-equivalence tests.
+    """
+    if not inp.get("shear_on"):
+        return None, None
+    axis = inp["shear_axis"]
+    return _build_shear_face_context(
+        inp,
+        n_prestress,
+        n_ed_comp,
+        component="vy" if axis == "x" else "vx",
+        axis=axis,
+        tension_low=bool(inp["shear_tension"]),
+        v_ed=float(inp["shear_V"]),
+        bw_override=float(inp["shear_bw"]),
+        link_legs=float(inp["shear_link_legs"]),
+        face_mode="legacy",
+    )
 
 
 def build_torsion_context(inp, n_ed_comp):

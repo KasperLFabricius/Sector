@@ -158,7 +158,7 @@ def test_v4_reinforcement_rows_migrate_to_stable_area_based_elements():
     )
 
 
-def test_v6_round_trip_preserves_size_basis_and_element_assignments():
+def test_v7_round_trip_preserves_size_basis_and_element_assignments():
     tables = _tables()
     tables["bars_base"] = rebar_table.normalise_table([
         {
@@ -178,7 +178,7 @@ def test_v6_round_trip_preserves_size_basis_and_element_assignments():
     restored, scalars = project_io.parse_project(text)
 
     payload = json.loads(text)
-    assert payload["version"] == 6
+    assert payload["version"] == 7
     pd.testing.assert_frame_equal(restored["bars_base"], tables["bars_base"])
     assert restored["bars_base"].iloc[1]["area (mm2)"] == pytest.approx(
         np.pi * 20.0**2 / 4.0
@@ -188,7 +188,7 @@ def test_v6_round_trip_preserves_size_basis_and_element_assignments():
     )
 
 
-def test_v6_round_trip_preserves_multiple_materials_without_flat_duplicates():
+def test_v7_round_trip_preserves_multiple_materials_without_flat_duplicates():
     mild, material_id = material_catalog.add_entry(
         material_catalog.default_catalog("mild"), "mild"
     )
@@ -206,7 +206,7 @@ def test_v6_round_trip_preserves_multiple_materials_without_flat_duplicates():
     payload = json.loads(text)
     _, scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 6
+    assert payload["version"] == 7
     assert "mild_fytk" not in payload["scalars"]
     assert [item["id"] for item in scalars[
         material_catalog.MILD_CATALOG_KEY]["items"]] == ["M1", "M2"]
@@ -246,11 +246,13 @@ def test_v5_material_ids_migrate_to_cloned_laws_without_changing_behaviour():
     assert [item["fytk"] for item in prestress] == [1500.0, 1500.0]
 
 
-def test_v6_round_trip_preserves_multiple_typed_load_cases():
+def test_v7_round_trip_preserves_multiple_typed_load_cases():
     tables = _tables()
     tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
         {"name": "PL-01", "description": "Fundamental A",
-         "n_ed_kn": -100.0, "mx_ed_knm": 20.0, "v_ed_kn": -12.0},
+         "n_ed_kn": -100.0, "mx_ed_knm": 20.0,
+         "vx_ed_kn": -12.0, "vy_ed_kn": 8.0,
+         "vx_face": "negative", "vy_face": "positive"},
         {"name": "PL-02", "description": "Accidental",
          "n_ed_kn": 50.0, "my_ed_knm": -8.0, "t_ed_knm": 3.5},
     ], load_cases.PLASTIC_TABLE_KEY)
@@ -267,7 +269,7 @@ def test_v6_round_trip_preserves_multiple_typed_load_cases():
     payload = json.loads(text)
     restored, scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 6
+    assert payload["version"] == 7
     assert [row["name"] for row in payload["load_cases"]["plastic"]] == [
         "PL-01", "PL-02"
     ]
@@ -277,6 +279,50 @@ def test_v6_round_trip_preserves_multiple_typed_load_cases():
     assert project_io.input_sha256(restored, scalars) == (
         payload["provenance"]["input_sha256"]
     )
+
+
+@pytest.mark.parametrize(
+    ("axis", "tension", "component", "face", "bw_key", "legs_key"),
+    [
+        ("Vertical shear (bending about x)", "Bottom / left face",
+         "vy", "negative", "shear_vy_bw", "shear_vy_link_legs"),
+        ("Horizontal shear (bending about y)", "Top / right face",
+         "vx", "positive", "shear_vx_bw", "shear_vx_link_legs"),
+    ],
+)
+def test_v6_shear_direction_migrates_without_changing_the_active_component(
+    axis, tension, component, face, bw_key, legs_key
+):
+    project = {
+        "format": project_io.FORMAT,
+        "version": 6,
+        "tables": {},
+        "scalars": {
+            "shear_on": True,
+            "shear_axis": axis,
+            "shear_tension": tension,
+            "shear_bw": 275.0,
+            "shear_link_legs": 4.0,
+        },
+        "load_cases": {
+            "plastic": [{
+                "name": "PL-OLD", "description": "v6",
+                "n_ed_kn": 0.0, "mx_ed_knm": 10.0, "my_ed_knm": -5.0,
+                "v_ed_kn": -85.0, "t_ed_knm": 0.0,
+            }],
+            "elastic": [],
+        },
+    }
+
+    tables, scalars = project_io.parse_project(json.dumps(project))
+    row = tables[load_cases.PLASTIC_TABLE_KEY].iloc[0]
+
+    assert row[f"{component}_ed_kn"] == -85.0
+    other = "vy" if component == "vx" else "vx"
+    assert row[f"{other}_ed_kn"] == 0.0
+    assert row[f"{component}_face"] == face
+    assert scalars[bw_key] == 275.0
+    assert scalars[legs_key] == 4.0
 
 
 def test_v4_project_rejects_nonfinite_load_case_instead_of_rewriting_it():

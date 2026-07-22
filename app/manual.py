@@ -478,7 +478,7 @@ def manual_blocks() -> list:
            ["Plastic Results", "Selected case: M-M envelope and utilisation"],
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
-           ["Shear", "Selected Plastic case: shear resistance and utilisation"],
+           ["Shear", "Selected Plastic case: Vx/Vy summary and directional details"],
            ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
            ["M-V-T Combined", "Selected Plastic case: combined interactions"]])
     call("tip", "*Auto-calc all derived values* (in Material parameters) "
@@ -619,17 +619,27 @@ def manual_blocks() -> list:
     call("standard", "The DK NA reports the fine and the coarse crack system side "
          "by side, each for the long-term and short-term load (four crack widths). "
          "Part C derives every model in full with the worked crack width.")
-    h2("Shear (VRd,c, no shear reinforcement)")
+    h2("Shear (Vx,Ed and Vy,Ed)")
     md("With **Check shear capacity** on, Sector computes the design shear "
        "resistance $V_{Rd,c}$ of a member **not** requiring shear reinforcement "
-       "(EN 1992-1-1 6.2.2) and the utilisation $V_{Ed}/V_{Rd,c}$. The signed "
-       "$V_{Ed}$ is entered per Plastic/capacity row; zero means not evaluated for "
-       "that row. The shared settings are the shear direction (vertical, bending about "
-       "$x$; or horizontal, about $y$), the tension face, the method edition, and "
-       "the web width $b_w$ (0 = derived). The effective depth $d$, the tension "
-       "reinforcement $A_{sl}$ and, when $b_w = 0$, the web width are all derived "
-       "from the geometry; the axial term uses the Plastic action-set force $N$ "
-       "and the selected-axis plastic moment.")
+       "(EN 1992-1-1 6.2.2) in each active direction. Signed $V_{x,Ed}$ and "
+       "$V_{y,Ed}$ are entered per Plastic/capacity row; zero disables only that "
+       "component.")
+    table(["Component", "Geometry and associated bending"],
+          [["$V_{x,Ed}$", "Along x; depth in x; left/right faces; paired with $M_{y,Ed}$"],
+           ["$V_{y,Ed}$", "Along y; depth in y; bottom/top faces; paired with $M_{x,Ed}$"]])
+    md("Face selection is **Auto** by default: a positive associated moment selects "
+       "the negative-coordinate face; a negative moment selects the positive face. "
+       "If that moment is zero, both faces are checked and the governing result is "
+       "reported. The row can override either face. The sign of shear does not select "
+       "the tension face. Web-width overrides and effective link-leg counts are "
+       "directional; method, aggregate and stirrup properties are shared.")
+    call("limit", "When both shear components are nonzero, Sector reports two "
+         "independent directional checks. It does **not** apply a resultant or claim "
+         "a general biaxial interaction equation. If both directions pass, overall "
+         "shear remains **REVIEW**; a directional failure makes the overall result "
+         "**FAIL**. With torsion, each V+T direction is screened separately and the "
+         "three-component Vx+Vy+T interaction remains **NOT ASSESSED**.")
     table(["Shear method", "What it sets"],
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
             "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],
@@ -655,7 +665,7 @@ def manual_blocks() -> list:
     md("With **Shear reinforcement (links) present** on, the resistance becomes the "
        "variable-strut $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3) instead of "
        "$V_{Rd,c}$ (which is still shown, to indicate whether links are strictly "
-       "required). The link inputs are the number of legs, the bar diameter and the "
+       "required). The link inputs are the effective legs for each direction, the bar diameter and the "
        "spacing $s$ (so $A_{sw} = n_{legs}\\,\\pi\\phi^2/4$), the link yield "
        "$f_{ywk}$, and the strut-angle bounds $\\cot\\theta_{min}$ / "
        "$\\cot\\theta_{max}$. Sector auto-optimises $\\theta$ within those bounds to "
@@ -1024,15 +1034,17 @@ def manual_blocks() -> list:
        "$k_1 = 0.15$ and $v_{min}$: the recommended "
        "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$, or the DK NA:2024 "
        "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$.")
-    md("Sector derives the geometry from the section for the chosen shear "
-       "direction: the effective depth $d$ is the distance from the extreme "
+    md("Sector derives the geometry separately for each active shear direction: "
+       "the effective depth $d$ is the distance from the extreme "
        "compression fibre (opposite the tension face) to the centroid of the "
        "tension bars; $b_w$, when not entered, is the smallest solid width sampled "
        "over the middle 80% of the depth (the web of a rectangular / T / box "
        "section -- a curved outline should have $b_w$ entered by hand). $\\sigma_{cp}$ "
        "uses the Plastic action-set force $N$; since Sector's $N$ is "
        "tension-positive it is negated to the code's compression-positive "
-         "convention, exactly as the axial-force flip elsewhere.")
+       "convention, exactly as the axial-force flip elsewhere. Automatic face "
+       "selection follows the associated moment; at zero moment both faces are "
+       "evaluated.")
     md("For EN 1992-1-1:2023, the action-dependent factor is\n\n"
        "$$a_{cs}=\\max\\!\\left(\\left|M_{Ed}/V_{Ed}\\right|,d\\right),\\qquad"
        "k_{vp}=\\max\\!\\left(1+\\frac{N_{Ed}}{|V_{Ed}|}\\frac{d}{3a_{cs}},0.1\\right),$$\n\n"

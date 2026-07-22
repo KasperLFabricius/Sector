@@ -26,7 +26,7 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 6   # v6: stable material catalogues and per-element assignments
+VERSION = 7   # v7: separate Vx,Ed / Vy,Ed actions and directional shear settings
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -79,8 +79,10 @@ SCALAR_KEYS = [
     "sls_pre_limit_pct", "sls_limit_source",
     # Shear (VRd,c without links, and the variable-strut VRd with links).
     "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
+    "shear_vx_bw", "shear_vy_bw",
     "shear_dlower",
-    "shear_links", "shear_link_legs", "shear_link_dia", "shear_link_s", "shear_fywk",
+    "shear_links", "shear_link_legs", "shear_vx_link_legs", "shear_vy_link_legs",
+    "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_cot_min", "shear_cot_max",
     # Torsion (thin-walled tube, TRd). The stirrup is the shared shear_link_* one.
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
@@ -185,9 +187,13 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
         )
     }
-    # Version 6 writes only the catalogue representation. External callers may
-    # still supply the former flat material values; migrate them at the save/hash
-    # boundary so two equivalent inputs have one canonical representation.
+    # These v6 controls were global because one shear component existed. Their
+    # values are consumed only by the v7 migration and are not written again.
+    for key in ("shear_axis", "shear_tension", "shear_bw", "shear_link_legs"):
+        scalar_payload.pop(key, None)
+    # Current project files write only the catalogue representation. External
+    # callers may still supply the former flat material values; migrate them at
+    # the save/hash boundary so two equivalent inputs have one canonical form.
     for kind, legacy_keys in (
         ("mild", material_catalog.LEGACY_MILD_KEYS),
         ("prestress", material_catalog.LEGACY_PRESTRESS_KEYS),
@@ -347,9 +353,21 @@ def parse_project(text: str):
     }
     scalars = {k: v for k, v in raw_scalars.items() if k in SCALAR_KEYS}
     if raw_load_cases is not None:
+        plastic_records = raw_load_cases.get("plastic", [])
+        if data.get("version", 1) < 7:
+            plastic_records = load_cases.migrate_legacy_plastic_records(
+                plastic_records,
+                axis=raw_scalars.get("shear_axis"),
+                tension=raw_scalars.get("shear_tension"),
+            )
         case_tables = {
             table_key: load_cases.table_from_records(
-                raw_load_cases.get(payload_key, []), table_key
+                (
+                    plastic_records
+                    if table_key == load_cases.PLASTIC_TABLE_KEY
+                    else raw_load_cases.get(payload_key, [])
+                ),
+                table_key,
             )
             for table_key, payload_key in _CASE_PAYLOAD_KEYS.items()
         }
@@ -408,6 +426,21 @@ def parse_project(text: str):
         )
         if scalars.get("capacity_steel_material_id") not in available:
             scalars["capacity_steel_material_id"] = available[0]
+    # v7 replaces the former global direction, face, web-width override and link
+    # leg count. Preserve the configured historical direction exactly; the other
+    # direction receives the app's normal defaults when mounted.
+    if data.get("version", 1) < 7:
+        component = load_cases.legacy_shear_component(
+            raw_scalars.get("shear_axis")
+        )
+        old_bw = raw_scalars.get("shear_bw")
+        if isinstance(old_bw, (int, float)):
+            scalars.setdefault(f"shear_{component}_bw", float(old_bw))
+        old_legs = raw_scalars.get("shear_link_legs")
+        if isinstance(old_legs, (int, float)):
+            scalars.setdefault(
+                f"shear_{component}_link_legs", float(old_legs)
+            )
     # The axial force N is now tension-positive; files written before that (version
     # < 2) stored it compression-positive, so negate their axial values to preserve
     # the physical loads. Moments are unchanged.
@@ -466,6 +499,11 @@ def parse_project(text: str):
         else:
             # Build migrated rows only after every historical scalar migration,
             # especially the pre-v2 axial-force sign conversion above.
-            case_tables = load_cases.tables_from_legacy_scalars(scalars)
+            legacy_scalars = dict(scalars)
+            if data.get("version", 1) < 7:
+                legacy_scalars.setdefault(
+                    "shear_tension", load_cases.FACE_NEGATIVE
+                )
+            case_tables = load_cases.tables_from_legacy_scalars(legacy_scalars)
     tables.update(case_tables)
     return tables, scalars

@@ -296,12 +296,14 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
         {
             "name": "PL-01", "description": "Routine combination",
             "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
-            "v_ed_kn": 0.0, "t_ed_knm": 0.0,
+            "vx_ed_kn": 0.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 0.0,
         },
         {
             "name": "PL-02", "description": "Governing combination",
             "n_ed_kn": 0.0, "mx_ed_knm": 125.0, "my_ed_knm": 0.0,
-            "v_ed_kn": 0.0, "t_ed_knm": 0.0,
+            "vx_ed_kn": 0.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 0.0,
         },
     ]
     elastic_rows = [
@@ -840,6 +842,34 @@ def test_report_includes_shear_section():
     assert "Utilisation" in txt
 
 
+def test_report_biaxial_shear_separates_directions_and_withholds_interaction():
+    out = _out()
+    vx = copy.deepcopy(_shear_out())
+    vx.update(component="vx", axis="y", tension_low=True, status="PASS")
+    vy = copy.deepcopy(_shear_out())
+    vy.update(component="vy", axis="x", tension_low=False, v_ed=65.0,
+              util=65.0 / vy["res"]["vrd_c"], status="PASS")
+    out["shear"] = dict(
+        vx,
+        directions={"vx": vx, "vy": vy},
+        active_directions=["vx", "vy"],
+        governing_component="vx",
+        biaxial=True,
+        interaction_assessed=False,
+        interaction_status="NOT ASSESSED",
+        status="REVIEW",
+    )
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+
+    assert "Vx,Ed" in txt and "Vy,Ed" in txt
+    assert "independent Vx/Vy checks" in txt
+    assert "Biaxial interaction: NOT ASSESSED" in txt
+    assert "undocumented interaction" in txt
+
+
 def _shear_out_2023():
     from sector import codes as _codes, shear as _shear
 
@@ -1050,6 +1080,30 @@ def test_report_includes_combined_section():
     assert "Combined bending" in txt or "M-V-T" in txt
     assert "6.3.2(6)" in txt                        # the DK NA combined rule
     assert "EXCEEDED" in txt                        # sum 1.3 > 1
+
+
+def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict():
+    out = _out()
+    vx = _combined_out(mv_independent=True)
+    vy = copy.deepcopy(vx)
+    vx.update(dkna_sum=0.70, dkna_ok=True)
+    vy.update(r_v=0.35, dkna_sum=0.65, dkna_ok=True)
+    out["combined"] = dict(
+        vx,
+        directions={"vx": vx, "vy": vy},
+        biaxial=True,
+        interaction_assessed=False,
+        interaction_status="NOT ASSESSED",
+        status="REVIEW",
+    )
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+
+    assert "Vx+T and Vy+T screens" in txt
+    assert "simultaneous Vx,Ed + Vy,Ed + TEd interaction is NOT ASSESSED" in txt
+    assert "no three-component interaction expression is inferred" in txt
 
 
 def test_report_combined_out_of_range_withholds_dependent_verdicts():

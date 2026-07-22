@@ -96,6 +96,53 @@ def test_build_shear_context_returns_payload_without_ui():
     assert payload["centroid"] == pytest.approx((0.15, 0.30))
 
 
+def test_directional_shear_contexts_map_components_moments_faces_and_settings():
+    inp = _member_input(
+        bars=[
+            (0.05, 0.30, 500.0),   # left
+            (0.25, 0.30, 800.0),   # right
+            (0.15, 0.05, 1400.0),  # bottom
+            (0.15, 0.55, 300.0),   # top
+        ],
+        Mx_pl=100.0,
+        My_pl=-80.0,
+        shear_Vx=40.0,
+        shear_Vy=50.0,
+        shear_face_x="auto",
+        shear_face_y="auto",
+        shear_vx_bw=210.0,
+        shear_vy_bw=260.0,
+        shear_vx_link_legs=3.0,
+        shear_vy_link_legs=4.0,
+    )
+
+    contexts = capacity.build_directional_shear_contexts(inp, 0.0, 0.0)
+    vx_payload, _ = contexts["vx"]["candidates"][0]
+    vy_payload, _ = contexts["vy"]["candidates"][0]
+
+    assert vx_payload["axis"] == "y"          # depth along x; paired with My
+    assert vx_payload["tension_low"] is False  # negative My -> right (+x)
+    assert vx_payload["asl"] == pytest.approx(800.0)
+    assert vx_payload["bw"] == pytest.approx(210.0)
+    assert vy_payload["axis"] == "x"          # depth along y; paired with Mx
+    assert vy_payload["tension_low"] is True   # positive Mx -> bottom (-y)
+    assert vy_payload["asl"] == pytest.approx(1400.0)
+    assert vy_payload["bw"] == pytest.approx(260.0)
+    assert vx_payload["res"]["vrd_c"] != pytest.approx(
+        vy_payload["res"]["vrd_c"]
+    )
+
+
+def test_auto_face_checks_both_faces_at_zero_moment_and_override_is_explicit():
+    assert capacity.shear_face_candidates("auto", 10.0) == (True,)
+    assert capacity.shear_face_candidates("auto", -10.0) == (False,)
+    assert capacity.shear_face_candidates("auto", 0.0) == (True, False)
+    assert capacity.shear_face_candidates("negative", -10.0) == (True,)
+    assert capacity.shear_face_candidates("positive", 10.0) == (False,)
+    with pytest.raises(ValueError, match="shear face"):
+        capacity.shear_face_candidates("sideways", 0.0)
+
+
 def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     valid = _member_input(
         torsion_on=True,
