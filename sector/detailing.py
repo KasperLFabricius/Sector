@@ -81,9 +81,13 @@ def _centroid_moments(
 ) -> tuple[float, float]:
     """Actions about the concrete centroid, using Sector's public signs."""
     cx, cy = _centroid(section)
+    # Sector exposes N as tension-positive while its engineering bending moments
+    # are the negatives of the tension-positive internal first moments.  Moving
+    # the reference point from the origin to (cx, cy) therefore adds N times the
+    # offset: M_C = M_O + N_tension * c.
     return (
-        float(mx_origin_knm) - float(n_ed_tension_kn) * cy,
-        float(my_origin_knm) - float(n_ed_tension_kn) * cx,
+        float(mx_origin_knm) + float(n_ed_tension_kn) * cy,
+        float(my_origin_knm) + float(n_ed_tension_kn) * cx,
     )
 
 

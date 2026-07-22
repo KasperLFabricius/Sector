@@ -238,8 +238,9 @@ def shear_direction_specs(inp):
     # Section forces are entered about the coordinate origin. Face selection must
     # follow the bending at the physical concrete centroid, including the locked-in
     # tendon moment, exactly like the action-dependent shear calculation below.
-    mx_centroid = mx_origin - axial * cy - mx_prestress
-    my_centroid = my_origin - axial * cx - my_prestress
+    # N is tension-positive, hence M_C = M_O + N*c before prestress is deducted.
+    mx_centroid = mx_origin + axial * cy - mx_prestress
+    my_centroid = my_origin + axial * cx - my_prestress
     components = inp.get("shear_components") or {}
     vx_signed = float(
         (components.get("vx") or {}).get(
@@ -304,10 +305,10 @@ def _build_shear_face_context(
     fyd_flex = design_yield(inp["steel"])
     ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
     if axis == "x":
-        m_ed_2023 = inp["Mx_pl"] - inp["P_pl"] * cy - mx_prestress
+        m_ed_2023 = inp["Mx_pl"] + inp["P_pl"] * cy - mx_prestress
         m_prestress = mx_prestress
     else:
-        m_ed_2023 = inp["My_pl"] - inp["P_pl"] * cx - my_prestress
+        m_ed_2023 = inp["My_pl"] + inp["P_pl"] * cx - my_prestress
         m_prestress = my_prestress
     result = shear.vrd_c(
         fck, code, bw_mm, d_mm, asl, n_ed_comp, area,

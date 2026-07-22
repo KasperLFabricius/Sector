@@ -948,7 +948,16 @@ def multi_case_summary_rows(inp, results, *, stale=False):
     # Clear spacing is a section-wide result, not a load-case result. Add it once
     # after the case loops rather than repeating it for every Plastic row.
     if inp.get("clear_spacing_on"):
-        spacing_only_inp = dict(inp, minimum_reinforcement_on=False)
+        spacing_only_inp = dict(
+            inp,
+            mode="",
+            plastic_case={},
+            elastic_case={},
+            minimum_reinforcement_on=False,
+            shear_on=False,
+            torsion_on=False,
+            combined_on=False,
+        )
         rows.extend(result_summary_rows(
             spacing_only_inp,
             {"clear_spacing": results.get("clear_spacing")}

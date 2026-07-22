@@ -83,6 +83,47 @@ def test_2005_formula_reports_face_inputs_and_area_ratio():
     assert row["utilisation"] == pytest.approx(expected / 982.0)
 
 
+def test_origin_moment_transfer_uses_tension_positive_axial_sign():
+    bars = [
+        (0.0, 0.05, 100.0),
+        (0.0, 0.55, 500.0),
+    ]
+    section = Section.from_polygon(
+        [(-0.10, 0.0), (0.10, 0.0), (0.10, 0.60), (-0.10, 0.60)],
+        bars,
+    )
+    elements = [
+        {
+            "id": f"R{index + 1}",
+            "kind": "bar",
+            "x_mm": x * 1000.0,
+            "y_mm": y * 1000.0,
+            "diameter_mm": 16.0,
+            "material_id": "M1",
+            "spacing_group_id": "",
+        }
+        for index, (x, y, _area) in enumerate(bars)
+    ]
+
+    result = detailing.minimum_reinforcement_2005(
+        section,
+        elements,
+        [_steel(), _steel()],
+        fctm_mpa=2.9,
+        n_ed_tension_kn=100.0,
+        mx_ed_knm=0.0,
+        my_ed_knm=0.0,
+    )
+
+    check = result["checks"][0]
+    expected = max(0.26 * 2.9 / 500.0, 0.0013) * 200.0 * 550.0
+    assert result["mx_ed_centroid_knm"] == pytest.approx(30.0)
+    assert check["face"] == "bottom"
+    assert check["bar_ids"] == ["R1"]
+    assert check["as_min_mm2"] == pytest.approx(expected)
+    assert check["status"] == "FAIL"
+
+
 def test_2005_formula_uses_conservative_face_fyk_and_flags_missing_face():
     section, elements, materials = _rectangle()
     materials = [_steel(400.0), _steel(500.0), *materials[2:]]

@@ -642,6 +642,12 @@ def test_multi_case_summary_adds_section_wide_spacing_only_once():
     assert sum(
         row["check"] == "Reinforcement clear spacing" for row in rows
     ) == 1
+    assert not any(row["status"] == "NOT RUN" for row in rows)
+    spacing_row = next(
+        row for row in rows if row["check"] == "Reinforcement clear spacing"
+    )
+    assert spacing_row["case"] == "-"
+    assert presentation.overall_summary_status(rows) == "PASS"
     minimum_rows = [
         row for row in rows
         if row["check"].startswith("Longitudinal minimum reinforcement")
