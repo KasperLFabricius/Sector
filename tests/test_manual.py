@@ -398,16 +398,37 @@ def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     assert not any(item.key == "manual_part" for item in at.selectbox)
 
 
-def test_native_manual_dismiss_callback_clears_the_durable_open_flag(monkeypatch):
-    # Streamlit calls this callback for the dialog X, Escape and backdrop paths.
-    # Keep it independent of the explicit Close button so a native dismissal
-    # cannot leave the durable flag set and reopen the dialog on the next rerun.
-    state = {"_manual_open": True}
-    monkeypatch.setattr(manual.st, "session_state", state)
+def test_native_manual_dismissal_event_closes_and_stays_closed():
+    # AppTest has no high-level dialog-dismiss method. Send the same trigger-value
+    # widget event that Streamlit's frontend sends for X, Escape or backdrop. This
+    # exercises the decorator's on_dismiss wiring (not merely the callback body):
+    # removing ``on_dismiss=_dismiss_manual_dialog`` leaves the dialog proto without
+    # a widget ID and makes this regression fail.
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.run()
+    at.number_input(key="conc_fck").set_value(55.0).run()
+    at.button(key="open_manual").click().run()
+    dialog = next(element for element in at._tree if element.type == "dialog")
+    assert dialog.proto.dialog.id
 
-    manual._dismiss_manual_dialog()
+    widget_states = at._tree.get_widget_states()
+    dismiss_event = widget_states.widgets.add()
+    dismiss_event.id = dialog.proto.dialog.id
+    dismiss_event.trigger_value = True
+    at._run(widget_states)
 
-    assert state["_manual_open"] is False
+    assert not at.exception
+    assert at.session_state["_manual_open"] is False
+    assert at.session_state["_main_page"] == "Inputs"
+    assert at.session_state["conc_fck"] == 55.0
+    assert not any(button.key == "manual_close" for button in at.button)
+
+    # The next ordinary rerun must not reopen a dialog from a stale durable flag.
+    at.run()
+    assert not at.exception
+    assert at.session_state["_manual_open"] is False
+    assert at.session_state["conc_fck"] == 55.0
+    assert not any(button.key == "manual_close" for button in at.button)
 
 
 def test_opening_and_closing_the_manual_keeps_inputs():
