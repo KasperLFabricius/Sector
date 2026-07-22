@@ -199,7 +199,17 @@ def test_frontend_uses_only_components_v2_state_api():
     assert "definition.editor = state.selectEditor" in renderer
     assert 'definition.editor = "list"' not in renderer
     assert "new ResizeObserver" in renderer
-    assert "state.table.redraw(true)" in renderer
+    assert "table.redraw(true)" in renderer
+    assert "state.visibilityObserver.disconnect()" in renderer
+    assert "cancelAnimationFrame(state.redrawFrame)" in renderer
+    assert "state.tableReady" in renderer
+    assert "if (table) table.destroy()" in renderer
+    assert "pointGridInstances.delete(parentElement)" in renderer
+    assert 'removeEventListener("click", state.handleAddRow)' in renderer
+    assert 'removeEventListener("paste", state.handlePaste, true)' in renderer
+    assert "return state.cleanup" in renderer
+    assert "frozen: true" in renderer
+    assert "frozen: isId" in renderer
     assert 'setAttribute("data-size-mode", value)' in renderer
     assert "pg-${spec.derived_role}" in renderer
     assert "spec.type === \"select\"" in renderer

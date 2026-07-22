@@ -599,7 +599,8 @@ def manual_blocks() -> list:
     h2("Crack width")
     md("Tick **Crack width** on each Elastic table row that requires acceptance. "
        "If any row is ticked, the global crack settings apply to every ticked row. "
-       "The bar diameter $\\phi$ (0 = derived from the bar area), the "
+       "The diameter override $\\phi$ (0 = each element's table diameter; Area "
+       "mode derives it from area), the "
        "mild-steel bond coefficient $k_1$ (0.8 ribbed, 1.6 plain), the code edition "
        "and -- for the DK NA -- the member type are the inputs.")
     table(["Crack-width code", "What it changes"],

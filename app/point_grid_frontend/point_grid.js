@@ -13,6 +13,7 @@ function createPointGridInstance(parentElement) {
     addButton,
     warning,
     table: null,
+    tableReady: false,
     columns: [],
     columnSpecs: [],
     specByField: new Map(),
@@ -30,8 +31,12 @@ function createPointGridInstance(parentElement) {
     setStateValue: null,
     visibilityTarget: null,
     visibilityObserver: null,
+    redrawFrame: null,
     wasVisible: false,
     visibleWidth: 0,
+    handleAddRow: null,
+    handlePaste: null,
+    cleanup: null,
   }
 
   state.isComplete = row => state.columnSpecs.every(spec => {
@@ -334,6 +339,7 @@ function createPointGridInstance(parentElement) {
         headerSort: false,
         editable: false,
         clipboard: false,
+        frozen: true,
         cssClass: "pg-id",
       })
     }
@@ -360,6 +366,7 @@ function createPointGridInstance(parentElement) {
             return true
           },
         clipboard: spec.paste !== false,
+        frozen: isId,
         cssClass: isId
           ? "pg-id"
           : spec.derived_role ? `pg-${spec.derived_role}` : "",
@@ -462,9 +469,15 @@ function createPointGridInstance(parentElement) {
       : []
     state.applyIds(rows)
 
+    if (state.redrawFrame !== null) {
+      cancelAnimationFrame(state.redrawFrame)
+      state.redrawFrame = null
+    }
+    state.tableReady = false
     if (state.table) {
-      state.table.destroy()
+      const oldTable = state.table
       state.table = null
+      oldTable.destroy()
     }
     state.gridElement.replaceChildren()
 
@@ -473,7 +486,7 @@ function createPointGridInstance(parentElement) {
       return
     }
 
-    state.table = new globalThis.Tabulator(state.gridElement, {
+    const table = new globalThis.Tabulator(state.gridElement, {
       data: rows,
       layout: state.layout,
       columns: state.buildColumns(),
@@ -484,14 +497,20 @@ function createPointGridInstance(parentElement) {
       addRowPos: "bottom",
       reactiveData: false,
     })
+    state.table = table
 
-    state.table.on("tableBuilt", () => state.refreshDeleteLabels())
-    state.table.on("renderComplete", () => state.refreshDeleteLabels())
-    state.table.on("cellEditing", cell => {
+    table.on("tableBuilt", () => {
+      if (state.table !== table) return
+      state.tableReady = true
+      state.refreshDeleteLabels()
+      state.redrawIfVisible(true)
+    })
+    table.on("renderComplete", () => state.refreshDeleteLabels())
+    table.on("cellEditing", cell => {
       const position = cell.getRow().getPosition(true)
       state.pasteAnchorRow = position > 0 ? position - 1 : 0
     })
-    state.table.on("cellEdited", cell => {
+    table.on("cellEdited", cell => {
       state.clearWarning()
       const row = cell.getRow()
       const normalised = state.normaliseSizeRow({ ...row.getData() })
@@ -500,25 +519,26 @@ function createPointGridInstance(parentElement) {
         state.emit()
       })
     })
-    state.table.on("rowDeleted", () => {
+    table.on("rowDeleted", () => {
       state.renumber()
       state.emit()
     })
-    state.table.on("clipboardPasted", () => {
+    table.on("clipboardPasted", () => {
       state.renumber()
       state.emit()
     })
   }
 
-  addButton.addEventListener("click", () => {
+  state.handleAddRow = () => {
     if (!state.table) return
     state.table.addRow(state.blankRow()).then(() => {
       state.renumber()
       state.emit()
     })
-  })
+  }
+  addButton.addEventListener("click", state.handleAddRow)
 
-  wrap.addEventListener("paste", event => {
+  state.handlePaste = event => {
     if (!state.table) return
     const clipboard = event.clipboardData
     const text = clipboard ? clipboard.getData("text") : ""
@@ -527,12 +547,13 @@ function createPointGridInstance(parentElement) {
     event.preventDefault()
     event.stopPropagation()
     state.applyPaste(text)
-  }, { capture: true })
+  }
+  wrap.addEventListener("paste", state.handlePaste, { capture: true })
 
   const root = parentElement.getRootNode()
   state.visibilityTarget = root && root.host ? root.host : wrap
   state.redrawIfVisible = (force = false) => {
-    if (!state.table || !state.visibilityTarget) return
+    if (!state.table || !state.tableReady || !state.visibilityTarget) return
     const rect = state.visibilityTarget.getBoundingClientRect()
     const visible = rect.width > 0 && rect.height > 0
     const widthChanged = Math.abs(rect.width - state.visibleWidth) > 0.5
@@ -540,13 +561,34 @@ function createPointGridInstance(parentElement) {
     state.wasVisible = visible
     state.visibleWidth = visible ? rect.width : 0
     if (!visible || (!force && !becameVisible && !widthChanged)) return
-    requestAnimationFrame(() => {
-      if (state.table) state.table.redraw(true)
+    if (state.redrawFrame !== null) cancelAnimationFrame(state.redrawFrame)
+    const table = state.table
+    state.redrawFrame = requestAnimationFrame(() => {
+      state.redrawFrame = null
+      if (state.table === table && state.tableReady) table.redraw(true)
     })
   }
   if (typeof ResizeObserver === "function") {
     state.visibilityObserver = new ResizeObserver(() => state.redrawIfVisible())
     state.visibilityObserver.observe(state.visibilityTarget)
+  }
+
+  state.cleanup = () => {
+    if (state.visibilityObserver) {
+      state.visibilityObserver.disconnect()
+      state.visibilityObserver = null
+    }
+    addButton.removeEventListener("click", state.handleAddRow)
+    wrap.removeEventListener("paste", state.handlePaste, true)
+    if (state.redrawFrame !== null) {
+      cancelAnimationFrame(state.redrawFrame)
+      state.redrawFrame = null
+    }
+    const table = state.table
+    state.table = null
+    state.tableReady = false
+    pointGridInstances.delete(parentElement)
+    if (table) table.destroy()
   }
 
   return state
@@ -570,7 +612,7 @@ export default function renderPointGrid(component) {
     state.clearWarning()
     state.build(nextData)
     state.redrawIfVisible(true)
-    return
+    return state.cleanup
   }
 
   state.label = String(nextData.label || state.label)
@@ -578,4 +620,5 @@ export default function renderPointGrid(component) {
   state.addButton.setAttribute("aria-label", `Add row to ${state.label}`)
   state.refreshDeleteLabels()
   state.redrawIfVisible(true)
+  return state.cleanup
 }
