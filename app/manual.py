@@ -1618,28 +1618,27 @@ def build_manual_pdf_bytes(figures=True):
 # ==========================================================================
 
 def render_manual_streamlit():
-    """Render the manual in place of the analysis layout (viewport takeover).
+    """Render the selected manual part and its PDF actions."""
+    with st.container(horizontal=True):
+        if st.button(
+            "Generate PDF", key="manual_gen_pdf", icon=":material/picture_as_pdf:"
+        ):
+            with st.spinner("Building the PDF manual..."):
+                try:
+                    st.session_state["manual_pdf"] = build_manual_pdf_bytes()
+                except Exception as e:                   # never break the dialog
+                    st.session_state["manual_pdf"] = None
+                    st.error(f"PDF build failed: {e}")
+        if st.session_state.get("manual_pdf"):
+            st.download_button(
+                "Download PDF", st.session_state["manual_pdf"],
+                file_name="Sector_User_Manual.pdf", mime="application/pdf",
+                key="manual_dl_pdf", icon=":material/download:",
+            )
+        if st.button("Close", key="manual_close", icon=":material/close:"):
+            st.session_state["_manual_open"] = False
+            st.rerun(scope="app")
 
-    Mirrors the Quick Section builder: a session flag (``_manual_open``) makes the
-    app render this instead of the normal views. Exiting is via the *Back to
-    analysis* button above the manual on the Analysis page, so it is
-    reachable without scrolling the manual.
-    """
-    c_gen, c_dl, _ = st.columns([1, 1, 4])
-    if c_gen.button("Generate PDF", width="stretch", key="manual_gen_pdf"):
-        with st.spinner("Building the PDF manual..."):
-            try:
-                st.session_state["manual_pdf"] = build_manual_pdf_bytes()
-            except Exception as e:                       # never break the viewport
-                st.session_state["manual_pdf"] = None
-                st.error(f"PDF build failed: {e}")
-    if st.session_state.get("manual_pdf"):
-        c_dl.download_button("Download PDF", st.session_state["manual_pdf"],
-                             file_name="Sector_User_Manual.pdf",
-                             mime="application/pdf", width="stretch",
-                             key="manual_dl_pdf")
-
-    st.markdown("# Sector user manual")
     st.caption("What Sector computes, the theory it applies, its features, and how "
                "to use it.")
 
@@ -1689,3 +1688,19 @@ def render_manual_streamlit():
             body = "\n".join("| " + " | ".join(str(c) for c in row) + " |"
                              for row in block[2])
             st.markdown(f"{header}\n{sep}\n{body}")
+
+
+def _dismiss_manual_dialog() -> None:
+    """Clear the durable open flag when the dialog is dismissed with X or Esc."""
+    st.session_state["_manual_open"] = False
+
+
+@st.dialog(
+    "Sector user manual",
+    width="large",
+    icon=":material/menu_book:",
+    on_dismiss=_dismiss_manual_dialog,
+)
+def render_manual_dialog():
+    """Show the manual above the current workspace in a fragment-scoped dialog."""
+    render_manual_streamlit()
