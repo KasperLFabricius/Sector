@@ -377,6 +377,7 @@ def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     assert not at.exception
     assert at.session_state["_manual_open"] is True
     assert at.session_state["_main_page"] == "Inputs"
+    assert any(element.type == "dialog" for element in at._tree)
     selector = next(item for item in at.selectbox if item.key == "manual_part")
     assert selector.value == "Part A - Get started"
     assert any("Part A - Get started" in m.value for m in at.markdown)
@@ -389,6 +390,24 @@ def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     assert not at.exception
     assert at.session_state["_manual_open"] is False
     assert at.session_state["_main_page"] == "Inputs"
+    # Exercise the next ordinary app rerun too: a stale durable flag must not
+    # remount the manual after either explicit or native dismissal.
+    at.run()
+    assert not at.exception
+    assert not any(button.key == "manual_close" for button in at.button)
+    assert not any(item.key == "manual_part" for item in at.selectbox)
+
+
+def test_native_manual_dismiss_callback_clears_the_durable_open_flag(monkeypatch):
+    # Streamlit calls this callback for the dialog X, Escape and backdrop paths.
+    # Keep it independent of the explicit Close button so a native dismissal
+    # cannot leave the durable flag set and reopen the dialog on the next rerun.
+    state = {"_manual_open": True}
+    monkeypatch.setattr(manual.st, "session_state", state)
+
+    manual._dismiss_manual_dialog()
+
+    assert state["_manual_open"] is False
 
 
 def test_opening_and_closing_the_manual_keeps_inputs():
