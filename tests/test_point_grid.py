@@ -179,6 +179,21 @@ def test_material_select_preserves_an_unresolved_import_until_user_replaces_it(
     assert "unresolved.disabled = true" in renderer
 
 
+def test_material_select_defaults_a_blank_paste_to_the_first_visible_option():
+    renderer = (pathlib.Path(point_grid_module.__file__).resolve().parent
+                / "point_grid_frontend" / "point_grid.js").read_text(
+                    encoding="utf-8"
+                )
+
+    # This branch is shared by paste processing, edited-cell mutation and emitted
+    # rows. It must precede the non-empty unknown-ID preservation branch.
+    blank_default = 'if (!text.length) return String(spec.options[0] ?? "")'
+    preserve_unknown = "return choice === undefined ? text : String(choice)"
+    assert blank_default in renderer
+    assert preserve_unknown in renderer
+    assert renderer.index(blank_default) < renderer.index(preserve_unknown)
+
+
 def test_component_registration_is_cached_per_streamlit_runtime(monkeypatch):
     class Manager:
         pass

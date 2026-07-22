@@ -109,6 +109,9 @@ function createPointGridInstance(parentElement) {
     }
     const text = value === null || value === undefined ? "" : String(value).trim()
     if (spec.type === "select" && Array.isArray(spec.options)) {
+      // Blank pasted cells follow the same first-option default as a newly added
+      // row. Non-empty unknown IDs remain intact for the blocking validation.
+      if (!text.length) return String(spec.options[0] ?? "")
       const choice = spec.options.find(
         option => String(option).toLowerCase() === text.toLowerCase(),
       )
