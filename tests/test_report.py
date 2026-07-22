@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report  # noqa: E402
+import material_catalog  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -148,6 +149,119 @@ def test_report_pdf_generates():
     )
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 3000
+
+
+def test_report_traces_multiple_materials_to_element_assignments():
+    inp = _inp()
+    catalogue, second_id = material_catalog.add_entry(
+        material_catalog.default_catalog("mild"), "mild"
+    )
+    catalogue["items"][0]["name"] = "New reinforcement"
+    catalogue["items"][1].update({
+        "name": "Existing reinforcement",
+        "description": "Verified from archive test certificate",
+        "fytk": 235.0,
+        "fyck": 235.0,
+        "futk": 360.0,
+    })
+    laws = {
+        item["id"]: material_catalog.build_material(item, "mild")
+        for item in catalogue["items"]
+    }
+    inp.update({
+        "bars": [(0.0, -0.12, 500.0), (0.0, 0.12, 400.0)],
+        "bar_elements": [
+            {"id": "R1", "x_mm": 0.0, "y_mm": -120.0,
+             "area_mm2": 500.0, "diameter_mm": 25.23,
+             "size_mode": "Area", "material_id": "M1",
+             "fatigue_detail_id": "", "group_id": "B1"},
+            {"id": "R2", "x_mm": 0.0, "y_mm": 120.0,
+             "area_mm2": 400.0, "diameter_mm": 22.57,
+             "size_mode": "Area", "material_id": second_id,
+             "fatigue_detail_id": "", "group_id": "B2"},
+        ],
+        "mild_material_catalog": catalogue,
+        "mild_materials": laws,
+        "bar_materials": [laws["M1"], laws[second_id]],
+        "steel": laws["M1"],
+        "capacity_steel_material_id": second_id,
+    })
+
+    txt = _pdf_text(sector_report.build_report(
+        {}, inp, _out(), figures=False,
+    ))
+    flat = " ".join(txt.split())
+
+    assert "M1 New reinforcement" in flat
+    assert "M2 Existing reinforcement" in flat
+    assert "Verified from archive test certificate" in flat
+    assert "R1 M1" in flat and "R2 M2" in flat
+
+
+def test_report_describes_built_in_prestress_without_false_zero_strengths():
+    entry = material_catalog.default_entry(
+        "prestress", preset="Curve 1 (built-in)"
+    )
+    catalogue = {"version": 1, "next_id": 2, "items": [entry]}
+    law = material_catalog.build_material(entry, "prestress")
+    inp = _inp()
+    inp.update({
+        "bars": [],
+        "bar_elements": [],
+        "tendons": [(0.0, -0.12, 5.0e-4)],
+        "tendon_elements": [{
+            "id": "T1", "x_mm": 0.0, "y_mm": -120.0,
+            "area_mm2": 500.0, "diameter_mm": 25.23,
+            "size_mode": "Area", "material_id": "P1",
+            "fatigue_detail_id": "", "group_id": "",
+        }],
+        "prestress_material_catalog": catalogue,
+        "prestress_materials": {"P1": law},
+        "tendon_materials": [law],
+        "prestress": law,
+        "prestress_preset": entry["preset"],
+    })
+
+    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+    flat = " ".join(txt.split())
+
+    assert "Built-in fixed curve 1" in flat
+    assert "Characteristic stress at rupture strain" in flat
+    assert "1645.000 MPa" in flat
+    assert "Proof strength" not in flat
+    assert "Ultimate strength" not in flat
+    assert "normative source not assigned" in flat
+
+
+@pytest.mark.parametrize(
+    "preset",
+    ["Custom / imported", "Curve 1 (bilinear hardening)"],
+)
+def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(preset):
+    entry = material_catalog.default_entry("mild", preset=preset)
+    entry["preset"] = preset
+    catalogue = {"version": 1, "next_id": 2, "items": [entry]}
+    law = material_catalog.build_material(entry, "mild")
+    inp = _inp()
+    inp.update({
+        "bar_elements": [{
+            "id": "R1", "x_mm": 0.0, "y_mm": -120.0,
+            "area_mm2": 500.0, "diameter_mm": 25.23,
+            "size_mode": "Area", "material_id": "M1",
+            "fatigue_detail_id": "", "group_id": "",
+        }],
+        "mild_material_catalog": catalogue,
+        "mild_materials": {"M1": law},
+        "bar_materials": [law],
+        "steel": law,
+    })
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, _out(), figures=False,
+    )).split())
+
+    assert "no normative curve source assigned" in flat
+    assert "3.2.7" not in flat
 
 
 def test_report_footer_identifies_the_organisational_licensee():

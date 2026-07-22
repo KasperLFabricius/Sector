@@ -49,10 +49,14 @@ def prestress_resultants(inp, cx=0.0, cy=0.0):
     """Return locked-in tendon ``(P, Mx, My)`` about ``(cx, cy)`` in kN/kNm."""
     prestress = inp.get("prestress")
     tendons = inp.get("tendons")
-    if prestress is None or not tendons:
+    materials = inp.get("tendon_materials")
+    if not tendons or (prestress is None and not materials):
         return 0.0, 0.0, 0.0
-    sig_ps = prestress.Es * prestress.IS * 1000.0
-    forces = [sig_ps * tendon[2] / 1.0e6 for tendon in tendons]
+    materials = materials or [prestress] * len(tendons)
+    if len(materials) != len(tendons):
+        raise ValueError("one prestressing material is required per tendon")
+    forces = [material.Es * material.IS * 1000.0 * tendon[2] / 1.0e6
+              for material, tendon in zip(materials, tendons)]
     axial = sum(forces)
     mx = sum(force * (tendon[1] - cy)
              for force, tendon in zip(forces, tendons))
@@ -77,6 +81,8 @@ def shear_lever_arm(inp, axis, tension_low, d_mm):
         point = plastic_capacity_at_angle(
             inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
             angle, prestress=prestress,
+            bar_materials=inp.get("bar_materials"),
+            tendon_materials=inp.get("tendon_materials"),
         )
     except Exception:
         return fallback
@@ -95,6 +101,8 @@ def shear_face_mrd(inp, axis, tension_low, m_off=0.0):
         mrd, exact = conditional_capacity(
             inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
             axis, tension_low, m_off, prestress=prestress,
+            bar_materials=inp.get("bar_materials"),
+            tendon_materials=inp.get("tendon_materials"),
         )
     except Exception:
         mrd, exact = 0.0, False
@@ -105,6 +113,8 @@ def shear_face_mrd(inp, axis, tension_low, m_off=0.0):
         point = plastic_capacity_at_angle(
             inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
             angle, prestress=prestress,
+            bar_materials=inp.get("bar_materials"),
+            tendon_materials=inp.get("tendon_materials"),
         )
     except Exception:
         return 0.0, False

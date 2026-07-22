@@ -14,6 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import load_cases  # noqa: E402
+import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
 
@@ -157,7 +158,7 @@ def test_v4_reinforcement_rows_migrate_to_stable_area_based_elements():
     )
 
 
-def test_v5_round_trip_preserves_size_basis_and_element_assignments():
+def test_v6_round_trip_preserves_size_basis_and_element_assignments():
     tables = _tables()
     tables["bars_base"] = rebar_table.normalise_table([
         {
@@ -177,7 +178,7 @@ def test_v5_round_trip_preserves_size_basis_and_element_assignments():
     restored, scalars = project_io.parse_project(text)
 
     payload = json.loads(text)
-    assert payload["version"] == 5
+    assert payload["version"] == 6
     pd.testing.assert_frame_equal(restored["bars_base"], tables["bars_base"])
     assert restored["bars_base"].iloc[1]["area (mm2)"] == pytest.approx(
         np.pi * 20.0**2 / 4.0
@@ -187,7 +188,65 @@ def test_v5_round_trip_preserves_size_basis_and_element_assignments():
     )
 
 
-def test_v4_round_trip_preserves_multiple_typed_load_cases():
+def test_v6_round_trip_preserves_multiple_materials_without_flat_duplicates():
+    mild, material_id = material_catalog.add_entry(
+        material_catalog.default_catalog("mild"), "mild"
+    )
+    mild["items"][1]["name"] = "Existing reinforcement"
+    mild["items"][1]["fytk"] = 235.0
+    prestress = material_catalog.default_catalog("prestress")
+
+    text = project_io.dump_project({}, {
+        material_catalog.MILD_CATALOG_KEY: mild,
+        material_catalog.PRESTRESS_CATALOG_KEY: prestress,
+        "capacity_steel_material_id": material_id,
+        # A stale compatibility alias must not create a second source of truth.
+        "mild_fytk": 999.0,
+    })
+    payload = json.loads(text)
+    _, scalars = project_io.parse_project(text)
+
+    assert payload["version"] == 6
+    assert "mild_fytk" not in payload["scalars"]
+    assert [item["id"] for item in scalars[
+        material_catalog.MILD_CATALOG_KEY]["items"]] == ["M1", "M2"]
+    assert scalars[material_catalog.MILD_CATALOG_KEY]["items"][1]["fytk"] == 235.0
+    assert scalars["capacity_steel_material_id"] == "M2"
+
+
+def test_v5_material_ids_migrate_to_cloned_laws_without_changing_behaviour():
+    project = {
+        "format": "sector-project",
+        "version": 5,
+        "tables": {
+            "bars_base": {
+                "columns": rebar_table.COLUMNS,
+                "rows": [["R1", 0.0, -100.0, "Area", 500.0, 25.23,
+                          "M2", "", ""]],
+            },
+            "tendons_base": {
+                "columns": rebar_table.COLUMNS,
+                "rows": [["P1", 0.0, 100.0, "Area", 150.0, 13.82,
+                          "P3", "", ""]],
+            },
+        },
+        "scalars": {
+            "mild_fytk": 412.0,
+            "pre_fytk": 1500.0,
+        },
+    }
+
+    _, scalars = project_io.parse_project(json.dumps(project))
+    mild = scalars[material_catalog.MILD_CATALOG_KEY]["items"]
+    prestress = scalars[material_catalog.PRESTRESS_CATALOG_KEY]["items"]
+
+    assert [item["id"] for item in mild] == ["M1", "M2"]
+    assert [item["fytk"] for item in mild] == [412.0, 412.0]
+    assert [item["id"] for item in prestress] == ["P1", "P3"]
+    assert [item["fytk"] for item in prestress] == [1500.0, 1500.0]
+
+
+def test_v6_round_trip_preserves_multiple_typed_load_cases():
     tables = _tables()
     tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
         {"name": "PL-01", "description": "Fundamental A",
@@ -208,7 +267,7 @@ def test_v4_round_trip_preserves_multiple_typed_load_cases():
     payload = json.loads(text)
     restored, scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 5
+    assert payload["version"] == 6
     assert [row["name"] for row in payload["load_cases"]["plastic"]] == [
         "PL-01", "PL-02"
     ]
@@ -380,8 +439,12 @@ def test_legacy_mpa_moduli_are_rescaled_to_gpa():
     # rescales them, so a 200000 MPa modulus reads as 200 GPa.
     text = project_io.dump_project({}, {"mild_Es": 200000.0, "pre_Es": 195000.0})
     _, scalars = project_io.parse_project(text)
-    assert scalars["mild_Es"] == pytest.approx(200.0)
-    assert scalars["pre_Es"] == pytest.approx(195.0)
+    mild = scalars[material_catalog.MILD_CATALOG_KEY]["items"][0]
+    prestress = scalars[material_catalog.PRESTRESS_CATALOG_KEY]["items"][0]
+    assert mild["Es"] == pytest.approx(200.0)
+    assert prestress["Es"] == pytest.approx(195.0)
+    assert "mild_Es" not in scalars
+    assert "pre_Es" not in scalars
 
 
 def test_gpa_moduli_load_unchanged():
@@ -389,8 +452,10 @@ def test_gpa_moduli_load_unchanged():
     # -- the rescale must not fire twice.
     text = project_io.dump_project({}, {"mild_Es": 200.0, "pre_Es": 195.0})
     _, scalars = project_io.parse_project(text)
-    assert scalars["mild_Es"] == pytest.approx(200.0)
-    assert scalars["pre_Es"] == pytest.approx(195.0)
+    mild = scalars[material_catalog.MILD_CATALOG_KEY]["items"][0]
+    prestress = scalars[material_catalog.PRESTRESS_CATALOG_KEY]["items"][0]
+    assert mild["Es"] == pytest.approx(200.0)
+    assert prestress["Es"] == pytest.approx(195.0)
 
 
 def test_legacy_axial_force_is_flipped_to_tension_positive():
@@ -443,7 +508,8 @@ def test_dump_handles_numpy_scalars():
                                         "mild_active_comp": np.bool_(True)})
     _, scalars = project_io.parse_project(text)
     assert scalars["conc_fck"] == 42.0
-    assert scalars["mild_active_comp"] is True
+    mild = scalars[material_catalog.MILD_CATALOG_KEY]["items"][0]
+    assert mild["active_in_compression"] is True
 
 
 def test_parse_rejects_foreign_or_broken_json():

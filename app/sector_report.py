@@ -40,6 +40,7 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
 import case_analysis
 import viz
 import result_presentation as presentation
+from sector import codes as ec2_codes
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
 
@@ -60,6 +61,34 @@ _CRACK_CANDIDATE_COL_WIDTHS = tuple(
 # the report still generates). BriCoS uses Helvetica -- DejaVuSans keeps the same
 # clean sans-serif look while adding the Greek the engineering notation needs.
 _FONT, _FONT_BOLD = "Helvetica", "Helvetica-Bold"
+
+
+def _steel_standard_reference(preset):
+    """Return a normative steel-law reference only for a recognised EC2 preset."""
+    code = ec2_codes.CODES.get(str(preset))
+    if code is None:
+        return None
+    if code.key == "EC2-2023":
+        return "EN 1992-1-1:2023 &#167;5.2.4"
+    return f"{code.label} &#167;3.2.7"
+
+
+def _steel_reference_set(presets):
+    references = [_steel_standard_reference(value) for value in presets]
+    known = list(dict.fromkeys(value for value in references if value))
+    return known, any(value is None for value in references)
+
+
+def _steel_theory_reference(presets):
+    known, has_unassigned = _steel_reference_set(presets)
+    if not has_unassigned and len(known) == 1:
+        return known[0]
+    if not has_unassigned:
+        return "material-specific catalogue references (mixed recognised editions)"
+    if known:
+        return ("material-specific catalogue references; custom/generic laws "
+                "have no assigned normative source")
+    return "custom/generic constitutive laws; no normative source assigned"
 
 
 def _register_fonts():
@@ -841,7 +870,7 @@ class ReportBuilder:
         self._h2("Concrete")
         self._concrete_block()
         self._keep_from(start)
-        if inp.get("bars"):
+        if inp.get("bars") or inp.get("shear_on") or inp.get("torsion_on"):
             start = len(self.flow)
             self._h2("Reinforcement")
             self._steel_block()
@@ -985,36 +1014,155 @@ class ReportBuilder:
             self._fig(viz.concrete_curve_figure(c), 130, 80)
 
     def _steel_block(self):
-        st = self.inp["steel"]
-        fyd = st.fytk / st.gamma_y if st.gamma_y else st.fytk
-        rows = [["Parameter", "Symbol", "Value"],
-                ["Yield strength", "f<sub>ytk</sub>", f"{_fmt(st.fytk, 3)} MPa"],
-                ["Compression yield", "f<sub>yck</sub>", f"{_fmt(st.fyck, 3)} MPa"],
-                ["Ultimate strength", "f<sub>utk</sub>", f"{_fmt(st.futk, 3)} MPa"],
-                ["Rupture strain", "eps<sub>ut</sub>", f"{_fmt(st.eut*1000, 3)} permille"],
-                ["Elastic modulus", "E<sub>s</sub>", f"{_fmt(st.Es/1000,0)} GPa"],
-                ["Partial factor", "gamma<sub>s</sub>", _fmt(st.gamma_y, 3)],
-                ["Active in compression", "-", "yes" if st.active_in_compression else "no"],
-                ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]]
-        self._table(rows, [60 * mm, 35 * mm, 50 * mm])
-        self._formula("f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>s</sub>",
-                      ref=("EN 1992-1-1:2023 &#167;5.2.4(1), Formula (5.11)"
-                           if "2023" in str(self.inp.get("mild_preset", "")) else
-                           "DS/EN 1992-1-1 &#167;3.2.7"),
-                      subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
-                      result=f"= {_fmt(fyd, 3)} MPa")
-        if self.figures:
-            self._fig(viz.steel_curve_figure(st), 130, 80)
+        catalogue = (self.inp.get("mild_material_catalog") or {}).get("items", [])
+        laws = self.inp.get("mild_materials") or {}
+        used_ids = list(dict.fromkeys(
+            [item.get("material_id") for item in self.inp.get("bar_elements", [])]
+            + ([self.inp.get("capacity_steel_material_id")]
+               if self.inp.get("shear_on") or self.inp.get("torsion_on") else [])
+        ))
+        records = [item for item in catalogue if item.get("id") in used_ids]
+        if not records:
+            records = [{"id": "-", "name": "Reinforcement", "description": "",
+                        "preset": self.inp.get("mild_preset", "-")}]
+            laws = {"-": self.inp["steel"]}
+        summary = [["ID", "Name", "Preset / source", "Use"]]
+        for item in records:
+            material_id = item.get("id", "-")
+            uses = []
+            count = sum(element.get("material_id") == material_id
+                        for element in self.inp.get("bar_elements", []))
+            if count:
+                uses.append(f"{count} bar{'s' if count != 1 else ''}")
+            if material_id == self.inp.get("capacity_steel_material_id"):
+                uses.append("member-check reference")
+            summary.append([
+                material_id, _html_escape(item.get("name", "")),
+                _html_escape(item.get("preset", "-")), ", ".join(uses) or "-",
+            ])
+        self._table(summary, [18 * mm, 42 * mm, 66 * mm, 40 * mm],
+                    font=7.0, keep=False)
+        self._small("Partial factors are the final effective user inputs; Sector "
+                    "applies no hidden control-, construction- or consequence-"
+                    "category multiplier.")
+        for material_index, item in enumerate(records):
+            if self.figures and material_index:
+                self.flow.append(PageBreak())
+            block_start = len(self.flow)
+            material_id = item.get("id", "-")
+            st = laws.get(material_id)
+            if st is None:
+                continue
+            title = f"{material_id} - {_html_escape(item.get('name', ''))}"
+            self._p(f"<b>{title}</b>")
+            if item.get("description"):
+                self._small(_html_escape(item["description"]))
+            fyd = st.fytk / st.gamma_y if st.gamma_y else st.fytk
+            rows = [["Parameter", "Symbol", "Value"],
+                    ["Yield strength", "f<sub>ytk</sub>", f"{_fmt(st.fytk, 3)} MPa"],
+                    ["Compression yield", "f<sub>yck</sub>", f"{_fmt(st.fyck, 3)} MPa"],
+                    ["Ultimate strength", "f<sub>utk</sub>", f"{_fmt(st.futk, 3)} MPa"],
+                    ["Rupture strain", "eps<sub>ut</sub>",
+                     f"{_fmt(st.eut*1000, 3)} permille"],
+                    ["Elastic modulus", "E<sub>s</sub>", f"{_fmt(st.Es/1000,1)} GPa"],
+                    ["Yield partial factor", "gamma<sub>y</sub>", _fmt(st.gamma_y, 3)],
+                    ["Ultimate partial factor", "gamma<sub>u</sub>", _fmt(st.gamma_u, 3)],
+                    ["Modulus factor", "gamma<sub>E</sub>", _fmt(st.gamma_E, 3)],
+                    ["Active in compression", "-",
+                     "yes" if st.active_in_compression else "no"],
+                    ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]]
+            self._table(rows, [60 * mm, 35 * mm, 50 * mm])
+            source_ref = _steel_standard_reference(item.get("preset"))
+            self._formula("f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>y</sub>",
+                          ref=(source_ref or
+                               "User-defined or generic constitutive law; no "
+                               "normative curve source assigned."),
+                          subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
+                          result=f"= {_fmt(fyd, 3)} MPa")
+            if self.figures:
+                self._fig(viz.steel_curve_figure(
+                    st, title=f"{material_id} - {item.get('name', '')}"
+                ), 130, 80)
+            self._keep_from(block_start)
 
     def _prestress_block(self):
-        p = self.inp["prestress"]
-        rows = [["Parameter", "Value"],
-                ["Initial prestrain IS", f"{_fmt(getattr(p,'IS',0.0)*1000, 3)} permille"],
-                ["Elastic modulus E<sub>p</sub>", f"{_fmt(getattr(p,'Es',0.0)/1000, 3)} GPa"],
-                ["Rupture strain", f"{_fmt(getattr(p,'rupture_strain',0.0)*1000, 3)} permille"]]
-        self._table(rows, [80 * mm, 60 * mm])
-        if self.figures and p is not None:
-            self._fig(viz.prestress_curve_figure(p), 130, 80)
+        catalogue = (self.inp.get("prestress_material_catalog") or {}).get(
+            "items", []
+        )
+        laws = self.inp.get("prestress_materials") or {}
+        used_ids = list(dict.fromkeys(
+            item.get("material_id") for item in self.inp.get("tendon_elements", [])
+        ))
+        records = [item for item in catalogue if item.get("id") in used_ids]
+        if not records:
+            records = [{"id": "-", "name": "Prestressing steel",
+                        "description": "",
+                        "preset": self.inp.get("prestress_preset", "-")}]
+            laws = {"-": self.inp["prestress"]}
+        summary = [["ID", "Name", "Preset / source", "Tendons"]]
+        for item in records:
+            material_id = item.get("id", "-")
+            count = sum(element.get("material_id") == material_id
+                        for element in self.inp.get("tendon_elements", []))
+            summary.append([material_id, _html_escape(item.get("name", "")),
+                            _html_escape(item.get("preset", "-")), count])
+        self._table(summary, [18 * mm, 45 * mm, 78 * mm, 25 * mm],
+                    font=7.0, keep=False)
+        for material_index, item in enumerate(records):
+            if self.figures and material_index:
+                self.flow.append(PageBreak())
+            block_start = len(self.flow)
+            material_id = item.get("id", "-")
+            p = laws.get(material_id)
+            if p is None:
+                continue
+            self._p(f"<b>{material_id} - {_html_escape(item.get('name', ''))}</b>")
+            if item.get("description"):
+                self._small(_html_escape(item["description"]))
+            rows = [["Parameter", "Symbol", "Value"],
+                    ["Initial prestrain", "eps<sub>p</sub><super>(0)</super>",
+                     f"{_fmt(p.IS*1000, 3)} permille"]]
+            if p.curve in (1, 2, 3, 4, 5):
+                characteristic_at_rupture = p.stress(
+                    p.rupture_strain, design=False
+                )
+                rows.extend([
+                    ["Curve definition", "-", f"Built-in fixed curve {p.curve}"],
+                    ["Curve source", "-", "Sector fixed polynomial; normative "
+                     "source not assigned"],
+                    ["Characteristic stress at rupture strain",
+                     "sigma<sub>p</sub>(eps<sub>ut</sub>)",
+                     f"{_fmt(characteristic_at_rupture, 3)} MPa"],
+                    ["Elastic-analysis modulus", "E<sub>p</sub>",
+                     f"{_fmt(p.Es/1000, 1)} GPa"],
+                    ["Fixed rupture strain", "eps<sub>ut</sub>",
+                     f"{_fmt(p.rupture_strain*1000, 3)} permille"],
+                    ["Design factor on fixed workline", "gamma<sub>y</sub>",
+                     _fmt(p.gamma_y, 3)],
+                ])
+            else:
+                rows.extend([
+                    ["Proof strength", "f<sub>p0.1k</sub>",
+                     f"{_fmt(p.fytk, 3)} MPa"],
+                    ["Ultimate strength", "f<sub>pk</sub>",
+                     f"{_fmt(p.futk, 3)} MPa"],
+                    ["Elastic modulus", "E<sub>p</sub>",
+                     f"{_fmt(p.Es/1000, 1)} GPa"],
+                    ["Rupture strain", "eps<sub>ut</sub>",
+                     f"{_fmt(p.rupture_strain*1000, 3)} permille"],
+                    ["Yield partial factor", "gamma<sub>y</sub>",
+                     _fmt(p.gamma_y, 3)],
+                    ["Ultimate partial factor", "gamma<sub>u</sub>",
+                     _fmt(p.gamma_u, 3)],
+                    ["Modulus factor", "gamma<sub>E</sub>",
+                     _fmt(p.gamma_E, 3)],
+                ])
+            self._table(rows, [60 * mm, 35 * mm, 50 * mm])
+            if self.figures:
+                self._fig(viz.prestress_curve_figure(
+                    p, title=f"{material_id} - {item.get('name', '')}"
+                ), 130, 80)
+            self._keep_from(block_start)
 
     def _loads_block(self):
         inp = self._base_inp
@@ -1136,6 +1284,18 @@ class ReportBuilder:
                 ])
             for limitation in basis.get("limitations", []):
                 rows.append(["Scope limitation", str(limitation)])
+        if self._result_values("shear") or self._result_values("torsion"):
+            material_id = inp.get("capacity_steel_material_id") or "-"
+            material_name = next(
+                (item.get("name", "") for item in
+                 (inp.get("mild_material_catalog") or {}).get("items", [])
+                 if item.get("id") == material_id),
+                "",
+            )
+            rows.append([
+                "Member-check reinforcing material",
+                f"{material_id} - {material_name}" if material_name else material_id,
+            ])
         plastic_results = self._result_values("plastic")
         if plastic_results:
             rows.append(["Sweep start V.min", f"{_fmt(inp.get('v_min'),0)} deg"])
@@ -1154,17 +1314,31 @@ class ReportBuilder:
             if inp.get("el_phi") is not None:
                 rows.append(["Creep coefficient &#966; (long-term)",
                              _fmt(inp.get("el_phi"), 3)])
-            ns_v, nl_v = inp.get("ns"), inp.get("nl")
-            rows.append(["Mild modular ratio n<sub>s</sub>=E<sub>s</sub>/E<sub>c</sub> "
-                         "(short) / n<sub>l</sub>=E<sub>s</sub>/E<sub>c,eff</sub> (long)",
-                         f"{_fmt(ns_v, 3)} / {_fmt(nl_v, 3)}"])
-            pre, stl = inp.get("prestress"), inp.get("steel")
-            if (inp.get("tendons") and pre is not None and getattr(pre, "Es", 0)
-                    and getattr(stl, "Es", 0) and ns_v is not None and nl_v is not None):
-                r = pre.Es / stl.Es
-                rows.append(["Prestress modular ratio n<sub>s</sub>=E<sub>p</sub>/E<sub>c</sub> "
-                             "(short) / n<sub>l</sub>=E<sub>p</sub>/E<sub>c,eff</sub> (long)",
-                             f"{_fmt(ns_v * r, 3)} / {_fmt(nl_v * r, 3)}"])
+            ec_mpa = float(inp.get("conc_Ec") or 0.0) * 1000.0
+            phi = float(inp.get("el_phi") or 0.0)
+            material_pairs = []
+            material_pairs.extend(
+                (element.get("material_id"), material)
+                for element, material in zip(inp.get("bar_elements", []),
+                                             inp.get("bar_materials", []))
+            )
+            material_pairs.extend(
+                (element.get("material_id"), material)
+                for element, material in zip(inp.get("tendon_elements", []),
+                                             inp.get("tendon_materials", []))
+            )
+            if not material_pairs:
+                if inp.get("bars") and inp.get("steel") is not None:
+                    material_pairs.append(("M1", inp["steel"]))
+                if inp.get("tendons") and inp.get("prestress") is not None:
+                    material_pairs.append(("P1", inp["prestress"]))
+            for material_id, material in dict(material_pairs).items():
+                ns_v = material.Es / ec_mpa if ec_mpa > 0.0 else None
+                nl_v = ns_v * (1.0 + phi) if ns_v is not None else None
+                rows.append([
+                    f"{material_id} modular ratios n<sub>s</sub> / n<sub>l</sub>",
+                    f"{_fmt(ns_v, 3)} / {_fmt(nl_v, 3)}",
+                ])
             rows.append(["Mean tensile strength f<sub>ctm</sub>",
                          f"{_fmt(inp.get('sls_fctm'), 3)} MPa"])
             rows.append(["Concrete compression criterion",
@@ -1204,26 +1378,33 @@ class ReportBuilder:
         elastic_results = self._result_values("elastic")
         if plastic_results:
             material_2023 = "2023" in str(self.inp.get("concrete_preset", ""))
-            steel_2023 = "2023" in str(self.inp.get("mild_preset", ""))
+            steel_presets = [
+                str(item.get("preset", ""))
+                for item in (self.inp.get("mild_material_catalog") or {}).get(
+                    "items", [])
+                if item.get("id") in {
+                    element.get("material_id")
+                    for element in self.inp.get("bar_elements", [])
+                }
+            ] or [str(self.inp.get("mild_preset", ""))]
             concrete_ref = (
                 "EN 1992-1-1:2023 &#167;8.1.1-8.1.2 and &#167;5.1.6"
                 if material_2023 else
                 "DS/EN 1992-1-1 &#167;6.1 and &#167;3.1.7"
             )
-            steel_ref = (
-                "EN 1992-1-1:2023 &#167;5.2.4"
-                if steel_2023 else
-                "DS/EN 1992-1-1 &#167;3.2.7"
-            )
+            steel_ref = _steel_theory_reference(steel_presets)
             self._p("<b>Plastic section capacity.</b> Plane sections; concrete in "
                     "compression follows the design curve above, reinforcement the "
                     "design stress-strain law. For a trial neutral axis the strain "
                     "plane is scaled to the governing curvature - the first material "
                     "limit reached:")
             self._formula("kappa<sub>u</sub> = min( eps<sub>cu2</sub>/c ,  "
-                          "eps<sub>su</sub>/(s<sub>na</sub>-s<sub>bar</sub>) ,  "
-                          "eps<sub>pu</sub>/... )",
-                          ref=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}")
+                           "min<sub>i</sub>[eps<sub>su,i</sub>/d<sub>s,i</sub>] ,  "
+                           "min<sub>j</sub>[(eps<sub>pu,j</sub>-"
+                           "eps<sub>p0,j</sub>)/d<sub>p,j</sub>] )",
+                           ref=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}")
+            self._small("Each bar and tendon uses its assigned material law and "
+                        "strain limit in the element-wise minima.")
             self._p("The compression depth c is solved from axial equilibrium and "
                     "the moments follow from the force resultants:")
             self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
@@ -1233,10 +1414,9 @@ class ReportBuilder:
                     "(reinforcement weighted by the modular ratio), concrete tension "
                     "ignored once cracked; long-term and short-term actions are "
                     "carried at their own modular ratios so creep is explicit. The "
-                    "ratios are derived from the moduli, not entered: mild steel uses "
-                    "n = E<sub>s</sub>/E<sub>c</sub> and tendons "
-                    "n = E<sub>p</sub>/E<sub>c</sub> (independent, since "
-                    "E<sub>s</sub> &#8800; E<sub>p</sub>), each creep-reduced to "
+                    "ratios are derived from the moduli, not entered: each bar or "
+                    "tendon uses its assigned n<sub>i</sub> = E<sub>i</sub>/"
+                    "E<sub>c</sub>, creep-reduced to "
                     "E/E<sub>c,eff</sub> with E<sub>c,eff</sub> = "
                     "E<sub>c</sub>/(1+&#966;) for the long-term state.")
             self._p("<b>Cracking threshold.</b> The Stage-I extreme tensile stress "
@@ -1353,7 +1533,9 @@ class ReportBuilder:
         # bar only when there are mild bars active in compression (a tendon-only
         # section has none). Guard on the field so an older payload does not raise.
         comp = (bool(self.inp.get("bars"))
-                and bool(getattr(self.inp.get("steel"), "active_in_compression", False))
+                and any(getattr(material, "active_in_compression", False)
+                        for material in (self.inp.get("bar_materials")
+                                         or [self.inp.get("steel")]))
                 and bool(pl["points"]) and "eps_s_comp" in pl["points"][0])
         capacity_rows = [[
             "NA angle",
@@ -1431,7 +1613,9 @@ class ReportBuilder:
                 f"concrete fibre is at the ultimate strain; the curvature scales "
                 f"the strain plane to that limit.")
         comp = (bool(self.inp.get("bars"))
-                and bool(getattr(self.inp.get("steel"), "active_in_compression", False))
+                and any(getattr(material, "active_in_compression", False)
+                        for material in (self.inp.get("bar_materials")
+                                         or [self.inp.get("steel")]))
                 and "eps_s_comp" in gov)
         steel_rows = ([["Most-tensile bar strain", "eps<sub>s,t</sub>",
                         f"{_fmt(gov['eps_s'], 3)} %"],
@@ -1493,12 +1677,13 @@ class ReportBuilder:
         if element_rows:
             self._h2("Governing reinforcement and tendon response")
             rows = [[
-                "Element", "State", "x", "y", "Area", "Strain",
+                "Element", "Material", "State", "x", "y", "Area", "Strain",
                 "Design stress", "Force",
             ]]
             for row in element_rows:
                 rows.append([
                     row["element_id"],
+                    row.get("material_id") or "-",
                     row["state"],
                     _fmt(row["x_mm"], 2),
                     _fmt(row["y_mm"], 2),
@@ -1509,9 +1694,9 @@ class ReportBuilder:
                 ])
             self._table(
                 rows,
-                [25 * mm, 18 * mm, 17 * mm, 17 * mm, 21 * mm,
-                 25 * mm, 24 * mm, 23 * mm],
-                font=6.5,
+                [21 * mm, 18 * mm, 17 * mm, 15 * mm, 15 * mm, 18 * mm,
+                 22 * mm, 22 * mm, 20 * mm],
+                font=6.1,
                 keep=False,
             )
             self._small(
@@ -1527,7 +1712,6 @@ class ReportBuilder:
             zones = viz.compression_zones(inp.get("outer", []), hp)
             bars = inp.get("bars", [])
             tendons = inp.get("tendons", [])
-            pre = inp.get("prestress")
             bar_colors = viz.halfplane_bar_colors(
                 bars, hp, kappa=gov["kappa"],
             )
@@ -1535,7 +1719,11 @@ class ReportBuilder:
                 tendons,
                 hp,
                 kappa=gov["kappa"],
-                prestrain=float(getattr(pre, "IS", 0.0)) if pre is not None else 0.0,
+                prestrain=(
+                    [material.IS for material in inp.get("tendon_materials", [])]
+                    if inp.get("tendon_materials") else
+                    float(getattr(inp.get("prestress"), "IS", 0.0))
+                ),
             )
             self._h2("Section state at the governing angle")
             self._fig(viz.section_figure(
@@ -2425,11 +2613,12 @@ class ReportBuilder:
                     "long-term concrete stress. Tension positive.")
         element_rows = el.get("elements") or []
         if element_rows:
-            rows = [["Element", "x", "y", "Area", "Strain", "TOTAL",
+            rows = [["Element", "Material", "x", "y", "Area", "Strain", "TOTAL",
                      "LONG", "DIF", "RST1"]]
             for row in element_rows:
                 rows.append([
                     row["element_id"],
+                    row.get("material_id") or "-",
                     _fmt(row["x_mm"], 1),
                     _fmt(row["y_mm"], 1),
                     _fmt(row["area_mm2"], 1),
@@ -2441,9 +2630,9 @@ class ReportBuilder:
                 ])
             self._table(
                 rows,
-                [24 * mm, 15 * mm, 15 * mm, 18 * mm, 20 * mm,
-                 20 * mm, 20 * mm, 18 * mm, 20 * mm],
-                font=6.5, keep=False,
+                [19 * mm, 17 * mm, 13 * mm, 13 * mm, 17 * mm, 18 * mm,
+                 18 * mm, 18 * mm, 17 * mm, 18 * mm],
+                font=6.0, keep=False,
             )
             self._small("Coordinates in mm; area in mm<super>2</super>; strain in "
                         "permille; stresses in MPa.")
@@ -2768,15 +2957,40 @@ class ReportBuilder:
                     "strains), and &#167;6.1 (bending)."
                 )
             if self.inp.get("bars"):
-                if "2023" in str(self.inp.get("mild_preset", "")):
+                steel_presets = [
+                    str(item.get("preset", ""))
+                    for item in (self.inp.get("mild_material_catalog") or {}).get(
+                        "items", [])
+                    if item.get("id") in {
+                        element.get("material_id")
+                        for element in self.inp.get("bar_elements", [])
+                    }
+                ] or [str(self.inp.get("mild_preset", ""))]
+                standard_refs, has_unassigned = _steel_reference_set(steel_presets)
+                if not has_unassigned and len(standard_refs) == 1:
                     lines.append(
-                        "Selected reinforcing-steel material - EN 1992-1-1:2023 "
-                        "&#167;5.2.4 and Formula (5.11)."
+                        "Selected reinforcing-steel material - "
+                        f"{standard_refs[0]}."
+                    )
+                elif not has_unassigned:
+                    lines.append(
+                        "Reinforcing-steel catalogue uses mixed recognised "
+                        "editions; each material definition and source is listed "
+                        "in Section and materials."
+                    )
+                elif standard_refs:
+                    lines.append(
+                        "Reinforcing-steel catalogue includes recognised standard "
+                        "presets and custom/generic laws. Standard references: "
+                        + "; ".join(standard_refs)
+                        + ". Custom/generic laws have no assigned normative curve "
+                        "source; use the material description as project evidence."
                     )
                 else:
                     lines.append(
-                        "Selected reinforcing-steel material - DS/EN 1992-1-1 "
-                        "&#167;3.2.7."
+                        "Reinforcing-steel catalogue uses custom/generic "
+                        "constitutive laws; no normative curve source is assigned. "
+                        "Use the material description as project evidence."
                     )
             lines.append(
                 "The capacity solver is covered by independent hand-calculation "

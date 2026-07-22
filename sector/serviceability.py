@@ -236,7 +236,7 @@ def _crack_width(
     cracked_state: ElasticResult,
     n: float,
     fctm: float,
-    Es: float,
+    Es: Union[float, Sequence[float]],
     cover: float,
     kt: float,
     k1: Union[float, Sequence[float]],
@@ -276,12 +276,15 @@ def _crack_width(
     ``"2023"`` switches to the EN 1992-1-1:2023 refined model (9.2.3), a different
     formula handled by :func:`_crack_width_2023`; the DK NA flags then do not apply.
     """
-    if edition == "2023":
-        return _crack_width_2023(section, cracked_state, n, fctm, Es, cover, kt,
-                                 k1, bar_diameter, n_mult=n_mult)
     bx, by, ba = section.bar_arrays()
     if not bx.size:
         return None
+    es_arr = np.broadcast_to(np.asarray(Es, dtype=float), (bx.size,))
+    mult_arr = (np.ones(bx.size) if n_mult is None else
+                np.broadcast_to(np.asarray(n_mult, dtype=float), (bx.size,)))
+    if edition == "2023":
+        return _crack_width_2023(section, cracked_state, n, fctm, Es, cover, kt,
+                                 k1, bar_diameter, n_mult=n_mult)
     sigma = np.asarray(cracked_state.bar_stress, dtype=float) / _KPA_PER_MPA  # MPa
     if float(sigma.max()) <= 0.0:
         return None  # no bar in tension -> no crack to control
@@ -335,7 +338,6 @@ def _crack_width(
     if as_eff <= 0.0:
         return None
     rho = as_eff / ac_eff
-    alpha_e = n
     # k1 (bond) may be a scalar (all reinforcement) or one value per bar -- e.g.
     # the mild-steel value for ordinary bars and 1.6 for prestressing tendons.
     k1_arr = np.broadcast_to(np.asarray(k1, dtype=float), (bx.size,))
@@ -361,6 +363,8 @@ def _crack_width(
         if not in_band[i] or sigma[i] <= 0.0:
             continue
         sigma_s = float(sigma[i])
+        es_i = float(es_arr[i])
+        alpha_e_i = float(n) * float(mult_arr[i])
         phi = float(phi_arr[i])
         if cover is not None:
             c_i = float(cover)
@@ -370,8 +374,10 @@ def _crack_width(
             c_i = max(distance_to_boundary(float(bx[i]), float(by[i]), rings)
                       * 1000.0 - phi / 2.0, 0.0)
         # EC2 (7.9): mean strain, with the 0.6 sigma_s/Es lower bound.
-        esm_ecm = max((sigma_s - kt * fctm / rho * (1.0 + alpha_e * rho)) / Es,
-                      0.6 * sigma_s / Es)
+        esm_ecm = max(
+            (sigma_s - kt * fctm / rho * (1.0 + alpha_e_i * rho)) / es_i,
+            0.6 * sigma_s / es_i,
+        )
         # EC2 (7.11): maximum crack spacing (cover and phi in mm). Under the DK NA
         # (7.3.4(3)) the cover term coefficient is k3*(25/c)^(2/3) instead of k3.
         k3_i = k3 * (25.0 / c_i) ** (2.0 / 3.0) if k3_cover_dependent and c_i > 0.0 else k3
@@ -412,7 +418,7 @@ def _crack_width_2023(
     cracked_state: ElasticResult,
     n: float,
     fctm: float,
-    Es: float,
+    Es: Union[float, Sequence[float]],
     cover: Optional[float],
     kt: float,
     k1: Union[float, Sequence[float]],
@@ -440,6 +446,9 @@ def _crack_width_2023(
     sigma = np.asarray(cracked_state.bar_stress, dtype=float) / _KPA_PER_MPA  # MPa
     if float(sigma.max()) <= 0.0:
         return None
+    es_arr = np.broadcast_to(np.asarray(Es, dtype=float), (bx.size,))
+    mult_arr = (np.ones(bx.size) if n_mult is None else
+                np.broadcast_to(np.asarray(n_mult, dtype=float), (bx.size,)))
     gx, gy, mag = _depth_axis(cracked_state.kx, cracked_state.ky)
     if mag == 0.0:
         return None
@@ -504,7 +513,6 @@ def _crack_width_2023(
     if as_eff <= 0.0:
         return None
     rho = as_eff / ac_eff
-    alpha_e = n
 
     # kfl (9.17, general; reduces to (9.16) for a rectangle): needs xg, the uncracked
     # transformed-section neutral axis (its centroid), projected on the depth axis.
@@ -528,6 +536,8 @@ def _crack_width_2023(
         if denom <= 1.0e-9:
             continue
         sigma_s = float(sigma[i])
+        es_i = float(es_arr[i])
+        alpha_e_i = float(n) * float(mult_arr[i])
         phi = _phi(i)
         if cover is not None:
             c_i = float(cover)
@@ -535,8 +545,10 @@ def _crack_width_2023(
             c_i = max(distance_to_boundary(float(bx[i]), float(by[i]), rings)
                       * 1000.0 - phi / 2.0, 0.0)
         # (9.11): mean strain; lower bound (1 - kt)*sigma_s/Es (was a fixed 0.6 in 2004).
-        esm_ecm = max((sigma_s - kt * fctm / rho * (1.0 + alpha_e * rho)) / Es,
-                      (1.0 - kt) * sigma_s / Es)
+        esm_ecm = max(
+            (sigma_s - kt * fctm / rho * (1.0 + alpha_e_i * rho)) / es_i,
+            (1.0 - kt) * sigma_s / es_i,
+        )
         # (9.18) bond factor: good bond (ribbed, k1<=1.0) -> 0.9, poor (plain) -> 1.2.
         kb = 0.9 if float(k1_arr[i]) <= 1.0 else 1.2
         # (9.15) mean crack spacing = 1.5c + (kfl*kb/7.2)*(phi/rho), capped at
@@ -562,7 +574,7 @@ def analyse_cracking(
     n: float,
     *,
     fctm: float,
-    Es: float = 200_000.0,
+    Es: Union[float, Sequence[float]] = 200_000.0,
     beta: float = 1.0,
     kt: float = 0.6,
     cover: Optional[float] = None,
@@ -589,7 +601,7 @@ def analyse_cracking(
     fctm:
         Concrete mean tensile strength (MPa); use :func:`sector.codes.fctm`.
     Es:
-        Reinforcement modulus (MPa).
+        Reinforcement modulus (MPa), either one value or one per element.
     beta:
         Tension-stiffening load-duration factor: ``1.0`` short-term / single
         load, ``0.5`` sustained or repeated.
@@ -709,7 +721,7 @@ def crack_width(
     n: float,
     *,
     fctm: float,
-    Es: float = 200_000.0,
+    Es: Union[float, Sequence[float]] = 200_000.0,
     kt: float = 0.6,
     cover: Optional[float] = None,
     bar_diameter: Optional[Union[float, Sequence[float]]] = None,

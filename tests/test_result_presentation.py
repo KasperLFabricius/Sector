@@ -128,6 +128,71 @@ def test_plastic_state_evidence_is_tension_positive_and_uses_mm2_area():
         tension["stress_mpa"] * 500.0 / 1000.0)
 
 
+def test_plastic_state_evidence_uses_and_identifies_each_material():
+    low = MildSteel(
+        fytk=300.0, fyck=300.0, futk=300.0, eut=0.05,
+        gamma_y=1.0, curve=2,
+    )
+    high = MildSteel(
+        fytk=600.0, fyck=600.0, futk=600.0, eut=0.05,
+        gamma_y=1.0, curve=2,
+    )
+    inp = {
+        "outer": [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)],
+        "holes": [],
+        "bars": [(0.0, -0.05, 500.0), (0.0, -0.05, 500.0)],
+        "tendons": [],
+        "concrete": Concrete(fck=30.0, gamma_c=1.5),
+        "steel": low,
+        "bar_materials": [low, high],
+        "prestress": None,
+        "bar_elements": [
+            {"id": "R1", "material_id": "M1"},
+            {"id": "R2", "material_id": "M2"},
+        ],
+        "mild_material_catalog": {
+            "items": [
+                {"id": "M1", "name": "Low strength"},
+                {"id": "M2", "name": "High strength"},
+            ]
+        },
+    }
+    point = {
+        "V": 90.0, "na_x": float("inf"), "na_y": 0.0, "kappa": 0.10,
+    }
+
+    rows = presentation.plastic_state_evidence(inp, point)["elements"]
+
+    assert [row["material_id"] for row in rows] == ["M1", "M2"]
+    assert [row["material_name"] for row in rows] == [
+        "Low strength", "High strength"
+    ]
+    assert rows[1]["stress_mpa"] > rows[0]["stress_mpa"]
+
+
+def test_plastic_state_evidence_rejects_incomplete_material_sequence():
+    steel = MildSteel(
+        fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
+        gamma_y=1.0, curve=2,
+    )
+    inp = {
+        "outer": [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)],
+        "holes": [],
+        "bars": [(0.0, -0.05, 500.0), (0.0, 0.05, 500.0)],
+        "bar_materials": [steel],
+        "tendons": [],
+        "concrete": Concrete(fck=30.0, gamma_c=1.5),
+        "steel": steel,
+        "prestress": None,
+    }
+
+    with pytest.raises(ValueError, match="one material and prestrain"):
+        presentation.plastic_state_evidence(
+            inp, {"V": 90.0, "na_x": float("inf"), "na_y": 0.0,
+                  "kappa": 0.01}
+        )
+
+
 def test_nm_boundary_rows_preserve_both_independent_axial_traces():
     interaction = {
         "x": {"N": [-100.0, 0.0], "M": [0.0, 50.0]},

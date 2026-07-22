@@ -126,14 +126,23 @@ def plastic_state_evidence(inp, point):
 
     element_rows = []
 
-    def append_elements(points, element_type, material, prestrain=0.0, ids=None):
+    def append_elements(points, element_type, material, prestrain=0.0, ids=None,
+                        material_ids=None, material_names=None):
+        points = list(points or [])
         if material is None:
             return
-        for element_no, element in enumerate(points or [], start=1):
+        materials = (list(material) if isinstance(material, (list, tuple))
+                     else [material] * len(points))
+        prestrains = (list(prestrain) if isinstance(prestrain, (list, tuple))
+                      else [prestrain] * len(points))
+        if len(materials) != len(points) or len(prestrains) != len(points):
+            raise ValueError("one material and prestrain are required per element")
+        for element_no, (element, law, initial) in enumerate(
+                zip(points, materials, prestrains), start=1):
             x, y = float(element[0]), float(element[1])
             area = float(element[2]) if len(element) > 2 else 0.0
-            strain = prestrain - kappa * (a * x + b * y + c)
-            stress = material.stress(strain, design=True)
+            strain = initial - kappa * (a * x + b * y + c)
+            stress = law.stress(strain, design=True)
             state = ("Tension" if strain > 1e-12 else
                      "Compression" if strain < -1e-12 else "Neutral")
             element_rows.append({
@@ -142,6 +151,12 @@ def plastic_state_evidence(inp, point):
                 "element_id": (str(ids[element_no - 1])
                                if ids and element_no <= len(ids)
                                else f"{element_type.lower()} {element_no}"),
+                "material_id": (str(material_ids[element_no - 1])
+                                if material_ids and element_no <= len(material_ids)
+                                else None),
+                "material_name": (str(material_names[element_no - 1])
+                                  if material_names and element_no <= len(material_names)
+                                  else None),
                 "state": state,
                 "x_mm": x * _MM,
                 "y_mm": y * _MM,
@@ -153,14 +168,30 @@ def plastic_state_evidence(inp, point):
 
     bar_ids = [item.get("id") for item in inp.get("bar_elements", [])]
     tendon_ids = [item.get("id") for item in inp.get("tendon_elements", [])]
-    append_elements(inp.get("bars"), "Bar", inp.get("steel"), ids=bar_ids)
+    bar_material_ids = [item.get("material_id")
+                        for item in inp.get("bar_elements", [])]
+    tendon_material_ids = [item.get("material_id")
+                           for item in inp.get("tendon_elements", [])]
+    mild_names = {item.get("id"): item.get("name") for item in
+                  (inp.get("mild_material_catalog") or {}).get("items", [])}
+    prestress_names = {item.get("id"): item.get("name") for item in
+                       (inp.get("prestress_material_catalog") or {}).get("items", [])}
+    append_elements(
+        inp.get("bars"), "Bar", inp.get("bar_materials") or inp.get("steel"),
+        ids=bar_ids, material_ids=bar_material_ids,
+        material_names=[mild_names.get(value) for value in bar_material_ids],
+    )
     prestress = inp.get("prestress")
     append_elements(
         inp.get("tendons"),
         "Tendon",
-        prestress,
-        float(getattr(prestress, "IS", 0.0)) if prestress is not None else 0.0,
+        inp.get("tendon_materials") or prestress,
+        ([material.IS for material in inp.get("tendon_materials", [])]
+         if inp.get("tendon_materials") else
+         float(getattr(prestress, "IS", 0.0)) if prestress is not None else 0.0),
         ids=tendon_ids,
+        material_ids=tendon_material_ids,
+        material_names=[prestress_names.get(value) for value in tendon_material_ids],
     )
     return {
         "halfplane": hp,

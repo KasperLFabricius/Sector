@@ -753,6 +753,22 @@ def test_prestress_resultants_helper():
         {"prestress": None, "tendons": tendons}, 0.0, 0.0
     ) == (0.0, 0.0, 0.0)
 
+    # Element-specific materials use each tendon's own modulus and initial strain.
+    import dataclasses
+    pre_2 = dataclasses.replace(pre, Es=180_000.0, IS=0.003)
+    expected_forces = [
+        pre.Es * pre.IS * 1000.0 * 1000.0 / 1.0e6,
+        pre_2.Es * pre_2.IS * 1000.0 * 500.0 / 1.0e6,
+    ]
+    mixed = capacity.prestress_resultants({
+        "prestress": pre,
+        "tendons": tendons,
+        "tendon_materials": [pre, pre_2],
+    })
+    assert mixed[0] == pytest.approx(sum(expected_forces))
+    assert mixed[1] == pytest.approx(-0.40 * sum(expected_forces))
+    assert mixed[2] == pytest.approx(0.10 * expected_forces[1])
+
 
 def _qs_prestressed_shear(pre_is, *, method=None):
     """A Quick Section rectangle with four tendons and the given prestrain, with

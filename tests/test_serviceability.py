@@ -9,6 +9,7 @@ proportional-scaling of the cracking load.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -110,6 +111,34 @@ def test_crack_width_uses_one_diameter_per_element(edition):
     assert result.crack is not None
     by_index = {candidate.bar_index: candidate for candidate in result.crack.candidates}
     assert [by_index[index].phi for index in range(3)] == pytest.approx(diameters)
+
+
+def test_crack_width_uses_each_elements_assigned_modulus():
+    # Hold the cracked state and stress equal at three otherwise equivalent bars.
+    # The bar with the lower assigned modulus has the greater mean strain and must
+    # govern; moving that modulus to another bar moves the governing element too.
+    sec = beam_section()
+    base = analyse_cracking(
+        sec, 0.0, 150.0, 0.0, 6.0, fctm=fctm(30.0), bar_diameter=25.0
+    )
+    state = dataclasses.replace(
+        base.cracked_state,
+        bar_stress=np.full(3, 200_000.0),
+    )
+    from sector.serviceability import crack_width
+
+    first_soft = crack_width(
+        sec, state, 6.0, fctm=fctm(30.0),
+        Es=[100_000.0, 200_000.0, 200_000.0], bar_diameter=25.0,
+    )
+    second_soft = crack_width(
+        sec, state, 6.0, fctm=fctm(30.0),
+        Es=[200_000.0, 100_000.0, 200_000.0], bar_diameter=25.0,
+    )
+
+    assert first_soft.gov_bar == 0
+    assert second_soft.gov_bar == 1
+    assert first_soft.wk == pytest.approx(second_soft.wk)
 
 
 def test_auto_per_bar_cover_matches_hand_calc():

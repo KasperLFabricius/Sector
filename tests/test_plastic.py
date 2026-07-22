@@ -206,3 +206,41 @@ def test_band_stress_memo_collapses_equal_kappa_h_and_preserves_values():
     assert a is b and len(memo) == 1                          # one cached array, reused
     assert np.allclose(a, _band_stresses(conc, 0.020, 0.0010, 40),
                        rtol=0.0, atol=1e-12)                  # memo preserves the values
+
+
+def test_plastic_capacity_uses_each_bars_assigned_material():
+    # Positive Mx puts the lower bar in tension. Swapping a 300 MPa and 600 MPa
+    # material between the two positions must therefore change the capacity; the
+    # scalar API remains exactly equivalent to repeating one material per element.
+    section = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        bars_xy_area_mm2=[(0.15, 0.05, 1000.0), (0.15, 0.55, 1000.0)],
+    )
+    low = MildSteel(fytk=300.0, fyck=300.0, futk=300.0, eut=0.05,
+                    gamma_y=1.15, gamma_u=1.15, curve=1)
+    high = MildSteel(fytk=600.0, fyck=600.0, futk=600.0, eut=0.05,
+                     gamma_y=1.15, gamma_u=1.15, curve=1)
+
+    weak_tension = plastic_capacity_at_angle(
+        section, _C30, low, 0.0, 90.0, bar_materials=[low, high]
+    )
+    strong_tension = plastic_capacity_at_angle(
+        section, _C30, low, 0.0, 90.0, bar_materials=[high, low]
+    )
+    scalar = plastic_capacity_at_angle(section, _C30, high, 0.0, 90.0)
+    repeated = plastic_capacity_at_angle(
+        section, _C30, low, 0.0, 90.0, bar_materials=[high, high]
+    )
+
+    assert weak_tension.converged and strong_tension.converged
+    assert strong_tension.Mx > 1.8 * weak_tension.Mx
+    assert repeated.Mx == scalar.Mx
+    assert repeated.My == scalar.My
+
+
+def test_plastic_capacity_rejects_incomplete_material_assignment():
+    section = _rect_with_top_and_bottom_bars()
+    with pytest.raises(ValueError, match="need 2 bar materials, got 1"):
+        plastic_capacity_at_angle(
+            section, _C30, _B500, 0.0, 90.0, bar_materials=[_B500]
+        )

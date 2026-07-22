@@ -1450,6 +1450,13 @@ def halfplane_bar_colors(points, halfplane, kappa=0.0, prestrain=0.0):
     """
     if halfplane is None:
         return None
+    points = list(points)
     a, b, c = halfplane
-    return [BAR_TENSION if prestrain - kappa * (a * p[0] + b * p[1] + c) >= 0.0
-            else BAR_COMPRESSION for p in points]
+    if isinstance(prestrain, (list, tuple)):
+        values = list(prestrain)
+        if len(values) != len(points):
+            raise ValueError("one prestrain value is required per point")
+    else:
+        values = [prestrain] * len(points)
+    return [BAR_TENSION if value - kappa * (a * p[0] + b * p[1] + c) >= 0.0
+            else BAR_COMPRESSION for p, value in zip(points, values)]
