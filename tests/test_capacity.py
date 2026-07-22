@@ -150,7 +150,10 @@ def test_auto_face_uses_centroid_adjusted_moment_not_origin_moment():
         P_pl=100.0,
         Mx_pl=10.0,
         My_pl=0.0,
-        shear_Vy=-25.0,
+        # The normal table path also carries an explicit signed component; it is
+        # authoritative even if a compatibility scalar contains only magnitude.
+        shear_Vy=25.0,
+        shear_components={"vy": {"signed_v_ed": -25.0}},
         shear_face_y="auto",
     )
     spec = capacity.shear_direction_specs(inp)["vy"]

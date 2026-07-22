@@ -107,8 +107,10 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
         P_pl=float(record["n_ed_kn"]),
         Mx_pl=float(record["mx_ed_knm"]),
         My_pl=float(record["my_ed_knm"]),
-        shear_Vx=abs(vx_ed),
-        shear_Vy=abs(vy_ed),
+        # Directional fields retain the entered sign for result tables and figures.
+        # The resistance pipeline takes the absolute magnitude explicitly.
+        shear_Vx=vx_ed,
+        shear_Vy=vy_ed,
         shear_face_x=vx_face,
         shear_face_y=vy_face,
         # Transitional single-component field for callers not yet consuming the

@@ -1934,27 +1934,63 @@ class ReportBuilder:
         if sh.get("both_faces_evaluated"):
             face_rows = [["Candidate face", "V<sub>Rd,c</sub>",
                           "|V<sub>Ed</sub>|/V<sub>Rd,c</sub>",
-                          "Shear status", "Combined status", "Governing"]]
+                          "|V<sub>Ed</sub>|/V<sub>Rd</sub>",
+                          "Shear", "V+T", "Combined"]]
             for candidate in sh.get("face_candidates", []):
                 candidate_shear = candidate.get("shear") or {}
+                candidate_links = candidate_shear.get("links") or {}
                 face_rows.append([
                     viz.tension_face_label(
                         candidate.get("tension_low", True), sh["axis"]
                     ),
                     f"{_fmt((candidate_shear.get('res') or {}).get('vrd_c'), 3)} kN",
                     _pct(candidate_shear.get("util")),
+                    ("-" if candidate_links.get("util") is None
+                     else _pct(candidate_links.get("util"))),
                     candidate.get("shear_status", "NOT ASSESSED"),
+                    candidate.get("torsion_status", "NOT RUN"),
                     candidate.get("combined_status", "NOT RUN"),
-                    ("Yes" if bool(candidate.get("tension_low"))
-                     == bool(sh.get("tension_low")) else ""),
                 ])
             self._small(
                 "The associated bending moment is effectively zero; both faces are "
-                "evaluated and the governing candidate is used."
+                "mandatory. Shear, V+T and combined checks may govern on different "
+                "faces."
             )
             self._table(
                 face_rows,
-                [38 * mm, 25 * mm, 34 * mm, 27 * mm, 25 * mm, 21 * mm],
+                [30 * mm, 23 * mm, 26 * mm, 23 * mm, 21 * mm, 21 * mm, 26 * mm],
+                font=5.8,
+            )
+            governing_domains = sh.get("governing_domains") or {}
+            labels = {
+                "shear": "Shear",
+                "vt": "V+T (6.29)",
+                "minimum_reinforcement": "Minimum reinf. (6.31)",
+                "combined": "Combined",
+            }
+            governing_rows = [["Check", "Governing face", "cot theta",
+                               "Value / util.", "Status / outcome"]]
+            for key in ("shear", "vt", "minimum_reinforcement", "combined"):
+                domain = governing_domains.get(key)
+                if not domain:
+                    continue
+                status = domain.get("status")
+                if key == "minimum_reinforcement":
+                    status = {
+                        "PASS": "minimum sufficient",
+                        "FAIL": "designed reinforcement required",
+                    }.get(status, str(status or "NOT ASSESSED").lower())
+                governing_rows.append([
+                    labels[key],
+                    viz.directional_face_label(component, domain.get("face")),
+                    _fmt(domain.get("cot"), 3),
+                    _pct(domain.get("util")),
+                    status,
+                ])
+            self._h2("Independent governing selections")
+            self._table(
+                governing_rows,
+                [35 * mm, 38 * mm, 24 * mm, 31 * mm, 42 * mm],
                 font=6.5,
             )
         links_payload = sh.get("links") or {}
@@ -2207,7 +2243,8 @@ class ReportBuilder:
             "expression is inferred."
         )
         rows = [["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
-                 "r<sub>T</sub>", "DK NA sum", "Status"]]
+                 "r<sub>T</sub>", "DK NA sum", "Governing face",
+                 "cot theta", "Status"]]
         for component in ("vx", "vy"):
             item = directions.get(component)
             if not item:
@@ -2216,14 +2253,24 @@ class ReportBuilder:
                 "Vx+T" if component == "vx" else "Vy+T",
                 _pct(item.get("r_m")), _pct(item.get("r_v")),
                 _pct(item.get("r_t")), _pct(item.get("dkna_sum")),
+                viz.directional_face_label(
+                    component, item.get("governing_face")
+                ),
+                _fmt(item.get("governing_cot"), 3),
                 item.get("status", (
                     "NOT ASSESSED" if not item.get("valid")
                     else "PASS" if item.get("dkna_ok") else "FAIL"
                 )),
             ])
-        self._table(rows, [27 * mm, 25 * mm, 25 * mm, 25 * mm, 32 * mm, 35 * mm])
+        self._table(
+            rows,
+            [20 * mm, 17 * mm, 17 * mm, 17 * mm, 23 * mm,
+             34 * mm, 18 * mm, 24 * mm],
+            font=5.8,
+        )
         for component in ("vx", "vy"):
             if component in directions:
+                block_start = len(self.flow)
                 label = "V<sub>x,Ed</sub> + T<sub>Ed</sub>" if component == "vx" \
                     else "V<sub>y,Ed</sub> + T<sub>Ed</sub>"
                 self._h2(f"Directional screen: {label}")
@@ -2231,6 +2278,11 @@ class ReportBuilder:
                     directions[component], include_case_heading=False,
                     component=component,
                 )
+                # A directional screen is a single auditable result.  Keep its
+                # heading, inputs and verdict together when the complete block
+                # fits on one page, instead of starting it at the foot of a page
+                # and continuing without context on the next one.
+                self._keep_from(block_start)
 
     def _combined_direction(self, c, *, include_case_heading=True, component=None):
         if include_case_heading:
@@ -2248,6 +2300,18 @@ class ReportBuilder:
             detail = ", ".join(missing) or "one or more component checks"
             self._small(f"Directional combined check not evaluated: {detail} missing or invalid.")
             return
+        if c.get("governing_face"):
+            component = component or c.get("component") or "vy"
+            angle_note = (
+                ""
+                if c.get("governing_cot") is None
+                else f" at cot theta = {_fmt(c.get('governing_cot'), 3)}"
+            )
+            self._small(
+                "Independent directional governing selection: "
+                f"{viz.directional_face_label(component, c['governing_face'])}"
+                f"{angle_note}."
+            )
         self._p("The three checks tied together under the shared edition <b>"
                 + str(c["method"]) + "</b>. The bending utilisation is the plastic "
                 "M-M envelope at the applied N; the shear and torsion utilisations "
@@ -2556,7 +2620,8 @@ class ReportBuilder:
                 "below; Vx+T and Vy+T are screened separately."
             )
             rows = [["Screen", "T<sub>Ed</sub>/T<sub>Rd</sub>",
-                     "6.29 V+T", "Status"]]
+                     "6.29 V+T", "Governing face", "cot theta", "Status"]]
+            min_reinf_rows = [["Screen", "6.31 sum", "Governing face", "Outcome"]]
             for component in ("vx", "vy"):
                 item = directional.get(component)
                 if not item:
@@ -2565,7 +2630,13 @@ class ReportBuilder:
                 value = interaction.get("value")
                 rows.append([
                     "Vx+T" if component == "vx" else "Vy+T",
-                    _pct(item.get("util")), _pct(value),
+                    _pct(item.get("util")),
+                    ("-" if value is None else _pct(value)),
+                    viz.directional_face_label(
+                        component,
+                        item.get("directional_governing_face"),
+                    ),
+                    _fmt(item.get("directional_governing_cot"), 3),
                     item.get("directional_interaction_status") or (
                         presentation.interaction_assessment_status(
                             interaction,
@@ -2573,7 +2644,44 @@ class ReportBuilder:
                         )
                     ),
                 ])
-            self._table(rows, [42 * mm, 42 * mm, 42 * mm, 42 * mm])
+                min_reinf = item.get("min_reinf") or {}
+                if min_reinf:
+                    outcome = (
+                        "not assessed"
+                        if not min_reinf.get("applicable")
+                        else "minimum sufficient"
+                        if min_reinf.get("ok")
+                        else "designed reinforcement required"
+                    )
+                    min_reinf_rows.append([
+                        "Vx+T" if component == "vx" else "Vy+T",
+                        (_fmt(min_reinf.get("value"), 3)
+                         if min_reinf.get("applicable") else "-"),
+                        viz.directional_face_label(
+                            component,
+                            item.get(
+                                "directional_min_reinf_governing_face"
+                            ),
+                        ),
+                        outcome,
+                    ])
+            self._table(
+                rows,
+                [27 * mm, 28 * mm, 25 * mm, 38 * mm, 20 * mm, 32 * mm],
+                font=6.5,
+            )
+            if len(min_reinf_rows) > 1:
+                self._h2("Directional minimum-reinforcement screens (Eq. 6.31)")
+                self._table(
+                    min_reinf_rows,
+                    [31 * mm, 28 * mm, 39 * mm, 72 * mm],
+                    font=6.5,
+                )
+                self._small(
+                    "Equation 6.31 determines whether minimum shear/torsion "
+                    "reinforcement is sufficient; it is not an overall resistance "
+                    "verdict."
+                )
         if not t["valid"]:
             if t.get("reason") == "multi-cell (2+ voids)":
                 self._small("Torsion not evaluated: a multi-cell section (two or "
@@ -2685,7 +2793,9 @@ class ReportBuilder:
         self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "
                     "MN.m to kN.m (resistances) and m<sup>2</sup> to mm<sup>2</sup> "
                     "(A<sub>sl</sub>).")
-        mr = t.get("min_reinf")
+        # Biaxial runs report Eq. 6.31 per shear direction above. The standalone
+        # torsion payload has no shear companion and must not replace those screens.
+        mr = None if directional else t.get("min_reinf")
         if mr is not None and mr.get("applicable"):
             self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
             vv = ("minimum reinforcement suffices" if mr["ok"]

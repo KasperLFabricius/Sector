@@ -4230,16 +4230,62 @@ def _shear_candidate_assessment(inp, candidate_out):
     """Return the status and shear-only metric for one candidate face."""
     shear_out = candidate_out.get("shear") or {}
     status = _directional_shear_status(inp, shear_out)
-    values = [float(shear_out.get("util") or 0.0)]
     links = shear_out.get("links") or {}
-    if links:
-        values.append(float(links.get("util") or 0.0))
-    metric = max(values)
+    # VRd,c remains useful context when links are present, but it is no longer the
+    # acceptance resistance. Rank faces/components by the same applicable metric
+    # used by _directional_shear_status so presentation and verdicts cannot diverge.
+    metric = float(
+        (links.get("util") if inp.get("shear_links") else shear_out.get("util"))
+        or 0.0
+    )
     return status, (math.inf if status == "INVALID" else metric)
+
+
+def _minimum_reinf_assessment(torsion_out):
+    """Return an ordering state for the face-specific Eq. 6.31 screen."""
+    if torsion_out is None:
+        return "NOT RUN", 0.0
+    check = (torsion_out or {}).get("min_reinf") or {}
+    if not check.get("applicable"):
+        return "NOT ASSESSED", 0.0
+    value = check.get("value")
+    if value is None or not math.isfinite(float(value)):
+        return "INVALID", math.inf
+    return ("PASS" if check.get("ok") else "FAIL"), float(value)
+
+
+def _candidate_domain_cot(candidate, domain):
+    """Strut cot(theta) for one candidate/domain, where the domain has an angle."""
+    results = candidate.get("results") or {}
+    if domain == "shear":
+        return (((results.get("shear") or {}).get("links") or {}).get("res") or {}).get(
+            "cot"
+        )
+    if domain == "vt":
+        return ((results.get("torsion") or {}).get("interaction") or {}).get("cot")
+    if domain == "combined":
+        combined_out = results.get("combined") or {}
+        transverse = combined_out.get("transverse") or {}
+        if transverse.get("valid") and transverse.get("cot") is not None:
+            return transverse.get("cot")
+        return (combined_out.get("crushing") or {}).get("cot")
+    return None
+
+
+def _governing_domain(candidate, status, metric, domain):
+    """Auditable face/angle/status record for an independently governed domain."""
+    return {
+        "face": "negative" if candidate["tension_low"] else "positive",
+        "cot": _candidate_domain_cot(candidate, domain),
+        "status": status,
+        "util": metric,
+    }
 
 
 def _torsion_interaction_assessment(torsion_out):
     """Return the acceptance state of one face-specific V+T crushing screen."""
+    if torsion_out is None:
+        return "NOT RUN", 0.0
     torsion_out = torsion_out or {}
     interaction = torsion_out.get("interaction") or {}
     value = interaction.get("value")
@@ -4326,6 +4372,9 @@ def _run_capacity_checks(inp, out):
             torsion_status, torsion_metric = _torsion_interaction_assessment(
                 candidate_out.get("torsion")
             )
+            min_reinf_status, min_reinf_metric = _minimum_reinf_assessment(
+                candidate_out.get("torsion")
+            )
             if candidate_out.get("combined") is not None:
                 combined_status, combined_metric = _combined_direction_assessment(
                     candidate_inp, candidate_out
@@ -4340,6 +4389,8 @@ def _run_capacity_checks(inp, out):
                 "shear_metric": shear_metric,
                 "torsion_status": torsion_status,
                 "torsion_metric": torsion_metric,
+                "min_reinf_status": min_reinf_status,
+                "min_reinf_metric": min_reinf_metric,
                 "combined_status": combined_status,
                 "combined_metric": combined_metric,
             })
@@ -4355,6 +4406,12 @@ def _run_capacity_checks(inp, out):
                 candidate["torsion_status"], candidate["torsion_metric"]
             ),
         )
+        min_reinf_governing = max(
+            candidates,
+            key=lambda candidate: capacity.assessment_key(
+                candidate["min_reinf_status"], candidate["min_reinf_metric"]
+            ),
+        )
         combined_governing = max(
             candidates,
             key=lambda candidate: capacity.assessment_key(
@@ -4365,6 +4422,53 @@ def _run_capacity_checks(inp, out):
         shear_status = capacity.aggregate_assessment_status(
             candidate["shear_status"] for candidate in candidates
         )
+        torsion_status = capacity.aggregate_assessment_status(
+            candidate["torsion_status"] for candidate in candidates
+        )
+        min_reinf_status = capacity.aggregate_assessment_status(
+            candidate["min_reinf_status"] for candidate in candidates
+        )
+        combined_status = capacity.aggregate_assessment_status(
+            candidate["combined_status"] for candidate in candidates
+        )
+        governing_domains = {
+            "shear": _governing_domain(
+                shear_governing,
+                shear_status,
+                shear_governing["shear_metric"],
+                "shear",
+            )
+        }
+        if any(
+            ((candidate["results"].get("torsion") or {}).get("interaction"))
+            is not None
+            for candidate in candidates
+        ):
+            governing_domains["vt"] = _governing_domain(
+                torsion_governing,
+                torsion_status,
+                torsion_governing["torsion_metric"],
+                "vt",
+            )
+        if any(
+            ((candidate["results"].get("torsion") or {}).get("min_reinf"))
+            is not None
+            for candidate in candidates
+        ):
+            governing_domains["minimum_reinforcement"] = _governing_domain(
+                min_reinf_governing,
+                min_reinf_status,
+                min_reinf_governing["min_reinf_metric"],
+                "minimum_reinforcement",
+            )
+        if any(candidate["results"].get("combined") is not None
+               for candidate in candidates):
+            governing_domains["combined"] = _governing_domain(
+                combined_governing,
+                combined_status,
+                combined_governing["combined_metric"],
+                "combined",
+            )
         shear_out.update(
             face_mode=str(inp.get(face_key, "auto")),
             both_faces_evaluated=len(candidates) == 2,
@@ -4375,12 +4479,15 @@ def _run_capacity_checks(inp, out):
             associated_moment_origin=spec["moment_origin"],
             signed_v_ed=spec["signed_v_ed"],
             status=shear_status,
+            governing_domains=governing_domains,
             face_candidates=[{
                 "tension_low": candidate["tension_low"],
                 "shear_status": candidate["shear_status"],
                 "shear_metric": candidate["shear_metric"],
                 "torsion_status": candidate["torsion_status"],
                 "torsion_metric": candidate["torsion_metric"],
+                "min_reinf_status": candidate["min_reinf_status"],
+                "min_reinf_metric": candidate["min_reinf_metric"],
                 "combined_status": candidate["combined_status"],
                 "combined_metric": candidate["combined_metric"],
                 "shear": candidate["results"].get("shear"),
@@ -4400,18 +4507,42 @@ def _run_capacity_checks(inp, out):
                 governing_face=(
                     "negative" if combined_governing["tension_low"] else "positive"
                 ),
+                governing_cot=_candidate_domain_cot(
+                    combined_governing, "combined"
+                ),
             )
         torsion_out = torsion_governing["results"].get("torsion")
         if torsion_out is not None:
+            vt_domain = governing_domains.get("vt") or {}
             torsion_out = dict(
                 torsion_out,
                 directional_interaction_status=capacity.aggregate_assessment_status(
                     candidate["torsion_status"] for candidate in candidates
                 ),
-                directional_governing_face=(
-                    "negative" if torsion_governing["tension_low"] else "positive"
-                ),
+                directional_governing_face=vt_domain.get("face"),
+                directional_governing_cot=vt_domain.get("cot"),
             )
+            selected_min_reinf = (
+                (min_reinf_governing["results"].get("torsion") or {}).get(
+                    "min_reinf"
+                )
+            )
+            if selected_min_reinf is not None:
+                torsion_out["min_reinf"] = dict(
+                    selected_min_reinf,
+                    directional_status=min_reinf_status,
+                    governing_face=(
+                        "negative"
+                        if min_reinf_governing["tension_low"]
+                        else "positive"
+                    ),
+                )
+                torsion_out["directional_min_reinf_status"] = min_reinf_status
+                torsion_out["directional_min_reinf_governing_face"] = (
+                    "negative"
+                    if min_reinf_governing["tension_low"]
+                    else "positive"
+                )
         directions[component] = {
             "component": component,
             "shear": shear_out,
@@ -5560,10 +5691,23 @@ def shear_view(inp, results):
         )
 
     if sh.get("both_faces_evaluated"):
+        governing_domains = sh.get("governing_domains") or {}
+        domain_labels = {
+            "shear": "Shear",
+            "vt": "V+T (6.29)",
+            "minimum_reinforcement": "Minimum reinf. (6.31)",
+            "combined": "Combined",
+        }
         candidate_rows = []
         for candidate in sh.get("face_candidates", []):
             candidate_shear = candidate.get("shear") or {}
             candidate_links = candidate_shear.get("links") or {}
+            face_token = "negative" if candidate.get("tension_low", True) else "positive"
+            governing_here = [
+                domain_labels[key]
+                for key, domain in governing_domains.items()
+                if domain.get("face") == face_token
+            ]
             candidate_rows.append({
                 "Face": viz.tension_face_label(
                     candidate.get("tension_low", True), sh["axis"]
@@ -5572,14 +5716,32 @@ def shear_view(inp, results):
                 "|VEd|/VRd,c": candidate_shear.get("util"),
                 "|VEd|/VRd": candidate_links.get("util"),
                 "Shear status": candidate.get("shear_status"),
+                "V+T status": candidate.get("torsion_status"),
                 "Combined status": candidate.get("combined_status"),
-                "Governing": (
-                    "Yes" if bool(candidate.get("tension_low"))
-                    == bool(sh.get("tension_low")) else ""
-                ),
+                "Governing domains": ", ".join(governing_here),
             })
         st.caption("Associated bending moment is zero; both faces were evaluated.")
         st.dataframe(candidate_rows, hide_index=True, width="stretch")
+        governing_rows = []
+        for key in ("shear", "vt", "minimum_reinforcement", "combined"):
+            domain = governing_domains.get(key)
+            if not domain:
+                continue
+            status = domain.get("status")
+            if key == "minimum_reinforcement":
+                status = {
+                    "PASS": "minimum sufficient",
+                    "FAIL": "designed reinforcement required",
+                }.get(status, str(status or "NOT ASSESSED").lower())
+            governing_rows.append({
+                "Check": domain_labels[key],
+                "Governing face": viz.directional_face_label(component, domain["face"]),
+                f"cot {_THETA}": domain.get("cot"),
+                "Value / utilisation": domain.get("util"),
+                "Status / outcome": status,
+            })
+        st.markdown("**Independent governing selections**")
+        st.dataframe(governing_rows, hide_index=True, width="stretch")
 
     links_payload = sh.get("links") or {}
     link_res = links_payload.get("res") or {}
@@ -5851,6 +6013,7 @@ def torsion_view(inp, results):
             "separate Vx+T and Vy+T screens; the torsion result below is standalone."
         )
         rows = []
+        min_reinf_rows = []
         for component in ("vx", "vy"):
             item = directional_interactions.get(component)
             if not item:
@@ -5868,8 +6031,40 @@ def torsion_view(inp, results):
                 "TEd/TRd": item.get("util"),
                 "6.29 V+T": value,
                 "Status": status,
+                "Governing face": viz.directional_face_label(
+                    component, item.get("directional_governing_face")
+                ),
+                f"cot {_THETA}": item.get("directional_governing_cot"),
             })
+            min_reinf = item.get("min_reinf") or {}
+            if min_reinf:
+                if not min_reinf.get("applicable"):
+                    outcome = "not assessed"
+                elif min_reinf.get("ok"):
+                    outcome = "minimum sufficient"
+                else:
+                    outcome = "designed reinforcement required"
+                min_reinf_rows.append({
+                    "Directional 6.31 screen": (
+                        "Vx,Ed + TEd" if component == "vx" else "Vy,Ed + TEd"
+                    ),
+                    "6.31 sum": min_reinf.get("value"),
+                    "Outcome": outcome,
+                    "Governing face": viz.directional_face_label(
+                        component,
+                        item.get(
+                            "directional_min_reinf_governing_face"
+                        ),
+                    ),
+                })
         st.dataframe(rows, hide_index=True, width="stretch")
+        if min_reinf_rows:
+            st.caption(
+                "Directional Eq. 6.31 checks whether minimum shear/torsion "
+                "reinforcement is sufficient; it is not an overall resistance "
+                "verdict."
+            )
+            st.dataframe(min_reinf_rows, hide_index=True, width="stretch")
     tube = t["tube"]
     if not t["valid"]:
         if t.get("reason") == "multi-cell (2+ voids)":
@@ -6010,7 +6205,9 @@ def torsion_view(inp, results):
                    "closed stirrups round the periphery + distributed longitudinal "
                    "steel on both faces.")
 
-    mr = t.get("min_reinf")
+    # A biaxial run reports Eq. 6.31 per shear direction above. The standalone
+    # torsion payload deliberately has no shear companion and must not replace it.
+    mr = None if directional_interactions else t.get("min_reinf")
     if mr is not None:
         st.divider()
         st.markdown("**Minimum-reinforcement screen (6.3.2(5), Eq 6.31)**")
@@ -6135,6 +6332,10 @@ def combined_view(inp, results):
                 "Shear util.": item.get("r_v"),
                 "Torsion util.": item.get("r_t"),
                 "DK NA sum": item.get("dkna_sum"),
+                "Governing face": viz.directional_face_label(
+                    component, item.get("governing_face")
+                ),
+                f"cot {_THETA}": item.get("governing_cot"),
                 "Status": item.get("status", (
                     "NOT ASSESSED" if not item.get("valid")
                     else "PASS" if item.get("dkna_ok") else "FAIL"
@@ -6172,6 +6373,18 @@ def combined_view(inp, results):
                    + "; ".join(missing) + ".")
         return
     st.caption(f"Shared code edition: {c['method']}.")
+    if c.get("governing_face"):
+        component = c.get("component") or "vy"
+        angle_note = (
+            ""
+            if c.get("governing_cot") is None
+            else f" at cot {_THETA} = {float(c['governing_cot']):.3f}"
+        )
+        st.caption(
+            "Independent directional governing selection: "
+            f"{viz.directional_face_label(component, c['governing_face'])}"
+            f"{angle_note}."
+        )
     if not c.get("code_applicable", True):
         st.warning("One or more selected strut-angle bounds fall outside the "
                    "method's code range. Combined values are exploratory only: "

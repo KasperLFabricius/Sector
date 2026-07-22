@@ -245,10 +245,19 @@ def test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim():
     assert set(results["combined"]["directions"]) == {"vx", "vy"}
     assert results["combined"]["interaction_status"] == "NOT ASSESSED"
     assert set(results["torsion"]["directional_interactions"]) == {"vx", "vy"}
+    for item in results["combined"]["directions"].values():
+        assert item["governing_face"] in {"negative", "positive"}
+        assert item["governing_cot"] is not None
 
     _select_view(at, "M-V-T Combined")
     assert not at.exception
     assert any("NOT ASSESSED" in warning.value for warning in at.warning)
+    table = next(
+        frame.value for frame in at.dataframe
+        if "Bending util." in frame.value.columns
+    )
+    assert "Governing face" in table.columns
+    assert f"cot {chr(0x03B8)}" in table.columns
 
 
 def test_biaxial_combined_fails_when_torsion_drives_a_directional_failure():

@@ -633,7 +633,9 @@ def manual_blocks() -> list:
        "a positive adjusted moment selects the negative-coordinate face and a "
        "negative adjusted moment selects the positive face. "
        "If that moment is zero, both faces are checked and the governing result is "
-       "reported. The row can override either face. The sign of shear does not select "
+       "reported separately for shear, V+T and combined checks, including the "
+       "governing face and strut angle where applicable. The row can override either "
+       "face. The sign of shear does not select "
        "the tension face. Web-width overrides and effective link-leg counts are "
        "directional; method, aggregate and stirrup properties are shared.")
     call("limit", "When both shear components are nonzero, Sector reports two "
@@ -641,7 +643,11 @@ def manual_blocks() -> list:
          "a general biaxial interaction equation. If both directions pass, overall "
          "shear remains **REVIEW**; a directional failure makes the overall result "
          "**FAIL**. With torsion, each V+T direction is screened separately and the "
-         "three-component Vx+Vy+T interaction remains **NOT ASSESSED**.")
+          "three-component Vx+Vy+T interaction remains **NOT ASSESSED**.")
+    md("Where torsion is active, the report also retains the directional Equation "
+       "6.31 minimum-reinforcement screen for Vx+T and Vy+T. This screen states "
+       "whether minimum reinforcement suffices; it is not an overall resistance "
+       "verdict.")
     table(["Shear method", "What it sets"],
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
             "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],

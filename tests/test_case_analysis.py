@@ -111,7 +111,7 @@ def test_maps_signed_cases_flags_and_zero_capacity_actions():
         -500.0, -120.0, 35.0
     )
     assert pl_a["shear_V"] == 40.0
-    assert pl_a["shear_Vx"] == 40.0
+    assert pl_a["shear_Vx"] == -40.0
     assert pl_a["shear_Vy"] == 0.0
     assert pl_a["shear_components"]["vx"]["signed_v_ed"] == -40.0
     assert pl_a["shear_face_x"] == "negative"
@@ -119,7 +119,7 @@ def test_maps_signed_cases_flags_and_zero_capacity_actions():
     assert pl_a["torsion_on"] is False
     assert pl_a["combined_on"] is False
     assert result["plastic_cases"][0]["actions"]["vx_ed_kn"] == -40.0
-    assert pl_b["shear_Vx"] == 30.0 and pl_b["shear_Vy"] == 12.0
+    assert pl_b["shear_Vx"] == 30.0 and pl_b["shear_Vy"] == -12.0
     assert pl_b["torsion_T"] == 8.0
     assert pl_b["combined_on"] is True
     assert el_stress["sls_cw"] is False

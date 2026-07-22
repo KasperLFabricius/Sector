@@ -539,6 +539,40 @@ def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     )
 
 
+def test_app_linked_shear_governing_uses_the_applicable_link_utilisation():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "pl_Mx", 0.0),
+        ("number_input", "shear_Vy", 150.0),
+    )
+
+    assert not at.exception
+    vy = at.session_state["results"]["shear"]["directions"]["vy"]
+    candidates = vy["face_candidates"]
+    assert len(candidates) == 2
+    for candidate in candidates:
+        assert candidate["shear_metric"] == pytest.approx(
+            candidate["shear"]["links"]["util"]
+        )
+    governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["shear_status"], item["shear"]["links"]["util"]
+        ),
+    )
+    assert vy["governing_face"] == (
+        "negative" if governing["tension_low"] else "positive"
+    )
+    assert vy["governing_domains"]["shear"]["util"] == pytest.approx(
+        governing["shear"]["links"]["util"]
+    )
+
+
 def test_app_shear_bw_override_is_used():
     at = _fresh()
     at.run()

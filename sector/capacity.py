@@ -240,13 +240,24 @@ def shear_direction_specs(inp):
     # tendon moment, exactly like the action-dependent shear calculation below.
     mx_centroid = mx_origin - axial * cy - mx_prestress
     my_centroid = my_origin - axial * cx - my_prestress
+    components = inp.get("shear_components") or {}
+    vx_signed = float(
+        (components.get("vx") or {}).get(
+            "signed_v_ed", inp.get("shear_Vx", 0.0)
+        )
+    )
+    vy_signed = float(
+        (components.get("vy") or {}).get(
+            "signed_v_ed", inp.get("shear_Vy", 0.0)
+        )
+    )
     return {
         "vx": {
             "axis": "y",
             "moment": my_centroid,
             "moment_origin": my_origin,
-            "v_ed": abs(float(inp.get("shear_Vx", 0.0))),
-            "signed_v_ed": float(inp.get("shear_Vx", 0.0)),
+            "v_ed": abs(vx_signed),
+            "signed_v_ed": vx_signed,
             "face": inp.get("shear_face_x", "auto"),
             "bw": float(inp.get("shear_vx_bw", 0.0)),
             "legs": float(inp.get("shear_vx_link_legs", 2.0)),
@@ -255,8 +266,8 @@ def shear_direction_specs(inp):
             "axis": "x",
             "moment": mx_centroid,
             "moment_origin": mx_origin,
-            "v_ed": abs(float(inp.get("shear_Vy", 0.0))),
-            "signed_v_ed": float(inp.get("shear_Vy", 0.0)),
+            "v_ed": abs(vy_signed),
+            "signed_v_ed": vy_signed,
             "face": inp.get("shear_face_y", "auto"),
             "bw": float(inp.get("shear_vy_bw", 0.0)),
             "legs": float(inp.get("shear_vy_link_legs", 2.0)),

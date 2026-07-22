@@ -41,6 +41,15 @@ def tension_face_label(tension_low, axis=None):
     return "bottom / left" if tension_low else "top / right"
 
 
+def directional_face_label(component, face):
+    """Physical label for a Vx/Vy negative- or positive-coordinate face."""
+    token = str(face or "").casefold()
+    if token not in {"negative", "positive"}:
+        return "-"
+    axis = "y" if str(component).casefold() == "vx" else "x"
+    return tension_face_label(token == "negative", axis)
+
+
 def chord_angle_note(theta_mode):
     """One shared sentence explaining how the M+V+T chord's strut angle was chosen.
 
