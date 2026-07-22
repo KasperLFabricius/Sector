@@ -119,7 +119,9 @@ function createPointGridInstance(parentElement) {
       // so the Python validation can block calculation and tell the user what to
       // repair. Never turn that evidence into the first valid option merely
       // because another cell was edited.
-      return choice === undefined ? text : String(choice)
+      return choice === undefined
+        ? (spec.preserve_unknown ? text : String(spec.options[0] ?? ""))
+        : String(choice)
     }
     return text
   }

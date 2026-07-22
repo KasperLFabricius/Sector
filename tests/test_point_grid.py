@@ -174,7 +174,7 @@ def test_material_select_preserves_an_unresolved_import_until_user_replaces_it(
                 / "point_grid_frontend" / "point_grid.js").read_text(
                     encoding="utf-8"
                 )
-    assert "choice === undefined ? text : String(choice)" in renderer
+    assert "spec.preserve_unknown ? text" in renderer
     assert "`${current} (undefined)`" in renderer
     assert "unresolved.disabled = true" in renderer
 
@@ -188,10 +188,34 @@ def test_material_select_defaults_a_blank_paste_to_the_first_visible_option():
     # This branch is shared by paste processing, edited-cell mutation and emitted
     # rows. It must precede the non-empty unknown-ID preservation branch.
     blank_default = 'if (!text.length) return String(spec.options[0] ?? "")'
-    preserve_unknown = "return choice === undefined ? text : String(choice)"
+    preserve_unknown = "spec.preserve_unknown ? text"
     assert blank_default in renderer
     assert preserve_unknown in renderer
     assert renderer.index(blank_default) < renderer.index(preserve_unknown)
+
+
+def test_only_material_selects_preserve_nonempty_unknown_values():
+    specs = {
+        spec["field"]: spec
+        for spec in rebar_table.point_grid_specs("bar", ["M1", "M2"])
+    }
+    renderer = (pathlib.Path(point_grid_module.__file__).resolve().parent
+                / "point_grid_frontend" / "point_grid.js").read_text(
+                    encoding="utf-8"
+                )
+
+    assert specs[rebar_table.MATERIAL_ID]["preserve_unknown"] is True
+    assert "preserve_unknown" not in specs[rebar_table.SIZE_MODE]
+    assert "spec.preserve_unknown ? text" in renderer
+    assert 'String(spec.options[0] ?? "")' in renderer
+
+    # Backend normalization defaults an invalid size mode to Area; the frontend
+    # now takes the same first-option branch instead of preserving invalid text.
+    frame = rebar_table.normalise_table([{
+        "x (mm)": 0.0, "y (mm)": 0.0, "area (mm2)": 314.0,
+        "size mode": "not-a-mode", "material ID": "M1",
+    }], "bar")
+    assert frame.iloc[0][rebar_table.SIZE_MODE] == rebar_table.AREA_MODE
 
 
 def test_component_registration_is_cached_per_streamlit_runtime(monkeypatch):

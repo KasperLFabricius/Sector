@@ -259,7 +259,7 @@ def point_grid_specs(kind: str, material_ids: Iterable[str] | None = None) -> li
                         if str(value).strip()]
     material_spec = (
         {"field": MATERIAL_ID, "title": "Material ID", "type": "select",
-         "options": material_options, "width": 108}
+         "options": material_options, "preserve_unknown": True, "width": 108}
         if material_options
         else {"field": MATERIAL_ID, "title": "Material ID", "type": "text",
               "width": 108}
