@@ -10,7 +10,11 @@ _FIELDS = {
     "pl_P": (load_cases.PLASTIC_TABLE_KEY, "n_ed_kn"),
     "pl_Mx": (load_cases.PLASTIC_TABLE_KEY, "mx_ed_knm"),
     "pl_My": (load_cases.PLASTIC_TABLE_KEY, "my_ed_knm"),
-    "shear_V": (load_cases.PLASTIC_TABLE_KEY, "v_ed_kn"),
+    "shear_V": (load_cases.PLASTIC_TABLE_KEY, "vy_ed_kn"),
+    "shear_Vx": (load_cases.PLASTIC_TABLE_KEY, "vx_ed_kn"),
+    "shear_Vy": (load_cases.PLASTIC_TABLE_KEY, "vy_ed_kn"),
+    "shear_face_x": (load_cases.PLASTIC_TABLE_KEY, "vx_face"),
+    "shear_face_y": (load_cases.PLASTIC_TABLE_KEY, "vy_face"),
     "torsion_T": (load_cases.PLASTIC_TABLE_KEY, "t_ed_knm"),
     "el_case_id": (load_cases.ELASTIC_TABLE_KEY, "name"),
     "el_long_P": (load_cases.ELASTIC_TABLE_KEY, "n_long_ed_kn"),
@@ -27,6 +31,10 @@ _DESCRIPTION_KEYS = {
 _EDITOR_KEYS = {
     load_cases.PLASTIC_TABLE_KEY: "plastic_cases_editor",
     load_cases.ELASTIC_TABLE_KEY: "elastic_cases_editor",
+}
+_WIDGET_ALIASES = {
+    "shear_bw": "shear_vy_bw",
+    "shear_link_legs": "shear_vy_link_legs",
 }
 
 
@@ -59,8 +67,9 @@ def apply_case_changes(at, changes):
         if key in _FIELDS or key in _DESCRIPTION_KEYS
     }
     ordinary = [
-        change for change in changes
-        if change[1] not in _FIELDS and change[1] not in _DESCRIPTION_KEYS
+        (widget_type, _WIDGET_ALIASES.get(key, key), value)
+        for widget_type, key, value in changes
+        if key not in _FIELDS and key not in _DESCRIPTION_KEYS
     ]
     if not case_updates:
         return ordinary, False

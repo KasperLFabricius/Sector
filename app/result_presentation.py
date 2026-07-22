@@ -307,6 +307,21 @@ def assessment_status_label(status):
     return _map_assessment_status(status)
 
 
+def interaction_assessment_status(interaction, *, applicable=True):
+    """Acceptance state for a V+T interaction without issuing an invalid verdict."""
+    interaction = interaction or {}
+    code_applicable = bool(
+        interaction.get("code_applicable", applicable) and applicable
+    )
+    value = interaction.get("value")
+    if not interaction.get("valid") or not code_applicable or value is None:
+        return "NOT ASSESSED"
+    value = float(value)
+    if not math.isfinite(value):
+        return "FAIL"
+    return "PASS" if value <= 1.0 + 1.0e-9 else "FAIL"
+
+
 def _percent(util):
     if util is None:
         return "-"
@@ -417,47 +432,50 @@ def result_summary_rows(inp, results, *, stale=False):
             view="Shear", note="Calculate required", inp=inp,
         ))
     elif shear is not None:
-        resistance = (shear.get("res") or {}).get("vrd_c")
         links_selected = bool(inp.get("shear_links"))
-        result = (
-            f"{_percent(shear.get('util'))} (VEd / VRd,c)"
-            if resistance is not None else "-"
-        )
-        no_links_status = (
-            "NOT APPLICABLE"
-            if links_selected
-            else _util_summary_status(
-                shear.get("util"),
-                valid=bool((shear.get("res") or {}).get("valid")),
+
+        def append_direction(component, direction):
+            suffix = {"vx": " Vx", "vy": " Vy"}.get(component, "")
+            action_label = {"vx": "Vx,Ed", "vy": "Vy,Ed"}.get(component, "VEd")
+            resistance = (direction.get("res") or {}).get("vrd_c")
+            result = (
+                f"{_percent(direction.get('util'))} "
+                f"({action_label} / VRd,c)"
+                if resistance is not None else "-"
             )
-        )
-        no_links_note = (
-            "Links present; use the reinforced shear check"
-            if links_selected
-            else str(shear.get("method") or "")
-        )
-        rows.append(_summary_row(
-            "Shear without links",
-            "plastic",
-            no_links_status,
-            result,
-            "<= 100 %",
-            shear.get("util"),
-            "Shear",
-            no_links_note,
-            inp,
-        ))
-        if links_selected:
-            links = shear.get("links")
+            rows.append(_summary_row(
+                f"Shear{suffix} without links",
+                "plastic",
+                (
+                    "NOT APPLICABLE"
+                    if links_selected
+                    else _util_summary_status(
+                        direction.get("util"),
+                        valid=bool((direction.get("res") or {}).get("valid")),
+                    )
+                ),
+                result,
+                "<= 100 %",
+                direction.get("util"),
+                "Shear",
+                (
+                    "Links present; use the reinforced shear check"
+                    if links_selected else str(direction.get("method") or "")
+                ),
+                inp,
+            ))
+            if not links_selected:
+                return
+            links = direction.get("links")
             if links is None:
                 rows.append(_summary_row(
-                    "Shear with links", "plastic", "NOT ASSESSED",
+                    f"Shear{suffix} with links", "plastic", "NOT ASSESSED",
                     view="Shear", note="Selected method does not evaluate links",
                     inp=inp,
                 ))
             else:
                 rows.append(_summary_row(
-                    "Shear with links",
+                    f"Shear{suffix} with links",
                     "plastic",
                     _util_summary_status(
                         links.get("util"),
@@ -471,6 +489,23 @@ def result_summary_rows(inp, results, *, stale=False):
                     str((links.get("res") or {}).get("governs") or ""),
                     inp,
                 ))
+
+        directions = shear.get("directions") or {}
+        if directions:
+            for component in ("vx", "vy"):
+                if component in directions:
+                    append_direction(component, directions[component])
+            if shear.get("biaxial"):
+                rows.append(_summary_row(
+                    "Biaxial shear interaction", "plastic", "NOT ASSESSED",
+                    result="Independent Vx/Vy checks",
+                    criterion="No general interaction expression",
+                    view="Shear",
+                    note="Overall shear requires engineering review",
+                    inp=inp,
+                ))
+        else:
+            append_direction("", shear)
 
     torsion = results.get("torsion")
     if torsion is None and inp.get("torsion_on"):
@@ -502,6 +537,42 @@ def result_summary_rows(inp, results, *, stale=False):
             view="M-V-T Combined", note="Calculate required", inp=inp,
         ))
     elif combined is not None:
+        directions = combined.get("directions") or {}
+        if combined.get("biaxial") and directions:
+            for component in ("vx", "vy"):
+                direction = directions.get(component)
+                if not direction:
+                    continue
+                label = "Vx+T" if component == "vx" else "Vy+T"
+                util = direction.get("governing_util")
+                rows.append(_summary_row(
+                    f"Combined {label} directional screen",
+                    "plastic",
+                    _map_assessment_status(direction.get("status")),
+                    _percent(util),
+                    "Each reported check <= 100 %",
+                    util,
+                    "M-V-T Combined",
+                    "See the directional result for component checks",
+                    inp,
+                ))
+            rows.append(_summary_row(
+                "Combined Vx-Vy-T interaction",
+                "plastic",
+                "NOT ASSESSED",
+                result="Independent Vx+T and Vy+T screens",
+                criterion="No established three-component expression",
+                view="M-V-T Combined",
+                note="Overall combined result requires engineering review",
+                inp=inp,
+            ))
+            if stale and results:
+                for row in rows:
+                    if row["status"] not in {"NOT RUN", "NOT APPLICABLE"}:
+                        previous = row["status"]
+                        row["status"] = "STALE"
+                        row["note"] = f"Last status: {previous}; inputs changed"
+            return rows
         valid = bool(combined.get("valid"))
         applicable = bool(combined.get("code_applicable", True))
         util = combined.get("dkna_sum")
@@ -733,14 +804,18 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             if family != "plastic":
                 continue
 
-            v_zero = abs(float(actions.get("v_ed_kn", 0.0))) <= 0.0
+            vx_zero = abs(float(actions.get("vx_ed_kn", 0.0))) <= 0.0
+            vy_zero = abs(float(actions.get("vy_ed_kn", 0.0))) <= 0.0
+            v_zero = vx_zero and vy_zero
             t_zero = abs(float(actions.get("t_ed_knm", 0.0))) <= 0.0
-            if inp.get("shear_on") and v_zero:
-                rows.append(_summary_row(
-                    "Shear", "plastic", "NOT APPLICABLE",
-                    result="VEd = 0", view="Shear",
-                    note="Zero action; not evaluated", inp=case_inp,
-                ))
+            if inp.get("shear_on"):
+                for component, is_zero in (("Vx", vx_zero), ("Vy", vy_zero)):
+                    if is_zero:
+                        rows.append(_summary_row(
+                            f"Shear {component}", "plastic", "NOT APPLICABLE",
+                            result=f"{component},Ed = 0", view="Shear",
+                            note="Zero component; not evaluated", inp=case_inp,
+                        ))
             if inp.get("torsion_on") and t_zero:
                 rows.append(_summary_row(
                     "Torsion", "plastic", "NOT APPLICABLE",
@@ -748,14 +823,14 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                     note="Zero action; not evaluated", inp=case_inp,
                 ))
             if inp.get("combined_on") and (v_zero or t_zero):
-                zero = " and ".join(
-                    label
-                    for label, is_zero in (("VEd", v_zero), ("TEd", t_zero))
-                    if is_zero
+                zero = (
+                    "Vx,Ed = Vy,Ed = TEd = 0"
+                    if v_zero and t_zero
+                    else "Vx,Ed = Vy,Ed = 0" if v_zero else "TEd = 0"
                 )
                 rows.append(_summary_row(
                     "Combined M-V-T", "plastic", "NOT APPLICABLE",
-                    result=f"{zero} = 0", view="M-V-T Combined",
+                    result=zero, view="M-V-T Combined",
                     note="Zero action; not evaluated", inp=case_inp,
                 ))
     return rows

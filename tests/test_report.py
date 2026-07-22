@@ -296,12 +296,14 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
         {
             "name": "PL-01", "description": "Routine combination",
             "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
-            "v_ed_kn": 0.0, "t_ed_knm": 0.0,
+            "vx_ed_kn": 0.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 0.0,
         },
         {
             "name": "PL-02", "description": "Governing combination",
             "n_ed_kn": 0.0, "mx_ed_knm": 125.0, "my_ed_knm": 0.0,
-            "v_ed_kn": 0.0, "t_ed_knm": 0.0,
+            "vx_ed_kn": 0.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 0.0,
         },
     ]
     elastic_rows = [
@@ -840,6 +842,72 @@ def test_report_includes_shear_section():
     assert "Utilisation" in txt
 
 
+def test_report_audits_independent_governing_faces_and_angles():
+    out = _out()
+    sh = _shear_out()
+    negative = copy.deepcopy(sh)
+    positive = copy.deepcopy(sh)
+    positive.update(tension_low=False, util=0.65)
+    sh.update(
+        component="vy",
+        face_mode="auto",
+        both_faces_evaluated=True,
+        governing_face="negative",
+        face_candidates=[
+            dict(
+                tension_low=True, shear=negative, shear_status="PASS",
+                torsion_status="PASS", combined_status="PASS",
+            ),
+            dict(
+                tension_low=False, shear=positive, shear_status="PASS",
+                torsion_status="FAIL", combined_status="FAIL",
+            ),
+        ],
+        governing_domains={
+            "shear": dict(face="negative", cot=1.25, status="PASS", util=0.77),
+            "vt": dict(face="positive", cot=1.75, status="FAIL", util=1.10),
+            "combined": dict(face="positive", cot=1.75, status="FAIL", util=1.20),
+        },
+    )
+    out["shear"] = sh
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+    assert "Independent governing selections" in text
+    assert "bottom (-y)" in text and "top (+y)" in text
+    assert "1.250" in text and "1.750" in text
+    assert "V+T (6.29)" in text
+
+
+def test_report_biaxial_shear_separates_directions_and_withholds_interaction():
+    out = _out()
+    vx = copy.deepcopy(_shear_out())
+    vx.update(component="vx", axis="y", tension_low=True, status="PASS")
+    vy = copy.deepcopy(_shear_out())
+    vy.update(component="vy", axis="x", tension_low=False, v_ed=65.0,
+              util=65.0 / vy["res"]["vrd_c"], status="PASS")
+    out["shear"] = dict(
+        vx,
+        directions={"vx": vx, "vy": vy},
+        active_directions=["vx", "vy"],
+        governing_component="vx",
+        biaxial=True,
+        interaction_assessed=False,
+        interaction_status="NOT ASSESSED",
+        status="REVIEW",
+    )
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+
+    assert "Vx,Ed" in txt and "Vy,Ed" in txt
+    assert "independent Vx/Vy checks" in txt
+    assert "Biaxial interaction: NOT ASSESSED" in txt
+    assert "undocumented interaction" in txt
+
+
 def _shear_out_2023():
     from sector import codes as _codes, shear as _shear
 
@@ -951,6 +1019,38 @@ def test_report_includes_torsion_section():
     assert "1176" in txt                            # required Asl
 
 
+def test_report_directional_vt_table_withholds_out_of_range_verdict():
+    out = _out()
+    torsion = _torsion_out(interaction=True)
+    directional = copy.deepcopy(torsion)
+    directional["interaction"]["code_applicable"] = False
+    directional.update(
+        directional_governing_face="negative",
+        directional_governing_cot=1.0,
+        directional_min_reinf_governing_face="negative",
+        min_reinf=dict(
+            applicable=True, value=0.52, ok=True, t_ed=40.0,
+            trd_c=100.0, v_ed=12.0, vrd_c=100.0, solid=True,
+            model_2023=False,
+        ),
+    )
+    torsion["directional_interactions"] = {
+        "vx": directional,
+        "vy": copy.deepcopy(directional),
+    }
+    out["torsion"] = torsion
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+    for label in ("Vx+T", "Vy+T"):
+        start = text.index(label)
+        assert "NOT ASSESSED" in text[start:start + 260]
+    assert "Directional minimum-reinforcement screens" in text
+    assert "minimum sufficient" in text
+    assert "left (-x)" in text and "bottom (-y)" in text
+
+
 def test_report_compound_torsion_requires_subdivision():
     out = _out()
     t = _torsion_out()
@@ -1050,6 +1150,76 @@ def test_report_includes_combined_section():
     assert "Combined bending" in txt or "M-V-T" in txt
     assert "6.3.2(6)" in txt                        # the DK NA combined rule
     assert "EXCEEDED" in txt                        # sum 1.3 > 1
+
+
+def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict():
+    out = _out()
+    vx = _combined_out(mv_independent=True)
+    vy = copy.deepcopy(vx)
+    vx.update(
+        component="vx", dkna_sum=0.70, dkna_ok=True,
+        governing_face="negative", governing_cot=1.25,
+    )
+    vy.update(
+        component="vy", r_v=0.35, dkna_sum=0.65, dkna_ok=True,
+        governing_face="positive", governing_cot=1.75,
+    )
+    out["combined"] = dict(
+        vx,
+        directions={"vx": vx, "vy": vy},
+        biaxial=True,
+        interaction_assessed=False,
+        interaction_status="NOT ASSESSED",
+        status="REVIEW",
+    )
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+
+    assert "Vx+T and Vy+T screens" in txt
+    assert "simultaneous Vx,Ed + Vy,Ed + TEd interaction is NOT ASSESSED" in txt
+    assert "no three-component interaction expression is inferred" in txt
+    assert "Governing face" in txt
+    assert "left (-x)" in txt and "top (+y)" in txt
+    assert "1.250" in txt and "1.750" in txt
+
+
+def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
+    import io
+
+    out = _out()
+    vx = _combined_out(mv_independent=True)
+    vy = copy.deepcopy(vx)
+    vx.update(component="vx", governing_face="negative", governing_cot=1.25)
+    vy.update(component="vy", governing_face="positive", governing_cot=1.75)
+    out["combined"] = dict(
+        vx,
+        directions={"vx": vx, "vy": vy},
+        biaxial=True,
+        interaction_assessed=False,
+        interaction_status="NOT ASSESSED",
+        status="REVIEW",
+    )
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), out, figures=False
+    )
+    builder._combined()
+
+    screen_blocks = []
+    for flowable in builder.flow:
+        if not isinstance(flowable, sector_report.KeepTogether):
+            continue
+        text = " ".join(
+            item.getPlainText()
+            for item in flowable._content
+            if hasattr(item, "getPlainText")
+        )
+        if "Directional screen:" in text:
+            screen_blocks.append(text)
+
+    assert len(screen_blocks) == 2
+    assert all("sum(SEd/SRd)" in text for text in screen_blocks)
 
 
 def test_report_combined_out_of_range_withholds_dependent_verdicts():

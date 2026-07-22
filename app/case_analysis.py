@@ -28,6 +28,11 @@ def _case_record(row: Mapping, key: str) -> dict:
         ).strip(),
     }
     record.update({
+        column: str(row.get(column) or "").strip()
+        for column in load_cases.TEXT_COLUMNS[key]
+        if column not in {load_cases.NAME, load_cases.DESCRIPTION}
+    })
+    record.update({
         column: float(row[column])
         for column in load_cases.NUMERIC_COLUMNS[key]
     })
@@ -85,9 +90,15 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
     method toggle. Combined M-V-T is live only when both actions are non-zero.
     """
     out = dict(base)
-    v_ed = float(record["v_ed_kn"])
+    legacy_v = float(record.get("v_ed_kn", 0.0))
+    vx_ed = float(record.get("vx_ed_kn", 0.0))
+    vy_ed = float(record.get("vy_ed_kn", legacy_v))
+    vx_face = str(record.get("vx_face", load_cases.FACE_AUTO))
+    vy_face = str(record.get("vy_face", load_cases.FACE_AUTO))
     t_ed = float(record["t_ed_knm"])
-    shear_live = bool(base.get("shear_on")) and abs(v_ed) > 0.0
+    vx_live = bool(base.get("shear_on")) and abs(vx_ed) > 0.0
+    vy_live = bool(base.get("shear_on")) and abs(vy_ed) > 0.0
+    shear_live = vx_live or vy_live
     torsion_live = bool(base.get("torsion_on")) and abs(t_ed) > 0.0
     bending_live = str(base.get("mode") or "") in {"Plastic", "Both"}
     out.update(
@@ -96,16 +107,38 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
         P_pl=float(record["n_ed_kn"]),
         Mx_pl=float(record["mx_ed_knm"]),
         My_pl=float(record["my_ed_knm"]),
-        shear_V=abs(v_ed),
+        # Directional fields retain the entered sign for result tables and figures.
+        # The resistance pipeline takes the absolute magnitude explicitly.
+        shear_Vx=vx_ed,
+        shear_Vy=vy_ed,
+        shear_face_x=vx_face,
+        shear_face_y=vy_face,
+        # Transitional single-component field for callers not yet consuming the
+        # directional contract. It is never used to combine Vx and Vy.
+        shear_V=(abs(vy_ed) if vy_live else abs(vx_ed)),
+        shear_components={
+            "vx": {
+                "signed_v_ed": vx_ed,
+                "v_ed": abs(vx_ed),
+                "axis": "y",
+                "face": vx_face,
+                "active": vx_live,
+            },
+            "vy": {
+                "signed_v_ed": vy_ed,
+                "v_ed": abs(vy_ed),
+                "axis": "x",
+                "face": vy_face,
+                "active": vy_live,
+            },
+        },
         torsion_T=abs(t_ed),
         shear_requested=bool(base.get("shear_on")),
         torsion_requested=bool(base.get("torsion_on")),
         combined_requested=bool(base.get("combined_on")),
         shear_on=shear_live,
         torsion_on=torsion_live,
-        combined_on=(
-            bool(base.get("combined_on")) and shear_live and torsion_live
-        ),
+        combined_on=bool(base.get("combined_on")) and shear_live and torsion_live,
     )
     return out
 

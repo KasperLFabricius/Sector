@@ -576,11 +576,28 @@ def test_app_combined_shear_torsion_interaction():
     inter = at.session_state["results"]["torsion"]["interaction"]
     assert inter["value"] == pytest.approx(
         inter["t_ed"] / inter["trd_max"] + inter["v_ed"] / inter["vrd_max"])
-    # ONE member strut angle (6.3.2(2)): the crushing interaction, the links and the
-    # torsion tube are all evaluated at the same cot theta.
+    # ONE member strut angle (6.3.2(2)) applies within each mandatory face
+    # candidate. Different check domains may independently govern on different
+    # faces, so their aggregate representatives need not have the same angle.
     r = at.session_state["results"]
-    assert inter["cot"] == pytest.approx(r["shear"]["links"]["res"]["cot"])
-    assert inter["cot"] == pytest.approx(r["torsion"]["cot"])
+    checked = 0
+    for candidate in r["shear"]["face_candidates"]:
+        candidate_torsion = candidate["torsion"]
+        candidate_inter = candidate_torsion.get("interaction") or {}
+        if not candidate_inter.get("valid"):
+            continue
+        checked += 1
+        assert candidate_inter["cot"] == pytest.approx(
+            candidate["shear"]["links"]["res"]["cot"]
+        )
+        assert candidate_inter["cot"] == pytest.approx(candidate_torsion["cot"])
+    assert checked == 2
+
+    domains = r["shear"]["governing_domains"]
+    assert domains["shear"]["face"] == r["shear"]["governing_face"]
+    assert domains["vt"]["face"] == r["torsion"]["directional_governing_face"]
+    assert domains["vt"]["cot"] == pytest.approx(inter["cot"])
+    assert "combined" not in domains
 
 
 def test_combined_vrdmax_uses_shear_method_not_torsion():
@@ -777,6 +794,50 @@ def test_app_min_reinf_screen_over_limit():
     assert mr["applicable"] is True
     assert mr["value"] > 1.0
     assert mr["ok"] is False
+
+
+def test_biaxial_torsion_retains_and_presents_directional_631_screens():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_Vx", 20.0),
+        ("number_input", "shear_Vy", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    directional = at.session_state["results"]["torsion"][
+        "directional_interactions"
+    ]
+    assert set(directional) == {"vx", "vy"}
+    for item in directional.values():
+        mr = item["min_reinf"]
+        assert mr["applicable"] is True
+        assert mr["value"] == pytest.approx(
+            mr["t_ed"] / mr["trd_c"] + mr["v_ed"] / mr["vrd_c"]
+        )
+        assert item["directional_min_reinf_governing_face"] in {
+            "negative", "positive"
+        }
+
+    _select_view(at, "Torsion")
+    table = next(
+        frame.value for frame in at.dataframe
+        if "Directional 6.31 screen" in frame.value.columns
+    )
+    assert set(table["Directional 6.31 screen"]) == {
+        "Vx,Ed + TEd", "Vy,Ed + TEd"
+    }
+    assert set(table["Outcome"]) <= {
+        "minimum sufficient", "designed reinforcement required"
+    }
 
 
 def test_app_torsion_is_saved_and_restored():

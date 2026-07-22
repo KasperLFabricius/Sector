@@ -459,10 +459,10 @@ def test_app_off_axis_chord_present_with_torsion():
 
 def test_app_shear_compression_face_governs_under_hogging():
     # Codex round-3 P2: the shear-axis chord now checks BOTH faces (the torsion
-    # tension acts on both). With a HOGGING moment while the shear-tension face is
-    # the bottom, the bending tensions the OPPOSITE (compression) face -- which then
-    # governs the longitudinal chord. The old shear-tension-face-only check would
-    # have seen only the relieved bottom face and missed this failure entirely.
+    # tension acts on both). Explicitly select the bottom shear-tension face while
+    # applying a HOGGING moment, which tensions the OPPOSITE (top) face. That face
+    # must govern the longitudinal chord. The explicit override is important here:
+    # the current Auto setting correctly selects the top face from the moment sign.
     at = _fresh(); at.run()
     _set(
         at,
@@ -470,6 +470,7 @@ def test_app_shear_compression_face_governs_under_hogging():
         ("checkbox", "shear_on", True),
         ("checkbox", "shear_links", True),
         ("number_input", "shear_V", 150.0),
+        ("selectbox", "shear_face_y", "negative"),
         ("checkbox", "torsion_on", True),
         ("number_input", "torsion_T", 40.0),
         ("checkbox", "combined_on", True),

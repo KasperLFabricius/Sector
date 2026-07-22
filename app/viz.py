@@ -32,9 +32,22 @@ def util_ok(util, tol=0.0):
     return util is not None and math.isfinite(util) and util <= 1.0 + tol
 
 
-def tension_face_label(tension_low):
+def tension_face_label(tension_low, axis=None):
     """The shear/chord tension face as a display label (shared by views + report)."""
+    if axis == "x":
+        return "bottom (-y)" if tension_low else "top (+y)"
+    if axis == "y":
+        return "left (-x)" if tension_low else "right (+x)"
     return "bottom / left" if tension_low else "top / right"
+
+
+def directional_face_label(component, face):
+    """Physical label for a Vx/Vy negative- or positive-coordinate face."""
+    token = str(face or "").casefold()
+    if token not in {"negative", "positive"}:
+        return "-"
+    axis = "y" if str(component).casefold() == "vx" else "x"
+    return tension_face_label(token == "negative", axis)
 
 
 def chord_angle_note(theta_mode):
@@ -804,6 +817,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
 def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                           centroid, asl_bar_ids, asl_cg_m, asl_mm2,
                           d_mm, z_mm, bw_mm, bw_source,
+                          signed_v_ed=None,
                           title="Shear geometry"):
     """Annotated section used to audit the geometry behind a shear check.
 
@@ -823,6 +837,14 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
     )
     if not outer:
         return fig
+    action_symbol = "V<sub>y,Ed</sub>" if axis == "x" else "V<sub>x,Ed</sub>"
+    signed_action = None if signed_v_ed is None else float(signed_v_ed)
+    action_label = (
+        action_symbol
+        if signed_action is None
+        else f"{action_symbol} = {signed_action:.3g} kN"
+    )
+    positive_action = signed_action is None or signed_action >= 0.0
 
     xs = [float(p[0]) * 1000.0 for p in outer]
     ys = [float(p[1]) * 1000.0 for p in outer]
@@ -857,13 +879,16 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                            yshift=6 if tension_low else -6,
                            font=dict(size=10, color=SCHEMATIC_INK))
         # VEd arrow in the physical shear direction.
-        fig.add_annotation(x=xmin - 0.12 * span_x, y=ymax,
-                           ax=xmin - 0.12 * span_x, ay=ymin,
+        arrow_y0, arrow_y1 = (
+            (ymin, ymax) if positive_action else (ymax, ymin)
+        )
+        fig.add_annotation(x=xmin - 0.12 * span_x, y=arrow_y1,
+                           ax=xmin - 0.12 * span_x, ay=arrow_y0,
                            axref="x", ayref="y", text="", showarrow=True,
                            arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
                            font=dict(size=11, color=SCHEMATIC_INK))
         fig.add_annotation(x=xmin - 0.12 * span_x, y=(ymin + ymax) / 2.0,
-                           text="VEd", showarrow=False, xanchor="right", xshift=-6,
+                           text=action_label, showarrow=False, xanchor="right", xshift=-6,
                            font=dict(size=11, color=SCHEMATIC_INK))
         if asl_cg_m is not None and d_mm > 0.0:
             cg = float(asl_cg_m) * 1000.0
@@ -902,13 +927,16 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                            xanchor="left" if tension_low else "right",
                            xshift=6 if tension_low else -6, yanchor="bottom",
                            font=dict(size=10, color=SCHEMATIC_INK))
-        fig.add_annotation(x=xmax, y=ymax + 0.12 * span_y,
-                           ax=xmin, ay=ymax + 0.12 * span_y,
+        arrow_x0, arrow_x1 = (
+            (xmin, xmax) if positive_action else (xmax, xmin)
+        )
+        fig.add_annotation(x=arrow_x1, y=ymax + 0.12 * span_y,
+                           ax=arrow_x0, ay=ymax + 0.12 * span_y,
                            axref="x", ayref="y", text="", showarrow=True,
                            arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
                            font=dict(size=11, color=SCHEMATIC_INK))
         fig.add_annotation(x=(xmin + xmax) / 2.0, y=ymax + 0.12 * span_y,
-                           text="VEd", showarrow=False, yanchor="bottom", yshift=6,
+                           text=action_label, showarrow=False, yanchor="bottom", yshift=6,
                            font=dict(size=11, color=SCHEMATIC_INK))
         if asl_cg_m is not None and d_mm > 0.0:
             cg = float(asl_cg_m) * 1000.0
@@ -948,6 +976,61 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         bgcolor="rgba(255,255,255,0.82)",
         font=dict(size=10, color=SCHEMATIC_INK),
     )
+    return fig
+
+
+def biaxial_shear_overview_figure(
+    outer, holes=None, bars=None, *, vx_ed=0.0, vy_ed=0.0,
+    title="Biaxial shear actions",
+):
+    """Section-coordinate overview of signed Vx,Ed and Vy,Ed actions.
+
+    The plot is evidence, not an interaction diagram: arrow direction follows the
+    entered sign and no resultant vector or acceptance boundary is drawn.
+    """
+    outer = list(outer or [])
+    fig = section_figure(
+        outer, holes or [], bars or [], title=title, show_labels=False,
+        scale=1000.0, unit="mm", height=500,
+    )
+    if not outer:
+        return fig
+    xs = [float(point[0]) * 1000.0 for point in outer]
+    ys = [float(point[1]) * 1000.0 for point in outer]
+    xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
+    span_x = max(xmax - xmin, 1.0)
+    span_y = max(ymax - ymin, 1.0)
+
+    def arrow(x0, y0, x1, y1, colour):
+        fig.add_annotation(
+            x=x1, y=y1, ax=x0, ay=y0, axref="x", ayref="y",
+            text="", showarrow=True, arrowhead=3, arrowsize=1.1,
+            arrowwidth=2.2, arrowcolor=colour,
+        )
+
+    vx_y = ymax + 0.16 * span_y
+    if float(vx_ed) >= 0.0:
+        arrow(xmin, vx_y, xmax, vx_y, LOAD_POINT)
+    else:
+        arrow(xmax, vx_y, xmin, vx_y, LOAD_POINT)
+    fig.add_annotation(
+        x=0.5 * (xmin + xmax), y=vx_y, yshift=11, showarrow=False,
+        text=f"V<sub>x,Ed</sub> = {float(vx_ed):.3g} kN",
+        font=dict(size=11, color=LOAD_POINT),
+    )
+
+    vy_x = xmin - 0.18 * span_x
+    if float(vy_ed) >= 0.0:
+        arrow(vy_x, ymin, vy_x, ymax, BAR_TENSION)
+    else:
+        arrow(vy_x, ymax, vy_x, ymin, BAR_TENSION)
+    fig.add_annotation(
+        x=vy_x, y=0.5 * (ymin + ymax), xshift=-12, showarrow=False,
+        text=f"V<sub>y,Ed</sub> = {float(vy_ed):.3g} kN",
+        textangle=-90, font=dict(size=11, color=BAR_TENSION),
+    )
+    fig.update_xaxes(range=[xmin - 0.34 * span_x, xmax + 0.10 * span_x])
+    fig.update_yaxes(range=[ymin - 0.10 * span_y, ymax + 0.32 * span_y])
     return fig
 
 

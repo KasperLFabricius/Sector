@@ -20,7 +20,7 @@ cross-section and reports, for the same section:
 Plastic and Elastic identify the calculation method, not the limit state. Each
 named row carries the user's project-defined description or classification (for
 example ULS, ALS, SLS or FLS). Plastic/capacity rows contain NEd, MxEd, MyEd,
-VEd and TEd. Elastic rows contain long- and short-term NEd/MxEd/MyEd components
+Vx,Ed, Vy,Ed and TEd. Elastic rows contain long- and short-term NEd/MxEd/MyEd components
 and select stress-limit and crack-width acceptance per row.
 
 Mild-steel and prestress catalogues provide stable material IDs. Each bar or

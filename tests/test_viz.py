@@ -734,7 +734,7 @@ def test_shear_geometry_figure_exposes_derived_geometry_and_selected_bars():
     text = " ".join((a.text or "") for a in fig.layout.annotations)
     assert "d = 550 mm" in text and "z = 495 mm" in text
     assert "400 mm" in text and "auto minimum solid width" in text
-    assert "bars 1, 2" in text and "VEd" in text
+    assert "bars 1, 2" in text and "V<sub>y,Ed</sub>" in text
 
 
 def test_horizontal_shear_geometry_uses_left_tension_face():
@@ -748,3 +748,36 @@ def test_horizontal_shear_geometry_uses_left_tension_face():
     text = " ".join((a.text or "") for a in fig.layout.annotations)
     assert "tension face" in text and "bending about y" in text
     assert "user input" in text
+
+
+def test_uniaxial_shear_geometry_preserves_negative_action_direction():
+    fig = viz.shear_geometry_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)], [],
+        [(-0.1, -0.25, 300.0), (0.1, -0.25, 300.0)],
+        axis="x", tension_low=True, centroid=(0.0, 0.0),
+        asl_bar_ids=[1, 2], asl_cg_m=-0.25, asl_mm2=600.0,
+        d_mm=550.0, z_mm=495.0, bw_mm=400.0, bw_source="auto",
+        signed_v_ed=-25.0,
+    )
+    load_arrow = next(
+        annotation for annotation in fig.layout.annotations
+        if annotation.showarrow and annotation.arrowcolor == viz.LOAD_POINT
+    )
+    text = " ".join((annotation.text or "") for annotation in fig.layout.annotations)
+
+    assert load_arrow.y < load_arrow.ay
+    assert "V<sub>y,Ed</sub> = -25 kN" in text
+
+
+def test_biaxial_shear_overview_has_signed_coordinate_arrows_without_resultant():
+    fig = viz.biaxial_shear_overview_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [], [], vx_ed=-40.0, vy_ed=25.0,
+    )
+    text = " ".join((annotation.text or "") for annotation in fig.layout.annotations)
+    arrows = [annotation for annotation in fig.layout.annotations if annotation.showarrow]
+
+    assert "V<sub>x,Ed</sub> = -40" in text
+    assert "V<sub>y,Ed</sub> = 25" in text
+    assert len(arrows) == 2
+    assert "resultant" not in text.casefold()

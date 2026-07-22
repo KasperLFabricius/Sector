@@ -2558,7 +2558,7 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     elastic = _widget(at.dataframe, "elastic_cases_editor").value
     assert list(plastic.columns) == [
         "name", "description", "n_ed_kn", "mx_ed_knm", "my_ed_knm",
-        "v_ed_kn", "t_ed_knm",
+        "vx_ed_kn", "vy_ed_kn", "vx_face", "vy_face", "t_ed_knm",
     ]
     assert list(elastic.columns) == [
         "name", "description",
@@ -2615,7 +2615,8 @@ def test_multi_case_overview_and_result_picker_show_selected_actions():
         frame.value for frame in at.dataframe
         if list(frame.value.columns) == [
             "N_Ed [kN]", "Mx_Ed [kNm]", "My_Ed [kNm]",
-            "V_Ed [kN]", "T_Ed [kNm]",
+            "Vx_Ed [kN]", "Vy_Ed [kN]", "Vx face", "Vy face",
+            "T_Ed [kNm]",
         ]
     )
     assert actions.iloc[0]["Mx_Ed [kNm]"] == pytest.approx(80.0)

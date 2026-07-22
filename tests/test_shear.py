@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from sector import codes, shear
+from sector import capacity, codes, shear
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works standalone
@@ -485,6 +485,94 @@ def test_app_shear_check_produces_a_resistance():
     assert sh["util"] == pytest.approx(100.0 / sh["res"]["vrd_c"])
 
 
+def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 50.0),
+        ("number_input", "pl_My", 50.0),
+        ("number_input", "shear_Vx", 1.0),
+        ("number_input", "shear_Vy", 1.0),
+    )
+
+    assert not at.exception
+    sh = at.session_state["results"]["shear"]
+    assert set(sh["directions"]) == {"vx", "vy"}
+    assert sh["status"] == "REVIEW"
+    assert sh["interaction_assessed"] is False
+    assert sh["interaction_status"] == "NOT ASSESSED"
+    assert sh["directions"]["vx"]["axis"] == "y"
+    assert sh["directions"]["vy"]["axis"] == "x"
+
+
+def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 0.0),
+        ("number_input", "shear_Vy", 1.0),
+    )
+
+    assert not at.exception
+    vy = at.session_state["results"]["shear"]["directions"]["vy"]
+    assert vy["both_faces_evaluated"] is True
+    assert len(vy["face_candidates"]) == 2
+    assert vy["governing_face"] in {"negative", "positive"}
+    candidates = vy["face_candidates"]
+    governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["shear_status"], item["shear_metric"]
+        ),
+    )
+    assert vy["status"] == capacity.aggregate_assessment_status(
+        item["shear_status"] for item in candidates
+    )
+    assert vy["governing_face"] == (
+        "negative" if governing["tension_low"] else "positive"
+    )
+
+
+def test_app_linked_shear_governing_uses_the_applicable_link_utilisation():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "pl_Mx", 0.0),
+        ("number_input", "shear_Vy", 150.0),
+    )
+
+    assert not at.exception
+    vy = at.session_state["results"]["shear"]["directions"]["vy"]
+    candidates = vy["face_candidates"]
+    assert len(candidates) == 2
+    for candidate in candidates:
+        assert candidate["shear_metric"] == pytest.approx(
+            candidate["shear"]["links"]["util"]
+        )
+    governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["shear_status"], item["shear"]["links"]["util"]
+        ),
+    )
+    assert vy["governing_face"] == (
+        "negative" if governing["tension_low"] else "positive"
+    )
+    assert vy["governing_domains"]["shear"]["util"] == pytest.approx(
+        governing["shear"]["links"]["util"]
+    )
+
+
 def test_app_shear_bw_override_is_used():
     at = _fresh()
     at.run()
@@ -704,14 +792,17 @@ def test_app_shear_is_saved_and_restored():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
-    _set(at, ("number_input", "shear_V", 123.0))
-    at.selectbox(key="shear_axis").set_value("Horizontal shear (bending about y)").run()
+    _set(
+        at,
+        ("number_input", "shear_Vx", 123.0),
+        ("number_input", "shear_vx_bw", 240.0),
+    )
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     tables = {k: at.session_state[k] for k in project_io.PROJECT_TABLE_KEYS
               if k in at.session_state}
     assert scalars["shear_on"] is True and "shear_V" not in scalars
-    assert first_case_value(at, "shear_V") == pytest.approx(123.0)
+    assert first_case_value(at, "shear_Vx") == pytest.approx(123.0)
 
     at2 = _fresh()
     at2.run()
@@ -719,8 +810,8 @@ def test_app_shear_is_saved_and_restored():
     at2.run()
     assert not at2.exception
     assert at2.session_state["shear_on"] is True
-    assert first_case_value(at2, "shear_V") == pytest.approx(123.0)
-    assert at2.session_state["shear_axis"] == "Horizontal shear (bending about y)"
+    assert first_case_value(at2, "shear_Vx") == pytest.approx(123.0)
+    assert at2.session_state["shear_vx_bw"] == pytest.approx(240.0)
 
 
 # -- Prestress resultants and axial-force effects in shear -------------------
