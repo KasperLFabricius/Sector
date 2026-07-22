@@ -934,9 +934,14 @@ def _restore_input_state() -> None:
 def _open_analysis_content(flag: str) -> None:
     """Open a full-width auxiliary view from an input-page button callback."""
     _snapshot_input_state()
-    st.session_state["_manual_open"] = flag == "manual"
     st.session_state["_qs_open"] = flag == "quick_section"
     st.session_state["_main_page"] = "Analysis"
+
+
+def _open_manual_dialog() -> None:
+    """Open the manual above the current workspace without navigating away."""
+    _snapshot_input_state()
+    st.session_state["_manual_open"] = True
 
 
 def _set_main_page(page: str) -> None:
@@ -2664,7 +2669,7 @@ def build_inputs(host=st):
         st.button(
             "User manual", key="open_manual", width="stretch",
             help="Open the user manual.",
-            on_click=_open_analysis_content, args=("manual",),
+            on_click=_open_manual_dialog,
         )
     return dict(section=section, void_error=void_error, steel_error=steel_error,
                 concrete=concrete, steel=steel,
@@ -5491,10 +5496,9 @@ quick_section_open = bool(st.session_state.get("_qs_open"))
 next_main_page = st.session_state.pop("_next_main_page", None)
 if next_main_page in {"Inputs", "Analysis"}:
     st.session_state["_main_page"] = next_main_page
-# A stored auxiliary-view flag is a deep link to the Analysis page (also useful for
-# restoring a Streamlit session and for AppTest). Do this before the keyed navigation
-# widget is created; modifying it afterwards is not allowed by Streamlit.
-if manual_open or quick_section_open:
+# The Quick Section builder remains a full-width Analysis view. The manual is a
+# dialog and deliberately leaves the current workspace page mounted behind it.
+if quick_section_open:
     st.session_state["_main_page"] = "Analysis"
 st.session_state.setdefault("_main_page", "Inputs")
 _restore_input_state()
@@ -5517,14 +5521,7 @@ if main_page == "Inputs":
     _generate_report(inp)
 else:
     inp = st.session_state.get("_latest_inputs")
-    if manual_open:
-        if st.button("Back to analysis", type="primary",
-                     width="stretch", key="manual_back"):
-            st.session_state["_manual_open"] = False
-            st.rerun()
-        import manual                      # lazy: keep the manual off the hot path
-        manual.render_manual_streamlit()
-    elif quick_section_open:
+    if quick_section_open:
         _quick_section_viewport()
     elif inp is None:
         st.info("Open Inputs once to initialise the section and analysis settings.")
@@ -5534,3 +5531,10 @@ else:
         )
     else:
         _analysis_workspace(inp)
+
+# Keep the current Inputs or Analysis workspace visible behind the manual. The
+# dialog is imported and built only while open, so its figures stay off the normal
+# rerun path.
+if manual_open:
+    import manual                          # lazy: keep the manual off the hot path
+    manual.render_manual_dialog()

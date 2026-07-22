@@ -366,16 +366,17 @@ def test_manual_pdf_exports_each_repeated_figure_only_once(monkeypatch):
     assert len(calls) == len(unique_figures)
 
 
-def test_manual_opens_from_about_and_closes_from_the_analysis_page():
+def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     assert not at.exception
-    # The "User manual" button lives in the About expander; opening it takes over
-    # the main area.
+    assert at.session_state["_main_page"] == "Inputs"
+    # The "User manual" button lives in the About expander. It opens above the
+    # current page instead of replacing the workspace.
     at.button(key="open_manual").click().run()
     assert not at.exception
     assert at.session_state["_manual_open"] is True
-    assert any("Sector user manual" in m.value for m in at.markdown)
+    assert at.session_state["_main_page"] == "Inputs"
     selector = next(item for item in at.selectbox if item.key == "manual_part")
     assert selector.value == "Part A - Get started"
     assert any("Part A - Get started" in m.value for m in at.markdown)
@@ -384,20 +385,19 @@ def test_manual_opens_from_about_and_closes_from_the_analysis_page():
     assert not at.exception
     assert any("Part B - Features & options" in m.value for m in at.markdown)
     assert not any("Part A - Get started" in m.value for m in at.markdown)
-    # The "Back to analysis" button is above the manual in the analysis page.
-    at.button(key="manual_back").click().run()
+    at.button(key="manual_close").click().run()
     assert not at.exception
     assert at.session_state["_manual_open"] is False
+    assert at.session_state["_main_page"] == "Inputs"
 
 
 def test_opening_and_closing_the_manual_keeps_inputs():
-    # Inputs are mirrored while the Analysis page is selected, so opening and
-    # closing the manual must not drop input state.
+    # Dialog fragment reruns must not unmount or reset the Inputs page widgets.
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()   # a non-default input
     at.button(key="open_manual").click().run()
-    at.button(key="manual_back").click().run()
+    at.button(key="manual_close").click().run()
     assert not at.exception
     assert at.session_state["conc_fck"] == 55.0             # preserved across open/close
 
