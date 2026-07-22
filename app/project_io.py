@@ -20,12 +20,13 @@ from datetime import datetime, timezone
 import pandas as pd
 
 import load_cases
+import material_catalog
 import reinforcement_table as rebar_table
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 5   # v5: stable, mixed-type reinforcement element records
+VERSION = 6   # v6: stable material catalogues and per-element assignments
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -53,6 +54,10 @@ SCALAR_KEYS = [
     # Concrete.
     "conc_preset", "conc_fck", "conc_gamma_c", "conc_k_tc", "conc_alpha_cc",
     "conc_eps_c2", "conc_eps_cu2", "conc_n", "conc_Ec", "sls_fctm",
+    # Stable material catalogues. The former flat material keys below remain in
+    # this allow-list only so old project files and API callers can be migrated.
+    material_catalog.MILD_CATALOG_KEY,
+    material_catalog.PRESTRESS_CATALOG_KEY,
     # Mild reinforcement.
     "mild_preset", "mild_active_comp", "mild_fytk", "mild_fyck", "mild_futk",
     "mild_eut", "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
@@ -88,6 +93,7 @@ SCALAR_KEYS = [
     "torsion_sub_b2", "torsion_sub_h2", "torsion_sub_b3", "torsion_sub_h3",
     # Combined M-V-T interaction.
     "combined_on", "combined_method", "combined_mv_independent",
+    "capacity_steel_material_id",
     "label_scale", "label_min_gap",
     # Report metadata.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev", "rep_author",
@@ -179,6 +185,25 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
         )
     }
+    # Version 6 writes only the catalogue representation. External callers may
+    # still supply the former flat material values; migrate them at the save/hash
+    # boundary so two equivalent inputs have one canonical representation.
+    for kind, legacy_keys in (
+        ("mild", material_catalog.LEGACY_MILD_KEYS),
+        ("prestress", material_catalog.LEGACY_PRESTRESS_KEYS),
+    ):
+        key = material_catalog.catalog_key(kind)
+        if key in scalar_payload:
+            scalar_payload[key] = material_catalog.normalise_catalog(
+                scalar_payload[key], kind
+            )
+        elif any(legacy in scalar_payload for legacy in legacy_keys):
+            scalar_payload[key] = material_catalog.from_legacy_scalars(
+                scalar_payload, kind
+            )
+        if key in scalar_payload:
+            for legacy in legacy_keys:
+                scalar_payload.pop(legacy, None)
     content = {
         "tables": {k: _table_to_obj(tables.get(k), k) for k in TABLE_KEYS},
         "scalars": scalar_payload,
@@ -343,6 +368,46 @@ def parse_project(text: str):
         val = scalars.get(key)
         if isinstance(val, (int, float)) and val >= 1000.0:
             scalars[key] = val / 1000.0
+    # Migrate either explicit v6 catalogues or the former one-material flat
+    # inputs. A deliberately partial project with no material data stays partial;
+    # the UI seeds its normal defaults independently.
+    for kind, legacy_keys in (
+        ("mild", material_catalog.LEGACY_MILD_KEYS),
+        ("prestress", material_catalog.LEGACY_PRESTRESS_KEYS),
+    ):
+        key = material_catalog.catalog_key(kind)
+        if key in scalars:
+            scalars[key] = material_catalog.normalise_catalog(scalars[key], kind)
+        elif any(legacy in raw_scalars for legacy in legacy_keys):
+            scalars[key] = material_catalog.from_legacy_scalars(scalars, kind)
+        if key in scalars:
+            for legacy in legacy_keys:
+                scalars.pop(legacy, None)
+    # Material IDs already existed as traceability fields in v5, although every
+    # element still used one global law. Clone that law under each valid referenced
+    # ID so old calculations remain runnable and numerically unchanged in v6.
+    if data.get("version", 1) < 6:
+        for kind, table_key in (("mild", "bars_base"),
+                                ("prestress", "tendons_base")):
+            key = material_catalog.catalog_key(kind)
+            table = tables.get(table_key)
+            if (
+                key not in scalars
+                or table is None
+                or rebar_table.MATERIAL_ID not in table
+            ):
+                continue
+            scalars[key] = material_catalog.materialise_legacy_assignments(
+                scalars[key], kind,
+                [rebar_table.text_cell(value)
+                 for value in table[rebar_table.MATERIAL_ID].tolist()],
+            )
+    if material_catalog.MILD_CATALOG_KEY in scalars:
+        available = material_catalog.material_ids(
+            scalars[material_catalog.MILD_CATALOG_KEY], "mild"
+        )
+        if scalars.get("capacity_steel_material_id") not in available:
+            scalars["capacity_steel_material_id"] = available[0]
     # The axial force N is now tension-positive; files written before that (version
     # < 2) stored it compression-positive, so negate their axial values to preserve
     # the physical loads. Moments are unchanged.

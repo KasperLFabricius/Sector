@@ -2118,6 +2118,46 @@ def test_material_preset_switch_calculates():
     assert "plastic" in at.session_state["results"]
 
 
+def test_material_catalogue_add_duplicate_delete_and_assignment_guard():
+    at = _fresh().run()
+    _goto_material_tab(at, "Mild steel")
+
+    assert [item["id"] for item in at.session_state[
+        "mild_material_catalog"]["items"]] == ["M1"]
+    # M1 is assigned to the default bars, so it cannot be deleted.
+    assert at.button(key="mild_catalog_delete").disabled is True
+
+    at.button(key="mild_catalog_add").click().run()
+    assert not at.exception
+    assert at.session_state["_mild_catalog_selected"] == "M2"
+    assert [item["id"] for item in at.session_state[
+        "mild_material_catalog"]["items"]] == ["M1", "M2"]
+    assert at.button(key="mild_catalog_delete").disabled is False
+
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.selectbox(key="capacity_steel_material_id").set_value("M2").run()
+    assert at.button(key="mild_catalog_delete").disabled is True
+    at.selectbox(key="capacity_steel_material_id").set_value("M1").run()
+    assert at.button(key="mild_catalog_delete").disabled is False
+
+    at.text_input(key="mildcat_r1_M2_name").set_value(
+        "Existing reinforcement"
+    ).run()
+    assert at.session_state["_fig_cache"]["steel_M2"][1].layout.title.text == (
+        "M2 - Existing reinforcement"
+    )
+    at.button(key="mild_catalog_duplicate").click().run()
+    assert not at.exception
+    items = at.session_state["mild_material_catalog"]["items"]
+    assert [item["id"] for item in items] == ["M1", "M2", "M3"]
+    assert items[2]["name"] == "Existing reinforcement copy"
+
+    at.button(key="mild_catalog_delete").click().run()
+    assert not at.exception
+    assert [item["id"] for item in at.session_state[
+        "mild_material_catalog"]["items"]] == ["M1", "M2"]
+
+
 def test_2023_concrete_fck_edit_calculates():
     # Editing fck under the strength-dependent 2023 preset (alpha_cc tracks fck).
     at = _fresh()
@@ -2453,7 +2493,7 @@ def test_prestress_curve_is_co_located_with_its_inputs():
     at.number_input(key="tnd_n").set_value(4).run()
     _apply_qs(at)                            # put tendons in the section
     _goto_material_tab(at, "Prestressing steel")
-    assert "prestress" in at.session_state["_fig_cache"]
+    assert "prestress_P1" in at.session_state["_fig_cache"]
     assert not at.exception
 
 
@@ -3347,9 +3387,10 @@ def test_modular_ratios_are_derived_from_moduli():
         ("number_input", "conc_Ec", 40.0),
         ("number_input", "el_phi", 2.0),
     )
+    _goto_input_tab(at, "Loads")
     md = "\n".join(m.value for m in at.markdown)
     assert "Modular ratios" in md
-    assert "| Mild (Es/Ec) | 5.000 | 15.000 |" in md
+    assert "| M1 - B550 reinforcement | 200.0 | 5.000 | 15.000 |" in md
 
 
 def test_prestress_gets_its_own_derived_modular_ratio():
@@ -3367,8 +3408,9 @@ def test_prestress_gets_its_own_derived_modular_ratio():
         ("number_input", "conc_Ec", 39.0),
         ("number_input", "el_phi", 0.0),
     )
+    _goto_input_tab(at, "Loads")
     md = "\n".join(m.value for m in at.markdown)
-    assert "| Prestress (Ep/Ec) | 5.000 | 5.000 |" in md
+    assert "| P1 - Prestressing steel | 195.0 | 5.000 | 5.000 |" in md
 
 
 def test_tendon_stress_limit_uses_fpk_not_proof_stress():

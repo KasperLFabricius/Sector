@@ -28,14 +28,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import sector_report  # noqa: E402
+import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
 from sector import codes, shear  # noqa: E402
-from sector.materials import Concrete, MildSteel  # noqa: E402
+from sector.materials import Concrete  # noqa: E402
 
 # Geometry, concrete law, steel law, two plastic interactions, two plastic
 # states, two elastic states, two elastic strain profiles and one derived shear
 # geometry. An intentional fixture change must update this explicit contract.
-_EXPECTED_FIGURE_COUNT = 12
+_EXPECTED_FIGURE_COUNT = 13
 
 
 class _FixedDateTime(datetime.datetime):
@@ -120,6 +121,24 @@ def _inputs() -> dict:
             "check_crack_width": False,
         },
     ]
+    mild_catalogue, second_id = material_catalog.add_entry(
+        material_catalog.default_catalog("mild"), "mild"
+    )
+    mild_catalogue["items"][0].update({
+        "name": "New B500 reinforcement",
+        "description": "Primary reinforcement",
+    })
+    mild_catalogue["items"][1].update({
+        "name": "Existing reinforcement",
+        "description": "Verified from archive test certificate",
+        "fytk": 235.0,
+        "fyck": 235.0,
+        "futk": 360.0,
+    })
+    mild_materials = {
+        item["id"]: material_catalog.build_material(item, "mild")
+        for item in mild_catalogue["items"]
+    }
     return {
         "mode": "Both",
         "plastic_cases": plastic_cases,
@@ -139,17 +158,29 @@ def _inputs() -> dict:
         },
         "outer": [(-0.1, -0.15), (0.1, -0.15), (0.1, 0.15), (-0.1, 0.15)],
         "holes": [],
-        "bars": [(0.0, -0.12, 500.0)],
+        "bars": [(0.0, -0.12, 500.0), (0.0, 0.12, 400.0)],
         "tendons": [],
+        "bar_elements": [
+            {
+                "id": "R1", "x_mm": 0.0, "y_mm": -120.0,
+                "area_mm2": 500.0, "diameter_mm": 25.23,
+                "size_mode": "Area", "material_id": "M1",
+                "fatigue_detail_id": "", "group_id": "B1",
+            },
+            {
+                "id": "R2", "x_mm": 0.0, "y_mm": 120.0,
+                "area_mm2": 400.0, "diameter_mm": 22.57,
+                "size_mode": "Area", "material_id": second_id,
+                "fatigue_detail_id": "", "group_id": "B2",
+            },
+        ],
+        "tendon_elements": [],
         "concrete": Concrete(fck=30.0, gamma_c=1.5, curve=2),
-        "steel": MildSteel(
-            fytk=500.0,
-            fyck=500.0,
-            futk=500.0,
-            eut=0.05,
-            gamma_y=1.15,
-            curve=2,
-        ),
+        "steel": mild_materials["M1"],
+        "mild_material_catalog": mild_catalogue,
+        "mild_materials": mild_materials,
+        "bar_materials": [mild_materials["M1"], mild_materials[second_id]],
+        "capacity_steel_material_id": second_id,
         "prestress": None,
         "P_pl": 0.0,
         "Mx_pl": 80.0,
@@ -458,6 +489,18 @@ def validate_pdf_content(pdf: bytes) -> str:
     if "NA intercepts" not in governing_page:
         raise AssertionError("the governing-case heading is separated from its table")
 
+    existing_material_page = next(
+        (page.extract_text() or "" for page in reader.pages
+         if "Verified from archive test certificate" in (page.extract_text() or "")),
+        "",
+    )
+    if not all(value in existing_material_page for value in (
+        "Yield partial factor", "Design yield", "= 195.833 MPa"
+    )):
+        raise AssertionError(
+            "a material heading/provenance is separated from its definition"
+        )
+
     settings_page = next(
         (page.extract_text() or "" for page in reader.pages
          if "Analysis settings" in (page.extract_text() or "")),
@@ -470,12 +513,18 @@ def validate_pdf_content(pdf: bytes) -> str:
     )):
         raise AssertionError("the loads and analysis settings are split across pages")
 
+    flat_text = " ".join(text.split())
     for expected in (
         "QA-REFERENCE",
         "Sweco Danmark A/S",
         "Rendered report regression",
         "Results overview - FAIL",
         "Governing combination",
+        "M1 New B500 reinforcement",
+        "M2 Existing reinforcement",
+        "Verified from archive test certificate",
+        "R1 M1",
+        "R2 M2",
         "VEd = 0",
         "Plastic section capacity - PL-QA-1",
         "Plastic section capacity - PL-QA-2",
@@ -488,7 +537,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Crack-width candidates",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",
     ):
-        if expected not in text:
+        if expected not in text and expected not in flat_text:
             raise AssertionError(f"expected report content is missing: {expected}")
     return text
 

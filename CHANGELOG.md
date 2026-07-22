@@ -1,5 +1,12 @@
 # Sector changelog
 
+## Unreleased
+
+- Added stable reinforcing- and prestressing-steel catalogues with per-element
+  assignment throughout plastic, elastic, crack-width and member checks.
+- Added material IDs, names, definitions, assignment evidence and individual
+  stress-strain curves to the UI, project files and PDF report.
+
 ## 0.90 - 2026-07-22
 
 Sector 0.90 completes the interface and multi-case workflow review.

@@ -110,3 +110,15 @@ def test_grid_metadata_marks_id_immutable_and_size_fields_as_derived_pair():
     assert options["id_prefix"] == "R"
     assert options["compact_paste_fields"] == [rt.X, rt.Y, rt.AREA]
     assert options["default_values"][rt.MATERIAL_ID] == "M1"
+
+
+def test_grid_material_assignment_is_limited_to_catalogue_ids():
+    specs = {
+        spec["field"]: spec
+        for spec in rt.point_grid_specs("bar", ["M1", "M4"])
+    }
+    options = rt.point_grid_options("bar", ["M1", "M4"])
+
+    assert specs[rt.MATERIAL_ID]["type"] == "select"
+    assert specs[rt.MATERIAL_ID]["options"] == ["M1", "M4"]
+    assert options["default_values"][rt.MATERIAL_ID] == "M1"

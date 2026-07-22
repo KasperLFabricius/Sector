@@ -58,6 +58,29 @@ def test_stress_assessments_use_stable_element_ids_when_supplied():
     assert checks["prestress"]["governing"] == "P3"
 
 
+def test_stress_assessments_govern_by_per_element_utilisation():
+    # Bar R2 has the lower stress but also the much lower assigned strength, so it
+    # governs by utilisation. A raw maximum-stress comparison would select R1.
+    checks = sls.stress_assessments(
+        [350.0, 260.0],
+        n_bars=2,
+        max_concrete_compression=12.0,
+        fck=30.0,
+        fyk=[600.0, 300.0],
+        fpk=None,
+        concrete_limit_pct=60.0,
+        reinforcement_limit_pct=80.0,
+        prestress_limit_pct=75.0,
+        valid=True,
+        bar_ids=["R1", "R2"],
+    )
+
+    assert checks["reinforcement"]["governing"] == "R2"
+    assert checks["reinforcement"]["value"] == pytest.approx(260.0)
+    assert checks["reinforcement"]["limit"] == pytest.approx(240.0)
+    assert checks["reinforcement"]["status"] == "EXCEEDED"
+
+
 def test_element_rows_are_typed_and_include_geometry_strain():
     rows = sls.element_rows(
         [(0.1, -0.2, 314.0)],
@@ -91,6 +114,24 @@ def test_element_rows_use_stable_element_ids_when_supplied():
     )
 
     assert [row["element_id"] for row in rows] == ["R7", "P3"]
+
+
+def test_element_rows_report_material_identity_and_per_element_modulus():
+    rows = sls.element_rows(
+        [(0.1, -0.2, 314.0), (0.0, -0.2, 314.0)],
+        [],
+        total=[200.0, 200.0], long=[150.0, 150.0],
+        dif=[50.0, 50.0], rst1=[0.0, 0.0],
+        es_mpa=[200_000.0, 100_000.0], ep_mpa=None,
+        bar_ids=["R1", "R2"],
+        bar_material_ids=["M1", "M2"],
+        bar_material_names=["B500", "Legacy steel"],
+    )
+
+    assert rows[0]["material_id"] == "M1"
+    assert rows[1]["material_name"] == "Legacy steel"
+    assert rows[0]["strain_permille"] == pytest.approx(1.0)
+    assert rows[1]["strain_permille"] == pytest.approx(2.0)
 
 
 def test_concrete_corner_rows_use_public_one_based_points():

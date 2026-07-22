@@ -20,6 +20,18 @@ def _element_id(ids: Sequence[str] | None, index: int, fallback: str) -> str:
     return fallback
 
 
+def _per_element(value, count: int, label: str) -> list:
+    """Broadcast a scalar or validate one value per element."""
+    if count == 0:
+        return []
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        values = list(value)
+        if len(values) != count:
+            raise ValueError(f"need {count} {label} values, got {len(values)}")
+        return values
+    return [value] * count
+
+
 def upper_limit_assessment(
     value: float | None,
     limit: float | None,
@@ -69,8 +81,8 @@ def stress_assessments(
     n_bars: int,
     max_concrete_compression: float,
     fck: float,
-    fyk: float,
-    fpk: float | None,
+    fyk: float | Sequence[float],
+    fpk: float | Sequence[float] | None,
     concrete_limit_pct: float,
     reinforcement_limit_pct: float,
     prestress_limit_pct: float,
@@ -83,14 +95,30 @@ def stress_assessments(
     mild = total[:n_bars]
     prestress = total[n_bars:]
 
-    def _max_tension(values: Sequence[float]):
-        if not values:
-            return None, None
-        i = max(range(len(values)), key=lambda j: values[j])
-        return max(values[i], 0.0), i + 1
+    fyk_values = [float(v) for v in _per_element(fyk, len(mild), "fyk")]
+    fpk_values = ([float(v) for v in _per_element(fpk, len(prestress), "fpk")]
+                  if fpk is not None else [])
 
-    mild_value, mild_no = _max_tension(mild)
-    pre_value, pre_no = _max_tension(prestress)
+    def _governing(values: Sequence[float], strengths: Sequence[float], pct: float):
+        if not values:
+            return None, None, None
+        tension = [max(float(value), 0.0) for value in values]
+        limits = [float(pct) / 100.0 * float(strength) for strength in strengths]
+        if pct > 0.0 and any(limit > 0.0 for limit in limits):
+            def score(index):
+                limit = limits[index]
+                return tension[index] / limit if limit > 0.0 else math.inf
+            index = max(range(len(values)), key=score)
+        else:
+            index = max(range(len(values)), key=lambda j: tension[j])
+        return tension[index], limits[index], index + 1
+
+    mild_value, mild_limit, mild_no = _governing(
+        mild, fyk_values, reinforcement_limit_pct
+    )
+    pre_value, pre_limit, pre_no = _governing(
+        prestress, fpk_values, prestress_limit_pct
+    ) if fpk_values else (None, None, None)
     concrete = upper_limit_assessment(
         max(float(max_concrete_compression), 0.0),
         float(concrete_limit_pct) / 100.0 * float(fck),
@@ -98,16 +126,15 @@ def stress_assessments(
     )
     reinforcement = upper_limit_assessment(
         mild_value,
-        float(reinforcement_limit_pct) / 100.0 * float(fyk),
+        mild_limit,
         valid=valid,
         applicable=bool(mild),
     )
     prestressing = upper_limit_assessment(
         pre_value,
-        (float(prestress_limit_pct) / 100.0 * float(fpk)
-         if fpk is not None else None),
+        pre_limit,
         valid=valid,
-        applicable=bool(prestress) and fpk is not None,
+        applicable=bool(prestress) and bool(fpk_values),
     )
     concrete.update(
         criterion=f"{float(concrete_limit_pct):g}% fck",
@@ -164,34 +191,49 @@ def element_rows(
     long: Sequence[float],
     dif: Sequence[float],
     rst1: Sequence[float],
-    es_mpa: float,
-    ep_mpa: float | None,
+    es_mpa: float | Sequence[float],
+    ep_mpa: float | Sequence[float] | None,
     bar_ids: Sequence[str] | None = None,
     tendon_ids: Sequence[str] | None = None,
+    bar_material_ids: Sequence[str] | None = None,
+    tendon_material_ids: Sequence[str] | None = None,
+    bar_material_names: Sequence[str] | None = None,
+    tendon_material_names: Sequence[str] | None = None,
 ) -> list[dict]:
     """Return a complete, explicitly typed SLS row for every bar and tendon."""
     rows: list[dict] = []
+    bar_moduli = [float(v) for v in _per_element(es_mpa, len(bars), "Es")]
+    fallback_es = bar_moduli[0] if bar_moduli else 200_000.0
+    tendon_moduli = (
+        [float(v) for v in _per_element(ep_mpa, len(tendons), "Ep")]
+        if ep_mpa is not None else [fallback_es] * len(tendons)
+    )
     elements = [
         ("Bar", i + 1,
-         _element_id(bar_ids, i, f"bar {i + 1}"),
-         p, float(es_mpa))
+         _element_id(bar_ids, i, f"bar {i + 1}"), p, bar_moduli[i],
+         _element_id(bar_material_ids, i, ""),
+         _element_id(bar_material_names, i, ""))
         for i, p in enumerate(bars)
     ]
-    tendon_modulus = float(ep_mpa) if ep_mpa is not None else float(es_mpa)
     elements.extend(
         ("Tendon", i + 1,
          _element_id(tendon_ids, i, f"tendon {i + 1}"),
-         p, tendon_modulus)
+         p, tendon_moduli[i],
+         _element_id(tendon_material_ids, i, ""),
+         _element_id(tendon_material_names, i, ""))
         for i, p in enumerate(tendons)
     )
     arrays = ([float(v) for v in total], [float(v) for v in long],
               [float(v) for v in dif], [float(v) for v in rst1])
-    for i, (kind, number, element_id, point, modulus) in enumerate(elements):
+    for i, (kind, number, element_id, point, modulus,
+            material_id, material_name) in enumerate(elements):
         stress = arrays[0][i]
         rows.append({
             "element_type": kind,
             "element_no": number,
             "element_id": element_id,
+            "material_id": material_id or None,
+            "material_name": material_name or None,
             "x_mm": float(point[0]) * 1000.0,
             "y_mm": float(point[1]) * 1000.0,
             "area_mm2": float(point[2]),

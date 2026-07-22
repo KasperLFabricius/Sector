@@ -23,6 +23,10 @@ example ULS, ALS, SLS or FLS). Plastic/capacity rows contain NEd, MxEd, MyEd,
 VEd and TEd. Elastic rows contain long- and short-term NEd/MxEd/MyEd components
 and select stress-limit and crack-width acceptance per row.
 
+Mild-steel and prestress catalogues provide stable material IDs. Each bar or
+tendon is assigned an ID, so mixed strengths, moduli, partial factors, worklines
+and tendon prestrains remain traceable in the UI, project file and PDF report.
+
 ## Goals
 
 A fast, modern tool with the rigour engineers expect: define a section by its

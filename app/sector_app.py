@@ -29,6 +29,7 @@ import streamlit as st  # noqa: E402
 
 import case_analysis  # noqa: E402
 import load_cases  # noqa: E402
+import material_catalog as mat_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
 import result_presentation as presentation  # noqa: E402
@@ -40,6 +41,7 @@ from sector import __version__ as sector_version  # noqa: E402
 from sector import (capacity, codes, combined, geometry, kernels,  # noqa: E402
                     material_presets as mp, shear, templates, torsion)
 from sector.build_info import short_revision, source_revision  # noqa: E402
+from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector import sls as sls_core  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
@@ -169,7 +171,9 @@ def _edition_family(label):
     return "Custom material law"
 
 
-def _design_basis_summary(*, concrete_preset, mild_preset, prestress_preset=None,
+def _design_basis_summary(*, concrete_preset, mild_preset=None,
+                          prestress_preset=None, mild_materials=None,
+                          prestress_materials=None,
                           crack_code=None, shear_method=None, shear_links=False,
                           torsion_method=None, combined_method=None):
     """Whole-calculation edition map and any material hybrid/coverage qualification.
@@ -179,9 +183,19 @@ def _design_basis_summary(*, concrete_preset, mild_preset, prestress_preset=None
     as one end-to-end code implementation.
     """
     selections = [("Concrete material", concrete_preset)]
-    if mild_preset:
+    if mild_materials:
+        selections.extend(
+            (f"Reinforcing steel {item['id']}", item["preset"])
+            for item in mild_materials
+        )
+    elif mild_preset:
         selections.append(("Reinforcing steel", mild_preset))
-    if prestress_preset:
+    if prestress_materials:
+        selections.extend(
+            (f"Prestressing steel {item['id']}", item["preset"])
+            for item in prestress_materials
+        )
+    elif prestress_preset:
         selections.append(("Prestressing steel", prestress_preset))
     if crack_code:
         selections.append(("Crack width", crack_code))
@@ -479,7 +493,30 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     return concrete, fctm_val, Ec, preset, k_tc, eta_cc
 
 
-def mild_panel(box, locked=False, *, heading=True):
+def _seed_material_entry_widgets(entry, kind, prefix, *, overwrite=False):
+    """Seed one catalogue entry before its widgets are mounted."""
+    values = {
+        "name": entry["name"],
+        "description": entry.get("description", ""),
+        "preset": entry["preset"],
+        **{field: entry[field] for field in mat_catalog.fields(kind)},
+    }
+    if kind == "mild":
+        values["active_comp"] = entry["active_in_compression"]
+    for field, value in values.items():
+        key = f"{prefix}_{field}"
+        if overwrite:
+            st.session_state[key] = value
+        else:
+            st.session_state.setdefault(key, value)
+    marker = f"{prefix}_prev"
+    if overwrite:
+        st.session_state[marker] = entry["preset"]
+    else:
+        st.session_state.setdefault(marker, entry["preset"])
+
+
+def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
     """Mild-steel material: preset, editable parameters and adjacent preview.
 
     A flat form on the general two-yield law: every parameter is always shown
@@ -493,21 +530,40 @@ def mild_panel(box, locked=False, *, heading=True):
     """
     if heading:
         box.markdown("**Mild steel**")
+    catalogue_mode = entry is not None
+    entry = dict(entry or mat_catalog.default_entry("mild"))
+    _seed_material_entry_widgets(entry, "mild", prefix)
+    if catalogue_mode:
+        box.caption(f"Material ID: {entry['id']}")
+        name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name")
+        description = _seeded_text(
+            box, "Description", entry.get("description", ""),
+            f"{prefix}_description",
+        )
+    else:
+        name, description = entry["name"], entry.get("description", "")
     presets = mp.MILD_PRESETS
     labels = list(presets)
-    preset = _seeded_selectbox(box, "Preset", labels, _DEFAULT_PRESET,
-                               "mild_preset", help=_PRESET_HELP)
+    if entry["preset"] not in labels:
+        labels.append(entry["preset"])
+    preset = _seeded_selectbox(box, "Preset", labels, entry["preset"],
+                               f"{prefix}_preset", help=_PRESET_HELP)
     # Selecting a preset whose compression yield is active (fyck > 0) turns the
     # "Active in compression" toggle on, so the preset's compression is not
     # silently dropped. (Checked before _prefill, which updates the change marker.)
-    if (st.session_state.get("mild_prev") != preset
+    if (preset in presets
+            and st.session_state.get(f"{prefix}_prev") != preset
             and presets[preset].get("fyck", 0.0) > 0.0):
-        st.session_state["mild_active_comp"] = True
-    _prefill("mild", preset, presets)
-    curve = presets[preset]["curve"]
-    st.session_state.setdefault("mild_active_comp", True)
+        st.session_state[f"{prefix}_active_comp"] = True
+    if preset in presets:
+        _prefill(prefix, preset, presets)
+        curve = presets[preset]["curve"]
+    else:
+        curve = int(entry["curve"])
+        st.session_state[f"{prefix}_prev"] = preset
+    st.session_state.setdefault(f"{prefix}_active_comp", True)
     active_comp = box.checkbox(
-        "Active in compression", key="mild_active_comp", disabled=locked,
+        "Active in compression", key=f"{prefix}_active_comp", disabled=locked,
         help="On: the bar carries compression and its compression-side inputs "
              "(fyck, ey0c) are used. Off: the reinforcement is tension-only "
              "(no compression), for every curve type. This applies to the plastic "
@@ -515,7 +571,7 @@ def mild_panel(box, locked=False, *, heading=True):
              "the bars in both directions.")
     # The compression-side inputs only matter when compression is active.
     comp_only = {"fyck", "ey0c"}
-    vals = {f: _number(box, "mild", f, mp.MILD_FIELD_META, mp.MILD_HELP,
+    vals = {f: _number(box, prefix, f, mp.MILD_FIELD_META, mp.MILD_HELP,
                        disabled=(locked and f != "Es")
                        or (f in comp_only and not active_comp))
             for f in mp.MILD_FIELD_META}
@@ -525,10 +581,21 @@ def mild_panel(box, locked=False, *, heading=True):
     comp = "active" if active_comp else "tension-only"
     box.caption(f"$f_{{yd}}$ = {steel.fytk / vals['gamma_y']:.3f} MPa,  "
                 f"$E_s$ = {vals['Es']:.0f} GPa,  compression {comp}")
-    return steel
+    if not catalogue_mode:
+        return steel
+    updated = {
+        **entry,
+        "name": str(name).strip() or entry["id"],
+        "description": str(description).strip(),
+        "preset": preset,
+        "curve": int(curve),
+        "active_in_compression": bool(active_comp),
+        **{field: float(value) for field, value in vals.items()},
+    }
+    return steel, updated
 
 
-def prestress_panel(box, locked=False, *, heading=True):
+def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"):
     """Prestressing-steel material: preset, editable parameters and adjacent preview.
 
     A flat form: the user-defined and Eurocode presets build the general
@@ -542,13 +609,31 @@ def prestress_panel(box, locked=False, *, heading=True):
     """
     if heading:
         box.markdown("**Prestressing steel**")
+    catalogue_mode = entry is not None
+    entry = dict(entry or mat_catalog.default_entry("prestress"))
+    _seed_material_entry_widgets(entry, "prestress", prefix)
+    if catalogue_mode:
+        box.caption(f"Material ID: {entry['id']}")
+        name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name")
+        description = _seeded_text(
+            box, "Description", entry.get("description", ""),
+            f"{prefix}_description",
+        )
+    else:
+        name, description = entry["name"], entry.get("description", "")
     presets = mp.PRESTRESS_PRESETS
     labels = list(presets)
-    preset = _seeded_selectbox(box, "Preset", labels, "EN 1992-1-1:2005",
-                               "pre_preset", help=_PRESET_HELP)
-    _prefill("pre", preset, presets)
-    curve = presets[preset]["curve"]
-    vals = {f: _number(box, "pre", f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP,
+    if entry["preset"] not in labels:
+        labels.append(entry["preset"])
+    preset = _seeded_selectbox(box, "Preset", labels, entry["preset"],
+                               f"{prefix}_preset", help=_PRESET_HELP)
+    if preset in presets:
+        _prefill(prefix, preset, presets)
+        curve = presets[preset]["curve"]
+    else:
+        curve = int(entry["curve"])
+        st.session_state[f"{prefix}_prev"] = preset
+    vals = {f: _number(box, prefix, f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP,
                        disabled=locked and f not in ("IS", "Es"))
             for f in mp.PRESTRESS_FIELD_META}
     _clamp_eut(box, vals, mp.PRESTRESS_FIELDS_BY_CURVE[curve])
@@ -560,7 +645,128 @@ def prestress_panel(box, locked=False, *, heading=True):
         box.caption(f"IS = {vals['IS']:.3f} permille,  "
                     f"fpd = {vals['fytk'] / vals['gamma_y']:.3f} MPa,  "
                     f"Ep = {vals['Es']:.0f} GPa")
-    return pre
+    if not catalogue_mode:
+        return pre
+    updated = {
+        **entry,
+        "name": str(name).strip() or entry["id"],
+        "description": str(description).strip(),
+        "preset": preset,
+        "curve": int(curve),
+        **{field: float(value) for field, value in vals.items()},
+    }
+    return pre, updated
+
+
+def _ensure_material_catalog_state():
+    """Seed and canonicalise both catalogues before section grids are mounted."""
+    st.session_state.setdefault("_material_catalog_revision", 0)
+    revision = int(st.session_state["_material_catalog_revision"])
+    for kind in mat_catalog.KINDS:
+        key = mat_catalog.catalog_key(kind)
+        st.session_state[key] = mat_catalog.ensure_catalog(st.session_state, kind)
+
+    # M1/P1 retain the historical widget keys. This keeps keyboard habits and
+    # existing integrations stable, while the revision gate ensures a loaded
+    # project overwrites stale widget state before the widgets are created.
+    if st.session_state.get("_material_alias_revision") != revision:
+        for kind, prefix in (("mild", "mild"), ("prestress", "pre")):
+            first = mat_catalog.entries(
+                st.session_state[mat_catalog.catalog_key(kind)], kind
+            )[0]
+            _seed_material_entry_widgets(first, kind, prefix, overwrite=True)
+        st.session_state["_material_alias_revision"] = revision
+
+
+def _catalog_prefix(kind, material_id):
+    first_id = "M1" if kind == "mild" else "P1"
+    if material_id == first_id:
+        return "mild" if kind == "mild" else "pre"
+    revision = int(st.session_state.get("_material_catalog_revision", 0))
+    return f"{kind}cat_r{revision}_{material_id}"
+
+
+def _bump_material_catalog_revision():
+    st.session_state["_material_catalog_revision"] = (
+        int(st.session_state.get("_material_catalog_revision", 0)) + 1
+    )
+
+
+def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
+                            locked=False):
+    """Edit one catalogue and return it with the selected material preview law."""
+    key = mat_catalog.catalog_key(kind)
+    catalogue = mat_catalog.normalise_catalog(st.session_state[key], kind)
+    items = catalogue["items"]
+    ids = [item["id"] for item in items]
+    labels = {item["id"]: mat_catalog.entry_label(item) for item in items}
+    select_key = f"_{kind}_catalog_selected"
+    pending_select_key = f"_{kind}_catalog_pending_selected"
+    if pending_select_key in st.session_state:
+        # An action button is evaluated after the selector has been instantiated,
+        # when Streamlit forbids writing that widget key. Carry the requested value
+        # across the action-triggered rerun and apply it here, before the next mount.
+        st.session_state[select_key] = st.session_state.pop(pending_select_key)
+    selected = _seeded_selectbox(
+        box, "Material", ids, ids[0], select_key,
+        format_func=lambda value: labels.get(value, value),
+        help="Stable material ID and editable name. Assign the ID in the section table.",
+    )
+    counts = mat_catalog.assigned_counts(assigned_ids)
+    protected = {str(value).strip() for value in protected_ids if str(value).strip()}
+    box.caption(f"Assigned elements: {counts.get(selected, 0)}")
+
+    actions = box.container(horizontal=True)
+    add_clicked = actions.button("Add", key=f"{kind}_catalog_add")
+    duplicate_clicked = actions.button(
+        "Duplicate", key=f"{kind}_catalog_duplicate", disabled=selected not in ids
+    )
+    delete_clicked = actions.button(
+        "Delete", key=f"{kind}_catalog_delete",
+        disabled=(len(ids) <= 1 or counts.get(selected, 0) > 0
+                  or selected in protected),
+        help=("Assigned materials cannot be deleted. Reassign their elements first."
+              if counts.get(selected, 0) > 0 else
+              "This material is the active member-check reference. Select another "
+              "reference first." if selected in protected else None),
+    )
+    if add_clicked or duplicate_clicked or delete_clicked:
+        _snapshot_input_state()
+        if add_clicked:
+            catalogue, selected = mat_catalog.add_entry(catalogue, kind)
+        elif duplicate_clicked:
+            catalogue, selected = mat_catalog.duplicate_entry(
+                catalogue, kind, selected
+            )
+        else:
+            catalogue = mat_catalog.delete_entry(
+                catalogue, kind, selected, assigned_ids=assigned_ids
+            )
+            selected = catalogue["items"][0]["id"]
+            if kind == "mild" and st.session_state.get(
+                    "capacity_steel_material_id") not in mat_catalog.material_ids(
+                        catalogue, kind):
+                # The reference selector was mounted earlier in this run, so carry
+                # its replacement to the next run rather than mutating its key now.
+                st.session_state["_capacity_steel_pending_material_id"] = selected
+        st.session_state[key] = catalogue
+        st.session_state[pending_select_key] = selected
+        _bump_material_catalog_revision()
+        st.rerun()
+
+    entry = next(item for item in items if item["id"] == selected)
+    prefix = _catalog_prefix(kind, selected)
+    if kind == "mild":
+        material, updated = mild_panel(
+            box, locked=locked, heading=False, entry=entry, prefix=prefix
+        )
+    else:
+        material, updated = prestress_panel(
+            box, locked=locked, heading=False, entry=entry, prefix=prefix
+        )
+    catalogue = mat_catalog.replace_entry(catalogue, kind, updated)
+    st.session_state[key] = catalogue
+    return catalogue, selected, material
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +864,22 @@ def _reseed_table(base_key, ed_key, df):
     st.session_state.pop(ed_key, None)
 
 
+def _grid_material_ids(kind):
+    if not kind:
+        return None
+    key = mat_catalog.catalog_key("mild" if kind == "bar" else "prestress")
+    catalogue = st.session_state.get(key)
+    return mat_catalog.material_ids(
+        catalogue, "mild" if kind == "bar" else "prestress"
+    ) if catalogue is not None else None
+
+
+def _point_data_version(base_key, table_version):
+    """Include catalogue structure in a reinforcement grid's seed version."""
+    return (f"{table_version}:m{st.session_state.get('_material_catalog_revision', 0)}"
+            if _reinforcement_kind(base_key) else table_version)
+
+
 def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     """Draw the editable grid and return its current contents as a DataFrame.
 
@@ -668,12 +890,14 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     typed or pasted value sticks on the first keystroke instead of lagging behind.
     """
     version = st.session_state.get(ed_key + "_ver", 0)
+    data_version = _point_data_version(base_key, version)
     kind = _reinforcement_kind(base_key)
-    specs = rebar_table.point_grid_specs(kind) if kind else None
-    options = rebar_table.point_grid_options(kind) if kind else None
+    material_ids = _grid_material_ids(kind)
+    specs = rebar_table.point_grid_specs(kind, material_ids) if kind else None
+    options = rebar_table.point_grid_options(kind, material_ids) if kind else None
     with box:
         return point_grid(st.session_state[base_key], cols, key=ed_key,
-                          id_start=id_start, data_version=version,
+                          id_start=id_start, data_version=data_version,
                           label=_POINT_TABLE_LABELS.get(base_key,
                                                         "Editable section points"),
                           column_specs=specs, component_options=options)
@@ -767,12 +991,12 @@ def _current_table(base_key, ed_key, cols):
     """
     value = st.session_state.get(ed_key)
     version = st.session_state.get(ed_key + "_ver", 0)
-    rows = _versioned_rows(value, version)
+    rows = _versioned_rows(value, _point_data_version(base_key, version))
     kind = _reinforcement_kind(base_key)
     if rows is None:   # absent, malformed or stale -- use the current base
         frame = st.session_state[base_key].copy().reset_index(drop=True)
     else:
-        specs = rebar_table.point_grid_specs(kind) if kind else None
+        specs = rebar_table.point_grid_specs(kind, _grid_material_ids(kind)) if kind else None
         frame = _rows_to_df(rows, cols, specs)
     return (rebar_table.normalise_table(frame, kind) if kind else frame)
 
@@ -936,6 +1160,8 @@ def _case_table_signature(value, key):
 # off-screen.
 _DURABLE_INPUT_SCALARS = tuple(project_io.SCALAR_KEYS) + (
     "autosave_on", "autosave_min", "_input_tab", "_material_tab",
+    "_material_catalog_revision", "_mild_catalog_selected",
+    "_prestress_catalog_selected",
 )
 _INPUT_STATE_KEY = "_durable_input_scalars"
 
@@ -1227,6 +1453,11 @@ def _apply_pending_project() -> None:
         _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
     for key, value in scalars.items():
         st.session_state[key] = value
+    if any(key in scalars for key in mat_catalog.CATALOG_KEYS):
+        _bump_material_catalog_revision()
+        st.session_state.pop("_material_alias_revision", None)
+        st.session_state.pop("_mild_catalog_selected", None)
+        st.session_state.pop("_prestress_catalog_selected", None)
     durable = {
         key: value
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
@@ -1450,7 +1681,8 @@ def _generate_report(inp):
     """Build the PDF from the current inputs when the Generate button was pressed."""
     if not st.session_state.pop("_generating_report", False):
         return
-    if inp.get("section") is None or inp.get("void_error") or inp.get("steel_error"):
+    if (inp.get("section") is None or inp.get("void_error")
+            or inp.get("steel_error") or inp.get("material_error")):
         _clear_report_artifact()
         st.session_state["_report_msg"] = ("error", "Define a valid section (and "
                                            "resolve any void or reinforcement error) "
@@ -1879,22 +2111,38 @@ def _quick_section_viewport():
         st.rerun()
 
 
-def _modular_ratio_readout(box, ns, nl, ns_p, nl_p, *, has_tendons):
-    """Report the derived short/long-term modular ratios (mild + prestress).
+def _modular_ratio_readout(box, mild_entries, prestress_entries,
+                           mild_materials, prestress_materials, ec_mpa, phi):
+    """Report the actual short/long modular ratio of every used material."""
+    def cell(value):
+        return str(value).replace("|", r"\|").replace("\r", " ").replace("\n", " ")
 
-    n_l and n_s are no longer entered but computed from the elastic moduli and the
-    creep coefficient, so the values actually used are shown here (and in the PDF
-    report). Mild steel and prestress get their own ratios because Es != Ep; the
-    prestress row is shown only when the section has tendons.
-    """
     # Plain-text cells (no LaTeX): KaTeX does not render reliably inside a markdown
     # table cell, so keep the maths in the intro line and the table simply readable.
     box.markdown(r"**Modular ratios** (derived from $E_c$, $E_s$, $E_p$, $\varphi$)")
-    rows = ["| Steel | Short-term n_s | Long-term n_l |",
-            "|:--|--:|--:|",
-            f"| Mild (Es/Ec) | {ns:.3f} | {nl:.3f} |"]
-    if has_tendons:
-        rows.append(f"| Prestress (Ep/Ec) | {ns_p:.3f} | {nl_p:.3f} |")
+    rows = ["| Material | E (GPa) | Short-term n_s | Long-term n_l |",
+            "|:--|--:|--:|--:|"]
+    for item, materials in ((entry, mild_materials) for entry in mild_entries):
+        law = materials.get(item["id"])
+        if law is not None:
+            ns = law.Es / ec_mpa
+            rows.append(
+                f"| {cell(item['id'])} - {cell(item['name'])} | "
+                f"{law.Es / 1000.0:.1f} | "
+                f"{ns:.3f} | {ns * (1.0 + phi):.3f} |"
+            )
+    for item, materials in ((entry, prestress_materials)
+                            for entry in prestress_entries):
+        law = materials.get(item["id"])
+        if law is not None:
+            ns = law.Es / ec_mpa
+            rows.append(
+                f"| {cell(item['id'])} - {cell(item['name'])} | "
+                f"{law.Es / 1000.0:.1f} | "
+                f"{ns:.3f} | {ns * (1.0 + phi):.3f} |"
+            )
+    if len(rows) == 2:
+        rows.append("| No assigned steel elements | - | - | - |")
     box.markdown("\n".join(rows))
 
 
@@ -1953,6 +2201,17 @@ def build_inputs(host=st):
     Containers are created in workflow order but filled below in dependency order.
     """
     s = host
+    _ensure_material_catalog_state()
+    mild_catalogue = mat_catalog.normalise_catalog(
+        st.session_state[mat_catalog.MILD_CATALOG_KEY], "mild"
+    )
+    prestress_catalogue = mat_catalog.normalise_catalog(
+        st.session_state[mat_catalog.PRESTRESS_CATALOG_KEY], "prestress"
+    )
+    mild_material_ids = mat_catalog.material_ids(mild_catalogue, "mild")
+    prestress_material_ids = mat_catalog.material_ids(
+        prestress_catalogue, "prestress"
+    )
 
     # Full-width tabs replace the former long, narrow sidebar stack. Panels carry
     # the calculation methodology (Elastic / Plastic), not a limit state -- the
@@ -2319,6 +2578,22 @@ def build_inputs(host=st):
     sts.caption("The same closed stirrup carries shear (through its legs) and "
                  "torsion (through the closed loop). For torsion the stirrup must be "
                  "closed. Enabled when shear links or the torsion check is on.")
+    if "_capacity_steel_pending_material_id" in st.session_state:
+        st.session_state["capacity_steel_material_id"] = st.session_state.pop(
+            "_capacity_steel_pending_material_id"
+        )
+    capacity_steel_material_id = _seeded_selectbox(
+        sts, "Reference reinforcing material", mild_material_ids,
+        mild_material_ids[0], "capacity_steel_material_id",
+        disabled=not (shear_on or torsion_on),
+        format_func=lambda value: next(
+            (mat_catalog.entry_label(item) for item in mild_catalogue["items"]
+             if item["id"] == value), value
+        ),
+        help="Material law supplying gamma_s and the longitudinal design yield "
+             "for shear/torsion member checks. Element-level bending and stress "
+             "calculations use each bar's assigned material.",
+    )
     shear_link_legs = _seeded_number(
         sts, "Stirrup legs (n, for shear)", 1.0, 20.0, 2.0, 1.0, "shear_link_legs",
         disabled=not _stirrups,
@@ -2334,8 +2609,8 @@ def build_inputs(host=st):
         sts, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
         disabled=not _stirrups,
         help="Characteristic yield strength of the stirrup steel; the design value "
-             "is fywk divided by the final effective gamma_s entered in the Mild "
-             "steel material panel. If the stirrup is not fully anchored, reduce "
+             "is fywk divided by the final effective gamma_s of the selected "
+             "reference material. If the stirrup is not fully anchored, reduce "
              "fywk here; Sector assumes anchorage and applies no hidden category "
              "multiplier.")
 
@@ -2511,6 +2786,38 @@ def build_inputs(host=st):
         {**item, "x": item["x_mm"] / _MM, "y": item["y_mm"] / _MM}
         for item in tendon_elements
     ]
+
+    def assigned_material_ids(frame):
+        # Include incomplete rows too. Their geometry is not solver-ready yet, but
+        # their material assignment is still user input and must prevent deletion.
+        if rebar_table.MATERIAL_ID not in frame:
+            return []
+        return [
+            str(value).strip()
+            for value in frame[rebar_table.MATERIAL_ID].tolist()
+            if str(value).strip()
+        ]
+
+    assigned_mild_ids = assigned_material_ids(_bar_frame)
+    assigned_prestress_ids = assigned_material_ids(_tendon_frame)
+    invalid_bar_materials = mat_catalog.invalid_assignments(
+        [item["material_id"] for item in bar_elements], mild_catalogue, "mild"
+    )
+    invalid_tendon_materials = mat_catalog.invalid_assignments(
+        [item["material_id"] for item in tendon_elements],
+        prestress_catalogue, "prestress",
+    )
+    material_assignment_error = None
+    if invalid_bar_materials or invalid_tendon_materials:
+        parts = []
+        if invalid_bar_materials:
+            parts.append("bar material " + ", ".join(invalid_bar_materials))
+        if invalid_tendon_materials:
+            parts.append("tendon material " + ", ".join(invalid_tendon_materials))
+        material_assignment_error = (
+            "Undefined material assignment(s): " + "; ".join(parts) + "."
+        )
+        sec.error(material_assignment_error)
     label_scale, label_min_gap = _section_input_preview(
         sec_preview,
         outer,
@@ -2579,26 +2886,108 @@ def build_inputs(host=st):
         viz.concrete_curve_figure,
         visible=bool(mat_tab.open and conc_tab.open),
     )
-    steel = mild_panel(mild_inputs, locked=lock_mats, heading=False)
+    mild_catalogue, selected_mild_id, selected_steel = _material_catalog_panel(
+        mild_inputs, "mild",
+        assigned_mild_ids,
+        protected_ids=([capacity_steel_material_id]
+                       if shear_on or torsion_on else []),
+        locked=lock_mats,
+    )
     _material_input_preview(
         mild_preview,
-        "steel",
-        steel,
+        f"steel_{selected_mild_id}",
+        selected_steel,
         viz.steel_curve_figure,
+        title=mat_catalog.entry_label(
+            mat_catalog.entry_map(mild_catalogue, "mild")[selected_mild_id]
+        ),
         visible=bool(mat_tab.open and mild_tab.open),
     )
-    mild_preset = st.session_state.get("mild_preset", "")
     # The reinforcement laws are always definable; whether each is used follows from
     # the section (mild steel when bars exist, prestress when tendons exist).
-    prestress = prestress_panel(pre_inputs, locked=lock_mats, heading=False)
+    (prestress_catalogue, selected_prestress_id,
+     selected_prestress) = _material_catalog_panel(
+        pre_inputs, "prestress",
+        assigned_prestress_ids,
+        locked=lock_mats,
+    )
     _material_input_preview(
         pre_preview,
-        "prestress",
-        prestress,
+        f"prestress_{selected_prestress_id}",
+        selected_prestress,
         viz.prestress_curve_figure,
+        title=mat_catalog.entry_label(
+            mat_catalog.entry_map(
+                prestress_catalogue, "prestress"
+            )[selected_prestress_id]
+        ),
         visible=bool(mat_tab.open and pre_tab.open),
     )
-    prestress_preset = st.session_state.get("pre_preset", "")
+
+    material_definition_errors = []
+
+    def _material_map(catalogue, kind):
+        out = {}
+        for item in catalogue["items"]:
+            try:
+                out[item["id"]] = mat_catalog.build_material(item, kind)
+            except (TypeError, ValueError) as exc:
+                material_definition_errors.append(f"{item['id']}: {exc}")
+        return out
+
+    mild_material_map = _material_map(mild_catalogue, "mild")
+    prestress_material_map = _material_map(prestress_catalogue, "prestress")
+    fallback_steel = mat_catalog.build_material(
+        mat_catalog.default_entry("mild"), "mild"
+    )
+    fallback_prestress = mat_catalog.build_material(
+        mat_catalog.default_entry("prestress"), "prestress"
+    )
+    reference_steel = mild_material_map.get(
+        capacity_steel_material_id, fallback_steel
+    )
+    bar_materials = [
+        mild_material_map.get(item["material_id"], fallback_steel)
+        for item in bar_elements
+    ]
+    tendon_materials = [
+        prestress_material_map.get(item["material_id"], fallback_prestress)
+        for item in tendon_elements
+    ]
+    prestress = tendon_materials[0] if tendon_materials else selected_prestress
+    material_error = material_assignment_error
+    if material_definition_errors:
+        definition_message = (
+            "Invalid material definition(s): "
+            + "; ".join(material_definition_errors)
+        )
+        mat_tab.error(definition_message)
+        material_error = (
+            f"{material_error} {definition_message}".strip()
+            if material_error else definition_message
+        )
+
+    mild_entries_by_id = mat_catalog.entry_map(mild_catalogue, "mild")
+    prestress_entries_by_id = mat_catalog.entry_map(
+        prestress_catalogue, "prestress"
+    )
+    used_mild_ids = list(dict.fromkeys(
+        [item["material_id"] for item in bar_elements]
+        + ([capacity_steel_material_id] if (shear_on or torsion_on) else [])
+    ))
+    used_prestress_ids = list(dict.fromkeys(
+        item["material_id"] for item in tendon_elements
+    ))
+    used_mild_entries = [mild_entries_by_id[value] for value in used_mild_ids
+                         if value in mild_entries_by_id]
+    used_prestress_entries = [prestress_entries_by_id[value]
+                              for value in used_prestress_ids
+                              if value in prestress_entries_by_id]
+    mild_preset = (used_mild_entries[0]["preset"] if used_mild_entries
+                   else mild_catalogue["items"][0]["preset"])
+    prestress_preset = (used_prestress_entries[0]["preset"]
+                        if used_prestress_entries
+                        else prestress_catalogue["items"][0]["preset"])
 
     effective_shear_method = (
         combined_method if combined_on else shear_method
@@ -2608,8 +2997,8 @@ def build_inputs(host=st):
     ) if torsion_on else None
     design_basis = _design_basis_summary(
         concrete_preset=concrete_preset,
-        mild_preset=mild_preset if bars else None,
-        prestress_preset=prestress_preset if tendons else None,
+        mild_materials=used_mild_entries,
+        prestress_materials=used_prestress_entries,
         crack_code=sls_code if (elastic_on and sls_cw) else None,
         shear_method=effective_shear_method,
         shear_links=bool(shear_links),
@@ -2631,18 +3020,16 @@ def build_inputs(host=st):
     for limitation in design_basis["limitations"]:
         design_basis_slot.warning(limitation)
 
-    # The modular ratios are derived from the elastic moduli, not entered: mild steel
-    # uses n = Es/Ec and prestress n = Ep/Ec (independent ratios, since Es != Ep), each
-    # creep-reduced to E/Ec,eff = E(1+phi)/Ec for the sustained (long-term) state. The
-    # scalar nl/ns handed to the solver are the mild-steel ratios; the tendons carry
-    # their own ratio per bar (the Ep/Es multiplier), so both pairs are reported below.
+    # The elastic solver uses a fixed 200 GPa reference ratio and one multiplier per
+    # element. Their product is each assigned material's actual E/Ec ratio.
     ec_mpa = max(conc_Ec, 1e-6) * 1000.0
-    ns = steel.Es / ec_mpa
-    nl = steel.Es * (1.0 + phi_creep) / ec_mpa
-    ns_p = prestress.Es / ec_mpa
-    nl_p = prestress.Es * (1.0 + phi_creep) / ec_mpa
+    ns = STEEL_REFERENCE_MODULUS / ec_mpa
+    nl = STEEL_REFERENCE_MODULUS * (1.0 + phi_creep) / ec_mpa
     loads.markdown("**Derived modular ratios**")
-    _modular_ratio_readout(loads, ns, nl, ns_p, nl_p, has_tendons=bool(tendons))
+    _modular_ratio_readout(
+        loads, used_mild_entries, used_prestress_entries,
+        mild_material_map, prestress_material_map, ec_mpa, phi_creep,
+    )
 
     section = (Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
                                     tendons_xy_area_mm2=tendons, holes=holes)
@@ -2696,7 +3083,12 @@ def build_inputs(host=st):
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.
     _get = lambda keys: tuple(st.session_state.get(k) for k in keys)
-    shared_sig = geom_sig + _get(_SHARED_SIG_KEYS)
+    material_sig = (
+        mat_catalog.signature(mild_catalogue, "mild"),
+        mat_catalog.signature(prestress_catalogue, "prestress"),
+        capacity_steel_material_id,
+    )
+    shared_sig = geom_sig + material_sig + _get(_SHARED_SIG_KEYS)
     plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
     elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
     capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS)
@@ -2740,7 +3132,8 @@ def build_inputs(host=st):
             on_click=_open_manual_dialog,
         )
     return dict(section=section, void_error=void_error, steel_error=steel_error,
-                concrete=concrete, steel=steel,
+                material_error=material_error,
+                concrete=concrete, steel=reference_steel,
                 concrete_preset=concrete_preset,
                 concrete_k_tc=concrete_k_tc,
                 concrete_eta_cc=concrete_eta_cc,
@@ -2761,6 +3154,13 @@ def build_inputs(host=st):
                 elastic_cases=case_frames[load_cases.ELASTIC_TABLE_KEY],
                 bars=bars, outer=outer, holes=holes, tendons=tendons,
                 bar_elements=bar_elements, tendon_elements=tendon_elements,
+                mild_material_catalog=mild_catalogue,
+                prestress_material_catalog=prestress_catalogue,
+                mild_materials=mild_material_map,
+                prestress_materials=prestress_material_map,
+                bar_materials=bar_materials,
+                tendon_materials=tendon_materials,
+                capacity_steel_material_id=capacity_steel_material_id,
                 prestress=prestress, P_pl=P_pl, Mx_pl=Mx_pl, My_pl=My_pl,
                 check_util=check_util,
                 interaction=interaction,
@@ -2911,7 +3311,8 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     the affected half.
     """
     out = {}
-    if inp["section"] is None or inp.get("void_error") or inp.get("steel_error"):
+    if (inp["section"] is None or inp.get("void_error")
+            or inp.get("steel_error") or inp.get("material_error")):
         return out                          # invalid section -> nothing to run
     if inp["mode"] in ("Plastic", "Both") and reuse_plastic is not None:
         out["plastic"] = reuse_plastic
@@ -2928,7 +3329,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # The user enters N tension-positive; the solver is compression-positive, so
         # negate at the boundary (the engine and its verification are unchanged).
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            -inp["P_pl"], vlo, sweep_hi, vstep, prestress=pre)
+                            -inp["P_pl"], vlo, sweep_hi, vstep, prestress=pre,
+                            bar_materials=inp.get("bar_materials"),
+                            tendon_materials=inp.get("tendon_materials"))
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
         # Utilisation is a closed-envelope check (a partial arc has no wrap-around), and
@@ -2962,7 +3365,10 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # about y a vertical one (V = 0/180, My varies).
         if inp.get("interaction"):
             branch = lambda v: solve_interaction(inp["section"], inp["concrete"],
-                                                 inp["steel"], v, prestress=pre)
+                                                 inp["steel"], v, prestress=pre,
+                                                 bar_materials=inp.get("bar_materials"),
+                                                 tendon_materials=inp.get(
+                                                     "tendon_materials"))
             loop_x = branch(90.0) + list(reversed(branch(270.0)))
             loop_y = branch(0.0) + list(reversed(branch(180.0)))
             # The solver reports the axial compression-positive; negate it so the
@@ -2987,22 +3393,27 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # locked-in prestress Ep*IS, applied as a force so the user's N is the
         # external normal force only -- matching the plastic solver.
         sec = inp["section"]
-        n_mult = prestress_stress = pre_resultant = pre_mat = None
+        bar_laws = list(inp.get("bar_materials") or
+                        [inp["steel"]] * len(inp["bars"]))
+        tendon_laws = list(inp.get("tendon_materials") or [])
+        all_laws = bar_laws + tendon_laws
+        n_mult = (np.asarray(
+            [material.Es / STEEL_REFERENCE_MODULUS for material in all_laws],
+            dtype=float,
+        ) if all_laws else None)
+        prestress_stress = pre_resultant = None
         if inp["tendons"]:
             sec = Section.from_polygon(corners=inp["outer"],
                                        bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
                                        holes=inp["holes"])
-            pre_mat = inp["prestress"]
-            if pre_mat is not None:
-                nb, nt = len(inp["bars"]), len(inp["tendons"])
-                ep, es = pre_mat.Es, inp["steel"].Es
-                sig_ps = ep * pre_mat.IS * 1000.0   # MPa -> kN/m2 (bar-stress units)
-                n_mult = np.array([1.0] * nb + [ep / es] * nt)
-                prestress_stress = np.array([0.0] * nb + [sig_ps] * nt)
-                bx, by, ba = sec.bar_arrays()
-                f = prestress_stress * ba           # kN per tendon
-                pre_resultant = (float(f.sum()), float((f * by).sum()),
-                                 float((f * bx).sum()))   # N, Mx, My (kN, kNm)
+            nb = len(inp["bars"])
+            sig_ps = [material.Es * material.IS * 1000.0
+                      for material in tendon_laws]
+            prestress_stress = np.asarray([0.0] * nb + sig_ps, dtype=float)
+            bx, by, ba = sec.bar_arrays()
+            f = prestress_stress * ba               # kN per tendon
+            pre_resultant = (float(f.sum()), float((f * by).sum()),
+                             float((f * bx).sum()))   # N, Mx, My (kN, kNm)
         r = solve_elastic_combined(sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"],
                                    inp["nl"], p_el_s, inp["Mx_el_s"],
                                    inp["My_el_s"], inp["ns"],
@@ -3011,13 +3422,32 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         total = mpa(r.bar_stress_total)
         bar_ids = [item["id"] for item in inp.get("bar_elements", [])]
         tendon_ids = [item["id"] for item in inp.get("tendon_elements", [])]
+        mild_names = {
+            item["id"]: item["name"]
+            for item in inp["mild_material_catalog"]["items"]
+        }
+        prestress_names = {
+            item["id"]: item["name"]
+            for item in inp["prestress_material_catalog"]["items"]
+        }
         elements = sls_core.element_rows(
             inp["bars"], inp["tendons"],
             total=total, long=mpa(r.bar_stress_long),
             dif=mpa(r.bar_stress_dif), rst1=mpa(r.bar_stress_rst1),
-            es_mpa=inp["steel"].Es,
-            ep_mpa=(pre_mat.Es if pre_mat is not None else None),
+            es_mpa=[material.Es for material in bar_laws],
+            ep_mpa=([material.Es for material in tendon_laws]
+                    if tendon_laws else None),
             bar_ids=bar_ids, tendon_ids=tendon_ids,
+            bar_material_ids=[item["material_id"]
+                              for item in inp.get("bar_elements", [])],
+            tendon_material_ids=[item["material_id"]
+                                 for item in inp.get("tendon_elements", [])],
+            bar_material_names=[mild_names.get(element["material_id"], "")
+                                for element in inp.get("bar_elements", [])],
+            tendon_material_names=[
+                prestress_names.get(element["material_id"], "")
+                for element in inp.get("tendon_elements", [])
+            ],
         )
         corners = sls_core.concrete_corner_rows(
             inp["outer"], inp["holes"],
@@ -3034,11 +3464,12 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             n_bars=len(inp["bars"]),
             max_concrete_compression=r.max_concrete_compression / 1000.0,
             fck=inp["concrete"].fck,
-            fyk=inp["steel"].fytk,
+            fyk=[material.fytk for material in bar_laws],
             # The tendon SLS criterion is stated against characteristic ultimate
             # strength fpk (the material model calls this ``futk``); ``fytk`` is
             # the separate fp0.1k proof stress.
-            fpk=(pre_mat.futk if pre_mat is not None else None),
+            fpk=([material.futk for material in tendon_laws]
+                 if tendon_laws else None),
             concrete_limit_pct=inp["sls_conc_limit_pct"],
             reinforcement_limit_pct=inp["sls_steel_limit_pct"],
             prestress_limit_pct=inp["sls_pre_limit_pct"],
@@ -3112,7 +3543,8 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # below per system), so the coarse flag here is immaterial.
         cr_l = analyse_cracking(
             sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
-            fctm=inp["sls_fctm"], Es=inp["steel"].Es, beta=0.5, kt=0.4,
+            fctm=inp["sls_fctm"], Es=[material.Es for material in all_laws],
+            beta=0.5, kt=0.4,
             bar_diameter=phi, k1=k1_bars,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             edition=inp["sls_edition"],
@@ -3171,7 +3603,8 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
 
             def _cw(state, n, kt, coarse):
                 return crack_width(sec, state, n, fctm=inp["sls_fctm"],
-                                   Es=inp["steel"].Es, kt=kt, bar_diameter=phi,
+                                   Es=[material.Es for material in all_laws],
+                                   kt=kt, bar_diameter=phi,
                                    k1=k1_bars, k3_cover_dependent=dk_na,
                                    include_hx_term=include_hx, coarse=coarse,
                                    edition=inp["sls_edition"], n_mult=n_mult)
@@ -3244,7 +3677,8 @@ def run_analysis(
     gating remains the caller's responsibility; matching rows are then reused by
     name and exact action signature.
     """
-    if inp["section"] is None or inp.get("void_error") or inp.get("steel_error"):
+    if (inp["section"] is None or inp.get("void_error")
+            or inp.get("steel_error") or inp.get("material_error")):
         return {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
         return _run_single_analysis(
@@ -3820,25 +4254,53 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
     if visible:
         bar_xy = [(b[0], b[1], b[2]) for b in bars]
         tendon_xy = [(t[0], t[1], t[2]) for t in tendons]
-        bar_ids = [item["id"] for item in (bar_elements or [])]
-        tendon_ids = [item["id"] for item in (tendon_elements or [])]
+        bar_records = list(bar_elements or [])
+        tendon_records = list(tendon_elements or [])
+        bar_ids = [item["id"] for item in bar_records]
+        tendon_ids = [item["id"] for item in tendon_records]
+
+        def assignment_hover(records):
+            out = []
+            for item in records:
+                line = f"material = {item.get('material_id') or '-'}"
+                diameter = item.get("diameter_mm")
+                if diameter is not None:
+                    line += f"<br>diameter = {float(diameter):.3g} mm"
+                line += f"<br>size basis = {item.get('size_mode') or '-'}"
+                out.append(line)
+            return out
+
+        bar_hover = assignment_hover(bar_records)
+        tendon_hover = assignment_hover(tendon_records)
+        assignment_sig = tuple(
+            (item.get("id"), item.get("material_id"), item.get("diameter_mm"),
+             item.get("size_mode"))
+            for item in bar_records + tendon_records
+        )
         sig = (outer, holes, bar_xy, tendon_xy, tuple(bar_ids), tuple(tendon_ids),
-               label_scale, label_min_gap)
+               assignment_sig, label_scale, label_min_gap)
         fig = _memo_fig("section", sig, lambda: viz.section_figure(
             outer, holes, bar_xy, title="Section preview", tendons=tendon_xy,
             show_labels=True, label_scale=label_scale,
             label_min_gap=label_min_gap, height=640, scale=_MM, unit="mm",
             bar_ids=bar_ids, tendon_ids=tendon_ids,
+            bar_hover=bar_hover, tendon_hover=tendon_hover,
         ))
         box.plotly_chart(fig, width="stretch")
     return label_scale, label_min_gap
 
 
-def _material_input_preview(box, cache_name, material, figure_builder, *, visible):
+def _material_input_preview(box, cache_name, material, figure_builder, *, visible,
+                            title=None):
     """Render one live material law only when its nested input tab is visible."""
     if visible:
+        signature = (material, title) if title is not None else material
+        if title is None:
+            build = lambda: figure_builder(material)
+        else:
+            build = lambda: figure_builder(material, title=title)
         box.plotly_chart(
-            _memo_fig(cache_name, material, lambda: figure_builder(material)),
+            _memo_fig(cache_name, signature, build),
             width="stretch",
         )
 
@@ -3976,7 +4438,8 @@ def _plastic_table(pts, cable, steel_comp=False):
     return cols
 
 
-def _plastic_bar_hover(points, hp, kappa, material, prestrain=0.0):
+def _plastic_bar_hover(points, hp, kappa, material, prestrain=0.0,
+                       material_ids=None):
     """Per-bar hover strings 'sigma = X MPa, eps = Y %' at a plastic state.
 
     From the strain plane -- the compression half-plane ``hp`` gives the signed
@@ -3987,12 +4450,24 @@ def _plastic_bar_hover(points, hp, kappa, material, prestrain=0.0):
     integration. ``points`` are in metres (the half-plane units)."""
     if material is None:
         return None
+    materials = (list(material) if isinstance(material, (list, tuple))
+                 else [material] * len(points))
+    prestrains = (list(prestrain) if isinstance(prestrain, (list, tuple))
+                  else [prestrain] * len(points))
+    if len(materials) != len(points) or len(prestrains) != len(points):
+        raise ValueError("one material and prestrain are required per element")
+    ids = ([""] * len(points) if material_ids is None else list(material_ids))
+    if len(ids) != len(points):
+        raise ValueError("one material ID is required per element")
     a, b, c = hp
     out = []
-    for p in points:
-        eps = prestrain - kappa * (a * p[0] + b * p[1] + c)   # net strain, tension +
-        sig = material.stress(eps, design=True)               # MPa, tension +
-        out.append(f"{_SIGMA} = {sig:.1f} MPa, {_EPS} = {eps * 100.0:.3f} %")
+    for p, law, initial, material_id in zip(points, materials, prestrains, ids):
+        eps = initial - kappa * (a * p[0] + b * p[1] + c)    # tension positive
+        sig = law.stress(eps, design=True)
+        suffix = f", material {material_id}" if material_id else ""
+        out.append(
+            f"{_SIGMA} = {sig:.1f} MPa, {_EPS} = {eps * 100.0:.3f} %{suffix}"
+        )
     return out
 
 
@@ -4074,14 +4549,26 @@ def plastic_view(inp, results):
         # angle, like the elastic view. Mild bars follow the side of the neutral
         # axis; tendons carry their locked-in prestrain so one on the compression
         # side still reads as tension. Points are in metres (the half-plane units).
-        pre_IS = inp["prestress"].IS if inp["prestress"] is not None else 0.0
+        tendon_laws = list(inp.get("tendon_materials") or [])
+        if not tendon_laws and inp.get("prestress") is not None:
+            tendon_laws = [inp["prestress"]] * len(inp["tendons"])
+        tendon_prestrains = [material.IS for material in tendon_laws]
         bar_colors = viz.halfplane_bar_colors(inp["bars"], hp, kappa=pt["kappa"])
         tendon_colors = viz.halfplane_bar_colors(inp["tendons"], hp, kappa=pt["kappa"],
-                                                 prestrain=pre_IS)
+                                                 prestrain=tendon_prestrains)
         # Per-bar stress/strain at this rotation, shown on hover (varies with V).
-        bar_hover = _plastic_bar_hover(inp["bars"], hp, pt["kappa"], inp["steel"])
+        bar_hover = _plastic_bar_hover(
+            inp["bars"], hp, pt["kappa"],
+            inp.get("bar_materials") or inp["steel"],
+            material_ids=[item["material_id"]
+                          for item in inp.get("bar_elements", [])],
+        )
         tendon_hover = _plastic_bar_hover(inp["tendons"], hp, pt["kappa"],
-                                          inp["prestress"], prestrain=pre_IS)
+                                          tendon_laws or inp.get("prestress"),
+                                          prestrain=tendon_prestrains,
+                                          material_ids=[item["material_id"] for item
+                                                        in inp.get(
+                                                            "tendon_elements", [])])
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
                                bar_colors=bar_colors, tendons=tendon_xy,
@@ -4103,7 +4590,10 @@ def plastic_view(inp, results):
         # there are mild bars that are active in compression (a tendon-only section has
         # no mild bar to compress). Also guard on the field being present so a pre-v0.40
         # reused payload (which lacks eps_s_comp) degrades to the single strain.
-        active_comp = (inp["steel"].active_in_compression and bool(inp["bars"])
+        active_comp = (any(material.active_in_compression
+                           for material in (inp.get("bar_materials")
+                                            or [inp["steel"]]))
+                       and bool(inp["bars"])
                        and "eps_s_comp" in pt)
         lines = [
             f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
@@ -4158,9 +4648,15 @@ def plastic_view(inp, results):
         element_rows = evidence["elements"]
         if element_rows:
             st.markdown("**Reinforcement and tendon response**")
+            material_labels = [
+                (f"{row.get('material_id')} - {row.get('material_name')}"
+                 if row.get("material_name") else row.get("material_id"))
+                for row in element_rows
+            ]
             st.dataframe(
                 {
                     "Element": [row["element_id"] for row in element_rows],
+                    "Material": material_labels,
                     "State": [row["state"] for row in element_rows],
                     "x (mm)": [round(row["x_mm"], 2) for row in element_rows],
                     "y (mm)": [round(row["y_mm"], 2) for row in element_rows],
@@ -4178,7 +4674,10 @@ def plastic_view(inp, results):
 
     with st.expander("Full results table (per neutral-axis angle)"):
         # Size the table to all rows so the page scrolls, not the table itself.
-        steel_comp = (inp["steel"].active_in_compression and bool(inp["bars"])
+        steel_comp = (any(material.active_in_compression
+                          for material in (inp.get("bar_materials")
+                                           or [inp["steel"]]))
+                      and bool(inp["bars"])
                       and bool(pts) and "eps_s_comp" in pts[0])
         st.dataframe(_plastic_table(pts, bool(inp["tendons"]), steel_comp),
                      hide_index=True, width="stretch",
@@ -4299,15 +4798,23 @@ def elastic_view(inp, results):
         f"Criteria: {e.get('sls_limit_source', '-')}. "
         "Limits apply to the total elastic action.")
 
-    # Modular ratios are derived (not entered); report the values actually used. Mild
-    # steel and prestress differ (Es != Ep), so both pairs are shown when tendons exist.
-    _nl, _ns = inp["nl"], inp["ns"]
-    ratio_txt = (f"Modular ratios ($E_s/E_c$, $E_p/E_c$; creep-reduced for long-term): "
-                 f"mild $n_s$ = {_ns:.3f}, $n_l$ = {_nl:.3f}")
-    if inp["tendons"] and inp.get("prestress") is not None:
-        _r = inp["prestress"].Es / inp["steel"].Es
-        ratio_txt += f"; prestress $n_s$ = {_ns * _r:.3f}, $n_l$ = {_nl * _r:.3f}"
-    st.caption(ratio_txt)
+    # Modular ratios are derived per assigned material.
+    ec_mpa = inp["conc_Ec"] * 1000.0
+    ratios = []
+    for element, material in zip(inp.get("bar_elements", []),
+                                 inp.get("bar_materials", [])):
+        ratios.append((element["material_id"], material))
+    for element, material in zip(inp.get("tendon_elements", []),
+                                 inp.get("tendon_materials", [])):
+        ratios.append((element["material_id"], material))
+    unique_ratios = {material_id: material for material_id, material in ratios}
+    if unique_ratios:
+        ratio_txt = "; ".join(
+            f"{material_id}: n_s = {material.Es / ec_mpa:.3f}, "
+            f"n_l = {material.Es * (1.0 + inp['el_phi']) / ec_mpa:.3f}"
+            for material_id, material in unique_ratios.items()
+        )
+        st.caption("Derived modular ratios - " + ratio_txt + ".")
 
     # The tendon prestress is applied automatically from the initial strain, so N
     # is the external force only; show the equivalent prestress action that was added.
@@ -4370,9 +4877,15 @@ def elastic_view(inp, results):
     st.markdown("**Reinforcement and tendon response (tension +)**")
     element_rows = e.get("elements", [])
     if element_rows:
+        material_labels = [
+            (f"{row.get('material_id')} - {row.get('material_name')}"
+             if row.get("material_name") else row.get("material_id"))
+            for row in element_rows
+        ]
         st.dataframe(
             {
                 "Element": [r["element_id"] for r in element_rows],
+                "Material": material_labels,
                 "x (mm)": [round(r["x_mm"], 2) for r in element_rows],
                 "y (mm)": [round(r["y_mm"], 2) for r in element_rows],
                 "Area (mm2)": [round(r["area_mm2"], 2) for r in element_rows],
@@ -4592,6 +5105,21 @@ def _verdict_metric(box, label, value, ok, *, code_applicable=True, help=None):
                                       else help + " " + scope_help))
 
 
+def _member_material_note(inp):
+    """Compact trace from shared shear/torsion parameters to their material law."""
+    material_id = inp.get("capacity_steel_material_id") or "-"
+    name = next(
+        (item.get("name", "") for item in
+         (inp.get("mild_material_catalog") or {}).get("items", [])
+         if item.get("id") == material_id),
+        "",
+    )
+    label = f"{material_id} - {name}" if name else str(material_id)
+    gamma_s = getattr(inp.get("steel"), "gamma_y", None)
+    suffix = f"; gamma_s = {gamma_s:g}" if gamma_s is not None else ""
+    st.caption(f"Member-check reinforcing material: {label}{suffix}.")
+
+
 def shear_view(inp, results):
     """Shear resistance without shear reinforcement (VRd,c) and the utilisation.
 
@@ -4609,6 +5137,7 @@ def shear_view(inp, results):
             st.info("Press Calculate to run the shear check.")
         return
     sh = results["shear"]
+    _member_material_note(inp)
     res = sh["res"]
     axis_lbl = ("Vertical (bending about x)" if sh["axis"] == "x"
                 else "Horizontal (bending about y)")
@@ -4888,6 +5417,7 @@ def torsion_view(inp, results):
             st.info("Press Calculate to run the torsion check.")
         return
     t = results["torsion"]
+    _member_material_note(inp)
     tube = t["tube"]
     if not t["valid"]:
         if t.get("reason") == "multi-cell (2+ voids)":
@@ -5127,6 +5657,7 @@ def combined_view(inp, results):
                     "Calculate to run the combined check.")
         return
     c = results["combined"]
+    _member_material_note(inp)
     if not c["valid"]:
         missing = []
         if not c.get("have_m"):
@@ -5543,7 +6074,9 @@ def _analysis_workspace(inp):
     if st.session_state.get("_case_error"):
         st.error(st.session_state["_case_error"])
 
-    for section_err in (inp.get("void_error"), inp.get("steel_error")):
+    for section_err in (
+        inp.get("void_error"), inp.get("steel_error"), inp.get("material_error")
+    ):
         if section_err:
             st.error(section_err)
 

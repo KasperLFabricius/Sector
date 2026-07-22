@@ -252,9 +252,18 @@ def valid_elements(value, kind: str) -> list[dict]:
     return out
 
 
-def point_grid_specs(kind: str) -> list[dict]:
+def point_grid_specs(kind: str, material_ids: Iterable[str] | None = None) -> list[dict]:
     """Plain component column metadata for the mixed reinforcement grid."""
     kind = _kind(kind)
+    material_options = [str(value).strip() for value in (material_ids or [])
+                        if str(value).strip()]
+    material_spec = (
+        {"field": MATERIAL_ID, "title": "Material ID", "type": "select",
+         "options": material_options, "width": 108}
+        if material_options
+        else {"field": MATERIAL_ID, "title": "Material ID", "type": "text",
+              "width": 108}
+    )
     return [
         {"field": ELEMENT_ID, "title": "ID", "type": "id", "width": 64,
          "editable": False, "paste": False},
@@ -266,23 +275,24 @@ def point_grid_specs(kind: str) -> list[dict]:
          "derived_role": "area"},
         {"field": DIAMETER, "title": "Diameter (mm)", "type": "number",
          "width": 124, "derived_role": "diameter"},
-        {"field": MATERIAL_ID, "title": "Material ID", "type": "text",
-         "width": 100},
+        material_spec,
         {"field": FATIGUE_DETAIL_ID, "title": "Fatigue detail ID", "type": "text",
          "width": 128},
         {"field": GROUP_ID, "title": "Group ID", "type": "text", "width": 92},
     ]
 
 
-def point_grid_options(kind: str) -> dict:
+def point_grid_options(kind: str, material_ids: Iterable[str] | None = None) -> dict:
     """Persistent-ID and size-derivation settings for the frontend."""
+    available = [str(value).strip() for value in (material_ids or [])
+                 if str(value).strip()]
     return {
         "id_column": ELEMENT_ID,
         "id_prefix": id_prefix(kind),
         "layout": "fitData",
         "default_values": {
             SIZE_MODE: AREA_MODE,
-            MATERIAL_ID: default_material_id(kind),
+            MATERIAL_ID: (available[0] if available else default_material_id(kind)),
             FATIGUE_DETAIL_ID: "",
             GROUP_ID: "",
         },

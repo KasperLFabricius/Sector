@@ -413,8 +413,9 @@ def manual_blocks() -> list:
     md("1. **Define the section.** Open the *Section* panel and either edit the "
        "point tables (concrete corners, voids, bars and tendons, all in mm) or "
        "press *Quick Section builder* to generate a parametric shape.\n"
-       "2. **Set the materials.** In *Material parameters* pick or enter the "
-       "concrete, mild steel and (if any) prestress.\n"
+       "2. **Set the materials.** In *Material parameters* define the concrete "
+       "and one or more mild-steel or prestress materials, then assign their IDs "
+       "to the reinforcement rows.\n"
        "3. **Choose the analyses.** In *Analysis settings* pick Plastic, "
        "Elastic or Both and set the applicable global acceptance limits.\n"
        "4. **Enter the cases.** Add uniquely named rows to the Plastic/capacity "
@@ -469,8 +470,8 @@ def manual_blocks() -> list:
     md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
        "parameters*, *Loads* and *Project & report* in full-width tabs. The "
        "*Section* tab places the section drawing beside its point tables, and each "
-       "material subtab places its stress-strain diagram beside the corresponding "
-       "parameters. These previews update live. The **Analysis** page contains only "
+       "material panel places the selected stress-strain law beside its parameters. "
+       "These previews update live. The **Analysis** page contains only "
        "calculated results selected with the **View** dropdown.")
     table(["View", "Shows"],
           [["Results Overview", "All cases, statuses, criteria and governing checks"],
@@ -541,9 +542,12 @@ def manual_blocks() -> list:
          "the plane-section assumption no longer holds across a break.")
 
     h1("Materials")
-    md("Each material can be entered by hand or loaded from a code preset, then "
-       "adjusted. The presets supply starting values for the partial factors and the "
-       "curve shape; the *Preset* dropdown at the top of each material sets them.")
+    md("Concrete has one definition. Mild steel and prestress use catalogues: each "
+       "definition has a stable ID, name and optional description. Add, duplicate "
+       "or delete definitions in the material panel, then assign the ID to each bar "
+       "or tendon in the Section table. An assigned definition cannot be deleted. "
+       "A preset supplies starting values for the selected definition; every value "
+       "can then be adjusted.")
     call("limit", "Enter the **final effective** material partial factors in the "
          "material panels, including every applicable national increase or reduction "
          "for construction, control and consequence category. Sector does not ask for "
@@ -566,7 +570,8 @@ def manual_blocks() -> list:
     fig(fig_beam_concrete_law, "The concrete-law preview for the rectangular "
         "example (C40/50).")
     h2("Mild steel")
-    md("The mild steel is bilinear (optionally with hardening). The inputs are the "
+    md("Each mild-steel definition is bilinear (optionally with hardening). The "
+       "selected definition's plot is shown beside its inputs. The inputs are the "
        "yield and ultimate strengths $f_{yk}$ / $f_{tk}$, the ultimate strain "
        "$\\varepsilon_{uk}$, the partial factors and the modulus $E_s$. The "
        "**Active in compression** toggle decides whether the bars carry "
@@ -577,10 +582,14 @@ def manual_blocks() -> list:
     call("standard", "The concrete and steel laws follow DS/EN 1992-1-1 3.1.7 and "
          "3.2.7; the ultimate strains follow Table 3.1. Part C derives them in full.")
     h2("Prestressing steel")
-    md("A prestress material adds the tendon law and, crucially, the initial strain "
+    md("Each prestress definition adds the tendon law and, crucially, the initial strain "
        "$\\varepsilon_{p,IS}$ locked into the tendons. The inputs mirror the mild "
        "steel plus that initial strain. Tendons are analysed at their **total** "
        "strain -- the initial strain plus the section strain at their location.")
+    call("concept", "Plastic capacity, cracked-elastic stiffness and stress, and "
+         "crack calculations use the material assigned to each element. Shared "
+         "member checks for shear and torsion use the explicitly selected mild-"
+         "steel reference material; its ID is shown with those settings and results.")
     fig(fig_circular_prestress_law, "The tendon law for the circular example.")
 
     h1("Analysis & result settings")
@@ -704,9 +713,9 @@ def manual_blocks() -> list:
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
        "effective modulus $E_{c,eff} = E_c/(1+\\varphi)$. These ratios are **not "
        "entered** -- they are derived from the elastic moduli and the creep "
-       "coefficient $\\varphi$. Mild steel and prestress are **independent**, "
-       "because $E_s \\neq E_p$: mild steel uses $n = E_s/E_c$ and tendons "
-       "$n = E_p/E_c$. Both pairs are reported in the Loads panel and in the report.")
+       "coefficient $\\varphi$. The appropriate $E_s$ or $E_p$ is used for each "
+       "bar or tendon, so different material definitions may have different ratios. "
+       "The ratios of every material used in the section are reported.")
 
     h1("Loads")
     md("Loads are entered in two editable tables. Every active row needs a name, "
@@ -860,7 +869,8 @@ def manual_blocks() -> list:
         "crushing strain. The internal solver formula above is compression-positive; "
         "the reported strains negate it.")
     h2("The governing curvature")
-    md("The curvature is scaled until the **first** material limit is reached, so "
+    md("The curvature is scaled until the **first** element reaches its assigned "
+       "material limit, so "
        "none is driven past its limit:\n\n"
        "$$\\varphi = \\min\\!\\left(\\frac{\\varepsilon_{cu2}}{c},\\; "
        "\\frac{\\varepsilon_{ud}}{s_{na}-s_{bar,min}},\\; "
@@ -871,7 +881,9 @@ def manual_blocks() -> list:
        "active in compression and their ultimate strain is below the concrete "
        "crushing strain -- otherwise the concrete crushes first) and rupture of the "
        "most tensile tendon (measured from its locked-in strain). Whichever is "
-       "smallest governs.")
+       "smallest governs. With several definitions, these candidate limits are "
+       "evaluated for every bar and tendon using its own ultimate strain, initial "
+       "strain and compression setting.")
     call("tip", "The reported mild-steel strain is split into its two governing "
          "extremes: the most **tensile** bar strain $\\varepsilon_{s,t}$ and, when "
          "the bars are active in compression, the most **compressed** bar strain "
@@ -903,7 +915,8 @@ def manual_blocks() -> list:
     md("The Elastic solver takes the section as already cracked: concrete "
        "carries compression only (zero stress where $\\varepsilon\\ge 0$) and the "
        "steel is linear in both directions. The analysis works with a reference "
-       "concrete modulus and the modular ratio $n=E_s/E_c$: each bar contributes a "
+       "concrete modulus and an element-specific modular ratio $n_i=E_i/E_c$: each "
+       "bar or tendon contributes a "
        "transformed area $n\\,A$. (The solver can also subtract the concrete a "
        "compression-zone bar displaces, using $(n-1)\\,A$ there; Sector leaves that "
        "refinement off, so the reported stresses and section properties use "
@@ -914,10 +927,9 @@ def manual_blocks() -> list:
        "$n_l = E_s/E_{c,eff}$ with $E_{c,eff}=E_c/(1+\\varphi)$, and the "
        "short-term state uses $n_s = E_s/E_c$. The reported total combines the two, "
        "so both load duration and creep are captured. Prestressing tendons carry "
-       "their **own** modular ratio $n_p = E_p/E_c$ (creep-reduced the same way), "
-       "independent of the mild-steel ratio because $E_p \\neq E_s$; the solver "
-       "applies it per bar. None of these ratios is entered -- they are all derived "
-       "from the moduli $E_c$, $E_s$, $E_p$ and the creep coefficient $\\varphi$.")
+       "the corresponding material's modular ratio $n_p = E_p/E_c$ (creep-reduced "
+       "the same way). None of these ratios is entered -- each is derived from the "
+       "assigned material modulus, $E_c$ and the creep coefficient $\\varphi$.")
     fig(fig_beam_cracked, "The beam's cracked (Stage II) state under the service "
         "moment: the compression zone (shaded) above the neutral axis.")
 

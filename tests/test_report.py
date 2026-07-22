@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report  # noqa: E402
+import material_catalog  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -148,6 +149,53 @@ def test_report_pdf_generates():
     )
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 3000
+
+
+def test_report_traces_multiple_materials_to_element_assignments():
+    inp = _inp()
+    catalogue, second_id = material_catalog.add_entry(
+        material_catalog.default_catalog("mild"), "mild"
+    )
+    catalogue["items"][0]["name"] = "New reinforcement"
+    catalogue["items"][1].update({
+        "name": "Existing reinforcement",
+        "description": "Verified from archive test certificate",
+        "fytk": 235.0,
+        "fyck": 235.0,
+        "futk": 360.0,
+    })
+    laws = {
+        item["id"]: material_catalog.build_material(item, "mild")
+        for item in catalogue["items"]
+    }
+    inp.update({
+        "bars": [(0.0, -0.12, 500.0), (0.0, 0.12, 400.0)],
+        "bar_elements": [
+            {"id": "R1", "x_mm": 0.0, "y_mm": -120.0,
+             "area_mm2": 500.0, "diameter_mm": 25.23,
+             "size_mode": "Area", "material_id": "M1",
+             "fatigue_detail_id": "", "group_id": "B1"},
+            {"id": "R2", "x_mm": 0.0, "y_mm": 120.0,
+             "area_mm2": 400.0, "diameter_mm": 22.57,
+             "size_mode": "Area", "material_id": second_id,
+             "fatigue_detail_id": "", "group_id": "B2"},
+        ],
+        "mild_material_catalog": catalogue,
+        "mild_materials": laws,
+        "bar_materials": [laws["M1"], laws[second_id]],
+        "steel": laws["M1"],
+        "capacity_steel_material_id": second_id,
+    })
+
+    txt = _pdf_text(sector_report.build_report(
+        {}, inp, _out(), figures=False,
+    ))
+    flat = " ".join(txt.split())
+
+    assert "M1 New reinforcement" in flat
+    assert "M2 Existing reinforcement" in flat
+    assert "Verified from archive test certificate" in flat
+    assert "R1 M1" in flat and "R2 M2" in flat
 
 
 def test_report_footer_identifies_the_organisational_licensee():
