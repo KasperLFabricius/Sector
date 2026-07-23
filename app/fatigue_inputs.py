@@ -235,19 +235,25 @@ def _number(value) -> float:
 
 
 def _source_items(value) -> list[Mapping]:
-    items = value.get("items", []) if isinstance(value, Mapping) else value
-    if items is None:
+    if value is None:
         return []
-    if isinstance(items, Mapping):
-        items = [items]
-    if not isinstance(items, Iterable) or isinstance(items, (str, bytes)):
-        raise ValueError("fatigue detail catalogue items must be a list")
-    items = list(items)
+    if isinstance(value, Mapping):
+        if "items" not in value:
+            raise ValueError(
+                "fatigue detail catalogue items must be a non-empty list"
+            )
+        items = value["items"]
+    else:
+        items = value
+    if not isinstance(items, list) or not items:
+        raise ValueError(
+            "fatigue detail catalogue items must be a non-empty list"
+        )
     if any(not isinstance(item, Mapping) for item in items):
         raise ValueError(
             "fatigue detail catalogue items must contain only objects"
         )
-    return items
+    return list(items)
 
 
 def _validate_raw_entry(raw: Mapping, position: int) -> None:
@@ -345,6 +351,8 @@ def normalise_catalog(value) -> dict:
     """Return a canonical catalogue with stable, unique ``F<number>`` IDs."""
     source = _source_items(value)
     if not source:
+        # ``None`` means a new, not-yet-initialised catalogue. Explicit empty or
+        # malformed catalogues are rejected by ``_source_items`` above.
         return default_catalog()
     for position, raw in enumerate(source, start=1):
         _validate_raw_entry(raw, position)

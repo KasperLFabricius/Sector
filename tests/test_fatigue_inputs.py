@@ -121,8 +121,12 @@ def test_catalogue_rejects_explicit_malformed_engineering_fields(
 @pytest.mark.parametrize(
     ("value", "message"),
     [
-        ({"items": "bad"}, "items must be a list"),
-        ({"items": 42}, "items must be a list"),
+        ({"items": "bad"}, "items must be a non-empty list"),
+        ({"items": 42}, "items must be a non-empty list"),
+        ({"items": None}, "items must be a non-empty list"),
+        ({"items": {}}, "items must be a non-empty list"),
+        ({"items": []}, "items must be a non-empty list"),
+        ({}, "items must be a non-empty list"),
         ({"items": ["bad"]}, "items must contain only objects"),
     ],
 )

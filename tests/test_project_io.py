@@ -407,6 +407,21 @@ def test_v9_rejects_nonobject_fatigue_catalogue_items():
         project_io.parse_project(json.dumps(project))
 
 
+@pytest.mark.parametrize("items", [None, {}, []])
+def test_v9_rejects_explicit_empty_fatigue_catalogues(items):
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            fatigue_inputs.DETAIL_CATALOG_KEY: {"items": items}
+        },
+    }
+
+    with pytest.raises(ValueError, match="items must be a non-empty list"):
+        project_io.parse_project(json.dumps(project))
+
+
 @pytest.mark.parametrize(
     ("axis", "tension", "component", "face", "bw_key", "legs_key"),
     [
