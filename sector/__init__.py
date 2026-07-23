@@ -27,6 +27,17 @@ from .geometry import (
     orient,
     signed_area,
 )
+from .fatigue import (
+    ConcreteFatigueProperties,
+    FatigueSpectrumResult,
+    ReinforcementFatigueProperties,
+    SpectrumBin,
+    analyse_fatigue_spectrum,
+    analyse_grouped_spectra,
+    concrete_fatigue_life,
+    concrete_fatigue_strength,
+    steel_fatigue_life,
+)
 from .materials import Concrete, MildSteel, Prestress
 from .plastic import (
     InteractionPoint,
@@ -53,6 +64,15 @@ __all__ = [
     "CombinedElasticResult",
     "solve_elastic",
     "solve_elastic_combined",
+    "SpectrumBin",
+    "ReinforcementFatigueProperties",
+    "ConcreteFatigueProperties",
+    "FatigueSpectrumResult",
+    "steel_fatigue_life",
+    "concrete_fatigue_strength",
+    "concrete_fatigue_life",
+    "analyse_fatigue_spectrum",
+    "analyse_grouped_spectra",
     "PlasticPoint",
     "plastic_capacity_at_angle",
     "solve_plastic",

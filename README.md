@@ -70,6 +70,7 @@ sector/        computation core (headless, regression-tested)
   materials    concrete / mild-steel / prestress stress-strain laws
   section      the cross-section model
   elastic      cracked-section elastic stresses
+  fatigue      grouped S-N/Miner damage using Elastic long/short states
   plastic      nonlinear capacity (neutral-axis sweep, governing failure)
   capacity     headless shear, torsion, and M-V-T result orchestration
   detailing    longitudinal minimum reinforcement and clear spacing
