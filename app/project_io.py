@@ -41,6 +41,21 @@ _CASE_PAYLOAD_KEYS = {
     load_cases.ELASTIC_TABLE_KEY: "elastic",
 }
 
+FATIGUE_SCALAR_KEYS = (
+    fatigue_inputs.DETAIL_CATALOG_KEY,
+    "fatigue_on",
+    "fatigue_edition",
+    "fatigue_check_steel",
+    "fatigue_check_concrete",
+    "fatigue_gamma_c",
+    "fatigue_gamma_s",
+    "fatigue_gamma_ff",
+    "fatigue_beta_cc_t0",
+    "fatigue_t0_days",
+    "fatigue_concrete_c",
+    "fatigue_source",
+)
+
 # Every scalar / string input that makes up a project. Missing keys are skipped on
 # save, so an older or partial file still loads what it has.
 SCALAR_KEYS = [

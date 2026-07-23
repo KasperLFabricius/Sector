@@ -98,6 +98,26 @@ def test_catalogue_validation_requires_positive_curve_data_and_mandrel():
     assert any("mandrel_diameter_mm" in error for error in errors)
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("n_star", "bad", "n_star must be a finite number"),
+        ("k1", math.inf, "k1 must be a finite number"),
+        ("kind", "cable", "kind must be mild or prestress"),
+        ("stress_model", "other", "unknown stress_model"),
+        ("bend_reduction", "false", "bend_reduction must be true or false"),
+    ],
+)
+def test_catalogue_rejects_explicit_malformed_engineering_fields(
+    field, value, message
+):
+    entry = fi.default_entry(preset=fi.PRESET_2023_BENT_BARS)
+    entry[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        fi.normalise_catalog({"items": [entry]})
+
+
 def _spectrum_rows():
     return [
         {
@@ -197,3 +217,20 @@ def test_spectrum_requires_a_row_only_when_fatigue_is_enabled():
     assert fi.spectrum_errors(None, require_rows=True) == [
         "At least one fatigue spectrum bin is required"
     ]
+
+
+def test_spectrum_case_collisions_are_reported_and_never_split_damage_groups():
+    rows = [
+        {"spectrum": "Traffic", "name": "FAT-01", "cycles": 1e5},
+        {"spectrum": "traffic", "name": "FAT-02", "cycles": 2e5},
+    ]
+
+    errors = fi.spectrum_errors(rows)
+    groups = fi.spectrum_groups(rows)
+
+    assert errors == [
+        "Fatigue row 2: Spectrum 'traffic' differs only by case from "
+        "'Traffic'; use one spelling"
+    ]
+    assert list(groups) == ["Traffic"]
+    assert [row["name"] for row in groups["Traffic"]] == ["FAT-01", "FAT-02"]

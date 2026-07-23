@@ -1463,6 +1463,10 @@ def _apply_pending_project() -> None:
     }
     for key in load_cases.LEGACY_SCALAR_KEYS:
         st.session_state.pop(key, None)
+    # A project that predates fatigue inputs must not inherit those settings from
+    # the project previously open in this Streamlit session.
+    for key in project_io.FATIGUE_SCALAR_KEYS:
+        st.session_state.pop(key, None)
     _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
     # Missing load tables in a partial project must not inherit cases from the
@@ -1500,7 +1504,10 @@ def _apply_pending_project() -> None:
     durable = {
         key: value
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
-        if key not in load_cases.LEGACY_SCALAR_KEYS
+        if (
+            key not in load_cases.LEGACY_SCALAR_KEYS
+            and key not in project_io.FATIGUE_SCALAR_KEYS
+        )
     }
     durable.update(scalars)
     st.session_state[_INPUT_STATE_KEY] = durable

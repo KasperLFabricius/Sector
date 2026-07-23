@@ -243,6 +243,41 @@ def _source_items(value) -> list[Mapping]:
     return [item for item in items if isinstance(item, Mapping)]
 
 
+def _validate_raw_entry(raw: Mapping, position: int) -> None:
+    """Reject explicit malformed engineering fields before applying defaults."""
+    label = _text(raw.get("id")) or f"item {position}"
+    numeric_fields = (
+        "n_star",
+        "k1",
+        "k2",
+        "delta_sigma_rsk_mpa",
+        "mandrel_diameter_mm",
+    )
+    for field in numeric_fields:
+        if field not in raw:
+            continue
+        value = raw[field]
+        if isinstance(value, bool):
+            raise ValueError(f"{label}: {field} must be a finite number")
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{label}: {field} must be a finite number"
+            ) from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{label}: {field} must be a finite number")
+    if "kind" in raw and _text(raw["kind"]).lower() not in KINDS:
+        raise ValueError(f"{label}: kind must be mild or prestress")
+    if (
+        "stress_model" in raw
+        and _text(raw["stress_model"]) not in STRESS_MODELS
+    ):
+        raise ValueError(f"{label}: unknown stress_model")
+    if "bend_reduction" in raw and not isinstance(raw["bend_reduction"], bool):
+        raise ValueError(f"{label}: bend_reduction must be true or false")
+
+
 def default_entry(
     *,
     detail_id: str = "F1",
@@ -304,6 +339,8 @@ def normalise_catalog(value) -> dict:
     source = _source_items(value)
     if not source:
         return default_catalog()
+    for position, raw in enumerate(source, start=1):
+        _validate_raw_entry(raw, position)
     pattern = re.compile(r"^F([1-9][0-9]*)$")
     valid_numbers = [
         int(match.group(1))
@@ -618,12 +655,23 @@ def spectrum_errors(
         for name in existing_case_names
         if str(name).strip()
     }
+    spectrum_labels: dict[str, str] = {}
     for index, row in frame.iterrows():
         number = index + 1
         spectrum = _text(row[SPECTRUM])
         name = _text(row[NAME])
         if not spectrum:
             errors.append(f"Fatigue row {number}: Spectrum is required")
+        else:
+            folded_spectrum = spectrum.casefold()
+            prior_label = spectrum_labels.get(folded_spectrum)
+            if prior_label is None:
+                spectrum_labels[folded_spectrum] = spectrum
+            elif prior_label != spectrum:
+                errors.append(
+                    f"Fatigue row {number}: Spectrum '{spectrum}' differs "
+                    f"only by case from '{prior_label}'; use one spelling"
+                )
         if not name:
             errors.append(f"Fatigue row {number}: Name is required")
         else:
@@ -648,8 +696,11 @@ def spectrum_errors(
 def spectrum_groups(value) -> dict[str, list[dict]]:
     """Return ordered spectrum groups; each group is assessed independently."""
     grouped: dict[str, list[dict]] = {}
+    labels: dict[str, str] = {}
     for record in spectrum_records(value):
-        grouped.setdefault(record[SPECTRUM], []).append(record)
+        folded = record[SPECTRUM].casefold()
+        label = labels.setdefault(folded, record[SPECTRUM])
+        grouped.setdefault(label, []).append(record)
     return grouped
 
 

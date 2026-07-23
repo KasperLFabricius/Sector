@@ -369,6 +369,31 @@ def test_v9_rejects_malformed_fatigue_section_and_spectrum_rows():
 
 
 @pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("n_star", "bad", "n_star must be a finite number"),
+        ("bend_reduction", "false", "bend_reduction must be true or false"),
+    ],
+)
+def test_v9_rejects_malformed_fatigue_catalogue_values(field, value, message):
+    entry = fatigue_inputs.default_entry(
+        preset=fatigue_inputs.PRESET_2023_BENT_BARS
+    )
+    entry[field] = value
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            fatigue_inputs.DETAIL_CATALOG_KEY: {"items": [entry]}
+        },
+    }
+
+    with pytest.raises(ValueError, match=message):
+        project_io.parse_project(json.dumps(project))
+
+
+@pytest.mark.parametrize(
     ("axis", "tension", "component", "face", "bw_key", "legs_key"),
     [
         ("Vertical shear (bending about x)", "Bottom / left face",

@@ -1643,6 +1643,68 @@ def test_app_preserves_backend_fatigue_inputs_before_ui_integration():
     assert restored_scalars["fatigue_gamma_s"] == 1.32
 
 
+def test_loading_nonfatigue_project_clears_prior_fatigue_state():
+    import json
+    import fatigue_inputs
+    import project_io
+
+    fatigue_project = project_io.dump_project(
+        {
+            fatigue_inputs.SPECTRUM_TABLE_KEY:
+                fatigue_inputs.normalise_spectrum_table([{
+                    "spectrum": "Traffic",
+                    "name": "FAT-01",
+                    "cycles": 2e6,
+                }])
+        },
+        {
+            fatigue_inputs.DETAIL_CATALOG_KEY:
+                fatigue_inputs.default_catalog(),
+            "fatigue_on": True,
+            "fatigue_gamma_c": 1.595,
+            "fatigue_source": "Previous project",
+        },
+    )
+    at = _fresh()
+    at.session_state["_pending_project"] = fatigue_project
+    at.run()
+    assert at.session_state["fatigue_on"] is True
+
+    old_project = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 8,
+        "tables": {},
+        "scalars": {"mode": "Plastic"},
+    })
+    at.session_state["_pending_project"] = old_project
+    at.run()
+
+    assert not at.exception
+    assert fatigue_inputs.SPECTRUM_TABLE_KEY not in at.session_state
+    assert all(
+        key not in at.session_state
+        for key in project_io.FATIGUE_SCALAR_KEYS
+    )
+    saved = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    payload = json.loads(saved)
+    assert "fatigue" not in payload
+    assert all(
+        key not in payload["scalars"]
+        for key in project_io.FATIGUE_SCALAR_KEYS
+    )
+
+
 def test_v4_case_tables_follow_current_controls_and_preserve_later_rows():
     import sys as _sys
 
