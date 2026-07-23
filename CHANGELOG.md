@@ -4,8 +4,9 @@
 
 - Added the headless grouped-spectrum fatigue engine for reinforcing and
   prestressing steel and for same-fibre concrete compression damage, including
-  per-element yield checks, explicit partial factors, the EN 1992-2:2005
-  concrete bridge method and the EN 1992-1-1:2023 method.
+  an adaptive section-wide governing-fibre search, explicit search-convergence
+  evidence, per-element yield checks, explicit partial factors, the
+  EN 1992-2:2005 concrete bridge method and the EN 1992-1-1:2023 method.
 - Added the versioned fatigue input model: stable S-N detail IDs, verified 2005
   and 2023 Eurocode presets, grouped long-/short-action spectrum bins and
   lossless project-file migration. UI and report presentation follow in the

@@ -21,12 +21,13 @@ multipliers.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import numpy as np
 
 from .elastic import CombinedElasticResult, solve_elastic_combined
+from .geometry import points_inside_concrete
 from .section import Section
 
 
@@ -38,6 +39,9 @@ DAMAGE_LIMIT = 1.0
 _MPA_DIVISOR = 1000.0
 _LOG10_FLOAT_MAX = math.log10(np.finfo(float).max)
 _LOG10_FLOAT_TINY = math.log10(np.nextafter(0.0, 1.0))
+_DEFAULT_FIBRE_SEARCH_DIVISIONS = 24
+_DEFAULT_FIBRE_SEARCH_MAX_DIVISIONS = 192
+_DEFAULT_FIBRE_SEARCH_REL_TOL = 1.0e-3
 
 
 def _finite(value: float, label: str) -> float:
@@ -283,11 +287,25 @@ class ConcreteFibreFatigueResult:
 
 
 @dataclass(frozen=True)
+class ConcreteFibreSearch:
+    """Adaptive same-fibre search evidence for concrete fatigue damage."""
+
+    x_m: float
+    y_m: float
+    damage: float
+    divisions: int
+    points_evaluated: int
+    relative_change: float
+    converged: bool
+
+
+@dataclass(frozen=True)
 class FatigueSpectrumResult:
     spectrum_name: str
     bins: tuple[FatigueBinState, ...]
     reinforcement: tuple[ReinforcementFatigueResult, ...]
     concrete: tuple[ConcreteFibreFatigueResult, ...]
+    concrete_search: ConcreteFibreSearch | None
     fcd_fat_mpa: float | None
     governing_reinforcement_id: str | None
     governing_concrete_fibre: int | None
@@ -414,6 +432,285 @@ def _concrete_compression_mpa(
         + float(result.ky) * vertices[:, 1]
     )
     return tuple(float(value) for value in np.maximum(-plane, 0.0) / _MPA_DIVISOR)
+
+
+def _concrete_damage_field(
+    points: np.ndarray,
+    states: Sequence[FatigueBinState],
+    properties: ConcreteFatigueProperties,
+    gamma_ff: float,
+) -> np.ndarray:
+    """Return accumulated same-point concrete damage for many fibre locations."""
+
+    fibres = np.asarray(points, dtype=float)
+    if fibres.ndim != 2 or fibres.shape[1] != 2 or not len(fibres):
+        raise ValueError("concrete fatigue search points must be an (N, 2) array")
+    if not np.isfinite(fibres).all():
+        raise ValueError("concrete fatigue search points must be finite")
+    strength = concrete_fatigue_strength(properties)
+    action_factor = _positive(gamma_ff, "gamma_Ff")
+    damage = np.zeros(len(fibres), dtype=float)
+    for state in states:
+        result = state.elastic_result
+        if result is None:
+            raise ValueError(
+                "concrete fatigue search requires retained Elastic results"
+            )
+        long = np.asarray(
+            _concrete_compression_mpa(result.long, fibres),
+            dtype=float,
+        )
+        total = np.asarray(
+            _concrete_compression_mpa(result.short_term, fibres),
+            dtype=float,
+        )
+        sigma_min = action_factor * np.minimum(long, total)
+        sigma_max = action_factor * np.maximum(long, total)
+        ratio = np.divide(
+            sigma_min,
+            sigma_max,
+            out=np.zeros_like(sigma_max),
+            where=sigma_max > 0.0,
+        )
+        no_range = np.isclose(
+            sigma_min,
+            sigma_max,
+            rtol=1.0e-12,
+            atol=1.0e-12,
+        )
+        denominator = np.sqrt(np.maximum(1.0 - ratio, 0.0))
+        exponent = np.full(len(fibres), math.inf, dtype=float)
+        active = ~no_range
+        exponent[active] = (
+            float(properties.c)
+            * (1.0 - sigma_max[active] / strength)
+            / denominator[active]
+        )
+        log10_damage = math.log10(float(state.cycles)) - exponent
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            partial = np.power(
+                10.0,
+                np.clip(
+                    log10_damage,
+                    _LOG10_FLOAT_TINY,
+                    _LOG10_FLOAT_MAX,
+                ),
+            )
+        partial[log10_damage < _LOG10_FLOAT_TINY] = 0.0
+        partial[log10_damage > _LOG10_FLOAT_MAX] = math.inf
+        partial[no_range] = 0.0
+        damage += partial
+    return damage
+
+
+def _fatigue_search_points(
+    section: Section,
+    divisions: int,
+) -> np.ndarray:
+    """Build an interior grid plus a finer exact-boundary sampling."""
+
+    outer = np.asarray(section.concrete[0], dtype=float)
+    x_min = float(np.min(outer[:, 0]))
+    x_max = float(np.max(outer[:, 0]))
+    y_min = float(np.min(outer[:, 1]))
+    y_max = float(np.max(outer[:, 1]))
+    width = x_max - x_min
+    height = y_max - y_min
+    extent = max(width, height)
+    if extent <= 0.0:
+        raise ValueError("concrete fatigue search needs a non-degenerate section")
+
+    xs = np.linspace(x_min, x_max, divisions + 1)
+    ys = np.linspace(y_min, y_max, divisions + 1)
+    gx, gy = np.meshgrid(xs, ys)
+    grid = np.column_stack((gx.ravel(), gy.ravel()))
+    mask = points_inside_concrete(
+        grid,
+        section.concrete[0],
+        section.concrete[1:],
+    )
+    interior = grid[mask]
+
+    spacing = extent / (4.0 * divisions)
+    boundary = []
+    for ring in section.concrete:
+        points = np.asarray(ring, dtype=float)
+        for index, start in enumerate(points):
+            end = points[(index + 1) % len(points)]
+            pieces = max(
+                1,
+                int(math.ceil(float(np.linalg.norm(end - start)) / spacing)),
+            )
+            t = np.arange(pieces, dtype=float) / pieces
+            boundary.append(start + t[:, None] * (end - start))
+    return np.vstack((interior, *boundary, section.concrete_vertices()))
+
+
+def _refine_concrete_damage_point(
+    section: Section,
+    seed: np.ndarray,
+    seed_damage: float,
+    states: Sequence[FatigueBinState],
+    properties: ConcreteFatigueProperties,
+    gamma_ff: float,
+    step_x: float,
+    step_y: float,
+) -> tuple[np.ndarray, float, int]:
+    """Pattern-search a sampled maximum without leaving the concrete."""
+
+    point = np.asarray(seed, dtype=float)
+    best = float(seed_damage)
+    evaluated = 0
+    directions = np.asarray([
+        (-1.0, -1.0), (0.0, -1.0), (1.0, -1.0),
+        (-1.0, 0.0),                 (1.0, 0.0),
+        (-1.0, 1.0),  (0.0, 1.0),  (1.0, 1.0),
+    ])
+    for _ in range(14):
+        candidates = point + directions * np.asarray((step_x, step_y))
+        mask = points_inside_concrete(
+            candidates,
+            section.concrete[0],
+            section.concrete[1:],
+        )
+        candidates = candidates[mask]
+        if len(candidates):
+            values = _concrete_damage_field(
+                candidates,
+                states,
+                properties,
+                gamma_ff,
+            )
+            evaluated += len(candidates)
+            index = int(np.argmax(values))
+            value = float(values[index])
+            if value > best:
+                point = candidates[index]
+                best = value
+                continue
+        step_x *= 0.5
+        step_y *= 0.5
+    return point, best, evaluated
+
+
+def locate_governing_concrete_fibre(
+    section: Section,
+    states: Sequence[FatigueBinState],
+    properties: ConcreteFatigueProperties,
+    *,
+    gamma_ff: float,
+    initial_divisions: int = _DEFAULT_FIBRE_SEARCH_DIVISIONS,
+    max_divisions: int = _DEFAULT_FIBRE_SEARCH_MAX_DIVISIONS,
+    relative_tolerance: float = _DEFAULT_FIBRE_SEARCH_REL_TOL,
+) -> ConcreteFibreSearch:
+    """Adaptively locate the governing same-fibre concrete damage.
+
+    Original polygon corners alone are insufficient when the cyclic endpoints
+    have different neutral-axis directions.  The search combines a section-wide
+    grid, finer sampling of every outer and void edge, and local refinement.  It
+    doubles the grid twice or more and exposes the observed convergence so a
+    non-stable search cannot receive a normal passing result.
+    """
+
+    solved = tuple(states)
+    if not solved:
+        raise ValueError("at least one fatigue bin is required")
+    start = int(initial_divisions)
+    maximum = int(max_divisions)
+    tolerance = _positive(relative_tolerance, "concrete search tolerance")
+    if start < 4:
+        raise ValueError("concrete search initial divisions must be at least 4")
+    if maximum < 4 * start:
+        raise ValueError(
+            "concrete search maximum divisions must be at least four times "
+            "the initial divisions"
+        )
+
+    outer = np.asarray(section.concrete[0], dtype=float)
+    width = float(np.max(outer[:, 0]) - np.min(outer[:, 0]))
+    height = float(np.max(outer[:, 1]) - np.min(outer[:, 1]))
+    divisions = start
+    previous = None
+    stable_refinements = 0
+    relative_change = math.inf
+    best_point = np.asarray(section.concrete_vertices()[0], dtype=float)
+    best_damage = -math.inf
+    points_evaluated = 0
+    converged = False
+
+    while True:
+        points = _fatigue_search_points(section, divisions)
+        values = _concrete_damage_field(
+            points,
+            solved,
+            properties,
+            gamma_ff,
+        )
+        points_evaluated += len(points)
+        index = int(np.argmax(values))
+        candidate, candidate_damage, local_count = (
+            _refine_concrete_damage_point(
+                section,
+                points[index],
+                float(values[index]),
+                solved,
+                properties,
+                gamma_ff,
+                width / divisions if width > 0.0 else 0.0,
+                height / divisions if height > 0.0 else 0.0,
+            )
+        )
+        points_evaluated += local_count
+        if candidate_damage > best_damage:
+            best_point = candidate
+            best_damage = candidate_damage
+
+        if previous is not None:
+            scale = max(abs(best_damage), 1.0e-12)
+            relative_change = abs(best_damage - previous) / scale
+            if relative_change <= tolerance:
+                stable_refinements += 1
+            else:
+                stable_refinements = 0
+            if stable_refinements >= 2:
+                converged = True
+                break
+        previous = best_damage
+        if divisions >= maximum:
+            break
+        divisions = min(2 * divisions, maximum)
+
+    return ConcreteFibreSearch(
+        x_m=float(best_point[0]),
+        y_m=float(best_point[1]),
+        damage=float(best_damage),
+        divisions=divisions,
+        points_evaluated=points_evaluated,
+        relative_change=float(relative_change),
+        converged=converged,
+    )
+
+
+def _states_at_concrete_fibres(
+    states: Sequence[FatigueBinState],
+    fibres: np.ndarray,
+) -> tuple[FatigueBinState, ...]:
+    """Replace only the concrete stress arrays at the requested fixed fibres."""
+
+    return tuple(
+        replace(
+            state,
+            concrete_compression_long_mpa=_concrete_compression_mpa(
+                state.elastic_result.long,
+                fibres,
+            ),
+            concrete_compression_total_mpa=_concrete_compression_mpa(
+                state.elastic_result.short_term,
+                fibres,
+            ),
+        )
+        for state in states
+    )
 
 
 def solve_fatigue_bin(
@@ -709,6 +1006,15 @@ def analyse_fatigue_spectrum(
     n_mult: np.ndarray | None = None,
     prestress_stress: np.ndarray | None = None,
     displace_concrete: bool = False,
+    concrete_search_initial_divisions: int = (
+        _DEFAULT_FIBRE_SEARCH_DIVISIONS
+    ),
+    concrete_search_max_divisions: int = (
+        _DEFAULT_FIBRE_SEARCH_MAX_DIVISIONS
+    ),
+    concrete_search_relative_tolerance: float = (
+        _DEFAULT_FIBRE_SEARCH_REL_TOL
+    ),
 ) -> FatigueSpectrumResult:
     """Solve and assess one independent grouped fatigue spectrum."""
 
@@ -753,6 +1059,34 @@ def analyse_fatigue_spectrum(
         )
         for bin_input in bin_inputs
     )
+    concrete_search = None
+    concrete_fibres = section.concrete_vertices()
+    if check_concrete and concrete is not None:
+        concrete_search = locate_governing_concrete_fibre(
+            section,
+            states,
+            concrete,
+            gamma_ff=gamma_ff,
+            initial_divisions=concrete_search_initial_divisions,
+            max_divisions=concrete_search_max_divisions,
+            relative_tolerance=concrete_search_relative_tolerance,
+        )
+        search_point = np.asarray(
+            (concrete_search.x_m, concrete_search.y_m),
+            dtype=float,
+        )
+        extent = max(
+            float(np.ptp(concrete_fibres[:, 0])),
+            float(np.ptp(concrete_fibres[:, 1])),
+            1.0,
+        )
+        duplicate = np.any(
+            np.linalg.norm(concrete_fibres - search_point, axis=1)
+            <= 1.0e-10 * extent
+        )
+        if not duplicate:
+            concrete_fibres = np.vstack((concrete_fibres, search_point))
+        states = _states_at_concrete_fibres(states, concrete_fibres)
     steel_results = (
         assess_reinforcement_spectrum(
             properties,
@@ -765,7 +1099,7 @@ def analyse_fatigue_spectrum(
     )
     concrete_results = (
         assess_concrete_spectrum(
-            section.concrete_vertices(),
+            concrete_fibres,
             states,
             concrete,
             gamma_ff=gamma_ff,
@@ -774,7 +1108,13 @@ def analyse_fatigue_spectrum(
         else ()
     )
     all_results = (*steel_results, *concrete_results)
-    converged = all(state.converged for state in states)
+    converged = bool(
+        all(state.converged for state in states)
+        and (
+            concrete_search is None
+            or concrete_search.converged
+        )
+    )
     utilisation = max(
         (result.utilisation for result in all_results),
         default=0.0,
@@ -797,6 +1137,7 @@ def analyse_fatigue_spectrum(
         bins=states,
         reinforcement=steel_results,
         concrete=concrete_results,
+        concrete_search=concrete_search,
         fcd_fat_mpa=(
             concrete_fatigue_strength(concrete)
             if check_concrete and concrete is not None

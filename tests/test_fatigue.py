@@ -441,6 +441,62 @@ def test_integrated_spectrum_uses_existing_elastic_long_short_solution():
     )
 
 
+def test_concrete_search_catches_governing_edge_fibre_missed_by_corners():
+    section = Section.from_polygon(
+        corners=[
+            (-0.5, -0.5),
+            (0.5, -0.5),
+            (0.5, 0.5),
+            (-0.5, 0.5),
+        ],
+        bars_xy_area_mm2=[
+            (0.0, -0.42, 1000.0),
+            (0.0, 0.42, 1000.0),
+        ],
+    )
+    bin_input = fatigue.SpectrumBin(
+        name="Rotating stress planes",
+        cycles=1.0e7,
+        p_long_kn=260.59468685,
+        mx_long_knm=52.14636107,
+        my_long_knm=-324.57696939,
+        p_short_kn=-45.05153404,
+        mx_short_knm=390.75603827,
+        my_short_knm=338.45754694,
+    )
+
+    result = fatigue.analyse_fatigue_spectrum(
+        "Traffic",
+        section,
+        (bin_input,),
+        nl=10.0,
+        ns=6.0,
+        check_reinforcement=False,
+        concrete=fatigue.ConcreteFatigueProperties(
+            edition="2023",
+            fck_mpa=37.5,
+            gamma_c=1.5,
+            beta_cc_t0=1.0,
+        ),
+        gamma_ff=1.0,
+    )
+
+    corner_count = len(section.concrete_vertices())
+    assert max(item.damage for item in result.concrete[:corner_count]) < 1.0
+    assert len(result.concrete) == corner_count + 1
+    assert result.concrete_search is not None
+    assert result.concrete_search.converged is True
+    assert result.concrete_search.divisions >= 96
+    assert result.concrete_search.x_m == pytest.approx(-0.5)
+    assert 0.34 < result.concrete_search.y_m < 0.39
+    assert result.concrete_search.damage > 4.0
+    assert result.governing_concrete_fibre == corner_count
+    assert result.concrete[corner_count].damage == pytest.approx(
+        result.concrete_search.damage
+    )
+    assert result.passed is False
+
+
 def test_uniform_compression_matches_transformed_section_hand_calculation():
     section = _section()
     n_ratio = 10.0

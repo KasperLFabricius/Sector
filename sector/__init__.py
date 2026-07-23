@@ -29,6 +29,7 @@ from .geometry import (
 )
 from .fatigue import (
     ConcreteFatigueProperties,
+    ConcreteFibreSearch,
     FatigueSpectrumResult,
     ReinforcementFatigueProperties,
     SpectrumBin,
@@ -36,6 +37,7 @@ from .fatigue import (
     analyse_grouped_spectra,
     concrete_fatigue_life,
     concrete_fatigue_strength,
+    locate_governing_concrete_fibre,
     steel_fatigue_life,
 )
 from .materials import Concrete, MildSteel, Prestress
@@ -67,10 +69,12 @@ __all__ = [
     "SpectrumBin",
     "ReinforcementFatigueProperties",
     "ConcreteFatigueProperties",
+    "ConcreteFibreSearch",
     "FatigueSpectrumResult",
     "steel_fatigue_life",
     "concrete_fatigue_strength",
     "concrete_fatigue_life",
+    "locate_governing_concrete_fibre",
     "analyse_fatigue_spectrum",
     "analyse_grouped_spectra",
     "PlasticPoint",
