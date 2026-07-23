@@ -319,6 +319,7 @@ def test_v9_round_trip_preserves_fatigue_details_and_grouped_spectrum():
         "fatigue_gamma_c": 1.595,
         "fatigue_gamma_s": 1.32,
         "fatigue_gamma_ff": 1.0,
+        "fatigue_concrete_k1": 0.85,
     }
 
     text = project_io.dump_project(tables, scalars)
@@ -335,6 +336,7 @@ def test_v9_round_trip_preserves_fatigue_details_and_grouped_spectrum():
         tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
     )
     assert restored_scalars["fatigue_gamma_c"] == 1.595
+    assert restored_scalars["fatigue_concrete_k1"] == 0.85
     assert (
         restored_scalars[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
             "stress_model"

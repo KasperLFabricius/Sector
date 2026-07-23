@@ -2,9 +2,15 @@
 
 ## Unreleased
 
+- Added the headless grouped-spectrum fatigue engine for reinforcing and
+  prestressing steel and for same-fibre concrete compression damage, including
+  a certified section-wide governing-fibre search, explicit bound/convergence
+  evidence, per-element yield checks, tendon-aware solver mapping, the 2005 and
+  2023 rebar/tendon bond corrections, action-level fatigue-load factoring, the
+  EN 1992-2:2005 concrete bridge method and the EN 1992-1-1:2023 method.
 - Added the versioned fatigue input model: stable S-N detail IDs, verified 2005
   and 2023 Eurocode presets, grouped long-/short-action spectrum bins and
-  lossless project-file migration. Calculation and presentation follow in the
+  lossless project-file migration. UI and report presentation follow in the
   next scoped change.
 - Added stable reinforcing- and prestressing-steel catalogues with per-element
   assignment throughout plastic, elastic, crack-width and member checks.

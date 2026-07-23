@@ -52,6 +52,7 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_gamma_ff",
     "fatigue_beta_cc_t0",
     "fatigue_t0_days",
+    "fatigue_concrete_k1",
     "fatigue_concrete_c",
     "fatigue_source",
 )
@@ -101,7 +102,7 @@ SCALAR_KEYS = [
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
     "fatigue_check_concrete", "fatigue_gamma_c", "fatigue_gamma_s",
     "fatigue_gamma_ff", "fatigue_beta_cc_t0", "fatigue_t0_days",
-    "fatigue_concrete_c", "fatigue_source",
+    "fatigue_concrete_k1", "fatigue_concrete_c", "fatigue_source",
     # Longitudinal minimum reinforcement and clear spacing.
     "minimum_reinforcement_on", "clear_spacing_on", "detailing_edition",
     "detailing_d_upper", "detailing_include_tendons",
