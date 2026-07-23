@@ -19,16 +19,20 @@ cross-section and reports, for the same section:
 * **Longitudinal detailing checks** - per-case minimum reinforcement, including
   resultant biaxial tension zones, and a section-wide clear-spacing review with
   stable element IDs.
+* **Fatigue analysis** - grouped sustained/basic and cyclic action bins, using
+  the cracked elastic section for reinforcing steel, tendons and concrete.
 
 Plastic and Elastic identify the calculation method, not the limit state. Each
 named row carries the user's project-defined description or classification (for
 example ULS, ALS, SLS or FLS). Plastic/capacity rows contain NEd, MxEd, MyEd,
 Vx,Ed, Vy,Ed and TEd. Elastic rows contain long- and short-term NEd/MxEd/MyEd components
-and select stress-limit and crack-width acceptance per row.
+and select stress-limit and crack-width acceptance per row. Fatigue spectra
+group named bins with cycle counts and sustained/basic plus cyclic NEd/MxEd/MyEd.
 
 Mild-steel and prestress catalogues provide stable material IDs. Each bar or
 tendon is assigned an ID, so mixed strengths, moduli, partial factors, worklines
 and tendon prestrains remain traceable in the UI, project file and PDF report.
+Fatigue S-N details use separate stable IDs assigned to the same elements.
 
 ## Goals
 

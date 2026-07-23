@@ -122,3 +122,15 @@ def test_grid_material_assignment_is_limited_to_catalogue_ids():
     assert specs[rt.MATERIAL_ID]["type"] == "select"
     assert specs[rt.MATERIAL_ID]["options"] == ["M1", "M4"]
     assert options["default_values"][rt.MATERIAL_ID] == "M1"
+
+
+def test_grid_fatigue_assignment_uses_kind_compatible_catalogue_ids():
+    specs = {
+        spec["field"]: spec
+        for spec in rt.point_grid_specs("bar", ["M1"], ["F1", "F4"])
+    }
+    options = rt.point_grid_options("bar", ["M1"], ["F1", "F4"])
+
+    assert specs[rt.FATIGUE_DETAIL_ID]["type"] == "select"
+    assert specs[rt.FATIGUE_DETAIL_ID]["options"] == ["F1", "F4"]
+    assert options["default_values"][rt.FATIGUE_DETAIL_ID] == "F1"
