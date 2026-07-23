@@ -655,6 +655,12 @@ def test_uniform_compression_matches_transformed_section_hand_calculation():
     assert result.reinforcement[0].bins[0].stress_range_mpa == pytest.approx(
         expected_steel_range
     )
+    assert result.concrete_search is not None
+    assert result.concrete_search.converged is True
+    assert result.concrete_search.upper_damage == pytest.approx(
+        result.concrete_search.damage
+    )
+    assert result.passed is True
 
 
 def test_tendon_only_section_is_included_in_fatigue_solver_order():
@@ -714,7 +720,7 @@ def _mixed_properties():
     )
 
 
-def test_2005_mixed_bond_correction_matches_eta_equilibrium_factors():
+def test_2005_mixed_bond_correction_applies_eta_to_rebar_only():
     result = fatigue.analyse_fatigue_spectrum(
         "Mixed 2005",
         _mixed_section(),
@@ -733,8 +739,9 @@ def test_2005_mixed_bond_correction_matches_eta_equilibrium_factors():
     mild = result.reinforcement[0].bins[0]
     tendon = result.reinforcement[1].bins[0]
     assert mild.bond_adjustment == pytest.approx(eta)
-    assert tendon.bond_adjustment == pytest.approx(beta * eta)
+    assert tendon.bond_adjustment == pytest.approx(1.0)
     assert "6.8.2(2)" in mild.bond_method
+    assert "tendon range unadjusted" in tendon.bond_method
     assert mild.stress_total_elastic_mpa != mild.stress_long_mpa
 
 

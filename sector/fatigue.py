@@ -926,7 +926,9 @@ def locate_governing_concrete_fibre(
                 0,
             )
 
-    converged = False
+    # If every initial box is already bounded by the best sampled value,
+    # there is no unresolved search region and the certificate is complete.
+    converged = not heap
     while heap:
         while heap and -heap[0][0] <= best_damage:
             heapq.heappop(heap)
@@ -1280,11 +1282,11 @@ def _apply_reinforcement_bond_correction(
     if selected == EC2_2005:
         factors = np.concatenate((
             np.full(mild_count, eta, dtype=float),
-            eta * betas,
+            np.ones(tendon_count, dtype=float),
         ))
         method = (
-            "EN 1992-1-1:2005 6.8.2(2) bond correction "
-            f"(eta={eta:.6g})"
+            "EN 1992-1-1:2005 6.8.2(2) reinforcing-steel bond "
+            f"correction (eta={eta:.6g}); tendon range unadjusted"
         )
         corrected = []
         for state in solved:
