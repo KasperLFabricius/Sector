@@ -3779,7 +3779,7 @@ class ReportBuilder:
         governing_name = str(payload.get("governing_spectrum") or "-")
         self._h1("Grouped fatigue")
         self._status_block(
-            f"{status} - {governing_name} | utilisation "
+            f"{status} - {_html_escape(governing_name)} | utilisation "
             f"{_pct(fatigue_presentation.evidence_number(
                 payload.get('utilisation')
             ))}",

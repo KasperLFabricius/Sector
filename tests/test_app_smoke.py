@@ -6,6 +6,7 @@ for each analysis mode, and assert it produces results without error.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 import sys
 
@@ -1800,6 +1801,33 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert not at.exception
     assert at.selectbox(key="_fatigue_result_spectrum").options == ["Traffic"]
     assert at.selectbox(key="_fatigue_result_element").options[0] == "R1"
+    # Every value rendered in the utilisation-map hover must participate in its
+    # memo key. A recalculation can change Miner damage while a different criterion
+    # leaves the overall utilisation unchanged.
+    map_id = id(
+        at.session_state["_fig_cache"]["fatigue_utilisation_map"][1]
+    )
+    spectrum_result = fatigue["spectra"][0]
+    steel_result = spectrum_result.reinforcement[0]
+    changed_steel_result = dataclasses.replace(
+        steel_result,
+        damage=steel_result.damage + 0.01,
+        damage_utilisation=steel_result.damage_utilisation + 0.01,
+    )
+    fatigue["spectra"] = (
+        dataclasses.replace(
+            spectrum_result,
+            reinforcement=(
+                changed_steel_result,
+                *spectrum_result.reinforcement[1:],
+            ),
+        ),
+    )
+    at.run()
+    assert id(
+        at.session_state["_fig_cache"]["fatigue_utilisation_map"][1]
+    ) != map_id
+
     detail = at.segmented_control(key="_fatigue_result_detail")
     assert detail.options == ["Reinforcement", "Spectrum bins", "Basis"]
     spectrum_summary = next(
@@ -1871,6 +1899,22 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     )
     assert stale_actions.iloc[0]["Nlong,Ed [kN]"] == pytest.approx(-100.0)
     assert any("inputs changed" in warning.value.lower() for warning in at.warning)
+
+    # A session can survive a code hot reload from a build that did not yet store
+    # snapshots. In that legacy state, suppress input-dependent stale evidence
+    # instead of falling back to the newly edited actions or geometry.
+    del at.session_state["result_input_snapshot"]
+    at.run()
+    assert any(
+        "predates input snapshots" in error.value
+        for error in at.error
+    )
+    assert not any(
+        {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+            frame.value.columns
+        )
+        for frame in at.dataframe
+    )
 
     _goto_page(at, "Inputs")
     calculated_fatigue_sig = at.session_state["result_fatigue_sig"]

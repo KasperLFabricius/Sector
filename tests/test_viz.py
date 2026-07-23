@@ -942,6 +942,8 @@ def test_fatigue_utilisation_map_marks_a_failing_certified_search_bound():
     assert "certified search bound > 1.00" in names
     assert bound.marker.symbol == "x"
     assert list(concrete_trace.marker.symbol) == ["star"]
+    assert fig.layout.coloraxis.cmax == pytest.approx(1.0)
+    assert max(fig.layout.coloraxis.colorbar.tickvals) == pytest.approx(1.0)
     assert "upper D = 1.080 &gt; 1.00" in " ".join(
         annotation.text for annotation in fig.layout.annotations
     )

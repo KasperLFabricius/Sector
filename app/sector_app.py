@@ -6894,6 +6894,12 @@ def _fatigue_map_signature(inp, spectrum):
                 fatigue_presentation.evidence_number(
                     fatigue_presentation.value(item, "utilisation")
                 ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "damage_utilisation")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "yield_utilisation")
+                ),
             )
             for item in fatigue_presentation.items(spectrum, "reinforcement")
         ),
@@ -6909,6 +6915,12 @@ def _fatigue_map_signature(inp, spectrum):
                 fatigue_presentation.evidence_number(
                     fatigue_presentation.value(item, "utilisation")
                 ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "damage")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "stress_utilisation")
+                ),
             )
             for item in fatigue_presentation.items(spectrum, "concrete")
         ),
@@ -6917,6 +6929,12 @@ def _fatigue_map_signature(inp, spectrum):
             if search is None
             else (
                 bool(fatigue_presentation.value(search, "converged", False)),
+                fatigue_presentation.finite_number(
+                    fatigue_presentation.value(search, "x_m")
+                ),
+                fatigue_presentation.finite_number(
+                    fatigue_presentation.value(search, "y_m")
+                ),
                 fatigue_presentation.evidence_number(
                     fatigue_presentation.value(search, "damage")
                 ),
@@ -8692,6 +8710,18 @@ def _analysis_workspace(inp):
         c_calc.caption(":green[Results up to date]")
     if stale and view in _RESULT_VIEWS:
         st.warning("Inputs changed since the last calculation - press Calculate to update.")
+    result_snapshot = st.session_state.get("result_input_snapshot")
+    if stale and view in _RESULT_VIEWS and result_snapshot is None:
+        # Sessions can survive a Streamlit hot reload. A result produced by an
+        # older Sector version has no matching input snapshot, so rendering it
+        # against today's edited inputs would create internally inconsistent QA
+        # evidence. Keep the payload hidden until a current calculation records
+        # the missing snapshot.
+        st.error(
+            "The stale calculation predates input snapshots. Press Calculate "
+            "before viewing its input-dependent results."
+        )
+        return
     if st.session_state.get("_case_error"):
         st.error(st.session_state["_case_error"])
 
@@ -8721,7 +8751,7 @@ def _analysis_workspace(inp):
 
     if view == "Results Overview":
         overview_inp = (
-            st.session_state.get("result_input_snapshot", inp)
+            result_snapshot
             if stale
             else inp
         )
@@ -8732,7 +8762,7 @@ def _analysis_workspace(inp):
         interaction_view(view_inp, view_results)
     elif view == "Fatigue Results":
         fatigue_inp = (
-            st.session_state.get("result_input_snapshot", inp)
+            result_snapshot
             if stale
             else inp
         )

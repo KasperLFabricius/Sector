@@ -902,8 +902,9 @@ def fatigue_utilisation_map_figure(
         for result in [*reinforcement.values(), *concrete]
     ]
     search = _fatigue_value(spectrum, "concrete_search")
-    if search is not None:
-        utilisation_values.append(_fatigue_value(search, "upper_damage"))
+    # The certified upper damage is a bound over a search region, not a sampled
+    # point represented by the colour axis. It has a dedicated red indicator below;
+    # including it here can collapse every actual point into the bottom of the scale.
     cmax, tickvals = _fatigue_utilisation_scale(utilisation_values)
 
     fig = go.Figure()

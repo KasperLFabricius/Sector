@@ -424,6 +424,7 @@ def test_report_fatigue_chapter_uses_the_engine_failure_state():
 def test_report_escapes_user_defined_fatigue_settings():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]
+    payload["governing_spectrum"] = "Traffic <A> & B"
     payload["basis"]["spectrum_source"] = "Register A & B <issued>"
     payload["fatigue_detail_basis"][0]["name"] = "Bar <detail> & coupler"
     payload["fatigue_detail_basis"][0]["source"] = "Drawing A&B <rev 2>"
@@ -432,6 +433,7 @@ def test_report_escapes_user_defined_fatigue_settings():
         {}, inp, out, figures=False
     )).split())
 
+    assert "Traffic <A> & B" in text
     assert "Register A & B <issued>" in text
     assert "Bar <detail> & coupler" in text
     assert "Drawing A&B <rev 2>" in text
