@@ -393,6 +393,20 @@ def test_v9_rejects_malformed_fatigue_catalogue_values(field, value, message):
         project_io.parse_project(json.dumps(project))
 
 
+def test_v9_rejects_nonobject_fatigue_catalogue_items():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            fatigue_inputs.DETAIL_CATALOG_KEY: {"items": ["bad"]}
+        },
+    }
+
+    with pytest.raises(ValueError, match="items must contain only objects"):
+        project_io.parse_project(json.dumps(project))
+
+
 @pytest.mark.parametrize(
     ("axis", "tension", "component", "face", "bw_key", "legs_key"),
     [

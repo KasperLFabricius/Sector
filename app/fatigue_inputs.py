@@ -236,11 +236,18 @@ def _number(value) -> float:
 
 def _source_items(value) -> list[Mapping]:
     items = value.get("items", []) if isinstance(value, Mapping) else value
+    if items is None:
+        return []
     if isinstance(items, Mapping):
         items = [items]
     if not isinstance(items, Iterable) or isinstance(items, (str, bytes)):
-        return []
-    return [item for item in items if isinstance(item, Mapping)]
+        raise ValueError("fatigue detail catalogue items must be a list")
+    items = list(items)
+    if any(not isinstance(item, Mapping) for item in items):
+        raise ValueError(
+            "fatigue detail catalogue items must contain only objects"
+        )
+    return items
 
 
 def _validate_raw_entry(raw: Mapping, position: int) -> None:
@@ -465,6 +472,9 @@ def delete_entry(
 
 def replace_entry(catalog, entry: Mapping) -> dict:
     canonical = normalise_catalog(catalog)
+    if not isinstance(entry, Mapping):
+        raise ValueError("fatigue detail entry must be an object")
+    _validate_raw_entry(entry, 1)
     detail_id = _text(entry.get("id"))
     found = False
     items = []

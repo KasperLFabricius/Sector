@@ -118,6 +118,27 @@ def test_catalogue_rejects_explicit_malformed_engineering_fields(
         fi.normalise_catalog({"items": [entry]})
 
 
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ({"items": "bad"}, "items must be a list"),
+        ({"items": 42}, "items must be a list"),
+        ({"items": ["bad"]}, "items must contain only objects"),
+    ],
+)
+def test_catalogue_rejects_malformed_item_containers(value, message):
+    with pytest.raises(ValueError, match=message):
+        fi.normalise_catalog(value)
+
+
+def test_replace_entry_applies_the_same_strict_field_validation():
+    entry = fi.default_entry()
+    entry["n_star"] = "bad"
+
+    with pytest.raises(ValueError, match="n_star must be a finite number"):
+        fi.replace_entry(fi.default_catalog(), entry)
+
+
 def _spectrum_rows():
     return [
         {
