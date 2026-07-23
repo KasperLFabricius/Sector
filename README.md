@@ -16,6 +16,9 @@ cross-section and reports, for the same section:
   the elastic result.
 * **Section capacity checks** - shear, torsion and combined M-V-T checks where
   supported by the selected Eurocode method.
+* **Longitudinal detailing checks** - per-case minimum reinforcement, including
+  resultant biaxial tension zones, and a section-wide clear-spacing review with
+  stable element IDs.
 
 Plastic and Elastic identify the calculation method, not the limit state. Each
 named row carries the user's project-defined description or classification (for
@@ -69,6 +72,7 @@ sector/        computation core (headless, regression-tested)
   elastic      cracked-section elastic stresses
   plastic      nonlinear capacity (neutral-axis sweep, governing failure)
   capacity     headless shear, torsion, and M-V-T result orchestration
+  detailing    longitudinal minimum reinforcement and clear spacing
   serviceability  cracking threshold, tension stiffening, crack width
   templates    parametric section + reinforcement builders
 app/           Streamlit interface (sector_app, viz)

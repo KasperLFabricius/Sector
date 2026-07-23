@@ -404,6 +404,8 @@ def manual_blocks() -> list:
        "(tension-ignored) section, with creep through the modular ratio.\n"
        "- **Acceptance criteria.** User-defined stress limits, cracking threshold, "
        "transformed section properties and crack width.\n"
+       "- **Longitudinal detailing.** Edition-specific minimum-reinforcement "
+       "checks per selected capacity case and a section-wide clear-spacing check.\n"
        "- **Multi-case review and reporting.** Named Plastic/capacity and Elastic "
        "rows are summarised together, remain selectable individually, and are "
        "included in a QA PDF with worked formulas and code references. A project "
@@ -478,6 +480,7 @@ def manual_blocks() -> list:
            ["Plastic Results", "Selected case: M-M envelope and utilisation"],
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
+           ["Detailing", "Selected case: minimum reinforcement; section-wide spacing"],
            ["Shear", "Selected Plastic case: Vx/Vy summary and directional details"],
            ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
            ["M-V-T Combined", "Selected Plastic case: combined interactions"]])
@@ -514,7 +517,10 @@ def manual_blocks() -> list:
        "and crack-spacing geometry. *Independent* is therefore appropriate when "
        "one point represents a non-circular or grouped steel area. Material, fatigue-"
        "detail and group IDs are assignments carried with the element; blank optional "
-       "assignments are reported as such. Half-typed rows are ignored until complete.")
+       "assignments are reported as such. **Lap / bundle ID** declares elements that "
+       "belong to the same lap or bundle for the spacing review; a geometric "
+       "shortfall then becomes **Review**, never an automatic pass. Half-typed rows "
+       "are ignored until complete.")
     call("concept", "Everything downstream reads these points. The builder, the "
          "presets and the save file all end up as rows in these four tables, so you "
          "can always edit the geometry by hand.")
@@ -605,6 +611,23 @@ def manual_blocks() -> list:
        "capacity only.")
     fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the "
         "applied load; the sweep from 0 to 360 degrees closes the curve.")
+    h2("Minimum reinforcement and clear spacing")
+    md("Enable **Minimum longitudinal reinforcement** and select the check on each "
+       "required Plastic/capacity row. The selected detailing edition and the "
+       "global $f_{ctm}$ apply to those rows. Enable **Clear spacing** for one "
+       "section-wide pairwise check and enter $D_{upper}$; tendons are excluded "
+       "unless explicitly included, in which case their entered diameter must be "
+       "the detailing envelope or duct diameter.")
+    table(["Edition", "Minimum-reinforcement method"],
+          [["EN 1992-1-1:2005 / DK NA:2024",
+            "$A_{s,prov} \\geq A_{s,min}$ in the resultant bending-tension zone (9.1N)"],
+           ["EN 1992-1-1:2023",
+            "Nominal section resistance at characteristic bar yield compared with the cracking action (12.1/12.2)"]])
+    call("limit", "Prestressing tendons are not credited in the minimum-"
+         "reinforcement check. The DK NA side-face reinforcement rule for high "
+         "beam webs, lap length and bundle verification remain separate detailing "
+         "reviews. Ordinary bars are assumed anchored to develop the entered "
+         "$f_{yk}$; reduce it where the force cannot be developed.")
     h2("Crack width")
     md("Tick **Crack width** on each Elastic table row that requires acceptance. "
        "If any row is ticked, the global crack settings apply to every ticked row. "
@@ -741,8 +764,8 @@ def manual_blocks() -> list:
        "the project classification, combination or source. Add, delete, paste and "
        "reorder rows directly in the tables.")
     table(["Table", "Per-row fields", "Row-specific rule"],
-          [["Plastic / capacity", "$N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$, $V_{Ed}$, $T_{Ed}$",
-            "Zero $V_{Ed}$ or $T_{Ed}$ skips that check for the row"],
+          [["Plastic / capacity", "$N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$, $V_{x,Ed}$, $V_{y,Ed}$, $T_{Ed}$",
+            "Zero shear/torsion skips that component; minimum reinforcement is selected per row"],
            ["Elastic", "Long- and short-term $N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$",
             "Tick Stress limits and/or Crack width for the row"]])
     md("The Elastic long-term and short-term components are solved together. The "
@@ -773,6 +796,12 @@ def manual_blocks() -> list:
        "short-term and total states, with the peak concrete compression and the "
        "neutral-axis position. When cracking is checked the section properties "
        "(uncracked and cracked) and the crack width follow.")
+    h2("Detailing results")
+    md("The **Detailing** view gives a concise status for minimum reinforcement and "
+       "clear spacing. The section figure highlights the bars included in the "
+       "selected case and dimensions the governing spacing pair. Tables retain "
+       "provided and required values, utilisation or margin, element IDs and any "
+       "lap/bundle review flag.")
     h2("Shear results")
     md("The **Shear** view reports the applied $V_{Ed}$, the resistance "
        "$V_{Rd,c}$ and the utilisation, then the derived quantities ($d$, $b_w$, "
@@ -928,6 +957,44 @@ def manual_blocks() -> list:
        "kNm is then a utilisation of $300/346 = 0.87$.")
     fig(fig_beam_envelope, "The beam envelope with its applied load; each vertex is "
         "one solved neutral-axis angle.")
+
+    h1("Minimum reinforcement and clear spacing")
+    h2("EN 1992-1-1:2005 and DK NA:2024")
+    md("Sector transfers the moments to the gross-concrete centroid and derives "
+       "the uncracked gross-concrete strain plane for the complete $M_x$-$M_y$ "
+       "action. Its tensile half-plane is checked using:\n\n"
+       "$$A_{s,min}=\\max\\!\\left(0.26\\frac{f_{ctm}}{f_{yk}},\\,0.0013\\right)"
+       "b_t d, \\qquad A_{s,prov}\\ge A_{s,min}. $$\n\n"
+       "$b_t$ is the exact mean width of that resultant tension half, and $d$ "
+       "is measured normal to its neutral line from the opposite extreme concrete "
+       "fibre to the centroid of the bars in tension. If several assigned materials occur, "
+       "the lowest $f_{yk}$ is used. Reference: 9.2.1.1(1), Formula (9.1N).")
+    call("limit", "The DK NA:2024 side-face reinforcement requirement for high "
+         "beam webs is separate from Formula (9.1N) and is not included.")
+    h2("EN 1992-1-1:2023")
+    md("For bending with axial force, Sector derives the uncracked cracking action "
+       "in the applied moment direction and checks:\n\n"
+       "$$M_{R,nom}(N_{Ed})\\ge M_{cr}(N_{Ed}).$$\n\n"
+       "The nominal resistance uses the entered design concrete law and limits "
+       "each mild bar to its characteristic $f_{yk}$; a biaxial case uses a "
+       "15-degree nominal-resistance envelope. Pure tension uses:\n\n"
+       "$$\\sum A_{s,i}f_{yk,i}\\ge A_c f_{ctm}.$$\n\n"
+       "Reference: 12.2(2), Formulae (12.1) and (12.2). The bending check is "
+       "reported not applicable when compressive $N_{Ed}$ is not below "
+       "$0.5A_cf_{cd}$.")
+    h2("Clear spacing")
+    md("For each included pair of longitudinal elements, Sector computes the "
+       "edge-to-edge distance from the entered coordinates and circular detailing "
+       "diameters and checks:\n\n"
+       "$$c_{clear}\\ge\\max(\\phi_{max},\\,D_{upper}+5\\,\\text{mm},\\,20\\,\\text{mm}).$$\n\n"
+       "This is 8.2(2) for the 2005 family and 11.2(2) for 2023. The smallest "
+       "margin governs. A shared nonblank Lap / bundle ID changes a shortfall to "
+       "**Review** because the cross-section cannot establish lap length, bond, "
+       "bundle equivalence or longitudinal arrangement.")
+    call("limit", "The minimum-reinforcement check credits mild bars only. The "
+         "spacing check is section-plane geometry for longitudinal elements; it "
+         "does not verify anchorage, lap length, cover, maximum spacing, congestion "
+         "or shear/torsion detailing.")
 
     h1("Cracked-section elastic analysis")
     md("The Elastic solver takes the section as already cracked: concrete "
@@ -1225,9 +1292,9 @@ def manual_blocks() -> list:
     part("Part D - Reference")
 
     h1("Standards")
-    md("Sector follows the Eurocode 2 family. The crack-width check offers several "
-       "editions (Part C sets them out in full); the rest of the analysis is common "
-       "to all of them.")
+    md("Sector follows the Eurocode 2 family. Material, crack-width, detailing and "
+       "member-check editions are selected explicitly and recorded in the results "
+       "and report; Part C states the implemented differences.")
     table(["Topic", "Reference"],
           [["Concrete stress-strain law", "DS/EN 1992-1-1 3.1.7 and Table 3.1"],
            ["Ultimate strains", "DS/EN 1992-1-1 Table 3.1"],
@@ -1236,6 +1303,9 @@ def manual_blocks() -> list:
            ["Cracking and crack width (2005)", "DS/EN 1992-1-1 7.3"],
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
+           ["Minimum reinforcement (2005 / DK NA)", "DS/EN 1992-1-1 9.2.1.1(1), Formula (9.1N); DK NA:2024"],
+           ["Minimum reinforcement (2023)", "DS/EN 1992-1-1:2023 12.2(2), Formulae (12.1)-(12.2)"],
+           ["Clear spacing (2005 / 2023)", "DS/EN 1992-1-1 8.2(2); DS/EN 1992-1-1:2023 11.2(2)"],
            ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"],
            ["Shear, strain-based (2023)", "DS/EN 1992-1-1:2023 8.2.2 (tau_Rd,c, ddg)"],
            ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"],
@@ -1255,7 +1325,11 @@ def manual_blocks() -> list:
        "- **Section and resistance scope.** Sector includes section bending, "
        "elastic/crack response, shear, torsion and combined M-V-T checks where "
        "the selected method is supported. It does not model member buckling, "
-       "second-order response, deflection, connections or global load paths.")
+       "second-order response, deflection, connections or global load paths.\n"
+       "- **Detailing scope.** The longitudinal check does not credit tendons and "
+       "does not verify the DK NA high-web side-face rule. The clear-spacing check "
+       "uses the entered section-plane geometry; anchorage, lap length, bundle "
+       "equivalence, cover, maximum spacing and congestion remain separate reviews.")
     call("limit", "The crack-width models are one-directional: the effective "
          "tension area and the crack spacing are defined for a single bending "
          "direction, so the crack width is reported for the governing bar along the "
@@ -1268,6 +1342,9 @@ def manual_blocks() -> list:
            ["$\\varphi_{NA}$", "Neutral-axis sweep angle from +y; degrees"],
            ["$V_{Ed}$", "Applied design shear action; kN"],
            ["$A_{sl}$", "Selected tension-side longitudinal reinforcement; mm2"],
+           ["$A_{s,min}$", "Required longitudinal minimum reinforcement; mm2"],
+           ["$b_t$", "Mean width of the bending tension zone; mm"],
+           ["$D_{upper}$", "Upper aggregate size used in the clear-spacing rule; mm"],
            ["$A_{sw}/s$", "Shear-link area per spacing; mm2/mm"],
            ["$F_c$", "Concrete compression resultant; kN"],
            ["$L$, $d_x$, $d_y$", "Internal lever arm and its components; mm"],

@@ -97,6 +97,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Plastic / capacity",
         "Stress limits and/or Crack width",
         "Results overview",
+        "Minimum reinforcement and clear spacing",
+        "Lap / bundle ID",
         "Governing",
         "PDF report",
         "Every computed case",

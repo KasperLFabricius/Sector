@@ -41,6 +41,7 @@ import case_analysis
 import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
+from sector import detailing
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
 
@@ -419,7 +420,10 @@ class ReportBuilder:
             if result_key is not None
             else any(
                 key in self._base_out
-                for key in ("plastic", "shear", "torsion", "combined")
+                for key in (
+                    "plastic", "shear", "torsion", "combined",
+                    "minimum_reinforcement",
+                )
             )
         )
         return [(self._base_inp, self._base_out)] if active else []
@@ -492,7 +496,7 @@ class ReportBuilder:
         self.flow.append(KeepTogether(table))
         self._gap(4)
 
-    def _case_line(self, family):
+    def _case_line(self, family, title=""):
         self._small("<b>Case:</b> " + _report_action_set_text(self.inp, family))
         actions = self.inp.get("_report_case_actions") or {}
         if family == "plastic" and actions:
@@ -513,12 +517,18 @@ class ReportBuilder:
                 [28 * mm] * 6,
                 font=6.9,
             )
-            self._small(
-                "Tension-face selection: V<sub>x,Ed</sub> = "
-                f"{_html_escape(actions.get('vx_face', 'auto'))}; "
-                "V<sub>y,Ed</sub> = "
-                f"{_html_escape(actions.get('vy_face', 'auto'))}."
-            )
+            if title.startswith(("Shear", "Combined", "Torsion")):
+                self._small(
+                    "<b>Shear tension faces:</b> V<sub>x,Ed</sub> = "
+                    f"{_html_escape(actions.get('vx_face', 'auto'))}; "
+                    "V<sub>y,Ed</sub> = "
+                    f"{_html_escape(actions.get('vy_face', 'auto'))}."
+                )
+            if title.startswith("Longitudinal minimum reinforcement"):
+                self._small(
+                    "<b>Minimum reinforcement:</b> "
+                    f"{'selected' if actions.get('check_minimum_reinforcement') else 'not selected'}."
+                )
         elif family == "elastic" and actions:
             self._table(
                 [[
@@ -546,7 +556,7 @@ class ReportBuilder:
         start = len(self.flow)
         case_id = presentation.action_set(self.inp, family)["id"] or "ID NOT SET"
         self._h1(f"{title} - {_html_escape(case_id)}")
-        self._case_line(family)
+        self._case_line(family, title)
         self._keep_from(start + 1)
 
     def _results_overview(self):
@@ -706,11 +716,17 @@ class ReportBuilder:
         self._theory()
         self._tick(0.2, "Section and materials...")
         self._inputs()
+        if self._base_out.get("clear_spacing") is not None:
+            self.flow.append(PageBreak())
+            self.inp, self.out = self._base_inp, self._base_out
+            self._clear_spacing()
         jobs = []
         for case_inp, case_out in self._case_contexts("plastic"):
             case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
             for key, label, method in (
                 ("plastic", "Plastic capacity", "_plastic"),
+                ("minimum_reinforcement", "Minimum reinforcement",
+                 "_minimum_reinforcement"),
                 ("shear", "Shear resistance", "_shear"),
                 ("torsion", "Torsion resistance", "_torsion"),
                 ("combined", "Combined M-V-T", "_combined"),
@@ -819,6 +835,7 @@ class ReportBuilder:
             ("elastic", "elastic stresses / cracking"),
             ("shear", "shear"),
             ("torsion", "torsion"),
+            ("minimum_reinforcement", "longitudinal minimum reinforcement"),
         ):
             count = len(self._result_values(key))
             if count:
@@ -926,6 +943,7 @@ class ReportBuilder:
                         "diameter_mm": math.sqrt(4.0 * point[2] / math.pi),
                         "size_mode": "Area", "material_id": "-",
                         "fatigue_detail_id": "", "group_id": "",
+                        "spacing_group_id": "",
                     }
                     for index, point in enumerate(points, 1)
                 ]
@@ -940,13 +958,17 @@ class ReportBuilder:
             ])
             self._table(rows, [18 * mm, 26 * mm, 26 * mm, 31 * mm,
                                31 * mm, 31 * mm], font=7.2, keep=False)
-            assignments = [["ID", "Material ID", "Fatigue detail ID", "Group ID"]]
+            assignments = [[
+                "ID", "Material ID", "Fatigue detail ID", "Group ID",
+                "Lap / bundle ID",
+            ]]
             assignments.extend([
                 [record.get("id", "-"), record.get("material_id", "-"),
-                 record.get("fatigue_detail_id") or "-", record.get("group_id") or "-"]
+                 record.get("fatigue_detail_id") or "-", record.get("group_id") or "-",
+                 record.get("spacing_group_id") or "-"]
                 for record in records
             ])
-            self._table(assignments, [24 * mm, 42 * mm, 52 * mm, 42 * mm],
+            self._table(assignments, [18 * mm, 35 * mm, 43 * mm, 32 * mm, 38 * mm],
                         font=7.2, keep=False)
 
         reinforcement_tables("Reinforcing bars", inp.get("bars", []),
@@ -1188,7 +1210,7 @@ class ReportBuilder:
                     "Case", "Description", "N<sub>Ed</sub>",
                     "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
                     "V<sub>x,Ed</sub>", "V<sub>y,Ed</sub>",
-                    "T<sub>Ed</sub>", "Faces",
+                    "T<sub>Ed</sub>", "Faces", "Min. reinf.",
                 ]]
                 rows.extend([
                     [
@@ -1201,13 +1223,14 @@ class ReportBuilder:
                         _fmt(row["vy_ed_kn"], 3),
                         _fmt(row["t_ed_knm"], 3),
                         f"Vx {row['vx_face']}; Vy {row['vy_face']}",
+                        "yes" if row.get("check_minimum_reinforcement") else "no",
                     ]
                     for row in plastic
                 ])
                 self._table(
                     rows,
-                    [15 * mm, 28 * mm] + [17 * mm] * 6 + [25 * mm],
-                    font=6.1,
+                    [15 * mm, 24 * mm] + [16 * mm] * 6 + [21 * mm, 14 * mm],
+                    font=5.8,
                     keep=False,
                 )
                 self._small("N, Vx and Vy in kN; M and T in kNm. A zero shear "
@@ -1317,6 +1340,25 @@ class ReportBuilder:
             checked = plastic_results[0].get("check_util", True)
             rows.append(["Utilisation check",
                          "applied moment checked" if checked else "capacity only"])
+        if inp.get("minimum_reinforcement_on"):
+            rows.extend([
+                ["Longitudinal minimum reinforcement", "selected per capacity case"],
+                ["Detailing edition", str(inp.get("detailing_edition") or "-")],
+            ])
+            if not self._result_values("elastic"):
+                rows.append([
+                    "Mean tensile strength f<sub>ctm</sub>",
+                    f"{_fmt(inp.get('sls_fctm'), 3)} MPa",
+                ])
+        if inp.get("clear_spacing_on"):
+            rows.extend([
+                ["Clear-spacing check", "section-wide"],
+                ["Upper aggregate size D<sub>upper</sub>",
+                 f"{_fmt(inp.get('detailing_d_upper'), 1)} mm"],
+                ["Tendons included in spacing",
+                 "yes - entered diameter is detailing envelope"
+                 if inp.get("detailing_include_tendons") else "no"],
+            ])
         elastic_results = self._result_values("elastic")
         if elastic_results:
             # Modular ratios are derived from the elastic moduli and creep, not entered;
@@ -1389,6 +1431,7 @@ class ReportBuilder:
         self._h1("Basis of analysis")
         plastic_results = self._result_values("plastic")
         elastic_results = self._result_values("elastic")
+        minimum_results = self._result_values("minimum_reinforcement")
         if plastic_results:
             material_2023 = "2023" in str(self.inp.get("concrete_preset", ""))
             steel_presets = [
@@ -1437,9 +1480,253 @@ class ReportBuilder:
             if any(result.get("show_cw") for result in elastic_results):
                 self._p("<b>Crack width.</b> The requested crack-width calculation "
                         "follows the selected code method and is worked below.")
-        if not plastic_results and not elastic_results:
+        if minimum_results:
+            edition = str(self.inp.get("detailing_edition") or "")
+            if edition == detailing.EC2_2023:
+                self._p(
+                    "<b>Longitudinal minimum reinforcement.</b> The nominal section "
+                    "resistance at characteristic reinforcement yield is compared "
+                    "with the cracking action for each selected case. Pure tension "
+                    "uses direct force equilibrium."
+                )
+                self._small(
+                    "Reference: EN 1992-1-1:2023, 12.2(2), Formulae (12.1) and "
+                    "(12.2). Prestressing tendons are not credited."
+                )
+            else:
+                self._p(
+                    "<b>Longitudinal minimum reinforcement.</b> The resultant "
+                    "gross-concrete tension zone is checked using "
+                    "A<sub>s,min</sub> = max(0.26 "
+                    "f<sub>ctm</sub>/f<sub>yk</sub>, 0.0013) b<sub>t</sub>d."
+                )
+                self._small(
+                    "Reference: EN 1992-1-1, 9.2.1.1(1), Formula (9.1N). "
+                    "Prestressing tendons are not credited."
+                )
+        if self._base_out.get("clear_spacing") is not None:
+            clause = "11.2(2)" if self.inp.get("detailing_edition") == detailing.EC2_2023 else "8.2(2)"
+            self._p(
+                "<b>Clear spacing.</b> Pairwise edge-to-edge distance is compared "
+                "with max(phi, D<sub>upper</sub> + 5 mm, 20 mm)."
+            )
+            self._small(
+                f"Reference: {self.inp.get('detailing_edition', '-')} {clause}. "
+                "A declared lap or bundle remains an engineering-review item."
+            )
+        if (not plastic_results and not elastic_results and not minimum_results
+                and self._base_out.get("clear_spacing") is None):
             self._p("No bending-capacity or elastic-stress result was included in "
                     "this report.")
+
+    def _minimum_reinforcement(self):
+        result = self.out["minimum_reinforcement"]
+        self._case_heading("Longitudinal minimum reinforcement", "plastic")
+        status = str(result.get("status") or "NOT ASSESSED").upper()
+        checks = result.get("checks") or []
+        utilisations = [
+            float(check["utilisation"])
+            for check in checks
+            if check.get("utilisation") is not None
+            and math.isfinite(float(check["utilisation"]))
+        ]
+        summary = (
+            f"governing utilisation {_pct(max(utilisations))}"
+            if utilisations else str(result.get("reason") or "not evaluated")
+        )
+        self._status_block(f"{status} - {summary}", status)
+        self._small(
+            f"<b>Method:</b> {_html_escape(result.get('edition', '-'))} | "
+            f"{_html_escape(result.get('clause', '-'))}."
+        )
+
+        highlight_ids = sorted({
+            str(element_id)
+            for check in checks
+            for element_id in check.get("bar_ids") or []
+        })
+        self._fig(viz.detailing_geometry_figure(
+            self.inp.get("outer") or [],
+            self.inp.get("holes") or [],
+            self.inp.get("bars") or [],
+            self.inp.get("tendons") or [],
+            bar_elements=self.inp.get("bar_elements") or [],
+            tendon_elements=self.inp.get("tendon_elements") or [],
+            highlight_ids=highlight_ids,
+            tension_zone=checks[0] if checks else None,
+            title="Minimum-reinforcement geometry",
+        ), 150, 108)
+
+        if checks and presentation.minimum_area_check(result, checks[0]):
+            self._formula(
+                "A<sub>s,min</sub> = max(0.26 f<sub>ctm</sub> / "
+                "f<sub>yk</sub>, 0.0013) b<sub>t</sub>d",
+                ref=(f"{_html_escape(result.get('edition', '-'))} "
+                     "&#167;9.2.1.1(1), Formula (9.1N)"),
+            )
+            rows = [[
+                "Axis", "Face", "A<sub>s,prov</sub>", "A<sub>s,min</sub>",
+                "Util.", "b<sub>t</sub>", "d", "f<sub>ctm</sub>",
+                "f<sub>yk</sub>", "Bars", "Status",
+            ]]
+            rows.extend([
+                [
+                    (
+                        "Mx + My" if check.get("axis") == "xy"
+                        else f"M{check.get('axis', '-')}"
+                    ),
+                    check.get("face", "-"),
+                    _fmt(check.get("as_provided_mm2"), 1),
+                    _fmt(check.get("as_min_mm2"), 1),
+                    _pct(check.get("utilisation")),
+                    _fmt(check.get("bt_mm"), 1), _fmt(check.get("d_mm"), 1),
+                    _fmt(check.get("fctm_mpa"), 2),
+                    _fmt(check.get("fyk_mpa"), 1),
+                    _html_escape(", ".join(check.get("bar_ids") or [])),
+                    check.get("status", "-"),
+                ]
+                for check in checks
+            ])
+            self._table(
+                rows,
+                [14 * mm, 22 * mm, 17 * mm, 17 * mm, 14 * mm,
+                 14 * mm, 14 * mm, 13 * mm, 13 * mm, 18 * mm, 14 * mm],
+                font=5.9,
+                keep=False,
+            )
+            self._small(
+                "Areas in mm<super>2</super>; b<sub>t</sub> and d in mm; "
+                "strengths in MPa."
+            )
+            for check in checks:
+                if check.get("reason"):
+                    self._small(
+                        "<b>Outcome:</b> " + _html_escape(check["reason"])
+                    )
+        elif checks and checks[0].get("type") == "pure tension":
+            self._formula(
+                "R<sub>nom</sub> = sum(A<sub>s,i</sub> f<sub>yk,i</sub>) "
+                "&#8805; R<sub>cr</sub> = A<sub>c</sub> f<sub>ctm</sub>",
+                ref="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
+            )
+            rows = [[
+                "R<sub>cr</sub> (kN)", "R<sub>nom</sub> (kN)", "Utilisation",
+                "A<sub>s,prov</sub> (mm<super>2</super>)", "Bars", "Status",
+            ]]
+            rows.extend([
+                [
+                    _fmt(check.get("demand_kn"), 2),
+                    _fmt(check.get("resistance_kn"), 2),
+                    _pct(check.get("utilisation")),
+                    _fmt(check.get("as_provided_mm2"), 1),
+                    _html_escape(", ".join(check.get("bar_ids") or [])),
+                    check.get("status", "-"),
+                ]
+                for check in checks
+            ])
+            self._table(rows, [27 * mm, 27 * mm, 26 * mm, 35 * mm,
+                               35 * mm, 20 * mm], font=7.0)
+        elif checks:
+            self._formula(
+                "M<sub>R,nom</sub>(N<sub>Ed</sub>) &#8805; "
+                "M<sub>cr</sub>(N<sub>Ed</sub>)",
+                ref="EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
+            )
+            rows = [[
+                "M<sub>cr</sub> (kNm)", "M<sub>R,nom</sub> (kNm)",
+                "Utilisation", "N<sub>nom,t</sub> (kN)", "Axial eq.",
+                "A<sub>s,prov</sub> (mm<super>2</super>)", "Status",
+            ]]
+            rows.extend([
+                [
+                    _fmt(check.get("m_cr_knm"), 2),
+                    _fmt(check.get("mr_nom_knm"), 2),
+                    _pct(check.get("utilisation")),
+                    _fmt(check.get("nominal_axial_resistance_kn"), 2),
+                    ("yes" if check.get("axial_feasible") is True
+                     else "no" if check.get("axial_feasible") is False else "-"),
+                    _fmt(check.get("as_provided_mm2"), 1),
+                    check.get("status", "-"),
+                ]
+                for check in checks
+            ])
+            self._table(rows, [24 * mm, 24 * mm, 20 * mm, 26 * mm,
+                               22 * mm, 30 * mm, 19 * mm], font=6.4)
+            for check in checks:
+                self._small(
+                    "<b>Nominal-resistance model:</b> "
+                    + _html_escape(check.get("model") or "-")
+                    + f"; cracking factor {_fmt(check.get('cracking_factor'), 4)}."
+                )
+        elif result.get("reason"):
+            self._small(_html_escape(result["reason"]))
+
+        for limitation in result.get("limitations") or []:
+            self._small("<b>Scope:</b> " + _html_escape(limitation))
+
+    def _clear_spacing(self):
+        result = self.out["clear_spacing"]
+        self._h1("Reinforcement clear spacing")
+        status = str(result.get("status") or "NOT ASSESSED").upper()
+        governing = result.get("governing") or {}
+        summary = (
+            f"{_fmt(governing.get('clear_mm'), 1)} mm clear; "
+            f"{_fmt(governing.get('required_mm'), 1)} mm required"
+            if governing else str(result.get("reason") or "not evaluated")
+        )
+        self._status_block(f"{status} - {summary}", status)
+        self._small(
+            f"<b>Method:</b> {_html_escape(result.get('edition', '-'))} | "
+            f"{_html_escape(result.get('clause', '-'))}; "
+            f"D<sub>upper</sub> = {_fmt(result.get('d_upper_mm'), 1)} mm."
+        )
+        self._fig(viz.detailing_geometry_figure(
+            self.inp.get("outer") or [],
+            self.inp.get("holes") or [],
+            self.inp.get("bars") or [],
+            self.inp.get("tendons") or [],
+            bar_elements=self.inp.get("bar_elements") or [],
+            tendon_elements=self.inp.get("tendon_elements") or [],
+            spacing_pair=governing,
+            title="Governing clear-spacing pair",
+        ), 150, 108)
+        self._formula(
+            "c<sub>req</sub> = max(phi<sub>max</sub>, "
+            "D<sub>upper</sub> + 5 mm, 20 mm)",
+            ref=(f"{_html_escape(result.get('edition', '-'))} "
+                 f"&#167;{_html_escape(result.get('clause', '-'))}"),
+        )
+        if governing:
+            self._small(
+                "<b>Governing pair:</b> "
+                f"{_html_escape(governing.get('first_id', '?'))} - "
+                f"{_html_escape(governing.get('second_id', '?'))}; "
+                f"margin {_fmt(governing.get('margin_mm'), 1)} mm."
+            )
+        pairs = result.get("pairs") or []
+        if pairs:
+            rows = [[
+                "Pair", "Elements", "Clear (mm)", "Required (mm)",
+                "Margin (mm)", "Lap / bundle ID", "Status",
+            ]]
+            rows.extend([
+                [
+                    f"{_html_escape(pair.get('first_id', '?'))} - "
+                    f"{_html_escape(pair.get('second_id', '?'))}",
+                    f"{_html_escape(pair.get('first_kind', '-'))} / "
+                    f"{_html_escape(pair.get('second_kind', '-'))}",
+                    _fmt(pair.get("clear_mm"), 1),
+                    _fmt(pair.get("required_mm"), 1),
+                    _fmt(pair.get("margin_mm"), 1),
+                    _html_escape(pair.get("spacing_group_id") or "-"),
+                    pair.get("status", "-"),
+                ]
+                for pair in pairs
+            ])
+            self._table(rows, [31 * mm, 24 * mm, 22 * mm, 25 * mm,
+                               22 * mm, 27 * mm, 19 * mm], font=6.4, keep=False)
+        for limitation in result.get("limitations") or []:
+            self._small("<b>Scope:</b> " + _html_escape(limitation))
 
     def _plastic(self):
         pl = self.out["plastic"]

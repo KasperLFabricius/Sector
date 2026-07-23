@@ -151,6 +151,109 @@ def test_report_pdf_generates():
     assert len(pdf) > 3000
 
 
+def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "minimum_reinforcement_on": True,
+        "clear_spacing_on": True,
+        "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "detailing_d_upper": 16.0,
+        "detailing_include_tendons": False,
+        "bars": [(-0.04, -0.12, 314.0), (0.04, -0.12, 314.0)],
+        "bar_elements": [
+            {
+                "id": "R1", "x_mm": -40.0, "y_mm": -120.0,
+                "area_mm2": 314.0, "diameter_mm": 20.0,
+                "size_mode": "Diameter", "material_id": "M1",
+                "fatigue_detail_id": "", "group_id": "",
+                "spacing_group_id": "LAP-A",
+            },
+            {
+                "id": "R2", "x_mm": 40.0, "y_mm": -120.0,
+                "area_mm2": 314.0, "diameter_mm": 20.0,
+                "size_mode": "Diameter", "material_id": "M1",
+                "fatigue_detail_id": "", "group_id": "",
+                "spacing_group_id": "LAP-A",
+            },
+        ],
+    })
+    minimum = {
+        "status": "PASS",
+        "edition": inp["detailing_edition"],
+        "clause": "9.2.1.1(1), Formula (9.1N)",
+        "checks": [{
+            "type": "minimum area", "status": "PASS", "axis": "xy",
+            "face": "resultant tension zone",
+            "as_provided_mm2": 628.0, "as_min_mm2": 410.0,
+            "utilisation": 410.0 / 628.0, "bt_mm": 200.0,
+            "d_mm": 270.0, "fctm_mpa": 2.9, "fyk_mpa": 500.0,
+            "bar_ids": ["R1", "R2"],
+        }],
+        "limitations": ["Prestressing tendons are not credited."],
+    }
+    spacing = {
+        "status": "PASS", "edition": inp["detailing_edition"],
+        "clause": "8.2(2)", "d_upper_mm": 16.0,
+        "governing": {
+            "status": "PASS", "first_id": "R1", "second_id": "R2",
+            "first_kind": "bar", "second_kind": "bar", "clear_mm": 60.0,
+            "required_mm": 21.0, "margin_mm": 39.0,
+            "spacing_group_id": "LAP-A",
+        },
+        "pairs": [],
+        "limitations": ["Pairwise edge-to-edge distance is checked."],
+    }
+    spacing["pairs"] = [dict(spacing["governing"])]
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp,
+        {"minimum_reinforcement": minimum, "clear_spacing": spacing},
+        figures=False,
+    )).split())
+
+    assert "Longitudinal minimum reinforcement" in text
+    assert "Mx + My" in text
+    assert "resultant tension zone" in text
+    assert "A s,min" in text or "As,min" in text
+    assert "Reinforcement clear spacing" in text
+    assert "R1 - R2" in text
+    assert "Lap / bundle ID" in text
+    assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
+
+
+def test_report_keeps_failed_2005_no_bar_result_in_minimum_area_format():
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "minimum_reinforcement_on": True,
+        "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+    })
+    minimum = {
+        "status": "FAIL",
+        "edition": inp["detailing_edition"],
+        "clause": "9.2.1.1(1), Formula (9.1N)",
+        "checks": [{
+            "type": "minimum area", "status": "FAIL", "axis": "xy",
+            "face": "resultant tension zone", "as_provided_mm2": 0.0,
+            "as_min_mm2": None, "utilisation": None, "bt_mm": None,
+            "d_mm": None, "fctm_mpa": 2.9, "fyk_mpa": None,
+            "bar_ids": [],
+            "reason": "No ordinary reinforcement bar lies in the tension zone.",
+        }],
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, {"minimum_reinforcement": minimum}, figures=False,
+    )).split())
+
+    assert "Formula (9.1N)" in text
+    assert "Outcome:" in text
+    assert "No ordinary reinforcement bar lies in the tension zone." in text
+    assert "MR,nom" not in text
+    assert "Formula (12.1)" not in text
+
+
 def test_report_traces_multiple_materials_to_element_assignments():
     inp = _inp()
     catalogue, second_id = material_catalog.add_entry(

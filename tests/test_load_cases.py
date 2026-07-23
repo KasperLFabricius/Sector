@@ -112,6 +112,21 @@ def test_directional_shear_faces_roundtrip_and_validate():
         lc.table_records(invalid, lc.PLASTIC_TABLE_KEY)
 
 
+def test_plastic_minimum_reinforcement_flag_roundtrips_as_boolean():
+    source = lc.normalise_table([{
+        "name": "PL-MIN",
+        "mx_ed_knm": 45.0,
+        "check_minimum_reinforcement": True,
+    }], lc.PLASTIC_TABLE_KEY)
+
+    records = lc.table_records(source, lc.PLASTIC_TABLE_KEY)
+    restored = lc.table_from_records(records, lc.PLASTIC_TABLE_KEY)
+
+    assert bool(records[0]["check_minimum_reinforcement"]) is True
+    assert bool(restored.loc[0, "check_minimum_reinforcement"]) is True
+    assert str(restored["check_minimum_reinforcement"].dtype) == "bool"
+
+
 def test_case_serialisation_rejects_invalid_numeric_cells():
     source = lc.normalise_table([
         {"name": "PL-BAD", "mx_ed_knm": "not a number"},

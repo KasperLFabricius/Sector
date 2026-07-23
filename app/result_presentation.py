@@ -299,12 +299,21 @@ def _map_assessment_status(status):
         "INVALID": "INVALID",
         "NOT ASSESSED": "NOT ASSESSED",
         "NOT APPLICABLE": "NOT APPLICABLE",
+        "REVIEW": "REVIEW",
     }.get(str(status or "").upper(), "NOT ASSESSED")
 
 
 def assessment_status_label(status):
     """Map solver-specific acceptance states to the UI/report vocabulary."""
     return _map_assessment_status(status)
+
+
+def minimum_area_check(minimum, check):
+    """Identify a 2005-family Formula (9.1N) result, including failed rows."""
+    return bool(
+        str((check or {}).get("type") or "").casefold() == "minimum area"
+        or "9.1n" in str((minimum or {}).get("clause") or "").casefold()
+    )
 
 
 def interaction_assessment_status(interaction, *, applicable=True):
@@ -424,6 +433,120 @@ def result_summary_rows(inp, results, *, stale=False):
                 assessment.get("util"), "Elastic Results",
                 assessment.get("governing") or "", inp,
             ))
+
+    minimum = results.get("minimum_reinforcement")
+    if minimum is None and inp.get("minimum_reinforcement_on"):
+        rows.append(_summary_row(
+            "Longitudinal minimum reinforcement", "plastic", "NOT RUN",
+            view="Detailing", note="Calculate required", inp=inp,
+        ))
+    elif minimum is not None:
+        checks = minimum.get("checks") or []
+        if not checks:
+            rows.append(_summary_row(
+                "Longitudinal minimum reinforcement",
+                "plastic",
+                _map_assessment_status(minimum.get("status")),
+                view="Detailing",
+                note=str(minimum.get("reason") or minimum.get("clause") or ""),
+                inp=inp,
+            ))
+        for check in checks:
+            util = check.get("utilisation")
+            face = check.get("face")
+            axis = check.get("axis")
+            suffix = (
+                " Mx+My resultant"
+                if axis == "xy"
+                else f" M{axis} {face}" if axis and face else ""
+            )
+            if minimum_area_check(minimum, check):
+                required = check.get("as_min_mm2")
+                result_text = (
+                    f"As,prov {check.get('as_provided_mm2', 0.0):.1f} mm2; "
+                    "As,min "
+                    + ("-" if required is None else f"{float(required):.1f} mm2")
+                )
+                criterion = "As,prov >= As,min"
+            elif check.get("type") == "pure tension":
+                resistance = check.get("resistance_kn")
+                demand = check.get("demand_kn")
+                result_text = (
+                    "Rnom "
+                    + ("-" if resistance is None else f"{float(resistance):.1f}")
+                    + " kN; Rcr "
+                    + ("-" if demand is None else f"{float(demand):.1f}")
+                    + " kN"
+                )
+                criterion = "Rnom >= Rcr"
+            else:
+                resistance = check.get("mr_nom_knm")
+                demand = check.get("m_cr_knm")
+                result_text = (
+                    "MR,nom "
+                    + ("-" if resistance is None else f"{float(resistance):.1f}")
+                    + " kNm; Mcr "
+                    + ("-" if demand is None else f"{float(demand):.1f}")
+                    + " kNm"
+                )
+                criterion = "MR,nom >= Mcr"
+            note_parts = [str(minimum.get("clause") or "")]
+            if check.get("axial_feasible") is not None:
+                note_parts.append(
+                    "nominal axial equilibrium verified"
+                    if check.get("axial_feasible")
+                    else "nominal axial equilibrium not available"
+                )
+            if check.get("reason"):
+                note_parts.append(str(check["reason"]))
+            rows.append(_summary_row(
+                f"Longitudinal minimum reinforcement{suffix}",
+                "plastic",
+                _map_assessment_status(check.get("status")),
+                result_text,
+                criterion,
+                util,
+                "Detailing",
+                "; ".join(part for part in note_parts if part),
+                inp,
+            ))
+
+    spacing = results.get("clear_spacing")
+    if spacing is None and inp.get("clear_spacing_on"):
+        rows.append(_summary_row(
+            "Reinforcement clear spacing", "section", "NOT RUN",
+            view="Detailing", note="Calculate required", inp=inp,
+        ))
+    elif spacing is not None:
+        governing = spacing.get("governing") or {}
+        clear = governing.get("clear_mm")
+        required = governing.get("required_mm")
+        util = (
+            float(required) / float(clear)
+            if required is not None and clear is not None and float(clear) > 0.0
+            else math.inf if governing and required is not None else None
+        )
+        result_text = (
+            f"{clear:.1f} mm ({governing.get('first_id', '?')}-"
+            f"{governing.get('second_id', '?')})"
+            if clear is not None else "-"
+        )
+        criterion = f">= {required:.1f} mm" if required is not None else "-"
+        rows.append(_summary_row(
+            "Reinforcement clear spacing",
+            "section",
+            _map_assessment_status(spacing.get("status")),
+            result_text,
+            criterion,
+            util,
+            "Detailing",
+            (
+                f"Declared group {governing.get('spacing_group_id')} requires review"
+                if governing.get("declared_exception")
+                else str(spacing.get("clause") or "")
+            ),
+            inp,
+        ))
 
     shear = results.get("shear")
     if shear is None and inp.get("shear_on"):
@@ -773,6 +896,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             or bool(inp.get("shear_on"))
             or bool(inp.get("torsion_on"))
             or bool(inp.get("combined_on"))
+            or bool(inp.get("minimum_reinforcement_on"))
         ),
         "elastic": mode in {"Elastic", "Both"},
     }
@@ -795,6 +919,8 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             actions = entry.get("actions") or {}
             if family == "plastic":
                 case_inp = case_analysis.plastic_case_input(inp, actions)
+                # Clear spacing is section-wide and is appended once below.
+                case_inp["clear_spacing_on"] = False
             else:
                 case_inp = case_analysis.elastic_case_input(inp, actions)
             case_results = entry.get("results") or {}
@@ -833,6 +959,25 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                     result=zero, view="M-V-T Combined",
                     note="Zero action; not evaluated", inp=case_inp,
                 ))
+    # Clear spacing is a section-wide result, not a load-case result. Add it once
+    # after the case loops rather than repeating it for every Plastic row.
+    if inp.get("clear_spacing_on"):
+        spacing_only_inp = dict(
+            inp,
+            mode="",
+            plastic_case={},
+            elastic_case={},
+            minimum_reinforcement_on=False,
+            shear_on=False,
+            torsion_on=False,
+            combined_on=False,
+        )
+        rows.extend(result_summary_rows(
+            spacing_only_inp,
+            {"clear_spacing": results.get("clear_spacing")}
+            if results.get("clear_spacing") is not None else {},
+            stale=stale,
+        ))
     return rows
 
 
@@ -840,7 +985,7 @@ def overall_summary_status(rows):
     """Return the most conservative state represented in a summary table."""
     states = {row.get("status") for row in rows}
     for status in (
-        "INVALID", "FAIL", "STALE", "NOT ASSESSED", "NOT RUN", "PASS",
+        "INVALID", "FAIL", "STALE", "REVIEW", "NOT ASSESSED", "NOT RUN", "PASS",
         "NOT APPLICABLE",
     ):
         if status in states:

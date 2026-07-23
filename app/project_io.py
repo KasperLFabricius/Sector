@@ -22,11 +22,12 @@ import pandas as pd
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
+from sector import detailing
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 7   # v7: separate Vx,Ed / Vy,Ed actions and directional shear settings
+VERSION = 8   # v8: longitudinal minimum-reinforcement and clear-spacing inputs
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -77,6 +78,9 @@ SCALAR_KEYS = [
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
+    # Longitudinal minimum reinforcement and clear spacing.
+    "minimum_reinforcement_on", "clear_spacing_on", "detailing_edition",
+    "detailing_d_upper", "detailing_include_tendons",
     # Shear (VRd,c without links, and the variable-strut VRd with links).
     "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
     "shear_vx_bw", "shear_vy_bw",
@@ -443,6 +447,15 @@ def parse_project(text: str):
         old_legs = raw_scalars.get("shear_link_legs")
         if isinstance(old_legs, (int, float)):
             scalars[f"shear_{component}_link_legs"] = float(old_legs)
+    # v8 introduces detailing settings and a per-row minimum-reinforcement flag.
+    # Write every new scalar explicitly when loading an older file so a reused
+    # Streamlit session cannot leak checks or parameters from the previous project.
+    if data.get("version", 1) < 8:
+        scalars.setdefault("minimum_reinforcement_on", False)
+        scalars.setdefault("clear_spacing_on", False)
+        scalars.setdefault("detailing_edition", detailing.EC2_2005_DKNA)
+        scalars.setdefault("detailing_d_upper", 16.0)
+        scalars.setdefault("detailing_include_tendons", False)
     # The axial force N is now tension-positive; files written before that (version
     # < 2) stored it compression-positive, so negate their axial values to preserve
     # the physical loads. Moments are unchanged.

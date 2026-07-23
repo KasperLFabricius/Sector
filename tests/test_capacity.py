@@ -146,7 +146,7 @@ def test_auto_face_checks_both_faces_at_zero_moment_and_override_is_explicit():
 def test_auto_face_uses_centroid_adjusted_moment_not_origin_moment():
     inp = _member_input(
         # The concrete centroid is y = 0.30 m. The positive 10 kNm origin
-        # moment becomes -20 kNm at the centroid under 100 kN tension.
+        # moment becomes +40 kNm at the centroid under 100 kN tension.
         P_pl=100.0,
         Mx_pl=10.0,
         My_pl=0.0,
@@ -159,10 +159,16 @@ def test_auto_face_uses_centroid_adjusted_moment_not_origin_moment():
     spec = capacity.shear_direction_specs(inp)["vy"]
 
     assert spec["moment_origin"] == pytest.approx(10.0)
-    assert spec["moment"] == pytest.approx(-20.0)
+    assert spec["moment"] == pytest.approx(40.0)
     assert spec["signed_v_ed"] == pytest.approx(-25.0)
     assert spec["v_ed"] == pytest.approx(25.0)
-    assert capacity.shear_face_candidates(spec["face"], spec["moment"]) == (False,)
+    assert capacity.shear_face_candidates(spec["face"], spec["moment"]) == (True,)
+
+    contexts = capacity.build_directional_shear_contexts(
+        inp, n_prestress=0.0, n_ed_comp=-100.0
+    )
+    payload, _links = contexts["vy"]["candidates"][0]
+    assert payload["m_ed_2023"] == pytest.approx(40.0)
 
 
 def test_mandatory_faces_are_governed_independently_for_shear_and_combined():

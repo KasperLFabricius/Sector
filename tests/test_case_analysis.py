@@ -153,6 +153,47 @@ def test_capacity_only_zero_action_case_is_recorded_but_not_run():
     assert calls[0]["mode"] == "Elastic"
 
 
+def test_selected_minimum_reinforcement_row_runs_without_plastic_bending():
+    calls = []
+    inp = _base(
+        mode="Elastic",
+        shear_on=False,
+        torsion_on=False,
+        combined_on=False,
+        minimum_reinforcement_on=True,
+        plastic_cases=_plastic([
+            {
+                "name": "PL-MIN",
+                "mx_ed_knm": 55.0,
+                "check_minimum_reinforcement": True,
+            },
+            {
+                "name": "PL-SKIP",
+                "mx_ed_knm": 75.0,
+                "check_minimum_reinforcement": False,
+            },
+        ]),
+        elastic_cases=_elastic([{"name": "EL-01"}]),
+    )
+
+    def runner(case_inp, **_kwargs):
+        calls.append(case_inp)
+        if case_inp["mode"] == "Elastic":
+            return {"elastic": {"case": case_inp["elastic_case"]["id"]}}
+        assert case_inp["mode"] == "Capacity"
+        assert case_inp["minimum_reinforcement_on"] is True
+        return {"minimum_reinforcement": {"status": "PASS"}}
+
+    result = case_analysis.run_case_tables(inp, runner)
+
+    assert [call["mode"] for call in calls] == ["Capacity", "Elastic"]
+    assert result["plastic_cases"][0]["evaluated"] is True
+    assert result["plastic_cases"][0]["results"]["minimum_reinforcement"][
+        "status"
+    ] == "PASS"
+    assert result["plastic_cases"][1]["evaluated"] is False
+
+
 def test_reuses_unchanged_rows_and_recalculates_only_changed_row():
     calls = []
 

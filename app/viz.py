@@ -814,6 +814,203 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     return fig
 
 
+def detailing_geometry_figure(
+    outer,
+    holes,
+    bars,
+    tendons,
+    *,
+    bar_elements=None,
+    tendon_elements=None,
+    highlight_ids=None,
+    spacing_pair=None,
+    tension_zone=None,
+    title="Detailing geometry",
+):
+    """Publication-ready section figure for minimum steel and spacing evidence.
+
+    Element coordinates remain tied to stable IDs.  A governing spacing pair is
+    dimensioned between the actual circular perimeters using the entered
+    diameters; selected minimum-reinforcement bars receive an open highlight.
+    """
+    bar_elements = list(bar_elements or [])
+    tendon_elements = list(tendon_elements or [])
+    bar_ids = [str(item.get("id") or index + 1)
+               for index, item in enumerate(bar_elements)]
+    tendon_ids = [str(item.get("id") or index + 1)
+                  for index, item in enumerate(tendon_elements)]
+    fig = section_figure(
+        outer,
+        holes,
+        bars,
+        title=title,
+        tendons=tendons,
+        show_labels=True,
+        scale=1000.0,
+        unit="mm",
+        height=570,
+        bar_ids=bar_ids,
+        tendon_ids=tendon_ids,
+    )
+    records = {
+        str(item.get("id")): item
+        for item in bar_elements + tendon_elements
+        if item.get("id")
+    }
+    selected = [records[value] for value in (highlight_ids or []) if value in records]
+    if selected:
+        fig.add_trace(go.Scatter(
+            x=[float(item["x_mm"]) for item in selected],
+            y=[float(item["y_mm"]) for item in selected],
+            mode="markers",
+            name="included reinforcement",
+            marker=dict(
+                size=20,
+                symbol="circle-open",
+                color="#0072B2",
+                line=dict(color="#0072B2", width=2.4),
+            ),
+            text=[str(item.get("id")) for item in selected],
+            hovertemplate="%{text}<br>included in check<extra></extra>",
+        ))
+
+    zone = tension_zone or {}
+    direction = zone.get("tension_direction") or []
+    if len(direction) == 2 and zone.get("neutral_c_m") is not None and outer:
+        ux, uy = float(direction[0]), float(direction[1])
+        c_mm = float(zone["neutral_c_m"]) * 1000.0
+        outer_x = [float(point[0]) * 1000.0 for point in outer]
+        outer_y = [float(point[1]) * 1000.0 for point in outer]
+        xmin, xmax = min(outer_x), max(outer_x)
+        ymin, ymax = min(outer_y), max(outer_y)
+        span = max(xmax - xmin, ymax - ymin, 1.0)
+        tolerance = 1.0e-9 * span
+        intersections = []
+        if abs(uy) > 1.0e-12:
+            for x_value in (xmin, xmax):
+                y_value = (-c_mm - ux * x_value) / uy
+                if ymin - tolerance <= y_value <= ymax + tolerance:
+                    intersections.append((x_value, y_value))
+        if abs(ux) > 1.0e-12:
+            for y_value in (ymin, ymax):
+                x_value = (-c_mm - uy * y_value) / ux
+                if xmin - tolerance <= x_value <= xmax + tolerance:
+                    intersections.append((x_value, y_value))
+        unique = []
+        for point in intersections:
+            if not any(math.hypot(point[0] - other[0], point[1] - other[1])
+                       <= tolerance for other in unique):
+                unique.append(point)
+        if len(unique) >= 2:
+            first, second = max(
+                ((first, second) for index, first in enumerate(unique)
+                 for second in unique[index + 1:]),
+                key=lambda pair: math.hypot(
+                    pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]
+                ),
+            )
+            fig.add_trace(go.Scatter(
+                x=[first[0], second[0]],
+                y=[first[1], second[1]],
+                mode="lines",
+                name="resultant tension boundary",
+                line=dict(color="#4B5563", width=2.0, dash="dash"),
+                hovertemplate="gross-concrete zero-strain line<extra></extra>",
+            ))
+            mid_x = 0.5 * (first[0] + second[0])
+            mid_y = 0.5 * (first[1] + second[1])
+            fig.add_annotation(
+                x=mid_x + ux * 0.16 * span,
+                y=mid_y + uy * 0.16 * span,
+                ax=mid_x,
+                ay=mid_y,
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                text="tension",
+                showarrow=True,
+                arrowhead=3,
+                arrowsize=1.0,
+                arrowwidth=1.8,
+                arrowcolor="#4B5563",
+                font=dict(color="#4B5563", size=11),
+                bgcolor="rgba(255,255,255,0.82)",
+            )
+
+    pair = spacing_pair or {}
+    first = records.get(str(pair.get("first_id")))
+    second = records.get(str(pair.get("second_id")))
+    if first is not None and second is not None:
+        x1, y1 = float(first["x_mm"]), float(first["y_mm"])
+        x2, y2 = float(second["x_mm"]), float(second["y_mm"])
+        dx, dy = x2 - x1, y2 - y1
+        length = math.hypot(dx, dy)
+        ux, uy = ((dx / length, dy / length) if length > 0.0 else (1.0, 0.0))
+        r1 = 0.5 * float(pair.get("phi_first_mm") or first.get("diameter_mm") or 0.0)
+        r2 = 0.5 * float(pair.get("phi_second_mm") or second.get("diameter_mm") or 0.0)
+        ax, ay = x1 + ux * r1, y1 + uy * r1
+        bx, by = x2 - ux * r2, y2 - uy * r2
+        status = str(pair.get("status") or "REVIEW").upper()
+        colour = {
+            "PASS": "#009E73",
+            "FAIL": "#D55E00",
+            "REVIEW": "#E69F00",
+        }.get(status, "#334155")
+        fig.add_trace(go.Scatter(
+            x=[x1, x2],
+            y=[y1, y2],
+            mode="markers",
+            name="governing spacing pair",
+            marker=dict(
+                size=22,
+                symbol="circle-open",
+                color=colour,
+                line=dict(color=colour, width=2.6),
+            ),
+            text=[str(pair.get("first_id")), str(pair.get("second_id"))],
+            hovertemplate="%{text}<br>governing pair<extra></extra>",
+        ))
+        fig.add_shape(
+            type="line", x0=ax, y0=ay, x1=bx, y1=by,
+            line=dict(color=colour, width=2.4),
+        )
+        outer_x = [float(point[0]) * 1000.0 for point in (outer or [])]
+        outer_y = [float(point[1]) * 1000.0 for point in (outer or [])]
+        span = max(
+            (max(outer_x) - min(outer_x)) if outer_x else 1.0,
+            (max(outer_y) - min(outer_y)) if outer_y else 1.0,
+            1.0,
+        )
+        tick = 0.018 * span
+        px, py = -uy, ux
+        for x, y in ((ax, ay), (bx, by)):
+            fig.add_shape(
+                type="line",
+                x0=x - px * tick / 2.0,
+                y0=y - py * tick / 2.0,
+                x1=x + px * tick / 2.0,
+                y1=y + py * tick / 2.0,
+                line=dict(color=colour, width=2.0),
+            )
+        clear = float(pair.get("clear_mm") or 0.0)
+        required = float(pair.get("required_mm") or 0.0)
+        fig.add_annotation(
+            x=0.5 * (ax + bx),
+            y=0.5 * (ay + by),
+            text=(f"c = {clear:.1f} mm<br>required = {required:.1f} mm"),
+            showarrow=False,
+            xanchor="center",
+            yanchor="bottom",
+            yshift=8,
+            bgcolor="rgba(255,255,255,0.88)",
+            bordercolor=colour,
+            borderwidth=1.2,
+            font=dict(color=SCHEMATIC_INK, size=11),
+        )
+    return fig
+
+
 def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                           centroid, asl_bar_ids, asl_cg_m, asl_mm2,
                           d_mm, z_mm, bw_mm, bw_source,
