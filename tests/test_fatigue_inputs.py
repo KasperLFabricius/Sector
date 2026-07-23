@@ -32,6 +32,23 @@ def test_builtin_detail_presets_match_the_two_eurocode_editions():
     assert new_curved_steel_duct["k1"] == 3.0
 
 
+def test_named_detail_preset_retains_edition_only_while_values_match():
+    entry = fi.default_entry(preset=fi.PRESET_2023_BARS)
+    entry["mandrel_diameter_mm"] = 80.0
+    entry["bond_ratio_xi"] = 0.7
+    unchanged = fi.normalise_catalog({"items": [entry]})["items"][0]
+
+    assert unchanged["preset"] == fi.PRESET_2023_BARS
+    assert fi.preset_edition(unchanged["preset"]) == fi.EC2_2023
+
+    entry["n_star"] = 3.0e6
+    custom = fi.normalise_catalog({"items": [entry]})["items"][0]
+
+    assert custom["preset"] == fi.CUSTOM_PRESET
+    assert fi.preset_edition(custom["preset"]) is None
+    assert custom["n_star"] == 3.0e6
+
+
 @pytest.mark.parametrize(
     ("diameter", "expected"),
     [(10.0, 160.0), (12.0, 160.0), (14.0, 140.0),

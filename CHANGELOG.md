@@ -5,7 +5,10 @@
 - Added the tested fatigue application boundary: canonical section-force sign
   conversion, per-element material/detail mapping, explicit mixed-bond inputs,
   full user-entered factors and auditable VD/BN spectrum provenance. Authority
-  selections validate evidence but never modify actions or cycle counts.
+  selections validate evidence but never modify actions or cycle counts. Named
+  fatigue-detail presets are edition-checked, custom detail sources remain
+  explicit, and built-in tendon curves use the material catalogue's entered
+  characteristic proof stress for fatigue acceptance.
 - Added the headless grouped-spectrum fatigue engine for reinforcing and
   prestressing steel and for same-fibre concrete compression damage, including
   a certified section-wide governing-fibre search, explicit bound/convergence

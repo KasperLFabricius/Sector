@@ -181,6 +181,16 @@ DETAIL_FIELDS = (
     "source",
 )
 
+_STANDARD_PRESET_FIELDS = (
+    "kind",
+    "n_star",
+    "k1",
+    "k2",
+    "delta_sigma_rsk_mpa",
+    "stress_model",
+    "bend_reduction",
+)
+
 # Authority/method identifiers are stable project-file values.  The labels are
 # deliberately explicit because the selected method is reported as provenance;
 # Sector does not generate traffic models or apply authority-specific factors.
@@ -332,6 +342,35 @@ def _finite(value, fallback: float) -> float:
     return number if math.isfinite(number) else float(fallback)
 
 
+def preset_edition(preset: str) -> str | None:
+    """Return the Eurocode edition behind a named standard detail preset."""
+
+    selected = _text(preset)
+    if selected not in DETAIL_PRESETS:
+        return None
+    return EC2_2023 if "2023" in selected else EC2_2005
+
+
+def _matches_named_preset(entry: Mapping, preset: str) -> bool:
+    """Whether the standard-defining values still match ``preset`` exactly."""
+
+    expected = DETAIL_PRESETS[preset]
+    for field in _STANDARD_PRESET_FIELDS:
+        actual = entry[field]
+        reference = expected[field]
+        if isinstance(reference, float):
+            if not math.isclose(
+                float(actual),
+                reference,
+                rel_tol=1.0e-12,
+                abs_tol=1.0e-12,
+            ):
+                return False
+        elif actual != reference:
+            return False
+    return True
+
+
 def _number(value) -> float:
     if value is None or (isinstance(value, str) and not value.strip()):
         return 0.0
@@ -467,6 +506,12 @@ def _normalise_entry(raw: Mapping, detail_id: str) -> dict:
         ),
         "source": _text(raw.get("source"), preset["source"]),
     }
+    # A named Eurocode preset is provenance, not merely a starting template.
+    # Once a standard-defining S-N value changes, retain the values but label the
+    # detail as custom. User-specific mandrel and bond inputs remain compatible
+    # with the named detail and are deliberately excluded from this comparison.
+    if recognised and not _matches_named_preset(out, selected):
+        out["preset"] = CUSTOM_PRESET
     return out
 
 

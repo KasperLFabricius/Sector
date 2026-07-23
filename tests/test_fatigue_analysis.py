@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
+import material_catalog as mat_catalog  # noqa: E402
 from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -85,6 +86,18 @@ def _base(**overrides):
         eut=0.035,
         Es=195_000.0,
     )
+    mild_catalog = mat_catalog.default_catalog("mild")
+    mild_catalog["items"][0].update({
+        "fytk": 550.0,
+        "fyck": 500.0,
+        "Es": 210.0,
+    })
+    prestress_catalog = mat_catalog.default_catalog("prestress")
+    prestress_catalog["items"][0].update({
+        "fytk": 1640.0,
+        "futk": 1860.0,
+        "Es": 195.0,
+    })
     value = {
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
@@ -158,6 +171,8 @@ def _base(**overrides):
         }],
         "bar_materials": [mild],
         "tendon_materials": [prestress],
+        mat_catalog.MILD_CATALOG_KEY: mild_catalog,
+        mat_catalog.PRESTRESS_CATALOG_KEY: prestress_catalog,
         "nl": 18.0,
         "ns": 6.5,
         "void_error": None,
@@ -252,6 +267,104 @@ def test_concrete_parameters_follow_the_selected_edition():
     )
     assert "DS/EN 1992-2:2005" in references["concrete"]
     assert "DK NA:2024 explicit input factors" in references["reinforcement"]
+
+
+def test_standard_detail_presets_must_match_the_selected_fatigue_edition():
+    inp = _base()
+    catalogue = inp[fatigue_inputs.DETAIL_CATALOG_KEY]
+    catalogue["items"][0] = fatigue_inputs.apply_preset(
+        catalogue["items"][0],
+        fatigue_inputs.PRESET_2005_BARS,
+    )
+
+    errors = fatigue_analysis.validation_errors(inp)
+
+    assert any(
+        "R1: fatigue detail 'F1' uses DS/EN 1992-1-1:2005 resistance "
+        "with DS/EN 1992-1-1:2023" in error
+        for error in errors
+    )
+
+    old = _base(fatigue_edition=fatigue_inputs.EC2_2005_DKNA)
+    old_catalogue = old[fatigue_inputs.DETAIL_CATALOG_KEY]
+    old_catalogue["items"] = [
+        fatigue_inputs.apply_preset(
+            item,
+            (
+                fatigue_inputs.PRESET_2005_BARS
+                if item["kind"] == fatigue_inputs.MILD
+                else fatigue_inputs.PRESET_2005_PRETENSION
+            ),
+        )
+        for item in old_catalogue["items"]
+    ]
+    assert not any(
+        "resistance with" in error
+        for error in fatigue_analysis.validation_errors(old)
+    )
+
+
+def test_custom_detail_keeps_its_source_and_is_explicit_in_provenance():
+    inp = _base()
+    catalogue = inp[fatigue_inputs.DETAIL_CATALOG_KEY]
+    catalogue["items"][0]["n_star"] = 3.0e6
+    catalogue["items"][0]["source"] = "Project S-N test series SN-04"
+    inp[fatigue_inputs.DETAIL_CATALOG_KEY] = (
+        fatigue_inputs.normalise_catalog(catalogue)
+    )
+
+    assert fatigue_analysis.validation_errors(inp) == []
+    prepared = fatigue_analysis.prepare(inp)
+    detail = prepared.detail_records[0]
+
+    assert detail["preset"] == fatigue_inputs.CUSTOM_PRESET
+    assert detail["custom"] is True
+    assert detail["edition"] is None
+    assert detail["source"] == "Project S-N test series SN-04"
+    assert (
+        "F1: custom/imported fatigue resistance is used "
+        "(source: Project S-N test series SN-04)"
+        in fatigue_analysis.validation_warnings(inp)
+    )
+    result = fatigue_analysis.run_analysis(
+        inp,
+        engine=lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                spectrum_name="Traffic A",
+                utilisation=0.5,
+                converged=True,
+                passed=True,
+            ),
+        ),
+    )
+    assert result["fatigue_detail_basis"][0]["source"] == (
+        "Project S-N test series SN-04"
+    )
+    assert "custom/imported S-N resistance sources" in (
+        result["calculation_references"]["reinforcement"]
+    )
+
+
+def test_builtin_prestress_curve_uses_explicit_catalogue_proof_stress():
+    inp = _base()
+    inp["tendon_materials"] = [
+        Prestress(curve=1, IS=0.005, gamma_y=1.1, Es=195_000.0)
+    ]
+
+    assert inp["tendon_materials"][0].fytk == 0.0
+    assert fatigue_analysis.validation_errors(inp) == []
+    prepared = fatigue_analysis.prepare(inp)
+    assert prepared.reinforcement[1].fytk_mpa == 1640.0
+
+    missing = _base()
+    missing["tendon_materials"] = [
+        Prestress(curve=1, IS=0.005, gamma_y=1.1, Es=195_000.0)
+    ]
+    missing.pop(mat_catalog.PRESTRESS_CATALOG_KEY)
+    assert (
+        "P1: characteristic yield/proof stress must be greater than zero"
+        in fatigue_analysis.validation_errors(missing)
+    )
 
 
 def test_validation_catches_case_name_collisions_and_element_order_drift():
@@ -406,9 +519,14 @@ def test_analysis_signature_changes_with_spectrum_basis_and_material_modulus():
     changed_warning[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
         "source"
     ] = ""
+    changed_source = _base()
+    changed_source[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
+        "source"
+    ] = "Revised source"
 
     assert fatigue_analysis.analysis_signature(changed_spectrum) != signature
     assert fatigue_analysis.analysis_signature(changed_basis) != signature
     assert fatigue_analysis.analysis_signature(changed_material) != signature
     assert fatigue_analysis.analysis_signature(changed_assignment) != signature
     assert fatigue_analysis.analysis_signature(changed_warning) != signature
+    assert fatigue_analysis.analysis_signature(changed_source) != signature

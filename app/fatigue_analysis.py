@@ -20,6 +20,7 @@ import numpy as np
 
 import fatigue_inputs
 import load_cases
+import material_catalog as mat_catalog
 from sector.fatigue import (
     ConcreteFatigueProperties,
     FatigueSpectrumResult,
@@ -46,6 +47,7 @@ class PreparedFatigueAnalysis:
     edition: str
     solver_element_ids: tuple[str, ...]
     element_records: tuple[Mapping, ...]
+    detail_records: tuple[Mapping, ...]
     gamma_c: float | None
     gamma_s: float | None
     gamma_ff: float
@@ -245,6 +247,79 @@ def _validate_materials(
             )
 
 
+def _proof_stresses(
+    inp: Mapping,
+    records: Sequence[Mapping],
+    materials: Sequence,
+    kind: str,
+    errors: list[str],
+) -> list[float | None]:
+    """Resolve explicit characteristic yield/proof stress per element.
+
+    Built-in prestressing curves 1-5 intentionally do not use ``fytk`` in their
+    polynomial material law. Their material-catalogue entry nevertheless carries
+    the editable ``f_p0.1k`` needed by the independent fatigue yield assessment.
+    """
+
+    catalog_entries = {}
+    catalog_key = mat_catalog.catalog_key(kind)
+    if inp.get(catalog_key) is not None:
+        catalog_entries = mat_catalog.entry_map(inp[catalog_key], kind)
+
+    output: list[float | None] = []
+    for index, record in enumerate(records):
+        material = materials[index] if index < len(materials) else None
+        if not isinstance(record, Mapping) or material is None:
+            output.append(None)
+            continue
+        element_id = str(record.get("id") or kind).strip()
+        strength = getattr(material, "fytk", None)
+        if kind == fatigue_inputs.PRESTRESS:
+            material_id = str(record.get("material_id") or "").strip()
+            entry = catalog_entries.get(material_id)
+            if entry is not None:
+                catalog_strength = entry.get("fytk")
+                try:
+                    if (
+                        math.isfinite(float(catalog_strength))
+                        and float(catalog_strength) > 0.0
+                    ):
+                        strength = catalog_strength
+                except (TypeError, ValueError):
+                    pass
+        output.append(_finite_attribute(
+            strength,
+            f"{element_id}: characteristic yield/proof stress",
+            errors,
+            positive=True,
+        ))
+    return output
+
+
+def _assigned_detail_records(
+    records: Sequence[Mapping],
+    details: Mapping[str, Mapping],
+) -> tuple[Mapping, ...]:
+    """Return each assigned fatigue detail once, in solver-element order."""
+
+    output = []
+    seen = set()
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        detail_id = str(record.get("fatigue_detail_id") or "").strip()
+        if not detail_id or detail_id in seen or detail_id not in details:
+            continue
+        seen.add(detail_id)
+        detail = details[detail_id]
+        output.append({
+            **{field: detail[field] for field in fatigue_inputs.DETAIL_FIELDS},
+            "edition": fatigue_inputs.preset_edition(detail["preset"]),
+            "custom": detail["preset"] == fatigue_inputs.CUSTOM_PRESET,
+        })
+    return tuple(output)
+
+
 def _detail_data(inp: Mapping, errors: list[str]) -> tuple[dict, dict]:
     try:
         catalog = fatigue_inputs.normalise_catalog(
@@ -401,11 +476,26 @@ def validation_errors(inp: Mapping) -> list[str]:
         tendon_materials,
         "Prestressing",
         errors,
-        require_strength=check_reinforcement,
+        # Built-in curves 1-5 obtain the fatigue proof stress from the assigned
+        # material-catalogue entry rather than the polynomial material object.
+        require_strength=False,
     )
+    if check_reinforcement:
+        _proof_stresses(
+            inp,
+            tendons,
+            tendon_materials,
+            fatigue_inputs.PRESTRESS,
+            errors,
+        )
 
     details, _catalog = _detail_data(inp, errors)
     if check_reinforcement:
+        selected_family = (
+            fatigue_inputs.EC2_2023
+            if "2023" in edition
+            else fatigue_inputs.EC2_2005 if edition else None
+        )
         for expected_kind, records in (
             (fatigue_inputs.MILD, bars),
             (fatigue_inputs.PRESTRESS, tendons),
@@ -433,6 +523,21 @@ def validation_errors(inp: Mapping) -> list[str]:
                         f"{element_id}: fatigue detail '{detail_id}' "
                         f"must be {expected_kind}"
                     )
+                else:
+                    detail_edition = fatigue_inputs.preset_edition(
+                        detail["preset"]
+                    )
+                    if (
+                        detail_edition is not None
+                        and selected_family is not None
+                        and detail_edition != selected_family
+                    ):
+                        errors.append(
+                            f"{element_id}: fatigue detail '{detail_id}' uses "
+                            f"{detail_edition} resistance with {edition}; select "
+                            "an edition-aligned preset or identify the detail as "
+                            "Custom / imported"
+                        )
         if bars and tendons:
             for record in tendons:
                 if not isinstance(record, Mapping):
@@ -485,9 +590,17 @@ def validation_warnings(inp: Mapping) -> list[str]:
         }
         for detail_id in sorted(assigned):
             detail = details.get(detail_id)
-            if detail is not None and not str(detail.get("source") or "").strip():
+            if detail is None:
+                continue
+            source = str(detail.get("source") or "").strip()
+            if not source:
                 warnings.append(
                     f"{detail_id}: fatigue resistance source is not stated"
+                )
+            if detail.get("preset") == fatigue_inputs.CUSTOM_PRESET:
+                warnings.append(
+                    f"{detail_id}: custom/imported fatigue resistance is used"
+                    + (f" (source: {source})" if source else "")
                 )
     return list(dict.fromkeys(warnings))
 
@@ -495,11 +608,16 @@ def validation_warnings(inp: Mapping) -> list[str]:
 def _reinforcement_properties(
     records: Sequence[Mapping],
     materials: Sequence,
+    proof_stresses: Sequence[float],
     details: Mapping[str, Mapping],
     kind: str,
 ) -> list[ReinforcementFatigueProperties]:
     output = []
-    for record, material in zip(records, materials):
+    for record, material, proof_stress in zip(
+        records,
+        materials,
+        proof_stresses,
+    ):
         detail = details[str(record["fatigue_detail_id"]).strip()]
         diameter = float(record["diameter_mm"])
         reference_range = fatigue_inputs.characteristic_stress_range(
@@ -519,7 +637,7 @@ def _reinforcement_properties(
             k1=float(detail["k1"]),
             k2=float(detail["k2"]),
             delta_sigma_rsk_mpa=reference_range,
-            fytk_mpa=float(material.fytk),
+            fytk_mpa=float(proof_stress),
             fyck_mpa=(
                 float(material.fyck)
                 if kind == fatigue_inputs.MILD
@@ -574,6 +692,33 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
     details = fatigue_inputs.entry_map(catalog)
     check_reinforcement = bool(inp.get("fatigue_check_steel"))
     check_concrete = bool(inp.get("fatigue_check_concrete"))
+    proof_errors: list[str] = []
+    bar_proof_stresses = (
+        _proof_stresses(
+            inp,
+            bars,
+            bar_materials,
+            fatigue_inputs.MILD,
+            proof_errors,
+        )
+        if check_reinforcement
+        else []
+    )
+    tendon_proof_stresses = (
+        _proof_stresses(
+            inp,
+            tendons,
+            tendon_materials,
+            fatigue_inputs.PRESTRESS,
+            proof_errors,
+        )
+        if check_reinforcement
+        else []
+    )
+    if proof_errors:
+        # ``validation_errors`` has already checked these values. Keep this
+        # defensive guard at the preparation boundary for custom integrations.
+        raise ValueError("; ".join(proof_errors))
     gamma_c = (
         float(inp["fatigue_gamma_c"]) if check_concrete else None
     )
@@ -584,12 +729,14 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         _reinforcement_properties(
             bars,
             bar_materials,
+            bar_proof_stresses,
             details,
             fatigue_inputs.MILD,
         )
         + _reinforcement_properties(
             tendons,
             tendon_materials,
+            tendon_proof_stresses,
             details,
             fatigue_inputs.PRESTRESS,
         )
@@ -655,6 +802,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             str(record["id"]).strip() for record in bars + tendons
         ),
         element_records=tuple(dict(record) for record in bars + tendons),
+        detail_records=_assigned_detail_records(bars + tendons, details),
         gamma_c=gamma_c,
         gamma_s=gamma_s,
         gamma_ff=float(inp["fatigue_gamma_ff"]),
@@ -690,6 +838,13 @@ def analysis_signature(inp: Mapping) -> tuple:
         )
         for record in prepared.element_records
     )
+    detail_signature = tuple(
+        tuple(
+            (str(key), record[key])
+            for key in sorted(record)
+        )
+        for record in prepared.detail_records
+    )
     reinforcement_signature = tuple(
         (
             item.element_id,
@@ -723,6 +878,7 @@ def analysis_signature(inp: Mapping) -> tuple:
     return (
         section_signature,
         element_signature,
+        detail_signature,
         tuple(
             (
                 name,
@@ -794,6 +950,15 @@ def run_analysis(
         prestress_stress=prepared.prestress_stress,
     ))
     governing = max(results, key=lambda result: result.utilisation)
+    references = calculation_references(prepared.edition)
+    if (
+        prepared.check_reinforcement
+        and any(record["custom"] for record in prepared.detail_records)
+    ):
+        references["reinforcement"] += (
+            "; assigned custom/imported S-N resistance sources are listed "
+            "separately"
+        )
     return {
         "edition": prepared.edition,
         "checks": {
@@ -806,9 +971,7 @@ def run_analysis(
         ],
         "calculation_references": {
             key: value
-            for key, value in calculation_references(
-                prepared.edition
-            ).items()
+            for key, value in references.items()
             if (
                 (key == "reinforcement" and prepared.check_reinforcement)
                 or (key == "concrete" and prepared.check_concrete)
@@ -832,6 +995,7 @@ def run_analysis(
             else None
         ),
         "reinforcement_properties": prepared.reinforcement,
+        "fatigue_detail_basis": prepared.detail_records,
         "t0_days": prepared.t0_days,
         "elements": prepared.element_records,
         "spectra": results,
