@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added the versioned fatigue input model: stable S-N detail IDs, verified 2005
+  and 2023 Eurocode presets, grouped long-/short-action spectrum bins and
+  lossless project-file migration. Calculation and presentation follow in the
+  next scoped change.
 - Added stable reinforcing- and prestressing-steel catalogues with per-element
   assignment throughout plastic, elastic, crack-width and member checks.
 - Added material IDs, names, definitions, assignment evidence and individual

@@ -13,6 +13,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
+import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
@@ -158,7 +159,7 @@ def test_v4_reinforcement_rows_migrate_to_stable_area_based_elements():
     )
 
 
-def test_v8_round_trip_preserves_size_basis_and_element_assignments():
+def test_current_round_trip_preserves_size_basis_and_element_assignments():
     tables = _tables()
     tables["bars_base"] = rebar_table.normalise_table([
         {
@@ -179,7 +180,7 @@ def test_v8_round_trip_preserves_size_basis_and_element_assignments():
     restored, scalars = project_io.parse_project(text)
 
     payload = json.loads(text)
-    assert payload["version"] == 8
+    assert payload["version"] == project_io.VERSION
     pd.testing.assert_frame_equal(restored["bars_base"], tables["bars_base"])
     assert restored["bars_base"].iloc[1]["area (mm2)"] == pytest.approx(
         np.pi * 20.0**2 / 4.0
@@ -189,7 +190,7 @@ def test_v8_round_trip_preserves_size_basis_and_element_assignments():
     )
 
 
-def test_v8_round_trip_preserves_multiple_materials_without_flat_duplicates():
+def test_current_round_trip_preserves_multiple_materials_without_flat_duplicates():
     mild, material_id = material_catalog.add_entry(
         material_catalog.default_catalog("mild"), "mild"
     )
@@ -207,7 +208,7 @@ def test_v8_round_trip_preserves_multiple_materials_without_flat_duplicates():
     payload = json.loads(text)
     _, scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 8
+    assert payload["version"] == project_io.VERSION
     assert "mild_fytk" not in payload["scalars"]
     assert [item["id"] for item in scalars[
         material_catalog.MILD_CATALOG_KEY]["items"]] == ["M1", "M2"]
@@ -247,7 +248,7 @@ def test_v5_material_ids_migrate_to_cloned_laws_without_changing_behaviour():
     assert [item["fytk"] for item in prestress] == [1500.0, 1500.0]
 
 
-def test_v8_round_trip_preserves_multiple_typed_load_cases():
+def test_current_round_trip_preserves_multiple_typed_load_cases():
     tables = _tables()
     tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table([
         {"name": "PL-01", "description": "Fundamental A",
@@ -270,7 +271,7 @@ def test_v8_round_trip_preserves_multiple_typed_load_cases():
     payload = json.loads(text)
     restored, scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 8
+    assert payload["version"] == project_io.VERSION
     assert [row["name"] for row in payload["load_cases"]["plastic"]] == [
         "PL-01", "PL-02"
     ]
@@ -280,6 +281,163 @@ def test_v8_round_trip_preserves_multiple_typed_load_cases():
     assert project_io.input_sha256(restored, scalars) == (
         payload["provenance"]["input_sha256"]
     )
+
+
+def test_v9_round_trip_preserves_fatigue_details_and_grouped_spectrum():
+    tables = {
+        fatigue_inputs.SPECTRUM_TABLE_KEY:
+            fatigue_inputs.normalise_spectrum_table([
+                {
+                    "spectrum": "Traffic",
+                    "name": "FAT-01",
+                    "description": "Frequent range",
+                    "cycles": 2e6,
+                    "n_long_ed_kn": -800.0,
+                    "mx_long_ed_knm": 120.0,
+                    "n_short_ed_kn": 50.0,
+                    "mx_short_ed_knm": 80.0,
+                },
+                {
+                    "spectrum": "Traffic",
+                    "name": "FAT-02",
+                    "cycles": 5e5,
+                    "n_long_ed_kn": -800.0,
+                    "mx_long_ed_knm": 120.0,
+                    "n_short_ed_kn": 120.0,
+                    "mx_short_ed_knm": 160.0,
+                },
+            ])
+    }
+    catalogue = fatigue_inputs.default_catalog()
+    catalogue["items"][0] = fatigue_inputs.apply_preset(
+        catalogue["items"][0], fatigue_inputs.PRESET_2023_BARS
+    )
+    scalars = {
+        fatigue_inputs.DETAIL_CATALOG_KEY: catalogue,
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_gamma_c": 1.595,
+        "fatigue_gamma_s": 1.32,
+        "fatigue_gamma_ff": 1.0,
+    }
+
+    text = project_io.dump_project(tables, scalars)
+    payload = json.loads(text)
+    restored, restored_scalars = project_io.parse_project(text)
+
+    assert payload["version"] == 9
+    assert [row["name"] for row in payload["fatigue"]["spectrum"]] == [
+        "FAT-01", "FAT-02"
+    ]
+    assert fatigue_inputs.spectrum_records(
+        restored[fatigue_inputs.SPECTRUM_TABLE_KEY]
+    ) == fatigue_inputs.spectrum_records(
+        tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
+    )
+    assert restored_scalars["fatigue_gamma_c"] == 1.595
+    assert (
+        restored_scalars[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
+            "stress_model"
+        ]
+        == fatigue_inputs.EC2_2023_BAR_STRESS
+    )
+    assert project_io.input_sha256(restored, restored_scalars) == (
+        project_io.input_sha256(tables, scalars)
+    )
+
+
+def test_v9_rejects_malformed_fatigue_section_and_spectrum_rows():
+    malformed_section = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {},
+        "fatigue": [],
+    })
+    malformed_rows = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {},
+        "fatigue": {"spectrum": [1, 2]},
+    })
+
+    with pytest.raises(ValueError, match="malformed 'fatigue' section"):
+        project_io.parse_project(malformed_section)
+    with pytest.raises(ValueError, match="list of row objects"):
+        project_io.parse_project(malformed_rows)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("n_star", "bad", "n_star must be a finite number"),
+        ("bend_reduction", "false", "bend_reduction must be true or false"),
+    ],
+)
+def test_v9_rejects_malformed_fatigue_catalogue_values(field, value, message):
+    entry = fatigue_inputs.default_entry(
+        preset=fatigue_inputs.PRESET_2023_BENT_BARS
+    )
+    entry[field] = value
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            fatigue_inputs.DETAIL_CATALOG_KEY: {"items": [entry]}
+        },
+    }
+
+    with pytest.raises(ValueError, match=message):
+        project_io.parse_project(json.dumps(project))
+
+
+def test_v9_rejects_nonobject_fatigue_catalogue_items():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            fatigue_inputs.DETAIL_CATALOG_KEY: {"items": ["bad"]}
+        },
+    }
+
+    with pytest.raises(ValueError, match="items must contain only objects"):
+        project_io.parse_project(json.dumps(project))
+
+
+@pytest.mark.parametrize("items", [None, {}, []])
+def test_v9_rejects_explicit_empty_fatigue_catalogues(items):
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            fatigue_inputs.DETAIL_CATALOG_KEY: {"items": items}
+        },
+    }
+
+    with pytest.raises(ValueError, match="items must be a non-empty list"):
+        project_io.parse_project(json.dumps(project))
+
+
+@pytest.mark.parametrize("catalogue", [None, []])
+def test_v9_rejects_nonobject_fatigue_catalogues(catalogue):
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            fatigue_inputs.DETAIL_CATALOG_KEY: catalogue
+        },
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="fatigue detail catalogue must be an object",
+    ):
+        project_io.parse_project(json.dumps(project))
 
 
 @pytest.mark.parametrize(

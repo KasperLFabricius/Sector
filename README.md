@@ -75,7 +75,8 @@ sector/        computation core (headless, regression-tested)
   detailing    longitudinal minimum reinforcement and clear spacing
   serviceability  cracking threshold, tension stiffening, crack width
   templates    parametric section + reinforcement builders
-app/           Streamlit interface (sector_app, viz)
+app/           Streamlit interface and canonical input models
+  fatigue_inputs  stable S-N detail catalogue and grouped spectrum schema
 tools/         developer tooling (e.g. regression-fixture generation)
 tests/         unit tests + the verification regression
 ```
