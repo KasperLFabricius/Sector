@@ -28,6 +28,7 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import case_analysis  # noqa: E402
+import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
 import project_io  # noqa: E402
@@ -1292,6 +1293,11 @@ def _project_state():
         tables[key] = load_cases.normalise_table(
             st.session_state.get(key), key
         )
+    fatigue_key = fatigue_inputs.SPECTRUM_TABLE_KEY
+    if fatigue_key in st.session_state:
+        tables[fatigue_key] = fatigue_inputs.normalise_spectrum_table(
+            st.session_state[fatigue_key]
+        )
     return tables, scalars
 
 
@@ -1467,9 +1473,19 @@ def _apply_pending_project() -> None:
             st.session_state.pop(key, None)
             st.session_state.pop(_CASE_EDITOR_KEYS[key], None)
             st.session_state.pop(f"_{key}_editor_seed", None)
+    fatigue_key = fatigue_inputs.SPECTRUM_TABLE_KEY
+    if fatigue_key not in tables:
+        st.session_state.pop(fatigue_key, None)
+        st.session_state.pop("fatigue_spectrum_editor", None)
+        st.session_state.pop(f"_{fatigue_key}_editor_seed", None)
     for key, df in tables.items():
         if key in load_cases.CASE_TABLE_KEYS:
             _reseed_case_table(key, df)
+            continue
+        if key == fatigue_key:
+            st.session_state[key] = fatigue_inputs.normalise_spectrum_table(df)
+            st.session_state.pop("fatigue_spectrum_editor", None)
+            st.session_state.pop(f"_{fatigue_key}_editor_seed", None)
             continue
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.

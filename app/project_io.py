@@ -1,10 +1,10 @@
 """Serialise the full input set to a project file and read it back (Save / Load).
 
 A project file is JSON: the four point tables (concrete corners, voids, bars and
-tendons, all in millimetres), the Plastic and Elastic load-case tables, and the
-remaining material and analysis-setting inputs. The geometry and load-case tables
-are the source of truth. Only the *inputs* are stored -- results are recomputed on
-load.
+tendons, all in millimetres), Plastic and Elastic load-case tables, an optional
+grouped fatigue spectrum, and the remaining material and analysis-setting inputs.
+The geometry and action tables are the source of truth. Only the *inputs* are
+stored -- results are recomputed on load.
 
 The functions here are pure (no Streamlit), so the round trip is unit-tested
 directly; the app wires the download / upload widgets to them.
@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+import fatigue_inputs
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
@@ -27,13 +28,14 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 8   # v8: longitudinal minimum-reinforcement and clear-spacing inputs
+VERSION = 9   # v9: fatigue-detail catalogue and grouped spectrum inputs
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
 REINFORCEMENT_TABLE_KEYS = {"bars_base": "bar", "tendons_base": "tendon"}
 CASE_TABLE_KEYS = list(load_cases.CASE_TABLE_KEYS)
-PROJECT_TABLE_KEYS = TABLE_KEYS + CASE_TABLE_KEYS
+FATIGUE_TABLE_KEYS = [fatigue_inputs.SPECTRUM_TABLE_KEY]
+PROJECT_TABLE_KEYS = TABLE_KEYS + CASE_TABLE_KEYS + FATIGUE_TABLE_KEYS
 _CASE_PAYLOAD_KEYS = {
     load_cases.PLASTIC_TABLE_KEY: "plastic",
     load_cases.ELASTIC_TABLE_KEY: "elastic",
@@ -59,6 +61,7 @@ SCALAR_KEYS = [
     # this allow-list only so old project files and API callers can be migrated.
     material_catalog.MILD_CATALOG_KEY,
     material_catalog.PRESTRESS_CATALOG_KEY,
+    fatigue_inputs.DETAIL_CATALOG_KEY,
     # Mild reinforcement.
     "mild_preset", "mild_active_comp", "mild_fytk", "mild_fyck", "mild_futk",
     "mild_eut", "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
@@ -78,6 +81,12 @@ SCALAR_KEYS = [
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
+    # Fatigue. Partial factors are complete user inputs; Sector does not apply
+    # control-, construction- or consequence-class multipliers.
+    "fatigue_on", "fatigue_edition", "fatigue_check_steel",
+    "fatigue_check_concrete", "fatigue_gamma_c", "fatigue_gamma_s",
+    "fatigue_gamma_ff", "fatigue_beta_cc_t0", "fatigue_t0_days",
+    "fatigue_concrete_c", "fatigue_source",
     # Longitudinal minimum reinforcement and clear spacing.
     "minimum_reinforcement_on", "clear_spacing_on", "detailing_edition",
     "detailing_d_upper", "detailing_include_tendons",
@@ -214,6 +223,12 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         if key in scalar_payload:
             for legacy in legacy_keys:
                 scalar_payload.pop(legacy, None)
+    if fatigue_inputs.DETAIL_CATALOG_KEY in scalar_payload:
+        scalar_payload[fatigue_inputs.DETAIL_CATALOG_KEY] = (
+            fatigue_inputs.normalise_catalog(
+                scalar_payload[fatigue_inputs.DETAIL_CATALOG_KEY]
+            )
+        )
     content = {
         "tables": {k: _table_to_obj(tables.get(k), k) for k in TABLE_KEYS},
         "scalars": scalar_payload,
@@ -225,6 +240,12 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
                 tables.get(table_key, legacy[table_key]), table_key
             )
             for table_key, payload_key in _CASE_PAYLOAD_KEYS.items()
+        }
+    if fatigue_inputs.SPECTRUM_TABLE_KEY in tables:
+        content["fatigue"] = {
+            "spectrum": fatigue_inputs.spectrum_records(
+                tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
+            )
         }
     return content
 
@@ -297,14 +318,19 @@ def project_provenance(text: str) -> dict:
         }
     raw_tables = data.get("tables") or {}
     raw_load_cases = data.get("load_cases")
+    raw_fatigue = data.get("fatigue")
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
+    if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
+        raise ValueError("malformed 'fatigue' section")
     canonical_inputs = {"tables": raw_tables, "scalars": raw_scalars}
     if raw_load_cases is not None:
         canonical_inputs["load_cases"] = raw_load_cases
+    if raw_fatigue is not None:
+        canonical_inputs["fatigue"] = raw_fatigue
     canonical = json.dumps(
         canonical_inputs,
         sort_keys=True, separators=(",", ":"), ensure_ascii=True,
@@ -346,11 +372,14 @@ def parse_project(text: str):
         raise ValueError("not a Sector project file")
     raw_tables = data.get("tables") or {}
     raw_load_cases = data.get("load_cases")
+    raw_fatigue = data.get("fatigue")
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
+    if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
+        raise ValueError("malformed 'fatigue' section")
     tables = {
         k: _obj_to_table(raw_tables[k], k)
         for k in TABLE_KEYS if k in raw_tables
@@ -375,6 +404,12 @@ def parse_project(text: str):
             )
             for table_key, payload_key in _CASE_PAYLOAD_KEYS.items()
         }
+    if raw_fatigue is not None:
+        tables[fatigue_inputs.SPECTRUM_TABLE_KEY] = (
+            fatigue_inputs.spectrum_from_records(
+                raw_fatigue.get("spectrum", [])
+            )
+        )
     # Files saved before the explicit EN 1992-1-1:2023 applicability selector have
     # no k_tc field. Migrate those deterministically to the general/other-case value
     # instead of letting an unrelated preset value already in session state leak
@@ -405,6 +440,12 @@ def parse_project(text: str):
         if key in scalars:
             for legacy in legacy_keys:
                 scalars.pop(legacy, None)
+    if fatigue_inputs.DETAIL_CATALOG_KEY in scalars:
+        scalars[fatigue_inputs.DETAIL_CATALOG_KEY] = (
+            fatigue_inputs.normalise_catalog(
+                scalars[fatigue_inputs.DETAIL_CATALOG_KEY]
+            )
+        )
     # Material IDs already existed as traceability fields in v5, although every
     # element still used one global law. Clone that law under each valid referenced
     # ID so old calculations remain runnable and numerically unchanged in v6.

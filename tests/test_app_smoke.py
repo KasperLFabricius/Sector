@@ -1591,6 +1591,58 @@ def test_save_load_round_trip_through_the_app():
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
+def test_app_preserves_backend_fatigue_inputs_before_ui_integration():
+    import fatigue_inputs
+    import project_io
+
+    spectrum = fatigue_inputs.normalise_spectrum_table([{
+        "spectrum": "Traffic",
+        "name": "FAT-01",
+        "cycles": 2e6,
+        "n_long_ed_kn": -500.0,
+        "mx_short_ed_knm": 80.0,
+    }])
+    source = project_io.dump_project(
+        {fatigue_inputs.SPECTRUM_TABLE_KEY: spectrum},
+        {
+            fatigue_inputs.DETAIL_CATALOG_KEY:
+                fatigue_inputs.default_catalog(),
+            "fatigue_on": True,
+            "fatigue_gamma_s": 1.32,
+        },
+    )
+
+    at = _fresh()
+    at.session_state["_pending_project"] = source
+    at.run()
+
+    assert not at.exception
+    assert fatigue_inputs.SPECTRUM_TABLE_KEY in at.session_state
+    assert at.session_state["fatigue_on"] is True
+    assert (
+        at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0]["id"]
+        == "F1"
+    )
+
+    saved = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    restored_tables, restored_scalars = project_io.parse_project(saved)
+    assert fatigue_inputs.spectrum_records(
+        restored_tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
+    ) == fatigue_inputs.spectrum_records(spectrum)
+    assert restored_scalars["fatigue_gamma_s"] == 1.32
+
+
 def test_v4_case_tables_follow_current_controls_and_preserve_later_rows():
     import sys as _sys
 
