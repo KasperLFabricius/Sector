@@ -283,7 +283,7 @@ def test_current_round_trip_preserves_multiple_typed_load_cases():
     )
 
 
-def test_v9_round_trip_preserves_fatigue_details_and_grouped_spectrum():
+def test_v10_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum():
     tables = {
         fatigue_inputs.SPECTRUM_TABLE_KEY:
             fatigue_inputs.normalise_spectrum_table([
@@ -314,6 +314,18 @@ def test_v9_round_trip_preserves_fatigue_details_and_grouped_spectrum():
     )
     scalars = {
         fatigue_inputs.DETAIL_CATALOG_KEY: catalogue,
+        fatigue_inputs.BASIS_KEY: {
+            "authority": fatigue_inputs.AUTHORITY_VD,
+            "method": fatigue_inputs.METHOD_VD_FLM4,
+            "spectrum_source": "Bridge model B-17",
+            "cycle_count_source": "Traffic register T-4",
+            "dynamic_effects": fatigue_inputs.DYNAMIC_INCLUDED,
+            "cycle_counting": fatigue_inputs.COUNTING_OTHER,
+            "concurrence_basis": "Simultaneous trucks excluded by study T-4",
+            "atypical_traffic": fatigue_inputs.ATYPICAL_CONSIDERED,
+            "approval_reference": "",
+            "notes": "",
+        },
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_gamma_c": 1.595,
@@ -326,7 +338,7 @@ def test_v9_round_trip_preserves_fatigue_details_and_grouped_spectrum():
     payload = json.loads(text)
     restored, restored_scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 9
+    assert payload["version"] == 10
     assert [row["name"] for row in payload["fatigue"]["spectrum"]] == [
         "FAT-01", "FAT-02"
     ]
@@ -338,14 +350,84 @@ def test_v9_round_trip_preserves_fatigue_details_and_grouped_spectrum():
     assert restored_scalars["fatigue_gamma_c"] == 1.595
     assert restored_scalars["fatigue_concrete_k1"] == 0.85
     assert (
+        restored_scalars[fatigue_inputs.BASIS_KEY]["method"]
+        == fatigue_inputs.METHOD_VD_FLM4
+    )
+    assert (
         restored_scalars[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
             "stress_model"
         ]
         == fatigue_inputs.EC2_2023_BAR_STRESS
     )
+    assert (
+        restored_scalars[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
+            "bond_ratio_xi"
+        ]
+        == 0.0
+    )
     assert project_io.input_sha256(restored, restored_scalars) == (
         project_io.input_sha256(tables, scalars)
     )
+
+
+def test_v9_fatigue_project_migrates_to_neutral_unmodified_basis():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            "fatigue_on": True,
+            "fatigue_gamma_ff": 1.0,
+            "fatigue_source": "Legacy spectrum register",
+        },
+        "fatigue": {
+            "spectrum": [{
+                "spectrum": "Traffic",
+                "name": "FAT-01",
+                "cycles": 1.0e6,
+            }]
+        },
+    }
+
+    _tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars[fatigue_inputs.BASIS_KEY] == (
+        {
+            **fatigue_inputs.default_basis(),
+            "spectrum_source": "Legacy spectrum register",
+        }
+    )
+    assert scalars["fatigue_gamma_ff"] == 1.0
+    assert "fatigue_source" not in scalars
+
+
+@pytest.mark.parametrize(
+    ("basis", "message"),
+    [
+        ([], "fatigue basis must be an object"),
+        (
+            {"authority": "Other authority"},
+            "unknown fatigue authority",
+        ),
+        (
+            {
+                "authority": fatigue_inputs.AUTHORITY_VD,
+                "method": fatigue_inputs.METHOD_BN_NEW_2,
+            },
+            "is not available for Vejdirektoratet",
+        ),
+    ],
+)
+def test_v10_rejects_malformed_fatigue_basis(basis, message):
+    project = {
+        "format": project_io.FORMAT,
+        "version": 10,
+        "tables": {},
+        "scalars": {fatigue_inputs.BASIS_KEY: basis},
+    }
+
+    with pytest.raises(ValueError, match=message):
+        project_io.parse_project(json.dumps(project))
 
 
 def test_v9_rejects_malformed_fatigue_section_and_spectrum_rows():

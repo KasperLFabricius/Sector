@@ -10,9 +10,10 @@ long-term/short-term convention:
 * ``short`` is the cyclic increment; and
 * the combined state is ``long + short``.
 
-The pure helpers in this module are shared by project I/O, the forthcoming
-fatigue engine and the Streamlit interface.  They do not select authority load
-models or alter user-entered partial factors.
+The pure helpers in this module are shared by project I/O, the fatigue
+application adapter and the Streamlit interface.  Authority selections are
+traceability metadata and validation rules only: they never alter section
+forces, cycle counts or user-entered partial factors.
 """
 
 from __future__ import annotations
@@ -25,10 +26,11 @@ from collections.abc import Iterable, Mapping, Sequence
 import pandas as pd
 
 
-VERSION = 1
+VERSION = 2
 
 DETAIL_CATALOG_KEY = "fatigue_detail_catalog"
 SPECTRUM_TABLE_KEY = "fatigue_spectrum_base"
+BASIS_KEY = "fatigue_basis"
 
 MILD = "mild"
 PRESTRESS = "prestress"
@@ -44,7 +46,9 @@ STRESS_MODELS = (
 )
 
 EC2_2005 = "DS/EN 1992-1-1:2005"
+EC2_2005_DKNA = "DS/EN 1992-1-1:2005 + DK NA:2024"
 EC2_2023 = "DS/EN 1992-1-1:2023"
+EDITIONS = (EC2_2005, EC2_2005_DKNA, EC2_2023)
 
 PRESET_2005_BARS = "EC2:2005 - straight reinforcing bars"
 PRESET_2005_BENT_BARS = "EC2:2005 - bent reinforcing bars"
@@ -86,6 +90,11 @@ def _preset(
         "stress_model": stress_model,
         "bend_reduction": bool(bend_reduction),
         "mandrel_diameter_mm": 0.0,
+        # Required only for bonded tendons combined with mild reinforcement.
+        # Zero means "not specified"; the application adapter then fails closed
+        # for a mixed section rather than assuming a bond model.
+        "bond_ratio_xi": 0.0,
+        "bond_equivalent_diameter_mm": 0.0,
         "source": source,
     }
 
@@ -167,7 +176,110 @@ DETAIL_FIELDS = (
     "stress_model",
     "bend_reduction",
     "mandrel_diameter_mm",
+    "bond_ratio_xi",
+    "bond_equivalent_diameter_mm",
     "source",
+)
+
+# Authority/method identifiers are stable project-file values.  The labels are
+# deliberately explicit because the selected method is reported as provenance;
+# Sector does not generate traffic models or apply authority-specific factors.
+AUTHORITY_USER = "User-defined / other"
+AUTHORITY_VD = "Vejdirektoratet"
+AUTHORITY_BN_NEW = "Banedanmark - new bridge"
+AUTHORITY_BN_EXISTING = "Banedanmark - existing bridge"
+AUTHORITIES = (
+    AUTHORITY_USER,
+    AUTHORITY_VD,
+    AUTHORITY_BN_NEW,
+    AUTHORITY_BN_EXISTING,
+)
+
+METHOD_USER_GROUPED = "User-defined grouped spectrum"
+METHOD_VD_FLM1 = "VD FLM1 - maximum stress range"
+METHOD_VD_FLM4 = "VD FLM4 - damage spectrum"
+METHOD_VD_FLM5 = "VD FLM5 - measured traffic"
+METHOD_BN_NEW_1 = "BN1-59-5 new bridge - method 1"
+METHOD_BN_NEW_2 = "BN1-59-5 new bridge - method 2"
+METHOD_BN_EXISTING_1 = "BN1-59-5 existing bridge - method 1"
+METHOD_BN_EXISTING_2 = "BN1-59-5 existing bridge - method 2"
+METHOD_BN_EXISTING_3 = "BN1-59-5 existing bridge - method 3"
+METHOD_BN_EXISTING_4 = "BN1-59-5 existing bridge - method 4"
+
+METHODS_BY_AUTHORITY = {
+    AUTHORITY_USER: (METHOD_USER_GROUPED,),
+    AUTHORITY_VD: (METHOD_VD_FLM1, METHOD_VD_FLM4, METHOD_VD_FLM5),
+    AUTHORITY_BN_NEW: (METHOD_BN_NEW_1, METHOD_BN_NEW_2),
+    AUTHORITY_BN_EXISTING: (
+        METHOD_BN_EXISTING_1,
+        METHOD_BN_EXISTING_2,
+        METHOD_BN_EXISTING_3,
+        METHOD_BN_EXISTING_4,
+    ),
+}
+
+METHOD_REFERENCES = {
+    METHOD_USER_GROUPED: "User-defined calculation basis",
+    METHOD_VD_FLM1: (
+        "Vejledning til belastnings- og beregningsgrundlag for broer, "
+        "clause 5.3.6 (FLM1)"
+    ),
+    METHOD_VD_FLM4: (
+        "Vejledning til belastnings- og beregningsgrundlag for broer, "
+        "clause 5.3.6 (FLM4)"
+    ),
+    METHOD_VD_FLM5: (
+        "Vejledning til belastnings- og beregningsgrundlag for broer, "
+        "clause 5.3.6 (FLM5)"
+    ),
+    METHOD_BN_NEW_1: "BN1-59-5:2024, clause 13.3.6, method 1",
+    METHOD_BN_NEW_2: "BN1-59-5:2024, clause 13.3.6, method 2",
+    METHOD_BN_EXISTING_1: "BN1-59-5:2024, clause 13.3.7, method 1",
+    METHOD_BN_EXISTING_2: "BN1-59-5:2024, clause 13.3.7, method 2",
+    METHOD_BN_EXISTING_3: "BN1-59-5:2024, clause 13.3.7, method 3",
+    METHOD_BN_EXISTING_4: "BN1-59-5:2024, clause 13.3.7, method 4",
+}
+
+STATUS_NOT_STATED = "Not stated"
+DYNAMIC_INCLUDED = "Included"
+DYNAMIC_NOT_INCLUDED = "Not included"
+DYNAMIC_NOT_APPLICABLE = "Not applicable"
+DYNAMIC_OPTIONS = (
+    STATUS_NOT_STATED,
+    DYNAMIC_INCLUDED,
+    DYNAMIC_NOT_INCLUDED,
+    DYNAMIC_NOT_APPLICABLE,
+)
+
+COUNTING_RAINFLOW = "Rainflow counting completed"
+COUNTING_OTHER = "Other documented counting method"
+COUNTING_NOT_REQUIRED = "Not required"
+COUNTING_OPTIONS = (
+    STATUS_NOT_STATED,
+    COUNTING_RAINFLOW,
+    COUNTING_OTHER,
+    COUNTING_NOT_REQUIRED,
+)
+
+ATYPICAL_CONSIDERED = "Considered"
+ATYPICAL_NOT_APPLICABLE = "Not applicable"
+ATYPICAL_OPTIONS = (
+    STATUS_NOT_STATED,
+    ATYPICAL_CONSIDERED,
+    ATYPICAL_NOT_APPLICABLE,
+)
+
+BASIS_FIELDS = (
+    "authority",
+    "method",
+    "spectrum_source",
+    "cycle_count_source",
+    "dynamic_effects",
+    "cycle_counting",
+    "concurrence_basis",
+    "atypical_traffic",
+    "approval_reference",
+    "notes",
 )
 
 SPECTRUM = "spectrum"
@@ -265,6 +377,8 @@ def _validate_raw_entry(raw: Mapping, position: int) -> None:
         "k2",
         "delta_sigma_rsk_mpa",
         "mandrel_diameter_mm",
+        "bond_ratio_xi",
+        "bond_equivalent_diameter_mm",
     )
     for field in numeric_fields:
         if field not in raw:
@@ -341,6 +455,14 @@ def _normalise_entry(raw: Mapping, detail_id: str) -> dict:
         "mandrel_diameter_mm": _finite(
             raw.get("mandrel_diameter_mm"),
             preset["mandrel_diameter_mm"],
+        ),
+        "bond_ratio_xi": _finite(
+            raw.get("bond_ratio_xi"),
+            preset["bond_ratio_xi"],
+        ),
+        "bond_equivalent_diameter_mm": _finite(
+            raw.get("bond_equivalent_diameter_mm"),
+            preset["bond_equivalent_diameter_mm"],
         ),
         "source": _text(raw.get("source"), preset["source"]),
     }
@@ -525,7 +647,147 @@ def catalog_errors(catalog) -> list[str]:
                 f"{detail_id}: mandrel_diameter_mm must be greater than zero "
                 "for a bent-bar detail"
             )
+        for field in ("bond_ratio_xi", "bond_equivalent_diameter_mm"):
+            if float(item[field]) < 0.0:
+                errors.append(
+                    f"{detail_id}: {field} must be zero or greater"
+                )
     return errors
+
+
+def default_basis() -> dict:
+    """Return neutral fatigue-spectrum provenance with no implied modifiers."""
+
+    return {
+        "authority": AUTHORITY_USER,
+        "method": METHOD_USER_GROUPED,
+        "spectrum_source": "",
+        "cycle_count_source": "",
+        "dynamic_effects": STATUS_NOT_STATED,
+        "cycle_counting": STATUS_NOT_STATED,
+        "concurrence_basis": "",
+        "atypical_traffic": STATUS_NOT_STATED,
+        "approval_reference": "",
+        "notes": "",
+    }
+
+
+def normalise_basis(value) -> dict:
+    """Validate and canonicalise authority/provenance metadata.
+
+    The returned record contains declarations only.  No field is interpreted as
+    a factor on actions, cycles or resistance.
+    """
+
+    if value is None:
+        return default_basis()
+    if not isinstance(value, Mapping):
+        raise ValueError("fatigue basis must be an object")
+    authority = _text(value.get("authority"), AUTHORITY_USER)
+    if authority not in AUTHORITIES:
+        raise ValueError(f"unknown fatigue authority: {authority}")
+    default_method = METHODS_BY_AUTHORITY[authority][0]
+    method = _text(value.get("method"), default_method)
+    if method not in METHODS_BY_AUTHORITY[authority]:
+        raise ValueError(
+            f"fatigue method '{method}' is not available for {authority}"
+        )
+    dynamic = _text(
+        value.get("dynamic_effects"), STATUS_NOT_STATED
+    )
+    if dynamic not in DYNAMIC_OPTIONS:
+        raise ValueError(f"unknown dynamic-effects status: {dynamic}")
+    counting = _text(
+        value.get("cycle_counting"), STATUS_NOT_STATED
+    )
+    if counting not in COUNTING_OPTIONS:
+        raise ValueError(f"unknown cycle-counting status: {counting}")
+    atypical = _text(
+        value.get("atypical_traffic"), STATUS_NOT_STATED
+    )
+    if atypical not in ATYPICAL_OPTIONS:
+        raise ValueError(f"unknown atypical-traffic status: {atypical}")
+    return {
+        "authority": authority,
+        "method": method,
+        "spectrum_source": _text(value.get("spectrum_source")),
+        "cycle_count_source": _text(value.get("cycle_count_source")),
+        "dynamic_effects": dynamic,
+        "cycle_counting": counting,
+        "concurrence_basis": _text(value.get("concurrence_basis")),
+        "atypical_traffic": atypical,
+        "approval_reference": _text(value.get("approval_reference")),
+        "notes": _text(value.get("notes")),
+    }
+
+
+def basis_warnings(value) -> list[str]:
+    """Return concise QA gaps in the selected authority provenance."""
+
+    basis = normalise_basis(value)
+    method = basis["method"]
+    warnings = []
+    if not basis["spectrum_source"]:
+        warnings.append("Fatigue spectrum source is not stated")
+    if not basis["cycle_count_source"]:
+        warnings.append("Fatigue cycle-count basis is not stated")
+    if basis["dynamic_effects"] == STATUS_NOT_STATED:
+        warnings.append("Dynamic effects are not stated")
+    elif basis["dynamic_effects"] == DYNAMIC_NOT_INCLUDED:
+        warnings.append("Spectrum excludes dynamic effects")
+    elif (
+        basis["dynamic_effects"] == DYNAMIC_NOT_APPLICABLE
+        and basis["authority"] != AUTHORITY_USER
+    ):
+        warnings.append(
+            "Dynamic effects are marked not applicable for an authority method"
+        )
+
+    needs_concurrence = (
+        basis["authority"] in (AUTHORITY_BN_NEW, AUTHORITY_BN_EXISTING)
+        or method in (METHOD_VD_FLM4, METHOD_VD_FLM5)
+    )
+    if needs_concurrence and not basis["concurrence_basis"]:
+        warnings.append("Lane/track concurrence basis is not stated")
+
+    rainflow_required = method in (
+        METHOD_BN_NEW_2,
+        METHOD_BN_EXISTING_3,
+        METHOD_BN_EXISTING_4,
+    )
+    if rainflow_required and basis["cycle_counting"] != COUNTING_RAINFLOW:
+        warnings.append("Selected BN1-59-5 method requires rainflow counting")
+    elif (
+        method in (METHOD_VD_FLM4, METHOD_VD_FLM5)
+        and basis["cycle_counting"] == STATUS_NOT_STATED
+    ):
+        warnings.append("Spectrum cycle-counting method is not stated")
+
+    if basis["authority"] == AUTHORITY_VD:
+        if basis["atypical_traffic"] == STATUS_NOT_STATED:
+            warnings.append("Atypical heavy traffic assessment is not stated")
+        if method == METHOD_VD_FLM5 and not basis["approval_reference"]:
+            warnings.append("VD FLM5 infrastructure-manager agreement is not stated")
+    if method == METHOD_BN_NEW_2 and not basis["approval_reference"]:
+        warnings.append(
+            "BN prescribed-traffic source/approval reference is not stated"
+        )
+    return warnings
+
+
+def method_requires_single_bin(method: str) -> bool:
+    """Whether one constant-amplitude range is required per result spectrum."""
+
+    return str(method).strip() in (
+        METHOD_VD_FLM1,
+        METHOD_BN_NEW_1,
+        METHOD_BN_EXISTING_1,
+    )
+
+
+def basis_signature(value) -> tuple:
+    basis = normalise_basis(value)
+    return tuple(basis[field] for field in BASIS_FIELDS)
 
 
 def characteristic_stress_range(
