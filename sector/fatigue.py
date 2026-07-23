@@ -232,9 +232,14 @@ class FatigueBinState:
     bar_stress_total_mpa: tuple[float, ...]
     concrete_compression_long_mpa: tuple[float, ...]
     concrete_compression_total_mpa: tuple[float, ...]
-    elastic_result: CombinedElasticResult
+    elastic_result: CombinedElasticResult | None
     bar_stress_fatigue_total_mpa: tuple[float, ...] = ()
     bond_method: str = "Perfect bond"
+    design_action_factor: float = 1.0
+    design_elastic_result: CombinedElasticResult | None = None
+    bar_stress_design_total_mpa: tuple[float, ...] = ()
+    bar_stress_fatigue_design_total_mpa: tuple[float, ...] = ()
+    concrete_compression_design_total_mpa: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -244,6 +249,7 @@ class ReinforcementBinResult:
     converged: bool
     stress_long_mpa: float
     stress_total_mpa: float
+    stress_total_design_mpa: float
     stress_total_elastic_mpa: float
     stress_range_mpa: float
     stress_range_elastic_mpa: float
@@ -470,6 +476,42 @@ def _concrete_compression_mpa(
     return tuple(float(value) for value in np.maximum(-plane, 0.0) / _MPA_DIVISOR)
 
 
+def _design_elastic_result(
+    state: FatigueBinState,
+    gamma_ff: float,
+) -> CombinedElasticResult:
+    """Return the action-factored result, never a stress-scaled substitute."""
+
+    action_factor = _positive(gamma_ff, "gamma_Ff")
+    design = state.design_elastic_result
+    if design is None:
+        if not math.isclose(
+            action_factor,
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(
+                "gamma_Ff other than 1 requires an action-level design "
+                "Elastic result"
+            )
+        design = state.elastic_result
+    elif not math.isclose(
+        float(state.design_action_factor),
+        action_factor,
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+    ):
+        raise ValueError(
+            "fatigue state design action factor does not match gamma_Ff"
+        )
+    if design is None:
+        raise ValueError(
+            "concrete fatigue search requires retained Elastic results"
+        )
+    return design
+
+
 def _concrete_damage_field(
     points: np.ndarray,
     states: Sequence[FatigueBinState],
@@ -484,14 +526,9 @@ def _concrete_damage_field(
     if not np.isfinite(fibres).all():
         raise ValueError("concrete fatigue search points must be finite")
     strength = concrete_fatigue_strength(properties)
-    action_factor = _positive(gamma_ff, "gamma_Ff")
     damage = np.zeros(len(fibres), dtype=float)
     for state in states:
-        result = state.elastic_result
-        if result is None:
-            raise ValueError(
-                "concrete fatigue search requires retained Elastic results"
-            )
+        result = _design_elastic_result(state, gamma_ff)
         long = np.asarray(
             _concrete_compression_mpa(result.long, fibres),
             dtype=float,
@@ -500,8 +537,8 @@ def _concrete_damage_field(
             _concrete_compression_mpa(result.short_term, fibres),
             dtype=float,
         )
-        sigma_min = action_factor * np.minimum(long, total)
-        sigma_max = action_factor * np.maximum(long, total)
+        sigma_min = np.minimum(long, total)
+        sigma_max = np.maximum(long, total)
         ratio = np.divide(
             sigma_min,
             sigma_max,
@@ -646,25 +683,20 @@ def _concrete_search_data(
     properties: ConcreteFatigueProperties,
     gamma_ff: float,
 ) -> _ConcreteSearchData:
-    action_factor = _positive(gamma_ff, "gamma_Ff")
     long_planes = []
     total_planes = []
     log10_cycles = []
     for state in states:
-        result = state.elastic_result
-        if result is None:
-            raise ValueError(
-                "concrete fatigue search requires retained Elastic results"
-            )
+        result = _design_elastic_result(state, gamma_ff)
         long_planes.append((
-            -action_factor * float(result.long.eps0) / _MPA_DIVISOR,
-            -action_factor * float(result.long.kx) / _MPA_DIVISOR,
-            -action_factor * float(result.long.ky) / _MPA_DIVISOR,
+            -float(result.long.eps0) / _MPA_DIVISOR,
+            -float(result.long.kx) / _MPA_DIVISOR,
+            -float(result.long.ky) / _MPA_DIVISOR,
         ))
         total_planes.append((
-            -action_factor * float(result.short_term.eps0) / _MPA_DIVISOR,
-            -action_factor * float(result.short_term.kx) / _MPA_DIVISOR,
-            -action_factor * float(result.short_term.ky) / _MPA_DIVISOR,
+            -float(result.short_term.eps0) / _MPA_DIVISOR,
+            -float(result.short_term.kx) / _MPA_DIVISOR,
+            -float(result.short_term.ky) / _MPA_DIVISOR,
         ))
         log10_cycles.append(math.log10(float(state.cycles)))
     return _ConcreteSearchData(
@@ -1000,20 +1032,32 @@ def _states_at_concrete_fibres(
 ) -> tuple[FatigueBinState, ...]:
     """Replace only the concrete stress arrays at the requested fixed fibres."""
 
-    return tuple(
-        replace(
+    output = []
+    for state in states:
+        raw = state.elastic_result
+        if raw is None:
+            raise ValueError(
+                "concrete fatigue fibres require retained Elastic results"
+            )
+        design = state.design_elastic_result or raw
+        output.append(replace(
             state,
             concrete_compression_long_mpa=_concrete_compression_mpa(
-                state.elastic_result.long,
+                raw.long,
                 fibres,
             ),
             concrete_compression_total_mpa=_concrete_compression_mpa(
-                state.elastic_result.short_term,
+                raw.short_term,
                 fibres,
             ),
-        )
-        for state in states
-    )
+            concrete_compression_design_total_mpa=(
+                _concrete_compression_mpa(
+                    design.short_term,
+                    fibres,
+                )
+            ),
+        ))
+    return tuple(output)
 
 
 def _fatigue_solver_section(
@@ -1081,14 +1125,16 @@ def solve_fatigue_bin(
     nl: float,
     ns: float,
     *,
+    gamma_ff: float = 1.0,
     n_mult: np.ndarray | None = None,
     prestress_stress: np.ndarray | None = None,
     displace_concrete: bool = False,
 ) -> FatigueBinState:
-    """Solve one spectrum bin and expose both cyclic endpoints."""
+    """Solve characteristic and action-factored cyclic endpoints."""
 
     _positive(nl, "long-term modular ratio")
     _positive(ns, "short-term modular ratio")
+    action_factor = _positive(gamma_ff, "gamma_Ff")
     solver_section, elements = _fatigue_solver_section(section)
     modular_factors = _validated_solver_vector(
         n_mult,
@@ -1101,30 +1147,47 @@ def solve_fatigue_bin(
         len(elements),
         "prestress_stress",
     )
-    result = solve_elastic_combined(
-        solver_section,
-        bin_input.p_long_kn,
-        bin_input.mx_long_knm,
-        bin_input.my_long_knm,
-        nl,
-        bin_input.p_short_kn,
-        bin_input.mx_short_knm,
-        bin_input.my_short_knm,
-        ns,
-        n_mult=modular_factors,
-        prestress_stress=initial_stress,
-        displace_concrete=displace_concrete,
+    def solve(short_factor: float) -> CombinedElasticResult:
+        return solve_elastic_combined(
+            solver_section,
+            bin_input.p_long_kn,
+            bin_input.mx_long_knm,
+            bin_input.my_long_knm,
+            nl,
+            short_factor * bin_input.p_short_kn,
+            short_factor * bin_input.mx_short_knm,
+            short_factor * bin_input.my_short_knm,
+            ns,
+            n_mult=modular_factors,
+            prestress_stress=initial_stress,
+            displace_concrete=displace_concrete,
+        )
+
+    result = solve(1.0)
+    design_result = (
+        result
+        if math.isclose(
+            action_factor,
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        )
+        else solve(action_factor)
     )
     vertices = solver_section.concrete_vertices()
     raw_total = tuple(
         float(value) / _MPA_DIVISOR
         for value in result.bar_stress_total
     )
+    design_total = tuple(
+        float(value) / _MPA_DIVISOR
+        for value in design_result.bar_stress_total
+    )
     return FatigueBinState(
         name=str(bin_input.name).strip(),
         description=str(bin_input.description).strip(),
         cycles=float(bin_input.cycles),
-        converged=bool(result.converged),
+        converged=bool(result.converged and design_result.converged),
         bar_stress_long_mpa=tuple(
             float(value) / _MPA_DIVISOR
             for value in result.bar_stress_long
@@ -1138,6 +1201,16 @@ def solve_fatigue_bin(
         ),
         elastic_result=result,
         bar_stress_fatigue_total_mpa=raw_total,
+        design_action_factor=action_factor,
+        design_elastic_result=design_result,
+        bar_stress_design_total_mpa=design_total,
+        bar_stress_fatigue_design_total_mpa=design_total,
+        concrete_compression_design_total_mpa=(
+            _concrete_compression_mpa(
+                design_result.short_term,
+                vertices,
+            )
+        ),
     )
 
 
@@ -1248,6 +1321,7 @@ def _apply_reinforcement_bond_correction(
     nl: float,
     ns: float,
     *,
+    gamma_ff: float,
     n_mult: np.ndarray | None,
     prestress_stress: np.ndarray | None,
     displace_concrete: bool,
@@ -1292,11 +1366,21 @@ def _apply_reinforcement_bond_correction(
         for state in solved:
             long = np.asarray(state.bar_stress_long_mpa, dtype=float)
             total = np.asarray(state.bar_stress_total_mpa, dtype=float)
+            design_total = np.asarray(
+                state.bar_stress_design_total_mpa,
+                dtype=float,
+            )
             fatigue_total = long + factors * (total - long)
+            fatigue_design_total = (
+                long + factors * (design_total - long)
+            )
             corrected.append(replace(
                 state,
                 bar_stress_fatigue_total_mpa=tuple(
                     float(value) for value in fatigue_total
+                ),
+                bar_stress_fatigue_design_total_mpa=tuple(
+                    float(value) for value in fatigue_design_total
                 ),
                 bond_method=method,
             ))
@@ -1318,6 +1402,7 @@ def _apply_reinforcement_bond_correction(
             bin_input,
             nl,
             ns,
+            gamma_ff=gamma_ff,
             n_mult=modular_factors,
             prestress_stress=equivalent_initial_stress,
             displace_concrete=displace_concrete,
@@ -1336,13 +1421,25 @@ def _apply_reinforcement_bond_correction(
             equivalent.bar_stress_total_mpa,
             dtype=float,
         )
+        equivalent_design_total = np.asarray(
+            equivalent.bar_stress_design_total_mpa,
+            dtype=float,
+        )
         corrected_range = equivalent_total - equivalent_long
+        corrected_design_range = (
+            equivalent_design_total - equivalent_long
+        )
         corrected_range[mild_count:] *= betas
+        corrected_design_range[mild_count:] *= betas
         corrected.append(replace(
             state,
             converged=bool(state.converged and equivalent.converged),
             bar_stress_fatigue_total_mpa=tuple(
                 float(value) for value in long + corrected_range
+            ),
+            bar_stress_fatigue_design_total_mpa=tuple(
+                float(value)
+                for value in long + corrected_design_range
             ),
             bond_method=method,
         ))
@@ -1394,13 +1491,40 @@ def assess_reinforcement_spectrum(
             state.bar_stress_fatigue_total_mpa
             or state.bar_stress_total_mpa
         )
+        fatigue_design_total = (
+            state.bar_stress_fatigue_design_total_mpa
+            or (
+                fatigue_total
+                if math.isclose(
+                    action_factor,
+                    1.0,
+                    rel_tol=0.0,
+                    abs_tol=1.0e-12,
+                )
+                else ()
+            )
+        )
         if (
             len(state.bar_stress_long_mpa) != len(props)
             or len(state.bar_stress_total_mpa) != len(props)
             or len(fatigue_total) != len(props)
+            or len(fatigue_design_total) != len(props)
         ):
             raise ValueError(
-                "reinforcement fatigue properties must match solver bar order"
+                "reinforcement fatigue properties and action-level design "
+                "stresses must match solver bar order"
+            )
+        if (
+            state.bar_stress_fatigue_design_total_mpa
+            and not math.isclose(
+                float(state.design_action_factor),
+                action_factor,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            )
+        ):
+            raise ValueError(
+                "fatigue state design action factor does not match gamma_Ff"
             )
 
     output = []
@@ -1415,8 +1539,16 @@ def assess_reinforcement_spectrum(
                 state.bar_stress_fatigue_total_mpa
                 or state.bar_stress_total_mpa
             )
+            fatigue_design_total = (
+                state.bar_stress_fatigue_design_total_mpa
+                or fatigue_total
+            )
             stress_total = float(fatigue_total[index])
+            stress_total_design = float(fatigue_design_total[index])
             stress_range = abs(stress_total - stress_long)
+            design_stress_range = abs(
+                stress_total_design - stress_long
+            )
             stress_range_elastic = abs(
                 stress_total_elastic - stress_long
             )
@@ -1427,23 +1559,23 @@ def assess_reinforcement_spectrum(
             else:
                 bond_adjustment = 1.0
             life = steel_fatigue_life(
-                stress_range,
+                design_stress_range,
                 n_star=item.n_star,
                 k1=item.k1,
                 k2=item.k2,
                 delta_sigma_rsk_mpa=item.delta_sigma_rsk_mpa,
                 gamma_s=material_factor,
-                gamma_ff=action_factor,
+                gamma_ff=1.0,
             )
             damage = _damage(state.cycles, life.log10_cycles)
             long_limit, long_util = _yield_assessment(
                 stress_long, item, material_factor
             )
             total_limit, total_util = _yield_assessment(
-                stress_total, item, material_factor
+                stress_total_design, item, material_factor
             )
             if total_util >= long_util:
-                governing_stress = stress_total
+                governing_stress = stress_total_design
                 yield_limit = total_limit
                 yield_utilisation = total_util
             else:
@@ -1456,12 +1588,13 @@ def assess_reinforcement_spectrum(
                 converged=state.converged,
                 stress_long_mpa=stress_long,
                 stress_total_mpa=stress_total,
+                stress_total_design_mpa=stress_total_design,
                 stress_total_elastic_mpa=stress_total_elastic,
                 stress_range_mpa=stress_range,
                 stress_range_elastic_mpa=stress_range_elastic,
                 bond_adjustment=bond_adjustment,
                 bond_method=state.bond_method,
-                design_stress_range_mpa=action_factor * stress_range,
+                design_stress_range_mpa=design_stress_range,
                 delta_sigma_rsk_mpa=float(item.delta_sigma_rsk_mpa),
                 delta_sigma_rd_mpa=(
                     float(item.delta_sigma_rsk_mpa) / material_factor
@@ -1527,12 +1660,39 @@ def assess_concrete_spectrum(
     action_factor = _positive(gamma_ff, "gamma_Ff")
     strength = concrete_fatigue_strength(properties)
     for state in solved:
+        design_total = (
+            state.concrete_compression_design_total_mpa
+            or (
+                state.concrete_compression_total_mpa
+                if math.isclose(
+                    action_factor,
+                    1.0,
+                    rel_tol=0.0,
+                    abs_tol=1.0e-12,
+                )
+                else ()
+            )
+        )
         if (
             len(state.concrete_compression_long_mpa) != len(points)
             or len(state.concrete_compression_total_mpa) != len(points)
+            or len(design_total) != len(points)
         ):
             raise ValueError(
-                "concrete fatigue stresses must match the fixed fibre array"
+                "concrete fatigue stresses and action-level design stresses "
+                "must match the fixed fibre array"
+            )
+        if (
+            state.concrete_compression_design_total_mpa
+            and not math.isclose(
+                float(state.design_action_factor),
+                action_factor,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            )
+        ):
+            raise ValueError(
+                "fatigue state design action factor does not match gamma_Ff"
             )
 
     output = []
@@ -1545,8 +1705,13 @@ def assess_concrete_spectrum(
             sigma_total = float(
                 state.concrete_compression_total_mpa[fibre_index]
             )
-            sigma_min = action_factor * min(sigma_long, sigma_total)
-            sigma_max = action_factor * max(sigma_long, sigma_total)
+            design_total = (
+                state.concrete_compression_design_total_mpa
+                or state.concrete_compression_total_mpa
+            )
+            sigma_total_design = float(design_total[fibre_index])
+            sigma_min = min(sigma_long, sigma_total_design)
+            sigma_max = max(sigma_long, sigma_total_design)
             life = concrete_fatigue_life(
                 sigma_max,
                 sigma_min,
@@ -1713,6 +1878,7 @@ def analyse_fatigue_spectrum(
             bin_input,
             nl,
             ns,
+            gamma_ff=gamma_ff,
             n_mult=n_mult,
             prestress_stress=prestress_stress,
             displace_concrete=displace_concrete,
@@ -1728,6 +1894,7 @@ def analyse_fatigue_spectrum(
             selected_edition,
             nl,
             ns,
+            gamma_ff=gamma_ff,
             n_mult=n_mult,
             prestress_stress=prestress_stress,
             displace_concrete=displace_concrete,

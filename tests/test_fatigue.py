@@ -13,8 +13,11 @@ def _state(
     *,
     bar_long=(),
     bar_total=(),
+    bar_design_total=(),
     concrete_long=(),
     concrete_total=(),
+    concrete_design_total=(),
+    design_action_factor=1.0,
     converged=True,
 ):
     return fatigue.FatigueBinState(
@@ -24,8 +27,13 @@ def _state(
         converged=converged,
         bar_stress_long_mpa=tuple(bar_long),
         bar_stress_total_mpa=tuple(bar_total),
+        bar_stress_fatigue_design_total_mpa=tuple(bar_design_total),
         concrete_compression_long_mpa=tuple(concrete_long),
         concrete_compression_total_mpa=tuple(concrete_total),
+        concrete_compression_design_total_mpa=tuple(
+            concrete_design_total
+        ),
+        design_action_factor=float(design_action_factor),
         elastic_result=None,
     )
 
@@ -264,6 +272,8 @@ def test_gamma_ff_is_visible_as_design_range_but_not_hidden_in_raw_stress():
         1.0e5,
         bar_long=(100.0,),
         bar_total=(150.0,),
+        bar_design_total=(160.0,),
+        design_action_factor=1.2,
     )
 
     result = fatigue.assess_reinforcement_spectrum(
@@ -275,7 +285,9 @@ def test_gamma_ff_is_visible_as_design_range_but_not_hidden_in_raw_stress():
 
     assert result.stress_range_mpa == 50.0
     assert result.design_stress_range_mpa == 60.0
-    assert result.governing_stress_mpa == 150.0
+    assert result.stress_total_mpa == 150.0
+    assert result.stress_total_design_mpa == 160.0
+    assert result.governing_stress_mpa == 160.0
 
 
 def test_nonconverged_bin_cannot_pass_reinforcement_fatigue():
@@ -348,6 +360,8 @@ def test_concrete_gamma_ff_and_strength_utilisation_are_explicit():
         1.0e3,
         concrete_long=(5.0,),
         concrete_total=(8.0,),
+        concrete_design_total=(8.75,),
+        design_action_factor=1.25,
     )
     properties = fatigue.ConcreteFatigueProperties(
         edition="2023",
@@ -363,11 +377,34 @@ def test_concrete_gamma_ff_and_strength_utilisation_are_explicit():
         gamma_ff=1.25,
     )[0].bins[0]
 
-    assert result.compression_min_design_mpa == 6.25
-    assert result.compression_max_design_mpa == 10.0
+    assert result.compression_min_design_mpa == 5.0
+    assert result.compression_max_design_mpa == 8.75
     assert result.stress_utilisation == pytest.approx(
-        10.0 / fatigue.concrete_fatigue_strength(properties)
+        8.75 / fatigue.concrete_fatigue_strength(properties)
     )
+
+
+def test_nonunit_gamma_ff_requires_action_level_design_endpoint():
+    state = _state(
+        "B1",
+        1.0e5,
+        concrete_long=(10.0,),
+        concrete_total=(12.0,),
+    )
+    properties = fatigue.ConcreteFatigueProperties(
+        edition="2023",
+        fck_mpa=40.0,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+    )
+
+    with pytest.raises(ValueError, match="action-level design stresses"):
+        fatigue.assess_concrete_spectrum(
+            np.asarray([(0.0, 0.0)]),
+            (state,),
+            properties,
+            gamma_ff=2.0,
+        )
 
 
 def test_constant_concrete_overload_fails_strength_even_with_zero_damage():
@@ -444,6 +481,48 @@ def test_integrated_spectrum_uses_existing_elastic_long_short_solution():
     assert result.governing_concrete_fibre in range(
         len(section.concrete_vertices())
     )
+
+
+def test_gamma_ff_is_applied_to_actions_before_cracked_solution():
+    section = _section()
+    bin_input = fatigue.SpectrumBin(
+        "Cracking transition",
+        1.0e4,
+        p_long_kn=100.0,
+        mx_short_knm=80.0,
+    )
+
+    state = fatigue.solve_fatigue_bin(
+        section,
+        bin_input,
+        12.0,
+        7.0,
+        gamma_ff=1.5,
+    )
+    expected = fatigue.solve_elastic_combined(
+        section,
+        100.0,
+        0.0,
+        0.0,
+        12.0,
+        0.0,
+        120.0,
+        0.0,
+        7.0,
+    )
+
+    assert state.design_action_factor == pytest.approx(1.5)
+    assert state.bar_stress_design_total_mpa == pytest.approx(
+        np.asarray(expected.bar_stress_total) / 1000.0
+    )
+    affine_stress_scaling = np.asarray(state.bar_stress_long_mpa) + 1.5 * (
+        np.asarray(state.bar_stress_total_mpa)
+        - np.asarray(state.bar_stress_long_mpa)
+    )
+    assert np.max(np.abs(
+        np.asarray(state.bar_stress_design_total_mpa)
+        - affine_stress_scaling
+    )) > 20.0
 
 
 def test_concrete_search_catches_governing_edge_fibre_missed_by_corners():
@@ -569,7 +648,13 @@ def test_certified_search_kernel_matches_reported_fibre_damage_kernel():
         beta_cc_t0=1.0,
     )
     states = tuple(
-        fatigue.solve_fatigue_bin(section, item, 12.0, 7.0)
+        fatigue.solve_fatigue_bin(
+            section,
+            item,
+            12.0,
+            7.0,
+            gamma_ff=1.1,
+        )
         for item in (
             fatigue.SpectrumBin(
                 "F1", 2.0e4, 800.0, 25.0, -10.0, 200.0, 15.0, 8.0
