@@ -406,7 +406,8 @@ def _results() -> dict:
         "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
         "clause": "9.2.1.1(1), Formula (9.1N)",
         "checks": [{
-            "status": "PASS", "axis": "x", "face": "bottom",
+            "type": "minimum area", "status": "PASS",
+            "axis": "x", "face": "bottom",
             "as_provided_mm2": 500.0, "as_min_mm2": 320.0,
             "utilisation": 0.64, "bt_mm": 200.0, "d_mm": 270.0,
             "fctm_mpa": 2.9, "fyk_mpa": 500.0, "bar_ids": ["R1"],

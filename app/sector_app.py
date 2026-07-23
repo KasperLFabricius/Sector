@@ -5081,7 +5081,7 @@ def detailing_view(inp, results, *, global_results=None):
     if minimum is not None:
         st.markdown("**Minimum-reinforcement evidence**")
         checks = minimum.get("checks") or []
-        if checks and checks[0].get("as_min_mm2") is not None:
+        if checks and presentation.minimum_area_check(minimum, checks[0]):
             rows = [{
                 "Axis": (
                     "Mx + My" if check.get("axis") == "xy"
@@ -5143,6 +5143,12 @@ def detailing_view(inp, results, *, global_results=None):
                     "Utilisation [%]": st.column_config.NumberColumn(format="%.1f"),
                 },
             )
+            reasons = [
+                str(check["reason"])
+                for check in checks if check.get("reason")
+            ]
+            if reasons:
+                st.caption("Outcome: " + "; ".join(dict.fromkeys(reasons)))
         elif minimum.get("reason"):
             st.caption(str(minimum["reason"]))
         if minimum.get("limitations"):

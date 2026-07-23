@@ -308,6 +308,14 @@ def assessment_status_label(status):
     return _map_assessment_status(status)
 
 
+def minimum_area_check(minimum, check):
+    """Identify a 2005-family Formula (9.1N) result, including failed rows."""
+    return bool(
+        str((check or {}).get("type") or "").casefold() == "minimum area"
+        or "9.1n" in str((minimum or {}).get("clause") or "").casefold()
+    )
+
+
 def interaction_assessment_status(interaction, *, applicable=True):
     """Acceptance state for a V+T interaction without issuing an invalid verdict."""
     interaction = interaction or {}
@@ -452,10 +460,12 @@ def result_summary_rows(inp, results, *, stale=False):
                 if axis == "xy"
                 else f" M{axis} {face}" if axis and face else ""
             )
-            if check.get("as_min_mm2") is not None:
+            if minimum_area_check(minimum, check):
+                required = check.get("as_min_mm2")
                 result_text = (
                     f"As,prov {check.get('as_provided_mm2', 0.0):.1f} mm2; "
-                    f"As,min {check['as_min_mm2']:.1f} mm2"
+                    "As,min "
+                    + ("-" if required is None else f"{float(required):.1f} mm2")
                 )
                 criterion = "As,prov >= As,min"
             elif check.get("type") == "pure tension":

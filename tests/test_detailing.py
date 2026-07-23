@@ -158,6 +158,7 @@ def test_2005_biaxial_check_uses_resultant_tension_zone_not_axis_halves():
 
     check = result["checks"][0]
     assert result["status"] == "FAIL"
+    assert check["type"] == "minimum area"
     assert check["axis"] == "xy"
     assert check["face"] == "resultant tension zone"
     assert check["bar_ids"] == []

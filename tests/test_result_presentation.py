@@ -567,7 +567,8 @@ def test_detailing_summary_reports_values_status_and_target_view():
         "status": "PASS",
         "clause": "9.2.1.1(1), Formula (9.1N)",
         "checks": [{
-            "status": "PASS", "axis": "x", "face": "bottom",
+            "type": "minimum area", "status": "PASS",
+            "axis": "x", "face": "bottom",
             "as_provided_mm2": 628.0, "as_min_mm2": 410.0,
             "utilisation": 410.0 / 628.0,
         }],
@@ -607,7 +608,7 @@ def test_detailing_summary_labels_one_biaxial_resultant_check():
         "status": "PASS",
         "clause": "9.2.1.1(1), Formula (9.1N)",
         "checks": [{
-            "status": "PASS", "axis": "xy",
+            "type": "minimum area", "status": "PASS", "axis": "xy",
             "face": "resultant tension zone",
             "as_provided_mm2": 800.0, "as_min_mm2": 500.0,
             "utilisation": 0.625,
@@ -629,6 +630,33 @@ def test_detailing_summary_labels_one_biaxial_resultant_check():
     assert biaxial["status"] == "PASS"
 
 
+def test_failed_2005_minimum_area_summary_is_not_presented_as_2023_resistance():
+    minimum = {
+        "status": "FAIL",
+        "clause": "9.2.1.1(1), Formula (9.1N)",
+        "checks": [{
+            "type": "minimum area", "status": "FAIL", "axis": "xy",
+            "face": "resultant tension zone", "as_provided_mm2": 0.0,
+            "as_min_mm2": None, "utilisation": None,
+            "reason": "No ordinary reinforcement bar lies in the tension zone.",
+        }],
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", minimum_reinforcement_on=True),
+        {"minimum_reinforcement": minimum},
+    )
+
+    row = next(
+        item for item in rows
+        if item["check"].startswith("Longitudinal minimum reinforcement")
+    )
+    assert row["status"] == "FAIL"
+    assert row["result"] == "As,prov 0.0 mm2; As,min -"
+    assert row["criterion"] == "As,prov >= As,min"
+    assert "MR,nom" not in row["result"]
+
+
 def test_multi_case_summary_adds_section_wide_spacing_only_once():
     inp = _inp(
         mode="Plastic",
@@ -648,7 +676,8 @@ def test_multi_case_summary_adds_section_wide_spacing_only_once():
             "status": "PASS",
             "clause": "9.2.1.1(1)",
             "checks": [{
-                "status": "PASS", "axis": "x", "face": "bottom",
+                "type": "minimum area", "status": "PASS",
+                "axis": "x", "face": "bottom",
                 "as_provided_mm2": 600.0, "as_min_mm2": 400.0,
                 "utilisation": 2.0 / 3.0,
             }],

@@ -183,7 +183,7 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
         "edition": inp["detailing_edition"],
         "clause": "9.2.1.1(1), Formula (9.1N)",
         "checks": [{
-            "status": "PASS", "axis": "xy",
+            "type": "minimum area", "status": "PASS", "axis": "xy",
             "face": "resultant tension zone",
             "as_provided_mm2": 628.0, "as_min_mm2": 410.0,
             "utilisation": 410.0 / 628.0, "bt_mm": 200.0,
@@ -220,6 +220,38 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "R1 - R2" in text
     assert "Lap / bundle ID" in text
     assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
+
+
+def test_report_keeps_failed_2005_no_bar_result_in_minimum_area_format():
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "minimum_reinforcement_on": True,
+        "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+    })
+    minimum = {
+        "status": "FAIL",
+        "edition": inp["detailing_edition"],
+        "clause": "9.2.1.1(1), Formula (9.1N)",
+        "checks": [{
+            "type": "minimum area", "status": "FAIL", "axis": "xy",
+            "face": "resultant tension zone", "as_provided_mm2": 0.0,
+            "as_min_mm2": None, "utilisation": None, "bt_mm": None,
+            "d_mm": None, "fctm_mpa": 2.9, "fyk_mpa": None,
+            "bar_ids": [],
+            "reason": "No ordinary reinforcement bar lies in the tension zone.",
+        }],
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, {"minimum_reinforcement": minimum}, figures=False,
+    )).split())
+
+    assert "Formula (9.1N)" in text
+    assert "Outcome:" in text
+    assert "No ordinary reinforcement bar lies in the tension zone." in text
+    assert "MR,nom" not in text
+    assert "Formula (12.1)" not in text
 
 
 def test_report_traces_multiple_materials_to_element_assignments():

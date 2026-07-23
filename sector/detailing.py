@@ -286,6 +286,7 @@ def minimum_reinforcement_2005(
             face_name = _face_name(axis, tension_low)
         row_status = "PASS" if valid and utilisation <= 1.0 + _TOL else "FAIL"
         rows = [{
+            "type": "minimum area",
             "status": row_status,
             "axis": axis,
             "face": face_name,

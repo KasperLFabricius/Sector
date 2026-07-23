@@ -1557,7 +1557,7 @@ class ReportBuilder:
             title="Minimum-reinforcement geometry",
         ), 150, 108)
 
-        if checks and checks[0].get("as_min_mm2") is not None:
+        if checks and presentation.minimum_area_check(result, checks[0]):
             self._formula(
                 "A<sub>s,min</sub> = max(0.26 f<sub>ctm</sub> / "
                 "f<sub>yk</sub>, 0.0013) b<sub>t</sub>d",
@@ -1598,6 +1598,11 @@ class ReportBuilder:
                 "Areas in mm<super>2</super>; b<sub>t</sub> and d in mm; "
                 "strengths in MPa."
             )
+            for check in checks:
+                if check.get("reason"):
+                    self._small(
+                        "<b>Outcome:</b> " + _html_escape(check["reason"])
+                    )
         elif checks and checks[0].get("type") == "pure tension":
             self._formula(
                 "R<sub>nom</sub> = sum(A<sub>s,i</sub> f<sub>yk,i</sub>) "
