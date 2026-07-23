@@ -256,7 +256,11 @@ def valid_elements(value, kind: str) -> list[dict]:
     return out
 
 
-def point_grid_specs(kind: str, material_ids: Iterable[str] | None = None) -> list[dict]:
+def point_grid_specs(
+    kind: str,
+    material_ids: Iterable[str] | None = None,
+    fatigue_detail_ids: Iterable[str] | None = None,
+) -> list[dict]:
     """Plain component column metadata for the mixed reinforcement grid."""
     kind = _kind(kind)
     material_options = [str(value).strip() for value in (material_ids or [])
@@ -267,6 +271,29 @@ def point_grid_specs(kind: str, material_ids: Iterable[str] | None = None) -> li
         if material_options
         else {"field": MATERIAL_ID, "title": "Material ID", "type": "text",
               "width": 108}
+    )
+    fatigue_options = [
+        str(value).strip()
+        for value in (fatigue_detail_ids or [])
+        if str(value).strip()
+    ]
+    fatigue_spec = (
+        {
+            "field": FATIGUE_DETAIL_ID,
+            "title": "Fatigue detail ID",
+            "type": "select",
+            "options": fatigue_options,
+            "preserve_unknown": True,
+            "allow_blank": True,
+            "width": 128,
+        }
+        if fatigue_options
+        else {
+            "field": FATIGUE_DETAIL_ID,
+            "title": "Fatigue detail ID",
+            "type": "text",
+            "width": 128,
+        }
     )
     return [
         {"field": ELEMENT_ID, "title": "ID", "type": "id", "width": 64,
@@ -280,15 +307,18 @@ def point_grid_specs(kind: str, material_ids: Iterable[str] | None = None) -> li
         {"field": DIAMETER, "title": "Diameter (mm)", "type": "number",
          "width": 124, "derived_role": "diameter"},
         material_spec,
-        {"field": FATIGUE_DETAIL_ID, "title": "Fatigue detail ID", "type": "text",
-         "width": 128},
+        fatigue_spec,
         {"field": GROUP_ID, "title": "Group ID", "type": "text", "width": 92},
         {"field": SPACING_GROUP_ID, "title": "Lap / bundle ID", "type": "text",
          "width": 128},
     ]
 
 
-def point_grid_options(kind: str, material_ids: Iterable[str] | None = None) -> dict:
+def point_grid_options(
+    kind: str,
+    material_ids: Iterable[str] | None = None,
+    fatigue_detail_ids: Iterable[str] | None = None,
+) -> dict:
     """Persistent-ID and size-derivation settings for the frontend."""
     available = [str(value).strip() for value in (material_ids or [])
                  if str(value).strip()]
@@ -299,6 +329,9 @@ def point_grid_options(kind: str, material_ids: Iterable[str] | None = None) -> 
         "default_values": {
             SIZE_MODE: AREA_MODE,
             MATERIAL_ID: (available[0] if available else default_material_id(kind)),
+            # The connection/detail class cannot be inferred from geometry.
+            # Require an explicit fatigue assignment even when compatible
+            # catalogue entries are available.
             FATIGUE_DETAIL_ID: "",
             GROUP_ID: "",
             SPACING_GROUP_ID: "",

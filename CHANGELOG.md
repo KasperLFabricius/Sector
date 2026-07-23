@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added the Streamlit fatigue workflow: explicit steel/concrete settings and
+  complete partial factors, authority/method declarations, editable grouped
+  sustained-plus-cyclic action spectra, S-N detail catalogues and per-element
+  detail assignment. Fatigue inputs participate in validation, calculation,
+  caching, project save/load and stale-result detection.
 - Added the tested fatigue application boundary: canonical section-force sign
   conversion, per-element material/detail mapping, explicit mixed-bond inputs,
   full user-entered factors and auditable VD/BN spectrum provenance. Authority
@@ -17,8 +22,8 @@
   EN 1992-2:2005 concrete bridge method and the EN 1992-1-1:2023 method.
 - Added the versioned fatigue input model: stable S-N detail IDs, verified 2005
   and 2023 Eurocode presets, grouped long-/short-action spectrum bins and
-  lossless project-file migration. UI and report presentation follow in the
-  next scoped change.
+  lossless project-file migration. Detailed result and report presentation
+  follows in the next scoped change.
 - Added stable reinforcing- and prestressing-steel catalogues with per-element
   assignment throughout plastic, elastic, crack-width and member checks.
 - Added material IDs, names, definitions, assignment evidence and individual

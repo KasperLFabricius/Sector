@@ -308,7 +308,8 @@ def test_persisted_settings_use_the_seeded_number_helper():
     import sector_app
     src = inspect.getsource(sector_app)
     for helper in (
-        "_seeded_number", "_seeded_checkbox", "_seeded_selectbox", "_seeded_text",
+        "_seeded_number", "_seeded_checkbox", "_seeded_toggle",
+        "_seeded_selectbox", "_seeded_text", "_seeded_text_area",
     ):
         assert f"def {helper}(" in src
     # Widgets whose key is restored from a saved project/session (a value= / index=
@@ -1591,7 +1592,7 @@ def test_save_load_round_trip_through_the_app():
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
-def test_app_preserves_backend_fatigue_inputs_before_ui_integration():
+def test_app_restores_fatigue_inputs_into_the_ui():
     import fatigue_inputs
     import project_io
 
@@ -1619,9 +1620,21 @@ def test_app_preserves_backend_fatigue_inputs_before_ui_integration():
     assert not at.exception
     assert fatigue_inputs.SPECTRUM_TABLE_KEY in at.session_state
     assert at.session_state["fatigue_on"] is True
+    assert at.toggle(key="fatigue_on").value is True
+    assert at.selectbox(key="fatigue_edition").value == (
+        fatigue_inputs.EC2_2005_DKNA
+    )
+    assert "fatigue_spectrum_editor" in at.session_state
+    assert at.selectbox(key="_fatigue_catalog_selected").value == "F1"
     assert (
         at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0]["id"]
         == "F1"
+    )
+    at.button(key="fatigue_catalog_add_tendon").click().run()
+    assert not at.exception
+    assert fatigue_inputs.detail_ids(
+        at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY],
+        fatigue_inputs.PRESTRESS,
     )
 
     saved = project_io.dump_project(
@@ -1680,11 +1693,19 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
     at.run()
 
     assert not at.exception
-    assert fatigue_inputs.SPECTRUM_TABLE_KEY not in at.session_state
-    assert all(
-        key not in at.session_state
-        for key in project_io.FATIGUE_SCALAR_KEYS
+    # The mounted UI seeds neutral defaults after clearing the previous project.
+    # Values from the first project must not leak into those defaults.
+    assert at.session_state["fatigue_on"] is False
+    assert fatigue_inputs.spectrum_records(
+        at.session_state[fatigue_inputs.SPECTRUM_TABLE_KEY]
+    ) == []
+    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.50)
+    assert at.session_state[fatigue_inputs.BASIS_KEY] == (
+        fatigue_inputs.default_basis()
     )
+    assert fatigue_inputs.detail_ids(
+        at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY]
+    ) == ["F1"]
     saved = project_io.dump_project(
         {
             key: at.session_state[key]
@@ -1698,11 +1719,145 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
         },
     )
     payload = json.loads(saved)
-    assert "fatigue" not in payload
-    assert all(
-        key not in payload["scalars"]
-        for key in project_io.FATIGUE_SCALAR_KEYS
+    assert payload["fatigue"]["spectrum"] == []
+    assert payload["scalars"]["fatigue_on"] is False
+    assert payload["scalars"]["fatigue_gamma_c"] == pytest.approx(1.50)
+
+
+def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
+    import fatigue_inputs
+    import project_io
+    import reinforcement_table as rt
+
+    at = _fresh()
+    at.run()
+    bars = at.session_state["bars_base"].copy(deep=True)
+    bars[rt.FATIGUE_DETAIL_ID] = "F1"
+    spectrum = fatigue_inputs.normalise_spectrum_table([{
+        "spectrum": "Traffic",
+        "name": "FAT-01",
+        "description": "One constant-amplitude bin",
+        "cycles": 2.0e6,
+        "n_long_ed_kn": -100.0,
+        "mx_long_ed_knm": 0.0,
+        "my_long_ed_knm": 0.0,
+        "n_short_ed_kn": 0.0,
+        "mx_short_ed_knm": 20.0,
+        "my_short_ed_knm": 0.0,
+    }])
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    tables["bars_base"] = bars
+    tables[fatigue_inputs.SPECTRUM_TABLE_KEY] = spectrum
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in at.session_state
+    }
+    scalars.update({
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_check_steel": True,
+        "fatigue_check_concrete": False,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_ff": 1.0,
+        fatigue_inputs.DETAIL_CATALOG_KEY: fatigue_inputs.default_catalog(),
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
+    })
+    at.session_state["_pending_project"] = project_io.dump_project(
+        tables, scalars
     )
+    at.run()
+    assert not at.exception
+
+    _calculate(at)
+
+    assert not at.exception
+    fatigue = at.session_state["results"]["fatigue"]
+    assert fatigue["governing_spectrum"] == "Traffic"
+    assert len(fatigue["spectra"]) == 1
+    assert at.session_state["result_fatigue_sig"] == (
+        at.session_state["_latest_inputs"]["fatigue_sig"]
+    )
+    summary = next(
+        frame.value for frame in at.dataframe
+        if "Check" in frame.value.columns and "Status" in frame.value.columns
+    )
+    assert summary.loc[summary["Check"] == "Fatigue"].shape[0] == 1
+    register = next(
+        frame.value for frame in at.dataframe
+        if "Analysis" in frame.value.columns
+        and "Result state" in frame.value.columns
+    )
+    fatigue_register = register.loc[register["Analysis"] == "Fatigue"]
+    assert fatigue_register.iloc[0]["Case"] == "Traffic"
+    assert fatigue_register.iloc[0]["Result state"] == "Calculated"
+
+    _goto_page(at, "Inputs")
+    calculated_fatigue_sig = at.session_state["result_fatigue_sig"]
+    current_fck = float(at.session_state["conc_fck"])
+    changed_fck = current_fck + 5.0 if current_fck <= 195.0 else current_fck - 5.0
+    at.number_input(key="conc_fck").set_value(changed_fck).run()
+    fck_fatigue_sig = at.session_state["_latest_inputs"]["fatigue_sig"]
+    assert fck_fatigue_sig != calculated_fatigue_sig
+    current_alpha_cc = float(at.session_state["conc_alpha_cc"])
+    changed_alpha_cc = 0.85 if current_alpha_cc != 0.85 else 0.90
+    at.number_input(key="conc_alpha_cc").set_value(changed_alpha_cc).run()
+    assert at.session_state["_latest_inputs"]["fatigue_sig"] != fck_fatigue_sig
+
+    at.number_input(key="fatigue_gamma_s").set_value(1.20).run()
+    assert at.session_state["result_sig"] != (
+        at.session_state["_latest_inputs"]["signature"]
+    )
+
+
+def test_fatigue_validation_stays_in_the_ui_instead_of_raising():
+    at = _fresh()
+    at.run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+
+    _calculate(at)
+
+    assert not at.exception
+    assert "results" not in at.session_state
+    errors = " ".join(item.value for item in at.error)
+    assert "At least one fatigue spectrum bin is required" in errors
+    assert "fatigue detail ID is required" in errors
+
+
+def test_fatigue_authority_widgets_write_the_structured_basis():
+    import fatigue_inputs
+
+    at = _fresh()
+    at.run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+    prefix = (
+        f"fatiguebasis_r{at.session_state['_fatigue_basis_revision']}"
+    )
+    at.selectbox(key=f"{prefix}_authority").set_value(
+        fatigue_inputs.AUTHORITY_VD
+    ).run()
+    assert at.session_state[fatigue_inputs.BASIS_KEY]["authority"] == (
+        fatigue_inputs.AUTHORITY_VD
+    )
+    assert at.session_state[fatigue_inputs.BASIS_KEY]["method"] == (
+        fatigue_inputs.METHOD_VD_FLM1
+    )
+
+    at.selectbox(key=f"{prefix}_method").set_value(
+        fatigue_inputs.METHOD_VD_FLM4
+    )
+    at.text_input(key=f"{prefix}_spectrum_source").set_value(
+        "Traffic model register"
+    )
+    at.run()
+
+    basis = at.session_state[fatigue_inputs.BASIS_KEY]
+    assert basis["method"] == fatigue_inputs.METHOD_VD_FLM4
+    assert basis["spectrum_source"] == "Traffic model register"
 
 
 def test_v4_case_tables_follow_current_controls_and_preserve_later_rows():
@@ -2531,6 +2686,17 @@ def test_fctm_and_ec_locked_in_plastic_only_mode():
     assert at.number_input(key="conc_Ec").disabled is False
 
 
+def test_fatigue_unlocks_the_elastic_material_parameters():
+    at = _fresh()
+    at.run()
+    assert at.number_input(key="conc_Ec").disabled is True
+
+    at.toggle(key="fatigue_on").set_value(True).run()
+
+    assert at.number_input(key="conc_Ec").disabled is False
+    assert at.number_input(key="el_phi").disabled is False
+
+
 def test_default_material_preset_is_dk_na_with_550():
     # Defaults to the Danish edition with B550 reinforcement.
     at = _fresh()
@@ -2684,6 +2850,13 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
         "check_stress", "check_crack_width",
+    ]
+    at.toggle(key="fatigue_on").set_value(True).run()
+    fatigue = _widget(at.dataframe, "fatigue_spectrum_editor").value
+    assert list(fatigue.columns) == [
+        "spectrum", "name", "description", "cycles",
+        "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
+        "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
     ]
     rendered_keys = {
         widget.key
@@ -2910,6 +3083,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     assert labels == [
         "Stress and crack-width criteria (Elastic)",
         "Longitudinal reinforcement & clear spacing",
+        "Fatigue",
         "Shear, torsion & combined (Plastic)",
         "About",
         "Report",

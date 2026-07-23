@@ -99,6 +99,10 @@ function createPointGridInstance(parentElement) {
     })
   }
 
+  state.selectDefault = spec => (
+    spec.allow_blank ? "" : String(spec.options?.[0] ?? "")
+  )
+
   state.coerceValue = (value, spec) => {
     if (spec.type === "number") {
       const number = Number(value)
@@ -109,9 +113,9 @@ function createPointGridInstance(parentElement) {
     }
     const text = value === null || value === undefined ? "" : String(value).trim()
     if (spec.type === "select" && Array.isArray(spec.options)) {
-      // Blank pasted cells follow the same first-option default as a newly added
-      // row. Non-empty unknown IDs remain intact for the blocking validation.
-      if (!text.length) return String(spec.options[0] ?? "")
+      // Some engineering assignments must remain blank until the user makes an
+      // explicit choice. Other selects retain their first-option default.
+      if (!text.length) return state.selectDefault(spec)
       const choice = spec.options.find(
         option => String(option).toLowerCase() === text.toLowerCase(),
       )
@@ -120,7 +124,7 @@ function createPointGridInstance(parentElement) {
       // repair. Never turn that evidence into the first valid option merely
       // because another cell was edited.
       return choice === undefined
-        ? (spec.preserve_unknown ? text : String(spec.options[0] ?? ""))
+        ? (spec.preserve_unknown ? text : state.selectDefault(spec))
         : String(choice)
     }
     return text
@@ -227,6 +231,12 @@ function createPointGridInstance(parentElement) {
     const currentIsKnown = values.some(
       value => String(value).toLowerCase() === current.toLowerCase(),
     )
+    if (params.allowBlank) {
+      const blank = document.createElement("option")
+      blank.value = ""
+      blank.textContent = "Select..."
+      select.appendChild(blank)
+    }
     if (current && !currentIsKnown) {
       const unresolved = document.createElement("option")
       unresolved.value = current
@@ -291,7 +301,7 @@ function createPointGridInstance(parentElement) {
       else if (Object.hasOwn(state.defaultValues, spec.field)) {
         row[spec.field] = state.coerceValue(state.defaultValues[spec.field], spec)
       } else if (spec.type === "select") {
-        row[spec.field] = String(spec.options?.[0] ?? "")
+        row[spec.field] = state.selectDefault(spec)
       } else {
         row[spec.field] = spec.type === "number" ? null : ""
       }
@@ -398,7 +408,10 @@ function createPointGridInstance(parentElement) {
         definition.formatter = state.formatNumber
       } else if (spec.type === "select") {
         definition.editor = state.selectEditor
-        definition.editorParams = { values: spec.options || [] }
+        definition.editorParams = {
+          values: spec.options || [],
+          allowBlank: spec.allow_blank === true,
+        }
         definition.formatter = cell => {
           const value = String(cell.getValue() ?? "")
           if (state.derivedSize && spec.field === state.derivedSize.mode) {

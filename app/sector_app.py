@@ -28,6 +28,7 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import case_analysis  # noqa: E402
+import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
@@ -169,7 +170,7 @@ def _design_basis_summary(*, concrete_preset, mild_preset=None,
                           prestress_materials=None,
                           crack_code=None, shear_method=None, shear_links=False,
                           torsion_method=None, combined_method=None,
-                          detailing_method=None):
+                          detailing_method=None, fatigue_method=None):
     """Whole-calculation edition map and any material hybrid/coverage qualification.
 
     Sector intentionally permits independent expert choices. This summary makes
@@ -201,6 +202,8 @@ def _design_basis_summary(*, concrete_preset, mild_preset=None,
         selections.append(("Combined M-V-T", combined_method))
     if detailing_method:
         selections.append(("Longitudinal detailing", detailing_method))
+    if fatigue_method:
+        selections.append(("Fatigue", fatigue_method))
 
     components = [
         {"role": role, "selection": str(selection),
@@ -280,6 +283,13 @@ def _seeded_checkbox(box, label, default, key, **kw):
     return box.checkbox(label, key=key, **kw)
 
 
+def _seeded_toggle(box, label, default, key, **kw):
+    """A persisted on/off setting without a competing widget default."""
+
+    st.session_state.setdefault(key, default)
+    return box.toggle(label, key=key, **kw)
+
+
 def _seeded_selectbox(box, label, options, default, key, **kw):
     """A selectbox whose default is seeded into session state rather than passed as
     ``index=`` -- same reason as :func:`_seeded_number`. ``default`` must be one of
@@ -294,6 +304,13 @@ def _seeded_text(box, label, default, key, **kw):
     """A persisted text input that does not conflict with loaded session state."""
     st.session_state.setdefault(key, default)
     return box.text_input(label, key=key, **kw)
+
+
+def _seeded_text_area(box, label, default, key, **kw):
+    """A persisted multi-line input without a competing widget default."""
+
+    st.session_state.setdefault(key, default)
+    return box.text_area(label, key=key, **kw)
 
 
 def _safe_build(box, builder, curve, vals, **extra):
@@ -768,6 +785,327 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
     return catalogue, selected, material
 
 
+def _fatigue_preset_for(edition, kind):
+    is_2023 = "2023" in str(edition)
+    if kind == fatigue_inputs.PRESTRESS:
+        return (
+            fatigue_inputs.PRESET_2023_PRETENSION
+            if is_2023
+            else fatigue_inputs.PRESET_2005_PRETENSION
+        )
+    return (
+        fatigue_inputs.PRESET_2023_BARS
+        if is_2023
+        else fatigue_inputs.PRESET_2005_BARS
+    )
+
+
+def _ensure_fatigue_catalog_state():
+    """Seed the stable S-N detail catalogue before reinforcement grids mount."""
+
+    st.session_state.setdefault("_fatigue_catalog_revision", 0)
+    key = fatigue_inputs.DETAIL_CATALOG_KEY
+    st.session_state[key] = fatigue_inputs.normalise_catalog(
+        st.session_state.get(key)
+    )
+
+
+def _bump_fatigue_catalog_revision():
+    st.session_state["_fatigue_catalog_revision"] = (
+        int(st.session_state.get("_fatigue_catalog_revision", 0)) + 1
+    )
+
+
+def _fatigue_catalog_prefix(detail_id):
+    revision = int(st.session_state.get("_fatigue_catalog_revision", 0))
+    return f"fatiguecat_r{revision}_{detail_id}"
+
+
+def _seed_fatigue_detail_widgets(entry, prefix):
+    values = {
+        "name": entry["name"],
+        "description": entry.get("description", ""),
+        "kind": entry["kind"],
+        "preset": entry["preset"],
+        **{
+            field: entry[field]
+            for field in (
+                "n_star",
+                "k1",
+                "k2",
+                "delta_sigma_rsk_mpa",
+                "stress_model",
+                "bend_reduction",
+                "mandrel_diameter_mm",
+                "bond_ratio_xi",
+                "bond_equivalent_diameter_mm",
+                "source",
+            )
+        },
+    }
+    for field, value in values.items():
+        st.session_state.setdefault(f"{prefix}_{field}", value)
+
+
+def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
+    """Edit named/custom S-N details and return the canonical catalogue."""
+
+    key = fatigue_inputs.DETAIL_CATALOG_KEY
+    catalogue = fatigue_inputs.normalise_catalog(st.session_state.get(key))
+    items = catalogue["items"]
+    ids = [item["id"] for item in items]
+    labels = {item["id"]: fatigue_inputs.entry_label(item) for item in items}
+    selected_key = "_fatigue_catalog_selected"
+    pending_key = "_fatigue_catalog_pending_selected"
+    if pending_key in st.session_state:
+        st.session_state[selected_key] = st.session_state.pop(pending_key)
+    selected = _seeded_selectbox(
+        box,
+        "Fatigue detail",
+        ids,
+        ids[0],
+        selected_key,
+        format_func=lambda value: labels.get(value, value),
+        help="Stable detail ID assigned in the section table.",
+    )
+    counts = fatigue_inputs.assigned_counts(assigned_ids)
+    box.caption(f"Assigned elements: {counts.get(selected, 0)}")
+
+    actions = box.container(horizontal=True)
+    add_mild = actions.button(
+        "Add mild",
+        key="fatigue_catalog_add_mild",
+        icon=":material/add:",
+    )
+    add_tendon = actions.button(
+        "Add tendon",
+        key="fatigue_catalog_add_tendon",
+        icon=":material/add:",
+    )
+    duplicate = actions.button(
+        "Duplicate",
+        key="fatigue_catalog_duplicate",
+        disabled=selected not in ids,
+    )
+    delete = actions.button(
+        "Delete",
+        key="fatigue_catalog_delete",
+        disabled=len(ids) <= 1 or counts.get(selected, 0) > 0,
+        help=(
+            "Assigned details cannot be deleted. Reassign the elements first."
+            if counts.get(selected, 0) > 0
+            else None
+        ),
+    )
+    if add_mild or add_tendon or duplicate or delete:
+        _snapshot_input_state()
+        if add_mild:
+            catalogue, selected = fatigue_inputs.add_entry(
+                catalogue,
+                preset=_fatigue_preset_for(edition, fatigue_inputs.MILD),
+            )
+        elif add_tendon:
+            catalogue, selected = fatigue_inputs.add_entry(
+                catalogue,
+                preset=_fatigue_preset_for(edition, fatigue_inputs.PRESTRESS),
+            )
+        elif duplicate:
+            catalogue, selected = fatigue_inputs.duplicate_entry(
+                catalogue,
+                selected,
+            )
+        else:
+            catalogue = fatigue_inputs.delete_entry(
+                catalogue,
+                selected,
+                assigned_ids=assigned_ids,
+            )
+            selected = catalogue["items"][0]["id"]
+        st.session_state[key] = catalogue
+        st.session_state[pending_key] = selected
+        _bump_fatigue_catalog_revision()
+        st.rerun()
+
+    entry = next(item for item in items if item["id"] == selected)
+    prefix = _fatigue_catalog_prefix(selected)
+    _seed_fatigue_detail_widgets(entry, prefix)
+    name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name")
+    description = _seeded_text(
+        box,
+        "Description",
+        entry.get("description", ""),
+        f"{prefix}_description",
+    )
+    compatible = [
+        preset
+        for preset, values in fatigue_inputs.DETAIL_PRESETS.items()
+        if values["kind"] == entry["kind"]
+    ]
+    preset_options = compatible + [fatigue_inputs.CUSTOM_PRESET]
+    preset = _seeded_selectbox(
+        box,
+        "Resistance preset",
+        preset_options,
+        entry["preset"],
+        f"{prefix}_preset",
+        help="Named Eurocode values are locked. Select Custom / imported to edit.",
+    )
+    if preset != entry["preset"]:
+        updated = (
+            fatigue_inputs.apply_preset(entry, preset)
+            if preset in fatigue_inputs.DETAIL_PRESETS
+            else {**entry, "preset": fatigue_inputs.CUSTOM_PRESET}
+        )
+        st.session_state[key] = fatigue_inputs.replace_entry(
+            catalogue,
+            updated,
+        )
+        st.session_state[pending_key] = selected
+        _bump_fatigue_catalog_revision()
+        st.rerun()
+
+    custom = preset == fatigue_inputs.CUSTOM_PRESET
+    kind = _seeded_selectbox(
+        box,
+        "Element type",
+        list(fatigue_inputs.KINDS),
+        entry["kind"],
+        f"{prefix}_kind",
+        disabled=not custom,
+        format_func=lambda value: (
+            "Mild reinforcement"
+            if value == fatigue_inputs.MILD
+            else "Prestressing tendon"
+        ),
+    )
+    standard_lock = not custom
+    c1, c2 = box.columns(2)
+    n_star = _seeded_number(
+        c1,
+        "Reference cycles N*",
+        1.0,
+        1.0e12,
+        float(entry["n_star"]),
+        1.0e5,
+        f"{prefix}_n_star",
+        disabled=standard_lock,
+        format="%.0f",
+    )
+    delta_sigma = _seeded_number(
+        c2,
+        "Reference range [MPa]",
+        0.1,
+        5000.0,
+        float(entry["delta_sigma_rsk_mpa"]),
+        1.0,
+        f"{prefix}_delta_sigma_rsk_mpa",
+        disabled=standard_lock,
+    )
+    k1 = _seeded_number(
+        c1,
+        "S-N slope k1",
+        0.1,
+        50.0,
+        float(entry["k1"]),
+        0.1,
+        f"{prefix}_k1",
+        disabled=standard_lock,
+    )
+    k2 = _seeded_number(
+        c2,
+        "S-N slope k2",
+        0.1,
+        50.0,
+        float(entry["k2"]),
+        0.1,
+        f"{prefix}_k2",
+        disabled=standard_lock,
+    )
+    stress_model = _seeded_selectbox(
+        box,
+        "Reference-range model",
+        list(fatigue_inputs.STRESS_MODELS),
+        entry["stress_model"],
+        f"{prefix}_stress_model",
+        disabled=standard_lock,
+        format_func=lambda value: {
+            fatigue_inputs.FIXED_STRESS: "Fixed reference range",
+            fatigue_inputs.EC2_2023_BAR_STRESS:
+                "EC2:2023 reinforcing-bar diameter",
+            fatigue_inputs.EC2_2023_WELDED_STRESS:
+                "EC2:2023 welded-bar diameter",
+        }.get(value, value),
+    )
+    bend_reduction = _seeded_toggle(
+        box,
+        "Bent-bar reduction",
+        bool(entry["bend_reduction"]),
+        f"{prefix}_bend_reduction",
+        disabled=standard_lock,
+    )
+    mandrel = _seeded_number(
+        box,
+        "Mandrel diameter [mm]",
+        0.0,
+        10000.0,
+        float(entry["mandrel_diameter_mm"]),
+        1.0,
+        f"{prefix}_mandrel_diameter_mm",
+        disabled=not bend_reduction,
+    )
+    bond_ratio = _seeded_number(
+        c1,
+        "Bond ratio xi (0 = unset)",
+        0.0,
+        10.0,
+        float(entry["bond_ratio_xi"]),
+        0.05,
+        f"{prefix}_bond_ratio_xi",
+        disabled=kind != fatigue_inputs.PRESTRESS,
+    )
+    bond_diameter = _seeded_number(
+        c2,
+        "Equivalent tendon diameter [mm]",
+        0.0,
+        1000.0,
+        float(entry["bond_equivalent_diameter_mm"]),
+        0.1,
+        f"{prefix}_bond_equivalent_diameter_mm",
+        disabled=kind != fatigue_inputs.PRESTRESS,
+    )
+    source = _seeded_text(
+        box,
+        "Resistance source",
+        entry.get("source", ""),
+        f"{prefix}_source",
+        disabled=standard_lock,
+    )
+    updated = {
+        **entry,
+        "name": str(name).strip() or entry["id"],
+        "description": str(description).strip(),
+        "kind": kind,
+        "preset": preset,
+        "n_star": float(n_star),
+        "k1": float(k1),
+        "k2": float(k2),
+        "delta_sigma_rsk_mpa": float(delta_sigma),
+        "stress_model": stress_model,
+        "bend_reduction": bool(bend_reduction),
+        "mandrel_diameter_mm": float(mandrel),
+        "bond_ratio_xi": float(bond_ratio),
+        "bond_equivalent_diameter_mm": float(bond_diameter),
+        "source": str(source).strip(),
+    }
+    catalogue = fatigue_inputs.replace_entry(catalogue, updated)
+    st.session_state[key] = catalogue
+    if kind != entry["kind"]:
+        st.session_state[pending_key] = selected
+        _bump_fatigue_catalog_revision()
+        st.rerun()
+    return catalogue
+
+
 # ---------------------------------------------------------------------------
 # Build the section and materials from the staged input tabs
 # ---------------------------------------------------------------------------
@@ -873,10 +1211,28 @@ def _grid_material_ids(kind):
     ) if catalogue is not None else None
 
 
+def _grid_fatigue_detail_ids(kind):
+    if not kind:
+        return None
+    catalogue = st.session_state.get(fatigue_inputs.DETAIL_CATALOG_KEY)
+    if catalogue is None:
+        return None
+    detail_kind = (
+        fatigue_inputs.MILD if kind == "bar" else fatigue_inputs.PRESTRESS
+    )
+    return fatigue_inputs.detail_ids(catalogue, detail_kind)
+
+
 def _point_data_version(base_key, table_version):
-    """Include catalogue structure in a reinforcement grid's seed version."""
-    return (f"{table_version}:m{st.session_state.get('_material_catalog_revision', 0)}"
-            if _reinforcement_kind(base_key) else table_version)
+    """Include assignment-catalogue structure in a reinforcement grid seed."""
+
+    if not _reinforcement_kind(base_key):
+        return table_version
+    return (
+        f"{table_version}:m"
+        f"{st.session_state.get('_material_catalog_revision', 0)}:f"
+        f"{st.session_state.get('_fatigue_catalog_revision', 0)}"
+    )
 
 
 def _render_point_table(box, base_key, ed_key, cols, id_start=1):
@@ -892,8 +1248,15 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     data_version = _point_data_version(base_key, version)
     kind = _reinforcement_kind(base_key)
     material_ids = _grid_material_ids(kind)
-    specs = rebar_table.point_grid_specs(kind, material_ids) if kind else None
-    options = rebar_table.point_grid_options(kind, material_ids) if kind else None
+    fatigue_ids = _grid_fatigue_detail_ids(kind)
+    specs = (
+        rebar_table.point_grid_specs(kind, material_ids, fatigue_ids)
+        if kind else None
+    )
+    options = (
+        rebar_table.point_grid_options(kind, material_ids, fatigue_ids)
+        if kind else None
+    )
     with box:
         return point_grid(st.session_state[base_key], cols, key=ed_key,
                           id_start=id_start, data_version=data_version,
@@ -995,7 +1358,14 @@ def _current_table(base_key, ed_key, cols):
     if rows is None:   # absent, malformed or stale -- use the current base
         frame = st.session_state[base_key].copy().reset_index(drop=True)
     else:
-        specs = rebar_table.point_grid_specs(kind, _grid_material_ids(kind)) if kind else None
+        specs = (
+            rebar_table.point_grid_specs(
+                kind,
+                _grid_material_ids(kind),
+                _grid_fatigue_detail_ids(kind),
+            )
+            if kind else None
+        )
         frame = _rows_to_df(rows, cols, specs)
     return (rebar_table.normalise_table(frame, kind) if kind else frame)
 
@@ -1157,6 +1527,233 @@ def _load_case_editors(box):
     }
 
 
+_FATIGUE_EDITOR_KEY = "fatigue_spectrum_editor"
+
+
+def _fatigue_spectrum_column_config():
+    """Engineering labels and strict types for the grouped-spectrum editor."""
+
+    def action(label, help_text):
+        return st.column_config.NumberColumn(
+            label,
+            help=help_text,
+            format="%.3f",
+            required=True,
+            min_value=-100000.0,
+            max_value=100000.0,
+            step=10.0,
+            width="small",
+        )
+
+    return {
+        fatigue_inputs.SPECTRUM: st.column_config.TextColumn(
+            "Spectrum *",
+            help="Bins with the same spectrum name are accumulated together.",
+            required=True,
+            pinned=True,
+            width="small",
+        ),
+        fatigue_inputs.NAME: st.column_config.TextColumn(
+            "Bin name *",
+            help="Required and unique across every load table.",
+            required=True,
+            pinned=True,
+            width="small",
+        ),
+        fatigue_inputs.DESCRIPTION: st.column_config.TextColumn(
+            "Description",
+            help="Project-defined load-bin description.",
+            pinned=True,
+            width="medium",
+        ),
+        fatigue_inputs.CYCLES: st.column_config.NumberColumn(
+            "Cycles n_i *",
+            help="Number of cycles represented by this bin.",
+            format="%.0f",
+            required=True,
+            min_value=1.0,
+            max_value=1.0e15,
+            step=1000.0,
+            width="small",
+        ),
+        "n_long_ed_kn": action(
+            "N_Ed,long [kN]",
+            "Sustained/basic axial force; tension is positive.",
+        ),
+        "mx_long_ed_knm": action(
+            "Mx_Ed,long [kNm]",
+            "Sustained/basic moment about the x-axis.",
+        ),
+        "my_long_ed_knm": action(
+            "My_Ed,long [kNm]",
+            "Sustained/basic moment about the y-axis.",
+        ),
+        "n_short_ed_kn": action(
+            "Delta N_Ed [kN]",
+            "Cyclic axial-force increment added to N_Ed,long.",
+        ),
+        "mx_short_ed_knm": action(
+            "Delta Mx_Ed [kNm]",
+            "Cyclic x-moment increment added to Mx_Ed,long.",
+        ),
+        "my_short_ed_knm": action(
+            "Delta My_Ed [kNm]",
+            "Cyclic y-moment increment added to My_Ed,long.",
+        ),
+    }
+
+
+def _fatigue_spectrum_editor(box):
+    """Render the authoritative grouped fatigue spectrum."""
+
+    key = fatigue_inputs.SPECTRUM_TABLE_KEY
+    seed_key = f"_{key}_editor_seed"
+    if key not in st.session_state:
+        st.session_state[key] = fatigue_inputs.empty_spectrum_table()
+    if _FATIGUE_EDITOR_KEY not in st.session_state or seed_key not in st.session_state:
+        st.session_state[seed_key] = fatigue_inputs.normalise_spectrum_table(
+            st.session_state[key]
+        )
+    seed = fatigue_inputs.normalise_spectrum_table(st.session_state[seed_key])
+    edited = box.data_editor(
+        seed,
+        key=_FATIGUE_EDITOR_KEY,
+        num_rows="dynamic",
+        hide_index=True,
+        width="stretch",
+        height="auto",
+        column_config=_fatigue_spectrum_column_config(),
+        column_order=fatigue_inputs.SPECTRUM_COLUMNS,
+    )
+    current = fatigue_inputs.normalise_spectrum_table(edited)
+    st.session_state[key] = current.copy(deep=True)
+    return fatigue_inputs.active_spectrum_table(current)
+
+
+def _fatigue_basis_prefix():
+    revision = int(st.session_state.get("_fatigue_basis_revision", 0))
+    return f"fatiguebasis_r{revision}"
+
+
+def _fatigue_basis_panel(box, *, disabled):
+    """Render authority/provenance declarations; they never modify values."""
+
+    basis = fatigue_inputs.normalise_basis(
+        st.session_state.get(fatigue_inputs.BASIS_KEY)
+    )
+    prefix = _fatigue_basis_prefix()
+    authority = _seeded_selectbox(
+        box,
+        "Authority",
+        list(fatigue_inputs.AUTHORITIES),
+        basis["authority"],
+        f"{prefix}_authority",
+        disabled=disabled,
+    )
+    methods = list(fatigue_inputs.METHODS_BY_AUTHORITY[authority])
+    method_default = (
+        basis["method"] if basis["method"] in methods else methods[0]
+    )
+    method = _seeded_selectbox(
+        box,
+        "Spectrum method",
+        methods,
+        method_default,
+        f"{prefix}_method",
+        disabled=disabled,
+    )
+    box.caption(fatigue_inputs.METHOD_REFERENCES[method])
+
+    left, right = box.columns(2)
+    spectrum_source = _seeded_text(
+        left,
+        "Spectrum source",
+        basis["spectrum_source"],
+        f"{prefix}_spectrum_source",
+        disabled=disabled,
+    )
+    cycle_count_source = _seeded_text(
+        right,
+        "Cycle-count source",
+        basis["cycle_count_source"],
+        f"{prefix}_cycle_count_source",
+        disabled=disabled,
+    )
+    dynamic_effects = _seeded_selectbox(
+        left,
+        "Dynamic effects",
+        list(fatigue_inputs.DYNAMIC_OPTIONS),
+        basis["dynamic_effects"],
+        f"{prefix}_dynamic_effects",
+        disabled=disabled,
+    )
+    cycle_counting = _seeded_selectbox(
+        right,
+        "Cycle counting",
+        list(fatigue_inputs.COUNTING_OPTIONS),
+        basis["cycle_counting"],
+        f"{prefix}_cycle_counting",
+        disabled=disabled,
+    )
+    concurrence_basis = _seeded_text(
+        left,
+        "Lane/track concurrence",
+        basis["concurrence_basis"],
+        f"{prefix}_concurrence_basis",
+        disabled=disabled,
+    )
+    atypical_traffic = _seeded_selectbox(
+        right,
+        "Atypical traffic",
+        list(fatigue_inputs.ATYPICAL_OPTIONS),
+        basis["atypical_traffic"],
+        f"{prefix}_atypical_traffic",
+        disabled=disabled,
+    )
+    approval_reference = _seeded_text(
+        left,
+        "Approval/reference",
+        basis["approval_reference"],
+        f"{prefix}_approval_reference",
+        disabled=disabled,
+    )
+    authority_adjustments = _seeded_text(
+        right,
+        "Authority adjustments",
+        basis["authority_adjustments"],
+        f"{prefix}_authority_adjustments",
+        disabled=disabled,
+        help="State applied action/cycle adjustments. This field is descriptive.",
+    )
+    notes = _seeded_text_area(
+        box,
+        "Basis notes",
+        basis["notes"],
+        f"{prefix}_notes",
+        disabled=disabled,
+        height=68,
+    )
+    basis = fatigue_inputs.normalise_basis({
+        "authority": authority,
+        "method": method,
+        "spectrum_source": spectrum_source,
+        "cycle_count_source": cycle_count_source,
+        "dynamic_effects": dynamic_effects,
+        "cycle_counting": cycle_counting,
+        "concurrence_basis": concurrence_basis,
+        "atypical_traffic": atypical_traffic,
+        "approval_reference": approval_reference,
+        "authority_adjustments": authority_adjustments,
+        "notes": notes,
+    })
+    st.session_state[fatigue_inputs.BASIS_KEY] = basis
+    if not disabled:
+        warnings = fatigue_inputs.basis_warnings(basis)
+        if warnings:
+            box.warning("QA declarations: " + "; ".join(warnings) + ".")
+    return basis
+
+
 def _case_table_signature(value, key):
     """Stable hashable table content, including deterministic invalid sentinels."""
     frame = load_cases.active_table(value, key)
@@ -1176,6 +1773,29 @@ def _case_table_signature(value, key):
         rows.append(tuple(row))
     return tuple(rows)
 
+
+def _fatigue_spectrum_signature(value):
+    """Stable grouped-spectrum content, including invalid numeric sentinels."""
+
+    frame = fatigue_inputs.active_spectrum_table(value)
+    rows = []
+    for record in frame.to_dict("records"):
+        row = []
+        for column in fatigue_inputs.SPECTRUM_COLUMNS:
+            cell = record[column]
+            if column in fatigue_inputs.SPECTRUM_NUMERIC:
+                try:
+                    number = float(cell)
+                except (TypeError, ValueError):
+                    number = math.nan
+                cell = number if math.isfinite(number) else "<invalid>"
+            else:
+                cell = str(cell)
+            row.append(cell)
+        rows.append(tuple(row))
+    return tuple(rows)
+
+
 # Input widgets are not rendered on the Analysis page. Streamlit consequently
 # removes their widget-owned keys at the end of that run, so keep a durable copy
 # outside the widget namespace and restore it before either page is rendered.
@@ -1185,7 +1805,8 @@ def _case_table_signature(value, key):
 _DURABLE_INPUT_SCALARS = tuple(project_io.SCALAR_KEYS) + (
     "autosave_on", "autosave_min", "_input_tab", "_material_tab",
     "_material_catalog_revision", "_mild_catalog_selected",
-    "_prestress_catalog_selected",
+    "_prestress_catalog_selected", "_fatigue_catalog_revision",
+    "_fatigue_catalog_selected", "_fatigue_basis_revision",
 )
 _INPUT_STATE_KEY = "_durable_input_scalars"
 
@@ -1501,6 +2122,19 @@ def _apply_pending_project() -> None:
         st.session_state.pop("_material_alias_revision", None)
         st.session_state.pop("_mild_catalog_selected", None)
         st.session_state.pop("_prestress_catalog_selected", None)
+    if (
+        fatigue_inputs.DETAIL_CATALOG_KEY in scalars
+        or any(key.startswith("fatiguecat_r") for key in st.session_state)
+    ):
+        _bump_fatigue_catalog_revision()
+        st.session_state.pop("_fatigue_catalog_selected", None)
+        st.session_state.pop("_fatigue_catalog_pending_selected", None)
+    st.session_state["_fatigue_basis_revision"] = (
+        int(st.session_state.get("_fatigue_basis_revision", 0)) + 1
+    )
+    for key in list(st.session_state):
+        if key.startswith("fatiguecat_r") or key.startswith("fatiguebasis_r"):
+            st.session_state.pop(key, None)
     durable = {
         key: value
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
@@ -1534,6 +2168,7 @@ def _apply_pending_project() -> None:
     # evidence belonging to the newly loaded section.
     for key in (
         "results", "result_sig", "result_plastic_sig", "result_elastic_sig",
+        "result_fatigue_sig",
         "result_plastic_case_context_sig", "result_elastic_case_context_sig",
         "result_plastic_bending_context_sig",
         "report_bytes", "report_signature", "report_filename", "report_generated_on",
@@ -1739,6 +2374,8 @@ def _generate_report(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
+    if inp.get("fatigue_on"):
+        case_errors = list(case_errors) + fatigue_analysis.validation_errors(inp)
     if case_errors:
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
@@ -2253,6 +2890,18 @@ def build_inputs(host=st):
     """
     s = host
     _ensure_material_catalog_state()
+    _ensure_fatigue_catalog_state()
+    st.session_state.setdefault("_fatigue_basis_revision", 0)
+    fatigue_catalogue = fatigue_inputs.normalise_catalog(
+        st.session_state[fatigue_inputs.DETAIL_CATALOG_KEY]
+    )
+    st.session_state[fatigue_inputs.BASIS_KEY] = fatigue_inputs.normalise_basis(
+        st.session_state.get(fatigue_inputs.BASIS_KEY)
+    )
+    if fatigue_inputs.SPECTRUM_TABLE_KEY not in st.session_state:
+        st.session_state[
+            fatigue_inputs.SPECTRUM_TABLE_KEY
+        ] = fatigue_inputs.empty_spectrum_table()
     mild_catalogue = mat_catalog.normalise_catalog(
         st.session_state[mat_catalog.MILD_CATALOG_KEY], "mild"
     )
@@ -2290,6 +2939,7 @@ def build_inputs(host=st):
     det = aset.expander(
         "Longitudinal reinforcement & clear spacing", expanded=False
     )
+    fat = aset.expander("Fatigue", expanded=False)
     sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
     about_slot = project.container()
     report_slot = project.container()
@@ -2302,9 +2952,132 @@ def build_inputs(host=st):
                            "run the two.")
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
+    fatigue_on = _seeded_toggle(
+        fat,
+        "Fatigue analysis",
+        False,
+        "fatigue_on",
+        help="Use the cracked elastic section to assess grouped fatigue spectra.",
+    )
+    fatigue_edition = _seeded_selectbox(
+        fat,
+        "Fatigue edition",
+        list(fatigue_inputs.EDITIONS),
+        fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_edition",
+        disabled=not fatigue_on,
+    )
+    fatigue_check_steel = _seeded_toggle(
+        fat,
+        "Reinforcement",
+        True,
+        "fatigue_check_steel",
+        disabled=not fatigue_on,
+    )
+    fatigue_check_concrete = _seeded_toggle(
+        fat,
+        "Concrete",
+        True,
+        "fatigue_check_concrete",
+        disabled=not fatigue_on,
+    )
+    fat.caption(
+        "Enter complete partial factors. Sector applies no control-, "
+        "construction- or consequence-class multiplier."
+    )
+    ff1, ff2, ff3 = fat.columns(3)
+    fatigue_gamma_ff = _seeded_number(
+        ff1,
+        "gamma_Ff",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "fatigue_gamma_ff",
+        disabled=not fatigue_on,
+    )
+    fatigue_gamma_s = _seeded_number(
+        ff2,
+        "gamma_s",
+        0.1,
+        10.0,
+        1.15,
+        0.05,
+        "fatigue_gamma_s",
+        disabled=not (fatigue_on and fatigue_check_steel),
+    )
+    fatigue_gamma_c = _seeded_number(
+        ff3,
+        "gamma_c,fat",
+        0.1,
+        10.0,
+        1.50,
+        0.05,
+        "fatigue_gamma_c",
+        disabled=not (fatigue_on and fatigue_check_concrete),
+    )
+    fc1, fc2 = fat.columns(2)
+    fatigue_beta_cc_t0 = _seeded_number(
+        fc1,
+        "beta_cc(t0)",
+        0.01,
+        2.0,
+        1.0,
+        0.05,
+        "fatigue_beta_cc_t0",
+        disabled=not (fatigue_on and fatigue_check_concrete),
+    )
+    fatigue_t0_days = _seeded_number(
+        fc2,
+        "Concrete age t0 [days]",
+        0.01,
+        100000.0,
+        28.0,
+        1.0,
+        "fatigue_t0_days",
+        disabled=not (fatigue_on and fatigue_check_concrete),
+    )
+    fatigue_concrete_k1 = _seeded_number(
+        fc1,
+        "Concrete fatigue k1",
+        0.01,
+        5.0,
+        0.85,
+        0.05,
+        "fatigue_concrete_k1",
+        disabled=(
+            not (fatigue_on and fatigue_check_concrete)
+            or "2023" in fatigue_edition
+        ),
+        help="Used by the 2005 concrete-fatigue expression.",
+    )
+    fatigue_concrete_c = _seeded_number(
+        fc2,
+        "Concrete fatigue C",
+        0.1,
+        100.0,
+        14.0,
+        0.5,
+        "fatigue_concrete_c",
+        disabled=not (fatigue_on and fatigue_check_concrete),
+    )
+    fat.markdown("**Spectrum basis**")
+    fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
+
     # Load tables are rendered before the acceptance controls so their per-case
     # checkboxes can enable the relevant crack-width settings in the same rerun.
     case_frames = _load_case_editors(loads)
+    if fatigue_on:
+        loads.markdown("**Grouped fatigue spectra**")
+        loads.caption(
+            "Each bin combines sustained/basic actions with the cyclic increment. "
+            "Sector solves both states and uses their stress range."
+        )
+        fatigue_spectrum = _fatigue_spectrum_editor(loads)
+    else:
+        fatigue_spectrum = fatigue_inputs.active_spectrum_table(
+            st.session_state.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
+        )
     case_head = load_cases.legacy_scalars_from_tables(case_frames)
     pl_case_id = case_head["pl_case_id"]
     pl_case_type = case_head["pl_case_type"]
@@ -2332,7 +3105,7 @@ def build_inputs(host=st):
     loads.markdown("**Global Elastic parameter**")
     phi_creep = _seeded_number(
         loads, r"Creep coefficient $\varphi$", 0.0, 5.0, 3.0, 0.1,
-        "el_phi", disabled=not elastic_on,
+        "el_phi", disabled=not (elastic_on or fatigue_on),
         help="One global final creep coefficient. Sustained actions use "
              "Ec,eff = Ec/(1+phi).",
     )
@@ -2909,8 +3682,19 @@ def build_inputs(host=st):
             if str(value).strip()
         ]
 
+    def assigned_fatigue_ids(frame):
+        if rebar_table.FATIGUE_DETAIL_ID not in frame:
+            return []
+        return [
+            str(value).strip()
+            for value in frame[rebar_table.FATIGUE_DETAIL_ID].tolist()
+            if str(value).strip()
+        ]
+
     assigned_mild_ids = assigned_material_ids(_bar_frame)
     assigned_prestress_ids = assigned_material_ids(_tendon_frame)
+    assigned_bar_fatigue_ids = assigned_fatigue_ids(_bar_frame)
+    assigned_tendon_fatigue_ids = assigned_fatigue_ids(_tendon_frame)
     invalid_bar_materials = mat_catalog.invalid_assignments(
         [item["material_id"] for item in bar_elements], mild_catalogue, "mild"
     )
@@ -2929,6 +3713,30 @@ def build_inputs(host=st):
             "Undefined material assignment(s): " + "; ".join(parts) + "."
         )
         sec.error(material_assignment_error)
+    fatigue_assignment_error = None
+    if fatigue_on and fatigue_check_steel:
+        invalid_bar_details = fatigue_inputs.invalid_assignments(
+            [item["fatigue_detail_id"] for item in bar_elements],
+            fatigue_catalogue,
+            fatigue_inputs.MILD,
+        )
+        invalid_tendon_details = fatigue_inputs.invalid_assignments(
+            [item["fatigue_detail_id"] for item in tendon_elements],
+            fatigue_catalogue,
+            fatigue_inputs.PRESTRESS,
+        )
+        if invalid_bar_details or invalid_tendon_details:
+            parts = []
+            if invalid_bar_details:
+                parts.append("bar detail " + ", ".join(invalid_bar_details))
+            if invalid_tendon_details:
+                parts.append(
+                    "tendon detail " + ", ".join(invalid_tendon_details)
+                )
+            fatigue_assignment_error = (
+                "Undefined fatigue assignment(s): " + "; ".join(parts) + "."
+            )
+            sec.error(fatigue_assignment_error)
     label_scale, label_min_gap = _section_input_preview(
         sec_preview,
         outer,
@@ -2947,10 +3755,15 @@ def build_inputs(host=st):
     # the material laws editable whenever one of those checks is active.
     capacity_checks_on = (
         shear_on or torsion_on or combined_on or minimum_reinforcement_on
+        or fatigue_on
     )
     lock_mats = mode == "Elastic" and not capacity_checks_on
     # fctm also enters both generations of the minimum-reinforcement check.
-    lock_elastic = mode == "Plastic" and not minimum_reinforcement_on
+    lock_elastic = (
+        mode == "Plastic"
+        and not minimum_reinforcement_on
+        and not fatigue_on
+    )
     if lock_mats:
         mat_tab.caption("Elastic-only mode: the stress-strain laws do not affect the "
                         "elastic results and are locked. Only fck (feeds fctm) and the "
@@ -2958,9 +3771,8 @@ def build_inputs(host=st):
                         "Plastic or Both to edit the full laws.")
     elif mode == "Elastic" and capacity_checks_on:
         mat_tab.caption(
-            "Elastic bending is selected, but an independent shear/torsion "
-            "capacity check is active. Design material strengths and final partial "
-            "factors therefore remain editable."
+            "An independent capacity or fatigue check is active, so its material "
+            "properties remain editable."
         )
 
     # Keep the derived-value action with the material inputs. It sets a one-shot
@@ -2977,14 +3789,18 @@ def build_inputs(host=st):
         st.rerun()
 
     material_tab_labels = ["Concrete", "Mild steel", "Prestressing steel"]
+    if fatigue_on:
+        material_tab_labels.append("Fatigue details")
     stored_material_tab = st.session_state.get("_material_tab")
     if stored_material_tab is not None and stored_material_tab not in material_tab_labels:
         st.session_state.pop("_material_tab", None)
-    conc_tab, mild_tab, pre_tab = mat_tab.tabs(
+    material_tabs = mat_tab.tabs(
         material_tab_labels,
         key="_material_tab",
         on_change=_snapshot_input_state,
     )
+    conc_tab, mild_tab, pre_tab = material_tabs[:3]
+    fatigue_tab = material_tabs[3] if fatigue_on else None
     conc_inputs, conc_preview = conc_tab.columns([1.1, 0.9], gap="large")
     mild_inputs, mild_preview = mild_tab.columns([1.1, 0.9], gap="large")
     pre_inputs, pre_preview = pre_tab.columns([1.1, 0.9], gap="large")
@@ -3037,6 +3853,14 @@ def build_inputs(host=st):
         ),
         visible=bool(mat_tab.open and pre_tab.open),
     )
+    if fatigue_tab is not None:
+        fatigue_catalogue = _fatigue_detail_catalog_panel(
+            fatigue_tab,
+            assigned_bar_fatigue_ids + assigned_tendon_fatigue_ids,
+            fatigue_edition,
+        )
+        for error in fatigue_inputs.catalog_errors(fatigue_catalogue):
+            fatigue_tab.error(error)
 
     material_definition_errors = []
 
@@ -3122,6 +3946,7 @@ def build_inputs(host=st):
             detailing_edition
             if minimum_reinforcement_on or clear_spacing_on else None
         ),
+        fatigue_method=fatigue_edition if fatigue_on else None,
     )
     if design_basis["mixed"] or design_basis["limitations"]:
         design_basis_slot.warning(design_basis["status"])
@@ -3224,7 +4049,34 @@ def build_inputs(host=st):
     )
     plastic_sig = plastic_case_context_sig + (plastic_table_sig,)
     elastic_sig = elastic_case_context_sig + (elastic_table_sig,)
-    sig = plastic_sig + elastic_sig
+    fatigue_sig = (
+        (
+            "fatigue",
+            True,
+            geom_sig,
+            material_sig,
+            fatigue_edition,
+            bool(fatigue_check_steel),
+            bool(fatigue_check_concrete),
+            float(concrete.fck),
+            float(concrete.alpha_cc),
+            float(fatigue_gamma_c),
+            float(fatigue_gamma_s),
+            float(fatigue_gamma_ff),
+            float(fatigue_beta_cc_t0),
+            float(fatigue_t0_days),
+            float(fatigue_concrete_k1),
+            float(fatigue_concrete_c),
+            float(nl),
+            float(ns),
+            fatigue_inputs.catalog_signature(fatigue_catalogue),
+            fatigue_inputs.basis_signature(fatigue_basis),
+            _fatigue_spectrum_signature(fatigue_spectrum),
+        )
+        if fatigue_on
+        else ("fatigue", False)
+    )
+    sig = plastic_sig + elastic_sig + (fatigue_sig,)
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
@@ -3239,6 +4091,7 @@ def build_inputs(host=st):
             "- **Plastic:** M-M capacity and utilisation\n"
             "- **Elastic:** cracked-section stresses\n"
             "- **Acceptance:** stress and crack-width criteria\n"
+            "- **Fatigue:** grouped spectrum assessment\n"
             "- **Capacity checks:** shear, torsion and combined M-V-T")
         st.caption("Set inputs, Calculate, review Results Overview, then export.")
         st.divider()
@@ -3252,6 +4105,7 @@ def build_inputs(host=st):
         )
     return dict(section=section, void_error=void_error, steel_error=steel_error,
                 material_error=material_error,
+                fatigue_assignment_error=fatigue_assignment_error,
                 concrete=concrete, steel=reference_steel,
                 concrete_preset=concrete_preset,
                 concrete_k_tc=concrete_k_tc,
@@ -3275,6 +4129,11 @@ def build_inputs(host=st):
                 bar_elements=bar_elements, tendon_elements=tendon_elements,
                 mild_material_catalog=mild_catalogue,
                 prestress_material_catalog=prestress_catalogue,
+                fatigue_detail_catalog=fatigue_catalogue,
+                fatigue_basis=fatigue_basis,
+                fatigue_spectrum_base=fatigue_inputs.normalise_spectrum_table(
+                    st.session_state[fatigue_inputs.SPECTRUM_TABLE_KEY]
+                ),
                 mild_materials=mild_material_map,
                 prestress_materials=prestress_material_map,
                 bar_materials=bar_materials,
@@ -3329,10 +4188,22 @@ def build_inputs(host=st):
                 detailing_edition=detailing_edition,
                 detailing_d_upper=detailing_d_upper,
                 detailing_include_tendons=detailing_include_tendons,
+                fatigue_on=fatigue_on,
+                fatigue_edition=fatigue_edition,
+                fatigue_check_steel=fatigue_check_steel,
+                fatigue_check_concrete=fatigue_check_concrete,
+                fatigue_gamma_c=fatigue_gamma_c,
+                fatigue_gamma_s=fatigue_gamma_s,
+                fatigue_gamma_ff=fatigue_gamma_ff,
+                fatigue_beta_cc_t0=fatigue_beta_cc_t0,
+                fatigue_t0_days=fatigue_t0_days,
+                fatigue_concrete_k1=fatigue_concrete_k1,
+                fatigue_concrete_c=fatigue_concrete_c,
                 mode=mode, extent=extent,
                 label_scale=label_scale, label_min_gap=label_min_gap,
                 signature=sig,
                 plastic_sig=plastic_sig, elastic_sig=elastic_sig,
+                fatigue_sig=fatigue_sig,
                 plastic_case_context_sig=plastic_case_context_sig,
                 elastic_case_context_sig=elastic_case_context_sig,
                 plastic_bending_context_sig=plastic_bending_context_sig)
@@ -3816,6 +4687,7 @@ def run_analysis(
     reuse_plastic_cases=None,
     reuse_plastic_bending_cases=None,
     reuse_elastic_cases=None,
+    reuse_fatigue=None,
 ):
     """Run legacy scalar inputs or every row in the canonical case tables.
 
@@ -3842,6 +4714,12 @@ def run_analysis(
                 edition=inp["detailing_edition"],
                 include_tendons=inp.get("detailing_include_tendons", False),
             )
+        if inp.get("fatigue_on"):
+            result["fatigue"] = (
+                reuse_fatigue
+                if reuse_fatigue is not None
+                else fatigue_analysis.run_analysis(inp)
+            )
         return result
 
     def _runner(case_inp, *, reuse_plastic=None):
@@ -3861,6 +4739,12 @@ def run_analysis(
             d_upper_mm=inp["detailing_d_upper"],
             edition=inp["detailing_edition"],
             include_tendons=inp.get("detailing_include_tendons", False),
+        )
+    if inp.get("fatigue_on"):
+        result["fatigue"] = (
+            reuse_fatigue
+            if reuse_fatigue is not None
+            else fatigue_analysis.run_analysis(inp)
         )
     return result
 
@@ -4950,6 +5834,29 @@ def results_overview_view(inp, results, *, stale=False):
                 ),
                 "Result state": state,
             })
+    if inp.get("fatigue_on"):
+        fatigue_result = (results or {}).get("fatigue")
+        fatigue_basis = inp.get("fatigue_basis") or {}
+        fatigue_case = (
+            str(
+                fatigue_result.get("governing_spectrum")
+                or "Grouped spectra"
+            )
+            if fatigue_result
+            else "Grouped spectra"
+        )
+        case_register.append({
+            "Analysis": "Fatigue",
+            "Case": fatigue_case,
+            "Description": (
+                fatigue_basis.get("method") or inp.get("fatigue_edition") or "-"
+            ),
+            "Result state": (
+                "Stale" if stale and fatigue_result
+                else "Calculated" if fatigue_result
+                else "Not calculated"
+            ),
+        })
 
     headline = f"{overall} - {len(rows)} checks across {len(case_register)} cases"
     if overall == "PASS":
@@ -7052,6 +7959,8 @@ def _analysis_workspace(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
+    if inp.get("fatigue_on"):
+        case_errors = list(case_errors) + fatigue_analysis.validation_errors(inp)
     if calc and case_errors:
         st.session_state["_case_error"] = "; ".join(case_errors) + "."
         calc = False
@@ -7090,6 +7999,11 @@ def _analysis_workspace(inp):
             == inp["plastic_bending_context_sig"]
             else None
         )
+        reuse_fatigue = (
+            prev.get("fatigue")
+            if st.session_state.get("result_fatigue_sig") == inp["fatigue_sig"]
+            else None
+        )
         st.session_state["results"] = run_analysis(
             inp,
             reuse_plastic=reuse_plastic,
@@ -7097,10 +8011,12 @@ def _analysis_workspace(inp):
             reuse_plastic_cases=reuse_plastic_cases,
             reuse_plastic_bending_cases=reuse_plastic_bending_cases,
             reuse_elastic_cases=reuse_elastic_cases,
+            reuse_fatigue=reuse_fatigue,
         )
         st.session_state["result_sig"] = inp["signature"]
         st.session_state["result_plastic_sig"] = inp["plastic_sig"]
         st.session_state["result_elastic_sig"] = inp["elastic_sig"]
+        st.session_state["result_fatigue_sig"] = inp["fatigue_sig"]
         st.session_state["result_plastic_case_context_sig"] = inp[
             "plastic_case_context_sig"
         ]
@@ -7147,7 +8063,8 @@ def _analysis_workspace(inp):
         st.error(st.session_state["_case_error"])
 
     for section_err in (
-        inp.get("void_error"), inp.get("steel_error"), inp.get("material_error")
+        inp.get("void_error"), inp.get("steel_error"), inp.get("material_error"),
+        inp.get("fatigue_assignment_error"),
     ):
         if section_err:
             st.error(section_err)
