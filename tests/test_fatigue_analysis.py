@@ -30,6 +30,7 @@ def _basis(**overrides):
         "concurrence_basis": "",
         "atypical_traffic": fatigue_inputs.ATYPICAL_NOT_APPLICABLE,
         "approval_reference": "",
+        "authority_adjustments": "",
         "notes": "",
     }
     value.update(overrides)
@@ -399,7 +400,15 @@ def test_analysis_signature_changes_with_spectrum_basis_and_material_modulus():
         curve=2,
         Es=205_000.0,
     )
+    changed_assignment = _base()
+    changed_assignment["bar_elements"][0]["material_id"] = "M2"
+    changed_warning = _base()
+    changed_warning[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
+        "source"
+    ] = ""
 
     assert fatigue_analysis.analysis_signature(changed_spectrum) != signature
     assert fatigue_analysis.analysis_signature(changed_basis) != signature
     assert fatigue_analysis.analysis_signature(changed_material) != signature
+    assert fatigue_analysis.analysis_signature(changed_assignment) != signature
+    assert fatigue_analysis.analysis_signature(changed_warning) != signature

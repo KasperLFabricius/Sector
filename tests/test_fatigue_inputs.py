@@ -166,6 +166,7 @@ def test_authority_basis_is_metadata_with_method_specific_qa_warnings():
         "cycle_counting": fi.COUNTING_OTHER,
         "concurrence_basis": "",
         "atypical_traffic": fi.ATYPICAL_NOT_APPLICABLE,
+        "authority_adjustments": "",
     })
 
     warnings = fi.basis_warnings(basis)
@@ -176,6 +177,7 @@ def test_authority_basis_is_metadata_with_method_specific_qa_warnings():
         "BN prescribed-traffic source/approval reference is not stated"
         in warnings
     )
+    assert "Authority load/cycle adjustments are not stated" in warnings
     assert fi.method_requires_single_bin(fi.METHOD_BN_NEW_1) is True
     assert fi.method_requires_single_bin(fi.METHOD_BN_NEW_2) is False
 

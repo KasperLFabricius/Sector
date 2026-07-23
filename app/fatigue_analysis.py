@@ -683,6 +683,13 @@ def analysis_signature(inp: Mapping) -> tuple:
         tuple((bar.x, bar.y, bar.area) for bar in section.bars),
         tuple((bar.x, bar.y, bar.area) for bar in section.tendons),
     )
+    element_signature = tuple(
+        tuple(
+            (str(key), record[key])
+            for key in sorted(record)
+        )
+        for record in prepared.element_records
+    )
     reinforcement_signature = tuple(
         (
             item.element_id,
@@ -715,6 +722,7 @@ def analysis_signature(inp: Mapping) -> tuple:
     )
     return (
         section_signature,
+        element_signature,
         tuple(
             (
                 name,
@@ -754,6 +762,7 @@ def analysis_signature(inp: Mapping) -> tuple:
         ),
         prepared.t0_days,
         fatigue_inputs.basis_signature(prepared.basis),
+        prepared.warnings,
     )
 
 

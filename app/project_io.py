@@ -497,8 +497,12 @@ def parse_project(text: str):
             scalars[fatigue_inputs.BASIS_KEY]
         )
     elif (
-        data.get("version", 1) < 10
-        and (bool(scalars.get("fatigue_on")) or raw_fatigue is not None)
+        bool(scalars.get("fatigue_on"))
+        or "fatigue_source" in raw_scalars
+        or (
+            data.get("version", 1) < 10
+            and raw_fatigue is not None
+        )
     ):
         # Older fatigue projects contained the numerical spectrum but no explicit
         # authority provenance.  Seed a neutral, visibly incomplete basis; never

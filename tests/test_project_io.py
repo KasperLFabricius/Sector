@@ -324,6 +324,9 @@ def test_v10_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum():
             "concurrence_basis": "Simultaneous trucks excluded by study T-4",
             "atypical_traffic": fatigue_inputs.ATYPICAL_CONSIDERED,
             "approval_reference": "",
+            "authority_adjustments": (
+                "FLM4 traffic factors included in action export"
+            ),
             "notes": "",
         },
         "fatigue_on": True,
@@ -352,6 +355,12 @@ def test_v10_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum():
     assert (
         restored_scalars[fatigue_inputs.BASIS_KEY]["method"]
         == fatigue_inputs.METHOD_VD_FLM4
+    )
+    assert (
+        restored_scalars[fatigue_inputs.BASIS_KEY][
+            "authority_adjustments"
+        ]
+        == "FLM4 traffic factors included in action export"
     )
     assert (
         restored_scalars[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
@@ -398,6 +407,23 @@ def test_v9_fatigue_project_migrates_to_neutral_unmodified_basis():
         }
     )
     assert scalars["fatigue_gamma_ff"] == 1.0
+    assert "fatigue_source" not in scalars
+
+
+def test_v10_partial_file_migrates_the_legacy_one_line_fatigue_source():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 10,
+        "tables": {},
+        "scalars": {"fatigue_source": "Imported spectrum note"},
+    }
+
+    _tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert (
+        scalars[fatigue_inputs.BASIS_KEY]["spectrum_source"]
+        == "Imported spectrum note"
+    )
     assert "fatigue_source" not in scalars
 
 

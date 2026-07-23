@@ -279,6 +279,7 @@ BASIS_FIELDS = (
     "concurrence_basis",
     "atypical_traffic",
     "approval_reference",
+    "authority_adjustments",
     "notes",
 )
 
@@ -668,6 +669,7 @@ def default_basis() -> dict:
         "concurrence_basis": "",
         "atypical_traffic": STATUS_NOT_STATED,
         "approval_reference": "",
+        "authority_adjustments": "",
         "notes": "",
     }
 
@@ -717,6 +719,9 @@ def normalise_basis(value) -> dict:
         "concurrence_basis": _text(value.get("concurrence_basis")),
         "atypical_traffic": atypical,
         "approval_reference": _text(value.get("approval_reference")),
+        "authority_adjustments": _text(
+            value.get("authority_adjustments")
+        ),
         "notes": _text(value.get("notes")),
     }
 
@@ -772,6 +777,11 @@ def basis_warnings(value) -> list[str]:
         warnings.append(
             "BN prescribed-traffic source/approval reference is not stated"
         )
+    if (
+        basis["authority"] != AUTHORITY_USER
+        and not basis["authority_adjustments"]
+    ):
+        warnings.append("Authority load/cycle adjustments are not stated")
     return warnings
 
 
