@@ -38,18 +38,23 @@ def _steel_properties(
     delta_sigma=160.0,
     fytk=500.0,
     fyck=500.0,
+    diameter=16.0,
+    bond_ratio=None,
+    bond_diameter=None,
 ):
     return fatigue.ReinforcementFatigueProperties(
         element_id=element_id,
         kind=kind,
         detail_id=detail_id,
-        diameter_mm=16.0,
+        diameter_mm=diameter,
         n_star=2.0e6,
         k1=5.0,
         k2=9.0,
         delta_sigma_rsk_mpa=delta_sigma,
         fytk_mpa=fytk,
         fyck_mpa=fyck,
+        bond_ratio_xi=bond_ratio,
+        bond_equivalent_diameter_mm=bond_diameter,
     )
 
 
@@ -490,11 +495,109 @@ def test_concrete_search_catches_governing_edge_fibre_missed_by_corners():
     assert result.concrete_search.x_m == pytest.approx(-0.5)
     assert 0.34 < result.concrete_search.y_m < 0.39
     assert result.concrete_search.damage > 4.0
+    assert result.concrete_search.absolute_gap == pytest.approx(
+        result.concrete_search.upper_damage
+        - result.concrete_search.damage
+    )
+    assert result.concrete_search.relative_gap >= 0.0
+    assert (
+        result.concrete_search.relative_change
+        == result.concrete_search.relative_gap
+    )
     assert result.governing_concrete_fibre == corner_count
     assert result.concrete[corner_count].damage == pytest.approx(
         result.concrete_search.damage
     )
     assert result.passed is False
+
+
+def test_concrete_search_cannot_certify_a_hidden_narrow_damage_peak():
+    section = Section.from_polygon(
+        corners=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    )
+    bins = (
+        fatigue.SpectrumBin(
+            "narrow",
+            2.0,
+            p_long_kn=12999.95,
+            mx_long_knm=6499.975,
+            my_long_knm=5333.3166666666675,
+            p_short_kn=1000.0,
+            mx_short_knm=500.0,
+            my_short_knm=666.6666666666661,
+        ),
+        fatigue.SpectrumBin(
+            "broad",
+            316.227766,
+            p_short_kn=7500.0,
+            mx_short_knm=3750.0,
+            my_short_knm=5000.0,
+        ),
+    )
+
+    result = fatigue.analyse_fatigue_spectrum(
+        "Adversarial peak",
+        section,
+        bins,
+        nl=1.0,
+        ns=1.0,
+        check_reinforcement=False,
+        concrete=fatigue.ConcreteFatigueProperties(
+            edition="2023",
+            fck_mpa=37.5,
+            gamma_c=1.5,
+            beta_cc_t0=1.0,
+        ),
+    )
+
+    assert result.concrete_search is not None
+    assert result.concrete_search.damage > 1.3
+    assert (
+        result.concrete_search.upper_damage
+        >= result.concrete_search.damage
+    )
+    assert result.utilisation >= result.concrete_search.upper_damage
+    assert result.passed is False
+
+
+def test_certified_search_kernel_matches_reported_fibre_damage_kernel():
+    section = _section()
+    properties = fatigue.ConcreteFatigueProperties(
+        edition="2023",
+        fck_mpa=37.5,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+    )
+    states = tuple(
+        fatigue.solve_fatigue_bin(section, item, 12.0, 7.0)
+        for item in (
+            fatigue.SpectrumBin(
+                "F1", 2.0e4, 800.0, 25.0, -10.0, 200.0, 15.0, 8.0
+            ),
+            fatigue.SpectrumBin(
+                "F2", 5.0e5, 300.0, -15.0, 20.0, -100.0, 6.0, -12.0
+            ),
+        )
+    )
+    points = np.asarray([
+        (-0.20, -0.30),
+        (0.20, 0.30),
+        (0.0, 0.0),
+        (-0.10, 0.15),
+    ])
+
+    reference = fatigue._concrete_damage_field(
+        points,
+        states,
+        properties,
+        1.1,
+    )
+    search_values = fatigue._search_damage_field(
+        points,
+        fatigue._concrete_search_data(states, properties, 1.1),
+    )
+
+    assert search_values == pytest.approx(reference)
 
 
 def test_uniform_compression_matches_transformed_section_hand_calculation():
@@ -552,6 +655,254 @@ def test_uniform_compression_matches_transformed_section_hand_calculation():
     assert result.reinforcement[0].bins[0].stress_range_mpa == pytest.approx(
         expected_steel_range
     )
+
+
+def test_tendon_only_section_is_included_in_fatigue_solver_order():
+    section = Section.from_polygon(
+        corners=[
+            (-0.20, -0.30),
+            (0.20, -0.30),
+            (0.20, 0.30),
+            (-0.20, 0.30),
+        ],
+        tendons_xy_area_mm2=[(0.0, -0.20, 600.0)],
+    )
+
+    result = fatigue.analyse_fatigue_spectrum(
+        "Tendon only",
+        section,
+        (fatigue.SpectrumBin("F1", 1.0e4, 500.0, 0.0, 0.0, 50.0),),
+        nl=10.0,
+        ns=10.0,
+        reinforcement=(
+            _steel_properties("P1", kind=fatigue.PRESTRESS),
+        ),
+        check_concrete=False,
+        n_mult=np.asarray([0.95]),
+        prestress_stress=np.asarray([900000.0]),
+    )
+
+    assert len(result.bins[0].bar_stress_long_mpa) == 1
+    assert len(result.reinforcement) == 1
+    assert result.reinforcement[0].element_id == "P1"
+    assert result.reinforcement[0].kind == fatigue.PRESTRESS
+
+
+def _mixed_section():
+    return Section.from_polygon(
+        corners=[
+            (-0.20, -0.30),
+            (0.20, -0.30),
+            (0.20, 0.30),
+            (-0.20, 0.30),
+        ],
+        bars_xy_area_mm2=[(0.0, -0.20, 1000.0)],
+        tendons_xy_area_mm2=[(0.0, 0.20, 1000.0)],
+    )
+
+
+def _mixed_properties():
+    return (
+        _steel_properties("R1", diameter=16.0),
+        _steel_properties(
+            "P1",
+            kind=fatigue.PRESTRESS,
+            diameter=16.0,
+            bond_ratio=0.25,
+            bond_diameter=16.0,
+        ),
+    )
+
+
+def test_2005_mixed_bond_correction_matches_eta_equilibrium_factors():
+    result = fatigue.analyse_fatigue_spectrum(
+        "Mixed 2005",
+        _mixed_section(),
+        (fatigue.SpectrumBin("F1", 1.0e4, 700.0, 0.0, 0.0, 100.0),),
+        nl=10.0,
+        ns=10.0,
+        reinforcement=_mixed_properties(),
+        fatigue_edition="2005",
+        check_concrete=False,
+        n_mult=np.ones(2),
+        prestress_stress=np.zeros(2),
+    )
+
+    beta = 0.5
+    eta = 2.0 / (1.0 + beta)
+    mild = result.reinforcement[0].bins[0]
+    tendon = result.reinforcement[1].bins[0]
+    assert mild.bond_adjustment == pytest.approx(eta)
+    assert tendon.bond_adjustment == pytest.approx(beta * eta)
+    assert "6.8.2(2)" in mild.bond_method
+    assert mild.stress_total_elastic_mpa != mild.stress_long_mpa
+
+
+def test_2023_mixed_bond_correction_uses_equivalent_tendon_area():
+    section = Section.from_polygon(
+        corners=[
+            (-0.20, -0.30),
+            (0.20, -0.30),
+            (0.20, 0.30),
+            (-0.20, 0.30),
+        ],
+        bars_xy_area_mm2=[(0.0, 0.0, 1000.0)],
+        tendons_xy_area_mm2=[(0.0, 0.0, 1000.0)],
+    )
+    n_ratio = 10.0
+    short_force = 100.0
+    beta = 0.5
+    actual_area = section.gross_area + n_ratio * 0.002
+    equivalent_area = section.gross_area + n_ratio * 0.0015
+    expected_elastic = n_ratio * short_force / actual_area / 1000.0
+    expected_equivalent = (
+        n_ratio * short_force / equivalent_area / 1000.0
+    )
+
+    result = fatigue.analyse_fatigue_spectrum(
+        "Mixed 2023",
+        section,
+        (fatigue.SpectrumBin("F1", 1.0e4, p_short_kn=short_force),),
+        nl=n_ratio,
+        ns=n_ratio,
+        reinforcement=_mixed_properties(),
+        fatigue_edition="2023",
+        check_concrete=False,
+        n_mult=np.ones(2),
+        prestress_stress=np.zeros(2),
+    )
+
+    mild = result.reinforcement[0].bins[0]
+    tendon = result.reinforcement[1].bins[0]
+    assert mild.stress_range_elastic_mpa == pytest.approx(expected_elastic)
+    assert mild.stress_range_mpa == pytest.approx(expected_equivalent)
+    assert tendon.stress_range_mpa == pytest.approx(
+        beta * expected_equivalent
+    )
+    assert "10.3(2)" in mild.bond_method
+
+
+def test_mixed_bond_data_and_solver_mapping_are_mandatory():
+    section = _mixed_section()
+    one_bin = (fatigue.SpectrumBin("F1", 1.0e4, p_short_kn=10.0),)
+    missing_bond = (
+        _steel_properties("R1"),
+        _steel_properties("P1", kind=fatigue.PRESTRESS),
+    )
+
+    with pytest.raises(ValueError, match="bond_ratio_xi"):
+        fatigue.analyse_fatigue_spectrum(
+            "Missing bond",
+            section,
+            one_bin,
+            nl=10.0,
+            ns=10.0,
+            reinforcement=missing_bond,
+            fatigue_edition="2023",
+            check_concrete=False,
+        )
+    with pytest.raises(ValueError, match="expected 'P1'"):
+        fatigue.analyse_fatigue_spectrum(
+            "Wrong ID",
+            section,
+            one_bin,
+            nl=10.0,
+            ns=10.0,
+            reinforcement=(
+                _steel_properties("R1"),
+                _steel_properties(
+                    "T1",
+                    kind=fatigue.PRESTRESS,
+                    bond_ratio=0.25,
+                    bond_diameter=16.0,
+                ),
+            ),
+            fatigue_edition="2023",
+            check_concrete=False,
+        )
+    with pytest.raises(ValueError, match="kind must be 'prestress'"):
+        fatigue.analyse_fatigue_spectrum(
+            "Wrong kind",
+            section,
+            one_bin,
+            nl=10.0,
+            ns=10.0,
+            reinforcement=(
+                _steel_properties("R1"),
+                _steel_properties(
+                    "P1",
+                    kind=fatigue.MILD,
+                    bond_ratio=0.25,
+                    bond_diameter=16.0,
+                ),
+            ),
+            fatigue_edition="2023",
+            check_concrete=False,
+        )
+
+
+def test_explicit_solver_element_ids_support_stable_project_ids():
+    properties = (
+        _steel_properties("BAR-A"),
+        _steel_properties(
+            "PT-07",
+            kind=fatigue.PRESTRESS,
+            bond_ratio=0.25,
+            bond_diameter=16.0,
+        ),
+    )
+
+    result = fatigue.analyse_fatigue_spectrum(
+        "Stable IDs",
+        _mixed_section(),
+        (fatigue.SpectrumBin("F1", 1.0e4, p_short_kn=10.0),),
+        nl=10.0,
+        ns=10.0,
+        reinforcement=properties,
+        fatigue_edition="2005",
+        solver_element_ids=("BAR-A", "PT-07"),
+        check_concrete=False,
+    )
+
+    assert [item.element_id for item in result.reinforcement] == [
+        "BAR-A",
+        "PT-07",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("n_mult", np.asarray([1.0]), r"shape \(2,\)"),
+        ("n_mult", np.asarray([1.0, math.inf]), "must be finite"),
+        ("n_mult", np.asarray([1.0, 0.0]), "greater than zero"),
+        ("prestress_stress", np.asarray([[0.0, 0.0]]), r"shape \(2,\)"),
+        ("prestress_stress", np.asarray([0.0, math.nan]), "must be finite"),
+    ],
+)
+def test_solver_vectors_reject_broadcasting_and_nonfinite_values(
+    field,
+    value,
+    message,
+):
+    kwargs = {
+        "n_mult": np.ones(2),
+        "prestress_stress": np.zeros(2),
+    }
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        fatigue.analyse_fatigue_spectrum(
+            "Bad vector",
+            _mixed_section(),
+            (fatigue.SpectrumBin("F1", 1.0e4, p_short_kn=10.0),),
+            nl=10.0,
+            ns=10.0,
+            reinforcement=_mixed_properties(),
+            fatigue_edition="2005",
+            check_concrete=False,
+            **kwargs,
+        )
 
 
 def test_grouped_spectra_are_assessed_independently():
