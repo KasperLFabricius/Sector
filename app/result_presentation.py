@@ -337,6 +337,65 @@ def _percent(util):
     return "infinite" if not math.isfinite(util) else f"{util * 100:.1f} %"
 
 
+def fatigue_summary_rows(inp, results, *, stale=False):
+    """Return one conservative aggregate row for an enabled fatigue analysis."""
+
+    inp = inp or {}
+    results = results or {}
+    if not bool(inp.get("fatigue_on")):
+        return []
+    fatigue = results.get("fatigue")
+    basis = inp.get("fatigue_basis") or {}
+    case = "-"
+    status = "NOT RUN"
+    result_text = "-"
+    util = None
+    note = "Calculate to assess the grouped spectra"
+    if fatigue is not None:
+        case = str(fatigue.get("governing_spectrum") or "-")
+        try:
+            util = float(fatigue.get("utilisation"))
+        except (TypeError, ValueError):
+            util = None
+        result_text = _percent(util)
+        warnings = tuple(fatigue.get("warnings") or ())
+        if not bool(fatigue.get("converged")):
+            status = "INVALID"
+            note = "Fatigue analysis did not converge"
+        elif not bool(fatigue.get("passed")):
+            status = "FAIL"
+            note = "Governing grouped spectrum"
+        elif warnings:
+            status = "REVIEW"
+            note = (
+                f"{len(warnings)} fatigue-basis warning"
+                + ("" if len(warnings) == 1 else "s")
+                + "; review Inputs"
+            )
+        else:
+            status = "PASS"
+            note = "Governing grouped spectrum"
+        if stale:
+            previous = status
+            status = "STALE"
+            note = f"Last status: {previous}; inputs changed"
+    return [{
+        "check": "Fatigue",
+        "family": "fatigue",
+        "case": case,
+        "case_type": str(inp.get("fatigue_edition") or "-"),
+        "source": str(
+            basis.get("spectrum_source") or basis.get("method") or "-"
+        ),
+        "status": status,
+        "result": result_text,
+        "criterion": "<= 100 %",
+        "util": util,
+        "view": "Results Overview",
+        "note": note,
+    }]
+
+
 def result_summary_rows(inp, results, *, stale=False):
     """Build the shared UI/PDF overview without rerunning any solver."""
     inp = inp or {}
@@ -887,7 +946,10 @@ def multi_case_summary_rows(inp, results, *, stale=False):
     inp = inp or {}
     results = results or {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
-        return result_summary_rows(inp, results, stale=stale)
+        return (
+            result_summary_rows(inp, results, stale=stale)
+            + fatigue_summary_rows(inp, results, stale=stale)
+        )
 
     mode = str(inp.get("mode") or "")
     requested = {
@@ -978,6 +1040,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             if results.get("clear_spacing") is not None else {},
             stale=stale,
         ))
+    rows.extend(fatigue_summary_rows(inp, results, stale=stale))
     return rows
 
 

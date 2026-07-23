@@ -4058,6 +4058,8 @@ def build_inputs(host=st):
             fatigue_edition,
             bool(fatigue_check_steel),
             bool(fatigue_check_concrete),
+            float(concrete.fck),
+            float(concrete.alpha_cc),
             float(fatigue_gamma_c),
             float(fatigue_gamma_s),
             float(fatigue_gamma_ff),
@@ -5832,6 +5834,29 @@ def results_overview_view(inp, results, *, stale=False):
                 ),
                 "Result state": state,
             })
+    if inp.get("fatigue_on"):
+        fatigue_result = (results or {}).get("fatigue")
+        fatigue_basis = inp.get("fatigue_basis") or {}
+        fatigue_case = (
+            str(
+                fatigue_result.get("governing_spectrum")
+                or "Grouped spectra"
+            )
+            if fatigue_result
+            else "Grouped spectra"
+        )
+        case_register.append({
+            "Analysis": "Fatigue",
+            "Case": fatigue_case,
+            "Description": (
+                fatigue_basis.get("method") or inp.get("fatigue_edition") or "-"
+            ),
+            "Result state": (
+                "Stale" if stale and fatigue_result
+                else "Calculated" if fatigue_result
+                else "Not calculated"
+            ),
+        })
 
     headline = f"{overall} - {len(rows)} checks across {len(case_register)} cases"
     if overall == "PASS":

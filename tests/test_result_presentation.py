@@ -542,6 +542,67 @@ def test_multi_case_summary_marks_governing_case_for_each_check():
     assert presentation.summary_governing_case_flags(rows) == [False, True]
 
 
+@pytest.mark.parametrize(
+    ("fatigue", "stale", "status"),
+    [
+        (None, False, "NOT RUN"),
+        ({
+            "governing_spectrum": "Traffic",
+            "utilisation": 0.75,
+            "converged": True,
+            "passed": True,
+            "warnings": (),
+        }, False, "PASS"),
+        ({
+            "governing_spectrum": "Traffic",
+            "utilisation": 1.20,
+            "converged": True,
+            "passed": False,
+            "warnings": (),
+        }, False, "FAIL"),
+        ({
+            "governing_spectrum": "Traffic",
+            "utilisation": 0.75,
+            "converged": True,
+            "passed": True,
+            "warnings": ("Spectrum source is not stated",),
+        }, False, "REVIEW"),
+        ({
+            "governing_spectrum": "Traffic",
+            "utilisation": 0.75,
+            "converged": False,
+            "passed": False,
+            "warnings": (),
+        }, False, "INVALID"),
+        ({
+            "governing_spectrum": "Traffic",
+            "utilisation": 0.75,
+            "converged": True,
+            "passed": True,
+            "warnings": (),
+        }, True, "STALE"),
+    ],
+)
+def test_fatigue_summary_prevents_a_false_overall_pass(
+        fatigue, stale, status):
+    inp = _inp(
+        mode="",
+        fatigue_on=True,
+        fatigue_edition="DS/EN 1992-1-1:2005 + DK NA:2024",
+        fatigue_basis={"method": "User-defined grouped spectrum"},
+    )
+    results = {"fatigue": fatigue} if fatigue is not None else {}
+
+    rows = presentation.multi_case_summary_rows(
+        inp, results, stale=stale
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["check"] == "Fatigue"
+    assert rows[0]["status"] == status
+    assert presentation.overall_summary_status(rows) == status
+
+
 def test_multi_case_summary_records_zero_actions_as_not_evaluated():
     inp = _inp(
         mode="Plastic",

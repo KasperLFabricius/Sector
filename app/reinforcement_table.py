@@ -321,11 +321,6 @@ def point_grid_options(
     """Persistent-ID and size-derivation settings for the frontend."""
     available = [str(value).strip() for value in (material_ids or [])
                  if str(value).strip()]
-    fatigue_available = [
-        str(value).strip()
-        for value in (fatigue_detail_ids or [])
-        if str(value).strip()
-    ]
     return {
         "id_column": ELEMENT_ID,
         "id_prefix": id_prefix(kind),
@@ -333,9 +328,10 @@ def point_grid_options(
         "default_values": {
             SIZE_MODE: AREA_MODE,
             MATERIAL_ID: (available[0] if available else default_material_id(kind)),
-            FATIGUE_DETAIL_ID: (
-                fatigue_available[0] if fatigue_available else ""
-            ),
+            # The connection/detail class cannot be inferred from geometry.
+            # Require an explicit fatigue assignment even when compatible
+            # catalogue entries are available.
+            FATIGUE_DETAIL_ID: "",
             GROUP_ID: "",
             SPACING_GROUP_ID: "",
         },

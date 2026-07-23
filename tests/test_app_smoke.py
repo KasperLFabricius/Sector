@@ -1782,8 +1782,32 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert at.session_state["result_fatigue_sig"] == (
         at.session_state["_latest_inputs"]["fatigue_sig"]
     )
+    summary = next(
+        frame.value for frame in at.dataframe
+        if "Check" in frame.value.columns and "Status" in frame.value.columns
+    )
+    assert summary.loc[summary["Check"] == "Fatigue"].shape[0] == 1
+    register = next(
+        frame.value for frame in at.dataframe
+        if "Analysis" in frame.value.columns
+        and "Result state" in frame.value.columns
+    )
+    fatigue_register = register.loc[register["Analysis"] == "Fatigue"]
+    assert fatigue_register.iloc[0]["Case"] == "Traffic"
+    assert fatigue_register.iloc[0]["Result state"] == "Calculated"
 
     _goto_page(at, "Inputs")
+    calculated_fatigue_sig = at.session_state["result_fatigue_sig"]
+    current_fck = float(at.session_state["conc_fck"])
+    changed_fck = current_fck + 5.0 if current_fck <= 195.0 else current_fck - 5.0
+    at.number_input(key="conc_fck").set_value(changed_fck).run()
+    fck_fatigue_sig = at.session_state["_latest_inputs"]["fatigue_sig"]
+    assert fck_fatigue_sig != calculated_fatigue_sig
+    current_alpha_cc = float(at.session_state["conc_alpha_cc"])
+    changed_alpha_cc = 0.85 if current_alpha_cc != 0.85 else 0.90
+    at.number_input(key="conc_alpha_cc").set_value(changed_alpha_cc).run()
+    assert at.session_state["_latest_inputs"]["fatigue_sig"] != fck_fatigue_sig
+
     at.number_input(key="fatigue_gamma_s").set_value(1.20).run()
     assert at.session_state["result_sig"] != (
         at.session_state["_latest_inputs"]["signature"]
