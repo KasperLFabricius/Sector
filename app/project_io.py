@@ -456,6 +456,13 @@ def parse_project(text: str):
             for legacy in legacy_keys:
                 scalars.pop(legacy, None)
     if fatigue_inputs.DETAIL_CATALOG_KEY in scalars:
+        if not isinstance(
+            scalars[fatigue_inputs.DETAIL_CATALOG_KEY], dict
+        ):
+            raise ValueError(
+                "fatigue detail catalogue must be an object with a "
+                "non-empty items list"
+            )
         scalars[fatigue_inputs.DETAIL_CATALOG_KEY] = (
             fatigue_inputs.normalise_catalog(
                 scalars[fatigue_inputs.DETAIL_CATALOG_KEY]

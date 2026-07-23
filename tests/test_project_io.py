@@ -422,6 +422,24 @@ def test_v9_rejects_explicit_empty_fatigue_catalogues(items):
         project_io.parse_project(json.dumps(project))
 
 
+@pytest.mark.parametrize("catalogue", [None, []])
+def test_v9_rejects_nonobject_fatigue_catalogues(catalogue):
+    project = {
+        "format": project_io.FORMAT,
+        "version": 9,
+        "tables": {},
+        "scalars": {
+            fatigue_inputs.DETAIL_CATALOG_KEY: catalogue
+        },
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="fatigue detail catalogue must be an object",
+    ):
+        project_io.parse_project(json.dumps(project))
+
+
 @pytest.mark.parametrize(
     ("axis", "tension", "component", "face", "bw_key", "legs_key"),
     [
