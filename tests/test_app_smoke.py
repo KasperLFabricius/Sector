@@ -7,6 +7,7 @@ for each analysis mode, and assert it produces results without error.
 from __future__ import annotations
 
 import dataclasses
+import json
 import pathlib
 import sys
 
@@ -103,6 +104,27 @@ def _select_view(at, value):
         _goto_page(at, "Analysis")
     at.selectbox(key="view").set_value(value).run()
     return at
+
+
+def _section_outline_from_result_view(at):
+    """Return the plotted section outline from a Plastic/Elastic result view."""
+
+    for chart in at.get("plotly_chart"):
+        spec = json.loads(chart.proto.spec)
+        x_title = (
+            spec.get("layout", {})
+            .get("xaxis", {})
+            .get("title", {})
+            .get("text")
+        )
+        data = spec.get("data", [])
+        if (
+            x_title == "x (mm)"
+            and data
+            and data[0].get("fill") == "toself"
+        ):
+            return data[0]["x"], data[0]["y"]
+    raise AssertionError("No section-state Plotly figure was rendered")
 
 
 def _replace_base_table(at, base_key, value):
@@ -1934,6 +1956,36 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     )
 
 
+def test_fatigue_map_signature_distinguishes_bars_from_tendons():
+    import sector_app
+
+    record = {"id": "R1", "x_mm": 0.0, "y_mm": -220.0}
+    common = {
+        "outer": [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        "holes": [],
+    }
+    spectrum = {
+        "spectrum_name": "Traffic",
+        "reinforcement": [],
+        "concrete": [],
+        "concrete_search": None,
+    }
+    bar_input = {
+        **common,
+        "bar_elements": [record],
+        "tendon_elements": [],
+    }
+    tendon_input = {
+        **common,
+        "bar_elements": [],
+        "tendon_elements": [record],
+    }
+
+    assert sector_app._fatigue_map_signature(
+        bar_input, spectrum
+    ) != sector_app._fatigue_map_signature(tendon_input, spectrum)
+
+
 def test_fatigue_validation_stays_in_the_ui_instead_of_raising():
     at = _fresh()
     at.run()
@@ -3267,6 +3319,33 @@ def test_staleness_badge_reflects_result_state():
     _set(at, ("number_input", "pl_Mx", 55.0))
     _goto_page(at, "Analysis")
     assert any("recalculate" in c for c in caps())
+
+
+@pytest.mark.parametrize("view", ["Plastic Results", "Elastic Results"])
+def test_stale_result_views_keep_the_calculated_section_geometry(view):
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    _calculate(at)
+    _select_view(at, view)
+    calculated_outline = _section_outline_from_result_view(at)
+
+    changed = at.session_state["corners_base"].copy(deep=True)
+    changed["x (mm)"] *= 1.25
+    changed["y (mm)"] *= 1.25
+    _replace_base_table(at, "corners_base", changed)
+    assert (
+        at.session_state["_latest_inputs"]["outer"]
+        != at.session_state["result_input_snapshot"]["outer"]
+    )
+
+    _select_view(at, view)
+    assert not at.exception
+    assert _section_outline_from_result_view(at) == calculated_outline
+    assert any(
+        "inputs changed" in warning.value.lower()
+        for warning in at.warning
+    )
 
 
 def test_combined_preflight_warns_when_prerequisites_missing():

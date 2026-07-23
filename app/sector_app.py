@@ -6878,14 +6878,16 @@ def _fatigue_map_signature(inp, spectrum):
         ),
         tuple(
             (
+                kind,
                 str(record.get("id") or ""),
                 float(record.get("x_mm", 0.0)),
                 float(record.get("y_mm", 0.0)),
             )
-            for record in (
-                list(inp.get("bar_elements") or [])
-                + list(inp.get("tendon_elements") or [])
+            for kind, records in (
+                ("bar", inp.get("bar_elements") or []),
+                ("tendon", inp.get("tendon_elements") or []),
             )
+            for record in records
         ),
         str(fatigue_presentation.value(spectrum, "spectrum_name", "")),
         tuple(
@@ -8732,10 +8734,15 @@ def _analysis_workspace(inp):
         if section_err:
             st.error(section_err)
 
+    # A stale result must be rendered wholly against the inputs that produced it.
+    # Apply this before selecting a case or deciding which checks were enabled so
+    # every result view receives one internally consistent input/result pair.
+    result_inp = result_snapshot if stale else inp
     family = (
         "elastic" if view == "Elastic Results"
         else "plastic" if (
-            view == "Detailing" and inp.get("minimum_reinforcement_on")
+            view == "Detailing"
+            and result_inp.get("minimum_reinforcement_on")
         )
         else "plastic" if view in {
             "Plastic Results", "N-M Interaction", "Shear", "Torsion",
@@ -8743,30 +8750,20 @@ def _analysis_workspace(inp):
         }
         else None
     )
-    view_inp, view_results = inp, results
+    view_inp, view_results = result_inp, results
     if family:
         view_inp, view_results, _entry = _selected_case_context(
-            inp, results, family
+            result_inp, results, family
         )
 
     if view == "Results Overview":
-        overview_inp = (
-            result_snapshot
-            if stale
-            else inp
-        )
-        results_overview_view(overview_inp, results, stale=stale)
+        results_overview_view(result_inp, results, stale=stale)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
         interaction_view(view_inp, view_results)
     elif view == "Fatigue Results":
-        fatigue_inp = (
-            result_snapshot
-            if stale
-            else inp
-        )
-        fatigue_view(fatigue_inp, results, stale=stale)
+        fatigue_view(result_inp, results, stale=stale)
     elif view == "Detailing":
         detailing_view(view_inp, view_results, global_results=results)
     elif view == "Shear":

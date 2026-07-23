@@ -1077,3 +1077,52 @@ def test_fatigue_damage_figure_caps_and_labels_unbounded_damage():
     assert "Unbounded Miner damage" in " ".join(
         annotation.text for annotation in fig.layout.annotations
     )
+
+
+def test_fatigue_figures_escape_user_controlled_plotly_text():
+    spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+    spectrum.spectrum_name = "Traffic <b>A</b> & B"
+    steel.element_id = "R<br>1 & 2"
+    steel.bins[0].bin_name = "FAT <i>1</i> & peak"
+    bar = {"id": steel.element_id, "x_mm": 0.0, "y_mm": -220.0}
+
+    utilisation = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [bar],
+        [],
+        spectrum,
+        title=f"Fatigue utilisation - {spectrum.spectrum_name}",
+    )
+    reinforcement = next(
+        trace for trace in utilisation.data
+        if trace.name == "reinforcing bar"
+    )
+    assert "Traffic &lt;b&gt;A&lt;/b&gt; &amp; B" in (
+        utilisation.layout.title.text
+    )
+    assert list(reinforcement.text) == ["R&lt;br&gt;1 &amp; 2"]
+    assert "R&lt;br&gt;1 &amp; 2" in reinforcement.customdata[0]
+
+    sn = viz.fatigue_sn_figure(
+        steel,
+        properties,
+        gamma_s=1.15,
+        title=f"S-N assessment - {steel.element_id}",
+    )
+    applied = next(
+        trace for trace in sn.data
+        if trace.name == "applied spectrum bins"
+    )
+    assert "R&lt;br&gt;1 &amp; 2" in sn.layout.title.text
+    assert list(applied.text) == ["FAT &lt;i&gt;1&lt;/i&gt; &amp; peak"]
+    assert "FAT &lt;i&gt;1&lt;/i&gt; &amp; peak" in applied.customdata[0][0]
+
+    damage = viz.fatigue_damage_figure(
+        steel,
+        title=f"Miner damage - {steel.element_id}",
+    )
+    assert "R&lt;br&gt;1 &amp; 2" in damage.layout.title.text
+    assert list(damage.data[0].x) == [
+        "FAT &lt;i&gt;1&lt;/i&gt; &amp; peak"
+    ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape as _html_escape
 import math
 
 import plotly.graph_objects as go
@@ -872,6 +873,12 @@ def _fatigue_limit_exceeded(value):
     return number > 1.0 or (number > 0.0 and not math.isfinite(number))
 
 
+def _fatigue_text(value):
+    """Escape user-controlled text before Plotly interprets its HTML subset."""
+
+    return _html_escape(str(value), quote=True)
+
+
 def fatigue_utilisation_map_figure(
     outer,
     holes,
@@ -992,7 +999,7 @@ def fatigue_utilisation_map_figure(
                 symbols.append("star-square" if exceeded else "star")
             else:
                 symbols.append("square-x" if exceeded else "square")
-            fibre = _fatigue_value(result, "fibre_index", "-")
+            fibre = _fatigue_text(_fatigue_value(result, "fibre_index", "-"))
             labels.append(f"C{fibre}")
             hover.append(
                 f"Concrete fibre {fibre}"
@@ -1065,13 +1072,17 @@ def fatigue_utilisation_map_figure(
             )
             for util in utils
         ]
-        labels = [str(record.get("id") or "-") for record, _ in selected]
+        labels = [
+            _fatigue_text(record.get("id") or "-")
+            for record, _ in selected
+        ]
         hover = []
         for (record, result), util in zip(selected, utils):
             damage = float(_fatigue_value(result, "damage_utilisation", 0.0))
             stress = float(_fatigue_value(result, "yield_utilisation", 0.0))
+            element_id = _fatigue_text(record.get("id", "-"))
             hover.append(
-                f"{kind} {record.get('id', '-')}"
+                f"{kind} {element_id}"
                 f"<br>x = {float(record.get('x_mm', 0.0)):.1f} mm, "
                 f"y = {float(record.get('y_mm', 0.0)):.1f} mm"
                 "<br>utilisation = "
@@ -1140,9 +1151,15 @@ def fatigue_utilisation_map_figure(
             hoverinfo="skip",
         ))
 
-    spectrum_name = str(_fatigue_value(spectrum, "spectrum_name", ""))
+    spectrum_name = _fatigue_text(
+        _fatigue_value(spectrum, "spectrum_name", "")
+    )
     fig.update_layout(
-        title=title or f"Fatigue utilisation - {spectrum_name}",
+        title=(
+            _fatigue_text(title)
+            if title is not None
+            else f"Fatigue utilisation - {spectrum_name}"
+        ),
         template=_TEMPLATE,
         height=520,
         margin=dict(l=20, r=25, t=55, b=96),
@@ -1330,7 +1347,7 @@ def fatigue_sn_figure(
     if plotted:
         custom = [
             [
-                str(_fatigue_value(item, "bin_name", "-")),
+                _fatigue_text(_fatigue_value(item, "bin_name", "-")),
                 _fatigue_hover_number(
                     _fatigue_value(item, "cycles_to_failure", math.inf)
                 ),
@@ -1352,7 +1369,10 @@ def fatigue_sn_figure(
                 symbol="circle",
                 line=dict(color="#111827", width=0.8),
             ),
-            text=[str(_fatigue_value(item, "bin_name", "-")) for item in plotted],
+            text=[
+                _fatigue_text(_fatigue_value(item, "bin_name", "-"))
+                for item in plotted
+            ],
             textposition="top center",
             textfont=dict(size=9, color=SCHEMATIC_INK),
             customdata=custom,
@@ -1383,9 +1403,13 @@ def fatigue_sn_figure(
         line_dash="dot",
         line_color=GUIDE_LINE,
     )
-    element_id = str(_fatigue_value(result, "element_id", ""))
+    element_id = _fatigue_text(_fatigue_value(result, "element_id", ""))
     fig.update_layout(
-        title=title or f"S-N assessment - {element_id}",
+        title=(
+            _fatigue_text(title)
+            if title is not None
+            else f"S-N assessment - {element_id}"
+        ),
         template=_TEMPLATE,
         height=450,
         margin=dict(l=65, r=25, t=55, b=100),
@@ -1415,7 +1439,10 @@ def fatigue_damage_figure(result, *, title=None):
     """Plot per-bin and cumulative Palmgren-Miner damage."""
 
     bins = list(_fatigue_items(result, "bins"))
-    names = [str(_fatigue_value(item, "bin_name", "-")) for item in bins]
+    names = [
+        _fatigue_text(_fatigue_value(item, "bin_name", "-"))
+        for item in bins
+    ]
     raw_damage = [
         float(_fatigue_value(item, "damage", 0.0))
         for item in bins
@@ -1551,6 +1578,7 @@ def fatigue_damage_figure(result, *, title=None):
             + str(_fatigue_value(result, "fibre_index", "-"))
         )
     )
+    identifier = _fatigue_text(identifier)
     yaxis = dict(
         title=(
             "Miner damage, D (log scale)"
@@ -1587,7 +1615,11 @@ def fatigue_damage_figure(result, *, title=None):
                 font=dict(size=10, color=SCHEMATIC_INK),
             )
     fig.update_layout(
-        title=title or f"Miner damage - {identifier}",
+        title=(
+            _fatigue_text(title)
+            if title is not None
+            else f"Miner damage - {identifier}"
+        ),
         template=_TEMPLATE,
         height=400,
         margin=dict(l=60, r=25, t=55, b=100),
