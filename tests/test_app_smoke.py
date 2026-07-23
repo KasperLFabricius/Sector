@@ -1796,6 +1796,53 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert fatigue_register.iloc[0]["Case"] == "Traffic"
     assert fatigue_register.iloc[0]["Result state"] == "Calculated"
 
+    _select_view(at, "Fatigue Results")
+    assert not at.exception
+    assert at.selectbox(key="_fatigue_result_spectrum").options == ["Traffic"]
+    assert at.selectbox(key="_fatigue_result_element").options[0] == "R1"
+    detail = at.segmented_control(key="_fatigue_result_detail")
+    assert detail.options == ["Reinforcement", "Spectrum bins", "Basis"]
+    spectrum_summary = next(
+        frame.value for frame in at.dataframe
+        if {"Spectrum", "Governing", "Utilisation [%]"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert spectrum_summary.iloc[0]["Spectrum"] == "Traffic"
+    reinforcement = next(
+        frame.value for frame in at.dataframe
+        if {"Element", "Detail", "Miner D", "Status"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert reinforcement.iloc[0]["Element"] == "R1"
+
+    detail.set_value("Spectrum bins").run()
+    assert not at.exception
+    action_table = next(
+        frame.value for frame in at.dataframe
+        if {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert action_table.iloc[0]["Bin"] == "FAT-01"
+    solver_table = next(
+        frame.value for frame in at.dataframe
+        if {"Bin", "gamma_Ff", "Bond method", "Status"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert solver_table.iloc[0]["Status"] == "OK"
+
+    at.segmented_control(key="_fatigue_result_detail").set_value("Basis").run()
+    assert not at.exception
+    basis_table = next(
+        frame.value for frame in at.dataframe
+        if list(frame.value.columns) == ["Item", "Value"]
+    )
+    assert "Edition" in set(basis_table["Item"])
+    assert "gamma_Ff" in set(basis_table["Item"])
+
     _goto_page(at, "Inputs")
     calculated_fatigue_sig = at.session_state["result_fatigue_sig"]
     current_fck = float(at.session_state["conc_fck"])
@@ -2808,7 +2855,8 @@ def test_view_dropdown_switches_without_error():
     at = _fresh()
     at.run()
     for v in [
-        "Results Overview", "Plastic Results", "Elastic Results", "Detailing"
+        "Results Overview", "Plastic Results", "Elastic Results",
+        "Fatigue Results", "Detailing",
     ]:
         _select_view(at, v)
         assert not at.exception, v

@@ -5,6 +5,7 @@ Greek glyphs are referenced via chr() so this test file stays ASCII.
 
 from __future__ import annotations
 
+import math
 import pathlib
 import sys
 
@@ -834,3 +835,160 @@ def test_detailing_figure_highlights_checked_bars_and_dimensions_spacing_pair():
     assert "c = 180.0 mm" in annotation_text
     assert "required = 205.0 mm" in annotation_text
     assert "tension" in annotation_text
+
+
+def _fatigue_figure_fixture():
+    from types import SimpleNamespace as NS
+
+    steel_bin = NS(
+        bin_name="FAT-1",
+        cycles=2.0e5,
+        design_stress_range_mpa=75.0,
+        cycles_to_failure=3.0e6,
+        damage=2.0e5 / 3.0e6,
+    )
+    steel = NS(
+        element_id="R1",
+        bins=(steel_bin,),
+        damage_utilisation=steel_bin.damage,
+        yield_utilisation=0.42,
+        utilisation=0.42,
+    )
+    concrete_bin = NS(
+        bin_name="FAT-1",
+        cycles=2.0e5,
+        damage=0.12,
+    )
+    concrete = NS(
+        fibre_index=4,
+        x_m=0.2,
+        y_m=-0.3,
+        bins=(concrete_bin,),
+        damage=0.12,
+        damage_utilisation=0.12,
+        stress_utilisation=1.08,
+        utilisation=1.08,
+    )
+    search = NS(
+        x_m=0.2,
+        y_m=-0.3,
+        upper_damage=0.13,
+    )
+    spectrum = NS(
+        spectrum_name="Traffic A",
+        reinforcement=(steel,),
+        concrete=(concrete,),
+        concrete_search=search,
+    )
+    properties = NS(
+        n_star=2.0e6,
+        k1=5.0,
+        k2=9.0,
+        delta_sigma_rsk_mpa=130.0,
+    )
+    return spectrum, steel, concrete, properties
+
+
+def test_fatigue_utilisation_map_is_qa_traceable_and_not_colour_only():
+    spectrum, _steel, _concrete, _properties = _fatigue_figure_fixture()
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    concrete = next(trace for trace in fig.data if trace.name == "concrete fibres")
+    reinforcement = next(
+        trace for trace in fig.data if trace.name == "reinforcing bar"
+    )
+
+    assert "limit exceeded (x marker)" in names
+    assert list(reinforcement.text) == ["R1"]
+    assert list(concrete.text) == ["C4"]
+    assert list(concrete.marker.symbol) == ["star-square"]
+    assert fig.layout.yaxis.scaleanchor == "x"
+    assert 1.0 in list(fig.layout.coloraxis.colorbar.tickvals)
+    assert "limit = 1.00" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_sn_figure_has_both_curves_knee_bins_and_log_axes():
+    _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+
+    fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    characteristic = next(
+        trace for trace in fig.data
+        if trace.name == "characteristic S-N curve"
+    )
+    design = next(trace for trace in fig.data if trace.name == "design S-N curve")
+    applied = next(
+        trace for trace in fig.data if trace.name == "applied spectrum bins"
+    )
+    knee = next(trace for trace in fig.data if trace.name == "design knee N*")
+
+    assert fig.layout.xaxis.type == "log"
+    assert fig.layout.yaxis.type == "log"
+    assert "design S-N curve" in names
+    assert list(applied.text) == ["FAT-1"]
+    assert knee.x[0] == pytest.approx(2.0e6)
+    assert knee.y[0] == pytest.approx(130.0 / 1.15)
+    assert characteristic.y[0] > design.y[0]
+
+
+def test_fatigue_sn_figure_explicitly_omits_zero_range_on_log_axes():
+    from types import SimpleNamespace as NS
+
+    _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+    zero = NS(
+        bin_name="FAT-0",
+        cycles=1.0e6,
+        design_stress_range_mpa=0.0,
+        cycles_to_failure=math.inf,
+        damage=0.0,
+    )
+    steel.bins = (*steel.bins, zero)
+
+    fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
+
+    text = " ".join(annotation.text for annotation in fig.layout.annotations)
+    assert "1 zero-range bin omitted" in text
+
+
+def test_fatigue_damage_figure_shows_bin_cumulative_and_limit():
+    _spectrum, steel, _concrete, _properties = _fatigue_figure_fixture()
+
+    fig = viz.fatigue_damage_figure(steel)
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    assert names == ["bin damage", "cumulative damage"]
+    assert list(fig.data[0].x) == ["FAT-1"]
+    assert fig.data[1].y[-1] == pytest.approx(2.0e5 / 3.0e6)
+    assert any(
+        shape.type == "line" and shape.y0 == 1.0 and shape.y1 == 1.0
+        for shape in fig.layout.shapes
+    )
+
+
+def test_fatigue_damage_figure_uses_log_scale_for_small_contributions():
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        element_id="R1",
+        bins=(
+            NS(bin_name="FAT-1", cycles=1.0e6, damage=1.0e-8),
+            NS(bin_name="FAT-2", cycles=2.0e6, damage=2.0e-7),
+        ),
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    assert fig.layout.yaxis.type == "log"
+    assert "log scale" in fig.layout.yaxis.title.text
+    assert list(fig.data[0].y) == pytest.approx([1.0e-8, 2.0e-7])
+    assert fig.data[1].y[-1] == pytest.approx(2.1e-7)

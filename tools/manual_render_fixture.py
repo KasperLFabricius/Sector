@@ -25,7 +25,7 @@ from tools.report_render_fixture import (  # noqa: E402
     validate_rendered_pages,
 )
 
-_EXPECTED_FIGURE_COUNT = 14
+_EXPECTED_FIGURE_COUNT = 16
 
 
 @functools.lru_cache(maxsize=1)
@@ -96,6 +96,11 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Contents",
         "Plastic / capacity",
         "Stress limits and/or Crack width",
+        "Grouped fatigue",
+        "Fatigue Results",
+        "Partial factor on the cyclic fatigue action",
+        "Miner damage",
+        "certified concrete-search bound",
         "Results overview",
         "Minimum reinforcement and clear spacing",
         "Lap / bundle ID",

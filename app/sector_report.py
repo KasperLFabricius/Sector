@@ -38,6 +38,8 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import case_analysis
+import fatigue_inputs
+import fatigue_presentation
 import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
@@ -758,6 +760,10 @@ class ReportBuilder:
                 getattr(self, method)()
         finally:
             self.inp, self.out = self._base_inp, self._base_out
+        if self._base_out.get("fatigue") is not None:
+            self._tick(0.88, "Grouped fatigue...")
+            self.flow.append(PageBreak())
+            self._fatigue()
         self._appendix()
         self._tick(0.92, "Writing PDF...")
         revision_id = short_revision(self.meta.get("source_revision"))
@@ -776,6 +782,15 @@ class ReportBuilder:
             for case_inp, _ in self._case_contexts(family)
             if presentation.action_set(case_inp, family)["id"]
         ]
+        cases.extend([
+            str(fatigue_presentation.value(spectrum, "spectrum_name", ""))
+            for spectrum in fatigue_presentation.items(
+                self._base_out.get("fatigue"), "spectra"
+            )
+            if str(fatigue_presentation.value(
+                spectrum, "spectrum_name", ""
+            )).strip()
+        ])
         case_text = " / ".join(cases) or "-"
         header = (
             f"Project: {project}  |  Section: {section}  |  Cases: {case_text}"
@@ -824,6 +839,19 @@ class ReportBuilder:
                 "Elastic analysis cases",
                 self._case_register("elastic"),
             ])
+        fatigue = self._base_out.get("fatigue")
+        if fatigue is not None:
+            rows.append([
+                "Fatigue spectra",
+                "; ".join(
+                    _html_escape(str(fatigue_presentation.value(
+                        spectrum, "spectrum_name", "-"
+                    )))
+                    for spectrum in fatigue_presentation.items(
+                        fatigue, "spectra"
+                    )
+                ) or "-",
+            ])
         self._table(rows, [55 * mm, 110 * mm])
         if m.get("comments"):
             self._h2("Comments")
@@ -842,6 +870,12 @@ class ReportBuilder:
                 labels.append(f"{label} ({count} case{'s' if count != 1 else ''})")
         if any(result.get("valid") for result in self._result_values("combined")):
             labels.append("combined M-V-T")
+        if fatigue is not None:
+            count = len(fatigue_presentation.items(fatigue, "spectra"))
+            labels.append(
+                f"grouped fatigue ({count} spectrum"
+                f"{'s' if count != 1 else ''})"
+            )
         ran = ", ".join(labels) or "none"
         self._small(f"Analysis mode: {mode}. Result sections included: {ran}.")
         basis = self.inp.get("design_basis") or {}
@@ -1275,7 +1309,47 @@ class ReportBuilder:
                 )
                 self._small("N in kN; M in kNm. Stress and crack acceptance are "
                             "selected per case; their limits are global.")
-            if not plastic and not elastic:
+            fatigue_rows = (
+                fatigue_inputs.spectrum_records(
+                    inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
+                )
+                if inp.get("fatigue_on") else []
+            )
+            if fatigue_rows:
+                self._small("<b>Grouped fatigue spectra</b>")
+                rows = [[
+                    "Spectrum", "Bin", "Description", "Cycles",
+                    "N<sub>long,Ed</sub>", "M<sub>x,long,Ed</sub>",
+                    "M<sub>y,long,Ed</sub>", "N<sub>short,Ed</sub>",
+                    "M<sub>x,short,Ed</sub>", "M<sub>y,short,Ed</sub>",
+                ]]
+                rows.extend([
+                    [
+                        _html_escape(row[fatigue_inputs.SPECTRUM]),
+                        _html_escape(row[fatigue_inputs.NAME]),
+                        _html_escape(row[fatigue_inputs.DESCRIPTION]),
+                        _fmt(row[fatigue_inputs.CYCLES], 3),
+                        _fmt(row["n_long_ed_kn"], 3),
+                        _fmt(row["mx_long_ed_knm"], 3),
+                        _fmt(row["my_long_ed_knm"], 3),
+                        _fmt(row["n_short_ed_kn"], 3),
+                        _fmt(row["mx_short_ed_knm"], 3),
+                        _fmt(row["my_short_ed_knm"], 3),
+                    ]
+                    for row in fatigue_rows
+                ])
+                self._table(
+                    rows,
+                    [18 * mm, 18 * mm, 24 * mm, 15 * mm]
+                    + [15 * mm] * 6,
+                    font=5.1,
+                    keep=False,
+                )
+                self._small(
+                    "N in kN; M in kNm. Long is the sustained state; short is "
+                    "the cyclic increment. N is tension-positive."
+                )
+            if not plastic and not elastic and not fatigue_rows:
                 self._small("No active load cases.")
             return
 
@@ -1425,13 +1499,94 @@ class ReportBuilder:
                               else f"{_fmt(dia, 3)} mm global override")])
                 rows.append(["Mild-steel bond coefficient k<sub>1</sub>",
                              _fmt(inp.get("sls_k1"), 3)])
+        fatigue_rows = None
+        fatigue = self._base_out.get("fatigue")
+        if fatigue is not None:
+            checks = fatigue.get("checks") or {}
+            factors = fatigue.get("partial_factors") or {}
+            concrete = fatigue.get("concrete_parameters") or {}
+            fatigue_basis = fatigue.get("basis") or {}
+            fatigue_rows = [["Setting", "Value"]]
+            fatigue_rows.extend([
+                ["Fatigue edition", str(fatigue.get("edition") or "-")],
+                [
+                    "Fatigue checks",
+                    ", ".join(
+                        label
+                        for key, label in (
+                            ("reinforcement", "reinforcement"),
+                            ("concrete", "concrete"),
+                        )
+                        if checks.get(key)
+                    ) or "-",
+                ],
+                ["Fatigue gamma<sub>Ff</sub>",
+                 _fmt(factors.get("gamma_ff"), 3)],
+            ])
+            if checks.get("reinforcement"):
+                fatigue_rows.append([
+                    "Fatigue gamma<sub>s</sub>",
+                    _fmt(factors.get("gamma_s"), 3),
+                ])
+            if checks.get("concrete"):
+                fatigue_rows.extend([
+                    ["Fatigue gamma<sub>c,fat</sub>",
+                     _fmt(factors.get("gamma_c"), 3)],
+                    ["Concrete age t<sub>0</sub>",
+                     f"{_fmt(fatigue.get('t0_days'), 2)} days"],
+                    ["beta<sub>cc</sub>(t<sub>0</sub>)",
+                     _fmt(concrete.get("beta_cc_t0"), 4)],
+                    ["Concrete fatigue f<sub>ck</sub>",
+                     f"{_fmt(concrete.get('fck_mpa'), 2)} MPa"],
+                    ["Concrete fatigue alpha<sub>cc</sub>",
+                     _fmt(concrete.get("alpha_cc"), 3)],
+                    ["Concrete fatigue k<sub>1</sub>",
+                     _fmt(concrete.get("k1"), 3)],
+                    ["Concrete fatigue C", _fmt(concrete.get("c"), 3)],
+                ])
+            fatigue_rows.extend([
+                ["Fatigue n<sub>l</sub> / n<sub>s</sub>",
+                 f"{_fmt(inp.get('nl'), 3)} / {_fmt(inp.get('ns'), 3)}"],
+                ["Fatigue authority",
+                 str(fatigue_basis.get("authority") or "-")],
+                ["Fatigue method", str(fatigue_basis.get("method") or "-")],
+                ["Spectrum source",
+                 str(fatigue_basis.get("spectrum_source") or "-")],
+                ["Cycle-count source",
+                 str(fatigue_basis.get("cycle_count_source") or "-")],
+                ["Dynamic effects",
+                 str(fatigue_basis.get("dynamic_effects") or "-")],
+                ["Cycle counting",
+                 str(fatigue_basis.get("cycle_counting") or "-")],
+                ["Concurrence basis",
+                 str(fatigue_basis.get("concurrence_basis") or "-")],
+                ["Atypical traffic",
+                 str(fatigue_basis.get("atypical_traffic") or "-")],
+                ["Approval reference",
+                 str(fatigue_basis.get("approval_reference") or "-")],
+                ["Authority adjustments",
+                 str(fatigue_basis.get("authority_adjustments") or "-")],
+            ])
+            for detail in fatigue.get("fatigue_detail_basis") or ():
+                fatigue_rows.append([
+                    f"Fatigue detail {detail.get('id', '-')}",
+                    (
+                        f"{detail.get('name') or detail.get('preset') or '-'}; "
+                        f"source: {detail.get('source') or 'not stated'}"
+                    ),
+                ])
         self._table(rows, [110 * mm, 55 * mm])
+        if fatigue_rows:
+            self.flow.append(PageBreak())
+            self._h2("Grouped fatigue settings")
+            self._table(fatigue_rows, [110 * mm, 55 * mm])
 
     def _theory(self):
         self._h1("Basis of analysis")
         plastic_results = self._result_values("plastic")
         elastic_results = self._result_values("elastic")
         minimum_results = self._result_values("minimum_reinforcement")
+        fatigue = self._base_out.get("fatigue")
         if plastic_results:
             material_2023 = "2023" in str(self.inp.get("concrete_preset", ""))
             steel_presets = [
@@ -1480,6 +1635,52 @@ class ReportBuilder:
             if any(result.get("show_cw") for result in elastic_results):
                 self._p("<b>Crack width.</b> The requested crack-width calculation "
                         "follows the selected code method and is worked below.")
+        if fatigue is not None:
+            references = fatigue.get("calculation_references") or {}
+            self._p(
+                "<b>Grouped fatigue.</b> Each named spectrum is checked "
+                "independently with the cracked Elastic solver. For each bin, "
+                "the long action is the sustained state and the short action is "
+                "the cyclic increment."
+            )
+            self._formula(
+                "delta sigma<sub>i</sub> = sigma(long + "
+                "gamma<sub>Ff</sub> short)<sub>i</sub> - "
+                "sigma(long)<sub>i</sub>",
+                ref=(
+                    "gamma<sub>Ff</sub> is applied to the cyclic section "
+                    "actions before solving; stresses are not scaled afterwards."
+                ),
+            )
+            if (fatigue.get("checks") or {}).get("reinforcement"):
+                self._p(
+                    "<b>Reinforcement fatigue.</b> The assigned two-slope S-N "
+                    "curve gives N<sub>R,i</sub> for each design stress range. "
+                    "The same bin also checks yield or proof stress."
+                )
+                self._formula(
+                    "D = sum(n<sub>i</sub> / N<sub>R,i</sub>) &#8804; 1.00",
+                    ref=_html_escape(
+                        references.get("reinforcement") or "-"
+                    ),
+                )
+            if (fatigue.get("checks") or {}).get("concrete"):
+                self._p(
+                    "<b>Concrete fatigue.</b> Compression minima and maxima are "
+                    "evaluated at the same fibre for every bin. Miner damage and "
+                    "the maximum compressive-stress ratio are checked. An "
+                    "adaptive section search reports a certified upper damage "
+                    "bound."
+                )
+                self._formula(
+                    "D<sub>c</sub> = sum(n<sub>i</sub> / "
+                    "N<sub>R,i</sub>) &#8804; 1.00",
+                    ref=_html_escape(references.get("concrete") or "-"),
+                )
+            self._small(
+                "Miner damage is accumulated within each named spectrum only; "
+                "different spectrum names are not combined."
+            )
         if minimum_results:
             edition = str(self.inp.get("detailing_edition") or "")
             if edition == detailing.EC2_2023:
@@ -1515,6 +1716,7 @@ class ReportBuilder:
                 "A declared lap or bundle remains an engineering-review item."
             )
         if (not plastic_results and not elastic_results and not minimum_results
+                and fatigue is None
                 and self._base_out.get("clear_spacing") is None):
             self._p("No bending-capacity or elastic-stress result was included in "
                     "this report.")
@@ -3499,6 +3701,9 @@ class ReportBuilder:
                 ])
         if len(rows) == 1:
             return
+        # Keep the legend with its table without the one-line continuation page
+        # produced when only the footnote overflows the preceding calculation.
+        self.flow.append(PageBreak())
         self._h2("Crack-width candidates - all checked cases")
         self._table(
             rows,
@@ -3542,6 +3747,589 @@ class ReportBuilder:
                         "(h-a<sub>y</sub>-x) accounts for curvature, and the mean "
                         "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
                         "/E<sub>s</sub>.")
+
+    def _fatigue(self):
+        payload = self._base_out["fatigue"]
+        status = fatigue_presentation.overall_status(payload)
+        governing_name = str(payload.get("governing_spectrum") or "-")
+        self._h1("Grouped fatigue")
+        self._status_block(
+            f"{status} - {governing_name} | utilisation "
+            f"{_pct(fatigue_presentation.finite_number(payload.get('utilisation')))}",
+            status,
+        )
+        checks = payload.get("checks") or {}
+        check_text = ", ".join(
+            label
+            for key, label in (
+                ("reinforcement", "reinforcement"),
+                ("concrete", "concrete"),
+            )
+            if checks.get(key)
+        ) or "-"
+        self._small(
+            f"<b>Edition:</b> {_html_escape(str(payload.get('edition') or '-'))}; "
+            f"<b>checks:</b> {check_text}. Each spectrum is independent."
+        )
+        warnings = tuple(payload.get("warnings") or ())
+        for warning in warnings:
+            self._small("<b>Review:</b> " + _html_escape(str(warning)))
+
+        self._h2("Basis and provenance")
+        basis = payload.get("basis") or {}
+        factors = payload.get("partial_factors") or {}
+        concrete_parameters = payload.get("concrete_parameters") or {}
+        basis_rows = [
+            ["Item", "Value"],
+            ["Authority", _html_escape(str(basis.get("authority") or "-"))],
+            ["Method", _html_escape(str(basis.get("method") or "-"))],
+            ["Authority reference",
+             _html_escape(str(payload.get("authority_reference") or "-"))],
+            ["Spectrum source",
+             _html_escape(str(basis.get("spectrum_source") or "-"))],
+            ["Cycle-count source",
+             _html_escape(str(basis.get("cycle_count_source") or "-"))],
+            ["Dynamic effects",
+             _html_escape(str(basis.get("dynamic_effects") or "-"))],
+            ["Cycle counting",
+             _html_escape(str(basis.get("cycle_counting") or "-"))],
+            ["Concurrence basis",
+             _html_escape(str(basis.get("concurrence_basis") or "-"))],
+            ["Atypical traffic",
+             _html_escape(str(basis.get("atypical_traffic") or "-"))],
+            ["Approval reference",
+             _html_escape(str(basis.get("approval_reference") or "-"))],
+            ["Authority adjustments",
+             _html_escape(str(basis.get("authority_adjustments") or "-"))],
+            ["gamma<sub>Ff</sub>", _fmt(factors.get("gamma_ff"), 3)],
+        ]
+        if checks.get("reinforcement"):
+            basis_rows.append([
+                "gamma<sub>s</sub>", _fmt(factors.get("gamma_s"), 3)
+            ])
+        if checks.get("concrete"):
+            basis_rows.extend([
+                ["gamma<sub>c,fat</sub>", _fmt(factors.get("gamma_c"), 3)],
+                ["t<sub>0</sub> (days)", _fmt(payload.get("t0_days"), 2)],
+                ["beta<sub>cc</sub>(t<sub>0</sub>)",
+                 _fmt(concrete_parameters.get("beta_cc_t0"), 4)],
+                ["f<sub>ck</sub> (MPa)",
+                 _fmt(concrete_parameters.get("fck_mpa"), 2)],
+                ["alpha<sub>cc</sub>",
+                 _fmt(concrete_parameters.get("alpha_cc"), 3)],
+                ["k<sub>1</sub>",
+                 _fmt(concrete_parameters.get("k1"), 3)],
+                ["C", _fmt(concrete_parameters.get("c"), 3)],
+            ])
+        if basis.get("notes"):
+            basis_rows.append([
+                "Notes", _html_escape(str(basis.get("notes")))
+            ])
+        self._table(basis_rows, [52 * mm, 113 * mm], keep=False)
+
+        references = payload.get("calculation_references") or {}
+        if references:
+            self._h2("Calculation references")
+            self._table(
+                [["Check", "Reference"]]
+                + [
+                    [
+                        key.capitalize(),
+                        _html_escape(str(reference)),
+                    ]
+                    for key, reference in references.items()
+                ],
+                [35 * mm, 130 * mm],
+                font=7.2,
+                keep=False,
+            )
+        details = payload.get("fatigue_detail_basis") or ()
+        if details:
+            self._h2("Assigned fatigue details")
+            rows = [[
+                "ID", "Name", "Type", "Preset", "N*", "k<sub>1</sub>",
+                "k<sub>2</sub>", "delta sigma<sub>Rsk</sub>", "Source",
+            ]]
+            rows.extend([
+                [
+                    _html_escape(str(detail.get("id") or "-")),
+                    _html_escape(str(detail.get("name") or "-")),
+                    _html_escape(str(detail.get("kind") or "-")),
+                    _html_escape(str(detail.get("preset") or "-")),
+                    _fmt(detail.get("n_star"), 3),
+                    _fmt(detail.get("k1"), 2),
+                    _fmt(detail.get("k2"), 2),
+                    f"{_fmt(detail.get('delta_sigma_rsk_mpa'), 2)} MPa",
+                    _html_escape(str(detail.get("source") or "not stated")),
+                ]
+                for detail in details
+            ])
+            self._table(
+                rows,
+                [12 * mm, 22 * mm, 14 * mm, 31 * mm, 15 * mm,
+                 10 * mm, 10 * mm, 23 * mm, 31 * mm],
+                font=5.3,
+                keep=False,
+            )
+
+        summary_rows = fatigue_presentation.spectrum_rows(payload)
+        self._h2("Spectrum summary")
+        rows = [[
+            "Spectrum", "Status", "Bins", "Steel", "Concrete", "Governing",
+            "Utilisation", "Search upper D",
+        ]]
+        rows.extend([
+            [
+                _html_escape(row["spectrum"]),
+                row["status"],
+                row["bins"],
+                row["reinforcement_elements"],
+                row["concrete_fibres"],
+                _html_escape(row["governing"]),
+                _pct(row["utilisation"]),
+                _fmt_sig(row["search_upper_damage"], 6),
+            ]
+            for row in summary_rows
+        ])
+        self._table(
+            rows,
+            [24 * mm, 16 * mm, 10 * mm, 12 * mm, 15 * mm,
+             44 * mm, 22 * mm, 23 * mm],
+            font=6.0,
+            keep=False,
+        )
+        self._small(
+            "Miner sums are accumulated within each spectrum; different "
+            "spectrum names are not combined."
+        )
+
+        input_records = fatigue_inputs.spectrum_records(
+            self._base_inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
+        )
+        spectra = fatigue_presentation.items(payload, "spectra")
+        for spectrum in spectra:
+            # Each independently assessed spectrum starts as a coherent report
+            # unit; do not strand its heading below the aggregate summary.
+            self.flow.append(PageBreak())
+            spectrum_name = str(
+                fatigue_presentation.value(spectrum, "spectrum_name", "-")
+            )
+            spectrum_status = fatigue_presentation.result_status(spectrum)
+            self._h2("Spectrum - " + _html_escape(spectrum_name))
+            self._status_block(
+                f"{spectrum_status} - utilisation "
+                f"{_pct(fatigue_presentation.finite_number(
+                    fatigue_presentation.value(spectrum, 'utilisation')
+                ))} | {_html_escape(
+                    fatigue_presentation.governing_criterion(spectrum)
+                )}",
+                spectrum_status,
+            )
+
+            self._fig(
+                viz.fatigue_utilisation_map_figure(
+                    self._base_inp.get("outer", []),
+                    self._base_inp.get("holes", []),
+                    self._base_inp.get("bar_elements", []),
+                    self._base_inp.get("tendon_elements", []),
+                    spectrum,
+                    title=f"Fatigue utilisation - {spectrum_name}",
+                ),
+                150,
+                105,
+            )
+
+            selected_inputs = [
+                row for row in input_records
+                if row[fatigue_inputs.SPECTRUM] == spectrum_name
+            ]
+            if selected_inputs:
+                self._h2("Entered spectrum actions")
+                rows = [[
+                    "Bin", "Description", "Cycles", "N<sub>long,Ed</sub>",
+                    "M<sub>x,long,Ed</sub>", "M<sub>y,long,Ed</sub>",
+                    "N<sub>short,Ed</sub>", "M<sub>x,short,Ed</sub>",
+                    "M<sub>y,short,Ed</sub>",
+                ]]
+                rows.extend([
+                    [
+                        _html_escape(row[fatigue_inputs.NAME]),
+                        _html_escape(row[fatigue_inputs.DESCRIPTION]),
+                        _fmt(row[fatigue_inputs.CYCLES], 3),
+                        _fmt(row["n_long_ed_kn"], 3),
+                        _fmt(row["mx_long_ed_knm"], 3),
+                        _fmt(row["my_long_ed_knm"], 3),
+                        _fmt(row["n_short_ed_kn"], 3),
+                        _fmt(row["mx_short_ed_knm"], 3),
+                        _fmt(row["my_short_ed_knm"], 3),
+                    ]
+                    for row in selected_inputs
+                ])
+                self._table(
+                    rows,
+                    [18 * mm, 30 * mm, 16 * mm] + [17 * mm] * 6,
+                    font=5.3,
+                    keep=False,
+                )
+                self._small(
+                    "N in kN; M in kNm; N tension-positive. "
+                    "Long is sustained; short is the cyclic increment."
+                )
+
+            state_rows = fatigue_presentation.spectrum_bin_rows(spectrum)
+            if state_rows:
+                self._h2("Elastic solver states")
+                rows = [[
+                    "Bin", "Status", "gamma<sub>Ff</sub>", "Bond method",
+                    "Max design delta sigma", "Max concrete compression",
+                ]]
+                rows.extend([
+                    [
+                        _html_escape(row["bin"]),
+                        row["status"],
+                        _fmt(row["gamma_ff"], 3),
+                        _html_escape(row["bond_method"]),
+                        f"{_fmt(row['max_design_stress_range_mpa'], 3)} MPa",
+                        f"{_fmt(row['max_concrete_compression_mpa'], 3)} MPa",
+                    ]
+                    for row in state_rows
+                ])
+                self._table(
+                    rows,
+                    [22 * mm, 18 * mm, 22 * mm, 42 * mm, 31 * mm, 31 * mm],
+                    font=6.4,
+                    keep=False,
+                )
+
+            reinforcement_rows = fatigue_presentation.reinforcement_rows(
+                spectrum
+            )
+            if reinforcement_rows:
+                self._h2("Reinforcement fatigue")
+                rows = [[
+                    "Element", "Type", "Detail", "phi", "Miner D",
+                    "Yield / proof util.", "Governing", "Util.", "Status",
+                ]]
+                rows.extend([
+                    [
+                        _html_escape(row["element_id"]),
+                        _html_escape(row["kind"]),
+                        _html_escape(row["detail_id"]),
+                        f"{_fmt(row['diameter_mm'], 1)} mm",
+                        _fmt_sig(row["damage"], 6),
+                        _pct(row["yield_utilisation"]),
+                        _html_escape(row["governing"]),
+                        _pct(row["utilisation"]),
+                        row["status"],
+                    ]
+                    for row in reinforcement_rows
+                ])
+                self._table(
+                    rows,
+                    [18 * mm, 14 * mm, 15 * mm, 15 * mm, 18 * mm,
+                     23 * mm, 29 * mm, 19 * mm, 16 * mm],
+                    font=5.7,
+                    keep=False,
+                )
+                governing_id = fatigue_presentation.value(
+                    spectrum, "governing_reinforcement_id"
+                )
+                if governing_id is None:
+                    governing_id = max(
+                        reinforcement_rows,
+                        key=lambda row: row["utilisation"] or -math.inf,
+                    )["element_id"]
+                result = fatigue_presentation.result_by_element(
+                    spectrum, governing_id
+                )
+                properties = fatigue_presentation.reinforcement_property(
+                    payload, governing_id
+                )
+                if result is not None and properties is not None:
+                    self._h2(
+                        "Governing reinforcement element - "
+                        + _html_escape(str(governing_id))
+                    )
+                    self._table(
+                        [[
+                            "Detail", "N*", "k<sub>1</sub>", "k<sub>2</sub>",
+                            "delta sigma<sub>Rsk</sub>", "f<sub>yk</sub> / proof",
+                            "Bond factor",
+                        ], [
+                            _html_escape(str(fatigue_presentation.value(
+                                properties, "detail_id", "-"
+                            ))),
+                            _fmt(fatigue_presentation.value(
+                                properties, "n_star"
+                            ), 3),
+                            _fmt(fatigue_presentation.value(
+                                properties, "k1"
+                            ), 2),
+                            _fmt(fatigue_presentation.value(
+                                properties, "k2"
+                            ), 2),
+                            f"{_fmt(fatigue_presentation.value(
+                                properties, 'delta_sigma_rsk_mpa'
+                            ), 2)} MPa",
+                            f"{_fmt(fatigue_presentation.value(
+                                properties, 'fytk_mpa'
+                            ), 2)} MPa",
+                            _fmt(fatigue_presentation.value(
+                                properties, "bond_ratio_xi"
+                            ), 3),
+                        ]],
+                        [22 * mm, 20 * mm, 15 * mm, 15 * mm,
+                         32 * mm, 32 * mm, 24 * mm],
+                        font=6.2,
+                    )
+                    self._fig(
+                        viz.fatigue_sn_figure(
+                            result,
+                            properties,
+                            factors.get("gamma_s"),
+                            title=f"S-N assessment - {governing_id}",
+                        ),
+                        150,
+                        95,
+                    )
+                    self._fig(
+                        viz.fatigue_damage_figure(
+                            result,
+                            title=f"Miner damage - {governing_id}",
+                        ),
+                        150,
+                        82,
+                    )
+                    bin_rows = fatigue_presentation.reinforcement_bin_rows(
+                        result
+                    )
+                    rows = [[
+                        "Bin", "Cycles", "Status", "Long stress",
+                        "Fatigue total", "Design total", "Elastic delta sigma",
+                        "Design delta sigma", "Bond factor / method",
+                    ]]
+                    rows.extend([
+                        [
+                            _html_escape(row["bin"]),
+                            _fmt(row["cycles"], 3),
+                            row["status"],
+                            _fmt(row["stress_long_mpa"], 3),
+                            _fmt(row["stress_total_mpa"], 3),
+                            _fmt(row["stress_total_design_mpa"], 3),
+                            _fmt(row["stress_range_elastic_mpa"], 3),
+                            _fmt(row["design_stress_range_mpa"], 3),
+                            (
+                                f"{_fmt(row['bond_adjustment'], 3)}<br/>"
+                                f"{_html_escape(row['bond_method'])}"
+                            ),
+                        ]
+                        for row in bin_rows
+                    ])
+                    self._table(
+                        rows,
+                        [18 * mm, 18 * mm, 16 * mm, 18 * mm, 18 * mm,
+                         19 * mm, 20 * mm, 21 * mm, 20 * mm],
+                        font=5.2,
+                        keep=False,
+                    )
+                    self._small(
+                        "All stresses are in MPa. Fatigue total includes the bond "
+                        "transformation; elastic delta sigma is the raw solver "
+                        "range; design values include action-level "
+                        "gamma<sub>Ff</sub>."
+                    )
+                    rows = [[
+                        "Bin", "delta sigma<sub>Rsk</sub>",
+                        "delta sigma<sub>Rd</sub>", "k", "N<sub>R</sub>",
+                        "Miner D", "Gov. stress", "Yield / proof", "Yield util.",
+                    ]]
+                    rows.extend([
+                        [
+                            _html_escape(row["bin"]),
+                            _fmt(row["delta_sigma_rsk_mpa"], 3),
+                            _fmt(row["delta_sigma_rd_mpa"], 3),
+                            _fmt(row["sn_exponent"], 2),
+                            _fmt_sig(row["cycles_to_failure"], 6),
+                            _fmt_sig(row["damage"], 6),
+                            _fmt(row["governing_stress_mpa"], 3),
+                            _fmt(row["yield_limit_mpa"], 3),
+                            _pct(row["yield_utilisation"]),
+                        ]
+                        for row in bin_rows
+                    ])
+                    self._table(
+                        rows,
+                        [18 * mm, 20 * mm, 20 * mm, 12 * mm, 21 * mm,
+                         18 * mm, 20 * mm, 21 * mm, 18 * mm],
+                        font=5.4,
+                        keep=False,
+                    )
+
+            concrete_rows = fatigue_presentation.concrete_rows(spectrum)
+            if concrete_rows:
+                self._h2("Concrete fatigue")
+                rows = [[
+                    "Fibre", "Source", "x", "y", "f<sub>cd,fat</sub>",
+                    "Miner D", "Stress util.", "Governing", "Util.", "Status",
+                ]]
+                rows.extend([
+                    [
+                        row["fibre_index"],
+                        row["source"],
+                        _fmt(row["x_mm"], 1),
+                        _fmt(row["y_mm"], 1),
+                        _fmt(row["fcd_fat_mpa"], 3),
+                        _fmt_sig(row["damage"], 6),
+                        _pct(row["stress_utilisation"]),
+                        row["governing"],
+                        _pct(row["utilisation"]),
+                        row["status"],
+                    ]
+                    for row in concrete_rows
+                ])
+                self._table(
+                    rows,
+                    [11 * mm, 20 * mm, 13 * mm, 13 * mm, 17 * mm,
+                     16 * mm, 18 * mm, 22 * mm, 16 * mm, 14 * mm],
+                    font=5.4,
+                    keep=False,
+                )
+                self._small(
+                    "Coordinates in mm; f<sub>cd,fat</sub> in MPa. Damage and "
+                    "stress are evaluated at the same fixed fibre."
+                )
+                governing_fibre = fatigue_presentation.value(
+                    spectrum, "governing_concrete_fibre"
+                )
+                result = fatigue_presentation.result_by_fibre(
+                    spectrum, governing_fibre
+                )
+                if result is None:
+                    result = max(
+                        fatigue_presentation.items(spectrum, "concrete"),
+                        key=lambda item: (
+                            fatigue_presentation.finite_number(
+                                fatigue_presentation.value(
+                                    item, "utilisation"
+                                )
+                            ) or -math.inf
+                        ),
+                    )
+                    governing_fibre = fatigue_presentation.value(
+                        result, "fibre_index"
+                    )
+                self._h2(
+                    "Governing concrete fibre - "
+                    + _html_escape(str(governing_fibre))
+                )
+                self._fig(
+                    viz.fatigue_damage_figure(
+                        result,
+                        title=f"Miner damage - concrete fibre {governing_fibre}",
+                    ),
+                    150,
+                    82,
+                )
+                search = fatigue_presentation.value(
+                    spectrum, "concrete_search"
+                )
+                if search is not None:
+                    search_status = (
+                        "CERTIFIED"
+                        if fatigue_presentation.value(
+                            search, "converged", False
+                        )
+                        else "INVALID"
+                    )
+                    self._h2("Certified governing-fibre search")
+                    self._table(
+                        [[
+                            "Status", "x", "y", "Point D", "Upper D",
+                            "Abs. gap", "Rel. gap", "Divisions", "Boxes", "Points",
+                        ], [
+                            search_status,
+                            f"{_fmt(1000.0 * fatigue_presentation.value(
+                                search, 'x_m', 0.0
+                            ), 2)} mm",
+                            f"{_fmt(1000.0 * fatigue_presentation.value(
+                                search, 'y_m', 0.0
+                            ), 2)} mm",
+                            _fmt_sig(fatigue_presentation.value(
+                                search, "damage"
+                            ), 6),
+                            _fmt_sig(fatigue_presentation.value(
+                                search, "upper_damage"
+                            ), 6),
+                            _fmt_sig(fatigue_presentation.value(
+                                search, "absolute_gap"
+                            ), 6),
+                            _pct(fatigue_presentation.value(
+                                search, "relative_gap"
+                            )),
+                            fatigue_presentation.value(search, "divisions", "-"),
+                            fatigue_presentation.value(
+                                search, "boxes_evaluated", "-"
+                            ),
+                            fatigue_presentation.value(
+                                search, "points_evaluated", "-"
+                            ),
+                        ]],
+                        [16 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm,
+                         16 * mm, 16 * mm, 16 * mm, 18 * mm, 18 * mm],
+                        font=5.3,
+                    )
+                bin_rows = fatigue_presentation.concrete_bin_rows(result)
+                rows = [[
+                    "Bin", "Cycles", "Status", "Long comp.", "Total comp.",
+                    "Design min", "Design max", "Ratio", "E<sub>cd,min</sub>",
+                    "E<sub>cd,max</sub>",
+                ]]
+                rows.extend([
+                    [
+                        _html_escape(row["bin"]),
+                        _fmt(row["cycles"], 3),
+                        row["status"],
+                        _fmt(row["compression_long_mpa"], 3),
+                        _fmt(row["compression_total_mpa"], 3),
+                        _fmt(row["compression_min_design_mpa"], 3),
+                        _fmt(row["compression_max_design_mpa"], 3),
+                        _fmt(row["stress_ratio"], 4),
+                        _fmt(row["e_cd_min"], 4),
+                        _fmt(row["e_cd_max"], 4),
+                    ]
+                    for row in bin_rows
+                ])
+                self._table(
+                    rows,
+                    [17 * mm, 17 * mm, 15 * mm, 18 * mm, 18 * mm,
+                     18 * mm, 18 * mm, 14 * mm, 15 * mm, 15 * mm],
+                    font=5.2,
+                    keep=False,
+                )
+                self._small(
+                    "Compression values in MPa; E<sub>cd</sub> is the "
+                    "normalised design compression level."
+                )
+                rows = [[
+                    "Bin", "N<sub>R</sub>", "log<sub>10</sub>N<sub>R</sub>",
+                    "Miner D", "Stress utilisation",
+                ]]
+                rows.extend([
+                    [
+                        _html_escape(row["bin"]),
+                        _fmt_sig(row["cycles_to_failure"], 6),
+                        _fmt(row["log10_cycles_to_failure"], 5),
+                        _fmt_sig(row["damage"], 6),
+                        _pct(row["stress_utilisation"]),
+                    ]
+                    for row in bin_rows
+                ])
+                self._table(
+                    rows,
+                    [28 * mm, 35 * mm, 35 * mm, 32 * mm, 35 * mm],
+                    font=6.5,
+                    keep=False,
+                )
 
     def _appendix(self):
         self.flow.append(PageBreak())
@@ -3675,6 +4463,30 @@ class ReportBuilder:
             lines.append(
                 "The combined M-V-T chapter states the selected edition, the common "
                 "strut-angle basis and the applicable interaction expressions."
+            )
+        fatigue = self._base_out.get("fatigue")
+        if fatigue is not None:
+            references = fatigue.get("calculation_references") or {}
+            lines.append(
+                "Grouped fatigue spectra are assessed independently with the "
+                "cracked Elastic solver. gamma<sub>Ff</sub> is applied to the "
+                "cyclic actions before solving; gamma<sub>s</sub> is applied to "
+                "the reinforcement S-N resistance."
+            )
+            for label, reference in references.items():
+                lines.append(
+                    f"Fatigue - {_html_escape(label)}: "
+                    f"{_html_escape(str(reference))}."
+                )
+            authority_reference = fatigue.get("authority_reference")
+            if authority_reference:
+                lines.append(
+                    "Fatigue spectrum authority/method reference: "
+                    + _html_escape(str(authority_reference))
+                    + "."
+                )
+            lines.append(
+                "Torsion and shear fatigue are not assessed in this version."
             )
         lines.append(
             "The printed gamma<sub>c</sub>, gamma<sub>s</sub> and reinforcement "
