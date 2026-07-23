@@ -1278,7 +1278,7 @@ def manual_blocks() -> list:
     md("Sector checks the section vertices and runs an adaptive branch-and-bound "
        "search over the concrete area. The result includes the largest evaluated "
        "damage, a conservative upper bound, the absolute and relative gap, sample "
-       "and box counts, termination reason and convergence. The upper bound governs "
+       "and box counts, and convergence. The upper bound governs "
        "acceptance, so an unresolved potentially critical region cannot pass.")
 
     h2("Edition and scope summary")

@@ -1548,31 +1548,56 @@ class ReportBuilder:
                 ["Fatigue n<sub>l</sub> / n<sub>s</sub>",
                  f"{_fmt(inp.get('nl'), 3)} / {_fmt(inp.get('ns'), 3)}"],
                 ["Fatigue authority",
-                 str(fatigue_basis.get("authority") or "-")],
-                ["Fatigue method", str(fatigue_basis.get("method") or "-")],
+                 _html_escape(str(fatigue_basis.get("authority") or "-"))],
+                ["Fatigue method",
+                 _html_escape(str(fatigue_basis.get("method") or "-"))],
                 ["Spectrum source",
-                 str(fatigue_basis.get("spectrum_source") or "-")],
+                 _html_escape(str(
+                     fatigue_basis.get("spectrum_source") or "-"
+                 ))],
                 ["Cycle-count source",
-                 str(fatigue_basis.get("cycle_count_source") or "-")],
+                 _html_escape(str(
+                     fatigue_basis.get("cycle_count_source") or "-"
+                 ))],
                 ["Dynamic effects",
-                 str(fatigue_basis.get("dynamic_effects") or "-")],
+                 _html_escape(str(
+                     fatigue_basis.get("dynamic_effects") or "-"
+                 ))],
                 ["Cycle counting",
-                 str(fatigue_basis.get("cycle_counting") or "-")],
+                 _html_escape(str(
+                     fatigue_basis.get("cycle_counting") or "-"
+                 ))],
                 ["Concurrence basis",
-                 str(fatigue_basis.get("concurrence_basis") or "-")],
+                 _html_escape(str(
+                     fatigue_basis.get("concurrence_basis") or "-"
+                 ))],
                 ["Atypical traffic",
-                 str(fatigue_basis.get("atypical_traffic") or "-")],
+                 _html_escape(str(
+                     fatigue_basis.get("atypical_traffic") or "-"
+                 ))],
                 ["Approval reference",
-                 str(fatigue_basis.get("approval_reference") or "-")],
+                 _html_escape(str(
+                     fatigue_basis.get("approval_reference") or "-"
+                 ))],
                 ["Authority adjustments",
-                 str(fatigue_basis.get("authority_adjustments") or "-")],
+                 _html_escape(str(
+                     fatigue_basis.get("authority_adjustments") or "-"
+                 ))],
             ])
             for detail in fatigue.get("fatigue_detail_basis") or ():
                 fatigue_rows.append([
-                    f"Fatigue detail {detail.get('id', '-')}",
+                    "Fatigue detail "
+                    + _html_escape(str(detail.get("id", "-"))),
                     (
-                        f"{detail.get('name') or detail.get('preset') or '-'}; "
-                        f"source: {detail.get('source') or 'not stated'}"
+                        _html_escape(str(
+                            detail.get("name")
+                            or detail.get("preset")
+                            or "-"
+                        ))
+                        + "; source: "
+                        + _html_escape(str(
+                            detail.get("source") or "not stated"
+                        ))
                     ),
                 ])
         self._table(rows, [110 * mm, 55 * mm])
@@ -3755,7 +3780,9 @@ class ReportBuilder:
         self._h1("Grouped fatigue")
         self._status_block(
             f"{status} - {governing_name} | utilisation "
-            f"{_pct(fatigue_presentation.finite_number(payload.get('utilisation')))}",
+            f"{_pct(fatigue_presentation.evidence_number(
+                payload.get('utilisation')
+            ))}",
             status,
         )
         checks = payload.get("checks") or {}
@@ -3918,7 +3945,7 @@ class ReportBuilder:
             self._h2("Spectrum - " + _html_escape(spectrum_name))
             self._status_block(
                 f"{spectrum_status} - utilisation "
-                f"{_pct(fatigue_presentation.finite_number(
+                f"{_pct(fatigue_presentation.evidence_number(
                     fatigue_presentation.value(spectrum, 'utilisation')
                 ))} | {_html_escape(
                     fatigue_presentation.governing_criterion(spectrum)
@@ -4208,7 +4235,7 @@ class ReportBuilder:
                     result = max(
                         fatigue_presentation.items(spectrum, "concrete"),
                         key=lambda item: (
-                            fatigue_presentation.finite_number(
+                            fatigue_presentation.evidence_number(
                                 fatigue_presentation.value(
                                     item, "utilisation"
                                 )

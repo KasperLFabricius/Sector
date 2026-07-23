@@ -603,6 +603,39 @@ def test_fatigue_summary_prevents_a_false_overall_pass(
     assert presentation.overall_summary_status(rows) == status
 
 
+def test_stale_fatigue_summary_uses_the_calculated_basis_not_live_edits():
+    inp = _inp(
+        mode="",
+        fatigue_on=True,
+        fatigue_edition="NEW EDITION",
+        fatigue_basis={
+            "method": "NEW METHOD",
+            "spectrum_source": "NEW SOURCE",
+        },
+    )
+    fatigue = {
+        "edition": "CALCULATED EDITION",
+        "basis": {
+            "method": "CALCULATED METHOD",
+            "spectrum_source": "CALCULATED SOURCE",
+        },
+        "governing_spectrum": "OLD SPECTRUM",
+        "utilisation": 0.75,
+        "converged": True,
+        "passed": True,
+        "warnings": (),
+    }
+
+    row = presentation.fatigue_summary_rows(
+        inp, {"fatigue": fatigue}, stale=True
+    )[0]
+
+    assert row["status"] == "STALE"
+    assert row["case"] == "OLD SPECTRUM"
+    assert row["case_type"] == "CALCULATED EDITION"
+    assert row["source"] == "CALCULATED SOURCE"
+
+
 def test_multi_case_summary_records_zero_actions_as_not_evaluated():
     inp = _inp(
         mode="Plastic",

@@ -35,6 +35,21 @@ def finite_number(raw):
     return number if math.isfinite(number) else None
 
 
+def evidence_number(raw):
+    """Return numeric result evidence, preserving signed infinity.
+
+    The fatigue engine deliberately uses infinity for infinite fatigue life and
+    unbounded Miner damage. ``NaN`` and non-numeric values are still invalid, but
+    an infinite failure must remain visible in result tables and reports.
+    """
+
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(number) else number
+
+
 def result_status(result):
     """Return the acceptance status of one computed spectrum/component."""
 
@@ -88,12 +103,13 @@ def spectrum_by_name(payload, spectrum_name):
 
 
 def _max_result(records):
+    def sort_key(record):
+        number = evidence_number(value(record, "utilisation"))
+        return number is not None, number if number is not None else -math.inf
+
     return max(
         records,
-        key=lambda record: (
-            finite_number(value(record, "utilisation")) is not None,
-            finite_number(value(record, "utilisation")) or -math.inf,
-        ),
+        key=sort_key,
         default=None,
     )
 
@@ -104,9 +120,9 @@ def governing_criterion(spectrum):
     candidates = []
     reinforcement = _max_result(items(spectrum, "reinforcement"))
     if reinforcement is not None:
-        util = finite_number(value(reinforcement, "utilisation"))
-        damage = finite_number(value(reinforcement, "damage_utilisation"))
-        stress = finite_number(value(reinforcement, "yield_utilisation"))
+        util = evidence_number(value(reinforcement, "utilisation"))
+        damage = evidence_number(value(reinforcement, "damage_utilisation"))
+        stress = evidence_number(value(reinforcement, "yield_utilisation"))
         criterion = (
             "Miner damage"
             if damage is not None and (stress is None or damage >= stress)
@@ -119,9 +135,9 @@ def governing_criterion(spectrum):
 
     concrete = _max_result(items(spectrum, "concrete"))
     if concrete is not None:
-        util = finite_number(value(concrete, "utilisation"))
-        damage = finite_number(value(concrete, "damage_utilisation"))
-        stress = finite_number(value(concrete, "stress_utilisation"))
+        util = evidence_number(value(concrete, "utilisation"))
+        damage = evidence_number(value(concrete, "damage_utilisation"))
+        stress = evidence_number(value(concrete, "stress_utilisation"))
         criterion = (
             "Miner damage"
             if damage is not None and (stress is None or damage >= stress)
@@ -134,7 +150,7 @@ def governing_criterion(spectrum):
         ))
 
     search = value(spectrum, "concrete_search")
-    upper = finite_number(value(search, "upper_damage")) if search else None
+    upper = evidence_number(value(search, "upper_damage")) if search else None
     if upper is not None:
         candidates.append((upper, "concrete certified damage bound"))
 
@@ -155,13 +171,13 @@ def spectrum_rows(payload):
             "reinforcement_elements": len(items(spectrum, "reinforcement")),
             "concrete_fibres": len(items(spectrum, "concrete")),
             "governing": governing_criterion(spectrum),
-            "utilisation": finite_number(value(spectrum, "utilisation")),
+            "utilisation": evidence_number(value(spectrum, "utilisation")),
             "search_converged": (
                 None if search is None else bool(value(search, "converged", False))
             ),
             "search_upper_damage": (
                 None if search is None
-                else finite_number(value(search, "upper_damage"))
+                else evidence_number(value(search, "upper_damage"))
             ),
         })
     return rows
@@ -172,14 +188,14 @@ def reinforcement_rows(spectrum):
 
     rows = []
     for result in items(spectrum, "reinforcement"):
-        damage = finite_number(value(result, "damage_utilisation"))
-        stress = finite_number(value(result, "yield_utilisation"))
+        damage = evidence_number(value(result, "damage_utilisation"))
+        stress = evidence_number(value(result, "yield_utilisation"))
         rows.append({
             "element_id": str(value(result, "element_id", "-")),
             "kind": str(value(result, "kind", "-")),
             "detail_id": str(value(result, "detail_id", "-")),
-            "diameter_mm": finite_number(value(result, "diameter_mm")),
-            "damage": finite_number(value(result, "damage")),
+            "diameter_mm": evidence_number(value(result, "diameter_mm")),
+            "damage": evidence_number(value(result, "damage")),
             "damage_utilisation": damage,
             "governing_damage_bin": str(
                 value(result, "governing_damage_bin", "-")
@@ -193,7 +209,7 @@ def reinforcement_rows(spectrum):
                 if damage is not None and (stress is None or damage >= stress)
                 else "yield/proof stress"
             ),
-            "utilisation": finite_number(value(result, "utilisation")),
+            "utilisation": evidence_number(value(result, "utilisation")),
             "status": result_status(result),
         })
     return rows
@@ -206,46 +222,46 @@ def reinforcement_bin_rows(result):
     for item in items(result, "bins"):
         rows.append({
             "bin": str(value(item, "bin_name", "-")),
-            "cycles": finite_number(value(item, "cycles")),
+            "cycles": evidence_number(value(item, "cycles")),
             "status": (
                 "OK" if bool(value(item, "converged", False)) else "INVALID"
             ),
-            "stress_long_mpa": finite_number(value(item, "stress_long_mpa")),
-            "stress_total_mpa": finite_number(value(item, "stress_total_mpa")),
-            "stress_total_design_mpa": finite_number(
+            "stress_long_mpa": evidence_number(value(item, "stress_long_mpa")),
+            "stress_total_mpa": evidence_number(value(item, "stress_total_mpa")),
+            "stress_total_design_mpa": evidence_number(
                 value(item, "stress_total_design_mpa")
             ),
-            "stress_total_elastic_mpa": finite_number(
+            "stress_total_elastic_mpa": evidence_number(
                 value(item, "stress_total_elastic_mpa")
             ),
-            "stress_range_mpa": finite_number(value(item, "stress_range_mpa")),
-            "stress_range_elastic_mpa": finite_number(
+            "stress_range_mpa": evidence_number(value(item, "stress_range_mpa")),
+            "stress_range_elastic_mpa": evidence_number(
                 value(item, "stress_range_elastic_mpa")
             ),
-            "bond_adjustment": finite_number(value(item, "bond_adjustment")),
+            "bond_adjustment": evidence_number(value(item, "bond_adjustment")),
             "bond_method": str(value(item, "bond_method", "-")),
-            "design_stress_range_mpa": finite_number(
+            "design_stress_range_mpa": evidence_number(
                 value(item, "design_stress_range_mpa")
             ),
-            "delta_sigma_rsk_mpa": finite_number(
+            "delta_sigma_rsk_mpa": evidence_number(
                 value(item, "delta_sigma_rsk_mpa")
             ),
-            "delta_sigma_rd_mpa": finite_number(
+            "delta_sigma_rd_mpa": evidence_number(
                 value(item, "delta_sigma_rd_mpa")
             ),
-            "sn_exponent": finite_number(value(item, "sn_exponent")),
-            "cycles_to_failure": finite_number(
+            "sn_exponent": evidence_number(value(item, "sn_exponent")),
+            "cycles_to_failure": evidence_number(
                 value(item, "cycles_to_failure")
             ),
-            "log10_cycles_to_failure": finite_number(
+            "log10_cycles_to_failure": evidence_number(
                 value(item, "log10_cycles_to_failure")
             ),
-            "damage": finite_number(value(item, "damage")),
-            "governing_stress_mpa": finite_number(
+            "damage": evidence_number(value(item, "damage")),
+            "governing_stress_mpa": evidence_number(
                 value(item, "governing_stress_mpa")
             ),
-            "yield_limit_mpa": finite_number(value(item, "yield_limit_mpa")),
-            "yield_utilisation": finite_number(
+            "yield_limit_mpa": evidence_number(value(item, "yield_limit_mpa")),
+            "yield_utilisation": evidence_number(
                 value(item, "yield_utilisation")
             ),
         })
@@ -271,15 +287,15 @@ def concrete_rows(spectrum):
             and math.isclose(x_m, search_x, abs_tol=1.0e-12)
             and math.isclose(y_m, search_y, abs_tol=1.0e-12)
         )
-        damage = finite_number(value(result, "damage_utilisation"))
-        stress = finite_number(value(result, "stress_utilisation"))
+        damage = evidence_number(value(result, "damage_utilisation"))
+        stress = evidence_number(value(result, "stress_utilisation"))
         rows.append({
             "fibre_index": value(result, "fibre_index", "-"),
             "source": "Adaptive search" if is_search else "Section vertex",
             "x_mm": None if x_m is None else x_m * 1000.0,
             "y_mm": None if y_m is None else y_m * 1000.0,
-            "fcd_fat_mpa": finite_number(value(result, "fcd_fat_mpa")),
-            "damage": finite_number(value(result, "damage")),
+            "fcd_fat_mpa": evidence_number(value(result, "fcd_fat_mpa")),
+            "damage": evidence_number(value(result, "damage")),
             "damage_utilisation": damage,
             "governing_damage_bin": str(
                 value(result, "governing_damage_bin", "-")
@@ -293,7 +309,7 @@ def concrete_rows(spectrum):
                 if damage is not None and (stress is None or damage >= stress)
                 else "compressive stress"
             ),
-            "utilisation": finite_number(value(result, "utilisation")),
+            "utilisation": evidence_number(value(result, "utilisation")),
             "status": result_status(result),
         })
     return rows
@@ -306,33 +322,33 @@ def concrete_bin_rows(result):
     for item in items(result, "bins"):
         rows.append({
             "bin": str(value(item, "bin_name", "-")),
-            "cycles": finite_number(value(item, "cycles")),
+            "cycles": evidence_number(value(item, "cycles")),
             "status": (
                 "OK" if bool(value(item, "converged", False)) else "INVALID"
             ),
-            "compression_long_mpa": finite_number(
+            "compression_long_mpa": evidence_number(
                 value(item, "compression_long_mpa")
             ),
-            "compression_total_mpa": finite_number(
+            "compression_total_mpa": evidence_number(
                 value(item, "compression_total_mpa")
             ),
-            "compression_min_design_mpa": finite_number(
+            "compression_min_design_mpa": evidence_number(
                 value(item, "compression_min_design_mpa")
             ),
-            "compression_max_design_mpa": finite_number(
+            "compression_max_design_mpa": evidence_number(
                 value(item, "compression_max_design_mpa")
             ),
-            "stress_ratio": finite_number(value(item, "stress_ratio")),
-            "e_cd_min": finite_number(value(item, "e_cd_min")),
-            "e_cd_max": finite_number(value(item, "e_cd_max")),
-            "cycles_to_failure": finite_number(
+            "stress_ratio": evidence_number(value(item, "stress_ratio")),
+            "e_cd_min": evidence_number(value(item, "e_cd_min")),
+            "e_cd_max": evidence_number(value(item, "e_cd_max")),
+            "cycles_to_failure": evidence_number(
                 value(item, "cycles_to_failure")
             ),
-            "log10_cycles_to_failure": finite_number(
+            "log10_cycles_to_failure": evidence_number(
                 value(item, "log10_cycles_to_failure")
             ),
-            "damage": finite_number(value(item, "damage")),
-            "stress_utilisation": finite_number(
+            "damage": evidence_number(value(item, "damage")),
+            "stress_utilisation": evidence_number(
                 value(item, "stress_utilisation")
             ),
         })
@@ -347,14 +363,14 @@ def spectrum_bin_rows(spectrum):
     rows = []
     for index, state in enumerate(items(spectrum, "bins")):
         steel_ranges = [
-            finite_number(value(element_bin, "design_stress_range_mpa"))
+            evidence_number(value(element_bin, "design_stress_range_mpa"))
             for element in reinforcement
             for element_bin in items(element, "bins")
             if str(value(element_bin, "bin_name", ""))
             == str(value(state, "name", ""))
         ]
         concrete_stresses = [
-            finite_number(value(fibre_bin, "compression_max_design_mpa"))
+            evidence_number(value(fibre_bin, "compression_max_design_mpa"))
             for fibre in concrete
             for fibre_bin in items(fibre, "bins")
             if str(value(fibre_bin, "bin_name", ""))
@@ -368,11 +384,11 @@ def spectrum_bin_rows(spectrum):
             "index": index + 1,
             "bin": str(value(state, "name", "-")),
             "description": str(value(state, "description", "") or ""),
-            "cycles": finite_number(value(state, "cycles")),
+            "cycles": evidence_number(value(state, "cycles")),
             "status": (
                 "OK" if bool(value(state, "converged", False)) else "INVALID"
             ),
-            "gamma_ff": finite_number(value(state, "design_action_factor")),
+            "gamma_ff": evidence_number(value(state, "design_action_factor")),
             "bond_method": str(value(state, "bond_method", "-")),
             "max_design_stress_range_mpa": (
                 max(steel_ranges, default=None)

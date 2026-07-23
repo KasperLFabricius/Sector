@@ -348,12 +348,17 @@ def fatigue_summary_rows(inp, results, *, stale=False):
         return []
     fatigue = results.get("fatigue")
     basis = inp.get("fatigue_basis") or {}
+    edition = str(inp.get("fatigue_edition") or "-")
     case = "-"
     status = "NOT RUN"
     result_text = "-"
     util = None
     note = "Calculate to assess the grouped spectra"
     if fatigue is not None:
+        # The result payload owns the basis that was actually calculated. This
+        # remains true when the live inputs have since changed and the row is stale.
+        basis = fatigue.get("basis") or basis
+        edition = str(fatigue.get("edition") or edition)
         case = str(fatigue.get("governing_spectrum") or "-")
         try:
             util = float(fatigue.get("utilisation"))
@@ -368,7 +373,7 @@ def fatigue_summary_rows(inp, results, *, stale=False):
         "check": "Fatigue",
         "family": "fatigue",
         "case": case,
-        "case_type": str(inp.get("fatigue_edition") or "-"),
+        "case_type": edition,
         "source": str(
             basis.get("spectrum_source") or basis.get("method") or "-"
         ),

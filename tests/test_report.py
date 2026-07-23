@@ -421,6 +421,22 @@ def test_report_fatigue_chapter_uses_the_engine_failure_state():
     assert "120.0 %" in text
 
 
+def test_report_escapes_user_defined_fatigue_settings():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["basis"]["spectrum_source"] = "Register A & B <issued>"
+    payload["fatigue_detail_basis"][0]["name"] = "Bar <detail> & coupler"
+    payload["fatigue_detail_basis"][0]["source"] = "Drawing A&B <rev 2>"
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Register A & B <issued>" in text
+    assert "Bar <detail> & coupler" in text
+    assert "Drawing A&B <rev 2>" in text
+
+
 def test_report_fatigue_chapter_requests_all_engineering_figures(monkeypatch):
     inp, out = _fatigue_report_fixture()
     titles = []

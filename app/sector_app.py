@@ -6,6 +6,7 @@ and acceptance checks.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import functools
 import math
@@ -2172,6 +2173,7 @@ def _apply_pending_project() -> None:
         "result_fatigue_sig",
         "result_plastic_case_context_sig", "result_elastic_case_context_sig",
         "result_plastic_bending_context_sig",
+        "result_input_snapshot",
         "report_bytes", "report_signature", "report_filename", "report_generated_on",
     ):
         st.session_state.pop(key, None)
@@ -5838,7 +5840,16 @@ def results_overview_view(inp, results, *, stale=False):
             })
     if inp.get("fatigue_on"):
         fatigue_result = (results or {}).get("fatigue")
-        fatigue_basis = inp.get("fatigue_basis") or {}
+        fatigue_basis = (
+            (fatigue_result or {}).get("basis")
+            or inp.get("fatigue_basis")
+            or {}
+        )
+        fatigue_edition = (
+            (fatigue_result or {}).get("edition")
+            or inp.get("fatigue_edition")
+            or "-"
+        )
         spectra = fatigue_presentation.items(fatigue_result, "spectra")
         if not spectra:
             spectra = (None,)
@@ -5855,7 +5866,7 @@ def results_overview_view(inp, results, *, stale=False):
                 ),
                 "Description": (
                     fatigue_basis.get("method")
-                    or inp.get("fatigue_edition")
+                    or fatigue_edition
                     or "-"
                 ),
                 "Result state": (
@@ -6852,6 +6863,7 @@ def _fatigue_status_callout(status, text):
 def _fatigue_map_signature(inp, spectrum):
     outer = inp.get("outer")
     holes = inp.get("holes")
+    search = fatigue_presentation.value(spectrum, "concrete_search")
     return (
         tuple(
             tuple(float(coordinate) for coordinate in point)
@@ -6879,7 +6891,7 @@ def _fatigue_map_signature(inp, spectrum):
         tuple(
             (
                 str(fatigue_presentation.value(item, "element_id", "")),
-                fatigue_presentation.finite_number(
+                fatigue_presentation.evidence_number(
                     fatigue_presentation.value(item, "utilisation")
                 ),
             )
@@ -6894,11 +6906,33 @@ def _fatigue_map_signature(inp, spectrum):
                 fatigue_presentation.finite_number(
                     fatigue_presentation.value(item, "y_m")
                 ),
-                fatigue_presentation.finite_number(
+                fatigue_presentation.evidence_number(
                     fatigue_presentation.value(item, "utilisation")
                 ),
             )
             for item in fatigue_presentation.items(spectrum, "concrete")
+        ),
+        (
+            None
+            if search is None
+            else (
+                bool(fatigue_presentation.value(search, "converged", False)),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(search, "damage")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(search, "upper_damage")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(search, "absolute_gap")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(search, "relative_gap")
+                ),
+                fatigue_presentation.value(search, "divisions"),
+                fatigue_presentation.value(search, "boxes_evaluated"),
+                fatigue_presentation.value(search, "points_evaluated"),
+            )
         ),
     )
 
@@ -7291,7 +7325,9 @@ def fatigue_view(inp, results, *, stale=False):
 
     status = fatigue_presentation.overall_status(payload, stale=stale)
     governing_name = str(payload.get("governing_spectrum") or "-")
-    utilisation = fatigue_presentation.finite_number(payload.get("utilisation"))
+    utilisation = fatigue_presentation.evidence_number(
+        payload.get("utilisation")
+    )
     _fatigue_status_callout(
         status,
         f"{governing_name} | utilisation {viz.pct(utilisation)}",
@@ -8617,6 +8653,11 @@ def _analysis_workspace(inp):
             "plastic_bending_context_sig"
         ]
         if st.session_state["results"]:
+            # Result payloads remain visible after an edit so the engineer can see
+            # the last calculated state. Keep the matching inputs with them: using
+            # live edited geometry or spectra in a stale result view would combine
+            # evidence from two different calculations.
+            st.session_state["result_input_snapshot"] = copy.deepcopy(inp)
             st.session_state["calculation_record"] = {
                 "performed_at_utc": datetime.now(timezone.utc).isoformat(
                     timespec="seconds"
@@ -8625,6 +8666,8 @@ def _analysis_workspace(inp):
                 "source_revision": source_revision(),
                 "input_sha256": _project_input_hash(),
             }
+        else:
+            st.session_state.pop("result_input_snapshot", None)
         # Re-default the Plastic view's neutral-axis state to this result's governing
         # angle. The user can still pick another rotation until the next Calculate.
         st.session_state.pop("pl_state", None)
@@ -8677,13 +8720,23 @@ def _analysis_workspace(inp):
         )
 
     if view == "Results Overview":
-        results_overview_view(inp, results, stale=stale)
+        overview_inp = (
+            st.session_state.get("result_input_snapshot", inp)
+            if stale
+            else inp
+        )
+        results_overview_view(overview_inp, results, stale=stale)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
         interaction_view(view_inp, view_results)
     elif view == "Fatigue Results":
-        fatigue_view(inp, results, stale=stale)
+        fatigue_inp = (
+            st.session_state.get("result_input_snapshot", inp)
+            if stale
+            else inp
+        )
+        fatigue_view(fatigue_inp, results, stale=stale)
     elif view == "Detailing":
         detailing_view(view_inp, view_results, global_results=results)
     elif view == "Shear":

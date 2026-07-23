@@ -1843,6 +1843,35 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert "Edition" in set(basis_table["Item"])
     assert "gamma_Ff" in set(basis_table["Item"])
 
+    # Stale results must retain the actions and geometry that produced them. If the
+    # live spectrum is edited before recalculation, the result drill-down must not
+    # combine those new inputs with the previous engine payload.
+    _goto_page(at, "Inputs")
+    changed_spectrum = spectrum.copy(deep=True)
+    changed_spectrum.loc[0, "n_long_ed_kn"] = -999.0
+    at.session_state[fatigue_inputs.SPECTRUM_TABLE_KEY] = changed_spectrum
+    for state_key in (
+        "fatigue_spectrum_editor",
+        f"_{fatigue_inputs.SPECTRUM_TABLE_KEY}_editor_seed",
+    ):
+        try:
+            del at.session_state[state_key]
+        except KeyError:
+            pass
+    at.run()
+    _select_view(at, "Fatigue Results")
+    at.segmented_control(key="_fatigue_result_detail").set_value(
+        "Spectrum bins"
+    ).run()
+    stale_actions = next(
+        frame.value for frame in at.dataframe
+        if {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert stale_actions.iloc[0]["Nlong,Ed [kN]"] == pytest.approx(-100.0)
+    assert any("inputs changed" in warning.value.lower() for warning in at.warning)
+
     _goto_page(at, "Inputs")
     calculated_fatigue_sig = at.session_state["result_fatigue_sig"]
     current_fck = float(at.session_state["conc_fck"])

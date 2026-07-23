@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import pathlib
 from types import SimpleNamespace as NS
 import sys
@@ -193,6 +194,28 @@ def test_reinforcement_rows_expose_miner_yield_and_full_bin_evidence():
     assert bins[0]["cycles_to_failure"] == pytest.approx(3.2e6)
     assert bins[0]["damage"] == pytest.approx(0.0625)
     assert bins[0]["bond_method"] == "Perfect bond"
+
+
+def test_result_rows_preserve_infinite_life_and_failure_evidence():
+    spectrum = _spectrum(utilisation=math.inf, passed=False)
+    element = spectrum.reinforcement[0]
+    element.damage = math.inf
+    element.damage_utilisation = math.inf
+    element.utilisation = math.inf
+    element.passed = False
+    element.bins[0].cycles_to_failure = 0.0
+    element.bins[0].log10_cycles_to_failure = -math.inf
+    element.bins[0].damage = math.inf
+
+    row = presentation.reinforcement_rows(spectrum)[0]
+    bin_row = presentation.reinforcement_bin_rows(element)[0]
+
+    assert math.isinf(row["damage"])
+    assert math.isinf(row["utilisation"])
+    assert row["governing"] == "Miner damage"
+    assert bin_row["cycles_to_failure"] == 0.0
+    assert bin_row["log10_cycles_to_failure"] == -math.inf
+    assert bin_row["damage"] == math.inf
 
 
 def test_concrete_rows_identify_search_point_and_certification_evidence():

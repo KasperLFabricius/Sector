@@ -873,6 +873,7 @@ def _fatigue_figure_fixture():
         x_m=0.2,
         y_m=-0.3,
         upper_damage=0.13,
+        converged=True,
     )
     spectrum = NS(
         spectrum_name="Traffic A",
@@ -912,6 +913,67 @@ def test_fatigue_utilisation_map_is_qa_traceable_and_not_colour_only():
     assert fig.layout.yaxis.scaleanchor == "x"
     assert 1.0 in list(fig.layout.coloraxis.colorbar.tickvals)
     assert "limit = 1.00" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_utilisation_map_marks_a_failing_certified_search_bound():
+    spectrum, _steel, concrete, _properties = _fatigue_figure_fixture()
+    concrete.utilisation = 0.80
+    concrete.stress_utilisation = 0.80
+    spectrum.concrete_search.upper_damage = 1.08
+
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    bound = next(
+        trace for trace in fig.data
+        if trace.name == "certified search bound > 1.00"
+    )
+    concrete_trace = next(
+        trace for trace in fig.data if trace.name == "concrete fibres"
+    )
+    assert "certified search bound > 1.00" in names
+    assert bound.marker.symbol == "x"
+    assert list(concrete_trace.marker.symbol) == ["star"]
+    assert "upper D = 1.080 &gt; 1.00" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_utilisation_map_caps_and_labels_infinite_failure_evidence():
+    spectrum, steel, concrete, _properties = _fatigue_figure_fixture()
+    steel.utilisation = math.inf
+    steel.damage_utilisation = math.inf
+    concrete.utilisation = math.inf
+    concrete.damage = math.inf
+    spectrum.concrete_search.upper_damage = math.inf
+
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    plotted_colours = [
+        value
+        for trace in fig.data
+        for value in (
+            list(trace.marker.color)
+            if isinstance(getattr(trace.marker, "color", None), (list, tuple))
+            else []
+        )
+    ]
+    assert all(math.isfinite(float(value)) for value in plotted_colours)
+    assert "upper D = inf &gt; 1.00" in " ".join(
         annotation.text for annotation in fig.layout.annotations
     )
 
@@ -992,3 +1054,24 @@ def test_fatigue_damage_figure_uses_log_scale_for_small_contributions():
     assert "log scale" in fig.layout.yaxis.title.text
     assert list(fig.data[0].y) == pytest.approx([1.0e-8, 2.0e-7])
     assert fig.data[1].y[-1] == pytest.approx(2.1e-7)
+
+
+def test_fatigue_damage_figure_caps_and_labels_unbounded_damage():
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        element_id="R1",
+        bins=(
+            NS(bin_name="FAT-1", cycles=1.0e6, damage=0.20),
+            NS(bin_name="FAT-2", cycles=2.0e6, damage=math.inf),
+        ),
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    assert all(math.isfinite(float(value)) for value in fig.data[0].y)
+    assert all(math.isfinite(float(value)) for value in fig.data[1].y)
+    assert list(fig.data[0].text) == ["", "inf"]
+    assert "Unbounded Miner damage" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )

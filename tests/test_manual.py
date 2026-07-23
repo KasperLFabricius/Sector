@@ -268,6 +268,7 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "Shear and torsion fatigue are not included",
     ):
         assert expected in text
+    assert "termination reason" not in text
 
 
 def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
