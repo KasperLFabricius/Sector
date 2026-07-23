@@ -78,6 +78,7 @@ sector/        computation core (headless, regression-tested)
   templates    parametric section + reinforcement builders
 app/           Streamlit interface and canonical input models
   fatigue_inputs  stable S-N detail catalogue and grouped spectrum schema
+  fatigue_analysis  validated application-to-fatigue-engine boundary
 tools/         developer tooling (e.g. regression-fixture generation)
 tests/         unit tests + the verification regression
 ```

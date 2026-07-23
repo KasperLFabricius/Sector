@@ -28,7 +28,7 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 9   # v9: fatigue-detail catalogue and grouped spectrum inputs
+VERSION = 10  # v10: fatigue authority/provenance and mixed-bond inputs
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -43,6 +43,7 @@ _CASE_PAYLOAD_KEYS = {
 
 FATIGUE_SCALAR_KEYS = (
     fatigue_inputs.DETAIL_CATALOG_KEY,
+    fatigue_inputs.BASIS_KEY,
     "fatigue_on",
     "fatigue_edition",
     "fatigue_check_steel",
@@ -78,6 +79,7 @@ SCALAR_KEYS = [
     material_catalog.MILD_CATALOG_KEY,
     material_catalog.PRESTRESS_CATALOG_KEY,
     fatigue_inputs.DETAIL_CATALOG_KEY,
+    fatigue_inputs.BASIS_KEY,
     # Mild reinforcement.
     "mild_preset", "mild_active_comp", "mild_fytk", "mild_fyck", "mild_futk",
     "mild_eut", "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
@@ -245,6 +247,25 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
                 scalar_payload[fatigue_inputs.DETAIL_CATALOG_KEY]
             )
         )
+    if fatigue_inputs.BASIS_KEY in scalar_payload:
+        scalar_payload[fatigue_inputs.BASIS_KEY] = (
+            fatigue_inputs.normalise_basis(
+                scalar_payload[fatigue_inputs.BASIS_KEY]
+            )
+        )
+    elif (
+        scalar_payload.get("fatigue_on")
+        or "fatigue_source" in scalar_payload
+    ):
+        basis = fatigue_inputs.default_basis()
+        basis["spectrum_source"] = str(
+            scalar_payload.get("fatigue_source") or ""
+        ).strip()
+        scalar_payload[fatigue_inputs.BASIS_KEY] = basis
+    if fatigue_inputs.BASIS_KEY in scalar_payload:
+        # ``fatigue_source`` was the pre-v10 one-line precursor to the structured
+        # basis.  Current files have one canonical provenance representation.
+        scalar_payload.pop("fatigue_source", None)
     content = {
         "tables": {k: _table_to_obj(tables.get(k), k) for k in TABLE_KEYS},
         "scalars": scalar_payload,
@@ -469,6 +490,30 @@ def parse_project(text: str):
                 scalars[fatigue_inputs.DETAIL_CATALOG_KEY]
             )
         )
+    if fatigue_inputs.BASIS_KEY in scalars:
+        if not isinstance(scalars[fatigue_inputs.BASIS_KEY], dict):
+            raise ValueError("fatigue basis must be an object")
+        scalars[fatigue_inputs.BASIS_KEY] = fatigue_inputs.normalise_basis(
+            scalars[fatigue_inputs.BASIS_KEY]
+        )
+    elif (
+        bool(scalars.get("fatigue_on"))
+        or "fatigue_source" in raw_scalars
+        or (
+            data.get("version", 1) < 10
+            and raw_fatigue is not None
+        )
+    ):
+        # Older fatigue projects contained the numerical spectrum but no explicit
+        # authority provenance.  Seed a neutral, visibly incomplete basis; never
+        # infer a traffic model or modifiers from the action rows.
+        basis = fatigue_inputs.default_basis()
+        basis["spectrum_source"] = str(
+            raw_scalars.get("fatigue_source") or ""
+        ).strip()
+        scalars[fatigue_inputs.BASIS_KEY] = basis
+    if fatigue_inputs.BASIS_KEY in scalars:
+        scalars.pop("fatigue_source", None)
     # Material IDs already existed as traceability fields in v5, although every
     # element still used one global law. Clone that law under each valid referenced
     # ID so old calculations remain runnable and numerically unchanged in v6.

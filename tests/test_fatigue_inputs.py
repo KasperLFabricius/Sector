@@ -32,6 +32,23 @@ def test_builtin_detail_presets_match_the_two_eurocode_editions():
     assert new_curved_steel_duct["k1"] == 3.0
 
 
+def test_named_detail_preset_retains_edition_only_while_values_match():
+    entry = fi.default_entry(preset=fi.PRESET_2023_BARS)
+    entry["mandrel_diameter_mm"] = 80.0
+    entry["bond_ratio_xi"] = 0.7
+    unchanged = fi.normalise_catalog({"items": [entry]})["items"][0]
+
+    assert unchanged["preset"] == fi.PRESET_2023_BARS
+    assert fi.preset_edition(unchanged["preset"]) == fi.EC2_2023
+
+    entry["n_star"] = 3.0e6
+    custom = fi.normalise_catalog({"items": [entry]})["items"][0]
+
+    assert custom["preset"] == fi.CUSTOM_PRESET
+    assert fi.preset_edition(custom["preset"]) is None
+    assert custom["n_star"] == 3.0e6
+
+
 @pytest.mark.parametrize(
     ("diameter", "expected"),
     [(10.0, 160.0), (12.0, 160.0), (14.0, 140.0),
@@ -98,6 +115,19 @@ def test_catalogue_validation_requires_positive_curve_data_and_mandrel():
     assert any("mandrel_diameter_mm" in error for error in errors)
 
 
+def test_tendon_bond_inputs_are_explicit_optional_catalogue_properties():
+    entry = fi.default_entry(preset=fi.PRESET_2023_PRETENSION)
+    assert entry["bond_ratio_xi"] == 0.0
+    assert entry["bond_equivalent_diameter_mm"] == 0.0
+
+    entry["bond_ratio_xi"] = 0.7
+    entry["bond_equivalent_diameter_mm"] = 12.5
+    restored = fi.normalise_catalog({"items": [entry]})["items"][0]
+
+    assert restored["bond_ratio_xi"] == 0.7
+    assert restored["bond_equivalent_diameter_mm"] == 12.5
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -141,6 +171,42 @@ def test_replace_entry_applies_the_same_strict_field_validation():
 
     with pytest.raises(ValueError, match="n_star must be a finite number"):
         fi.replace_entry(fi.default_catalog(), entry)
+
+
+def test_authority_basis_is_metadata_with_method_specific_qa_warnings():
+    basis = fi.normalise_basis({
+        "authority": fi.AUTHORITY_BN_NEW,
+        "method": fi.METHOD_BN_NEW_2,
+        "spectrum_source": "Prescribed traffic set",
+        "cycle_count_source": "BN traffic composition",
+        "dynamic_effects": fi.DYNAMIC_INCLUDED,
+        "cycle_counting": fi.COUNTING_OTHER,
+        "concurrence_basis": "",
+        "atypical_traffic": fi.ATYPICAL_NOT_APPLICABLE,
+        "authority_adjustments": "",
+    })
+
+    warnings = fi.basis_warnings(basis)
+
+    assert "Selected BN1-59-5 method requires rainflow counting" in warnings
+    assert "Lane/track concurrence basis is not stated" in warnings
+    assert (
+        "BN prescribed-traffic source/approval reference is not stated"
+        in warnings
+    )
+    assert "Authority load/cycle adjustments are not stated" in warnings
+    assert fi.method_requires_single_bin(fi.METHOD_BN_NEW_1) is True
+    assert fi.method_requires_single_bin(fi.METHOD_BN_NEW_2) is False
+
+
+def test_authority_basis_rejects_cross_authority_method_and_unknown_status():
+    with pytest.raises(ValueError, match="is not available"):
+        fi.normalise_basis({
+            "authority": fi.AUTHORITY_VD,
+            "method": fi.METHOD_BN_EXISTING_4,
+        })
+    with pytest.raises(ValueError, match="unknown dynamic-effects status"):
+        fi.normalise_basis({"dynamic_effects": "Maybe"})
 
 
 def _spectrum_rows():
