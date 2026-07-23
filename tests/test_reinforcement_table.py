@@ -133,4 +133,5 @@ def test_grid_fatigue_assignment_uses_kind_compatible_catalogue_ids():
 
     assert specs[rt.FATIGUE_DETAIL_ID]["type"] == "select"
     assert specs[rt.FATIGUE_DETAIL_ID]["options"] == ["F1", "F4"]
+    assert specs[rt.FATIGUE_DETAIL_ID]["allow_blank"] is True
     assert options["default_values"][rt.FATIGUE_DETAIL_ID] == ""

@@ -179,25 +179,32 @@ def test_material_select_preserves_an_unresolved_import_until_user_replaces_it(
     assert "unresolved.disabled = true" in renderer
 
 
-def test_material_select_defaults_a_blank_paste_to_the_first_visible_option():
+def test_select_blank_policy_preserves_explicit_engineering_assignments():
     renderer = (pathlib.Path(point_grid_module.__file__).resolve().parent
                 / "point_grid_frontend" / "point_grid.js").read_text(
                     encoding="utf-8"
                 )
 
-    # This branch is shared by paste processing, edited-cell mutation and emitted
-    # rows. It must precede the non-empty unknown-ID preservation branch.
-    blank_default = 'if (!text.length) return String(spec.options[0] ?? "")'
+    # Coercion is shared by hydration, pasting, editing and emitted rows. Fields
+    # marked allow_blank must stay blank; the material/size selects still use the
+    # first visible option.
+    blank_default = "if (!text.length) return state.selectDefault(spec)"
     preserve_unknown = "spec.preserve_unknown ? text"
     assert blank_default in renderer
     assert preserve_unknown in renderer
     assert renderer.index(blank_default) < renderer.index(preserve_unknown)
+    assert 'spec.allow_blank ? ""' in renderer
+    assert "row[spec.field] = state.selectDefault(spec)" in renderer
+    assert "allowBlank: spec.allow_blank === true" in renderer
+    assert 'blank.textContent = "Select..."' in renderer
 
 
-def test_only_material_selects_preserve_nonempty_unknown_values():
+def test_catalog_selects_preserve_nonempty_unknown_values():
     specs = {
         spec["field"]: spec
-        for spec in rebar_table.point_grid_specs("bar", ["M1", "M2"])
+        for spec in rebar_table.point_grid_specs(
+            "bar", ["M1", "M2"], ["F1", "F2"]
+        )
     }
     renderer = (pathlib.Path(point_grid_module.__file__).resolve().parent
                 / "point_grid_frontend" / "point_grid.js").read_text(
@@ -205,9 +212,12 @@ def test_only_material_selects_preserve_nonempty_unknown_values():
                 )
 
     assert specs[rebar_table.MATERIAL_ID]["preserve_unknown"] is True
+    assert specs[rebar_table.FATIGUE_DETAIL_ID]["preserve_unknown"] is True
+    assert specs[rebar_table.FATIGUE_DETAIL_ID]["allow_blank"] is True
+    assert "allow_blank" not in specs[rebar_table.MATERIAL_ID]
     assert "preserve_unknown" not in specs[rebar_table.SIZE_MODE]
     assert "spec.preserve_unknown ? text" in renderer
-    assert 'String(spec.options[0] ?? "")' in renderer
+    assert 'String(spec.options?.[0] ?? "")' in renderer
 
     # Backend normalization defaults an invalid size mode to Area; the frontend
     # now takes the same first-option branch instead of preserving invalid text.

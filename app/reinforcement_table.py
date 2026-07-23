@@ -284,6 +284,7 @@ def point_grid_specs(
             "type": "select",
             "options": fatigue_options,
             "preserve_unknown": True,
+            "allow_blank": True,
             "width": 128,
         }
         if fatigue_options
