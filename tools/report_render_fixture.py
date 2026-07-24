@@ -559,6 +559,19 @@ def validate_pdf_content(pdf: bytes) -> str:
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     if "figure unavailable" in text.lower():
         raise AssertionError("the report contains an unavailable-figure placeholder")
+    for token in (
+        "sqrt", "Cfrac", "Big", "sincos", "delta eps",
+        "varepsilon", "qquadk", "quadf", "sum(", "kN.m",
+    ):
+        if token.casefold() in text.casefold():
+            raise AssertionError(
+                f"the report exposes an unrendered mathematics token: {token}"
+            )
+    for symbol in (chr(0x00B0), chr(0x00B7), chr(0x03B2)):
+        if symbol not in text:
+            raise AssertionError(
+                f"the report is missing rendered mathematics symbol U+{ord(symbol):04X}"
+            )
 
     images = 0
     for page in reader.pages:
@@ -623,7 +636,7 @@ def validate_pdf_content(pdf: bytes) -> str:
          if "Analysis settings" in (page.extract_text() or "")),
         "",
     )
-    if "Sweep start V.min" not in settings_page:
+    if "Sweep start" not in settings_page:
         raise AssertionError("the analysis-settings heading is separated from its table")
     for heading, first_case in (
         ("Plastic / capacity cases", "PL-QA-1"),

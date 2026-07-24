@@ -38,6 +38,19 @@ def validate_pdf_content(pdf: bytes) -> str:
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
+    for token in (
+        "sqrt", "Cfrac", "Big", "varepsilon", "rightarrow",
+        "qquadk", "quadf", "kN.m",
+    ):
+        if token.casefold() in text.casefold():
+            raise AssertionError(
+                f"the manual exposes an unrendered mathematics token: {token}"
+            )
+    for symbol in (chr(0x221A), chr(0x2211), chr(0x03B8), chr(0x03B2)):
+        if symbol not in text:
+            raise AssertionError(
+                f"the manual is missing rendered mathematics symbol U+{ord(symbol):04X}"
+            )
 
     images = 0
     for page in reader.pages:

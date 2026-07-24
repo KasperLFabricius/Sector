@@ -933,6 +933,8 @@ def test_report_includes_sls_criteria_strain_and_candidate_evidence():
     assert "Bar diameter" not in txt
     assert "bar 1" in txt
     assert "0.300 mm" in txt and "0.213 mm" in txt
+    assert chr(0x394) + chr(0x3B5) in txt
+    assert "delta eps" not in txt
 
 
 def test_report_does_not_round_small_nonzero_product_inertia_to_zero():
@@ -1456,6 +1458,10 @@ def test_report_shear_2023_section():
     assert f"{sh['res']['vrd_c']:.3f}" in txt        # VRd,c
     assert "d" in txt and "dg" in txt                # ddg appears
     assert "k" in txt and "vp" in txt                # k_vp appears
+    assert chr(0x221A) in txt                        # radical, not "sqrt"
+    assert not any(
+        token in txt for token in ("sqrt", "Cfrac", "Big", "sincos")
+    )
 
 
 def test_report_shear_shows_prestress_precompression():
@@ -1536,6 +1542,12 @@ def test_report_includes_torsion_section():
     assert "76.4" in txt                            # TRd
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1176" in txt                            # required Asl
+    assert chr(0x2211) in txt                       # summation operator
+    assert chr(0x00B7) in txt                       # centred multiplication/unit dot
+    assert chr(0x00B0) in txt                       # degree symbol
+    assert not any(
+        token in txt for token in ("sqrt", "Cfrac", "Big", "sincos", "sum A", "kN.m")
+    )
 
 
 def test_report_directional_vt_table_withholds_out_of_range_verdict():
@@ -1738,7 +1750,7 @@ def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
             screen_blocks.append(text)
 
     assert len(screen_blocks) == 2
-    assert all("sum(SEd/SRd)" in text for text in screen_blocks)
+    assert all(f"{chr(0x2211)}(SEd/SRd)" in text for text in screen_blocks)
 
 
 def test_report_combined_out_of_range_withholds_dependent_verdicts():

@@ -1423,7 +1423,8 @@ def manual_blocks() -> list:
        "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, $t_{ef} = 100$ mm, "
        "$A_k = 0.1$ m$^2$, $u_k = 1.4$ m, $\\nu_t = 0.368$. At the optimum "
        "$\\cot\\theta = 1.75$ the stirrups and struts meet at "
-       "$T_{Rd} \\approx 76.4$ kN.m, with $T_{Rd,c} \\approx 31$ kN.m.")
+       "$T_{Rd} \\approx 76.4$ kN$\\cdot$m, with "
+       "$T_{Rd,c} \\approx 31$ kN$\\cdot$m.")
 
     h1("Combined M-V-T interaction")
     md("Bending, shear and torsion act together, so their checks are tied together "
@@ -1625,7 +1626,7 @@ _LATEX_CMD = {
     r"\Delta": "&#916;", r"\le": "&#8804;", r"\ge": "&#8805;",
     r"\leq": "&#8804;", r"\geq": "&#8805;",
     r"\neq": "&#8800;", r"\times": "&#215;", r"\cdot": "&#183;",
-    r"\approx": "&#8776;", r"\pm": "&#177;", r"\sum": "&#931;",
+    r"\approx": "&#8776;", r"\pm": "&#177;", r"\sum": "&#8721;",
     r"\circ": "&#176;", r"\rightarrow": "&#8594;",
 }
 
@@ -1680,10 +1681,21 @@ def _latex_to_rl(s: str) -> str:
         s = flat
     for k in sorted(_LATEX_CMD, key=len, reverse=True):
         s = s.replace(k, _LATEX_CMD[k])
-    operators = "|".join(_LATEX_WORD_OPERATORS)
-    s = re.sub(rf"\\({operators})\b", r"\1", s)
     s = re.sub(r"_([A-Za-z0-9])", r"<sub>\1</sub>", s)
     s = re.sub(r"\^([A-Za-z0-9])", r"<super>\1</super>", s)
+    operators = "|".join(_LATEX_WORD_OPERATORS)
+    # TeX inserts operator spacing automatically. Use non-breaking gaps on both
+    # sides so adjacent terms remain visibly separated. Match any operator
+    # sub/superscript as part of the operator, keeping log_10 and cot^2 attached.
+    script = r"((?:<(?:sub|super)>[^<>]*</(?:sub|super)>)*)"
+    s = re.sub(
+        rf"\\({operators})\b{script}",
+        lambda match: (
+            f"&nbsp;{match.group(1)}{match.group(2)}&nbsp;"
+        ),
+        s,
+    )
+    s = s.removeprefix("&nbsp;")
     return s.replace("{", "").replace("}", "").replace("\\", "")
 
 
