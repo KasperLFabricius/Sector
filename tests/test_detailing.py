@@ -32,7 +32,6 @@ def _rectangle():
             "y_mm": y * 1000.0,
             "diameter_mm": 25.0,
             "material_id": "M1",
-            "spacing_group_id": "",
         }
         for index, (x, y, _area) in enumerate(bars)
     ]
@@ -100,7 +99,6 @@ def test_origin_moment_transfer_uses_tension_positive_axial_sign():
             "y_mm": y * 1000.0,
             "diameter_mm": 16.0,
             "material_id": "M1",
-            "spacing_group_id": "",
         }
         for index, (x, y, _area) in enumerate(bars)
     ]
@@ -141,7 +139,6 @@ def test_2005_biaxial_check_uses_resultant_tension_zone_not_axis_halves():
             "y_mm": y * 1000.0,
             "diameter_mm": 36.0,
             "material_id": "M1",
-            "spacing_group_id": "",
         }
         for index, (x, y, _area) in enumerate(bars)
     ]
@@ -294,7 +291,7 @@ def test_2023_zero_cracking_moment_checks_nominal_axial_moment_envelope():
     assert result["status"] == "PASS"
 
 
-def _spacing_elements(clear_mm, *, group=""):
+def _spacing_elements(clear_mm):
     phi = 20.0
     return [
         {
@@ -303,7 +300,6 @@ def _spacing_elements(clear_mm, *, group=""):
             "x_mm": 0.0,
             "y_mm": 0.0,
             "diameter_mm": phi,
-            "spacing_group_id": group,
         },
         {
             "id": "R2",
@@ -311,7 +307,6 @@ def _spacing_elements(clear_mm, *, group=""):
             "x_mm": phi + clear_mm,
             "y_mm": 0.0,
             "diameter_mm": phi,
-            "spacing_group_id": group,
         },
     ]
 
@@ -329,20 +324,16 @@ def test_clear_spacing_uses_largest_code_term_and_pair_margin():
     assert pair["centre_distance_mm"] == pytest.approx(45.0)
 
 
-def test_clear_spacing_distinguishes_failure_from_declared_exception():
-    failed = detailing.clear_spacing(
+def test_clear_spacing_shortfall_fails_without_legacy_exception_fields():
+    result = detailing.clear_spacing(
         _spacing_elements(10.0),
         d_upper_mm=16.0,
         edition=detailing.EC2_2005_DKNA,
     )
-    review = detailing.clear_spacing(
-        _spacing_elements(10.0, group="L1"),
-        d_upper_mm=16.0,
-        edition=detailing.EC2_2005_DKNA,
-    )
-    assert failed["status"] == "FAIL"
-    assert review["status"] == "REVIEW"
-    assert review["governing"]["declared_exception"] is True
+    assert result["status"] == "FAIL"
+    assert result["governing"]["status"] == "FAIL"
+    assert "declared_exception" not in result["governing"]
+    assert "spacing_group_id" not in result["governing"]
 
 
 def test_clear_spacing_excludes_tendons_unless_their_envelope_is_selected():
@@ -354,7 +345,6 @@ def test_clear_spacing_excludes_tendons_unless_their_envelope_is_selected():
             "x_mm": 5.0,
             "y_mm": 0.0,
             "diameter_mm": 10.0,
-            "spacing_group_id": "",
         }
     )
     bars_only = detailing.clear_spacing(

@@ -74,7 +74,7 @@ def test_table_from_points_can_make_diameter_authoritative_rows():
 def test_tendon_defaults_and_valid_elements_keep_assignment_metadata():
     frame = rt.normalise_table([{
         rt.X: 10.0, rt.Y: -20.0, rt.AREA: 150.0,
-        rt.FATIGUE_DETAIL_ID: "PF1", rt.GROUP_ID: "CABLE-A",
+        rt.FATIGUE_DETAIL_ID: "PF1",
     }], "tendon")
 
     elements = rt.valid_elements(frame, "tendon")
@@ -82,7 +82,65 @@ def test_tendon_defaults_and_valid_elements_keep_assignment_metadata():
     assert frame.iloc[0][rt.ELEMENT_ID] == "P1"
     assert frame.iloc[0][rt.MATERIAL_ID] == "P1"
     assert elements[0]["fatigue_detail_id"] == "PF1"
-    assert elements[0]["group_id"] == "CABLE-A"
+    assert set(elements[0]) == {
+        "id", "kind", "x_mm", "y_mm", "area_mm2", "diameter_mm",
+        "size_mode", "material_id", "fatigue_detail_id",
+    }
+
+
+def test_assign_rows_updates_only_selected_material_and_detail_fields():
+    frame = rt.normalise_table([
+        {
+            rt.ELEMENT_ID: "R1", rt.X: 0.0, rt.Y: 0.0,
+            rt.AREA: 100.0, rt.MATERIAL_ID: "M1",
+        },
+        {
+            rt.ELEMENT_ID: "R2", rt.X: 20.0, rt.Y: 0.0,
+            rt.AREA: 200.0, rt.MATERIAL_ID: "M1",
+        },
+    ], "bar")
+
+    assigned = rt.assign_rows(
+        frame,
+        "bar",
+        ["R2"],
+        {
+            rt.MATERIAL_ID: "M2",
+            rt.FATIGUE_DETAIL_ID: "F3",
+        },
+    )
+
+    assert assigned.loc[0, rt.MATERIAL_ID] == "M1"
+    assert assigned.loc[0, rt.FATIGUE_DETAIL_ID] == ""
+    assert assigned.loc[1, rt.MATERIAL_ID] == "M2"
+    assert assigned.loc[1, rt.FATIGUE_DETAIL_ID] == "F3"
+    assert assigned.loc[1, rt.X] == 20.0
+    assert assigned.loc[1, rt.AREA] == 200.0
+
+
+def test_assign_rows_can_clear_fatigue_but_not_material():
+    frame = rt.normalise_table([{
+        rt.X: 0.0,
+        rt.Y: 0.0,
+        rt.AREA: 100.0,
+        rt.FATIGUE_DETAIL_ID: "F1",
+    }], "bar")
+
+    cleared = rt.assign_rows(
+        frame,
+        "bar",
+        ["R1"],
+        {rt.FATIGUE_DETAIL_ID: ""},
+    )
+
+    assert cleared.iloc[0][rt.FATIGUE_DETAIL_ID] == ""
+    with pytest.raises(ValueError, match="material ID cannot be blank"):
+        rt.assign_rows(
+            frame,
+            "bar",
+            ["R1"],
+            {rt.MATERIAL_ID: ""},
+        )
 
 
 def test_incomplete_or_nonpositive_size_rows_are_not_solver_elements():

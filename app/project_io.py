@@ -28,7 +28,7 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 10  # v10: fatigue authority/provenance and mixed-bond inputs
+VERSION = 11  # v11: material/detail-only reinforcement assignments
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]

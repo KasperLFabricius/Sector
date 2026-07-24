@@ -579,13 +579,13 @@ def manual_blocks() -> list:
            ["Independent", "Area and diameter", "Neither"]])
     md("Area controls section stiffness and resistance; diameter controls detailing "
        "and crack-spacing geometry. *Independent* is therefore appropriate when "
-       "one point represents a non-circular or grouped steel area. Material, fatigue-"
-       "detail and group IDs are assignments carried with the element. A fatigue "
+       "one point represents a non-circular or grouped steel area. Material and "
+       "fatigue-detail IDs are assignments carried with the element. Use **Bulk "
+       "assignments** above a reinforcement table to update all or selected IDs. "
+       "A fatigue "
        "detail is required on every bar and tendon when reinforcement fatigue is "
-       "enabled; otherwise it is optional. **Lap / bundle ID** declares elements that "
-       "belong to the same lap or bundle for the spacing review; a geometric "
-       "shortfall then becomes **Review**, never an automatic pass. Half-typed rows "
-       "are ignored until complete.")
+       "enabled; otherwise it is optional. Half-typed rows are ignored until "
+       "complete.")
     call("concept", "Everything downstream reads these points. The builder, the "
          "presets and the save file all end up as rows in these four tables, so you "
          "can always edit the geometry by hand.")
@@ -914,8 +914,7 @@ def manual_blocks() -> list:
     md("The **Detailing** view gives a concise status for minimum reinforcement and "
        "clear spacing. The section figure highlights the bars included in the "
        "selected case and dimensions the governing spacing pair. Tables retain "
-       "provided and required values, utilisation or margin, element IDs and any "
-       "lap/bundle review flag.")
+       "provided and required values, utilisation or margin and element IDs.")
     h2("Shear results")
     md("The **Shear** view reports the applied $V_{Ed}$, the resistance "
        "$V_{Rd,c}$ and the utilisation, then the derived quantities ($d$, $b_w$, "
@@ -1104,9 +1103,9 @@ def manual_blocks() -> list:
        "diameters and checks:\n\n"
        "$$c_{clear}\\ge\\max(\\phi_{max},\\,D_{upper}+5\\,\\text{mm},\\,20\\,\\text{mm}).$$\n\n"
        "This is 8.2(2) for the 2005 family and 11.2(2) for 2023. The smallest "
-       "margin governs. A shared nonblank Lap / bundle ID changes a shortfall to "
-       "**Review** because the cross-section cannot establish lap length, bond, "
-       "bundle equivalence or longitudinal arrangement.")
+       "margin governs, and a geometric shortfall is reported as **Fail**. Lap "
+       "length, bond, bundle equivalence and longitudinal arrangement remain "
+       "separate detailing checks.")
     call("limit", "The minimum-reinforcement check credits mild bars only. The "
          "spacing check is section-plane geometry for longitudinal elements; it "
          "does not verify anchorage, lap length, cover, maximum spacing, congestion "

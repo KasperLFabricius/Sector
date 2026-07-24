@@ -998,8 +998,7 @@ class ReportBuilder:
                         "y_mm": point[1] * _MM, "area_mm2": point[2],
                         "diameter_mm": math.sqrt(4.0 * point[2] / math.pi),
                         "size_mode": "Area", "material_id": "-",
-                        "fatigue_detail_id": "", "group_id": "",
-                        "spacing_group_id": "",
+                        "fatigue_detail_id": "",
                     }
                     for index, point in enumerate(points, 1)
                 ]
@@ -1014,17 +1013,13 @@ class ReportBuilder:
             ])
             self._table(rows, [18 * mm, 26 * mm, 26 * mm, 31 * mm,
                                31 * mm, 31 * mm], font=7.2, keep=False)
-            assignments = [[
-                "ID", "Material ID", "Fatigue detail ID", "Group ID",
-                "Lap / bundle ID",
-            ]]
+            assignments = [["ID", "Material ID", "Fatigue detail ID"]]
             assignments.extend([
                 [record.get("id", "-"), record.get("material_id", "-"),
-                 record.get("fatigue_detail_id") or "-", record.get("group_id") or "-",
-                 record.get("spacing_group_id") or "-"]
+                 record.get("fatigue_detail_id") or "-"]
                 for record in records
             ])
-            self._table(assignments, [18 * mm, 35 * mm, 43 * mm, 32 * mm, 38 * mm],
+            self._table(assignments, [25 * mm, 55 * mm, 70 * mm],
                         font=7.2, keep=False)
 
         reinforcement_tables("Reinforcing bars", inp.get("bars", []),
@@ -1767,7 +1762,7 @@ class ReportBuilder:
             )
             self._small(
                 f"Reference: {self.inp.get('detailing_edition', '-')} {clause}. "
-                "A declared lap or bundle remains an engineering-review item."
+                "Lap and bundle verification remains outside this section-plane check."
             )
         if (not plastic_results and not elastic_results and not minimum_results
                 and fatigue is None
@@ -1963,7 +1958,7 @@ class ReportBuilder:
         if pairs:
             rows = [[
                 "Pair", "Elements", "Clear (mm)", "Required (mm)",
-                "Margin (mm)", "Lap / bundle ID", "Status",
+                "Margin (mm)", "Status",
             ]]
             rows.extend([
                 [
@@ -1974,13 +1969,12 @@ class ReportBuilder:
                     _fmt(pair.get("clear_mm"), 1),
                     _fmt(pair.get("required_mm"), 1),
                     _fmt(pair.get("margin_mm"), 1),
-                    _html_escape(pair.get("spacing_group_id") or "-"),
                     pair.get("status", "-"),
                 ]
                 for pair in pairs
             ])
-            self._table(rows, [31 * mm, 24 * mm, 22 * mm, 25 * mm,
-                               22 * mm, 27 * mm, 19 * mm], font=6.4, keep=False)
+            self._table(rows, [38 * mm, 30 * mm, 26 * mm, 30 * mm,
+                               26 * mm, 20 * mm], font=6.4, keep=False)
         for limitation in result.get("limitations") or []:
             self._small("<b>Scope:</b> " + _html_escape(limitation))
 

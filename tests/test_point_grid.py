@@ -86,7 +86,7 @@ def test_mixed_grid_round_trip_preserves_ids_text_and_numeric_blanks():
         "ID": "R7", "x (mm)": 10.0, "y (mm)": -20.0,
         "size mode": "Independent", "area (mm2)": 400.0,
         "diameter (mm)": 25.0, "material ID": "M2",
-        "fatigue detail ID": "FD1", "group ID": "G1",
+        "fatigue detail ID": "FD1",
     }], "bar")
 
     records = _component_records(frame, rebar_table.COLUMNS, specs)
@@ -158,8 +158,6 @@ def test_live_rows_remain_authoritative_when_catalogue_options_change(monkeypatc
         "diameter (mm)": 25.0,
         "material ID": "M2",
         "fatigue detail ID": "",
-        "group ID": "live",
-        "spacing group ID": "",
     }]
 
     def fake_component(**kwargs):
