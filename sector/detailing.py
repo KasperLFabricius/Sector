@@ -771,10 +771,8 @@ def clear_spacing(
 ) -> dict:
     """Check pairwise clear distance between parallel reinforcement elements.
 
-    A shared nonblank ``spacing_group_id`` declares a lap/bundle exception.  The
-    geometric shortfall is still reported and receives ``REVIEW`` rather than a
-    silent pass because the cross-section alone cannot verify the longitudinal
-    lap length, bundle arrangement, bond or equivalent bundle diameter.
+    The section-plane geometry cannot verify lap length, bundle arrangement,
+    bond or an equivalent bundle diameter; those remain separate checks.
     """
     if edition not in EDITIONS:
         raise ValueError("unknown detailing edition")
@@ -818,13 +816,8 @@ def clear_spacing(
             phi_2 = float(second["diameter_mm"])
             clear = centre - 0.5 * (phi_1 + phi_2)
             required = max(max(phi_1, phi_2), float(d_upper_mm) + 5.0, 20.0)
-            group_1 = str(first.get("spacing_group_id") or "").strip()
-            group_2 = str(second.get("spacing_group_id") or "").strip()
-            declared_exception = bool(group_1 and group_1 == group_2)
             if clear + _TOL >= required:
                 pair_status = "PASS"
-            elif declared_exception:
-                pair_status = "REVIEW"
             else:
                 pair_status = "FAIL"
             pairs.append({
@@ -839,8 +832,6 @@ def clear_spacing(
                 "centre_distance_mm": centre,
                 "phi_first_mm": phi_1,
                 "phi_second_mm": phi_2,
-                "spacing_group_id": group_1 if declared_exception else "",
-                "declared_exception": declared_exception,
             })
     if not pairs:
         status = "NOT ASSESSED"
@@ -861,7 +852,7 @@ def clear_spacing(
         "reason": reason,
         "limitations": [
             "Pairwise edge-to-edge distance is checked in the section plane.",
-            "A declared lap/bundle group requires engineering review and is not an automatic pass.",
+            "Lap length, bundle arrangement, bond and equivalent bundle diameter are not verified.",
             "For included post-tensioning tendons, the entered diameter must be the detailing envelope or duct diameter.",
         ],
     }

@@ -2023,8 +2023,6 @@ def test_catalogue_revisions_preserve_every_live_reinforcement_cell():
         rebar_table.DIAMETER: 25.0,
         rebar_table.MATERIAL_ID: "M1",
         rebar_table.FATIGUE_DETAIL_ID: "",
-        rebar_table.GROUP_ID: "typed group",
-        rebar_table.SPACING_GROUP_ID: "typed spacing",
     }
     at.session_state["ed_bars"] = {
         "payload": {
@@ -2044,6 +2042,64 @@ def test_catalogue_revisions_preserve_every_live_reinforcement_cell():
             assert actual[key] == pytest.approx(value)
         else:
             assert actual[key] == value
+
+
+def test_bulk_reinforcement_assignment_updates_all_and_selected_rows():
+    from pandas.testing import assert_frame_equal
+
+    import reinforcement_table as rebar_table
+
+    at = _fresh()
+    at.run()
+    before = at.session_state["bars_base"].copy(deep=True)
+    element_ids = before[rebar_table.ELEMENT_ID].tolist()
+    geometry_columns = [
+        rebar_table.ELEMENT_ID,
+        rebar_table.X,
+        rebar_table.Y,
+        rebar_table.SIZE_MODE,
+        rebar_table.AREA,
+        rebar_table.DIAMETER,
+    ]
+    assert len(element_ids) > 1
+    assert list(before.columns) == rebar_table.COLUMNS
+
+    at.selectbox(key="_ed_bars_bulk_fatigue").set_value("F1").run()
+    assert at.button(key="_ed_bars_bulk_apply").disabled is False
+    at.button(key="_ed_bars_bulk_apply").click().run()
+
+    assigned = at.session_state["bars_base"].copy(deep=True)
+    assert assigned[rebar_table.FATIGUE_DETAIL_ID].tolist() == (
+        ["F1"] * len(element_ids)
+    )
+    assert_frame_equal(
+        assigned[geometry_columns],
+        before[geometry_columns],
+        check_dtype=True,
+    )
+
+    at.segmented_control(key="_ed_bars_bulk_scope").set_value(
+        "Selected elements"
+    ).run()
+    at.multiselect(key="_ed_bars_bulk_ids").set_value([element_ids[0]])
+    at.selectbox(key="_ed_bars_bulk_fatigue").set_value(
+        "__sector_clear__"
+    )
+    at.run()
+    assert at.button(key="_ed_bars_bulk_apply").disabled is False
+    at.button(key="_ed_bars_bulk_apply").click().run()
+
+    selected = at.session_state["bars_base"]
+    assert selected.iloc[0][rebar_table.FATIGUE_DETAIL_ID] == ""
+    assert selected.iloc[1:][rebar_table.FATIGUE_DETAIL_ID].tolist() == (
+        ["F1"] * (len(element_ids) - 1)
+    )
+    assert_frame_equal(
+        selected[geometry_columns],
+        before[geometry_columns],
+        check_dtype=True,
+    )
+    assert not at.exception
 
 
 def test_fatigue_authority_widgets_write_the_structured_basis():
@@ -3304,6 +3360,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Longitudinal reinforcement & clear spacing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Bulk assignments",
         "About",
         "Report",
         "Save / Load",

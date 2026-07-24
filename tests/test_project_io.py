@@ -166,8 +166,7 @@ def test_current_round_trip_preserves_size_basis_and_element_assignments():
             "ID": "R7", "x (mm)": 10.0, "y (mm)": -80.0,
             "size mode": "Independent", "area (mm2)": 420.0,
             "diameter (mm)": 25.0, "material ID": "M2",
-            "fatigue detail ID": "FD-BENT", "group ID": "B1",
-            "spacing group ID": "LAP-1",
+            "fatigue detail ID": "FD-BENT",
         },
         {
             "ID": "R9", "x (mm)": -10.0, "y (mm)": -80.0,
@@ -222,14 +221,14 @@ def test_v5_material_ids_migrate_to_cloned_laws_without_changing_behaviour():
         "version": 5,
         "tables": {
             "bars_base": {
-                "columns": rebar_table.COLUMNS[:-1],
+                "columns": rebar_table.COLUMNS,
                 "rows": [["R1", 0.0, -100.0, "Area", 500.0, 25.23,
-                          "M2", "", ""]],
+                          "M2", ""]],
             },
             "tendons_base": {
-                "columns": rebar_table.COLUMNS[:-1],
+                "columns": rebar_table.COLUMNS,
                 "rows": [["P1", 0.0, 100.0, "Area", 150.0, 13.82,
-                          "P3", "", ""]],
+                          "P3", ""]],
             },
         },
         "scalars": {
@@ -283,7 +282,7 @@ def test_current_round_trip_preserves_multiple_typed_load_cases():
     )
 
 
-def test_v10_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum():
+def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum():
     tables = {
         fatigue_inputs.SPECTRUM_TABLE_KEY:
             fatigue_inputs.normalise_spectrum_table([
@@ -341,7 +340,7 @@ def test_v10_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum():
     payload = json.loads(text)
     restored, restored_scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 10
+    assert payload["version"] == project_io.VERSION
     assert [row["name"] for row in payload["fatigue"]["spectrum"]] == [
         "FAT-01", "FAT-02"
     ]

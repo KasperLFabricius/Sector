@@ -668,11 +668,10 @@ def test_detailing_summary_reports_values_status_and_target_view():
         }],
     }
     spacing = {
-        "status": "REVIEW", "clause": "8.2(2)",
+        "status": "FAIL", "clause": "8.2(2)",
         "governing": {
             "first_id": "R1", "second_id": "R2", "clear_mm": 18.0,
-            "required_mm": 25.0, "declared_exception": True,
-            "spacing_group_id": "LAP-A",
+            "required_mm": 25.0,
         },
     }
 
@@ -691,10 +690,10 @@ def test_detailing_summary_reports_values_status_and_target_view():
     assert "As,prov 628.0" in minimum_row["result"]
     assert minimum_row["view"] == "Detailing"
     spacing_row = by_check["Reinforcement clear spacing"]
-    assert spacing_row["status"] == "REVIEW"
+    assert spacing_row["status"] == "FAIL"
     assert spacing_row["result"] == "18.0 mm (R1-R2)"
-    assert "LAP-A" in spacing_row["note"]
-    assert presentation.overall_summary_status(rows) == "REVIEW"
+    assert spacing_row["note"] == "8.2(2)"
+    assert presentation.overall_summary_status(rows) == "FAIL"
 
 
 def test_detailing_summary_labels_one_biaxial_resultant_check():

@@ -22,8 +22,6 @@ AREA = "area (mm2)"
 DIAMETER = "diameter (mm)"
 MATERIAL_ID = "material ID"
 FATIGUE_DETAIL_ID = "fatigue detail ID"
-GROUP_ID = "group ID"
-SPACING_GROUP_ID = "spacing group ID"
 
 COLUMNS = [
     ELEMENT_ID,
@@ -34,8 +32,6 @@ COLUMNS = [
     DIAMETER,
     MATERIAL_ID,
     FATIGUE_DETAIL_ID,
-    GROUP_ID,
-    SPACING_GROUP_ID,
 ]
 NUMERIC_COLUMNS = {X, Y, AREA, DIAMETER}
 TEXT_COLUMNS = set(COLUMNS) - NUMERIC_COLUMNS
@@ -186,8 +182,6 @@ def normalise_table(value, kind: str, *, default_mode: str = AREA_MODE) -> pd.Da
             MATERIAL_ID: text_cell(raw.get(MATERIAL_ID), default_material_id(kind))
                          or default_material_id(kind),
             FATIGUE_DETAIL_ID: text_cell(raw.get(FATIGUE_DETAIL_ID)),
-            GROUP_ID: text_cell(raw.get(GROUP_ID)),
-            SPACING_GROUP_ID: text_cell(raw.get(SPACING_GROUP_ID)),
         })
 
     if not rows:
@@ -250,10 +244,47 @@ def valid_elements(value, kind: str) -> list[dict]:
             "size_mode": str(row[SIZE_MODE]),
             "material_id": str(row[MATERIAL_ID]),
             "fatigue_detail_id": str(row[FATIGUE_DETAIL_ID]),
-            "group_id": str(row[GROUP_ID]),
-            "spacing_group_id": str(row[SPACING_GROUP_ID]),
         })
     return out
+
+
+def assign_rows(
+    value,
+    kind: str,
+    element_ids: Iterable[str],
+    assignments: Mapping[str, str],
+) -> pd.DataFrame:
+    """Apply material/detail assignments to named elements.
+
+    Only the two assignment fields exposed by Sector are accepted. Geometry,
+    size basis, stable IDs and every non-target row remain unchanged.
+    """
+
+    frame = normalise_table(value, kind)
+    targets = {
+        text_cell(element_id)
+        for element_id in element_ids
+        if text_cell(element_id)
+    }
+    supported = {MATERIAL_ID, FATIGUE_DETAIL_ID}
+    unknown = set(assignments) - supported
+    if unknown:
+        raise ValueError(
+            "unsupported reinforcement assignment field(s): "
+            + ", ".join(sorted(str(field) for field in unknown))
+        )
+    updates = {
+        field: text_cell(assignment)
+        for field, assignment in assignments.items()
+    }
+    if not targets or not updates or frame.empty:
+        return frame
+    mask = frame[ELEMENT_ID].isin(targets)
+    for field, assignment in updates.items():
+        if field == MATERIAL_ID and not assignment:
+            raise ValueError("material ID cannot be blank")
+        frame.loc[mask, field] = assignment
+    return normalise_table(frame, kind)
 
 
 def point_grid_specs(
@@ -308,9 +339,6 @@ def point_grid_specs(
          "width": 124, "derived_role": "diameter"},
         material_spec,
         fatigue_spec,
-        {"field": GROUP_ID, "title": "Group ID", "type": "text", "width": 92},
-        {"field": SPACING_GROUP_ID, "title": "Lap / bundle ID", "type": "text",
-         "width": 128},
     ]
 
 
@@ -333,8 +361,6 @@ def point_grid_options(
             # Require an explicit fatigue assignment even when compatible
             # catalogue entries are available.
             FATIGUE_DETAIL_ID: "",
-            GROUP_ID: "",
-            SPACING_GROUP_ID: "",
         },
         "compact_paste_fields": [X, Y, AREA],
         "derived_size": {

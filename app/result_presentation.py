@@ -589,11 +589,7 @@ def result_summary_rows(inp, results, *, stale=False):
             criterion,
             util,
             "Detailing",
-            (
-                f"Declared group {governing.get('spacing_group_id')} requires review"
-                if governing.get("declared_exception")
-                else str(spacing.get("clause") or "")
-            ),
+            str(spacing.get("clause") or ""),
             inp,
         ))
 

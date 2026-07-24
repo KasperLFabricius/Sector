@@ -103,7 +103,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "certified concrete-search bound",
         "Results overview",
         "Minimum reinforcement and clear spacing",
-        "Lap / bundle ID",
+        "Bulk assignments",
         "Governing",
         "PDF report",
         "Every computed case",

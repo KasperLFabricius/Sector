@@ -1189,6 +1189,11 @@ _POINT_TABLE_LABELS = {
     "tendons_base": "Tendon points",
 }
 
+_BULK_ALL = "All elements"
+_BULK_SELECTED = "Selected elements"
+_BULK_NO_CHANGE = "__sector_no_change__"
+_BULK_CLEAR = "__sector_clear__"
+
 
 def _reseed_table(base_key, ed_key, df):
     """Replace a point table's contents and make its grid re-seed from them.
@@ -1304,6 +1309,10 @@ def _reinforcement_kind(base_key):
 def _reinforcement_editor(box, base_key, ed_key):
     """Render one rich element table and return its frame, metadata and points."""
     kind = _reinforcement_kind(base_key)
+    current = _current_table(base_key, ed_key, _REBAR_COLS)
+    _reinforcement_bulk_assignment(
+        box, base_key, ed_key, current, kind,
+    )
     frame = rebar_table.normalise_table(
         _render_point_table(box, base_key, ed_key, _REBAR_COLS), kind,
     )
@@ -1317,6 +1326,144 @@ def _reinforcement_editor(box, base_key, ed_key):
         for item in elements
     ]
     return frame, elements, points_mm
+
+
+def _reinforcement_bulk_assignment(
+    box,
+    base_key,
+    ed_key,
+    frame,
+    kind,
+):
+    """Assign one material/detail ID to all or selected live table rows."""
+
+    frame = rebar_table.normalise_table(frame, kind)
+    element_ids = frame[rebar_table.ELEMENT_ID].astype(str).tolist()
+    notice_key = f"_{ed_key}_bulk_notice"
+    notice = st.session_state.pop(notice_key, None)
+    if notice:
+        box.success(notice)
+    if not element_ids:
+        return
+
+    panel = box.expander("Bulk assignments", expanded=False)
+    panel.caption(
+        "Apply one material and/or fatigue detail to all or selected IDs."
+    )
+    scope_key = f"_{ed_key}_bulk_scope"
+    if st.session_state.get(scope_key) not in {_BULK_ALL, _BULK_SELECTED}:
+        st.session_state[scope_key] = _BULK_ALL
+    scope = panel.segmented_control(
+        "Apply to",
+        [_BULK_ALL, _BULK_SELECTED],
+        key=scope_key,
+        width="stretch",
+    )
+
+    selected_key = f"_{ed_key}_bulk_ids"
+    selected_state = st.session_state.get(selected_key)
+    if not isinstance(selected_state, list):
+        selected_state = []
+    st.session_state[selected_key] = [
+        element_id
+        for element_id in selected_state
+        if element_id in element_ids
+    ]
+    selected_ids = panel.multiselect(
+        "Element IDs",
+        element_ids,
+        key=selected_key,
+        disabled=scope != _BULK_SELECTED,
+    )
+
+    material_ids = list(_grid_material_ids(kind) or ())
+    material_catalogue_kind = "mild" if kind == "bar" else "prestress"
+    material_catalogue = st.session_state.get(
+        mat_catalog.catalog_key(material_catalogue_kind)
+    )
+    material_entries = (
+        mat_catalog.entry_map(
+            material_catalogue, material_catalogue_kind
+        )
+        if material_catalogue is not None
+        else {}
+    )
+    material_options = [_BULK_NO_CHANGE, *material_ids]
+    material_key = f"_{ed_key}_bulk_material"
+    if st.session_state.get(material_key) not in material_options:
+        st.session_state[material_key] = _BULK_NO_CHANGE
+
+    fatigue_ids = list(_grid_fatigue_detail_ids(kind) or ())
+    fatigue_catalogue = st.session_state.get(
+        fatigue_inputs.DETAIL_CATALOG_KEY
+    )
+    fatigue_entries = (
+        fatigue_inputs.entry_map(fatigue_catalogue)
+        if fatigue_catalogue is not None
+        else {}
+    )
+    fatigue_options = [_BULK_NO_CHANGE, _BULK_CLEAR, *fatigue_ids]
+    fatigue_key = f"_{ed_key}_bulk_fatigue"
+    if st.session_state.get(fatigue_key) not in fatigue_options:
+        st.session_state[fatigue_key] = _BULK_NO_CHANGE
+
+    material_col, fatigue_col = panel.columns(2)
+    material_id = material_col.selectbox(
+        "Material",
+        material_options,
+        key=material_key,
+        format_func=lambda value: (
+            "No change"
+            if value == _BULK_NO_CHANGE
+            else mat_catalog.entry_label(material_entries[value])
+            if value in material_entries
+            else value
+        ),
+    )
+    fatigue_id = fatigue_col.selectbox(
+        "Fatigue detail",
+        fatigue_options,
+        key=fatigue_key,
+        format_func=lambda value: (
+            "No change"
+            if value == _BULK_NO_CHANGE
+            else "Clear assignment"
+            if value == _BULK_CLEAR
+            else fatigue_inputs.entry_label(fatigue_entries[value])
+            if value in fatigue_entries
+            else value
+        ),
+    )
+
+    targets = (
+        element_ids
+        if scope == _BULK_ALL
+        else list(selected_ids)
+    )
+    assignments = {}
+    if material_id != _BULK_NO_CHANGE:
+        assignments[rebar_table.MATERIAL_ID] = material_id
+    if fatigue_id != _BULK_NO_CHANGE:
+        assignments[rebar_table.FATIGUE_DETAIL_ID] = (
+            "" if fatigue_id == _BULK_CLEAR else fatigue_id
+        )
+    apply_disabled = not targets or not assignments
+    if panel.button(
+        "Apply assignments",
+        key=f"_{ed_key}_bulk_apply",
+        width="stretch",
+        disabled=apply_disabled,
+    ):
+        updated = rebar_table.assign_rows(
+            frame,
+            kind,
+            targets,
+            assignments,
+        )
+        _reseed_table(base_key, ed_key, updated)
+        label = "bars" if kind == "bar" else "tendons"
+        st.session_state[notice_key] = f"Updated {len(targets)} {label}."
+        st.rerun()
 
 
 def _void_groups(df, cols):
@@ -3280,8 +3427,7 @@ def build_inputs(host=st):
             "The case must represent the design situation required by the clause."
         )
     det.caption(
-        "Bars sharing a Lap / bundle ID are reported as REVIEW when ordinary "
-        "clear spacing is not met; the declaration is never an automatic pass."
+        "Lap and bundle verification is outside this section-plane spacing check."
     )
 
     sts.markdown("**Combined M-V-T interaction**")
@@ -4038,8 +4184,7 @@ def build_inputs(host=st):
     # they only prefill on demand.
     def _element_signature(elements):
         keys = ("id", "x_mm", "y_mm", "area_mm2", "diameter_mm", "size_mode",
-                "material_id", "fatigue_detail_id", "group_id",
-                "spacing_group_id")
+                "material_id", "fatigue_detail_id")
         return tuple(tuple(item.get(key) for key in keys) for item in elements)
 
     geom_sig = (tuple(outer), tuple(bars), tuple(tendons),
@@ -6150,7 +6295,6 @@ def detailing_view(inp, results, *, global_results=None):
             "Clear [mm]": pair.get("clear_mm"),
             "Required [mm]": pair.get("required_mm"),
             "Margin [mm]": pair.get("margin_mm"),
-            "Lap / bundle ID": pair.get("spacing_group_id") or "",
             "Status": pair.get("status"),
         } for pair in spacing.get("pairs") or []]
         if pair_rows:

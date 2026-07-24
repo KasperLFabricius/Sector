@@ -296,12 +296,13 @@ def test_manual_documents_longitudinal_minimum_reinforcement_and_spacing_scope()
         "uncracked gross-concrete strain plane",
         "12.2(2)",
         "D_{upper}",
-        "Lap / bundle ID",
+        "Bulk assignments",
         "high beam webs",
         "Prestressing tendons are not credited",
         "section-plane geometry",
     ):
         assert expected in text
+    assert "Lap / bundle ID" not in text
 
 
 def test_latex_to_rl_converts_the_subset():

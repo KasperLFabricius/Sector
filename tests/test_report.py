@@ -581,15 +581,13 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
                 "id": "R1", "x_mm": -40.0, "y_mm": -120.0,
                 "area_mm2": 314.0, "diameter_mm": 20.0,
                 "size_mode": "Diameter", "material_id": "M1",
-                "fatigue_detail_id": "", "group_id": "",
-                "spacing_group_id": "LAP-A",
+                "fatigue_detail_id": "",
             },
             {
                 "id": "R2", "x_mm": 40.0, "y_mm": -120.0,
                 "area_mm2": 314.0, "diameter_mm": 20.0,
                 "size_mode": "Diameter", "material_id": "M1",
-                "fatigue_detail_id": "", "group_id": "",
-                "spacing_group_id": "LAP-A",
+                "fatigue_detail_id": "",
             },
         ],
     })
@@ -614,7 +612,6 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
             "status": "PASS", "first_id": "R1", "second_id": "R2",
             "first_kind": "bar", "second_kind": "bar", "clear_mm": 60.0,
             "required_mm": 21.0, "margin_mm": 39.0,
-            "spacing_group_id": "LAP-A",
         },
         "pairs": [],
         "limitations": ["Pairwise edge-to-edge distance is checked."],
@@ -633,7 +630,7 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "A s,min" in text or "As,min" in text
     assert "Reinforcement clear spacing" in text
     assert "R1 - R2" in text
-    assert "Lap / bundle ID" in text
+    assert "Lap / bundle ID" not in text
     assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
 
 
@@ -692,11 +689,11 @@ def test_report_traces_multiple_materials_to_element_assignments():
             {"id": "R1", "x_mm": 0.0, "y_mm": -120.0,
              "area_mm2": 500.0, "diameter_mm": 25.23,
              "size_mode": "Area", "material_id": "M1",
-             "fatigue_detail_id": "", "group_id": "B1"},
+             "fatigue_detail_id": ""},
             {"id": "R2", "x_mm": 0.0, "y_mm": 120.0,
              "area_mm2": 400.0, "diameter_mm": 22.57,
              "size_mode": "Area", "material_id": second_id,
-             "fatigue_detail_id": "", "group_id": "B2"},
+             "fatigue_detail_id": ""},
         ],
         "mild_material_catalog": catalogue,
         "mild_materials": laws,
@@ -731,7 +728,7 @@ def test_report_describes_built_in_prestress_without_false_zero_strengths():
             "id": "T1", "x_mm": 0.0, "y_mm": -120.0,
             "area_mm2": 500.0, "diameter_mm": 25.23,
             "size_mode": "Area", "material_id": "P1",
-            "fatigue_detail_id": "", "group_id": "",
+            "fatigue_detail_id": "",
         }],
         "prestress_material_catalog": catalogue,
         "prestress_materials": {"P1": law},
@@ -766,7 +763,7 @@ def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(prese
             "id": "R1", "x_mm": 0.0, "y_mm": -120.0,
             "area_mm2": 500.0, "diameter_mm": 25.23,
             "size_mode": "Area", "material_id": "M1",
-            "fatigue_detail_id": "", "group_id": "",
+            "fatigue_detail_id": "",
         }],
         "mild_material_catalog": catalogue,
         "mild_materials": {"M1": law},
