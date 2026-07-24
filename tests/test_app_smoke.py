@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
+import re
 import sys
 
 import pytest
@@ -3051,6 +3052,17 @@ def test_inputs_carry_help_tooltips():
     assert at.number_input(key="fatigue_beta_cc_t0").label == (
         r"$\beta_{cc}(t_0)$"
     )
+    assert r"$\beta_{cc}(t_0)$" in at.number_input(
+        key="fatigue_t0_days").help
+    for widget_group in (
+        at.number_input, at.selectbox, at.text_input, at.toggle, at.checkbox,
+    ):
+        for widget in widget_group:
+            for value in (getattr(widget, "label", ""), getattr(widget, "help", "")):
+                assert not re.search(
+                    r"[\x00-\x08\x0b\x0c\x0e-\x1f]",
+                    value or "",
+                ), (widget.key, value)
     assert at.number_input(key="v_min").label == (
         r"Start angle $\varphi_{NA,\min}$ (deg)"
     )

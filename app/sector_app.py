@@ -3247,7 +3247,7 @@ def build_inputs(host=st):
         "fatigue_t0_days",
         disabled=not (fatigue_on and fatigue_check_concrete),
         help=r"Age at first cyclic loading. This documents the basis for "
-             "$\beta_{cc}(t_0)$; Sector does not derive that factor.",
+             r"$\beta_{cc}(t_0)$; Sector does not derive that factor.",
     )
     fatigue_concrete_k1 = _seeded_number(
         fc1,
