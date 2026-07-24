@@ -737,6 +737,11 @@ def test_shear_geometry_figure_exposes_derived_geometry_and_selected_bars():
     assert "d = 550 mm" in text and "z = 495 mm" in text
     assert "400 mm" in text and "auto minimum solid width" in text
     assert "bars 1, 2" in text and "V<sub>y,Ed</sub>" in text
+    summary = next(a for a in fig.layout.annotations if "A<sub>sl</sub>" in a.text)
+    assert summary.y > 1.0 and summary.yanchor == "bottom"
+    assert fig.layout.margin.t >= 100
+    face = next(a for a in fig.layout.annotations if a.text == "tension face")
+    assert face.showarrow and face.ay < face.y
 
 
 def test_horizontal_shear_geometry_uses_left_tension_face():
@@ -752,6 +757,34 @@ def test_horizontal_shear_geometry_uses_left_tension_face():
     assert "user input" in text
 
 
+def test_shear_geometry_compacts_long_selected_bar_list_in_header():
+    bars = [
+        (-0.15 + index * 0.03, -0.25, 200.0)
+        for index in range(12)
+    ]
+    fig = viz.shear_geometry_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        bars,
+        axis="x",
+        tension_low=True,
+        centroid=(0.0, 0.0),
+        asl_bar_ids=list(range(1, 13)),
+        asl_cg_m=-0.25,
+        asl_mm2=2400.0,
+        d_mm=550.0,
+        z_mm=495.0,
+        bw_mm=400.0,
+        bw_source="auto",
+    )
+    summary = next(
+        annotation
+        for annotation in fig.layout.annotations
+        if "A<sub>sl</sub>" in annotation.text
+    )
+    assert "1, 2, 3, 4, 5, 6, 7, 8, ... (12 total)" in summary.text
+
+
 def test_uniaxial_shear_geometry_preserves_negative_action_direction():
     fig = viz.shear_geometry_figure(
         [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)], [],
@@ -763,7 +796,11 @@ def test_uniaxial_shear_geometry_preserves_negative_action_direction():
     )
     load_arrow = next(
         annotation for annotation in fig.layout.annotations
-        if annotation.showarrow and annotation.arrowcolor == viz.LOAD_POINT
+        if (
+            annotation.showarrow
+            and annotation.arrowcolor == viz.LOAD_POINT
+            and not annotation.text
+        )
     )
     text = " ".join((annotation.text or "") for annotation in fig.layout.annotations)
 
@@ -833,9 +870,65 @@ def test_detailing_figure_highlights_checked_bars_and_dimensions_spacing_pair():
     annotation_text = " ".join(
         str(annotation.text) for annotation in fig.layout.annotations
     )
-    assert "c = 180.0 mm" in annotation_text
-    assert "required = 205.0 mm" in annotation_text
+    assert "c<sub>clear</sub> = 180.0 mm" in annotation_text
+    assert "c<sub>req</sub> = 205.0 mm" in annotation_text
     assert "tension" in annotation_text
+    spacing_label = next(
+        annotation
+        for annotation in fig.layout.annotations
+        if "c<sub>clear</sub>" in str(annotation.text)
+    )
+    assert spacing_label.showarrow
+    pair_mid_x = spacing_label.x
+    pair_mid_y = spacing_label.y
+    section_centroid = (0.0, 0.0)
+    assert (
+        (spacing_label.ax - pair_mid_x) * (pair_mid_x - section_centroid[0])
+        + (spacing_label.ay - pair_mid_y) * (pair_mid_y - section_centroid[1])
+    ) > 0.0
+    assert spacing_label.ay < -300.0
+
+
+def test_spacing_callout_normalises_off_centre_void_winding():
+    outer = [(-0.30, -0.30), (0.30, -0.30), (0.30, 0.30), (-0.30, 0.30)]
+    hole_ccw = [(-0.10, 0.05), (0.10, 0.05), (0.10, 0.25), (-0.10, 0.25)]
+    elements = [
+        {"id": "R1", "x_mm": -100.0, "y_mm": 0.0, "diameter_mm": 20.0},
+        {"id": "R2", "x_mm": 100.0, "y_mm": 0.0, "diameter_mm": 20.0},
+    ]
+    pair = {
+        "status": "PASS",
+        "first_id": "R1",
+        "second_id": "R2",
+        "phi_first_mm": 20.0,
+        "phi_second_mm": 20.0,
+        "clear_mm": 180.0,
+        "required_mm": 100.0,
+    }
+
+    def spacing_label(hole):
+        fig = viz.detailing_geometry_figure(
+            outer,
+            [hole],
+            [(-0.10, 0.0, 314.0), (0.10, 0.0, 314.0)],
+            [],
+            bar_elements=elements,
+            spacing_pair=pair,
+        )
+        return next(
+            annotation
+            for annotation in fig.layout.annotations
+            if "c<sub>clear</sub>" in str(annotation.text)
+        )
+
+    ccw_label = spacing_label(hole_ccw)
+    cw_label = spacing_label(list(reversed(hole_ccw)))
+
+    # The void lies above the pair, so the net-concrete centroid lies below it:
+    # the callout must go upward and must be invariant to the supplied winding.
+    assert ccw_label.ay > 300.0
+    assert ccw_label.ax == pytest.approx(cw_label.ax)
+    assert ccw_label.ay == pytest.approx(cw_label.ay)
 
 
 def _fatigue_figure_fixture():

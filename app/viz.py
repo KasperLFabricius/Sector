@@ -1898,17 +1898,80 @@ def detailing_geometry_figure(
             )
         clear = float(pair.get("clear_mm") or 0.0)
         required = float(pair.get("required_mm") or 0.0)
+        mid_x = 0.5 * (ax + bx)
+        mid_y = 0.5 * (ay + by)
+        try:
+            # Match the engineering section model: the concrete outline is positive
+            # and every void is negative regardless of the user's input winding.
+            # Otherwise an off-centre CCW void can reverse the selected callout side.
+            centroid_rings = [
+                geometry.orient(outer, ccw=True),
+                *(geometry.orient(hole, ccw=False) for hole in (holes or [])),
+            ]
+            section_cx, section_cy = geometry.area_moments_rings(
+                centroid_rings
+            ).centroid
+            section_cx *= 1000.0
+            section_cy *= 1000.0
+        except (TypeError, ValueError):
+            section_cx = sum(outer_x) / len(outer_x) if outer_x else mid_x
+            section_cy = sum(outer_y) / len(outer_y) if outer_y else mid_y
+        outward_x, outward_y = px, py
+        if (
+            (mid_x - section_cx) * outward_x
+            + (mid_y - section_cy) * outward_y
+        ) < 0.0:
+            outward_x, outward_y = -outward_x, -outward_y
+        # Move from the measured midpoint to the section's bounding box in the
+        # outward-normal direction, then add a geometry-scaled text clearance.
+        # This puts the box outside the concrete without the excessive whitespace
+        # that a fixed fraction from the midpoint creates for a pair near one face.
+        ray_to_boundary = []
+        if outer_x and abs(outward_x) > 1.0e-12:
+            boundary_x = max(outer_x) if outward_x > 0.0 else min(outer_x)
+            ray_to_boundary.append((boundary_x - mid_x) / outward_x)
+        if outer_y and abs(outward_y) > 1.0e-12:
+            boundary_y = max(outer_y) if outward_y > 0.0 else min(outer_y)
+            ray_to_boundary.append((boundary_y - mid_y) / outward_y)
+        boundary_offset = min(
+            (distance for distance in ray_to_boundary if distance >= 0.0),
+            default=0.0,
+        )
+        label_offset = boundary_offset + 0.22 * span
+        label_x = mid_x + outward_x * label_offset
+        label_y = mid_y + outward_y * label_offset
+        # Transparent data anchors make Plotly reserve room for the callout in
+        # autorange.  The text therefore remains outside the reinforcement field
+        # without being clipped or pushed into the axis/legend margin.
+        fig.add_trace(go.Scatter(
+            x=[label_x],
+            y=[label_y],
+            mode="markers",
+            marker=dict(size=1, opacity=0),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
         fig.add_annotation(
-            x=0.5 * (ax + bx),
-            y=0.5 * (ay + by),
-            text=(f"c = {clear:.1f} mm<br>required = {required:.1f} mm"),
-            showarrow=False,
+            x=mid_x,
+            y=mid_y,
+            ax=label_x,
+            ay=label_y,
+            xref="x",
+            yref="y",
+            axref="x",
+            ayref="y",
+            text=(f"c<sub>clear</sub> = {clear:.1f} mm<br>"
+                  f"c<sub>req</sub> = {required:.1f} mm"),
+            showarrow=True,
+            arrowhead=0,
+            arrowwidth=1.2,
+            arrowcolor=colour,
             xanchor="center",
-            yanchor="bottom",
-            yshift=8,
-            bgcolor="rgba(255,255,255,0.88)",
+            yanchor="middle",
+            bgcolor="rgba(255,255,255,0.94)",
             bordercolor=colour,
             borderwidth=1.2,
+            borderpad=4,
             font=dict(color=SCHEMATIC_INK, size=11),
         )
     return fig
@@ -1933,7 +1996,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
     bars = list(bars or [])
     fig = section_figure(
         outer, holes, bars, title=title, show_labels=False,
-        scale=1000.0, unit="mm", height=470,
+        scale=1000.0, unit="mm", height=560,
     )
     if not outer:
         return fig
@@ -1972,12 +2035,32 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         face_level = ymin if tension_low else ymax
         fig.add_shape(type="line", x0=xmin, x1=xmax, y0=face_level, y1=face_level,
                       line=dict(color=LOAD_POINT, width=2, dash="dash"))
-        fig.add_annotation(x=xmin + 0.04 * span_x, y=face_level,
-                           text="tension face", showarrow=False,
-                           xanchor="left",
-                           yanchor="bottom" if tension_low else "top",
-                           yshift=6 if tension_low else -6,
-                           font=dict(size=10, color=SCHEMATIC_INK))
+        face_x = xmin + 0.06 * span_x
+        face_label_y = face_level + (-0.14 if tension_low else 0.14) * span_y
+        fig.add_trace(go.Scatter(
+            x=[face_x], y=[face_label_y], mode="markers",
+            marker=dict(size=1, opacity=0), hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_annotation(
+            x=face_x,
+            y=face_level,
+            ax=face_x,
+            ay=face_label_y,
+            xref="x",
+            yref="y",
+            axref="x",
+            ayref="y",
+            text="tension face",
+            showarrow=True,
+            arrowhead=0,
+            arrowwidth=1.2,
+            arrowcolor=LOAD_POINT,
+            bgcolor="rgba(255,255,255,0.94)",
+            bordercolor=LOAD_POINT,
+            borderwidth=1.0,
+            borderpad=3,
+            font=dict(size=10, color=SCHEMATIC_INK),
+        )
         # VEd arrow in the physical shear direction.
         arrow_y0, arrow_y1 = (
             (ymin, ymax) if positive_action else (ymax, ymin)
@@ -2022,11 +2105,32 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         face_level = xmin if tension_low else xmax
         fig.add_shape(type="line", x0=face_level, x1=face_level, y0=ymin, y1=ymax,
                       line=dict(color=LOAD_POINT, width=2, dash="dash"))
-        fig.add_annotation(x=face_level, y=ymin + 0.05 * span_y,
-                           text="tension face", showarrow=False,
-                           xanchor="left" if tension_low else "right",
-                           xshift=6 if tension_low else -6, yanchor="bottom",
-                           font=dict(size=10, color=SCHEMATIC_INK))
+        face_y = ymin + 0.06 * span_y
+        face_label_x = face_level + (-0.14 if tension_low else 0.14) * span_x
+        fig.add_trace(go.Scatter(
+            x=[face_label_x], y=[face_y], mode="markers",
+            marker=dict(size=1, opacity=0), hoverinfo="skip", showlegend=False,
+        ))
+        fig.add_annotation(
+            x=face_level,
+            y=face_y,
+            ax=face_label_x,
+            ay=face_y,
+            xref="x",
+            yref="y",
+            axref="x",
+            ayref="y",
+            text="tension face",
+            showarrow=True,
+            arrowhead=0,
+            arrowwidth=1.2,
+            arrowcolor=LOAD_POINT,
+            bgcolor="rgba(255,255,255,0.94)",
+            bordercolor=LOAD_POINT,
+            borderwidth=1.0,
+            borderpad=3,
+            font=dict(size=10, color=SCHEMATIC_INK),
+        )
         arrow_x0, arrow_x1 = (
             (xmin, xmax) if positive_action else (xmax, xmin)
         )
@@ -2065,17 +2169,29 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                                yanchor="bottom", yshift=6,
                                font=dict(color=ENVELOPE))
 
-    ids = ", ".join(str(i) for i in selected) if selected else "none"
+    if not selected:
+        ids = "none"
+    elif len(selected) <= 8:
+        ids = ", ".join(str(i) for i in selected)
+    else:
+        ids = (
+            ", ".join(str(i) for i in selected[:8])
+            + f", ... ({len(selected)} total)"
+        )
     fig.add_annotation(
-        x=0.99, y=0.99, xref="paper", yref="paper",
-        xanchor="right", yanchor="top", showarrow=False, align="left",
+        x=0.0, y=1.02, xref="paper", yref="paper",
+        xanchor="left", yanchor="bottom", showarrow=False, align="left",
         text=(f"<b>b<sub>w</sub></b> = {bw_mm:.0f} mm ({bw_source})<br>"
               f"<b>A<sub>sl</sub></b> = {asl_mm2:.0f} mm<sup>2</sup> "
-              f"(bars {ids})<br>bending about {axis}<br>"
-              "dotted: gross centroid / Asl selection"),
-        bgcolor="rgba(255,255,255,0.82)",
+              f"(bars {ids}); bending about {axis}<br>"
+              "dotted line: gross centroid; stars: A<sub>sl</sub> bars"),
+        bgcolor="rgba(255,255,255,0.94)",
+        bordercolor=GUIDE_LINE,
+        borderwidth=1.0,
+        borderpad=4,
         font=dict(size=10, color=SCHEMATIC_INK),
     )
+    fig.update_layout(margin=dict(l=30, r=30, t=118, b=_LEGEND_BOT_M))
     return fig
 
 
