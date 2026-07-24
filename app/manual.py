@@ -1620,15 +1620,25 @@ _LATEX_CMD = {
     r"\varepsilon": "&#949;", r"\gamma": "&#947;", r"\sigma": "&#963;",
     r"\varphi": "&#966;", r"\alpha": "&#945;", r"\rho": "&#961;",
     r"\lambda": "&#955;", r"\phi": "&#966;", r"\eta": "&#951;",
+    r"\beta": "&#946;", r"\theta": "&#952;", r"\nu": "&#957;",
+    r"\tau": "&#964;", r"\xi": "&#958;", r"\pi": "&#960;",
     r"\Delta": "&#916;", r"\le": "&#8804;", r"\ge": "&#8805;",
+    r"\leq": "&#8804;", r"\geq": "&#8805;",
     r"\neq": "&#8800;", r"\times": "&#215;", r"\cdot": "&#183;",
     r"\approx": "&#8776;", r"\pm": "&#177;", r"\sum": "&#931;",
+    r"\circ": "&#176;", r"\rightarrow": "&#8594;",
 }
+
+_LATEX_LAYOUT_COMMANDS = (
+    r"\left", r"\right", r"\Big", r"\big", r"\Bigg", r"\bigg",
+    r"\!", r"\,", r"\;",
+)
+_LATEX_WORD_OPERATORS = ("min", "max", "ln", "log", "sin", "cos", "tan", "cot")
 
 
 def _latex_to_rl(s: str) -> str:
     """Convert the LaTeX subset used in the manual to ReportLab inline markup."""
-    for c in (r"\left", r"\right", r"\!", r"\,", r"\;"):
+    for c in sorted(_LATEX_LAYOUT_COMMANDS, key=len, reverse=True):
         s = s.replace(c, "")
     s = s.replace(r"\qquad", "&nbsp;&nbsp;&nbsp;").replace(r"\quad", "&nbsp;&nbsp;")
     s = re.sub(r"\\text\{([^{}]*)\}", r"\1", s)   # \text{label} -> label
@@ -1636,13 +1646,33 @@ def _latex_to_rl(s: str) -> str:
     s = re.sub(r"_\{([^{}]*)\}", r"<sub>\1</sub>", s)
     s = re.sub(r"\^\{([^{}]*)\}", r"<super>\1</super>", s)
 
+    # ReportLab has no TeX layout engine.  Preserve the mathematical meaning of
+    # roots in a compact linear form instead of exposing the command name.
+    while True:
+        rooted = re.sub(
+            r"\\sqrt\{([^{}]*)\}",
+            lambda m: "&#8730;(" + m.group(1) + ")",
+            s,
+        )
+        if rooted == s:
+            break
+        s = rooted
+
     def _frac(m):
-        wrap = lambda x: "(" + x + ")" if re.search(r"[ +\-]", x) else x
+        def wrap(x):
+            if x.startswith("&#8730;(") and x.endswith(")"):
+                return x
+            return "(" + x + ")" if re.search(r"[ +\-]", x) else x
+
         return wrap(m.group(1)) + "/" + wrap(m.group(2))
 
     # Iterate to a fixed point so a nested fraction (an inner tfrac inside the
     # numerator of an outer frac) is fully flattened: the inner one goes first,
     # which leaves the outer args brace-free for the next pass.
+    # An adjacent coefficient (for example C\frac{...}{...}) receives an
+    # explicit multiplication dot because a linearised fraction has no fraction
+    # bar to make the implied multiplication visually clear.
+    s = re.sub(r"(?<=[A-Za-z0-9)>])(?=\\t?frac\{)", "&#183;", s)
     while True:
         flat = re.sub(r"\\t?frac\{([^{}]*)\}\{([^{}]*)\}", _frac, s)
         if flat == s:
@@ -1650,7 +1680,8 @@ def _latex_to_rl(s: str) -> str:
         s = flat
     for k in sorted(_LATEX_CMD, key=len, reverse=True):
         s = s.replace(k, _LATEX_CMD[k])
-    s = re.sub(r"\\(min|max|ln|log)\b", r"\1", s)
+    operators = "|".join(_LATEX_WORD_OPERATORS)
+    s = re.sub(rf"\\({operators})\b", r"\1", s)
     s = re.sub(r"_([A-Za-z0-9])", r"<sub>\1</sub>", s)
     s = re.sub(r"\^([A-Za-z0-9])", r"<super>\1</super>", s)
     return s.replace("{", "").replace("}", "").replace("\\", "")

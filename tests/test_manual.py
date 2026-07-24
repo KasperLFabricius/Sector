@@ -92,6 +92,30 @@ def test_manual_math_spacing_cannot_merge_latex_commands_with_symbols():
     assert re.search(r"\\(?:quad|qquad)[A-Za-z]", text) is None
 
 
+def test_every_manual_latex_command_has_an_explicit_pdf_rendering_rule():
+    """Keep the in-app KaTeX and the PDF manual semantically aligned."""
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    maths = re.findall(r"\${1,2}(.*?)\${1,2}", text, flags=re.DOTALL)
+    commands = {
+        "\\" + name
+        for expression in maths
+        for name in re.findall(r"\\([A-Za-z]+)", expression)
+    }
+    supported = set(manual._LATEX_CMD)
+    supported.update(manual._LATEX_LAYOUT_COMMANDS)
+    supported.update("\\" + name for name in manual._LATEX_WORD_OPERATORS)
+    supported.update({r"\frac", r"\tfrac", r"\sqrt", r"\text", r"\quad", r"\qquad"})
+    assert commands <= supported
+
+    converted = "\n".join(manual._latex_to_rl(expression) for expression in maths)
+    forbidden = (
+        "sqrt", "frac", "Big", "beta", "theta", "nu", "tau", "xi", "pi",
+        "varepsilon", "gamma", "sigma", "varphi", "alpha", "rho", "lambda",
+        "eta", "Delta", "rightarrow", "leq", "geq",
+    )
+    assert not re.search(r"\b(?:" + "|".join(forbidden) + r")\b", converted)
+
+
 def test_manual_covers_both_examples_and_all_crack_editions():
     # The reference part documents every crack edition equally; the get-started part
     # introduces both worked examples.
@@ -344,6 +368,17 @@ def test_latex_to_rl_converts_the_subset():
     # The modular-ratio prose uses \neq (Es != Ep); it must render as the glyph.
     ne = manual._latex_to_rl(r"E_s \neq E_p")
     assert "&#8800;" in ne and "\\" not in ne
+
+    fatigue = manual._latex_to_rl(
+        r"\log_{10}N_R=C\frac{1-E_{max}}{\sqrt{1-R}}")
+    assert "C&#183;" in fatigue
+    assert "&#8730;(1-R)" in fatigue
+    assert "sqrt" not in fatigue and "frac" not in fatigue
+
+    shear = manual._latex_to_rl(
+        r"V_{Rd,c}=\Big[C_{Rd,c}+\tau_{Rd,c}\Big]")
+    assert "Big" not in shear
+    assert "&#964;" in shear
 
 
 def test_display_equation_tolerates_trailing_punctuation():
