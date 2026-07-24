@@ -1837,6 +1837,10 @@ def test_report_off_axis_skip_disclosed_uniaxially():
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
     assert "per sub-tube" in txt                     # the subdivided disclosure fired
+    assert (
+        "utilisation = 57.5 % (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+        in txt
+    )
 
 
 def test_report_partial_torsion_face_coverage_disclosed():
@@ -1855,6 +1859,10 @@ def test_report_partial_torsion_face_coverage_disclosed():
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
     assert "may not be the critical face" in txt
+    assert (
+        "utilisation = 57.5 % (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+        in txt
+    )
 
 
 def test_report_off_axis_chord_block():

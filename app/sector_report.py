@@ -2731,6 +2731,7 @@ class ReportBuilder:
             self._h2("Longitudinal chord: bending + shear"
                      + (" + torsion" if ch.get("has_torsion") else "") + " tension")
             vv = _code_verdict(ch["ok"], ch.get("code_applicable", True))
+            coverage = ch.get("off_not_evaluated")
             face = viz.tension_face_label(
                 ch.get("tension_low", True), ch.get("axis")
             )
@@ -2742,12 +2743,18 @@ class ReportBuilder:
                       f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
             fell_back = ch.get("biaxial") and not ch.get("conditional", True)
+            if coverage:
+                verdict_suffix = (
+                    "  (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+                )
+            elif fell_back:
+                verdict_suffix = "  (pure-axis fallback - see note)"
+            else:
+                verdict_suffix = f"  ({vv})"
             self._formula(
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(ch['m_total'], 1)} / {_fmt(ch['m_rd'], 1)}",
-                result=(f"utilisation = {_pct(ch['util'])}"
-                        + ("  (pure-axis fallback -- see note)" if fell_back
-                           else f"  ({vv})")))
+                result=f"utilisation = {_pct(ch['util'])}{verdict_suffix}")
             face_desc = (f"the shear tension face ({face})" if ch.get("gets_shift", True)
                          else f"the shear compression face ({face}) -- the torsion "
                          "tension governs there, with no shear shift and the bending "
@@ -2764,19 +2771,22 @@ class ReportBuilder:
                          "solve did not converge, so M<sub>Rd</sub> is the pure-axis "
                          "fallback and this check can be optimistic -- rely on the "
                          "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
-            elif ch.get("off_not_evaluated") == "subdivided":
+            if coverage == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated here -- rely on the combined "
                          "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
-            elif ch.get("off_not_evaluated") == "not_solved":
+            elif coverage == "not_solved":
                 note += (" One or more chord faces carrying the torsion share could "
                          "not be evaluated (a conditional solve failed or a face has "
                          "no tension steel), so they are not checked and the governing "
                          "chord shown may not be the critical face -- rely on the "
                          "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
             self._small(note)
-            self._chord_off_block(links.get("chord_off"))
+            self._chord_off_block(
+                links.get("chord_off"),
+                coverage_complete=not bool(coverage),
+            )
 
     def _combined(self):
         aggregate = self.out["combined"]
@@ -2979,7 +2989,11 @@ class ReportBuilder:
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
-            vv = _code_verdict(lg["ok"], applicable)
+            vv = _code_verdict(
+                lg["ok"],
+                applicable and lg.get("code_applicable", True),
+            )
+            coverage = lg.get("off_not_evaluated")
             ax = lg["axis"]
             face = viz.tension_face_label(
                 lg.get("tension_low", True), lg.get("axis")
@@ -3013,12 +3027,18 @@ class ReportBuilder:
                 result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm")
             biaxial = lg.get("biaxial", False)
             fell_back = biaxial and not lg.get("conditional", True)
+            if coverage:
+                verdict_suffix = (
+                    "  (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+                )
+            elif fell_back:
+                verdict_suffix = "  (pure-axis fallback - see note)"
+            else:
+                verdict_suffix = f"  ({vv})"
             self._formula(
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
-                result=(f"utilisation = {_pct(lg['util'])}"
-                        + ("  (pure-axis fallback -- see note)" if fell_back
-                           else f"  ({vv})")))
+                result=f"utilisation = {_pct(lg['util'])}{verdict_suffix}")
             if fell_back:
                 self._p("Biaxial bending: a moment about the OTHER axis is acting ("
                         f"{_pct(lg.get('off_util', 0.0))} of that axis' capacity) but "
@@ -3028,13 +3048,13 @@ class ReportBuilder:
                         "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
                         "which uses the full biaxial bending utilisation.")
             note = viz.chord_angle_note(lg.get("theta_mode"))
-            if lg.get("off_not_evaluated") == "subdivided":
+            if coverage == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated; the "
                          "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check covers the "
                          "interaction.")
-            elif lg.get("off_not_evaluated") == "not_solved":
+            elif coverage == "not_solved":
                 note += (" One or more chord faces carrying the torsion share could "
                          "not be evaluated (a conditional solve failed or a face has "
                          "no tension steel), so they are NOT checked and the governing "
@@ -3056,7 +3076,10 @@ class ReportBuilder:
                         "the peak-moment tension; a section tool uses M<sub>Rd</sub> as "
                         "that cap). ") + note
             self._small(note)
-            self._chord_off_block(c.get("chord_off"))
+            self._chord_off_block(
+                c.get("chord_off"),
+                coverage_complete=not bool(coverage),
+            )
         else:
             self._small(f"Additional longitudinal steel: torsion "
                         "&#8721;A<sub>sl</sub> = "
@@ -3065,7 +3088,7 @@ class ReportBuilder:
                         "kN on the tension chord (6.18) -- both beyond the bending "
                         "steel. Enable shear links for the full utilisation check.")
 
-    def _chord_off_block(self, och):
+    def _chord_off_block(self, och, *, coverage_complete=True):
         """Off-axis chord check (bending + torsion share), shared by the shear and
         combined sections. Rendered when torsion is live on a single-tube section:
         the chord about the OTHER axis carries its bending tension plus its share
@@ -3097,7 +3120,14 @@ class ReportBuilder:
         self._formula(
             "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
             subst=f"{_fmt(och['m_total'], 1)} / {_fmt(och['m_rd'], 1)}",
-            result=f"utilisation = {_pct(och['util'])}  ({vv})")
+            result=(
+                f"utilisation = {_pct(och['util'])}  "
+                + (
+                    f"({vv})"
+                    if coverage_complete
+                    else "(NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+                )
+            ))
         self._small(f"z = {_fmt(och['z'], 3)} m ({och.get('z_src') or '0.9 d'}). "
                     "Each chord's capacity is conditional on the OTHER axis' "
                     "bending moment only; the longitudinal steel the two chords "

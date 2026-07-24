@@ -8067,13 +8067,31 @@ def shear_view(inp, results):
             g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{ch['m_total']:.1f} kNm",
                       help="bending + shear shift (+ torsion) as an equivalent "
                            "moment on the governing chord face")
-            if (not ch.get("code_applicable", True)
-                    or (ch.get("biaxial") and not ch.get("conditional", True))):
-                g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(ch["util"]),
-                          help=("No code verdict outside the strut-angle range."
-                                if not ch.get("code_applicable", True)
-                                else "pure-axis fallback capacity -- see the warning "
-                                     "below"))
+            coverage = ch.get("off_not_evaluated")
+            fell_back = (
+                ch.get("biaxial") and not ch.get("conditional", True)
+            )
+            if not ch.get("code_applicable", True):
+                g3.metric(
+                    r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                    _pct(ch["util"]),
+                    help="No code verdict outside the strut-angle range.",
+                )
+            elif coverage:
+                g3.metric(
+                    r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                    _pct(ch["util"]),
+                    help=(
+                        "NOT ASSESSED: longitudinal chord coverage is incomplete; "
+                        "see the warning below."
+                    ),
+                )
+            elif fell_back:
+                g3.metric(
+                    r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                    _pct(ch["util"]),
+                    help="Pure-axis fallback capacity; see the warning below.",
+                )
             else:
                 g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(ch["util"]),
                           delta=("OK" if ch["ok"] else "Over limit"),
@@ -8094,19 +8112,19 @@ def shear_view(inp, results):
                 st.caption("The shear shift is capped so bending + shear does not "
                            "exceed MRd (6.2.3(7)); the strut-angle objective uses "
                            "this same capped demand.")
-            if ch.get("biaxial") and not ch.get("conditional", True):
+            if fell_back:
                 st.warning(
                     f"Biaxial bending: a moment about the OTHER axis is acting "
                     f"({_pct(ch['off_util'])} of that axis' capacity) but the "
                     "conditional capacity solve did not converge, so MRd is the "
                     "pure-axis fallback and this chord check can be optimistic -- "
                     "rely on the combined " + chr(0x03A3) + "(SEd/SRd) check.")
-            elif ch.get("off_not_evaluated") == "subdivided":
+            if coverage == "subdivided":
                 st.caption("Compound (subdivided) section: the torsion "
                            "longitudinal steel is per sub-tube, so the off-axis "
                            "chord's torsion share is not evaluated here; the "
                            + chr(0x03A3) + "(SEd/SRd) check covers the interaction.")
-            elif ch.get("off_not_evaluated") == "not_solved":
+            elif coverage == "not_solved":
                 st.warning(
                     "One or more chord faces that carry the torsion share could "
                     "not be evaluated (a conditional capacity solve did not "
@@ -8114,16 +8132,19 @@ def shear_view(inp, results):
                     "checked here and the governing chord shown may not be the "
                     "critical face; rely on the " + chr(0x03A3) + "(SEd/SRd) check "
                     "for the interaction.")
-            elif ch.get("biaxial") and not ch.get("has_torsion"):
+            elif not fell_back and ch.get("biaxial") and not ch.get("has_torsion"):
                 st.caption("The off-axis chord carries only its bending tension "
                            "(no torsion is acting), which the biaxial bending "
                            "utilisation already covers.")
-            _render_chord_off(links.get("chord_off"))
+            _render_chord_off(
+                links.get("chord_off"),
+                coverage_complete=not bool(coverage),
+            )
         st.plotly_chart(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                          links["dia"], links["s"]), width="stretch")
 
 
-def _render_chord_off(och):
+def _render_chord_off(och, *, coverage_complete=True):
     """Off-axis chord check block, shared by the Shear and Combined views.
 
     Rendered when torsion is live on a single-tube section: the chord about the
@@ -8143,9 +8164,22 @@ def _render_chord_off(och):
     g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{och['m_total']:.1f} kNm",
               help="bending + the torsion share as an equivalent moment on "
                    "this chord")
-    _verdict_metric(g3, r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
-                    _pct(och["util"]), och["ok"],
-                    code_applicable=och.get("code_applicable", True))
+    if coverage_complete:
+        _verdict_metric(
+            g3,
+            r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+            _pct(och["util"]),
+            och["ok"],
+            code_applicable=och.get("code_applicable", True),
+        )
+    else:
+        g3.metric(
+            r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+            _pct(och["util"]),
+            help=(
+                "NOT ASSESSED: one or more longitudinal chord faces are missing."
+            ),
+        )
     st.caption(
         f"Tension chord = the {face_lbl} face about the {och['axis']}-axis "
         "(the axis the shear does not act on). No shear shift acts on this chord; "
@@ -8692,19 +8726,36 @@ def combined_view(inp, results):
                      "tension governs there (no shear shift, bending relieves it)")
         biaxial = lg.get("biaxial", False)
         ok_l = lg["ok"]
+        coverage = lg.get("off_not_evaluated")
+        fell_back = biaxial and not lg.get("conditional", True)
         g1, g2, g3 = st.columns(3)
         g1.metric(fr"$M_{{Ed}}$ (about {ax_lbl})", f"{lg['m_ed']:.1f} kNm")
         g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{lg['m_total']:.1f} kNm",
                   help="bending + shear shift + torsion, as an equivalent moment "
                        "on the governing chord face")
-        if (not c.get("code_applicable", True)
-                or (biaxial and not lg.get("conditional", True))):
+        if not c.get("code_applicable", True):
+            g3.metric(
+                r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                _pct(lg["util"]),
+                help="No code verdict outside the strut-angle range.",
+            )
+        elif coverage:
+            g3.metric(
+                r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                _pct(lg["util"]),
+                help=(
+                    "NOT ASSESSED: longitudinal chord coverage is incomplete; "
+                    "see the warning below."
+                ),
+            )
+        elif fell_back:
             # The conditional biaxial solve failed and MRd fell back to the
             # pure-axis capacity, so withhold the reassuring OK/Over-limit verdict.
-            g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(lg["util"]),
-                      help=("No code verdict outside the strut-angle range."
-                            if not c.get("code_applicable", True)
-                            else "pure-axis fallback capacity -- see the warning below"))
+            g3.metric(
+                r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                _pct(lg["util"]),
+                help="Pure-axis fallback capacity; see the warning below.",
+            )
         else:
             g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(lg["util"]),
                       delta=("OK" if ok_l else "Over limit"),
@@ -8728,7 +8779,7 @@ def combined_view(inp, results):
                        "MRd (6.2.3(7): the added tension need not exceed the "
                        "peak-moment tension; a section tool has no beam peak, so MRd "
                        "is used as that cap).")
-        if biaxial and not lg.get("conditional", True):
+        if fell_back:
             st.warning(
                 f"Biaxial bending: a moment about the OTHER axis is acting "
                 f"({_pct(lg['off_util'])} of that axis' capacity) but the "
@@ -8736,12 +8787,12 @@ def combined_view(inp, results):
                 "pure-axis fallback and this chord check can be optimistic. Rely "
                 "on the " + chr(0x03A3) + "(SEd/SRd) check above, which uses the "
                 "full biaxial bending utilisation.")
-        elif lg.get("off_not_evaluated") == "subdivided":
+        if coverage == "subdivided":
             st.caption("Compound (subdivided) section: the torsion longitudinal "
                        "steel is per sub-tube, so the off-axis chord's torsion "
                        "share is not evaluated; the " + chr(0x03A3) + "(SEd/SRd) "
                        "sum above covers the interaction.")
-        elif lg.get("off_not_evaluated") == "not_solved":
+        elif coverage == "not_solved":
             st.warning(
                 "One or more chord faces that carry the torsion share could not be "
                 "evaluated (a conditional capacity solve did not converge or a face "
@@ -8749,15 +8800,18 @@ def combined_view(inp, results):
                 "governing chord shown may not be the critical face; the "
                 + chr(0x03A3) + "(SEd/SRd) sum above remains the combined "
                 "verification.")
-        elif biaxial and not lg.get("has_torsion"):
+        elif not fell_back and biaxial and not lg.get("has_torsion"):
             st.caption("The off-axis chord carries only its bending tension (no "
                        "torsion is acting), which the biaxial bending utilisation "
                        "in the " + chr(0x03A3) + "(SEd/SRd) sum already covers.")
-        else:
+        elif not fell_back:
             st.caption("The DK NA " + chr(0x03A3) + "(SEd/SRd) sum above uses the "
                        "full biaxial bending utilisation and remains the primary "
                        "combined check.")
-        _render_chord_off(c.get("chord_off"))
+        _render_chord_off(
+            c.get("chord_off"),
+            coverage_complete=not bool(coverage),
+        )
     else:
         st.caption(f"Torsion needs {chr(0x03A3)}Asl = {c['asl_torsion']:.0f} mm2 "
                    "distributed round the tube perimeter (6.28); the shear adds "

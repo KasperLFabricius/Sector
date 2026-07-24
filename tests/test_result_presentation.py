@@ -435,6 +435,29 @@ def test_combined_physical_components_tolerates_missing_candidate_utilisation():
     assert components[2]["util"] == pytest.approx(0.75)
 
 
+def test_combined_physical_components_withholds_off_axis_only_verdict():
+    components = presentation.combined_physical_components({
+        "transverse": None,
+        "longitudinal": None,
+        "chord_off": {"valid": True, "util": 0.75, "axis": "y"},
+    })
+    assert components[2]["status"] == "NOT ASSESSED"
+    assert "shear-axis" in components[2]["note"]
+
+
+def test_combined_physical_components_tolerates_missing_strut_angle():
+    components = presentation.combined_physical_components({
+        "transverse": {
+            "valid": True, "cot": None,
+            "u_crush": 0.40, "u_stirrup": 0.55,
+            "shear_fraction": 0.20, "torsion_fraction": 0.35,
+        },
+        "longitudinal": {"valid": True, "util": 0.60, "axis": "x"},
+    })
+    assert components[0]["status"] == "PASS"
+    assert components[0]["note"] == "V-T crushing at the shared member angle"
+
+
 def test_shear_screening_does_not_fail_when_selected_links_pass():
     shear = {
         "res": {"valid": True, "vrd_c": 100.0},

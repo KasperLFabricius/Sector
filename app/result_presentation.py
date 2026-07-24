@@ -378,6 +378,10 @@ def combined_physical_components(combined):
         transverse_valid = bool(transverse.get("valid"))
         concrete_util = transverse.get("u_crush")
         stirrup_util = transverse.get("u_stirrup")
+        try:
+            cot = float(transverse.get("cot"))
+        except (TypeError, ValueError):
+            cot = None
         concrete = {
             "key": "concrete",
             "label": "Concrete compression strut",
@@ -390,9 +394,11 @@ def combined_physical_components(combined):
             "valid": transverse_valid,
             "applicable": applicable,
             "note": (
-                f"V-T crushing at cot {_THETA} = "
-                f"{float(transverse.get('cot', 0.0)):.2f}"
-                if transverse_valid else "Combined strut check is invalid"
+                f"V-T crushing at cot {_THETA} = {cot:.2f}"
+                if transverse_valid and cot is not None
+                else "V-T crushing at the shared member angle"
+                if transverse_valid
+                else "Combined strut check is invalid"
             ),
         }
         stirrup = {
@@ -443,7 +449,8 @@ def combined_physical_components(combined):
             or governing.get("conditional", True)
         )
     )
-    long_valid = governing is not None
+    main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
+    long_valid = governing is not None and main_valid
     long_applicable = bool(
         applicable
         and long_valid
@@ -452,7 +459,10 @@ def combined_physical_components(combined):
         and governing.get("code_applicable", True)
     )
     long_util = governing.get("util") if governing is not None else None
-    if not long_valid:
+    if not main_valid:
+        long_status = "NOT ASSESSED"
+        long_note = "No valid shear-axis longitudinal chord check"
+    elif not long_valid:
         long_status = "NOT ASSESSED"
         long_note = "No valid longitudinal chord check"
     elif coverage:

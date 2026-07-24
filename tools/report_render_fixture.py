@@ -38,10 +38,11 @@ from sector.section import Section  # noqa: E402
 
 # Geometry, concrete law, steel law, two plastic interactions, two plastic
 # states, two elastic states, two elastic strain profiles, one derived shear
-# geometry, one V-T interaction, one minimum-reinforcement figure, one
-# clear-spacing figure and four grouped-fatigue figures. An intentional fixture
-# change must update this explicit contract.
-_EXPECTED_FIGURE_COUNT = 20
+# geometry, one shear-truss figure, one torsion-tube figure, two V-T interaction
+# figures, one minimum-reinforcement figure, one clear-spacing figure and four
+# grouped-fatigue figures. An intentional fixture change must update this
+# explicit contract.
+_EXPECTED_FIGURE_COUNT = 23
 
 
 class _FixedDateTime(datetime.datetime):
@@ -88,7 +89,7 @@ def _inputs() -> dict:
             "mx_ed_knm": 80.0,
             "my_ed_knm": 0.0,
             "v_ed_kn": 30.0,
-            "t_ed_knm": 0.0,
+            "t_ed_knm": 25.0,
             "check_minimum_reinforcement": True,
         },
         {
@@ -210,8 +211,18 @@ def _inputs() -> dict:
         fatigue_inputs.SPECTRUM_TABLE_KEY: fatigue_spectrum,
         fatigue_inputs.BASIS_KEY: fatigue_basis,
         "shear_on": True,
-        "torsion_on": False,
-        "combined_on": False,
+        "shear_links": True,
+        "shear_method": codes.EC2_2005_DKNA.label,
+        "shear_vx_link_legs": 2.0,
+        "shear_vy_link_legs": 2.0,
+        "shear_link_dia": 10.0,
+        "shear_link_s": 150.0,
+        "shear_fywk": 500.0,
+        "torsion_on": True,
+        "torsion_method": codes.EC2_2005_DKNA.label,
+        "combined_on": True,
+        "combined_method": codes.EC2_2005_DKNA.label,
+        "combined_mv_independent": False,
         "strut_cot_min": 1.0,
         "strut_cot_max": 2.5,
         "minimum_reinforcement_on": True,
@@ -461,39 +472,141 @@ def _results() -> dict:
         "method": codes.EC2_2005_DKNA.label,
         "model_2023": False,
     }
+    link_resistance = {
+        "vrd_s": 150.0,
+        "vrd_max": 300.0,
+        "vrd": 150.0,
+        "cot": 1.60,
+        "theta_deg": 32.01,
+        "z": 243.0,
+        "fywd": 500.0 / 1.15,
+        "nu1": codes.EC2_2005_DKNA.shear_nu1(30.0),
+        "alpha_cw": 1.0,
+        "sigma_cp": 0.0,
+        "fcd": 30.0 / 1.5,
+        "governs": "stirrups (VRd,s)",
+        "valid": True,
+    }
+    shear_payload["links"] = {
+        "res": link_resistance,
+        "util": 30.0 / link_resistance["vrd"],
+        "asw": 157.08,
+        "asw_over_s": 1.0472,
+        "legs": 2.0,
+        "dia": 10.0,
+        "s": 150.0,
+        "fywk": 500.0,
+        "cot_min": 1.0,
+        "cot_max": 2.5,
+        "delta_ftd": 24.0,
+        "cot_limit_lo": 1.0,
+        "cot_limit_hi": 2.5,
+        "z_source": "plastic internal lever arm",
+        "out_of_limits": False,
+        "code_applicable": True,
+        "required": bool(30.0 > shear_res["vrd_c"]),
+        "theta_mode": "utilisation",
+        "chord": None,
+        "chord_off": None,
+    }
+    interaction = {
+        "valid": True,
+        "cot": 1.60,
+        "theta_deg": 32.01,
+        "trd_max": 90.0,
+        "vrd_max": link_resistance["vrd_max"],
+        "t_ed": 25.0,
+        "v_ed": 30.0,
+        "value": 25.0 / 90.0 + 30.0 / link_resistance["vrd_max"],
+        "code_applicable": True,
+    }
+    torsion_payload = {
+        "tube": {
+            "A": 0.06,
+            "u": 1.0,
+            "tef": 60.0,
+            "Ak": 0.0204,
+            "uk": 0.76,
+            "tef_auto": 60.0,
+            "tef_capped": False,
+            "tef_user": False,
+            "hollow": False,
+            "valid": True,
+        },
+        "trd_s": 70.0,
+        "trd_max": 90.0,
+        "trd": 70.0,
+        "trd_c": 31.0,
+        "cot": 1.60,
+        "theta_deg": 32.01,
+        "util": 25.0 / 70.0,
+        "asl_req": 700.0,
+        "t_ed": 25.0,
+        "fcd": 30.0 / 1.5,
+        "fywd": 500.0 / 1.15,
+        "fyd_long": 500.0 / 1.15,
+        "nu": codes.EC2_2005_DKNA.torsion_nu(30.0),
+        "alpha_cw": 1.0,
+        "fctd": 1.35,
+        "asw_t": 78.54,
+        "asw_over_s": 0.5236,
+        "dia": 10.0,
+        "s": 150.0,
+        "cot_min": 1.0,
+        "cot_max": 2.5,
+        "method": codes.EC2_2005_DKNA.label,
+        "governs": "stirrups (TRd,s)",
+        "valid": True,
+        "cot_limit_lo": 1.0,
+        "cot_limit_hi": 2.5,
+        "out_of_limits": False,
+        "code_applicable": True,
+        "subdivided": False,
+        "theta_mode": "utilisation",
+        "interaction": interaction,
+        "min_reinf": {
+            "applicable": True,
+            "value": 25.0 / 31.0 + 30.0 / shear_res["vrd_c"],
+            "ok": False,
+            "t_ed": 25.0,
+            "trd_c": 31.0,
+            "v_ed": 30.0,
+            "vrd_c": shear_res["vrd_c"],
+            "solid": True,
+            "model_2023": False,
+        },
+    }
+    shear_util = shear_payload["links"]["util"]
+    torsion_util = torsion_payload["util"]
+    shear_fraction = (
+        0.0
+        if 30.0 <= shear_res["vrd_c"]
+        else 30.0 / link_resistance["vrd_s"]
+    )
+    stirrup_util = shear_fraction + torsion_util
     combined_payload = {
         "valid": True,
         "method": codes.EC2_2005_DKNA.label,
         "r_m": 0.80,
-        "r_v": 0.30,
-        "r_t": 0.25,
+        "r_v": shear_util,
+        "r_t": torsion_util,
         "m_v_independent": False,
-        "dkna_sum": 1.35,
+        "dkna_sum": 0.80 + shear_util + torsion_util,
         "dkna_ok": False,
         "code_applicable": True,
-        "crushing": {
-            "valid": True,
-            "cot": 1.60,
-            "theta_deg": 32.01,
-            "trd_max": 90.0,
-            "vrd_max": 650.0,
-            "t_ed": 25.0,
-            "v_ed": 30.0,
-            "value": 25.0 / 90.0 + 30.0 / 650.0,
-            "code_applicable": True,
-        },
+        "crushing": interaction,
         "transverse": {
             "valid": True,
             "cot": 1.60,
             "theta_deg": 32.01,
-            "u_stirrup": 0.55,
-            "u_crush": 25.0 / 90.0 + 30.0 / 650.0,
-            "governing": 0.55,
+            "u_stirrup": stirrup_util,
+            "u_crush": interaction["value"],
+            "governing": max(stirrup_util, interaction["value"]),
             "governs": "stirrups",
-            "ok": True,
-            "shear_fraction": 0.20,
-            "torsion_fraction": 0.35,
-            "shear_credited": False,
+            "ok": bool(max(stirrup_util, interaction["value"]) <= 1.0),
+            "shear_fraction": shear_fraction,
+            "torsion_fraction": torsion_util,
+            "shear_credited": bool(shear_fraction == 0.0),
             "vrd_c": shear_res["vrd_c"],
             "v_ed": 30.0,
         },
@@ -578,12 +691,14 @@ def _results() -> dict:
         "elastic": elastic,
         "fatigue": fatigue,
         "shear": shear_payload,
+        "torsion": torsion_payload,
         "combined": combined_payload,
         "clear_spacing": spacing,
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
              "results": {
                  "plastic": plastic, "shear": shear_payload,
+                 "torsion": torsion_payload,
                  "combined": combined_payload,
                  "minimum_reinforcement": minimum,
              }},
@@ -762,6 +877,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Concrete compression strut",
         "Closed stirrup",
         "Longitudinal reinforcement",
+        "Torsion (thin-walled tube)",
         "125.0 %",
         "245.000 MPa",
         "Crack-width candidates",
