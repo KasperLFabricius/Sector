@@ -2,6 +2,7 @@
   color: var(--st-text-color);
   font-family: var(--st-font);
   font-size: var(--st-base-font-size);
+  color-scheme: light dark;
 }
 
 *, *::before, *::after {
@@ -79,6 +80,21 @@
   color: var(--st-text-color);
   font: inherit;
   cursor: pointer;
+  color-scheme: light dark;
+}
+
+/* Chromium delegates the opened native option list to the operating system on
+   Windows.  Canvas/CanvasText keeps that popup legible even when the Streamlit
+   theme and the OS preference differ; the collapsed editor still uses the
+   Streamlit theme tokens above. */
+.pg-select-editor option {
+  background-color: Canvas;
+  color: CanvasText;
+}
+
+.pg-select-editor option:checked {
+  background-color: Highlight;
+  color: HighlightText;
 }
 
 /* The frozen ID column reads as a muted, non-editable row header. */

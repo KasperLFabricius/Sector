@@ -385,6 +385,10 @@ def test_frontend_is_scoped_accessible_and_theme_aware():
         "--st-dataframe-header-background-color",
     ):
         assert token in styles
+    assert "color-scheme: light dark" in styles
+    assert ".pg-select-editor option" in styles
+    for system_colour in ("Canvas", "CanvasText", "Highlight", "HighlightText"):
+        assert system_colour in styles
 
 
 def test_app_feeds_grid_points_to_the_analysis():
