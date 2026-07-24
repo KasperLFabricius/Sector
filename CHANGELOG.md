@@ -2,37 +2,42 @@
 
 ## Unreleased
 
-- Added the Streamlit fatigue workflow: explicit steel/concrete settings and
-  complete partial factors, authority/method declarations, editable grouped
-  sustained-plus-cyclic action spectra, S-N detail catalogues and per-element
-  detail assignment. Fatigue inputs participate in validation, calculation,
-  caching, project save/load and stale-result detection.
-- Added the tested fatigue application boundary: canonical section-force sign
-  conversion, per-element material/detail mapping, explicit mixed-bond inputs,
-  full user-entered factors and auditable VD/BN spectrum provenance. Authority
-  selections validate evidence but never modify actions or cycle counts. Named
-  fatigue-detail presets are edition-checked, custom detail sources remain
-  explicit, and built-in tendon curves use the material catalogue's entered
-  characteristic proof stress for fatigue acceptance.
-- Added the headless grouped-spectrum fatigue engine for reinforcing and
-  prestressing steel and for same-fibre concrete compression damage, including
-  a certified section-wide governing-fibre search, explicit bound/convergence
-  evidence, per-element yield checks, tendon-aware solver mapping, the 2005 and
-  2023 rebar/tendon bond corrections, action-level fatigue-load factoring, the
-  EN 1992-2:2005 concrete bridge method and the EN 1992-1-1:2023 method.
-- Added the versioned fatigue input model: stable S-N detail IDs, verified 2005
-  and 2023 Eurocode presets, grouped long-/short-action spectrum bins and
-  lossless project-file migration. Detailed result and report presentation
-  follows in the next scoped change.
-- Added stable reinforcing- and prestressing-steel catalogues with per-element
-  assignment throughout plastic, elastic, crack-width and member checks.
-- Added material IDs, names, definitions, assignment evidence and individual
-  stress-strain curves to the UI, project files and PDF report.
+## 0.91 - 2026-07-24
+
+Sector 0.91 adds mixed reinforcement, directional shear, longitudinal detailing
+and grouped fatigue workflows.
+
+- Opened the user manual in a large in-context dialog so the current workspace
+  and edited inputs remain visible and intact.
+- Added stable bar and tendon IDs with area-, diameter- and independent-size
+  definitions, plus material, fatigue-detail and group assignments.
+- Added reinforcing- and prestressing-steel catalogues with per-element
+  constitutive laws throughout plastic, elastic, crack-width and member checks.
+  Material definitions, assignments and individual stress-strain curves remain
+  traceable in the UI, project file and report.
+- Replaced the single shear action with signed `Vx,Ed` and `Vy,Ed` inputs.
+  Each direction is checked independently against its associated bending axis
+  and faces. Sector does not claim a general biaxial shear interaction verdict.
 - Added per-case longitudinal minimum-reinforcement checks for the 2005/DK NA
-  and 2023 Eurocode methods, including resultant biaxial tension-zone geometry
-  and retained ordinary-bar material assignments.
-- Added a section-wide clear-spacing check, explicit tendon-envelope opt-in and
-  lap/bundle review flags, plus matching UI, figures, report and manual evidence.
+  and 2023 Eurocode methods, including resultant biaxial tension-zone geometry.
+  Added a section-wide clear-spacing check with tendon-envelope opt-in and
+  explicit lap/bundle review flags.
+- Added grouped fatigue spectra using the cracked Elastic long-/short-action
+  states, stable S-N detail IDs, verified 2005 and 2023 presets and complete
+  user-entered partial factors. Authority declarations record VD/BN provenance
+  and do not modify actions, cycle counts or resistances.
+- Added reinforcing- and prestressing-steel S-N/Miner damage, yield/proof
+  acceptance and same-fibre concrete compression fatigue. Results retain raw,
+  bond-transformed and design stress ranges, solver convergence and a certified
+  section-wide concrete-search bound.
+- Added dedicated fatigue summaries and drill-down results, labelled
+  colour-accessible section maps, S-N and cumulative-damage figures, complete
+  PDF report evidence and matching manual guidance.
+- Advanced project files through deterministic migrations for the richer
+  element, material, shear, detailing and fatigue records.
+
+Shear- and torsion-induced fatigue remain outside the implemented fatigue scope.
+Plastic and Elastic remain solver names and do not prescribe a limit state.
 
 ## 0.90 - 2026-07-22
 

@@ -747,10 +747,10 @@ def test_report_footer_identifies_the_organisational_licensee():
         {"source_revision": "abcdef1234567890"},
         _inp(),
         _out(),
-        version="0.90",
+        version="0.91",
         figures=False,
     ))
-    assert "Sector 0.90 - abcdef123456 - Sweco Danmark A/S" in " ".join(txt.split())
+    assert "Sector 0.91 - abcdef123456 - Sweco Danmark A/S" in " ".join(txt.split())
 
 
 def test_report_front_matter_identifies_action_sets_and_result_statuses():

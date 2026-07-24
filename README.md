@@ -2,7 +2,7 @@
 
 **Reinforced-concrete cross-section analysis for structural engineering.**
 
-Current release: **Sector 0.90**. See [CHANGELOG.md](CHANGELOG.md).
+Current release: **Sector 0.91**. See [CHANGELOG.md](CHANGELOG.md).
 
 Sector analyses a polygonal reinforced (and optionally prestressed) concrete
 cross-section and reports, for the same section:
