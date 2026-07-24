@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import pathlib
+import re
 import sys
 
 import pytest
@@ -82,6 +83,13 @@ def test_manual_blocks_are_wellformed():
         elif b[0] == "table":
             headers, rows = b[1], b[2]
             assert all(len(row) == len(headers) for row in rows)  # rectangular
+
+
+def test_manual_math_spacing_cannot_merge_latex_commands_with_symbols():
+    # Adjacent Python string literals previously produced ``\quadf`` and
+    # ``\qquadk``. KaTeX renders those invalid commands as red source text.
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    assert re.search(r"\\(?:quad|qquad)[A-Za-z]", text) is None
 
 
 def test_manual_covers_both_examples_and_all_crack_editions():

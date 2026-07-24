@@ -1263,7 +1263,7 @@ def manual_blocks() -> list:
        "\\frac{f_{ck}}{\\gamma_{c,fat}}\\left(1-\\frac{f_{ck}}{250}\\right).$$\n\n"
        "For 2023:\n\n"
        "$$\\eta_{cc}=\\min\\left[\\left(\\frac{40}{f_{ck}}\\right)^{1/3},1\\right],"
-       "\\quad\\eta_{cc,fat}=\\min(0.85\\eta_{cc},0.8),\\quad"
+       "\\quad\\eta_{cc,fat}=\\min(0.85\\eta_{cc},0.8),\\quad "
        "f_{cd,fat}=\\beta_{cc}(t_0)\\frac{f_{ck}}{\\gamma_{c,fat}}"
        "\\eta_{cc,fat}.$$")
     md("At one fixed concrete fibre, let $\\sigma_{max}$ and $\\sigma_{min}$ be the "
@@ -1325,7 +1325,7 @@ def manual_blocks() -> list:
        "selection follows the associated moment; at zero moment both faces are "
        "evaluated.")
     md("For EN 1992-1-1:2023, the action-dependent factor is\n\n"
-       "$$a_{cs}=\\max\\!\\left(\\left|M_{Ed}/V_{Ed}\\right|,d\\right),\\qquad"
+       "$$a_{cs}=\\max\\!\\left(\\left|M_{Ed}/V_{Ed}\\right|,d\\right),\\qquad "
        "k_{vp}=\\max\\!\\left(1+\\frac{N_{Ed}}{|V_{Ed}|}\\frac{d}{3a_{cs}},0.1\\right),$$\n\n"
        "and $d$ in Formula (8.27) is replaced by $k_{vp}d$. The 2023 convention "
        "takes $N_{Ed}$ positive in tension, so axial tension raises $k_{vp}$ and "

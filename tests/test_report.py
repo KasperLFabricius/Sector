@@ -411,6 +411,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert sigma + "(long)i|" in formula
     assert "delta " + sigma not in text
     assert text.count(delta_sigma) >= 7
+    assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
 
 
 def test_report_fatigue_chapter_uses_the_engine_failure_state():
@@ -491,7 +492,7 @@ def test_report_escapes_user_defined_fatigue_settings():
 
 def test_report_preserves_literal_engineering_token_identifiers():
     inp, out = _fatigue_report_fixture()
-    literal_name = "sigma gamma phi alpha"
+    literal_name = "sigma gamma phi alpha beta eta"
     out["fatigue"]["governing_spectrum"] = literal_name
     out["fatigue"]["spectra"][0].spectrum_name = literal_name
 
@@ -1292,6 +1293,7 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     assert f"{eta:.6f}" in txt
     assert f"{0.85 * eta:.6f}" in txt
     assert f"{inp['concrete'].fcd:.3f}" in txt
+    assert chr(0x3B7) in txt  # eta_cc uses the Greek symbol
     assert "3.15" not in txt
 
 
