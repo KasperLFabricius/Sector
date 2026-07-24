@@ -698,7 +698,10 @@ def test_app_shear_links_flag_out_of_code_bounds():
     _select_view(at, "Shear")
     assert not at.exception
     assert any("NO CODE VERDICT" in w.value for w in at.warning)
-    util_metric = next(m for m in at.metric if m.label == "Utilisation VEd/VRd")
+    util_metric = next(
+        m for m in at.metric
+        if m.label == r"Utilisation $V_{Ed}/V_{Rd}$"
+    )
     assert not util_metric.delta
 
 

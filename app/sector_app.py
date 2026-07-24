@@ -395,13 +395,13 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         )
         if math.isclose(k_tc, 1.0):
             box.warning(
-                "k_tc = 1.00 is applicable only for t_ref <= 28 days (CR/CN) or "
-                "<= 56 days (CS) when design loading is not expected until at least "
+                r"$k_{tc}=1.00$ is applicable only for $t_{\mathrm{ref}}\leq28$ days "
+                r"(CR/CN) or $\leq56$ days (CS) when design loading is not expected until at least "
                 "3 months after casting, unless the governing National Annex states "
                 "otherwise. The user is explicitly assuming those conditions."
             )
         else:
-            box.caption("k_tc = 0.85: general / other-case value in 5.1.6(1).")
+            box.caption(r"$k_{tc}=0.85$: general/other-case value in 5.1.6(1).")
         eta_cc = min((_code.eta_cc_ref / fck) ** (1.0 / 3.0), 1.0)
 
     # For EN 2023, the effective coefficient is derived from the independent
@@ -416,7 +416,8 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
             r"Effective $\eta_{cc} k_{tc}$", float(lo), float(hi), step=float(step),
             key="conc_alpha_cc", disabled=True, format="%.6f",
             help="Derived EN 1992-1-1:2023 design-strength coefficient: "
-                 "eta_cc = min[(40/fck)^(1/3), 1.0], multiplied by the selected k_tc.",
+                 r"$\eta_{cc}=\min[(40/f_{ck})^{1/3},1.0]$, multiplied by the "
+                 r"selected $k_{tc}$.",
         )
     else:
         alpha_cc = _number(
@@ -445,9 +446,10 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     auto_all = st.session_state.get("_auto_all", False)
     if (box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
                    key="conc_strain_auto", width="stretch", disabled=strain_lock,
-                   help="Set eps_c2, eps_cu2 and n for the current grade and edition "
+                   help=r"Set $\varepsilon_{c2}$, $\varepsilon_{cu2}$ and $n$ for "
+                        "the current grade and edition "
                         "(EC2 Table 3.1, strength-dependent above C50/60; kept constant "
-                        "for EN 1992-1-1:2023). Press again after changing fck or preset.")
+                        r"for EN 1992-1-1:2023). Press again after changing $f_{ck}$ or preset.")
             or (auto_all and not strain_lock)):
         st.session_state["conc_eps_c2"] = a_ec2
         st.session_state["conc_eps_cu2"] = a_ecu2
@@ -469,7 +471,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n)
     note = (
-        f"  (eta_cc = {eta_cc:.6f}, k_tc = {k_tc:.2f})"
+        f"  ($\\eta_{{cc}}={eta_cc:.6f}$, $k_{{tc}}={k_tc:.2f}$)"
         if auto is not None else ""
     )
     box.caption(f"curve {curve},  $f_{{cd}}$ = {concrete.fcd:.3f} MPa,  "
@@ -482,14 +484,14 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     st.session_state.setdefault("sls_fctm", fctm_ec)
     if (box.button(f"Auto $f_{{ctm}}$ (EC2: {fctm_ec:.2f} MPa)", key="sls_fctm_auto",
                    width="stretch", disabled=lock_elastic,
-                   help="Set fctm = 0.30*fck^(2/3) (EC2 Table 3.1) for the current "
+                   help=r"Set $f_{ctm}=0.30f_{ck}^{2/3}$ (EC2 Table 3.1) for the current "
                         "concrete grade. Press again after changing the grade.")
             or (auto_all and not lock_elastic)):
         st.session_state["sls_fctm"] = fctm_ec
     fctm_val = box.number_input(r"Tensile strength $f_{ctm}$ (MPa)", 0.0, 10.0, step=0.1,
                                 key="sls_fctm", disabled=lock_elastic,
-                                help="Mean axial tensile strength for the cracking "
-                                     "check (fct,eff). Use Auto for the EC2 value.")
+                                help=r"Mean axial tensile strength for the cracking "
+                                     r"check ($f_{ct,\mathrm{eff}}$). Use Auto for the EC2 value.")
 
     # Elastic modulus Ec: only used by the elastic analysis, to derive the modular
     # ratios n = Es/Ec. The Auto button sets the EC2 secant modulus for the grade.
@@ -497,14 +499,14 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     st.session_state.setdefault("conc_Ec", ecm_gpa)
     if (box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
                    width="stretch", disabled=lock_elastic,
-                   help="Set Ec = Ecm = 22*(fcm/10)^0.3 GPa (EC2 Table 3.1) for the "
+                   help=r"Set $E_c=E_{cm}=22(f_{cm}/10)^{0.3}$ GPa (EC2 Table 3.1) for the "
                         "current grade.")
             or (auto_all and not lock_elastic)):
         st.session_state["conc_Ec"] = ecm_gpa
     Ec = box.number_input(r"Elastic modulus $E_c$ (GPa)", 1.0, 100.0, step=0.5,
                           key="conc_Ec", disabled=lock_elastic,
                           help="Concrete secant modulus, used only by the elastic "
-                               "analysis to auto-derive the modular ratios n = Es/Ec.")
+                               r"analysis to derive the modular ratios $n=E_s/E_c$.")
     return concrete, fctm_val, Ec, preset, k_tc, eta_cc
 
 
@@ -580,7 +582,7 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
     active_comp = box.checkbox(
         "Active in compression", key=f"{prefix}_active_comp", disabled=locked,
         help="On: the bar carries compression and its compression-side inputs "
-             "(fyck, ey0c) are used. Off: the reinforcement is tension-only "
+             r"($f_{yck}$, $\varepsilon_{0c}$) are used. Off: the reinforcement is tension-only "
              "(no compression), for every curve type. This applies to the plastic "
              "capacity; the elastic analysis is linear and treats "
              "the bars in both directions.")
@@ -655,11 +657,11 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     pre = _safe_build(box, mp.build_prestress, curve, vals)
     if curve in (1, 2, 3, 4, 5):
         box.caption(f"built-in curve {curve} (fixed shape); only the prestrain "
-                    f"IS = {vals['IS']:.3f} permille applies")
+                    f"$\\varepsilon_p^{{(0)}}={vals['IS']:.3f}$ permille applies")
     else:
-        box.caption(f"IS = {vals['IS']:.3f} permille,  "
-                    f"fpd = {vals['fytk'] / vals['gamma_y']:.3f} MPa,  "
-                    f"Ep = {vals['Es']:.0f} GPa")
+        box.caption(f"$\\varepsilon_p^{{(0)}}={vals['IS']:.3f}$ permille,  "
+                    f"$f_{{pd}}={vals['fytk'] / vals['gamma_y']:.3f}$ MPa,  "
+                    f"$E_p={vals['Es']:.0f}$ GPa")
     if not catalogue_mode:
         return pre
     updated = {
@@ -937,6 +939,7 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         "Description",
         entry.get("description", ""),
         f"{prefix}_description",
+        help="Optional engineering description used to distinguish similar details.",
     )
     compatible = [
         preset
@@ -974,6 +977,7 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         entry["kind"],
         f"{prefix}_kind",
         disabled=not custom,
+        help="Selects the reinforcement or tendon fatigue model.",
         format_func=lambda value: (
             "Mild reinforcement"
             if value == fatigue_inputs.MILD
@@ -984,7 +988,7 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
     c1, c2 = box.columns(2)
     n_star = _seeded_number(
         c1,
-        "Reference cycles N*",
+        r"Reference cycles $N^*$",
         1.0,
         1.0e12,
         float(entry["n_star"]),
@@ -992,36 +996,41 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         f"{prefix}_n_star",
         disabled=standard_lock,
         format="%.0f",
+        help=r"Cycle count at the knee of the two-slope S-N curve.",
     )
     delta_sigma = _seeded_number(
         c2,
-        "Reference range [MPa]",
+        r"Reference range $\Delta\sigma_{Rsk}$ (MPa)",
         0.1,
         5000.0,
         float(entry["delta_sigma_rsk_mpa"]),
         1.0,
         f"{prefix}_delta_sigma_rsk_mpa",
         disabled=standard_lock,
+        help=r"Characteristic stress range at $N^*$ before $\gamma_s$ and any "
+             "diameter or bend reduction.",
     )
     k1 = _seeded_number(
         c1,
-        "S-N slope k1",
+        r"S-N slope $k_1$",
         0.1,
         50.0,
         float(entry["k1"]),
         0.1,
         f"{prefix}_k1",
         disabled=standard_lock,
+        help=r"S-N exponent for stress ranges at or above the $N^*$ knee.",
     )
     k2 = _seeded_number(
         c2,
-        "S-N slope k2",
+        r"S-N slope $k_2$",
         0.1,
         50.0,
         float(entry["k2"]),
         0.1,
         f"{prefix}_k2",
         disabled=standard_lock,
+        help=r"S-N exponent for stress ranges below the $N^*$ knee.",
     )
     stress_model = _seeded_selectbox(
         box,
@@ -1030,6 +1039,8 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         entry["stress_model"],
         f"{prefix}_stress_model",
         disabled=standard_lock,
+        help=r"Determines whether $\Delta\sigma_{Rsk}$ is fixed or selected from "
+             "the element diameter.",
         format_func=lambda value: {
             fatigue_inputs.FIXED_STRESS: "Fixed reference range",
             fatigue_inputs.EC2_2023_BAR_STRESS:
@@ -1044,6 +1055,8 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         bool(entry["bend_reduction"]),
         f"{prefix}_bend_reduction",
         disabled=standard_lock,
+        help="Apply the selected code's bent-bar reduction to the characteristic "
+             "reference range.",
     )
     mandrel = _seeded_number(
         box,
@@ -1054,16 +1067,20 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         1.0,
         f"{prefix}_mandrel_diameter_mm",
         disabled=not bend_reduction,
+        help="Mandrel diameter used with the element diameter in the bent-bar "
+             "reduction.",
     )
     bond_ratio = _seeded_number(
         c1,
-        "Bond ratio xi (0 = unset)",
+        r"Bond ratio $\xi$ (0 = unset)",
         0.0,
         10.0,
         float(entry["bond_ratio_xi"]),
         0.05,
         f"{prefix}_bond_ratio_xi",
         disabled=kind != fatigue_inputs.PRESTRESS,
+        help="Bond-strength ratio for a bonded tendon in a section that also "
+             "contains mild reinforcement; 0 leaves it unspecified.",
     )
     bond_diameter = _seeded_number(
         c2,
@@ -1074,6 +1091,8 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         0.1,
         f"{prefix}_bond_equivalent_diameter_mm",
         disabled=kind != fatigue_inputs.PRESTRESS,
+        help="Equivalent tendon diameter used with the bond ratio for the mixed "
+             "reinforcement fatigue adjustment.",
     )
     source = _seeded_text(
         box,
@@ -1081,6 +1100,7 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         entry.get("source", ""),
         f"{prefix}_source",
         disabled=standard_lock,
+        help="Standard, clause or project source for the resistance definition.",
     )
     updated = {
         **entry,
@@ -1816,6 +1836,7 @@ def _fatigue_basis_panel(box, *, disabled):
         basis["authority"],
         f"{prefix}_authority",
         disabled=disabled,
+        help="Authority whose fatigue loading method defines the entered spectrum.",
     )
     methods = list(fatigue_inputs.METHODS_BY_AUTHORITY[authority])
     method_default = (
@@ -1828,6 +1849,8 @@ def _fatigue_basis_panel(box, *, disabled):
         method_default,
         f"{prefix}_method",
         disabled=disabled,
+        help="Loading method represented by the grouped spectrum. It records the "
+             "basis and does not modify actions or cycle counts.",
     )
     box.caption(fatigue_inputs.METHOD_REFERENCES[method])
 
@@ -1838,6 +1861,7 @@ def _fatigue_basis_panel(box, *, disabled):
         basis["spectrum_source"],
         f"{prefix}_spectrum_source",
         disabled=disabled,
+        help="Document or calculation that defines the entered fatigue spectrum.",
     )
     cycle_count_source = _seeded_text(
         right,
@@ -1845,6 +1869,7 @@ def _fatigue_basis_panel(box, *, disabled):
         basis["cycle_count_source"],
         f"{prefix}_cycle_count_source",
         disabled=disabled,
+        help="Document or calculation supporting the entered number of cycles.",
     )
     dynamic_effects = _seeded_selectbox(
         left,
@@ -1853,6 +1878,8 @@ def _fatigue_basis_panel(box, *, disabled):
         basis["dynamic_effects"],
         f"{prefix}_dynamic_effects",
         disabled=disabled,
+        help="Records whether the entered actions include the required dynamic "
+             "effects; Sector applies none automatically.",
     )
     cycle_counting = _seeded_selectbox(
         right,
@@ -1861,6 +1888,7 @@ def _fatigue_basis_panel(box, *, disabled):
         basis["cycle_counting"],
         f"{prefix}_cycle_counting",
         disabled=disabled,
+        help="Method used to convert the action history to the grouped cycle bins.",
     )
     concurrence_basis = _seeded_text(
         left,
@@ -1868,6 +1896,7 @@ def _fatigue_basis_panel(box, *, disabled):
         basis["concurrence_basis"],
         f"{prefix}_concurrence_basis",
         disabled=disabled,
+        help="Basis for simultaneous lane, track or traffic actions in the spectrum.",
     )
     atypical_traffic = _seeded_selectbox(
         right,
@@ -1876,6 +1905,7 @@ def _fatigue_basis_panel(box, *, disabled):
         basis["atypical_traffic"],
         f"{prefix}_atypical_traffic",
         disabled=disabled,
+        help="Records whether atypical traffic has been assessed in the spectrum.",
     )
     approval_reference = _seeded_text(
         left,
@@ -1883,6 +1913,7 @@ def _fatigue_basis_panel(box, *, disabled):
         basis["approval_reference"],
         f"{prefix}_approval_reference",
         disabled=disabled,
+        help="Approval, waiver or project reference required by the selected method.",
     )
     authority_adjustments = _seeded_text(
         right,
@@ -1899,6 +1930,7 @@ def _fatigue_basis_panel(box, *, disabled):
         f"{prefix}_notes",
         disabled=disabled,
         height=68,
+        help="Optional assumptions or limitations needed to reproduce the spectrum.",
     )
     basis = fatigue_inputs.normalise_basis({
         "authority": authority,
@@ -3132,6 +3164,7 @@ def build_inputs(host=st):
         fatigue_inputs.EC2_2005_DKNA,
         "fatigue_edition",
         disabled=not fatigue_on,
+        help="Selects the Eurocode fatigue-resistance expressions and preset values.",
     )
     fatigue_check_steel = _seeded_toggle(
         fat,
@@ -3139,6 +3172,8 @@ def build_inputs(host=st):
         True,
         "fatigue_check_steel",
         disabled=not fatigue_on,
+        help="Assess fatigue damage and the design yield/proof-stress limit for "
+             "assigned bars and tendons.",
     )
     fatigue_check_concrete = _seeded_toggle(
         fat,
@@ -3146,6 +3181,7 @@ def build_inputs(host=st):
         True,
         "fatigue_check_concrete",
         disabled=not fatigue_on,
+        help="Assess concrete compression fatigue at the searched section fibres.",
     )
     fat.caption(
         "Enter complete partial factors. Sector applies no control-, "
@@ -3154,58 +3190,68 @@ def build_inputs(host=st):
     ff1, ff2, ff3 = fat.columns(3)
     fatigue_gamma_ff = _seeded_number(
         ff1,
-        "gamma_Ff",
+        r"$\gamma_{Ff}$",
         0.1,
         10.0,
         1.0,
         0.05,
         "fatigue_gamma_ff",
         disabled=not fatigue_on,
+        help=r"Partial factor on each cyclic action increment before the elastic "
+             "fatigue solve.",
     )
     fatigue_gamma_s = _seeded_number(
         ff2,
-        "gamma_s",
+        r"$\gamma_s$",
         0.1,
         10.0,
         1.15,
         0.05,
         "fatigue_gamma_s",
         disabled=not (fatigue_on and fatigue_check_steel),
+        help=r"Final material factor reducing $\Delta\sigma_{Rsk}$ and the "
+             "reinforcement yield or proof-stress limit.",
     )
     fatigue_gamma_c = _seeded_number(
         ff3,
-        "gamma_c,fat",
+        r"$\gamma_{c,\mathrm{fat}}$",
         0.1,
         10.0,
         1.50,
         0.05,
         "fatigue_gamma_c",
         disabled=not (fatigue_on and fatigue_check_concrete),
+        help=r"Final material factor in the design concrete fatigue strength "
+             r"$f_{cd,\mathrm{fat}}$.",
     )
     fc1, fc2 = fat.columns(2)
     fatigue_beta_cc_t0 = _seeded_number(
         fc1,
-        "beta_cc(t0)",
+        r"$\beta_{cc}(t_0)$",
         0.01,
         2.0,
         1.0,
         0.05,
         "fatigue_beta_cc_t0",
         disabled=not (fatigue_on and fatigue_check_concrete),
+        help=r"Concrete strength-development factor at the first cyclic loading "
+             "age $t_0$; enter the value from the selected basis.",
     )
     fatigue_t0_days = _seeded_number(
         fc2,
-        "Concrete age t0 [days]",
+        r"Concrete age $t_0$ (days)",
         0.01,
         100000.0,
         28.0,
         1.0,
         "fatigue_t0_days",
         disabled=not (fatigue_on and fatigue_check_concrete),
+        help=r"Age at first cyclic loading. This documents the basis for "
+             r"$\beta_{cc}(t_0)$; Sector does not derive that factor.",
     )
     fatigue_concrete_k1 = _seeded_number(
         fc1,
-        "Concrete fatigue k1",
+        r"Concrete fatigue $k_1$",
         0.01,
         5.0,
         0.85,
@@ -3215,17 +3261,20 @@ def build_inputs(host=st):
             not (fatigue_on and fatigue_check_concrete)
             or "2023" in fatigue_edition
         ),
-        help="Used by the 2005 concrete-fatigue expression.",
+        help=r"Coefficient in the 2005 design strength $f_{cd,\mathrm{fat}}$; "
+             "not used by the 2023 expression.",
     )
     fatigue_concrete_c = _seeded_number(
         fc2,
-        "Concrete fatigue C",
+        r"Concrete fatigue $C$",
         0.1,
         100.0,
         14.0,
         0.5,
         "fatigue_concrete_c",
         disabled=not (fatigue_on and fatigue_check_concrete),
+        help=r"Coefficient in the implemented $\log_{10}N_R$ concrete fatigue-life "
+             "relation.",
     )
     fat.markdown("**Spectrum basis**")
     fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
@@ -3279,13 +3328,13 @@ def build_inputs(host=st):
     design_basis_slot = aset.container()
 
     aset.markdown("**Neutral-axis sweep (plastic)**")
-    v_min = _seeded_number(aset, r"Start angle $V_{min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
+    v_min = _seeded_number(aset, r"Start angle $\varphi_{NA,\min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
                            "v_min", disabled=not plastic_on,
                            help="First neutral-axis rotation angle of the plastic sweep.")
-    v_max = _seeded_number(aset, r"End angle $V_{max}$ (deg)", 0.0, 360.0, 360.0, 5.0,
+    v_max = _seeded_number(aset, r"End angle $\varphi_{NA,\max}$ (deg)", 0.0, 360.0, 360.0, 5.0,
                            "v_max", disabled=not plastic_on,
                            help="Last neutral-axis rotation angle of the plastic sweep.")
-    v_inc = _seeded_number(aset, r"Increment $V_{inc}$ (deg)", 1.0, 90.0, 15.0, 1.0,
+    v_inc = _seeded_number(aset, r"Increment $\Delta\varphi_{NA}$ (deg)", 1.0, 90.0, 15.0, 1.0,
                            "v_inc", disabled=not plastic_on,
                            help="Angular step between swept neutral-axis angles; "
                                 "a finer step gives a smoother M-M envelope.")
@@ -3304,19 +3353,19 @@ def build_inputs(host=st):
 
     scw.caption("User-defined criteria for Elastic results; 0 = not assessed.")
     sls_conc_limit_pct = _seeded_number(
-        scw, "Concrete compression limit (% fck, 0 = not assessed)",
+        scw, r"Concrete compression limit (% $f_{ck}$, 0 = not assessed)",
         0.0, 100.0, 60.0, 1.0, "sls_conc_limit_pct", disabled=not elastic_on,
-        help="Upper concrete compressive stress as a percentage of fck.")
+        help=r"Upper concrete compressive stress as a percentage of $f_{ck}$.")
     sls_steel_limit_pct = _seeded_number(
-        scw, "Reinforcement tension limit (% fyk, 0 = not assessed)",
+        scw, r"Reinforcement tension limit (% $f_{yk}$, 0 = not assessed)",
         0.0, 100.0, 80.0, 1.0, "sls_steel_limit_pct", disabled=not elastic_on,
         help="Upper reinforcing-steel tensile-stress criterion as a percentage of "
-             "the entered characteristic yield strength fyk.")
+             r"the entered characteristic yield strength $f_{yk}$.")
     sls_pre_limit_pct = _seeded_number(
-        scw, "Tendon tension limit (% fpk, 0 = not assessed)",
+        scw, r"Tendon tension limit (% $f_{pk}$, 0 = not assessed)",
         0.0, 100.0, 75.0, 1.0, "sls_pre_limit_pct", disabled=not elastic_on,
         help="Upper prestressing-steel tensile-stress criterion as a percentage of "
-             "the entered characteristic tendon strength fpk. It is assessed only "
+             r"the entered characteristic tendon strength $f_{pk}$. It is assessed only "
              "when the section contains tendons.")
     sls_limit_source = _seeded_text(
         scw, "Acceptance-criteria source",
@@ -3328,7 +3377,7 @@ def build_inputs(host=st):
         "Loads table."
     )
     sls_wk_limit = _seeded_number(
-        scw, r"Crack-width limit $w_{lim}$ (mm, 0 = not assessed)",
+        scw, r"Crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)",
         0.0, 5.0, 0.30, 0.05, "sls_wk_limit",
         disabled=not (elastic_on and sls_cw),
         help="User-supplied allowable calculated crack width in millimetres. "
@@ -3344,7 +3393,7 @@ def build_inputs(host=st):
     # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
     sls_bond = scw.selectbox(
-        "Mild-steel bond (k1)",
+        r"Mild-steel bond ($k_1$)",
         list(_BOND_K1), key="sls_bond", disabled=not (elastic_on and sls_cw),
         help="EC2 7.11 bond coefficient k1 for the crack spacing, applied to the "
              "mild reinforcement: 0.8 for ribbed / high-bond bars (e.g. Tentor), "
@@ -3396,14 +3445,15 @@ def build_inputs(host=st):
     )
     detailing_d_upper = _seeded_number(
         det,
-        "Maximum aggregate size Dupper (mm)",
+        r"Maximum aggregate size $D_{\mathrm{upper}}$ (mm)",
         0.0,
         100.0,
         16.0,
         1.0,
         "detailing_d_upper",
         disabled=not clear_spacing_on,
-        help="Upper aggregate size used in max(phi, Dupper + 5 mm, 20 mm).",
+        help=r"Upper aggregate size used in "
+             r"$\max(\phi,D_{\mathrm{upper}}+5\ \mathrm{mm},20\ \mathrm{mm})$.",
     )
     detailing_include_tendons = _seeded_checkbox(
         det,
@@ -3430,13 +3480,13 @@ def build_inputs(host=st):
         "Lap and bundle verification is outside this section-plane spacing check."
     )
 
-    sts.markdown("**Combined M-V-T interaction**")
-    sts.caption("Tie the bending (plastic M), shear (V) and torsion (T) checks "
+    sts.markdown(r"**Combined $M$-$V$-$T$ interaction**")
+    sts.caption(r"Tie the bending (plastic $M$), shear ($V$) and torsion ($T$) checks "
                  "together under one consistent code edition (6.3.2). Enable Plastic "
                  "(or Both), the shear check and the torsion check as well.")
     combined_on = _seeded_checkbox(
-        sts, "Check combined M-V-T", False, "combined_on",
-        help="Tie the M, V and T checks together (crushing 6.29 + DK NA sum rule); "
+        sts, r"Check combined $M$-$V$-$T$", False, "combined_on",
+        help=r"Tie the $M$, $V$ and $T$ checks together (crushing 6.29 and the DK NA sum rule); "
              "locks their method to the shared edition below. See the manual.")
     combined_method = _seeded_selectbox(
         sts, "Combined edition (shared)", list(_SHEAR_CODES),
@@ -3444,50 +3494,50 @@ def build_inputs(host=st):
         help="The single code edition used for the shear and torsion checks while "
              "Combined is on (their own method selectors are locked to this).")
     combined_mv_independent = _seeded_checkbox(
-        sts, "Shear longitudinal steel provided (M & V separate)", False,
+        sts, r"Shear longitudinal steel provided ($M$ and $V$ separate)", False,
         "combined_mv_independent", disabled=not combined_on,
         help="DK NA 6.3.2(6): when the longitudinal steel for shear (beyond bending) "
-             "is present, M and V are not summed in sum(SEd/SRd) -- two independent "
-             "checks (M+T and V+T) are made and the governing one taken.")
+             r"is present, $M$ and $V$ are not summed in $\sum(S_{Ed}/S_{Rd})$; "
+             r"$M+T$ and $V+T$ are checked independently and the governing value is used.")
     # Filled at the end of this block (once the shear/torsion toggles below are
     # known) with any missing combined-check prerequisites -- so the user sees them
     # here, right under the toggle, instead of only after Calculate.
     combined_warn = sts.container()
 
     sts.markdown("**Shear capacity**")
-    sts.caption("Directional resistance for Vx,Ed and Vy,Ed. Loads and optional "
+    sts.caption(r"Directional resistance for $V_{x,Ed}$ and $V_{y,Ed}$. Loads and optional "
                 "tension-face overrides are entered per Plastic/capacity case.")
     shear_on = _seeded_checkbox(
         sts, "Check shear capacity", False, "shear_on",
-        help="Compute directional VRd,c and utilisation. Enable links below when "
+        help=r"Compute directional $V_{Rd,c}$ and utilisation. Enable links below when "
              "shear reinforcement is present.")
     shear_method = _seeded_selectbox(
         sts, "Shear method", list(_SHEAR_METHODS), codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
-        help="Code edition for the shear rules: the 2005 family (VRd,c, 6.2.2(1)) or "
-             "EN 1992-1-1:2023 (strain-based tau_Rd,c, 8.2.2, no links). See the "
+        help=r"Code edition for the shear rules: the 2005 family ($V_{Rd,c}$, 6.2.2(1)) "
+             r"or EN 1992-1-1:2023 (strain-based $\tau_{Rd,c}$, 8.2.2, no links). See the "
              "manual for the difference.")
     _eff_shear_method = combined_method if combined_on else shear_method
     _shear_2023 = (_SHEAR_METHODS.get(_eff_shear_method) is not None
                    and getattr(_SHEAR_METHODS[_eff_shear_method], "shear_model",
                                "2005") == "2023")
     shear_dlower = _seeded_number(
-        sts, "Aggregate size Dlower (mm)", 4.0, 40.0, 16.0, 1.0, "shear_dlower",
+        sts, r"Aggregate size $D_{\mathrm{lower}}$ (mm)", 4.0, 40.0, 16.0, 1.0, "shear_dlower",
         disabled=not (shear_on and _shear_2023),
-        help="Lower sieve size of the coarsest aggregate (2023 method only): "
-             "ddg = 16 + Dlower (<= 40 mm) for fck <= 60 (8.2.1(4)).")
+        help=r"Lower sieve size of the coarsest aggregate (2023 method only): "
+             r"$d_{dg}=16+D_{\mathrm{lower}}\leq40$ mm for $f_{ck}\leq60$ MPa (8.2.1(4)).")
     if combined_on:
         sts.caption(f"Shear method set by Combined: {combined_method}")
     bwx, bwy = sts.columns(2)
     shear_vx_bw = _seeded_number(
-        bwx, r"$b_{w,Vx}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
+        bwx, r"$b_{w,x}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
         "shear_vx_bw", disabled=not shear_on,
-        help="Web width for Vx,Ed (depth along x; left/right faces).",
+        help=r"Web width for $V_{x,Ed}$ (depth along x; left/right faces).",
     )
     shear_vy_bw = _seeded_number(
-        bwy, r"$b_{w,Vy}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
+        bwy, r"$b_{w,y}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
         "shear_vy_bw", disabled=not shear_on,
-        help="Web width for Vy,Ed (depth along y; bottom/top faces).",
+        help=r"Web width for $V_{y,Ed}$ (depth along y; bottom/top faces).",
     )
     # Shear reinforcement (vertical links). When present, the member's resistance is
     # the variable-strut VRd = min(VRd,s, VRd,max) (sec. 6.2.3) rather than VRd,c; the
@@ -3496,44 +3546,45 @@ def build_inputs(host=st):
         sts, "Shear reinforcement (links) present", False, "shear_links",
         disabled=not shear_on,
         help="Add vertical links (stirrups). The resistance becomes the variable-"
-             "strut VRd = min(VRd,s, VRd,max) (EN 1992-1-1 6.2.3); VRd,c is still "
+             r"strut $V_{Rd}=\min(V_{Rd,s},V_{Rd,max})$ (EN 1992-1-1 6.2.3); "
+             r"$V_{Rd,c}$ is still "
              "shown to indicate whether links are strictly required.")
     _links = shear_on and shear_links
     shear_cot_min = _seeded_number(
         sts, r"Strut $\cot\theta$ min", 0.5, 5.0, 1.0, 0.1, "shear_cot_min",
         disabled=not _links,
         help="Lower bound for the auto-optimised strut angle. EN 1992-1-1 6.7N (and "
-             "DK NA:2024 6.7a NA) allow 1 <= cot(theta) <= 2.5; a value outside that "
+             r"DK NA:2024 6.7a NA) allow $1\leq\cot\theta\leq2.5$; a value outside that "
              "is allowed but warned, not blocked.")
     shear_cot_max = _seeded_number(
         sts, r"Strut $\cot\theta$ max", 0.5, 5.0, 2.5, 0.1, "shear_cot_max",
         disabled=not _links,
-        help="Upper bound for the auto-optimised strut angle (cot(theta) = 2.5 is the "
-             "code maximum; 1.0 corresponds to a 45-degree strut). Sector picks the "
-             "angle in [min, max] that maximises VRd = min(VRd,s, VRd,max).")
+        help=r"Upper bound for the auto-optimised strut angle ($\cot\theta=2.5$ is the "
+             r"code maximum; 1.0 corresponds to a 45-degree strut). Sector maximises "
+             r"$V_{Rd}=\min(V_{Rd,s},V_{Rd,max})$ within the entered bounds.")
     if _links and (shear_cot_min < 1.0 - 1e-9 or shear_cot_max > 2.5 + 1e-9):
         sts.caption("Note: the strut bounds fall outside the code range 1..2.5 "
                     "(6.7N / 6.7a NA) -- allowed, but check the value is justified.")
 
-    sts.markdown("**Torsion (TRd, thin-walled tube)**")
+    sts.markdown(r"**Torsion ($T_{Rd}$, thin-walled tube)**")
     sts.caption("Torsion resistance from the thin-walled tube idealisation "
-                 "(EN 1992-1-1 sec. 6.3): closed stirrups TRd,s, strut crushing "
-                 "TRd,max, cracking TRd,c, and the required longitudinal steel. The "
-                 "tube (A, u, tef, Ak, uk) is derived from the outline.")
+                 r"(EN 1992-1-1 sec. 6.3): closed stirrups $T_{Rd,s}$, strut crushing "
+                 r"$T_{Rd,max}$, cracking $T_{Rd,c}$, and the required longitudinal steel. "
+                 r"The tube ($A$, $u$, $t_{ef}$, $A_k$, $u_k$) is derived from the outline.")
     torsion_on = _seeded_checkbox(
         sts, "Check torsion capacity", False, "torsion_on",
-        help="Compute the torsion resistance TRd = min(TRd,s, TRd,max) and the "
-             "utilisation TEd/TRd, plus the combined shear+torsion crushing check "
+        help=r"Compute $T_{Rd}=\min(T_{Rd,s},T_{Rd,max})$ and $T_{Ed}/T_{Rd}$, "
+             "plus the combined shear-torsion crushing check "
              "(6.29) when links are also defined.")
     torsion_method = _seeded_selectbox(
         sts, "Torsion method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
         key="torsion_method", disabled=(not torsion_on) or combined_on,
         help="Code edition for the torsion rules. The DK NA:2024 uses its plasticity "
-             "pure-torsion strut factor nu_t = 0.7*(0.7 - fck/200) (5.104 NA) in "
-             "place of the recommended nu = 0.6*(1 - fck/250).")
+             r"pure-torsion strut factor $\nu_t=0.7(0.7-f_{ck}/200)$ (5.104 NA) in "
+             r"place of the recommended $\nu=0.6(1-f_{ck}/250)$.")
     if combined_on:
         sts.caption(f"Torsion method set by Combined: {combined_method}")
-    sts.caption("The applied torsion TEd is entered in the Loads panel.")
+    sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
     sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
                  "below (one leg carries the shear flow); the required longitudinal "
@@ -3554,9 +3605,9 @@ def build_inputs(host=st):
         sts, "Subdivide into sub-tubes (T / compound section)", False,
         "torsion_subdivide", disabled=not _tors,
         help="EN 1992-1-1 6.3.1(3): model a T / L / I / flanged section as component "
-             "rectangles, each an equivalent thin-walled tube. TRd is the SUM of the "
-             "sub-tube capacities and the applied TEd is split by uncracked torsional "
-             "stiffness C = beta*h*b^3 (6.3.1(4)). The FIRST rectangle is the web -- it "
+             r"rectangles, each an equivalent thin-walled tube. $T_{Rd}$ is the sum of "
+             r"the sub-tube capacities and $T_{Ed}$ is split by uncracked torsional "
+             r"stiffness $C=\beta hb^3$ (6.3.1(4)). The first rectangle is the web; it "
              "carries the shear in the combined V+T checks. Off = the single tube from "
              "the outline. A resistance is issued only after the positioned rectangles "
              "are proven to partition the concrete without gaps, overlaps or void "
@@ -3578,19 +3629,19 @@ def build_inputs(host=st):
             x_default, y_default, b_default, h_default = defaults[i]
             cx_col, cy_col, cb, ch = sts.columns(4)
             x_i = _seeded_number(
-                cx_col, f"x{i + 1} (mm)", -100000.0, 100000.0, x_default, 10.0,
+                cx_col, fr"$x_{{{i + 1}}}$ (mm)", -100000.0, 100000.0, x_default, 10.0,
                 f"torsion_sub_x{i}", disabled=not _tors,
                 help=f"Global x-coordinate of the centre of {role}.")
             y_i = _seeded_number(
-                cy_col, f"y{i + 1} (mm)", -100000.0, 100000.0, y_default, 10.0,
+                cy_col, fr"$y_{{{i + 1}}}$ (mm)", -100000.0, 100000.0, y_default, 10.0,
                 f"torsion_sub_y{i}", disabled=not _tors,
                 help=f"Global y-coordinate of the centre of {role}.")
             b_i = _seeded_number(
-                cb, f"b{i + 1} (mm) - {role}", 1.0, 100000.0, b_default, 10.0,
+                cb, fr"$b_{{{i + 1}}}$ (mm) - {role}", 1.0, 100000.0, b_default, 10.0,
                 f"torsion_sub_b{i}", disabled=not _tors,
                 help=f"Global x-direction width of {role}.")
             h_i = _seeded_number(
-                ch, f"h{i + 1} (mm) - {role}", 1.0, 100000.0, h_default, 10.0,
+                ch, fr"$h_{{{i + 1}}}$ (mm) - {role}", 1.0, 100000.0, h_default, 10.0,
                 f"torsion_sub_h{i}", disabled=not _tors,
                 help=f"Global y-direction height of {role}.")
             torsion_subrects.append((x_i, y_i, b_i, h_i))
@@ -3602,13 +3653,13 @@ def build_inputs(host=st):
     torsion_cot_min = _seeded_number(
         sts, r"Strut $\cot\theta$ min (torsion)", 0.5, 5.0, 1.0, 0.1,
         "torsion_cot_min", disabled=not _tors,
-        help="Lower bound for the auto-optimised torsion strut angle (code range "
-             "1..2.5; outside is warned, not blocked).")
+        help=r"Lower bound for the auto-optimised torsion strut angle (code range "
+             r"$1\leq\cot\theta\leq2.5$; values outside are warned, not blocked).")
     torsion_cot_max = _seeded_number(
         sts, r"Strut $\cot\theta$ max (torsion)", 0.5, 5.0, 2.5, 0.1,
         "torsion_cot_max", disabled=not _tors,
-        help="Upper bound for the auto-optimised torsion strut angle. Sector picks "
-             "the angle in [min, max] that maximises TRd = min(TRd,s, TRd,max).")
+        help=r"Upper bound for the auto-optimised torsion strut angle. Sector maximises "
+             r"$T_{Rd}=\min(T_{Rd,s},T_{Rd,max})$ within the entered bounds.")
     if _tors and (torsion_cot_min < 1.0 - 1e-9 or torsion_cot_max > 2.5 + 1e-9):
         sts.caption("Note: the torsion strut bounds fall outside the code range "
                     "1..2.5 (6.7N / 6.7a NA) -- allowed, but check it is justified.")
@@ -3633,34 +3684,35 @@ def build_inputs(host=st):
             (mat_catalog.entry_label(item) for item in mild_catalogue["items"]
              if item["id"] == value), value
         ),
-        help="Material law supplying gamma_s and the longitudinal design yield "
+        help=r"Material law supplying $\gamma_s$ and the longitudinal design yield "
              "for shear/torsion member checks. Element-level bending and stress "
              "calculations use each bar's assigned material.",
     )
     legs_x, legs_y = sts.columns(2)
     shear_vx_link_legs = _seeded_number(
-        legs_x, "Effective legs for Vx", 1.0, 20.0, 2.0, 1.0,
+        legs_x, r"Effective legs for $V_x$", 1.0, 20.0, 2.0, 1.0,
         "shear_vx_link_legs", disabled=not _links,
-        help="Number of stirrup legs crossing the Vx shear plane.",
+        help=r"Number of stirrup legs crossing the $V_x$ shear plane.",
     )
     shear_vy_link_legs = _seeded_number(
-        legs_y, "Effective legs for Vy", 1.0, 20.0, 2.0, 1.0,
+        legs_y, r"Effective legs for $V_y$", 1.0, 20.0, 2.0, 1.0,
         "shear_vy_link_legs", disabled=not _links,
-        help="Number of stirrup legs crossing the Vy shear plane.",
+        help=r"Number of stirrup legs crossing the $V_y$ shear plane.",
     )
     shear_link_dia = _seeded_number(
         sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
-        disabled=not _stirrups, help="Stirrup bar diameter; the leg area is pi/4*dia^2.")
+        disabled=not _stirrups,
+        help=r"Stirrup bar diameter $\phi$; one leg has area $\pi\phi^2/4$.")
     shear_link_s = _seeded_number(
-        sts, "Stirrup spacing s (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
+        sts, r"Stirrup spacing $s$ (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
         disabled=not _stirrups, help="Longitudinal spacing of the stirrups.")
     shear_fywk = _seeded_number(
         sts, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
         disabled=not _stirrups,
         help="Characteristic yield strength of the stirrup steel; the design value "
-             "is fywk divided by the final effective gamma_s of the selected "
+             r"is $f_{ywk}$ divided by the final effective $\gamma_s$ of the selected "
              "reference material. If the stirrup is not fully anchored, reduce "
-             "fywk here; Sector assumes anchorage and applies no hidden category "
+             r"$f_{ywk}$ here; Sector assumes anchorage and applies no hidden category "
              "multiplier.")
 
     # Pre-flight for the combined check (it needs several things at once): flag what
@@ -3935,7 +3987,7 @@ def build_inputs(host=st):
     )
     if lock_mats:
         mat_tab.caption("Elastic-only mode: the stress-strain laws do not affect the "
-                        "elastic results and are locked. Only fck (feeds fctm) and the "
+                        r"elastic results and are locked. Only $f_{ck}$ (feeds $f_{ctm}$) and the "
                         "steel modulus Es (crack width) stay editable; switch to "
                         "Plastic or Both to edit the full laws.")
     elif mode == "Elastic" and capacity_checks_on:
@@ -6720,8 +6772,8 @@ def elastic_view(inp, results):
     unique_ratios = {material_id: material for material_id, material in ratios}
     if unique_ratios:
         ratio_txt = "; ".join(
-            f"{material_id}: n_s = {material.Es / ec_mpa:.3f}, "
-            f"n_l = {material.Es * (1.0 + inp['el_phi']) / ec_mpa:.3f}"
+            f"{material_id}: $n_s={material.Es / ec_mpa:.3f}$, "
+            f"$n_l={material.Es * (1.0 + inp['el_phi']) / ec_mpa:.3f}$"
             for material_id, material in unique_ratios.items()
         )
         st.caption("Derived modular ratios - " + ratio_txt + ".")
@@ -6732,9 +6784,9 @@ def elastic_view(inp, results):
     if ps is not None:
         # ps[0] is the tendon tension resultant; the prestress precompresses the
         # section, so as an axial action (tension-positive) it is a compression.
-        st.caption(f"Equivalent tendon-prestress action: N = {-ps[0]:.3f} kN, "
+        st.caption(f"Equivalent tendon-prestress action: $N={-ps[0]:.3f}$ kN, "
                    f"$M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm "
-                   "(added to external N/M; N tension-positive).")
+                   r"(added to the external $N$ and $M$; $N$ is tension-positive).")
 
     # The neutral axis and the compression/tension zones only make sense when the
     # concrete actually carries compression; a fully tensile case has none.
@@ -6865,8 +6917,9 @@ def _elastic_sls_section(inp, e):
 
     st.metric(r"Cracking factor $\lambda_{cr}$",
               "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
-              help="Proportional load factor to first cracking, fctm / sigma_ct,I "
-                   "(= Mcr/M in pure bending), taken as the governing (smaller) of "
+              help=r"Proportional load factor to first cracking, "
+                   r"$f_{ctm}/\sigma_{ct,I}$ ($=M_{cr}/M$ in pure bending), taken as "
+                   "the governing (smaller) of "
                    "the long-term and total actions. < 1 = cracked.")
 
     pL, pR = st.columns(2)
@@ -7244,8 +7297,8 @@ def _fatigue_reinforcement_panel(payload, spectrum):
         ),
     }], height=120)
     st.caption(
-        f"gamma_Ff = {(payload.get('partial_factors') or {}).get('gamma_ff'):g} "
-        "is applied to the cyclic actions; the design S-N curve uses gamma_s."
+        f"$\\gamma_{{Ff}}={(payload.get('partial_factors') or {}).get('gamma_ff'):g}$ "
+        r"is applied to the cyclic actions; the design S-N curve uses $\gamma_s$."
     )
 
     st.markdown("**Bin results**")
@@ -7280,7 +7333,7 @@ def _fatigue_reinforcement_panel(payload, spectrum):
     st.caption(
         "Elastic total and elastic stress range are the direct solver response. "
         "Fatigue values include the reported bond transformation; design values "
-        "also include the action-level gamma_Ff factor."
+        r"also include the action-level $\gamma_{Ff}$ factor."
     )
 
 
@@ -7667,7 +7720,7 @@ def _member_material_note(inp):
     )
     label = f"{material_id} - {name}" if name else str(material_id)
     gamma_s = getattr(inp.get("steel"), "gamma_y", None)
-    suffix = f"; gamma_s = {gamma_s:g}" if gamma_s is not None else ""
+    suffix = f"; $\\gamma_s={gamma_s:g}$" if gamma_s is not None else ""
     st.caption(f"Member-check reinforcing material: {label}{suffix}.")
 
 
@@ -7761,28 +7814,31 @@ def shear_view(inp, results):
     res = sh["res"]
     component = sh.get("component") or ("vy" if sh["axis"] == "x" else "vx")
     action_label = "Vx,Ed" if component == "vx" else "Vy,Ed"
-    axis_lbl = ("Vy along y; paired with Mx" if component == "vy"
-                else "Vx along x; paired with My")
+    action_math = r"$V_{x,Ed}$" if component == "vx" else r"$V_{y,Ed}$"
+    util_math = (r"$|V_{x,Ed}|/V_{Rd,c}$" if component == "vx"
+                 else r"$|V_{y,Ed}|/V_{Rd,c}$")
+    axis_lbl = (r"$V_{y,Ed}$ along y; paired with $M_{x,Ed}$" if component == "vy"
+                else r"$V_{x,Ed}$ along x; paired with $M_{y,Ed}$")
     face_lbl = viz.tension_face_label(sh["tension_low"], sh["axis"])
     if not res["valid"]:
-        st.warning("VRd,c is zero -- there is no tension reinforcement on the chosen "
+        st.warning(r"$V_{Rd,c}$ is zero - there is no tension reinforcement on the chosen "
                    "face, or the derived effective depth / web width is zero. Add "
-                   "tension bars on that face and check the geometry (or enter bw).")
+                   r"tension bars on that face and check the geometry (or enter $b_w$).")
     util = sh["util"]
     ok = viz.util_ok(util)
     m1, m2, m3 = st.columns(3)
     signed_v_ed = float(sh.get("signed_v_ed", sh["v_ed"]))
-    m1.metric(f"Applied {action_label}", f"{signed_v_ed:.3f} kN")
-    m2.metric("Resistance VRd,c", f"{res['vrd_c']:.3f} kN")
+    m1.metric(f"Applied {action_math}", f"{signed_v_ed:.3f} kN")
+    m2.metric(r"Resistance $V_{Rd,c}$", f"{res['vrd_c']:.3f} kN")
     util_txt = _pct(util)
-    m3.metric(f"Utilisation |{action_label}|/VRd,c", util_txt,
+    m3.metric(f"Utilisation {util_math}", util_txt,
               delta=("OK" if ok else "Over limit"),
               delta_color=("normal" if ok else "inverse"))
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
                  "prestress initial strain)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
                f"{sh['method']}. The axial action uses the plastic axial force "
-               f"N = {sh['n_ed']:.1f} kN (tension-positive){pre_note}.")
+               f"$N={sh['n_ed']:.1f}$ kN (tension-positive){pre_note}.")
     if sh.get("face_mode") == "auto":
         st.caption(
             "Automatic face selection uses the associated moment at the concrete "
@@ -7936,18 +7992,19 @@ def shear_view(inp, results):
                        f"{links['cot_limit_hi']:.1f}] (EN 1992-1-1 6.7N / DK NA 6.7a "
                        "NA). Values are shown for exploration only: NO CODE VERDICT "
                        "is issued for the links or dependent interaction checks.")
-        req_txt = ("links are required (VEd > VRd,c)" if links["required"]
-                   else "links are not strictly required (VEd <= VRd,c); minimum "
+        req_txt = (r"links are required ($V_{Ed}>V_{Rd,c}$)" if links["required"]
+                   else r"links are not strictly required ($V_{Ed}\leq V_{Rd,c}$); minimum "
                         "reinforcement rules still apply")
-        st.caption(f"For this VEd, {req_txt}.")
+        st.caption(f"For this $V_{{Ed}}$, {req_txt}.")
         util_l = links["util"]
         ok_l = viz.util_ok(util_l)
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("VRd,s", f"{lk['vrd_s']:.3f} kN")
-        c2.metric("VRd,max", f"{lk['vrd_max']:.3f} kN")
-        c3.metric("VRd = min", f"{lk['vrd']:.3f} kN", help=f"governed by {lk['governs']}")
+        c1.metric(r"$V_{Rd,s}$", f"{lk['vrd_s']:.3f} kN")
+        c2.metric(r"$V_{Rd,max}$", f"{lk['vrd_max']:.3f} kN")
+        c3.metric(r"$V_{Rd}=\min$", f"{lk['vrd']:.3f} kN",
+                  help=f"governed by {lk['governs']}")
         ul_txt = _pct(util_l)
-        _verdict_metric(c4, "Utilisation VEd/VRd", ul_txt, ok_l,
+        _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l,
                         code_applicable=links.get("code_applicable", True))
         st.dataframe(
             {"Quantity": [f"Strut angle {_THETA}", f"cot {_THETA} (auto)",
@@ -7993,19 +8050,19 @@ def shear_view(inp, results):
                          "tension governs here, with no shear shift and the bending "
                          "relieving rather than adding")
             g1, g2, g3 = st.columns(3)
-            g1.metric(f"MEd (about {ch['axis']})", f"{ch['m_ed']:.1f} kNm")
-            g2.metric("MEd,total", f"{ch['m_total']:.1f} kNm",
+            g1.metric(fr"$M_{{Ed}}$ (about {ch['axis']})", f"{ch['m_ed']:.1f} kNm")
+            g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{ch['m_total']:.1f} kNm",
                       help="bending + shear shift (+ torsion) as an equivalent "
                            "moment on the governing chord face")
             if (not ch.get("code_applicable", True)
                     or (ch.get("biaxial") and not ch.get("conditional", True))):
-                g3.metric("MEd,total/MRd", _pct(ch["util"]),
+                g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(ch["util"]),
                           help=("No code verdict outside the strut-angle range."
                                 if not ch.get("code_applicable", True)
                                 else "pure-axis fallback capacity -- see the warning "
                                      "below"))
             else:
-                g3.metric("MEd,total/MRd", _pct(ch["util"]),
+                g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(ch["util"]),
                           delta=("OK" if ch["ok"] else "Over limit"),
                           delta_color=("normal" if ch["ok"] else "inverse"))
             obj_note = (" This demand is part of the strut-angle objective, so "
@@ -8066,14 +8123,15 @@ def _render_chord_off(och):
     face_lbl = viz.tension_face_label(
         och.get("tension_low", True), och.get("axis")
     )
-    st.markdown(f"**Off-axis chord (about {och['axis']}, governing face): bending "
-                "+ torsion tension**")
+    st.markdown(fr"**Off-axis chord (about {och['axis']}, governing face): bending "
+                r"+ torsion tension**")
     g1, g2, g3 = st.columns(3)
-    g1.metric(f"MEd (about {och['axis']})", f"{och['m_ed']:.1f} kNm")
-    g2.metric("MEd,total", f"{och['m_total']:.1f} kNm",
+    g1.metric(fr"$M_{{Ed}}$ (about {och['axis']})", f"{och['m_ed']:.1f} kNm")
+    g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{och['m_total']:.1f} kNm",
               help="bending + the torsion share as an equivalent moment on "
                    "this chord")
-    _verdict_metric(g3, "MEd,total/MRd", _pct(och["util"]), och["ok"],
+    _verdict_metric(g3, r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                    _pct(och["util"]), och["ok"],
                     code_applicable=och.get("code_applicable", True))
     st.caption(
         f"Tension chord = the {face_lbl} face about the {och['axis']}-axis "
@@ -8205,20 +8263,21 @@ def torsion_view(inp, results):
     util_txt = _pct(util)
     if t.get("subdivided"):
         m1, m2, m3 = st.columns(3)
-        m1.metric("Applied TEd", f"{t['t_ed']:.3f} kNm")
-        m2.metric(chr(0x03A3) + " TRd,i", f"{t['trd']:.3f} kNm",
+        m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
+        m2.metric(r"$\sum T_{Rd,i}$", f"{t['trd']:.3f} kNm",
                   help="theoretical sum of the sub-tube capacities (6.3.1(3)); the "
                        "pass/fail check is the governing sub-tube, not this sum")
         _verdict_metric(
-            m3, "Governing util (max TEd_i/TRd_i)", util_txt, ok,
+            m3, r"Governing utilisation $\max(T_{Ed,i}/T_{Rd,i})$", util_txt, ok,
             code_applicable=t.get("code_applicable", True),
         )
     else:
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Applied TEd", f"{t['t_ed']:.3f} kNm")
-        m2.metric("TRd = min", f"{t['trd']:.3f} kNm", help=f"governed by {t['governs']}")
-        m3.metric("Cracking TRd,c", f"{t['trd_c']:.3f} kNm")
-        _verdict_metric(m4, "Utilisation TEd/TRd", util_txt, ok,
+        m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
+        m2.metric(r"$T_{Rd}=\min$", f"{t['trd']:.3f} kNm",
+                  help=f"governed by {t['governs']}")
+        m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
+        _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok,
                         code_applicable=t.get("code_applicable", True))
 
     if t.get("subdivided"):
@@ -8317,9 +8376,9 @@ def torsion_view(inp, results):
             val = mr["value"]
             ok_mr = mr["ok"]
             s1, s2, s3 = st.columns(3)
-            s1.metric("TEd / TRd,c", f"{mr['t_ed'] / mr['trd_c'] * 100:.1f} %")
-            s2.metric("VEd / VRd,c", f"{mr['v_ed'] / mr['vrd_c'] * 100:.1f} %")
-            s3.metric("Sum (<= 100%)", f"{val * 100:.1f} %",
+            s1.metric(r"$T_{Ed}/T_{Rd,c}$", f"{mr['t_ed'] / mr['trd_c'] * 100:.1f} %")
+            s2.metric(r"$V_{Ed}/V_{Rd,c}$", f"{mr['v_ed'] / mr['vrd_c'] * 100:.1f} %")
+            s3.metric(r"Sum ($\leq100\%$)", f"{val * 100:.1f} %",
                       delta=("minimum reinf. suffices" if ok_mr
                              else "designed reinf. required"),
                       delta_color=("normal" if ok_mr else "inverse"))
@@ -8347,13 +8406,13 @@ def torsion_view(inp, results):
         val = inter["value"]
         ok_i = viz.util_ok(val)
         i1, i2, i3 = st.columns(3)
-        i1.metric("TEd / TRd,max", f"{(inter['t_ed']/inter['trd_max']*100):.1f} %"
+        i1.metric(r"$T_{Ed}/T_{Rd,max}$", f"{(inter['t_ed']/inter['trd_max']*100):.1f} %"
                   if inter["trd_max"] > 0 else "inf")
-        i2.metric("VEd / VRd,max", f"{(inter['v_ed']/inter['vrd_max']*100):.1f} %"
+        i2.metric(r"$V_{Ed}/V_{Rd,max}$", f"{(inter['v_ed']/inter['vrd_max']*100):.1f} %"
                   if inter["vrd_max"] > 0 else "inf")
         val_txt = _pct(val)
         _verdict_metric(
-            i3, "Sum (<= 100%)", val_txt, ok_i,
+            i3, r"Sum ($\leq100\%$)", val_txt, ok_i,
             code_applicable=inter.get("code_applicable", True),
         )
         st.caption(
@@ -8490,17 +8549,18 @@ def combined_view(inp, results):
                    "NO CODE VERDICT is issued until every active strut band is "
                    "within its permitted range.")
     m1, m2, m3 = st.columns(3)
-    m1.metric("Bending M", _pct(c["r_m"]))
-    m2.metric("Shear V", _pct(c["r_v"]))
-    m3.metric("Torsion T", _pct(c["r_t"]))
-    st.caption("Each is the action's utilisation acting alone (M is the plastic M-M "
-               "envelope at the applied N; V and T the shear and torsion checks).")
+    m1.metric(r"Bending $M$", _pct(c["r_m"]))
+    m2.metric(r"Shear $V$", _pct(c["r_v"]))
+    m3.metric(r"Torsion $T$", _pct(c["r_t"]))
+    st.caption(r"Each is the action's utilisation acting alone ($M$ is the plastic "
+               r"$M$-$M$ envelope at the applied $N$; $V$ and $T$ are the shear "
+               "and torsion checks).")
 
     st.divider()
-    st.markdown("**DK NA 6.3.2(6): " + chr(0x03A3) + "(SEd/SRd) <= 1**")
+    st.markdown(r"**DK NA 6.3.2(6): $\sum(S_{Ed}/S_{Rd})\leq1$**")
     ok = c["dkna_ok"]
     d1, d2 = st.columns([1, 2])
-    _verdict_metric(d1, chr(0x03A3) + "(SEd/SRd)", _pct(c["dkna_sum"]), ok,
+    _verdict_metric(d1, r"$\sum(S_{Ed}/S_{Rd})$", _pct(c["dkna_sum"]), ok,
                     code_applicable=c.get("code_applicable", True))
     if c["m_v_independent"]:
         d2.caption("M and V are checked separately (shear longitudinal steel "
@@ -8514,7 +8574,8 @@ def combined_view(inp, results):
     cr = c.get("crushing")
     if cr is not None and cr.get("valid"):
         st.divider()
-        st.markdown("**Concrete crushing (6.29): TEd/TRd,max + VEd/VRd,max <= 1**")
+        st.markdown(r"**Concrete crushing (6.29): "
+                    r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$**")
         val = cr["value"]
         ok_c = viz.util_ok(val)
         cc1, cc2 = st.columns([1, 2])
@@ -8523,9 +8584,9 @@ def combined_view(inp, results):
             code_applicable=cr.get("code_applicable",
                                    c.get("code_applicable", True)),
         )
-        cc2.caption(f"At a common strut cot {_THETA} = {cr['cot']:.2f} "
-                    f"({cr['theta_deg']:.1f} deg). TRd,max = {cr['trd_max']:.1f} kNm, "
-                    f"VRd,max = {cr['vrd_max']:.1f} kN.")
+        cc2.caption(f"At a common strut $\\cot\\theta={cr['cot']:.2f}$ "
+                    f"({cr['theta_deg']:.1f} deg). $T_{{Rd,max}}={cr['trd_max']:.1f}$ kNm, "
+                    f"$V_{{Rd,max}}={cr['vrd_max']:.1f}$ kN.")
         st.plotly_chart(viz.vt_interaction_figure(
             cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],
             show_verdict=cr.get("code_applicable",
@@ -8583,20 +8644,20 @@ def combined_view(inp, results):
         biaxial = lg.get("biaxial", False)
         ok_l = lg["ok"]
         g1, g2, g3 = st.columns(3)
-        g1.metric(f"MEd (about {ax_lbl})", f"{lg['m_ed']:.1f} kNm")
-        g2.metric("MEd,total", f"{lg['m_total']:.1f} kNm",
+        g1.metric(fr"$M_{{Ed}}$ (about {ax_lbl})", f"{lg['m_ed']:.1f} kNm")
+        g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{lg['m_total']:.1f} kNm",
                   help="bending + shear shift + torsion, as an equivalent moment "
                        "on the governing chord face")
         if (not c.get("code_applicable", True)
                 or (biaxial and not lg.get("conditional", True))):
             # The conditional biaxial solve failed and MRd fell back to the
             # pure-axis capacity, so withhold the reassuring OK/Over-limit verdict.
-            g3.metric("MEd,total/MRd", _pct(lg["util"]),
+            g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(lg["util"]),
                       help=("No code verdict outside the strut-angle range."
                             if not c.get("code_applicable", True)
                             else "pure-axis fallback capacity -- see the warning below"))
         else:
-            g3.metric("MEd,total/MRd", _pct(lg["util"]),
+            g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(lg["util"]),
                       delta=("OK" if ok_l else "Over limit"),
                       delta_color=("normal" if ok_l else "inverse"))
         st.caption(

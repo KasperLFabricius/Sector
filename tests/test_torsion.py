@@ -391,7 +391,7 @@ def test_app_torsion_view_renders():
     assert not at.exception
     labels = [m.label for m in at.metric]
     assert any("Utilisation" in lbl for lbl in labels)
-    assert any("TRd" in lbl for lbl in labels)
+    assert any("T_{Rd" in lbl for lbl in labels)
 
 
 def _subdivided(at, b0=300.0, h0=600.0, b1=1000.0, h1=200.0, T=40.0):
@@ -479,7 +479,9 @@ def test_app_invalid_subtube_partition_withholds_torsion_verdict():
     assert t["reason"].startswith("invalid sub-tube partition:")
     _select_view(at, "Torsion")
     assert any("do not form the concrete section" in w.value for w in at.warning)
-    assert not any("Utilisation TEd/TRd" in m.label for m in at.metric)
+    assert not any(
+        m.label == r"Utilisation $T_{Ed}/T_{Rd}$" for m in at.metric
+    )
 
 
 def test_app_torsion_subdivided_distributes_by_stiffness():
@@ -498,7 +500,7 @@ def test_app_torsion_subdivided_view_renders():
     _select_view(at, "Torsion")
     assert not at.exception
     labels = [m.label for m in at.metric]
-    assert any("TRd" in lbl for lbl in labels)
+    assert any("T_{Rd" in lbl for lbl in labels)
 
 
 def test_app_torsion_subdivided_caption_not_shared_angle_when_disjoint():
@@ -908,5 +910,8 @@ def test_app_torsion_out_of_range_withholds_verdict():
     assert t["code_applicable"] is False
     _select_view(at, "Torsion")
     assert any("NO CODE VERDICT" in w.value for w in at.warning)
-    util_metric = next(m for m in at.metric if m.label == "Utilisation TEd/TRd")
+    util_metric = next(
+        m for m in at.metric
+        if m.label == r"Utilisation $T_{Ed}/T_{Rd}$"
+    )
     assert not util_metric.delta

@@ -508,7 +508,7 @@ def test_app_combined_view_renders():
     assert not at.exception
     labels = [m.label for m in at.metric]
     assert any("Bending" in lbl for lbl in labels)
-    assert any("SEd/SRd" in lbl for lbl in labels)
+    assert any("S_{Ed}/S_{Rd}" in lbl for lbl in labels)
     # The shared-stirrup transverse check reports steel demand and crushing
     # separately, and the OK/Over verdict rides a mechanism-labelled metric so a
     # crushing-controlled angle is never mislabelled as stirrup demand (Codex).
@@ -530,7 +530,8 @@ def test_app_combined_out_of_range_withholds_dependent_verdicts():
     _select_view(at, "M-V-T Combined")
     assert any("NO CODE VERDICT" in w.value for w in at.warning)
     verdict_labels = (
-        chr(0x03A3) + "(SEd/SRd)", "Sum", "MEd,total/MRd",
+        r"$\sum(S_{Ed}/S_{Rd})$", "Sum",
+        r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
     )
     verdict_metrics = [
         m for m in at.metric

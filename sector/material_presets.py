@@ -88,13 +88,13 @@ CONCRETE_FIELD_META = {
 
 # Help text shown as a hover tooltip next to each field.
 CONCRETE_HELP = {
-    "fck": "Characteristic compressive cylinder strength of the concrete.",
-    "gamma_c": "Final effective partial factor on the concrete strength (design = "
-               "characteristic / gamma_c). Include every applicable national "
+    "fck": r"Characteristic compressive cylinder strength $f_{ck}$.",
+    "gamma_c": r"Final effective partial factor $\gamma_c$ on the concrete strength "
+               "(design = characteristic / partial factor). Include every applicable national "
                "increase or reduction; Sector applies no hidden construction-, "
                "control- or consequence-category multiplier.",
     "alpha_cc": "Coefficient for long-term and loading effects on the concrete "
-                "design strength (fcd = alpha_cc * fck / gamma_c).",
+                r"design strength ($f_{cd}=\alpha_{cc}f_{ck}/\gamma_c$).",
     "eps_c2": "Compressive strain at peak stress (parabola apex). EC2 Table 3.1: "
               "0.2 permille up to C50/60, larger above (use Auto).",
     "eps_cu2": "Ultimate (crushing) compressive strain. EC2 Table 3.1: 0.35 "
@@ -210,28 +210,30 @@ MILD_FIELD_META = {
 }
 
 MILD_HELP = {
-    "fytk": "Characteristic yield stress in tension.",
-    "fyck": "Characteristic yield stress in compression (set 0 for no "
+    "fytk": r"Characteristic tensile yield stress $f_{ytk}$.",
+    "fyck": r"Characteristic compression yield stress $f_{yck}$ (set 0 for no "
             "compression capacity).",
-    "futk": "Characteristic ultimate (rupture) stress in tension.",
+    "futk": r"Characteristic ultimate tensile stress $f_{utk}$.",
     "eut": "Design rupture strain (applied symmetrically in tension and "
-           "compression). Per EC2 3.2.7 the design value is typically 0.9*euk "
-           "(e.g. ~45 permille for class B steel, euk = 50 permille); enter the "
+           r"compression). Per EC2 3.2.7 the design value is typically "
+           r"$0.9\varepsilon_{uk}$ (for example about 45 permille for class B steel, "
+           r"$\varepsilon_{uk}=50$ permille); enter the "
            "design value.",
-    "gamma_y": "Final effective partial factor on the yield stress. It also applies "
-               "to stirrup fywk. Include every applicable national increase or "
+    "gamma_y": r"Final effective partial factor $\gamma_y$ on the yield stress. It "
+               r"also applies to stirrup $f_{ywk}$. Include every applicable national increase or "
                "reduction; Sector applies no hidden category multiplier.",
-    "gamma_u": "Final effective partial factor on the ultimate stress. Include every "
+    "gamma_u": r"Final effective partial factor $\gamma_u$ on the ultimate stress. Include every "
                "applicable increase or reduction; Sector applies no hidden category "
                "multiplier.",
-    "gamma_E": "Final effective partial factor on the elastic modulus.",
-    "k": "Ratio of the first to the second yield stress (f1 / fytk). Use k = 1 "
+    "gamma_E": r"Final effective partial factor $\gamma_E$ on the elastic modulus.",
+    "k": r"Ratio of the first to the second yield stress ($f_1/f_{ytk}$). Use $k=1$ "
          "for a single yield point (bilinear or elastic-perfectly-plastic).",
-    "ey0t": "Plastic strain at the second tensile yield. Use 0 for a single "
+    "ey0t": r"Plastic strain $\varepsilon_{0t}$ at the second tensile yield. Use 0 for a single "
             "yield point.",
-    "ey0c": "Plastic strain at the second compression yield (mirror of ey0t). "
+    "ey0c": r"Plastic strain $\varepsilon_{0c}$ at the second compression yield "
+            r"(mirror of $\varepsilon_{0t}$). "
             "Use 0 for a single compression yield.",
-    "Es": "Elastic (Young's) modulus of the reinforcement.",
+    "Es": r"Elastic (Young's) modulus $E_s$ of the reinforcement.",
 }
 
 MILD_FIELDS_BY_CURVE = {
@@ -306,22 +308,22 @@ PRESTRESS_FIELD_META = {
 }
 
 PRESTRESS_HELP = {
-    "IS": "Initial (effective) prestrain locked into the tendon after losses; "
+    "IS": r"Initial effective prestrain $\varepsilon_p^{(0)}$ locked into the tendon after losses; "
           "the section strain adds to this.",
-    "fytk": "Characteristic 0.1% proof stress (fp0.1k).",
-    "futk": "Characteristic ultimate (rupture) stress (fpk).",
+    "fytk": r"Characteristic 0.1% proof stress $f_{p0.1k}$.",
+    "futk": r"Characteristic ultimate stress $f_{pk}$.",
     "eut": "Strain at rupture.",
-    "gamma_y": "Final effective partial factor on the proof stress. Include every "
+    "gamma_y": r"Final effective partial factor $\gamma_y$ on the proof stress. Include every "
                "applicable increase or reduction; Sector applies no hidden category "
                "multiplier.",
-    "gamma_u": "Final effective partial factor on the ultimate stress. Include every "
+    "gamma_u": r"Final effective partial factor $\gamma_u$ on the ultimate stress. Include every "
                "applicable increase or reduction; Sector applies no hidden category "
                "multiplier.",
-    "gamma_E": "Final effective partial factor on the elastic modulus.",
-    "k": "Ratio of the first to the proof stress (f1 / fp0.1k). Use k = 1 for a "
+    "gamma_E": r"Final effective partial factor $\gamma_E$ on the elastic modulus.",
+    "k": r"Ratio of the first to the proof stress ($f_1/f_{p0.1k}$). Use $k=1$ for a "
          "bilinear curve.",
-    "ey0t": "Plastic strain at the proof stress. Use 0 for a bilinear curve.",
-    "Es": "Elastic modulus of the prestressing steel (Ep).",
+    "ey0t": r"Plastic strain $\varepsilon_{0t}$ at the proof stress. Use 0 for a bilinear curve.",
+    "Es": r"Elastic modulus $E_p$ of the prestressing steel.",
 }
 
 PRESTRESS_FIELDS_BY_CURVE = {

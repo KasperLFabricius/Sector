@@ -115,7 +115,8 @@ _register_fonts()
 # stays ASCII). Applied at render time with word boundaries, so Python identifiers
 # (c.eps_c2) and dict keys (cw.get("phi")) are never touched.
 _GREEK = {"eps": "&#949;", "sigma": "&#963;", "lambda": "&#955;", "alpha": "&#945;",
-          "gamma": "&#947;", "kappa": "&#954;", "rho": "&#961;", "phi": "&#966;",
+          "beta": "&#946;", "eta": "&#951;", "gamma": "&#947;",
+          "kappa": "&#954;", "rho": "&#961;", "phi": "&#966;",
           "theta": "&#952;", "nu": "&#957;", "tau": "&#964;", "permille": "&#8240;"}
 _GREEK_RE = re.compile(r"\b(" + "|".join(_GREEK) + r")\b")
 
@@ -132,8 +133,8 @@ def _html_escape(value, quote=True):
     # A literal user comparison must not be converted by _greek either.
     escaped = escaped.replace("&lt;=", "&#60;=").replace("&gt;=", "&#62;=")
     return _GREEK_RE.sub(
-        lambda match: (
-            f"&#{ord(match.group(1)[0])};{match.group(1)[1:]}"
+        lambda match: "".join(
+            f"&#{ord(character)};" for character in match.group(1)
         ),
         escaped,
     )
@@ -3913,7 +3914,7 @@ class ReportBuilder:
         if details:
             self._h2("Assigned fatigue details")
             rows = [[
-                "ID", "Name", "Type", "Preset", "N*", "k<sub>1</sub>",
+                "ID", "Name", "Type", "Preset", "N<super>*</super>", "k<sub>1</sub>",
                 "k<sub>2</sub>", "&#916;sigma<sub>Rsk</sub>", "Source",
             ]]
             rows.extend([
@@ -4118,7 +4119,7 @@ class ReportBuilder:
                     )
                     self._table(
                         [[
-                            "Detail", "N*", "k<sub>1</sub>", "k<sub>2</sub>",
+                            "Detail", "N<super>*</super>", "k<sub>1</sub>", "k<sub>2</sub>",
                             "&#916;sigma<sub>Rsk</sub>", "f<sub>yk</sub> / proof",
                             "Bond factor",
                         ], [

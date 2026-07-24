@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import pathlib
+import re
 import sys
 
 import pytest
@@ -3025,6 +3026,84 @@ def test_inputs_carry_help_tooltips():
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
+    for key in (
+        "fatigue_edition",
+        "fatigue_check_steel",
+        "fatigue_check_concrete",
+        "fatigue_gamma_ff",
+        "fatigue_gamma_s",
+        "fatigue_gamma_c",
+        "fatigue_beta_cc_t0",
+        "fatigue_t0_days",
+        "fatigue_concrete_k1",
+        "fatigue_concrete_c",
+    ):
+        w = (
+            _widget(at.number_input, key)
+            or _widget(at.selectbox, key)
+            or _widget(at.toggle, key)
+        )
+        assert w is not None and w.help, key
+    assert at.number_input(key="fatigue_gamma_ff").label == r"$\gamma_{Ff}$"
+    assert at.number_input(key="fatigue_gamma_s").label == r"$\gamma_s$"
+    assert at.number_input(key="fatigue_gamma_c").label == (
+        r"$\gamma_{c,\mathrm{fat}}$"
+    )
+    assert at.number_input(key="fatigue_beta_cc_t0").label == (
+        r"$\beta_{cc}(t_0)$"
+    )
+    assert r"$\beta_{cc}(t_0)$" in at.number_input(
+        key="fatigue_t0_days").help
+    for widget_group in (
+        at.number_input, at.selectbox, at.text_input, at.toggle, at.checkbox,
+    ):
+        for widget in widget_group:
+            for value in (getattr(widget, "label", ""), getattr(widget, "help", "")):
+                assert not re.search(
+                    r"[\x00-\x08\x0b\x0c\x0e-\x1f]",
+                    value or "",
+                ), (widget.key, value)
+    assert at.number_input(key="v_min").label == (
+        r"Start angle $\varphi_{NA,\min}$ (deg)"
+    )
+    assert at.number_input(key="sls_wk_limit").label == (
+        r"Crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)"
+    )
+    assert at.number_input(key="detailing_d_upper").label == (
+        r"Maximum aggregate size $D_{\mathrm{upper}}$ (mm)"
+    )
+    assert at.selectbox(key="sls_bond").label == r"Mild-steel bond ($k_1$)"
+    at.toggle(key="fatigue_on").set_value(True).run()
+    _goto_material_tab(at, "Fatigue details")
+    fatigue_detail_keys = (
+        "_n_star",
+        "_delta_sigma_rsk_mpa",
+        "_k1",
+        "_k2",
+        "_stress_model",
+        "_mandrel_diameter_mm",
+        "_bond_ratio_xi",
+        "_bond_equivalent_diameter_mm",
+        "_source",
+    )
+    widgets = (
+        list(at.number_input)
+        + list(at.selectbox)
+        + list(at.text_input)
+    )
+    for suffix in fatigue_detail_keys:
+        matching = [
+            w for w in widgets
+            if str(w.key).startswith("fatiguecat_")
+            and str(w.key).endswith(suffix)
+        ]
+        assert matching and matching[0].help, suffix
+    n_star = next(
+        w for w in widgets
+        if str(w.key).startswith("fatiguecat_")
+        and str(w.key).endswith("_n_star")
+    )
+    assert n_star.label == r"Reference cycles $N^*$"
     assert at.radio(key="mode").help
     _goto_page(at, "Analysis")
     assert at.selectbox(key="view").help
