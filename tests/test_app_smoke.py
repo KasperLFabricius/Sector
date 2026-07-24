@@ -6,6 +6,8 @@ for each analysis mode, and assert it produces results without error.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import pathlib
 import sys
 
@@ -102,6 +104,27 @@ def _select_view(at, value):
         _goto_page(at, "Analysis")
     at.selectbox(key="view").set_value(value).run()
     return at
+
+
+def _section_outline_from_result_view(at):
+    """Return the plotted section outline from a Plastic/Elastic result view."""
+
+    for chart in at.get("plotly_chart"):
+        spec = json.loads(chart.proto.spec)
+        x_title = (
+            spec.get("layout", {})
+            .get("xaxis", {})
+            .get("title", {})
+            .get("text")
+        )
+        data = spec.get("data", [])
+        if (
+            x_title == "x (mm)"
+            and data
+            and data[0].get("fill") == "toself"
+        ):
+            return data[0]["x"], data[0]["y"]
+    raise AssertionError("No section-state Plotly figure was rendered")
 
 
 def _replace_base_table(at, base_key, value):
@@ -1796,6 +1819,125 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert fatigue_register.iloc[0]["Case"] == "Traffic"
     assert fatigue_register.iloc[0]["Result state"] == "Calculated"
 
+    _select_view(at, "Fatigue Results")
+    assert not at.exception
+    assert at.selectbox(key="_fatigue_result_spectrum").options == ["Traffic"]
+    assert at.selectbox(key="_fatigue_result_element").options[0] == "R1"
+    # Every value rendered in the utilisation-map hover must participate in its
+    # memo key. A recalculation can change Miner damage while a different criterion
+    # leaves the overall utilisation unchanged.
+    map_id = id(
+        at.session_state["_fig_cache"]["fatigue_utilisation_map"][1]
+    )
+    spectrum_result = fatigue["spectra"][0]
+    steel_result = spectrum_result.reinforcement[0]
+    changed_steel_result = dataclasses.replace(
+        steel_result,
+        damage=steel_result.damage + 0.01,
+        damage_utilisation=steel_result.damage_utilisation + 0.01,
+    )
+    fatigue["spectra"] = (
+        dataclasses.replace(
+            spectrum_result,
+            reinforcement=(
+                changed_steel_result,
+                *spectrum_result.reinforcement[1:],
+            ),
+        ),
+    )
+    at.run()
+    assert id(
+        at.session_state["_fig_cache"]["fatigue_utilisation_map"][1]
+    ) != map_id
+
+    detail = at.segmented_control(key="_fatigue_result_detail")
+    assert detail.options == ["Reinforcement", "Spectrum bins", "Basis"]
+    spectrum_summary = next(
+        frame.value for frame in at.dataframe
+        if {"Spectrum", "Governing", "Utilisation [%]"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert spectrum_summary.iloc[0]["Spectrum"] == "Traffic"
+    reinforcement = next(
+        frame.value for frame in at.dataframe
+        if {"Element", "Detail", "Miner D", "Status"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert reinforcement.iloc[0]["Element"] == "R1"
+
+    detail.set_value("Spectrum bins").run()
+    assert not at.exception
+    action_table = next(
+        frame.value for frame in at.dataframe
+        if {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert action_table.iloc[0]["Bin"] == "FAT-01"
+    solver_table = next(
+        frame.value for frame in at.dataframe
+        if {"Bin", "gamma_Ff", "Bond method", "Status"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert solver_table.iloc[0]["Status"] == "OK"
+
+    at.segmented_control(key="_fatigue_result_detail").set_value("Basis").run()
+    assert not at.exception
+    basis_table = next(
+        frame.value for frame in at.dataframe
+        if list(frame.value.columns) == ["Item", "Value"]
+    )
+    assert "Edition" in set(basis_table["Item"])
+    assert "gamma_Ff" in set(basis_table["Item"])
+
+    # Stale results must retain the actions and geometry that produced them. If the
+    # live spectrum is edited before recalculation, the result drill-down must not
+    # combine those new inputs with the previous engine payload.
+    _goto_page(at, "Inputs")
+    changed_spectrum = spectrum.copy(deep=True)
+    changed_spectrum.loc[0, "n_long_ed_kn"] = -999.0
+    at.session_state[fatigue_inputs.SPECTRUM_TABLE_KEY] = changed_spectrum
+    for state_key in (
+        "fatigue_spectrum_editor",
+        f"_{fatigue_inputs.SPECTRUM_TABLE_KEY}_editor_seed",
+    ):
+        try:
+            del at.session_state[state_key]
+        except KeyError:
+            pass
+    at.run()
+    _select_view(at, "Fatigue Results")
+    at.segmented_control(key="_fatigue_result_detail").set_value(
+        "Spectrum bins"
+    ).run()
+    stale_actions = next(
+        frame.value for frame in at.dataframe
+        if {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+            frame.value.columns
+        )
+    )
+    assert stale_actions.iloc[0]["Nlong,Ed [kN]"] == pytest.approx(-100.0)
+    assert any("inputs changed" in warning.value.lower() for warning in at.warning)
+
+    # A session can survive a code hot reload from a build that did not yet store
+    # snapshots. In that legacy state, suppress input-dependent stale evidence
+    # instead of falling back to the newly edited actions or geometry.
+    del at.session_state["result_input_snapshot"]
+    at.run()
+    assert any(
+        "predates input snapshots" in error.value
+        for error in at.error
+    )
+    assert not any(
+        {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+            frame.value.columns
+        )
+        for frame in at.dataframe
+    )
+
     _goto_page(at, "Inputs")
     calculated_fatigue_sig = at.session_state["result_fatigue_sig"]
     current_fck = float(at.session_state["conc_fck"])
@@ -1812,6 +1954,36 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert at.session_state["result_sig"] != (
         at.session_state["_latest_inputs"]["signature"]
     )
+
+
+def test_fatigue_map_signature_distinguishes_bars_from_tendons():
+    import sector_app
+
+    record = {"id": "R1", "x_mm": 0.0, "y_mm": -220.0}
+    common = {
+        "outer": [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        "holes": [],
+    }
+    spectrum = {
+        "spectrum_name": "Traffic",
+        "reinforcement": [],
+        "concrete": [],
+        "concrete_search": None,
+    }
+    bar_input = {
+        **common,
+        "bar_elements": [record],
+        "tendon_elements": [],
+    }
+    tendon_input = {
+        **common,
+        "bar_elements": [],
+        "tendon_elements": [record],
+    }
+
+    assert sector_app._fatigue_map_signature(
+        bar_input, spectrum
+    ) != sector_app._fatigue_map_signature(tendon_input, spectrum)
 
 
 def test_fatigue_validation_stays_in_the_ui_instead_of_raising():
@@ -2808,7 +2980,8 @@ def test_view_dropdown_switches_without_error():
     at = _fresh()
     at.run()
     for v in [
-        "Results Overview", "Plastic Results", "Elastic Results", "Detailing"
+        "Results Overview", "Plastic Results", "Elastic Results",
+        "Fatigue Results", "Detailing",
     ]:
         _select_view(at, v)
         assert not at.exception, v
@@ -3146,6 +3319,33 @@ def test_staleness_badge_reflects_result_state():
     _set(at, ("number_input", "pl_Mx", 55.0))
     _goto_page(at, "Analysis")
     assert any("recalculate" in c for c in caps())
+
+
+@pytest.mark.parametrize("view", ["Plastic Results", "Elastic Results"])
+def test_stale_result_views_keep_the_calculated_section_geometry(view):
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    _calculate(at)
+    _select_view(at, view)
+    calculated_outline = _section_outline_from_result_view(at)
+
+    changed = at.session_state["corners_base"].copy(deep=True)
+    changed["x (mm)"] *= 1.25
+    changed["y (mm)"] *= 1.25
+    _replace_base_table(at, "corners_base", changed)
+    assert (
+        at.session_state["_latest_inputs"]["outer"]
+        != at.session_state["result_input_snapshot"]["outer"]
+    )
+
+    _select_view(at, view)
+    assert not at.exception
+    assert _section_outline_from_result_view(at) == calculated_outline
+    assert any(
+        "inputs changed" in warning.value.lower()
+        for warning in at.warning
+    )
 
 
 def test_combined_preflight_warns_when_prerequisites_missing():

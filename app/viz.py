@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape as _html_escape
 import math
 
 import plotly.graph_objects as go
@@ -227,7 +228,13 @@ _TEMPLATE = "plotly_white+sector"
 # Basic-Multilingual-Plane code points, so they never form surrogate pairs).
 _EPS = chr(0x3B5)       # epsilon
 _SIGMA = chr(0x3C3)     # sigma
+_DELTA = chr(0x394)     # uppercase delta
 _PERMILLE = chr(0x2030)  # per-mille sign
+_FLOAT_MAX = float.fromhex("0x1.fffffffffffffp+1023")
+_FLOAT_MIN_POSITIVE = float.fromhex("0x0.0000000000001p-1022")
+_LOG_FLOAT_MAX = math.log(_FLOAT_MAX)
+_LOG_FLOAT_MIN_POSITIVE = math.log(_FLOAT_MIN_POSITIVE)
+_FATIGUE_UTILISATION_PLOT_CAP = 1.10
 
 _MID = chr(0x00B7)  # middle dot, for products like k*fytk (BMP, surrogate-safe)
 
@@ -810,6 +817,902 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         # a constant gap below the title without spilling past the bottom margin.
         legend=dict(orientation="h", yanchor="top", y=_legend_y(height), x=0.5,
                     xanchor="center"),
+    )
+    return fig
+
+
+def _fatigue_value(record, name, default=None):
+    if isinstance(record, dict):
+        return record.get(name, default)
+    return getattr(record, name, default)
+
+
+def _fatigue_items(record, name):
+    return tuple(_fatigue_value(record, name, ()) or ())
+
+
+def _fatigue_utilisation_scale(values):
+    numeric = []
+    for value in values:
+        try:
+            numeric.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    finite = [max(value, 0.0) for value in numeric if math.isfinite(value)]
+    unbounded = any(value > 0.0 and not math.isfinite(value) for value in numeric)
+    raw_upper = max([1.0, *finite])
+    capped = unbounded or raw_upper > _FATIGUE_UTILISATION_PLOT_CAP
+    upper = min(raw_upper, _FATIGUE_UTILISATION_PLOT_CAP)
+    if unbounded:
+        upper = _FATIGUE_UTILISATION_PLOT_CAP
+    # Cividis is perceptually ordered and remains legible for common colour-vision
+    # deficiencies.  The explicit 1.00 tick and x-patterns carry the limit.
+    ticks = [0.0, 0.5, 1.0]
+    if upper > 1.0 + 1.0e-9:
+        ticks.append(upper)
+    return upper, sorted(set(ticks)), capped
+
+
+def _fatigue_plot_utilisation(value, upper):
+    """Return a finite colour value while preserving failure through symbols."""
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(number):
+        return upper if number > 0.0 else 0.0
+    return min(max(number, 0.0), upper)
+
+
+def _fatigue_hover_number(value, format_spec=".3g"):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if math.isnan(number):
+        return "-"
+    if math.isinf(number):
+        return "inf" if number > 0.0 else "-inf"
+    magnitude = abs(number)
+    if magnitude >= 1.0e6 or (0.0 < magnitude < 1.0e-4):
+        return format(number, ".3e")
+    return format(number, format_spec)
+
+
+def _fatigue_limit_exceeded(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return number > 1.0 or (number > 0.0 and not math.isfinite(number))
+
+
+def _fatigue_text(value):
+    """Escape user-controlled text before Plotly interprets its HTML subset."""
+
+    return _html_escape(str(value), quote=True)
+
+
+def fatigue_utilisation_map_figure(
+    outer,
+    holes,
+    bar_elements,
+    tendon_elements,
+    spectrum,
+    *,
+    title=None,
+):
+    """Map steel and concrete fatigue utilisation on the section.
+
+    Geometry is supplied in the application's native convention: concrete rings
+    in metres and element records in millimetres. Stable element/fibre labels and
+    over-limit x-patterns make the figure interpretable without colour.
+    """
+
+    outer = [] if outer is None else list(outer)
+    holes = [] if holes is None else list(holes)
+    bar_elements = list(bar_elements or [])
+    tendon_elements = list(tendon_elements or [])
+    reinforcement = {
+        str(_fatigue_value(result, "element_id", "")): result
+        for result in _fatigue_items(spectrum, "reinforcement")
+    }
+    concrete = list(_fatigue_items(spectrum, "concrete"))
+    utilisation_values = [
+        _fatigue_value(result, "utilisation")
+        for result in [*reinforcement.values(), *concrete]
+    ]
+    search = _fatigue_value(spectrum, "concrete_search")
+    # The certified upper damage is a bound over a search region, not a sampled
+    # point represented by the colour axis. It has a dedicated red indicator below;
+    # including it here can collapse every actual point into the bottom of the scale.
+    cmax, tickvals, colour_scale_capped = _fatigue_utilisation_scale(
+        utilisation_values
+    )
+
+    fig = go.Figure()
+    ox, oy = _ring_xy([
+        (float(point[0]) * 1000.0, float(point[1]) * 1000.0)
+        for point in outer
+    ])
+    fig.add_trace(go.Scatter(
+        x=ox,
+        y=oy,
+        fill="toself",
+        mode="lines",
+        fillcolor=CONCRETE_FILL,
+        line=dict(color=CONCRETE_LINE, width=1.5),
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+    for ring in holes:
+        hx, hy = _ring_xy([
+            (float(point[0]) * 1000.0, float(point[1]) * 1000.0)
+            for point in ring
+        ])
+        fig.add_trace(go.Scatter(
+            x=hx,
+            y=hy,
+            fill="toself",
+            mode="lines",
+            fillcolor=HOLE_FILL,
+            line=dict(color=CONCRETE_LINE, width=1.0, dash="dot"),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+
+    search_x = (
+        float(_fatigue_value(search, "x_m")) * 1000.0
+        if search is not None else None
+    )
+    search_y = (
+        float(_fatigue_value(search, "y_m")) * 1000.0
+        if search is not None else None
+    )
+    search_upper = (
+        float(_fatigue_value(search, "upper_damage"))
+        if search is not None else None
+    )
+    search_converged = (
+        bool(_fatigue_value(search, "converged", False))
+        if search is not None else True
+    )
+    search_bound_failed = bool(
+        search_upper is not None
+        and (not math.isfinite(search_upper) or search_upper > 1.0)
+    )
+
+    if concrete:
+        concrete_x = [
+            float(_fatigue_value(result, "x_m")) * 1000.0
+            for result in concrete
+        ]
+        concrete_y = [
+            float(_fatigue_value(result, "y_m")) * 1000.0
+            for result in concrete
+        ]
+        concrete_raw_util = [
+            float(_fatigue_value(result, "utilisation"))
+            for result in concrete
+        ]
+        concrete_util = [
+            _fatigue_plot_utilisation(value, cmax)
+            for value in concrete_raw_util
+        ]
+        symbols = []
+        labels = []
+        hover = []
+        for result, x_mm, y_mm, raw_util in zip(
+            concrete, concrete_x, concrete_y, concrete_raw_util
+        ):
+            is_search = bool(
+                search is not None
+                and math.isclose(x_mm, search_x, abs_tol=1.0e-9)
+                and math.isclose(y_mm, search_y, abs_tol=1.0e-9)
+            )
+            exceeded = _fatigue_limit_exceeded(raw_util)
+            if is_search:
+                symbols.append("star-square" if exceeded else "star")
+            else:
+                symbols.append("square-x" if exceeded else "square")
+            fibre = _fatigue_text(_fatigue_value(result, "fibre_index", "-"))
+            labels.append(f"C{fibre}")
+            hover.append(
+                f"Concrete fibre {fibre}"
+                + (" (adaptive search)" if is_search else "")
+                + f"<br>x = {x_mm:.1f} mm, y = {y_mm:.1f} mm"
+                + "<br>utilisation = "
+                + _fatigue_hover_number(raw_util, ".3f")
+                + f"<br>damage = "
+                f"{_fatigue_hover_number(_fatigue_value(result, 'damage', 0.0))}"
+                + f"<br>stress utilisation = "
+                f"{_fatigue_hover_number(
+                    _fatigue_value(result, 'stress_utilisation', 0.0),
+                    '.3f',
+                )}"
+                + (
+                    "<br>search upper damage = "
+                    f"{_fatigue_hover_number(search_upper, '.3f')}"
+                    + (
+                        "<br>search convergence = certified"
+                        if search_converged
+                        else "<br>search convergence = not converged"
+                    )
+                    if is_search else ""
+                )
+            )
+        fig.add_trace(go.Scatter(
+            x=concrete_x,
+            y=concrete_y,
+            mode="markers+text",
+            name="concrete fibres",
+            marker=dict(
+                size=10,
+                symbol=symbols,
+                color=concrete_util,
+                coloraxis="coloraxis",
+                line=dict(color="#111827", width=0.8),
+            ),
+            text=labels,
+            textposition="top center",
+            textfont=dict(size=9, color=SCHEMATIC_INK),
+            customdata=hover,
+            hovertemplate="%{customdata}<extra></extra>",
+        ))
+
+    def add_elements(records, kind, base_symbol, size):
+        selected = [
+            (record, reinforcement.get(str(record.get("id") or "")))
+            for record in records
+        ]
+        selected = [
+            (record, result)
+            for record, result in selected
+            if result is not None
+        ]
+        if not selected:
+            return
+        utils = [
+            float(_fatigue_value(result, "utilisation"))
+            for _record, result in selected
+        ]
+        plot_utils = [
+            _fatigue_plot_utilisation(value, cmax)
+            for value in utils
+        ]
+        symbols = [
+            (
+                base_symbol + "-x"
+                if _fatigue_limit_exceeded(util)
+                else base_symbol
+            )
+            for util in utils
+        ]
+        labels = [
+            _fatigue_text(record.get("id") or "-")
+            for record, _ in selected
+        ]
+        hover = []
+        for (record, result), util in zip(selected, utils):
+            damage = float(_fatigue_value(result, "damage_utilisation", 0.0))
+            stress = float(_fatigue_value(result, "yield_utilisation", 0.0))
+            element_id = _fatigue_text(record.get("id", "-"))
+            hover.append(
+                f"{kind} {element_id}"
+                f"<br>x = {float(record.get('x_mm', 0.0)):.1f} mm, "
+                f"y = {float(record.get('y_mm', 0.0)):.1f} mm"
+                "<br>utilisation = "
+                + _fatigue_hover_number(util, ".3f")
+                + "<br>Miner damage = "
+                + _fatigue_hover_number(damage)
+                + "<br>yield/proof utilisation = "
+                + _fatigue_hover_number(stress, ".3f")
+            )
+        fig.add_trace(go.Scatter(
+            x=[float(record.get("x_mm", 0.0)) for record, _ in selected],
+            y=[float(record.get("y_mm", 0.0)) for record, _ in selected],
+            mode="markers+text",
+            name=kind.lower(),
+            marker=dict(
+                size=size,
+                symbol=symbols,
+                color=plot_utils,
+                coloraxis="coloraxis",
+                line=dict(color="#111827", width=1.0),
+            ),
+            text=labels,
+            textposition="top center",
+            textfont=dict(size=10, color=SCHEMATIC_INK),
+            customdata=hover,
+            hovertemplate="%{customdata}<extra></extra>",
+        ))
+
+    add_elements(bar_elements, "Reinforcing bar", "circle", 12)
+    add_elements(tendon_elements, "Tendon", "diamond", 13)
+    if search_bound_failed and search_x is not None and search_y is not None:
+        fig.add_trace(go.Scatter(
+            x=[search_x],
+            y=[search_y],
+            mode="markers",
+            name="certified search bound > 1.00",
+            marker=dict(
+                size=19,
+                symbol="x",
+                color="#9B1C1C",
+                line=dict(color="#FFFFFF", width=1.0),
+            ),
+            customdata=[(
+                "Certified upper damage = "
+                f"{_fatigue_hover_number(search_upper, '.3f')}"
+                "<br>Marker is at the worst evaluated fibre; the conservative "
+                "bound applies to the complete concrete search region."
+            )],
+            hovertemplate="%{customdata}<extra></extra>",
+        ))
+    if any(
+        _fatigue_limit_exceeded(value)
+        for value in utilisation_values
+    ):
+        fig.add_trace(go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            name="limit exceeded (x marker)",
+            marker=dict(
+                size=10,
+                symbol="circle-x",
+                color="#FFFFFF",
+                line=dict(color="#111827", width=1.0),
+            ),
+            hoverinfo="skip",
+        ))
+
+    spectrum_name = _fatigue_text(
+        _fatigue_value(spectrum, "spectrum_name", "")
+    )
+    fig.update_layout(
+        title=(
+            _fatigue_text(title)
+            if title is not None
+            else f"Fatigue utilisation - {spectrum_name}"
+        ),
+        template=_TEMPLATE,
+        height=520,
+        margin=dict(l=20, r=25, t=55, b=96),
+        xaxis=dict(title=dict(text="x (mm)", standoff=10), zeroline=True),
+        yaxis=dict(
+            title="y (mm)",
+            scaleanchor="x",
+            scaleratio=1,
+            zeroline=True,
+        ),
+        coloraxis=dict(
+            cmin=0.0,
+            cmax=cmax,
+            colorscale="Cividis",
+            colorbar=dict(
+                title="Utilisation",
+                tickvals=tickvals,
+                ticktext=[
+                    (
+                        f">= {tick:.2f}"
+                        if colour_scale_capped and math.isclose(tick, cmax)
+                        else f"{tick:.2f}"
+                    )
+                    for tick in tickvals
+                ],
+                thickness=14,
+                len=0.72,
+            ),
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=_legend_y(520),
+            x=0.5,
+            xanchor="center",
+        ),
+    )
+    fig.add_annotation(
+        x=0.99,
+        y=0.99,
+        xref="paper",
+        yref="paper",
+        xanchor="right",
+        yanchor="top",
+        text="acceptance limit = 1.00",
+        showarrow=False,
+        bgcolor="rgba(255,255,255,0.82)",
+        font=dict(size=10, color=SCHEMATIC_INK),
+    )
+    if search_bound_failed:
+        fig.add_annotation(
+            x=0.01,
+            y=0.99,
+            xref="paper",
+            yref="paper",
+            xanchor="left",
+            yanchor="top",
+            text=(
+                "certified search upper D = "
+                f"{_fatigue_hover_number(search_upper, '.3f')} &gt; 1.00"
+            ),
+            showarrow=False,
+            bgcolor="rgba(253,236,236,0.92)",
+            bordercolor="#9B1C1C",
+            font=dict(size=10, color="#9B1C1C"),
+        )
+    if search is not None and not search_converged:
+        fig.add_annotation(
+            x=0.01,
+            y=0.90 if search_bound_failed else 0.99,
+            xref="paper",
+            yref="paper",
+            xanchor="left",
+            yanchor="top",
+            text="adaptive concrete search not converged; result invalid",
+            showarrow=False,
+            bgcolor="rgba(255,244,214,0.94)",
+            bordercolor="#7A4E00",
+            font=dict(size=10, color="#7A4E00"),
+        )
+    return fig
+
+
+def _sn_range_at_cycles(cycles, *, n_star, knee_range, k1, k2):
+    """Evaluate a positive two-slope S-N ordinate without overflow."""
+
+    exponent = k1 if cycles <= n_star else k2
+    log_range = (
+        math.log(knee_range)
+        + (math.log(n_star) - math.log(cycles)) / exponent
+    )
+    if log_range >= _LOG_FLOAT_MAX:
+        return _FLOAT_MAX
+    if log_range <= _LOG_FLOAT_MIN_POSITIVE:
+        return _FLOAT_MIN_POSITIVE
+    return math.exp(log_range)
+
+
+def _finite_power_of_ten(exponent):
+    """Return a positive finite float at extreme base-10 exponents."""
+
+    try:
+        value = 10.0 ** exponent
+    except OverflowError:
+        return _FLOAT_MAX
+    if value == 0.0:
+        return _FLOAT_MIN_POSITIVE
+    return min(value, _FLOAT_MAX)
+
+
+def fatigue_sn_figure(
+    result,
+    properties,
+    gamma_s,
+    *,
+    title=None,
+):
+    """Plot characteristic/design two-slope S-N curves and applied bins."""
+
+    n_star = float(_fatigue_value(properties, "n_star"))
+    k1 = float(_fatigue_value(properties, "k1"))
+    k2 = float(_fatigue_value(properties, "k2"))
+    characteristic_knee = float(
+        _fatigue_value(properties, "delta_sigma_rsk_mpa")
+    )
+    gamma_s = float(gamma_s)
+    design_knee = characteristic_knee / gamma_s
+    bins = list(_fatigue_items(result, "bins"))
+    applied_cycles = [
+        float(_fatigue_value(item, "cycles"))
+        for item in bins
+        if float(_fatigue_value(item, "cycles", 0.0)) > 0.0
+    ]
+    # The curve domain follows the applied spectrum. The derived resistance life
+    # is hover evidence, not a plotted x-coordinate, and must not collapse the
+    # useful domain when it approaches a floating-point limit.
+    minimum_cycles = min([1.0e3, n_star, *applied_cycles])
+    maximum_cycles = max([1.0e9, n_star, *applied_cycles])
+    log_min = max(
+        math.floor(math.log10(minimum_cycles)),
+        math.log10(_FLOAT_MIN_POSITIVE),
+    )
+    log_max = min(
+        math.ceil(math.log10(maximum_cycles)),
+        math.log10(_FLOAT_MAX),
+    )
+    count = min(
+        600,
+        max(120, int(math.ceil((log_max - log_min) * 30))),
+    )
+    curve_cycles = [
+        _finite_power_of_ten(
+            log_min + (log_max - log_min) * index / (count - 1)
+        )
+        for index in range(count)
+    ]
+    characteristic = [
+        _sn_range_at_cycles(
+            cycles,
+            n_star=n_star,
+            knee_range=characteristic_knee,
+            k1=k1,
+            k2=k2,
+        )
+        for cycles in curve_cycles
+    ]
+    design = [
+        _sn_range_at_cycles(
+            cycles,
+            n_star=n_star,
+            knee_range=design_knee,
+            k1=k1,
+            k2=k2,
+        )
+        for cycles in curve_cycles
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=curve_cycles,
+        y=characteristic,
+        mode="lines",
+        name="characteristic S-N curve",
+        line=dict(color=CURVE_CHAR, width=2.0, dash="dash"),
+        hovertemplate=(
+            "N = %{x:.3g}<br>"
+            f"{_DELTA}{_SIGMA} = %{{y:.3g}} MPa<extra></extra>"
+        ),
+    ))
+    fig.add_trace(go.Scatter(
+        x=curve_cycles,
+        y=design,
+        mode="lines",
+        name="design S-N curve",
+        line=dict(color=ENVELOPE, width=2.8),
+        hovertemplate=(
+            "N = %{x:.3g}<br>"
+            f"design {_DELTA}{_SIGMA} = %{{y:.3g}} MPa<extra></extra>"
+        ),
+    ))
+    fig.add_trace(go.Scatter(
+        x=[n_star],
+        y=[design_knee],
+        mode="markers",
+        name="design knee N*",
+        marker=dict(
+            size=9,
+            color=ENVELOPE,
+            symbol="diamond",
+            line=dict(color="white", width=1.0),
+        ),
+        hovertemplate=(
+            "N* = %{x:.3g}<br>"
+            f"design {_DELTA}{_SIGMA} = %{{y:.3g}} MPa<extra></extra>"
+        ),
+    ))
+
+    plotted = [
+        item
+        for item in bins
+        if (
+            float(_fatigue_value(item, "cycles", 0.0)) > 0.0
+            and float(_fatigue_value(item, "design_stress_range_mpa", 0.0))
+            > 0.0
+        )
+    ]
+    if plotted:
+        custom = [
+            [
+                _fatigue_text(_fatigue_value(item, "bin_name", "-")),
+                _fatigue_hover_number(
+                    _fatigue_value(item, "cycles_to_failure", math.inf)
+                ),
+                _fatigue_hover_number(_fatigue_value(item, "damage", 0.0)),
+            ]
+            for item in plotted
+        ]
+        fig.add_trace(go.Scatter(
+            x=[float(_fatigue_value(item, "cycles")) for item in plotted],
+            y=[
+                float(_fatigue_value(item, "design_stress_range_mpa"))
+                for item in plotted
+            ],
+            mode="markers+text",
+            name="applied spectrum bins",
+            marker=dict(
+                size=10,
+                color=LOAD_POINT,
+                symbol="circle",
+                line=dict(color="#111827", width=0.8),
+            ),
+            text=[
+                _fatigue_text(_fatigue_value(item, "bin_name", "-"))
+                for item in plotted
+            ],
+            textposition="top center",
+            textfont=dict(size=9, color=SCHEMATIC_INK),
+            customdata=custom,
+            hovertemplate=(
+                "%{customdata[0]}<br>applied cycles = %{x:.3g}<br>"
+                f"design {_DELTA}{_SIGMA} = %{{y:.3g}} MPa<br>"
+                "N_R = %{customdata[1]}<br>"
+                "Miner contribution = %{customdata[2]}<extra></extra>"
+            ),
+        ))
+    omitted = len(bins) - len(plotted)
+    if omitted:
+        fig.add_annotation(
+            x=0.01,
+            y=0.02,
+            xref="paper",
+            yref="paper",
+            xanchor="left",
+            yanchor="bottom",
+            text=f"{omitted} zero-range bin omitted from logarithmic axes",
+            showarrow=False,
+            bgcolor="rgba(255,255,255,0.82)",
+            font=dict(size=10, color=SCHEMATIC_INK),
+        )
+    fig.add_vline(
+        x=n_star,
+        line_width=0.9,
+        line_dash="dot",
+        line_color=GUIDE_LINE,
+    )
+    element_id = _fatigue_text(_fatigue_value(result, "element_id", ""))
+    fig.update_layout(
+        title=(
+            _fatigue_text(title)
+            if title is not None
+            else f"S-N assessment - {element_id}"
+        ),
+        template=_TEMPLATE,
+        height=450,
+        margin=dict(l=65, r=25, t=55, b=100),
+        xaxis=dict(
+            title=dict(text="Cycles, N", standoff=10),
+            type="log",
+            exponentformat="power",
+        ),
+        yaxis=dict(
+            title=f"Stress range, {_DELTA}{_SIGMA} (MPa)",
+            type="log",
+            exponentformat="power",
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=_legend_y(450),
+            x=0.5,
+            xanchor="center",
+        ),
+    )
+    return fig
+
+
+def fatigue_damage_figure(result, *, title=None):
+    """Plot per-bin and cumulative Palmgren-Miner damage."""
+
+    bins = list(_fatigue_items(result, "bins"))
+    names = [
+        _fatigue_text(_fatigue_value(item, "bin_name", "-"))
+        for item in bins
+    ]
+    raw_damage = [
+        float(_fatigue_value(item, "damage", 0.0))
+        for item in bins
+    ]
+    finite_damage = [
+        max(value, 0.0) for value in raw_damage if math.isfinite(value)
+    ]
+    unbounded = [
+        value > 0.0 and not math.isfinite(value)
+        for value in raw_damage
+    ]
+    largest_finite = max([1.0, *finite_damage])
+    finite_sum = sum(finite_damage)
+    cap_basis = max(
+        largest_finite,
+        finite_sum if math.isfinite(finite_sum) else largest_finite,
+    )
+    plot_cap = (
+        _FLOAT_MAX
+        if cap_basis >= _FLOAT_MAX / 1.05
+        else max(1.10, cap_basis * 1.05)
+    )
+    damage = [
+        plot_cap if is_unbounded else max(value, 0.0)
+        for value, is_unbounded in zip(raw_damage, unbounded)
+    ]
+    cumulative_raw = []
+    cumulative = []
+    cumulative_unbounded = []
+    running = 0.0
+    for raw in raw_damage:
+        running = running + raw if math.isfinite(running) else running
+        is_unbounded = not math.isfinite(running)
+        cumulative_raw.append(running)
+        cumulative_unbounded.append(is_unbounded)
+        cumulative.append(plot_cap if is_unbounded else running)
+    any_unbounded = any(unbounded) or any(cumulative_unbounded)
+    positive = [value for value in [*damage, *cumulative] if value > 0.0]
+    use_log_scale = (
+        not any_unbounded
+        and bool(positive)
+        and max(cumulative, default=0.0) < 0.05
+    )
+    fig = go.Figure()
+    cycles = [
+        float(_fatigue_value(item, "cycles", 0.0))
+        for item in bins
+    ]
+    if use_log_scale:
+        visible = [
+            (name, value, count)
+            for name, value, count in zip(names, damage, cycles)
+            if value > 0.0
+        ]
+        fig.add_trace(go.Scatter(
+            x=[item[0] for item in visible],
+            y=[item[1] for item in visible],
+            mode="markers",
+            name="bin damage",
+            marker=dict(
+                size=10,
+                color=LOAD_POINT,
+                symbol="square",
+                line=dict(color="#111827", width=0.7),
+            ),
+            customdata=[item[2] for item in visible],
+            hovertemplate=(
+                "%{x}<br>cycles = %{customdata:.3g}<br>"
+                "damage = %{y:.3g}<extra></extra>"
+            ),
+        ))
+    else:
+        fig.add_trace(go.Bar(
+            x=names,
+            y=damage,
+            name="bin damage",
+            marker=dict(
+                color=[
+                    "#9B1C1C" if is_unbounded else LOAD_POINT
+                    for is_unbounded in unbounded
+                ],
+                line=dict(color="#111827", width=0.5),
+            ),
+            customdata=[
+                [count, _fatigue_hover_number(raw)]
+                for count, raw in zip(cycles, raw_damage)
+            ],
+            text=["inf" if is_unbounded else "" for is_unbounded in unbounded],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=(
+                "%{x}<br>cycles = %{customdata[0]:.3g}<br>"
+                "damage = %{customdata[1]}<extra></extra>"
+            ),
+        ))
+    fig.add_trace(go.Scatter(
+        x=names,
+        y=[
+            value if (not use_log_scale or value > 0.0) else None
+            for value in cumulative
+        ],
+        mode=(
+            "lines+markers+text"
+            if any(cumulative_unbounded)
+            else "lines+markers"
+        ),
+        name="cumulative damage",
+        line=dict(color=ENVELOPE, width=2.4),
+        marker=dict(size=7, symbol="diamond"),
+        text=[
+            "inf" if is_unbounded else ""
+            for is_unbounded in cumulative_unbounded
+        ],
+        textposition="top center",
+        cliponaxis=False,
+        customdata=[
+            _fatigue_hover_number(value) for value in cumulative_raw
+        ],
+        hovertemplate=(
+            "%{x}<br>cumulative damage = %{customdata}<extra></extra>"
+        ),
+    ))
+    fig.add_hline(
+        y=1.0,
+        line_width=1.5,
+        line_dash="dash",
+        line_color=BAR_COMPRESSION,
+        annotation_text="D = 1.00 limit",
+        annotation_position="top right",
+    )
+    if any_unbounded:
+        fig.add_annotation(
+            x=0.01,
+            y=0.98,
+            xref="paper",
+            yref="paper",
+            xanchor="left",
+            yanchor="top",
+            text=(
+                "Unbounded Miner damage (inf); affected bars or the cumulative "
+                "line are capped for plotting"
+            ),
+            showarrow=False,
+            bgcolor="rgba(253,236,236,0.92)",
+            bordercolor="#9B1C1C",
+            font=dict(size=10, color="#9B1C1C"),
+        )
+    identifier = (
+        _fatigue_value(result, "element_id")
+        or (
+            "concrete fibre "
+            + str(_fatigue_value(result, "fibre_index", "-"))
+        )
+    )
+    identifier = _fatigue_text(identifier)
+    yaxis = dict(
+        title=(
+            "Miner damage, D (log scale)"
+            if use_log_scale else "Miner damage, D"
+        ),
+        rangemode=None if use_log_scale else "tozero",
+        gridcolor=_GRID_COLOR,
+    )
+    if use_log_scale:
+        yaxis.update(
+            type="log",
+            exponentformat="power",
+            range=[
+                math.floor(math.log10(min(positive))) - 0.25,
+                0.15,
+            ],
+        )
+        zero_bins = sum(value <= 0.0 for value in damage)
+        if zero_bins:
+            note = f"{zero_bins} zero-damage bin"
+            if zero_bins != 1:
+                note += "s"
+            note += " omitted"
+            fig.add_annotation(
+                x=0.01,
+                y=0.02,
+                xref="paper",
+                yref="paper",
+                xanchor="left",
+                yanchor="bottom",
+                text=note,
+                showarrow=False,
+                bgcolor="rgba(255,255,255,0.82)",
+                font=dict(size=10, color=SCHEMATIC_INK),
+            )
+    fig.update_layout(
+        title=(
+            _fatigue_text(title)
+            if title is not None
+            else f"Miner damage - {identifier}"
+        ),
+        template=_TEMPLATE,
+        height=400,
+        margin=dict(l=60, r=25, t=55, b=100),
+        xaxis=dict(title=dict(text="Spectrum bin", standoff=10)),
+        yaxis=yaxis,
+        barmode="group",
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=_legend_y(400),
+            x=0.5,
+            xanchor="center",
+        ),
     )
     return fig
 

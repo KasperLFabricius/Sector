@@ -28,16 +28,20 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import sector_report  # noqa: E402
+import fatigue_analysis  # noqa: E402
+import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
 from sector import codes, shear  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
+from sector.section import Section  # noqa: E402
 
 # Geometry, concrete law, steel law, two plastic interactions, two plastic
 # states, two elastic states, two elastic strain profiles, one derived shear
-# geometry, one minimum-reinforcement figure and one clear-spacing figure. An
-# intentional fixture change must update this explicit contract.
-_EXPECTED_FIGURE_COUNT = 15
+# geometry, one minimum-reinforcement figure, one clear-spacing figure and four
+# grouped-fatigue figures. An intentional fixture change must update this
+# explicit contract.
+_EXPECTED_FIGURE_COUNT = 19
 
 
 class _FixedDateTime(datetime.datetime):
@@ -142,10 +146,69 @@ def _inputs() -> dict:
         item["id"]: material_catalog.build_material(item, "mild")
         for item in mild_catalogue["items"]
     }
+    outer = [(-0.1, -0.15), (0.1, -0.15), (0.1, 0.15), (-0.1, 0.15)]
+    bars = [(0.0, -0.12, 500.0), (0.0, 0.12, 400.0)]
+    fatigue_catalogue = fatigue_inputs.default_catalog()
+    fatigue_catalogue["items"][0].update({
+        "name": "Straight reinforcing bars",
+        "description": "QA fixture detail",
+    })
+    fatigue_spectrum = [
+        {
+            "spectrum": "Road traffic",
+            "name": "FAT-QA-H",
+            "description": "Heavy vehicle range | Source: QA spectrum",
+            "cycles": 1.0e5,
+            "n_long_ed_kn": 0.0,
+            "mx_long_ed_knm": 8.0,
+            "my_long_ed_knm": 0.0,
+            "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 4.0,
+            "my_short_ed_knm": 0.0,
+        },
+        {
+            "spectrum": "Road traffic",
+            "name": "FAT-QA-M",
+            "description": "Frequent vehicle range | Source: QA spectrum",
+            "cycles": 1.0e6,
+            "n_long_ed_kn": 0.0,
+            "mx_long_ed_knm": 8.0,
+            "my_long_ed_knm": 0.0,
+            "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 2.0,
+            "my_short_ed_knm": 0.0,
+        },
+    ]
+    fatigue_basis = fatigue_inputs.default_basis()
+    fatigue_basis.update({
+        "spectrum_source": "QA traffic spectrum REF-FAT-01",
+        "cycle_count_source": "QA cycle register REF-CYC-01",
+        "dynamic_effects": fatigue_inputs.DYNAMIC_INCLUDED,
+        "cycle_counting": fatigue_inputs.COUNTING_RAINFLOW,
+        "concurrence_basis": "Single loaded lane in the QA fixture",
+        "atypical_traffic": fatigue_inputs.ATYPICAL_CONSIDERED,
+        "approval_reference": "QA-FAT-APP-01",
+        "authority_adjustments": "No additional adjustment; actions are final",
+        "notes": "Issued-report regression spectrum",
+    })
     return {
         "mode": "Both",
         "plastic_cases": plastic_cases,
         "elastic_cases": elastic_cases,
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_check_steel": True,
+        "fatigue_check_concrete": True,
+        "fatigue_gamma_ff": 1.0,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_beta_cc_t0": 1.0,
+        "fatigue_t0_days": 28.0,
+        "fatigue_concrete_k1": 0.85,
+        "fatigue_concrete_c": 14.0,
+        fatigue_inputs.DETAIL_CATALOG_KEY: fatigue_catalogue,
+        fatigue_inputs.SPECTRUM_TABLE_KEY: fatigue_spectrum,
+        fatigue_inputs.BASIS_KEY: fatigue_basis,
         "shear_on": True,
         "torsion_on": False,
         "combined_on": False,
@@ -164,23 +227,29 @@ def _inputs() -> dict:
             "type": elastic_cases[0]["description"],
             "source": "QA fixture combination register",
         },
-        "outer": [(-0.1, -0.15), (0.1, -0.15), (0.1, 0.15), (-0.1, 0.15)],
+        "outer": outer,
         "holes": [],
-        "bars": [(0.0, -0.12, 500.0), (0.0, 0.12, 400.0)],
+        "bars": bars,
         "tendons": [],
+        "section": Section.from_polygon(
+            corners=outer,
+            holes=[],
+            bars_xy_area_mm2=bars,
+            tendons_xy_area_mm2=[],
+        ),
         "bar_elements": [
             {
                 "id": "R1", "x_mm": 0.0, "y_mm": -120.0,
                 "area_mm2": 500.0, "diameter_mm": 25.23,
                 "size_mode": "Area", "material_id": "M1",
-                "fatigue_detail_id": "", "group_id": "B1",
+                "fatigue_detail_id": "F1", "group_id": "B1",
                 "spacing_group_id": "",
             },
             {
                 "id": "R2", "x_mm": 0.0, "y_mm": 120.0,
                 "area_mm2": 400.0, "diameter_mm": 22.57,
                 "size_mode": "Area", "material_id": second_id,
-                "fatigue_detail_id": "", "group_id": "B2",
+                "fatigue_detail_id": "F1", "group_id": "B2",
                 "spacing_group_id": "",
             },
         ],
@@ -439,9 +508,11 @@ def _results() -> dict:
     inputs = _inputs()
     plastic_rows = inputs["plastic_cases"]
     elastic_rows = inputs["elastic_cases"]
+    fatigue = fatigue_analysis.run_analysis(inputs)
     return {
         "plastic": plastic,
         "elastic": elastic,
+        "fatigue": fatigue,
         "shear": shear_payload,
         "clear_spacing": spacing,
         "plastic_cases": [
@@ -557,10 +628,23 @@ def validate_pdf_content(pdf: bytes) -> str:
     )
     if "Sweep start V.min" not in settings_page:
         raise AssertionError("the analysis-settings heading is separated from its table")
-    if not all(case in settings_page for case in (
-        "PL-QA-1", "PL-QA-2", "EL-QA-1", "EL-QA-2"
-    )):
-        raise AssertionError("the loads and analysis settings are split across pages")
+    for heading, first_case in (
+        ("Plastic / capacity cases", "PL-QA-1"),
+        ("Elastic cases", "EL-QA-1"),
+        ("Grouped fatigue spectra", "FAT-QA-H"),
+    ):
+        page_text = next(
+            (
+                page.extract_text() or ""
+                for page in reader.pages
+                if heading in (page.extract_text() or "")
+            ),
+            "",
+        )
+        if first_case not in page_text:
+            raise AssertionError(
+                f"the {heading} heading is separated from its first row"
+            )
 
     flat_text = " ".join(text.split())
     for expected in (
@@ -585,6 +669,16 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Elastic section response and stress limits - EL-QA-2",
         "Cracking and crack width - EL-QA-1",
         "Cracking threshold - EL-QA-2",
+        "Grouped fatigue",
+        "Road traffic",
+        "FAT-QA-H",
+        "FAT-QA-M",
+        "QA traffic spectrum REF-FAT-01",
+        "Spectrum summary",
+        "Reinforcement fatigue",
+        "Concrete fatigue",
+        "Certified governing-fibre search",
+        "Torsion and shear fatigue are not assessed",
         "125.0 %",
         "245.000 MPa",
         "Crack-width candidates",
@@ -619,7 +713,11 @@ def _pixels(image: Image.Image) -> list[int]:
     return list(getter())
 
 
-def validate_rendered_pages(pages: list[Image.Image]) -> None:
+def validate_rendered_pages(
+    pages: list[Image.Image],
+    *,
+    require_document_control: bool = False,
+) -> None:
     """Reject blank, clipped, malformed or ink-saturated report pages."""
     if len(pages) < 6:
         raise AssertionError(f"expected at least 6 report pages, got {len(pages)}")
@@ -661,6 +759,38 @@ def validate_rendered_pages(pages: list[Image.Image]) -> None:
                 f"page {number} has content clipped against the page edge"
             )
 
+        if require_document_control:
+            # Text extraction can still find header/footer strings when a PDF
+            # graphics-state error makes them invisible. Check their rendered
+            # text zones independently of the body and horizontal rules.
+            furniture_regions = {
+                "header project": (
+                    int(0.09 * width), int(0.028 * height),
+                    int(0.72 * width), int(0.044 * height),
+                ),
+                "header revision": (
+                    int(0.80 * width), int(0.028 * height),
+                    int(0.92 * width), int(0.044 * height),
+                ),
+                "footer identity": (
+                    int(0.09 * width), int(0.952 * height),
+                    int(0.65 * width), int(0.967 * height),
+                ),
+                "footer page number": (
+                    int(0.78 * width), int(0.952 * height),
+                    int(0.92 * width), int(0.967 * height),
+                ),
+            }
+            for label, box in furniture_regions.items():
+                region_pixels = _pixels(grey.crop(box))
+                region_dark = sum(
+                    value < 245 for value in region_pixels
+                ) / len(region_pixels)
+                if region_dark < 0.01:
+                    raise AssertionError(
+                        f"page {number} has no visible {label}"
+                    )
+
 
 def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     """Write the stable PDF and rendered page PNG evidence."""
@@ -670,7 +800,7 @@ def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     pdf_path = output / "sector-report-reference.pdf"
     pdf_path.write_bytes(pdf)
     pages = render_pdf(pdf)
-    validate_rendered_pages(pages)
+    validate_rendered_pages(pages, require_document_control=True)
     paths = [pdf_path]
     for index, page in enumerate(pages, start=1):
         path = output / f"sector-report-page-{index:02d}.png"

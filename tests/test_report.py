@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import math
 import pathlib
 import sys
+from types import SimpleNamespace as NS
 
 import pytest
 
@@ -12,6 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report  # noqa: E402
+import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
@@ -140,6 +143,378 @@ def _out():
                         "criterion": "0.3 mm",
                     },
                     "crack_code": "EN 1992-1-1:2005", "crack_member": None}}
+
+
+def _fatigue_report_fixture():
+    inp = _inp()
+    inp.update({
+        "mode": "",
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_check_steel": True,
+        "fatigue_check_concrete": True,
+        "fatigue_gamma_ff": 1.10,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_t0_days": 28.0,
+        "fatigue_beta_cc_t0": 0.92,
+        "fatigue_concrete_k1": 1.0,
+        "fatigue_concrete_c": 14.0,
+        "bar_elements": [{
+            "id": "R1",
+            "kind": "bar",
+            "x_mm": 0.0,
+            "y_mm": -120.0,
+            "area_mm2": 500.0,
+            "diameter_mm": 25.23,
+            "material_id": "M1",
+            "fatigue_detail_id": "F1",
+        }],
+        "tendon_elements": [],
+        fatigue_inputs.BASIS_KEY: {
+            "authority": fatigue_inputs.AUTHORITY_USER,
+            "method": fatigue_inputs.METHOD_USER_GROUPED,
+            "spectrum_source": "Traffic model TM-7",
+            "cycle_count_source": "Cycle count CC-4",
+            "dynamic_effects": fatigue_inputs.DYNAMIC_INCLUDED,
+            "cycle_counting": fatigue_inputs.COUNTING_OTHER,
+            "concurrence_basis": "Concurrent lane model",
+            "atypical_traffic": fatigue_inputs.ATYPICAL_NOT_APPLICABLE,
+            "approval_reference": "DB-FAT-02",
+            "authority_adjustments": "None",
+            "notes": "Independent spectra",
+        },
+        fatigue_inputs.SPECTRUM_TABLE_KEY:
+            fatigue_inputs.normalise_spectrum_table([
+                {
+                    "spectrum": "Traffic A",
+                    "name": "FAT-A1",
+                    "description": "Heavy vehicles",
+                    "cycles": 2.0e5,
+                    "n_long_ed_kn": -300.0,
+                    "mx_long_ed_knm": 40.0,
+                    "n_short_ed_kn": 20.0,
+                    "mx_short_ed_knm": 25.0,
+                },
+                {
+                    "spectrum": "Traffic B",
+                    "name": "FAT-B1",
+                    "description": "Permit vehicles",
+                    "cycles": 4.0e4,
+                    "n_long_ed_kn": -250.0,
+                    "my_long_ed_knm": 15.0,
+                    "n_short_ed_kn": -10.0,
+                    "my_short_ed_knm": 30.0,
+                },
+            ]),
+    })
+
+    def spectrum(name, bin_name, utilisation):
+        steel_bin = NS(
+            bin_name=bin_name,
+            cycles=2.0e5,
+            converged=True,
+            stress_long_mpa=105.0,
+            stress_total_mpa=165.0,
+            stress_total_design_mpa=171.0,
+            stress_total_elastic_mpa=165.0,
+            stress_range_mpa=60.0,
+            stress_range_elastic_mpa=60.0,
+            bond_adjustment=1.0,
+            bond_method="Perfect bond",
+            design_stress_range_mpa=66.0,
+            delta_sigma_rsk_mpa=160.0,
+            delta_sigma_rd_mpa=139.13,
+            sn_exponent=5.0,
+            cycles_to_failure=3.0e6,
+            log10_cycles_to_failure=6.47712,
+            damage=0.0666667,
+            governing_stress_mpa=171.0,
+            yield_limit_mpa=434.78,
+            yield_utilisation=0.3933,
+        )
+        steel = NS(
+            element_id="R1",
+            kind="mild",
+            detail_id="F1",
+            diameter_mm=25.23,
+            bins=(steel_bin,),
+            damage=utilisation,
+            damage_utilisation=utilisation,
+            governing_damage_bin=bin_name,
+            yield_utilisation=0.3933,
+            governing_yield_bin=bin_name,
+            utilisation=utilisation,
+            converged=True,
+            passed=True,
+        )
+        concrete_bin = NS(
+            bin_name=bin_name,
+            cycles=2.0e5,
+            converged=True,
+            compression_long_mpa=6.0,
+            compression_total_mpa=10.0,
+            compression_min_design_mpa=6.0,
+            compression_max_design_mpa=10.4,
+            stress_ratio=0.5769,
+            e_cd_min=0.25,
+            e_cd_max=0.433,
+            cycles_to_failure=2.0e7,
+            log10_cycles_to_failure=7.30103,
+            damage=0.01,
+            stress_utilisation=0.433,
+        )
+        concrete = NS(
+            fibre_index=4,
+            x_m=0.1,
+            y_m=-0.15,
+            bins=(concrete_bin,),
+            fcd_fat_mpa=24.0,
+            damage=0.01,
+            damage_utilisation=0.01,
+            governing_damage_bin=bin_name,
+            stress_utilisation=0.433,
+            governing_stress_bin=bin_name,
+            utilisation=0.433,
+            converged=True,
+            passed=True,
+        )
+        search = NS(
+            x_m=0.1,
+            y_m=-0.15,
+            damage=0.01,
+            upper_damage=0.011,
+            divisions=96,
+            boxes_evaluated=128,
+            points_evaluated=772,
+            absolute_gap=0.001,
+            relative_gap=0.10,
+            converged=True,
+        )
+        state = NS(
+            name=bin_name,
+            description="Grouped bin",
+            cycles=2.0e5,
+            converged=True,
+            bond_method="Perfect bond",
+            design_action_factor=1.10,
+        )
+        return NS(
+            spectrum_name=name,
+            bins=(state,),
+            reinforcement=(steel,),
+            concrete=(concrete,),
+            concrete_search=search,
+            fcd_fat_mpa=24.0,
+            governing_reinforcement_id="R1",
+            governing_concrete_fibre=4,
+            utilisation=utilisation,
+            converged=True,
+            passed=True,
+        )
+
+    spectra = (
+        spectrum("Traffic A", "FAT-A1", 0.55),
+        spectrum("Traffic B", "FAT-B1", 0.72),
+    )
+    payload = {
+        "edition": fatigue_inputs.EC2_2023,
+        "checks": {"reinforcement": True, "concrete": True},
+        "basis": inp[fatigue_inputs.BASIS_KEY],
+        "authority_reference": "Project-defined grouped spectrum",
+        "calculation_references": {
+            "reinforcement": (
+                "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2"
+            ),
+            "concrete": "DS/EN 1992-1-1:2023, Annex E.7-E.8",
+        },
+        "warnings": ("Cycle-count method requires project review",),
+        "partial_factors": {
+            "gamma_c": 1.50,
+            "gamma_s": 1.15,
+            "gamma_ff": 1.10,
+        },
+        "concrete_parameters": {
+            "fck_mpa": 30.0,
+            "beta_cc_t0": 0.92,
+            "alpha_cc": 1.0,
+            "k1": 1.0,
+            "c": 14.0,
+        },
+        "reinforcement_properties": (
+            NS(
+                element_id="R1",
+                kind="mild",
+                detail_id="F1",
+                diameter_mm=25.23,
+                n_star=2.0e6,
+                k1=5.0,
+                k2=9.0,
+                delta_sigma_rsk_mpa=160.0,
+                fytk_mpa=500.0,
+                fyck_mpa=500.0,
+                bond_ratio_xi=None,
+                bond_equivalent_diameter_mm=None,
+            ),
+        ),
+        "fatigue_detail_basis": ({
+            "id": "F1",
+            "name": "Straight bars",
+            "kind": "mild",
+            "preset": fatigue_inputs.PRESET_2023_BARS,
+            "n_star": 2.0e6,
+            "k1": 5.0,
+            "k2": 9.0,
+            "delta_sigma_rsk_mpa": 160.0,
+            "source": "DS/EN 1992-1-1:2023, Table E.1",
+        },),
+        "t0_days": 28.0,
+        "elements": tuple(inp["bar_elements"]),
+        "spectra": spectra,
+        "governing_spectrum": "Traffic B",
+        "utilisation": 0.72,
+        "converged": True,
+        "passed": True,
+    }
+    return inp, {"fatigue": payload}
+
+
+def test_report_includes_complete_grouped_fatigue_evidence():
+    inp, out = _fatigue_report_fixture()
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {"proj_no": "FAT-QA"}, inp, out, figures=False
+    )).split())
+
+    assert "Grouped fatigue" in text
+    assert "REVIEW - Traffic B" in text
+    assert "Traffic A" in text and "Traffic B" in text
+    assert "FAT-A1" in text and "FAT-B1" in text
+    assert "Reinforcement fatigue" in text
+    assert "Concrete fatigue" in text
+    assert "Certified governing-fibre search" in text
+    assert "Upper D" in text
+    assert "Fatigue total" in text
+    assert "Bond factor / method" in text
+    assert "bond transformation" in text
+    assert "raw solver range" in text
+    assert "action-level" in text
+    assert "Annex E.5" in text and "Annex E.7-E.8" in text
+    assert "different spectrum names are not combined" in text
+    assert "Torsion and shear fatigue are not assessed" in text
+    compact = text.replace(" ", "")
+    delta_sigma = chr(0x394) + chr(0x3C3)
+    sigma = chr(0x3C3)
+    formula_start = compact.index(delta_sigma + "i=")
+    formula = compact[formula_start:formula_start + 90]
+    assert formula.startswith(delta_sigma + "i=|")
+    assert sigma + "(long)i|" in formula
+    assert "delta " + sigma not in text
+    assert text.count(delta_sigma) >= 7
+
+
+def test_report_fatigue_chapter_uses_the_engine_failure_state():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["warnings"] = ()
+    payload["passed"] = False
+    payload["utilisation"] = 1.20
+    payload["governing_spectrum"] = "Traffic B"
+    payload["spectra"][1].passed = False
+    payload["spectra"][1].utilisation = 1.20
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "FAIL - Traffic B" in text
+    assert "120.0 %" in text
+
+
+def test_report_escapes_user_defined_fatigue_settings():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["governing_spectrum"] = "Traffic <A> & B"
+    payload["basis"]["spectrum_source"] = "Register A & B <issued>"
+    payload["fatigue_detail_basis"][0]["name"] = "Bar <detail> & coupler"
+    payload["fatigue_detail_basis"][0]["source"] = "Drawing A&B <rev 2>"
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Traffic <A> & B" in text
+    assert "Register A & B <issued>" in text
+    assert "Bar <detail> & coupler" in text
+    assert "Drawing A&B <rev 2>" in text
+
+
+def test_report_preserves_literal_engineering_token_identifiers():
+    inp, out = _fatigue_report_fixture()
+    literal_name = "sigma gamma phi alpha"
+    out["fatigue"]["governing_spectrum"] = literal_name
+    out["fatigue"]["spectra"][0].spectrum_name = literal_name
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert literal_name in text
+
+
+def test_report_outline_decodes_literal_engineering_token_case_id():
+    import io
+    import pypdf
+
+    inp = _inp()
+    inp["plastic_case"]["id"] = "sigma"
+    pdf = sector_report.build_report({}, inp, _out(), figures=False)
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+
+    titles = []
+    pending = list(reader.outline)
+    while pending:
+        item = pending.pop(0)
+        if isinstance(item, list):
+            pending[0:0] = item
+        else:
+            titles.append(str(getattr(item, "title", item)))
+
+    assert any(title.endswith("sigma") for title in titles)
+    assert not any("&#115;igma" in title for title in titles)
+
+
+def test_report_preserves_negative_infinite_concrete_log_life():
+    inp, out = _fatigue_report_fixture()
+    concrete_bin = out["fatigue"]["spectra"][0].concrete[0].bins[0]
+    concrete_bin.log10_cycles_to_failure = -math.inf
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "-inf" in text
+
+
+def test_report_fatigue_chapter_requests_all_engineering_figures(monkeypatch):
+    inp, out = _fatigue_report_fixture()
+    titles = []
+
+    monkeypatch.setattr(sector_report, "ensure_image_server", lambda: None)
+
+    def capture(_self, figure, *_args, **_kwargs):
+        titles.append(str(figure.layout.title.text or ""))
+
+    monkeypatch.setattr(sector_report.ReportBuilder, "_fig", capture)
+    sector_report.build_report({}, inp, out, figures=True)
+
+    assert sum(title.startswith("Fatigue utilisation") for title in titles) == 2
+    assert sum(title.startswith("S-N assessment") for title in titles) == 2
+    assert sum(title.startswith("Miner damage - R1") for title in titles) == 2
+    assert sum(
+        title.startswith("Miner damage - concrete fibre")
+        for title in titles
+    ) == 2
 
 
 def test_report_pdf_generates():

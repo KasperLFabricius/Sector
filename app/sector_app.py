@@ -6,6 +6,7 @@ and acceptance checks.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import functools
 import math
@@ -30,6 +31,7 @@ import streamlit as st  # noqa: E402
 import case_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
+import fatigue_presentation  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
 import project_io  # noqa: E402
@@ -2171,6 +2173,7 @@ def _apply_pending_project() -> None:
         "result_fatigue_sig",
         "result_plastic_case_context_sig", "result_elastic_case_context_sig",
         "result_plastic_bending_context_sig",
+        "result_input_snapshot",
         "report_bytes", "report_signature", "report_filename", "report_generated_on",
     ):
         st.session_state.pop(key, None)
@@ -5680,7 +5683,8 @@ def _run_capacity_checks(inp, out):
 # View order follows the checking workflow: consolidated status first, then the
 # plastic, elastic, shear, torsion and combined details.
 VIEWS = ["Results Overview", "Plastic Results", "N-M Interaction",
-         "Elastic Results", "Detailing", "Shear", "Torsion", "M-V-T Combined"]
+         "Elastic Results", "Fatigue Results", "Detailing", "Shear", "Torsion",
+         "M-V-T Combined"]
 _RESULT_VIEWS = tuple(VIEWS)
 
 
@@ -5836,27 +5840,41 @@ def results_overview_view(inp, results, *, stale=False):
             })
     if inp.get("fatigue_on"):
         fatigue_result = (results or {}).get("fatigue")
-        fatigue_basis = inp.get("fatigue_basis") or {}
-        fatigue_case = (
-            str(
-                fatigue_result.get("governing_spectrum")
-                or "Grouped spectra"
-            )
-            if fatigue_result
-            else "Grouped spectra"
+        fatigue_basis = (
+            (fatigue_result or {}).get("basis")
+            or inp.get("fatigue_basis")
+            or {}
         )
-        case_register.append({
-            "Analysis": "Fatigue",
-            "Case": fatigue_case,
-            "Description": (
-                fatigue_basis.get("method") or inp.get("fatigue_edition") or "-"
-            ),
-            "Result state": (
-                "Stale" if stale and fatigue_result
-                else "Calculated" if fatigue_result
-                else "Not calculated"
-            ),
-        })
+        fatigue_edition = (
+            (fatigue_result or {}).get("edition")
+            or inp.get("fatigue_edition")
+            or "-"
+        )
+        spectra = fatigue_presentation.items(fatigue_result, "spectra")
+        if not spectra:
+            spectra = (None,)
+        for spectrum in spectra:
+            case_register.append({
+                "Analysis": "Fatigue",
+                "Case": (
+                    str(
+                        fatigue_presentation.value(
+                            spectrum, "spectrum_name", "Grouped spectra"
+                        )
+                    )
+                    if spectrum is not None else "Grouped spectra"
+                ),
+                "Description": (
+                    fatigue_basis.get("method")
+                    or fatigue_edition
+                    or "-"
+                ),
+                "Result state": (
+                    "Stale" if stale and fatigue_result
+                    else "Calculated" if fatigue_result
+                    else "Not calculated"
+                ),
+            })
 
     headline = f"{overall} - {len(rows)} checks across {len(case_register)} cases"
     if overall == "PASS":
@@ -6799,6 +6817,634 @@ def _crack_width_panel(e):
                    f"effective area, $w_k$ halved). Member type = {member} (the "
                    f"(h-x)/3 effective-height term applies to slabs and prestressed "
                    f"members, fine system only).")
+
+
+_FATIGUE_STATUS_COLOURS = {
+    "PASS": "background-color: #E8F5E9; color: #1B5E20; font-weight: 600",
+    "FAIL": "background-color: #FDECEC; color: #9B1C1C; font-weight: 600",
+    "INVALID": "background-color: #FDECEC; color: #9B1C1C; font-weight: 600",
+    "REVIEW": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
+    "STALE": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
+    "OK": "background-color: #E8F5E9; color: #1B5E20",
+    "CERTIFIED": "background-color: #E8F5E9; color: #1B5E20",
+}
+
+
+def _fatigue_result_table(rows, *, height=420):
+    """Render a compact fatigue table with a consistent status column."""
+
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        st.info("No results for this check.")
+        return
+    if "Status" in frame.columns:
+        frame = frame.style.map(
+            lambda item: _FATIGUE_STATUS_COLOURS.get(str(item), ""),
+            subset=["Status"],
+        )
+    st.dataframe(
+        frame,
+        hide_index=True,
+        width="stretch",
+        height=min(35 * (len(rows) + 1) + 3, height),
+    )
+
+
+def _fatigue_status_callout(status, text):
+    message = f"{status} - {text}"
+    if status == "PASS":
+        st.success(message)
+    elif status in {"FAIL", "INVALID"}:
+        st.error(message)
+    else:
+        st.warning(message)
+
+
+def _fatigue_map_signature(inp, spectrum):
+    outer = inp.get("outer")
+    holes = inp.get("holes")
+    search = fatigue_presentation.value(spectrum, "concrete_search")
+    return (
+        tuple(
+            tuple(float(coordinate) for coordinate in point)
+            for point in ([] if outer is None else outer)
+        ),
+        tuple(
+            tuple(
+                tuple(float(coordinate) for coordinate in point)
+                for point in ring
+            )
+            for ring in ([] if holes is None else holes)
+        ),
+        tuple(
+            (
+                kind,
+                str(record.get("id") or ""),
+                float(record.get("x_mm", 0.0)),
+                float(record.get("y_mm", 0.0)),
+            )
+            for kind, records in (
+                ("bar", inp.get("bar_elements") or []),
+                ("tendon", inp.get("tendon_elements") or []),
+            )
+            for record in records
+        ),
+        str(fatigue_presentation.value(spectrum, "spectrum_name", "")),
+        tuple(
+            (
+                str(fatigue_presentation.value(item, "element_id", "")),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "utilisation")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "damage_utilisation")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "yield_utilisation")
+                ),
+            )
+            for item in fatigue_presentation.items(spectrum, "reinforcement")
+        ),
+        tuple(
+            (
+                fatigue_presentation.value(item, "fibre_index"),
+                fatigue_presentation.finite_number(
+                    fatigue_presentation.value(item, "x_m")
+                ),
+                fatigue_presentation.finite_number(
+                    fatigue_presentation.value(item, "y_m")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "utilisation")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "damage")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(item, "stress_utilisation")
+                ),
+            )
+            for item in fatigue_presentation.items(spectrum, "concrete")
+        ),
+        (
+            None
+            if search is None
+            else (
+                bool(fatigue_presentation.value(search, "converged", False)),
+                fatigue_presentation.finite_number(
+                    fatigue_presentation.value(search, "x_m")
+                ),
+                fatigue_presentation.finite_number(
+                    fatigue_presentation.value(search, "y_m")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(search, "damage")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(search, "upper_damage")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(search, "absolute_gap")
+                ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(search, "relative_gap")
+                ),
+                fatigue_presentation.value(search, "divisions"),
+                fatigue_presentation.value(search, "boxes_evaluated"),
+                fatigue_presentation.value(search, "points_evaluated"),
+            )
+        ),
+    )
+
+
+def _fatigue_reinforcement_panel(payload, spectrum):
+    rows = fatigue_presentation.reinforcement_rows(spectrum)
+    if not rows:
+        st.info("Reinforcement fatigue is not included in this calculation.")
+        return
+    _fatigue_result_table([
+        {
+            "Element": row["element_id"],
+            "Type": row["kind"].capitalize(),
+            "Detail": row["detail_id"],
+            "Diameter [mm]": row["diameter_mm"],
+            "Miner D": row["damage"],
+            "Yield / proof util. [%]": (
+                None if row["yield_utilisation"] is None
+                else 100.0 * row["yield_utilisation"]
+            ),
+            "Governing": row["governing"],
+            "Utilisation [%]": (
+                None if row["utilisation"] is None
+                else 100.0 * row["utilisation"]
+            ),
+            "Status": row["status"],
+        }
+        for row in rows
+    ])
+
+    options = [row["element_id"] for row in rows]
+    preferred = str(
+        fatigue_presentation.value(
+            spectrum, "governing_reinforcement_id", options[0]
+        )
+        or options[0]
+    )
+    if preferred not in options:
+        preferred = options[0]
+    key = "_fatigue_result_element"
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = preferred
+    selected = st.selectbox(
+        "Reinforcement element",
+        options,
+        key=key,
+        help="Select an element for its S-N curve and bin evidence.",
+    )
+    result = fatigue_presentation.result_by_element(spectrum, selected)
+    properties = fatigue_presentation.reinforcement_property(payload, selected)
+    if result is None or properties is None:
+        st.error("INVALID - Assigned fatigue properties are unavailable.")
+        return
+
+    gamma_s = (payload.get("partial_factors") or {}).get("gamma_s")
+    bin_rows = fatigue_presentation.reinforcement_bin_rows(result)
+    property_signature = tuple(
+        fatigue_presentation.value(properties, field)
+        for field in (
+            "element_id", "detail_id", "diameter_mm", "n_star", "k1", "k2",
+            "delta_sigma_rsk_mpa", "fytk_mpa", "fyck_mpa",
+            "bond_ratio_xi", "bond_equivalent_diameter_mm",
+        )
+    )
+    bin_signature = tuple(
+        tuple(row.get(name) for name in sorted(row))
+        for row in bin_rows
+    )
+    left, right = st.columns([3, 2])
+    with left:
+        st.plotly_chart(
+            _memo_fig(
+                "fatigue_sn",
+                (property_signature, float(gamma_s), bin_signature),
+                lambda: viz.fatigue_sn_figure(
+                    result, properties, gamma_s,
+                ),
+            ),
+            width="stretch",
+        )
+    with right:
+        st.plotly_chart(
+            _memo_fig(
+                "fatigue_reinforcement_damage",
+                (selected, bin_signature),
+                lambda: viz.fatigue_damage_figure(result),
+            ),
+            width="stretch",
+        )
+
+    st.markdown("**Assigned S-N and strength data**")
+    _fatigue_result_table([{
+        "Element": selected,
+        "Detail": fatigue_presentation.value(properties, "detail_id", "-"),
+        "N*": fatigue_presentation.value(properties, "n_star"),
+        "k1": fatigue_presentation.value(properties, "k1"),
+        "k2": fatigue_presentation.value(properties, "k2"),
+        f"{_DELTA}{_SIGMA}Rsk [MPa]": fatigue_presentation.value(
+            properties, "delta_sigma_rsk_mpa"
+        ),
+        "fyk / proof [MPa]": fatigue_presentation.value(
+            properties, "fytk_mpa"
+        ),
+        "Bond factor": (
+            fatigue_presentation.value(properties, "bond_ratio_xi") or "-"
+        ),
+    }], height=120)
+    st.caption(
+        f"gamma_Ff = {(payload.get('partial_factors') or {}).get('gamma_ff'):g} "
+        "is applied to the cyclic actions; the design S-N curve uses gamma_s."
+    )
+
+    st.markdown("**Bin results**")
+    _fatigue_result_table([
+        {
+            "Bin": row["bin"],
+            "Cycles": row["cycles"],
+            "Status": row["status"],
+            "Long stress [MPa]": row["stress_long_mpa"],
+            "Elastic total [MPa]": row["stress_total_elastic_mpa"],
+            "Fatigue total [MPa]": row["stress_total_mpa"],
+            "Design total [MPa]": row["stress_total_design_mpa"],
+            f"Elastic {_DELTA}{_SIGMA} [MPa]": (
+                row["stress_range_elastic_mpa"]
+            ),
+            f"Fatigue {_DELTA}{_SIGMA} [MPa]": row["stress_range_mpa"],
+            f"Design {_DELTA}{_SIGMA} [MPa]": (
+                row["design_stress_range_mpa"]
+            ),
+            f"{_DELTA}{_SIGMA}Rd [MPa]": row["delta_sigma_rd_mpa"],
+            "N_R": row["cycles_to_failure"],
+            "Miner D": row["damage"],
+            "Yield / proof util. [%]": (
+                None if row["yield_utilisation"] is None
+                else 100.0 * row["yield_utilisation"]
+            ),
+            "Bond factor": row["bond_adjustment"],
+            "Bond method": row["bond_method"],
+        }
+        for row in bin_rows
+    ], height=560)
+    st.caption(
+        "Elastic total and elastic stress range are the direct solver response. "
+        "Fatigue values include the reported bond transformation; design values "
+        "also include the action-level gamma_Ff factor."
+    )
+
+
+def _fatigue_concrete_panel(spectrum):
+    rows = fatigue_presentation.concrete_rows(spectrum)
+    if not rows:
+        st.info("Concrete fatigue is not included in this calculation.")
+        return
+    _fatigue_result_table([
+        {
+            "Fibre": row["fibre_index"],
+            "Source": row["source"],
+            "x [mm]": row["x_mm"],
+            "y [mm]": row["y_mm"],
+            "Miner D": row["damage"],
+            "Stress util. [%]": (
+                None if row["stress_utilisation"] is None
+                else 100.0 * row["stress_utilisation"]
+            ),
+            "Governing": row["governing"],
+            "Utilisation [%]": (
+                None if row["utilisation"] is None
+                else 100.0 * row["utilisation"]
+            ),
+            "Status": row["status"],
+        }
+        for row in rows
+    ], height=520)
+
+    options = [row["fibre_index"] for row in rows]
+    preferred = fatigue_presentation.value(
+        spectrum, "governing_concrete_fibre", options[0]
+    )
+    if preferred not in options:
+        preferred = options[0]
+    key = "_fatigue_result_fibre"
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = preferred
+    selected = st.selectbox(
+        "Concrete fibre",
+        options,
+        key=key,
+        format_func=lambda index: next(
+            (
+                f"C{index} - {row['source']} "
+                f"({row['x_mm']:.1f}, {row['y_mm']:.1f}) mm"
+                for row in rows if row["fibre_index"] == index
+            ),
+            f"C{index}",
+        ),
+        help="Select a fixed fibre for its same-point damage evidence.",
+    )
+    result = fatigue_presentation.result_by_fibre(spectrum, selected)
+    if result is None:
+        st.error("INVALID - Selected concrete fibre is unavailable.")
+        return
+    bin_rows = fatigue_presentation.concrete_bin_rows(result)
+    bin_signature = tuple(
+        tuple(row.get(name) for name in sorted(row))
+        for row in bin_rows
+    )
+    st.plotly_chart(
+        _memo_fig(
+            "fatigue_concrete_damage",
+            (selected, bin_signature),
+            lambda: viz.fatigue_damage_figure(result),
+        ),
+        width="stretch",
+    )
+
+    search = fatigue_presentation.value(spectrum, "concrete_search")
+    if search is not None:
+        st.markdown("**Certified governing-fibre search**")
+        _fatigue_result_table([{
+            "Status": (
+                "CERTIFIED"
+                if fatigue_presentation.value(search, "converged", False)
+                else "INVALID"
+            ),
+            "x [mm]": 1000.0 * fatigue_presentation.value(search, "x_m", 0.0),
+            "y [mm]": 1000.0 * fatigue_presentation.value(search, "y_m", 0.0),
+            "Point D": fatigue_presentation.value(search, "damage"),
+            "Upper bound D": fatigue_presentation.value(
+                search, "upper_damage"
+            ),
+            "Absolute gap": fatigue_presentation.value(search, "absolute_gap"),
+            "Relative gap [%]": 100.0 * fatigue_presentation.value(
+                search, "relative_gap", 0.0
+            ),
+            "Divisions": fatigue_presentation.value(search, "divisions"),
+            "Boxes": fatigue_presentation.value(search, "boxes_evaluated"),
+            "Points": fatigue_presentation.value(search, "points_evaluated"),
+        }], height=120)
+
+    st.markdown("**Selected-fibre bin results**")
+    _fatigue_result_table([
+        {
+            "Bin": row["bin"],
+            "Cycles": row["cycles"],
+            "Status": row["status"],
+            "Long compression [MPa]": row["compression_long_mpa"],
+            "Total compression [MPa]": row["compression_total_mpa"],
+            "Design min [MPa]": row["compression_min_design_mpa"],
+            "Design max [MPa]": row["compression_max_design_mpa"],
+            "Stress ratio": row["stress_ratio"],
+            "Ecd,min": row["e_cd_min"],
+            "Ecd,max": row["e_cd_max"],
+            "N_R": row["cycles_to_failure"],
+            "Miner D": row["damage"],
+            "Stress util. [%]": (
+                None if row["stress_utilisation"] is None
+                else 100.0 * row["stress_utilisation"]
+            ),
+        }
+        for row in bin_rows
+    ], height=560)
+
+
+def _fatigue_spectrum_panel(inp, spectrum):
+    selected_name = str(
+        fatigue_presentation.value(spectrum, "spectrum_name", "")
+    )
+    records = [
+        record
+        for record in fatigue_inputs.spectrum_records(
+            inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
+        )
+        if record[fatigue_inputs.SPECTRUM] == selected_name
+    ]
+    st.markdown("**Entered actions (tension-positive N)**")
+    _fatigue_result_table([
+        {
+            "Bin": record[fatigue_inputs.NAME],
+            "Description": record[fatigue_inputs.DESCRIPTION],
+            "Cycles": record[fatigue_inputs.CYCLES],
+            "Nlong,Ed [kN]": record["n_long_ed_kn"],
+            "Mx,long,Ed [kNm]": record["mx_long_ed_knm"],
+            "My,long,Ed [kNm]": record["my_long_ed_knm"],
+            "Nshort,Ed [kN]": record["n_short_ed_kn"],
+            "Mx,short,Ed [kNm]": record["mx_short_ed_knm"],
+            "My,short,Ed [kNm]": record["my_short_ed_knm"],
+        }
+        for record in records
+    ], height=520)
+    st.markdown("**Elastic solver states**")
+    _fatigue_result_table([
+        {
+            "Bin": row["bin"],
+            "Description": row["description"],
+            "Cycles": row["cycles"],
+            "Status": row["status"],
+            "gamma_Ff": row["gamma_ff"],
+            f"Max design {_DELTA}{_SIGMA} [MPa]": (
+                row["max_design_stress_range_mpa"]
+            ),
+            "Max concrete compression [MPa]": (
+                row["max_concrete_compression_mpa"]
+            ),
+            "Bond method": row["bond_method"],
+        }
+        for row in fatigue_presentation.spectrum_bin_rows(spectrum)
+    ], height=520)
+
+
+def _fatigue_result_basis_panel(payload):
+    basis = payload.get("basis") or {}
+    factors = payload.get("partial_factors") or {}
+    checks = payload.get("checks") or {}
+    parameters = payload.get("concrete_parameters") or {}
+    rows = [
+        ("Edition", payload.get("edition") or "-"),
+        (
+            "Checks",
+            ", ".join(
+                label
+                for key, label in (
+                    ("reinforcement", "reinforcement"),
+                    ("concrete", "concrete"),
+                )
+                if checks.get(key)
+            ) or "-",
+        ),
+        ("Authority", basis.get("authority") or "-"),
+        ("Method", basis.get("method") or "-"),
+        ("Authority reference", payload.get("authority_reference") or "-"),
+        ("Spectrum source", basis.get("spectrum_source") or "-"),
+        ("Cycle-count source", basis.get("cycle_count_source") or "-"),
+        ("Dynamic effects", basis.get("dynamic_effects") or "-"),
+        ("Cycle counting", basis.get("cycle_counting") or "-"),
+        ("Concurrence basis", basis.get("concurrence_basis") or "-"),
+        ("Atypical traffic", basis.get("atypical_traffic") or "-"),
+        ("Approval reference", basis.get("approval_reference") or "-"),
+        ("Authority adjustments", basis.get("authority_adjustments") or "-"),
+        ("gamma_Ff", factors.get("gamma_ff")),
+        ("gamma_s", factors.get("gamma_s")),
+        ("gamma_c,fat", factors.get("gamma_c")),
+        ("t0 [days]", payload.get("t0_days")),
+        ("beta_cc(t0)", parameters.get("beta_cc_t0")),
+        ("fck [MPa]", parameters.get("fck_mpa")),
+        ("Notes", basis.get("notes") or "-"),
+    ]
+    _fatigue_result_table([
+        {"Item": label, "Value": value}
+        for label, value in rows
+        if value is not None
+    ], height=760)
+    references = payload.get("calculation_references") or {}
+    if references:
+        st.markdown("**Calculation references**")
+        _fatigue_result_table([
+            {"Check": key.capitalize(), "Reference": value}
+            for key, value in references.items()
+        ], height=180)
+    details = payload.get("fatigue_detail_basis") or ()
+    if details:
+        st.markdown("**Assigned fatigue details**")
+        _fatigue_result_table([
+            {
+                "ID": item.get("id"),
+                "Name": item.get("name"),
+                "Type": str(item.get("kind") or "").capitalize(),
+                "Preset": item.get("preset"),
+                "N*": item.get("n_star"),
+                "k1": item.get("k1"),
+                "k2": item.get("k2"),
+                f"{_DELTA}{_SIGMA}Rsk [MPa]": (
+                    item.get("delta_sigma_rsk_mpa")
+                ),
+                "Source": item.get("source") or "-",
+            }
+            for item in details
+        ], height=420)
+
+
+def fatigue_view(inp, results, *, stale=False):
+    """Grouped fatigue summary with spectrum and component drill-down."""
+
+    if not inp.get("fatigue_on"):
+        st.info("Enable Fatigue in Analysis settings, then press Calculate.")
+        return
+    payload = (results or {}).get("fatigue")
+    if payload is None:
+        st.info("Press Calculate to assess the grouped spectra.")
+        return
+
+    status = fatigue_presentation.overall_status(payload, stale=stale)
+    governing_name = str(payload.get("governing_spectrum") or "-")
+    utilisation = fatigue_presentation.evidence_number(
+        payload.get("utilisation")
+    )
+    _fatigue_status_callout(
+        status,
+        f"{governing_name} | utilisation {viz.pct(utilisation)}",
+    )
+    warnings = tuple(payload.get("warnings") or ())
+    if warnings:
+        with st.expander(f"Basis warnings ({len(warnings)})", expanded=True):
+            for warning in warnings:
+                st.markdown(f"- {warning}")
+
+    summary_rows = fatigue_presentation.spectrum_rows(payload)
+    _fatigue_result_table([
+        {
+            "Spectrum": row["spectrum"],
+            "Status": row["status"],
+            "Bins": row["bins"],
+            "Reinforcement": row["reinforcement_elements"],
+            "Concrete fibres": row["concrete_fibres"],
+            "Governing": row["governing"],
+            "Utilisation [%]": (
+                None if row["utilisation"] is None
+                else 100.0 * row["utilisation"]
+            ),
+            "Search upper D": row["search_upper_damage"],
+        }
+        for row in summary_rows
+    ], height=360)
+    st.caption(
+        "Each named spectrum is assessed independently; Miner sums are not "
+        "combined across spectrum names."
+    )
+
+    options = [row["spectrum"] for row in summary_rows]
+    if not options:
+        st.error("INVALID - No spectrum results were returned.")
+        return
+    preferred = governing_name if governing_name in options else options[0]
+    key = "_fatigue_result_spectrum"
+    if st.session_state.get(key) not in options:
+        st.session_state[key] = preferred
+    selected_name = st.selectbox(
+        "Spectrum",
+        options,
+        key=key,
+        help="Select a grouped spectrum for detailed results.",
+    )
+    spectrum = fatigue_presentation.spectrum_by_name(payload, selected_name)
+    if spectrum is None:
+        st.error("INVALID - Selected spectrum result is unavailable.")
+        return
+
+    row = next(
+        item for item in summary_rows if item["spectrum"] == selected_name
+    )
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Status", row["status"])
+    m2.metric("Utilisation", viz.pct(row["utilisation"]))
+    m3.metric("Bins", row["bins"])
+    m4.metric("Governing", row["governing"])
+    st.plotly_chart(
+        _memo_fig(
+            "fatigue_utilisation_map",
+            _fatigue_map_signature(inp, spectrum),
+            lambda: viz.fatigue_utilisation_map_figure(
+                inp.get("outer", []),
+                inp.get("holes", []),
+                inp.get("bar_elements", []),
+                inp.get("tendon_elements", []),
+                spectrum,
+            ),
+        ),
+        width="stretch",
+    )
+
+    detail_options = []
+    if fatigue_presentation.items(spectrum, "reinforcement"):
+        detail_options.append("Reinforcement")
+    if fatigue_presentation.items(spectrum, "concrete"):
+        detail_options.append("Concrete")
+    detail_options.extend(["Spectrum bins", "Basis"])
+    detail_key = "_fatigue_result_detail"
+    if st.session_state.get(detail_key) not in detail_options:
+        st.session_state[detail_key] = detail_options[0]
+    detail = st.segmented_control(
+        "Detail",
+        detail_options,
+        key=detail_key,
+        required=True,
+    )
+    if detail == "Reinforcement":
+        _fatigue_reinforcement_panel(payload, spectrum)
+    elif detail == "Concrete":
+        _fatigue_concrete_panel(spectrum)
+    elif detail == "Spectrum bins":
+        _fatigue_spectrum_panel(inp, spectrum)
+    else:
+        _fatigue_result_basis_panel(payload)
 
 
 def _verdict_metric(box, label, value, ok, *, code_applicable=True, help=None):
@@ -8027,6 +8673,11 @@ def _analysis_workspace(inp):
             "plastic_bending_context_sig"
         ]
         if st.session_state["results"]:
+            # Result payloads remain visible after an edit so the engineer can see
+            # the last calculated state. Keep the matching inputs with them: using
+            # live edited geometry or spectra in a stale result view would combine
+            # evidence from two different calculations.
+            st.session_state["result_input_snapshot"] = copy.deepcopy(inp)
             st.session_state["calculation_record"] = {
                 "performed_at_utc": datetime.now(timezone.utc).isoformat(
                     timespec="seconds"
@@ -8035,6 +8686,8 @@ def _analysis_workspace(inp):
                 "source_revision": source_revision(),
                 "input_sha256": _project_input_hash(),
             }
+        else:
+            st.session_state.pop("result_input_snapshot", None)
         # Re-default the Plastic view's neutral-axis state to this result's governing
         # angle. The user can still pick another rotation until the next Calculate.
         st.session_state.pop("pl_state", None)
@@ -8059,6 +8712,18 @@ def _analysis_workspace(inp):
         c_calc.caption(":green[Results up to date]")
     if stale and view in _RESULT_VIEWS:
         st.warning("Inputs changed since the last calculation - press Calculate to update.")
+    result_snapshot = st.session_state.get("result_input_snapshot")
+    if stale and view in _RESULT_VIEWS and result_snapshot is None:
+        # Sessions can survive a Streamlit hot reload. A result produced by an
+        # older Sector version has no matching input snapshot, so rendering it
+        # against today's edited inputs would create internally inconsistent QA
+        # evidence. Keep the payload hidden until a current calculation records
+        # the missing snapshot.
+        st.error(
+            "The stale calculation predates input snapshots. Press Calculate "
+            "before viewing its input-dependent results."
+        )
+        return
     if st.session_state.get("_case_error"):
         st.error(st.session_state["_case_error"])
 
@@ -8069,10 +8734,15 @@ def _analysis_workspace(inp):
         if section_err:
             st.error(section_err)
 
+    # A stale result must be rendered wholly against the inputs that produced it.
+    # Apply this before selecting a case or deciding which checks were enabled so
+    # every result view receives one internally consistent input/result pair.
+    result_inp = result_snapshot if stale else inp
     family = (
         "elastic" if view == "Elastic Results"
         else "plastic" if (
-            view == "Detailing" and inp.get("minimum_reinforcement_on")
+            view == "Detailing"
+            and result_inp.get("minimum_reinforcement_on")
         )
         else "plastic" if view in {
             "Plastic Results", "N-M Interaction", "Shear", "Torsion",
@@ -8080,18 +8750,20 @@ def _analysis_workspace(inp):
         }
         else None
     )
-    view_inp, view_results = inp, results
+    view_inp, view_results = result_inp, results
     if family:
         view_inp, view_results, _entry = _selected_case_context(
-            inp, results, family
+            result_inp, results, family
         )
 
     if view == "Results Overview":
-        results_overview_view(inp, results, stale=stale)
+        results_overview_view(result_inp, results, stale=stale)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
         interaction_view(view_inp, view_results)
+    elif view == "Fatigue Results":
+        fatigue_view(result_inp, results, stale=stale)
     elif view == "Detailing":
         detailing_view(view_inp, view_results, global_results=results)
     elif view == "Shear":

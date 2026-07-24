@@ -5,6 +5,7 @@ Greek glyphs are referenced via chr() so this test file stays ASCII.
 
 from __future__ import annotations
 
+import math
 import pathlib
 import sys
 
@@ -18,6 +19,7 @@ from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 
 _EPS = chr(0x3B5)       # epsilon
 _SIGMA = chr(0x3C3)     # sigma
+_DELTA = chr(0x394)     # uppercase delta
 _PERMILLE = chr(0x2030)  # per-mille sign
 
 
@@ -834,3 +836,403 @@ def test_detailing_figure_highlights_checked_bars_and_dimensions_spacing_pair():
     assert "c = 180.0 mm" in annotation_text
     assert "required = 205.0 mm" in annotation_text
     assert "tension" in annotation_text
+
+
+def _fatigue_figure_fixture():
+    from types import SimpleNamespace as NS
+
+    steel_bin = NS(
+        bin_name="FAT-1",
+        cycles=2.0e5,
+        design_stress_range_mpa=75.0,
+        cycles_to_failure=3.0e6,
+        damage=2.0e5 / 3.0e6,
+    )
+    steel = NS(
+        element_id="R1",
+        bins=(steel_bin,),
+        damage_utilisation=steel_bin.damage,
+        yield_utilisation=0.42,
+        utilisation=0.42,
+    )
+    concrete_bin = NS(
+        bin_name="FAT-1",
+        cycles=2.0e5,
+        damage=0.12,
+    )
+    concrete = NS(
+        fibre_index=4,
+        x_m=0.2,
+        y_m=-0.3,
+        bins=(concrete_bin,),
+        damage=0.12,
+        damage_utilisation=0.12,
+        stress_utilisation=1.08,
+        utilisation=1.08,
+    )
+    search = NS(
+        x_m=0.2,
+        y_m=-0.3,
+        upper_damage=0.13,
+        converged=True,
+    )
+    spectrum = NS(
+        spectrum_name="Traffic A",
+        reinforcement=(steel,),
+        concrete=(concrete,),
+        concrete_search=search,
+    )
+    properties = NS(
+        n_star=2.0e6,
+        k1=5.0,
+        k2=9.0,
+        delta_sigma_rsk_mpa=130.0,
+    )
+    return spectrum, steel, concrete, properties
+
+
+def test_fatigue_utilisation_map_is_qa_traceable_and_not_colour_only():
+    spectrum, _steel, _concrete, _properties = _fatigue_figure_fixture()
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    concrete = next(trace for trace in fig.data if trace.name == "concrete fibres")
+    reinforcement = next(
+        trace for trace in fig.data if trace.name == "reinforcing bar"
+    )
+
+    assert "limit exceeded (x marker)" in names
+    assert list(reinforcement.text) == ["R1"]
+    assert list(concrete.text) == ["C4"]
+    assert list(concrete.marker.symbol) == ["star-square"]
+    assert fig.layout.yaxis.scaleanchor == "x"
+    assert 1.0 in list(fig.layout.coloraxis.colorbar.tickvals)
+    assert "limit = 1.00" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_utilisation_map_marks_a_failing_certified_search_bound():
+    spectrum, _steel, concrete, _properties = _fatigue_figure_fixture()
+    concrete.utilisation = 0.80
+    concrete.stress_utilisation = 0.80
+    spectrum.concrete_search.upper_damage = 1.08
+
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    bound = next(
+        trace for trace in fig.data
+        if trace.name == "certified search bound > 1.00"
+    )
+    concrete_trace = next(
+        trace for trace in fig.data if trace.name == "concrete fibres"
+    )
+    assert "certified search bound > 1.00" in names
+    assert bound.marker.symbol == "x"
+    assert list(concrete_trace.marker.symbol) == ["star"]
+    assert fig.layout.coloraxis.cmax == pytest.approx(1.0)
+    assert max(fig.layout.coloraxis.colorbar.tickvals) == pytest.approx(1.0)
+    assert "upper D = 1.080 &gt; 1.00" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_utilisation_map_caps_and_labels_infinite_failure_evidence():
+    spectrum, steel, concrete, _properties = _fatigue_figure_fixture()
+    steel.utilisation = math.inf
+    steel.damage_utilisation = math.inf
+    concrete.utilisation = math.inf
+    concrete.damage = math.inf
+    spectrum.concrete_search.upper_damage = math.inf
+
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    plotted_colours = [
+        value
+        for trace in fig.data
+        for value in (
+            list(trace.marker.color)
+            if isinstance(getattr(trace.marker, "color", None), (list, tuple))
+            else []
+        )
+    ]
+    assert all(math.isfinite(float(value)) for value in plotted_colours)
+    assert "upper D = inf &gt; 1.00" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_utilisation_map_caps_extreme_finite_failure_evidence():
+    spectrum, steel, concrete, _properties = _fatigue_figure_fixture()
+    steel.utilisation = 1.5e308
+    steel.damage_utilisation = 1.5e308
+    concrete.utilisation = 1.5e308
+    concrete.damage = 1.5e308
+
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    plotted_colours = [
+        float(value)
+        for trace in fig.data
+        for value in (
+            list(trace.marker.color)
+            if isinstance(getattr(trace.marker, "color", None), (list, tuple))
+            else []
+        )
+    ]
+    ticktext = list(fig.layout.coloraxis.colorbar.ticktext)
+    hover = " ".join(
+        str(value)
+        for trace in fig.data
+        for value in (list(trace.customdata) if trace.customdata is not None else [])
+    )
+    assert max(plotted_colours) == pytest.approx(1.10)
+    assert fig.layout.coloraxis.cmax == pytest.approx(1.10)
+    assert ticktext[-1] == ">= 1.10"
+    assert max(map(len, ticktext)) < 12
+    assert "1.500e+308" in hover
+
+
+def test_fatigue_sn_figure_has_both_curves_knee_bins_and_log_axes():
+    _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+
+    fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    characteristic = next(
+        trace for trace in fig.data
+        if trace.name == "characteristic S-N curve"
+    )
+    design = next(trace for trace in fig.data if trace.name == "design S-N curve")
+    applied = next(
+        trace for trace in fig.data if trace.name == "applied spectrum bins"
+    )
+    knee = next(trace for trace in fig.data if trace.name == "design knee N*")
+
+    assert fig.layout.xaxis.type == "log"
+    assert fig.layout.yaxis.type == "log"
+    assert "design S-N curve" in names
+    assert list(applied.text) == ["FAT-1"]
+    assert knee.x[0] == pytest.approx(2.0e6)
+    assert knee.y[0] == pytest.approx(130.0 / 1.15)
+    assert characteristic.y[0] > design.y[0]
+    assert _DELTA + _SIGMA in fig.layout.yaxis.title.text
+    for trace in (characteristic, design, knee, applied):
+        assert _DELTA + _SIGMA in trace.hovertemplate
+
+
+def test_fatigue_sn_figure_explicitly_omits_zero_range_on_log_axes():
+    from types import SimpleNamespace as NS
+
+    _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+    zero = NS(
+        bin_name="FAT-0",
+        cycles=1.0e6,
+        design_stress_range_mpa=0.0,
+        cycles_to_failure=math.inf,
+        damage=0.0,
+    )
+    steel.bins = (*steel.bins, zero)
+
+    fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
+
+    text = " ".join(annotation.text for annotation in fig.layout.annotations)
+    assert "1 zero-range bin omitted" in text
+
+
+def test_fatigue_sn_figure_handles_finite_near_overflow_life():
+    _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+    steel.bins[0].cycles_to_failure = 1.5e308
+
+    fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
+
+    characteristic = next(
+        trace for trace in fig.data
+        if trace.name == "characteristic S-N curve"
+    )
+    assert all(
+        math.isfinite(float(value)) and float(value) > 0.0
+        for value in characteristic.x
+    )
+    assert all(
+        math.isfinite(float(value)) and float(value) > 0.0
+        for value in characteristic.y
+    )
+    assert max(float(value) for value in characteristic.x) <= 1.0e9
+
+
+def test_fatigue_sn_figure_handles_finite_subnormal_life():
+    subnormal = float.fromhex("0x0.0000000000001p-1022")
+    _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+    steel.bins[0].cycles_to_failure = subnormal
+
+    fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
+
+    characteristic = next(
+        trace for trace in fig.data
+        if trace.name == "characteristic S-N curve"
+    )
+    design = next(trace for trace in fig.data if trace.name == "design S-N curve")
+    applied = next(
+        trace for trace in fig.data if trace.name == "applied spectrum bins"
+    )
+    assert min(float(value) for value in characteristic.x) >= 1.0e3
+    for trace in (characteristic, design):
+        assert all(
+            math.isfinite(float(value)) and float(value) > 0.0
+            for value in trace.y
+        )
+    assert "4.941e-324" in str(applied.customdata[0][1])
+
+
+def test_fatigue_damage_figure_shows_bin_cumulative_and_limit():
+    _spectrum, steel, _concrete, _properties = _fatigue_figure_fixture()
+
+    fig = viz.fatigue_damage_figure(steel)
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    assert names == ["bin damage", "cumulative damage"]
+    assert list(fig.data[0].x) == ["FAT-1"]
+    assert fig.data[1].y[-1] == pytest.approx(2.0e5 / 3.0e6)
+    assert any(
+        shape.type == "line" and shape.y0 == 1.0 and shape.y1 == 1.0
+        for shape in fig.layout.shapes
+    )
+
+
+def test_fatigue_damage_figure_uses_log_scale_for_small_contributions():
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        element_id="R1",
+        bins=(
+            NS(bin_name="FAT-1", cycles=1.0e6, damage=1.0e-8),
+            NS(bin_name="FAT-2", cycles=2.0e6, damage=2.0e-7),
+        ),
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    assert fig.layout.yaxis.type == "log"
+    assert "log scale" in fig.layout.yaxis.title.text
+    assert list(fig.data[0].y) == pytest.approx([1.0e-8, 2.0e-7])
+    assert fig.data[1].y[-1] == pytest.approx(2.1e-7)
+
+
+def test_fatigue_damage_figure_caps_and_labels_unbounded_damage():
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        element_id="R1",
+        bins=(
+            NS(bin_name="FAT-1", cycles=1.0e6, damage=0.20),
+            NS(bin_name="FAT-2", cycles=2.0e6, damage=math.inf),
+        ),
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    assert all(math.isfinite(float(value)) for value in fig.data[0].y)
+    assert all(math.isfinite(float(value)) for value in fig.data[1].y)
+    assert list(fig.data[0].text) == ["", "inf"]
+    assert "Unbounded Miner damage" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_damage_figure_caps_overflowed_cumulative_sum():
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        element_id="R1",
+        bins=(
+            NS(bin_name="FAT-1", cycles=1.0e6, damage=1.0e308),
+            NS(bin_name="FAT-2", cycles=2.0e6, damage=1.0e308),
+        ),
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    cumulative = next(
+        trace for trace in fig.data
+        if trace.name == "cumulative damage"
+    )
+    assert all(math.isfinite(float(value)) for value in cumulative.y)
+    assert list(cumulative.text) == ["", "inf"]
+    assert "Unbounded Miner damage" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_figures_escape_user_controlled_plotly_text():
+    spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+    spectrum.spectrum_name = "Traffic <b>A</b> & B"
+    steel.element_id = "R<br>1 & 2"
+    steel.bins[0].bin_name = "FAT <i>1</i> & peak"
+    bar = {"id": steel.element_id, "x_mm": 0.0, "y_mm": -220.0}
+
+    utilisation = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [bar],
+        [],
+        spectrum,
+        title=f"Fatigue utilisation - {spectrum.spectrum_name}",
+    )
+    reinforcement = next(
+        trace for trace in utilisation.data
+        if trace.name == "reinforcing bar"
+    )
+    assert "Traffic &lt;b&gt;A&lt;/b&gt; &amp; B" in (
+        utilisation.layout.title.text
+    )
+    assert list(reinforcement.text) == ["R&lt;br&gt;1 &amp; 2"]
+    assert "R&lt;br&gt;1 &amp; 2" in reinforcement.customdata[0]
+
+    sn = viz.fatigue_sn_figure(
+        steel,
+        properties,
+        gamma_s=1.15,
+        title=f"S-N assessment - {steel.element_id}",
+    )
+    applied = next(
+        trace for trace in sn.data
+        if trace.name == "applied spectrum bins"
+    )
+    assert "R&lt;br&gt;1 &amp; 2" in sn.layout.title.text
+    assert list(applied.text) == ["FAT &lt;i&gt;1&lt;/i&gt; &amp; peak"]
+    assert "FAT &lt;i&gt;1&lt;/i&gt; &amp; peak" in applied.customdata[0][0]
+
+    damage = viz.fatigue_damage_figure(
+        steel,
+        title=f"Miner damage - {steel.element_id}",
+    )
+    assert "R&lt;br&gt;1 &amp; 2" in damage.layout.title.text
+    assert list(damage.data[0].x) == [
+        "FAT &lt;i&gt;1&lt;/i&gt; &amp; peak"
+    ]

@@ -21,4 +21,4 @@ def test_issued_report_renders_every_page_and_retains_expected_content():
     pdf = build_fixture_pdf()
     validate_pdf_content(pdf)
     pages = render_pdf(pdf)
-    validate_rendered_pages(pages)
+    validate_rendered_pages(pages, require_document_control=True)

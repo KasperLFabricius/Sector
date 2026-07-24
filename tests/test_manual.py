@@ -194,7 +194,8 @@ def test_manual_documents_project_recovery_and_ownership():
     pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
     assert "Author: Kasper Lindskov Fabricius" in pdf_text
     assert "licensed to Sweco Danmark A/S for internal use" in pdf_text
-    assert "*" not in pdf_text
+    assert "**" not in pdf_text
+    assert "*Custom" not in pdf_text
 
 
 def test_manual_documents_shared_strut_angle_and_stirrup():
@@ -235,7 +236,7 @@ def test_manual_documents_native_case_tables_results_and_report():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for expected in (
         "Plastic / capacity",
-        "names are unique across both tables",
+        "names are unique across the Plastic/capacity, Elastic and fatigue-bin",
         "Stress limits and/or Crack width",
         "zero means not evaluated",
         "single global creep coefficient",
@@ -246,6 +247,44 @@ def test_manual_documents_native_case_tables_results_and_report():
         "bookmarked detail chapters",
     ):
         assert expected in text
+
+
+def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "Fatigue Results",
+        "Fatigue details",
+        "Spectrum basis",
+        "control-, construction- or consequence-class multiplier",
+        "gamma_{Ff}",
+        r"\\Delta\\sigma_{Ed,i}",
+        "N_{R,i}",
+        r"D=\\sum_i",
+        "same fibre",
+        "conservative upper bound",
+        "DS/EN 1992-1-1:2023",
+        "DS/EN 1992-2:2005/AC:2008",
+        "each spectrum is independent",
+        "Shear and torsion fatigue are not included",
+    ):
+        assert expected in text
+    assert "termination reason" not in text
+
+
+def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
+    result, properties, gamma_s = manual.example_fatigue_reinforcement()
+    assert result["element_id"] == "R1"
+    assert len(result["bins"]) == 3
+    assert all(item["cycles_to_failure"] > item["cycles"] for item in result["bins"])
+    assert sum(item["damage"] for item in result["bins"]) < 1.0
+    sn = manual.fig_fatigue_sn()
+    damage = manual.fig_fatigue_damage()
+    assert any(trace.name == "design S-N curve" for trace in sn.data)
+    assert any(trace.name == "applied spectrum bins" for trace in sn.data)
+    assert any(trace.name == "cumulative damage" for trace in damage.data)
+    assert properties["delta_sigma_rsk_mpa"] / gamma_s == pytest.approx(
+        139.1304348
+    )
 
 
 def test_manual_documents_longitudinal_minimum_reinforcement_and_spacing_scope():

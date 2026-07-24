@@ -34,6 +34,7 @@ from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
 from sector import templates
 from sector.codes import fctm
+from sector.fatigue import steel_fatigue_life
 from sector.materials import Concrete, MildSteel, Prestress
 from sector.plastic import solve_plastic
 from sector.section import Section
@@ -182,6 +183,62 @@ def fig_beam_cracked():
     return viz.section_figure(ex["outer"], ex["holes"], bar_xy, na_line=na,
                               zones=zones, title="Cracked section (Stage II)",
                               show_labels=False, height=460, scale=_MM, unit="mm")
+
+
+def example_fatigue_reinforcement() -> tuple[dict, dict, float]:
+    """A compact grouped-spectrum example for the fatigue methodology figures."""
+
+    properties = {
+        "n_star": 2.0e6,
+        "k1": 5.0,
+        "k2": 9.0,
+        "delta_sigma_rsk_mpa": 160.0,
+    }
+    gamma_s = 1.15
+    inputs = (
+        ("Heavy", 1.0e5, 155.0),
+        ("Medium", 1.0e6, 110.0),
+        ("Frequent", 5.0e6, 70.0),
+    )
+    bins = []
+    for name, cycles, design_range in inputs:
+        life = steel_fatigue_life(
+            design_range,
+            n_star=properties["n_star"],
+            k1=properties["k1"],
+            k2=properties["k2"],
+            delta_sigma_rsk_mpa=properties["delta_sigma_rsk_mpa"],
+            gamma_s=gamma_s,
+            # The example range already comes from the action-level
+            # long + gamma_Ff * short solve.
+            gamma_ff=1.0,
+        )
+        bins.append({
+            "bin_name": name,
+            "cycles": cycles,
+            "design_stress_range_mpa": design_range,
+            "cycles_to_failure": life.cycles,
+            "damage": cycles / life.cycles,
+        })
+    return {"element_id": "R1", "bins": tuple(bins)}, properties, gamma_s
+
+
+def fig_fatigue_sn():
+    result, properties, gamma_s = example_fatigue_reinforcement()
+    return viz.fatigue_sn_figure(
+        result,
+        properties,
+        gamma_s,
+        title="Reinforcement fatigue: S-N assessment",
+    )
+
+
+def fig_fatigue_damage():
+    result, _properties, _gamma_s = example_fatigue_reinforcement()
+    return viz.fatigue_damage_figure(
+        result,
+        title="Reinforcement fatigue: Miner damage",
+    )
 
 
 def _schematic():
@@ -381,7 +438,8 @@ def manual_blocks() -> list:
        "prestressed sections. You give it an arbitrary polygonal concrete outline "
        "(with any number of voids), the mild-steel bars and prestressing tendons, "
        "and the material laws. It returns plastic capacity, cracked-section elastic "
-       "response, optional acceptance checks and a QA report.")
+       "response, grouped fatigue checks, optional acceptance checks and a QA "
+       "report.")
     md("The section and material-law diagrams update as you type; the result "
        "views recompute when you press *Calculate*.")
     call("limit", "Sector analyses **one plane cross-section**. It assumes plane "
@@ -404,12 +462,14 @@ def manual_blocks() -> list:
        "(tension-ignored) section, with creep through the modular ratio.\n"
        "- **Acceptance criteria.** User-defined stress limits, cracking threshold, "
        "transformed section properties and crack width.\n"
+       "- **Grouped fatigue.** Reinforcement S-N/Miner and concrete compression "
+       "checks from named spectra of sustained states and cyclic increments.\n"
        "- **Longitudinal detailing.** Edition-specific minimum-reinforcement "
        "checks per selected capacity case and a section-wide clear-spacing check.\n"
-       "- **Multi-case review and reporting.** Named Plastic/capacity and Elastic "
-       "rows are summarised together, remain selectable individually, and are "
-       "included in a QA PDF with worked formulas and code references. A project "
-       "file saves the whole input set.")
+       "- **Multi-case review and reporting.** Named Plastic/capacity, Elastic and "
+       "fatigue rows are summarised together, remain selectable individually, and "
+       "are included in a QA PDF with formulas and code references. A project file "
+       "saves the whole input set.")
 
     h1("Quick start")
     md("1. **Define the section.** Open the *Section* panel and either edit the "
@@ -419,10 +479,11 @@ def manual_blocks() -> list:
        "and one or more mild-steel or prestress materials, then assign their IDs "
        "to the reinforcement rows.\n"
        "3. **Choose the analyses.** In *Analysis settings* pick Plastic, "
-       "Elastic or Both and set the applicable global acceptance limits.\n"
-       "4. **Enter the cases.** Add uniquely named rows to the Plastic/capacity "
-       "and Elastic tables. Select stress and/or crack-width acceptance on each "
-       "Elastic row.\n"
+       "Elastic or Both, enable Fatigue if required, and set the applicable "
+       "criteria and factors.\n"
+       "4. **Enter the cases.** Add uniquely named rows to the Plastic/capacity, "
+       "Elastic and grouped-fatigue tables. Select stress and/or crack-width "
+       "acceptance on each Elastic row.\n"
        "5. **Calculate.** Open *Analysis*, review *Results Overview*, then select "
        "a case in each detailed result view.\n"
        "6. **Export.** Generate the PDF report or download the project file.")
@@ -460,6 +521,8 @@ def manual_blocks() -> list:
        "interaction diagram, not just the two principal directions.\n"
        "- **Crack-width verification.** Check the service crack width against a "
        "limit, to whichever code edition applies to the job.\n"
+       "- **Grouped fatigue verification.** Check several independently defined "
+       "spectra and review each bar, tendon, concrete fibre and spectrum bin.\n"
        "- **Comparing layouts.** Change the bars or the concrete grade and read the "
        "capacity and crack width straight back.")
 
@@ -480,6 +543,7 @@ def manual_blocks() -> list:
            ["Plastic Results", "Selected case: M-M envelope and utilisation"],
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
+           ["Fatigue Results", "All spectra; selected spectrum, element, fibre and bin evidence"],
            ["Detailing", "Selected case: minimum reinforcement; section-wide spacing"],
            ["Shear", "Selected Plastic case: Vx/Vy summary and directional details"],
            ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
@@ -516,8 +580,9 @@ def manual_blocks() -> list:
     md("Area controls section stiffness and resistance; diameter controls detailing "
        "and crack-spacing geometry. *Independent* is therefore appropriate when "
        "one point represents a non-circular or grouped steel area. Material, fatigue-"
-       "detail and group IDs are assignments carried with the element; blank optional "
-       "assignments are reported as such. **Lap / bundle ID** declares elements that "
+       "detail and group IDs are assignments carried with the element. A fatigue "
+       "detail is required on every bar and tendon when reinforcement fatigue is "
+       "enabled; otherwise it is optional. **Lap / bundle ID** declares elements that "
        "belong to the same lap or bundle for the spacing review; a geometric "
        "shortfall then becomes **Review**, never an automatic pass. Half-typed rows "
        "are ignored until complete.")
@@ -642,6 +707,39 @@ def manual_blocks() -> list:
     call("standard", "The DK NA reports the fine and the coarse crack system side "
          "by side, each for the long-term and short-term load (four crack widths). "
          "Part C derives every model in full with the worked crack width.")
+    h2("Grouped fatigue")
+    md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
+       "**Reinforcement** and/or **Concrete**. Enter the complete project factors "
+       "$\\gamma_{Ff}$, $\\gamma_s$ and $\\gamma_{c,fat}$. Sector applies no "
+       "control-, construction- or consequence-class multiplier.")
+    table(["Input", "Use"],
+          [["$\\gamma_{Ff}$", "Factors the cyclic action increment before the elastic solve"],
+           ["$\\gamma_s$", "Reduces the reinforcement S-N resistance and yield/proof limit"],
+           ["$\\gamma_{c,fat}$", "Reduces the concrete fatigue strength"],
+           ["$\\beta_{cc}(t_0)$, $t_0$", "Concrete strength at the start of cyclic loading"],
+           ["$k_1$, $C$", "2005 concrete-strength coefficient and concrete fatigue-life coefficient"]])
+    md("The **Fatigue details** material tab holds named resistance definitions. "
+       "Assign one stable detail ID to every checked bar or tendon. Standard presets "
+       "lock $N^*$, the two S-N slopes, the characteristic reference range and its "
+       "source; Custom / imported makes them editable. Diameter-dependent and "
+       "bent-bar reductions are applied where the selected preset requires them. "
+       "For a section combining mild reinforcement and bonded tendons, each tendon "
+       "also needs the bond ratio $\\xi$ and equivalent tendon diameter.")
+    md("The **Spectrum basis** records the authority method, spectrum and cycle-"
+       "count sources, dynamic effects, cycle-counting method, concurrence, atypical "
+       "traffic, approvals and authority adjustments. These are provenance fields: "
+       "they do not alter actions, cycles or resistance automatically. Missing "
+       "required evidence produces **Review**, not an unstated assumption.")
+    table(["Fatigue edition", "Implemented resistance basis"],
+          [["DS/EN 1992-1-1:2005",
+            "Steel 6.8.4 and Tables 6.3N/6.4N; corrected concrete expression from DS/EN 1992-2 6.106"],
+           ["DS/EN 1992-1-1:2005 + DK NA:2024",
+            "Same calculation models, with the complete Danish project factors entered explicitly"],
+           ["DS/EN 1992-1-1:2023",
+            "Reinforcement Annex E.5 and Tables E.1/E.2; concrete Annex E.7-E.8"]])
+    call("limit", "Each named spectrum is assessed independently. Sector does not "
+         "combine spectra or derive traffic cycles, dynamic allowance or lane/track "
+         "concurrence. Fatigue from shear and torsion is not included.")
     h2("Shear (Vx,Ed and Vy,Ed)")
     md("With **Check shear capacity** on, Sector computes the design shear "
        "resistance $V_{Rd,c}$ of a member **not** requiring shear reinforcement "
@@ -759,21 +857,29 @@ def manual_blocks() -> list:
        "The ratios of every material used in the section are reported.")
 
     h1("Loads")
-    md("Loads are entered in two editable tables. Every active row needs a name, "
-       "and names are unique across both tables; use the optional description for "
-       "the project classification, combination or source. Add, delete, paste and "
-       "reorder rows directly in the tables.")
+    md("Loads are entered in three editable tables. Every active row has one name, "
+       "and names are unique across the Plastic/capacity, Elastic and fatigue-bin "
+       "rows. Use the optional description for the project classification, "
+       "combination or source. Add, delete, paste and reorder rows directly in the "
+       "tables.")
     table(["Table", "Per-row fields", "Row-specific rule"],
           [["Plastic / capacity", "$N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$, $V_{x,Ed}$, $V_{y,Ed}$, $T_{Ed}$",
             "Zero shear/torsion skips that component; minimum reinforcement is selected per row"],
            ["Elastic", "Long- and short-term $N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$",
-            "Tick Stress limits and/or Crack width for the row"]])
+            "Tick Stress limits and/or Crack width for the row"],
+           ["Grouped fatigue", "Spectrum, bin name, cycles; long- and short-term $N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$",
+            "Repeated Spectrum labels form one Miner sum; each spectrum is independent"]])
     md("The Elastic long-term and short-term components are solved together. The "
        "single global creep coefficient $\\varphi$ applies to all Elastic rows. "
        "Stress limits (percent of $f_{ck}$ / $f_{yk}$ / $f_{pk}$), the crack-width "
        "limit (mm) and their stated source are also global; the row tick marks decide "
        "which acceptance checks are issued. Crack width includes both the long-term "
        "and total long-plus-short response for each selected row.")
+    md("A fatigue bin uses the long-term fields for the sustained/basic state and "
+       "the short-term fields for the cyclic increment. Sector solves both states "
+       "with the Elastic solver; their stress difference is the range. Reuse one "
+       "**Spectrum** label for all bins that belong to the same Miner sum. Spectrum "
+       "labels that differ only by letter case are rejected.")
     call("tip", "Use stable case names from the project combination register. They "
          "appear unchanged in the result selector, summary and PDF.")
 
@@ -796,6 +902,14 @@ def manual_blocks() -> list:
        "short-term and total states, with the peak concrete compression and the "
        "neutral-axis position. When cracking is checked the section properties "
        "(uncracked and cracked) and the crack width follow.")
+    h2("Fatigue results")
+    md("The **Fatigue Results** view first lists every spectrum and its governing "
+       "utilisation. Select a spectrum to see the section utilisation map, then "
+       "open **Reinforcement**, **Concrete**, **Spectrum bins** or **Basis**. "
+       "Element and fibre selectors expose the governing and all non-governing "
+       "results. The tables retain stresses, ranges, S-N life, per-bin damage, "
+       "yield/proof checks, concrete stress ratios, solver convergence, resistance "
+       "sources and the certified concrete-search bound.")
     h2("Detailing results")
     md("The **Detailing** view gives a concise status for minimum reinforcement and "
        "clear spacing. The section figure highlights the bars included in the "
@@ -818,10 +932,12 @@ def manual_blocks() -> list:
        "$V$-$T$ envelope diagram, and the additional longitudinal steel demand.")
     h2("PDF report")
     md("The report reproduces the complete named case register, descriptions, "
-       "signed actions and per-Elastic-row acceptance selections. Its overview "
-       "uses the same statuses and governing rules as the UI. Every computed case "
-       "then receives its own bookmarked detail chapters; zero-action checks remain "
-       "visible as not applicable in the overview and are not given a false result.")
+       "signed actions, per-Elastic-row acceptance selections and every fatigue "
+       "spectrum bin. Its overview uses the same statuses and governing rules as "
+       "the UI. Every computed case is covered in the bookmarked detail chapters; the "
+       "fatigue chapter includes all spectra, figures, element/fibre results, bin "
+       "evidence, factors, references and provenance. Zero-action checks remain "
+       "visible as not applicable and are not given a false result.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -1095,6 +1211,95 @@ def manual_blocks() -> list:
          "each for the long-term and short-term load; the report writes out the "
          "governing worked crack width.")
 
+    h1("Grouped fatigue")
+    h2("Elastic stress ranges")
+    md("Each spectrum bin contains a sustained/basic action $S_l$, a cyclic "
+       "increment $S_s$ and a cycle count $n_i$. Sector uses the cracked Elastic "
+       "solver twice and applies the action factor to the increment:\n\n"
+       "$$\\Delta\\sigma_{Ed,i}=\\left|\\sigma(S_l+\\gamma_{Ff}S_s)"
+       "-\\sigma(S_l)\\right|.$$\n\n"
+       "Long-term actions use $n_l$ and the increment uses $n_s$. Prestress and "
+       "element-specific elastic moduli follow the assigned material definitions. "
+       "The unfactored total state is retained beside the design state for QA.")
+    call("concept", "$\\gamma_{Ff}$ is applied once, at action level. The resulting "
+         "design stress range enters the S-N or concrete-life check; it is not "
+         "applied again to the resistance curve.")
+
+    h2("Reinforcement S-N and Miner check")
+    md("For each bar or tendon, the selected fatigue detail supplies $N^*$, slopes "
+       "$k_1$ and $k_2$, and the characteristic reference range "
+       "$\\Delta\\sigma_{Rsk}$. The design knee is\n\n"
+       "$$\\Delta\\sigma_{Rd}=\\frac{\\Delta\\sigma_{Rsk}}{\\gamma_s},$$\n\n"
+       "and the life of bin $i$ is\n\n"
+       "$$N_{R,i}=N^*\\left(\\frac{\\Delta\\sigma_{Rd}}"
+       "{\\Delta\\sigma_{Ed,i}}\\right)^{k},$$\n\n"
+       "with $k=k_1$ above the knee and $k=k_2$ below it. Zero range gives infinite "
+       "life. Diameter and bent-bar adjustments follow the selected detail preset.")
+    md("Damage is accumulated within one named spectrum:\n\n"
+       "$$D=\\sum_i\\frac{n_i}{N_{R,i}}\\leq1.0.$$\n\n"
+       "The long-term and design-total stresses are also checked against the "
+       "element's tension or compression yield/proof strength divided by "
+       "$\\gamma_s$. The larger of Miner damage and yield/proof utilisation governs.")
+    fig(fig_fatigue_sn, "Two-slope characteristic and design S-N curves. Each "
+        "labelled marker is one applied spectrum bin; logarithmic axes retain the "
+        "wide cycle and stress ranges without visual distortion.")
+    fig(fig_fatigue_damage, "Per-bin and cumulative Miner damage for the same "
+        "element. The cumulative line and $D=1.00$ limit make the governing "
+        "contribution and remaining margin visible. The y-axis changes to a "
+        "logarithmic scale for low-damage spectra so small contributions remain "
+        "readable.")
+
+    h2("Mixed mild reinforcement and bonded tendons")
+    md("When both occur in one section, Sector applies the edition-specific bond "
+       "model. The 2005 method applies the 6.8.2(2) bond correction $\\eta$ to the "
+       "mild-reinforcement range and leaves the tendon range unadjusted. The 2023 "
+       "method resolves the section using the equivalent tendon area from 10.3(2). "
+       "The tendon detail therefore requires $\\xi$ and an equivalent diameter. "
+       "The applied method and adjustment are reported for every bin.")
+
+    h2("Concrete compression fatigue")
+    md("The fatigue strength is edition-specific. For the 2005 family Sector uses "
+       "the corrected DS/EN 1992-2 expression\n\n"
+       "$$f_{cd,fat}=k_1\\,\\beta_{cc}(t_0)\\,\\alpha_{cc}"
+       "\\frac{f_{ck}}{\\gamma_{c,fat}}\\left(1-\\frac{f_{ck}}{250}\\right).$$\n\n"
+       "For 2023:\n\n"
+       "$$\\eta_{cc}=\\min\\left[\\left(\\frac{40}{f_{ck}}\\right)^{1/3},1\\right],"
+       "\\quad\\eta_{cc,fat}=\\min(0.85\\eta_{cc},0.8),\\quad"
+       "f_{cd,fat}=\\beta_{cc}(t_0)\\frac{f_{ck}}{\\gamma_{c,fat}}"
+       "\\eta_{cc,fat}.$$")
+    md("At one fixed concrete fibre, let $\\sigma_{max}$ and $\\sigma_{min}$ be the "
+       "larger and smaller design compression magnitudes for a bin, "
+       "$E_{max}=\\sigma_{max}/f_{cd,fat}$ and "
+       "$R=\\sigma_{min}/\\sigma_{max}$. The implemented life relation is\n\n"
+       "$$\\log_{10}N_R=C\\frac{1-E_{max}}{\\sqrt{1-R}}.$$\n\n"
+       "Miner damage is summed at that same fibre; maxima from different locations "
+       "are never combined into a fictitious history. Direct stress utilisation "
+       "$E_{max}\\leq1.0$ is checked in parallel.")
+    md("Sector checks the section vertices and runs an adaptive branch-and-bound "
+       "search over the concrete area. The result includes the largest evaluated "
+       "damage, a conservative upper bound, the absolute and relative gap, sample "
+       "and box counts, and convergence. The upper bound governs "
+       "acceptance, so an unresolved potentially critical region cannot pass.")
+
+    h2("Edition and scope summary")
+    table(["Edition", "Reinforcement", "Concrete", "Mixed bond"],
+          [["DS/EN 1992-1-1:2005",
+            "6.8.4; Tables 6.3N/6.4N",
+            "Corrected DS/EN 1992-2:2005/AC:2008 6.106",
+            "6.8.2(2) eta correction"],
+           ["DS/EN 1992-1-1:2005 + DK NA:2024",
+            "Same method; explicit Danish project factors",
+            "Same corrected method; explicit Danish project factors",
+            "6.8.2(2) eta correction"],
+           ["DS/EN 1992-1-1:2023",
+            "Annex E.5; Tables E.1/E.2",
+            "Annex E.7-E.8",
+            "10.3(2) equivalent tendon area"]])
+    call("limit", "Each spectrum forms its own Miner sum and result. Sector does "
+         "not combine spectra. The fatigue implementation covers normal force and "
+         "biaxial bending through the Elastic solver; shear- and torsion-induced "
+         "fatigue are outside the present scope.")
+
     h1("Shear resistance without shear reinforcement")
     md("The design shear resistance of a member not requiring shear reinforcement "
        "(EN 1992-1-1 6.2.2(1)) is\n\n"
@@ -1276,15 +1481,17 @@ def manual_blocks() -> list:
          "for a capacity-only run with no applied shear or torsion.")
 
     h1("Equilibrium check")
-    md("Both analyses carry a convergence flag. The plastic solve balances the "
+    md("Every numerical solve carries a convergence flag. The plastic solve balances the "
        "axial force **at each swept angle** to a tight residual, "
        "$|\\sum F - N|\\le 10^{-6}\\max(1,|N|)$; an angle whose axial force cannot "
        "be balanced -- the axial demand exceeds what the section can carry there -- "
        "is marked not converged. Such a point is still drawn on the envelope (so an "
        "infeasible or partial sweep is visible rather than hidden), and the "
-       "run records whether every point converged. The elastic solve iterates the "
+       "run records whether every point converged. Each Elastic state iterates the "
        "compression zone until the transformed resultants match the applied "
-       "$(N,M_x,M_y)$.")
+       "$(N,M_x,M_y)$. A fatigue spectrum converges only when its characteristic "
+       "and action-factored Elastic state in every bin converge; a non-converged "
+       "state cannot pass.")
 
     # =====================================================================
     # PART D - REFERENCE
@@ -1303,6 +1510,10 @@ def manual_blocks() -> list:
            ["Cracking and crack width (2005)", "DS/EN 1992-1-1 7.3"],
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
+           ["Reinforcement fatigue (2005)", "DS/EN 1992-1-1:2005+A1:2014 6.8.2, 6.8.4 and Tables 6.3N/6.4N"],
+           ["Concrete fatigue (2005)", "DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
+           ["Reinforcement fatigue (2023)", "DS/EN 1992-1-1:2023 Annex E.5 and Tables E.1/E.2"],
+           ["Concrete fatigue (2023)", "DS/EN 1992-1-1:2023 Annex E.7-E.8"],
            ["Minimum reinforcement (2005 / DK NA)", "DS/EN 1992-1-1 9.2.1.1(1), Formula (9.1N); DK NA:2024"],
            ["Minimum reinforcement (2023)", "DS/EN 1992-1-1:2023 12.2(2), Formulae (12.1)-(12.2)"],
            ["Clear spacing (2005 / 2023)", "DS/EN 1992-1-1 8.2(2); DS/EN 1992-1-1:2023 11.2(2)"],
@@ -1323,9 +1534,14 @@ def manual_blocks() -> list:
        "material reaches its strain limit (concrete crushing or steel/tendon "
        "rupture); no material is driven past its limit.\n"
        "- **Section and resistance scope.** Sector includes section bending, "
-       "elastic/crack response, shear, torsion and combined M-V-T checks where "
-       "the selected method is supported. It does not model member buckling, "
-       "second-order response, deflection, connections or global load paths.\n"
+       "elastic/crack response, grouped normal-force/bending fatigue, shear, "
+       "torsion and combined M-V-T checks where the selected method is supported. "
+       "It does not model member buckling, second-order response, deflection, "
+       "connections or global load paths.\n"
+       "- **Fatigue spectrum ownership.** Named spectra are independent. The user "
+       "owns the cycle spectrum, dynamic effects, concurrence, authority "
+       "adjustments and approvals; provenance fields document them but do not "
+       "modify the calculation. Shear and torsion fatigue are not included.\n"
        "- **Detailing scope.** The longitudinal check does not credit tendons and "
        "does not verify the DK NA high-web side-face rule. The clear-spacing check "
        "uses the entered section-plane geometry; anchorage, lap length, bundle "
@@ -1341,6 +1557,13 @@ def manual_blocks() -> list:
            ["$M_x$, $M_y$", "Bending moments about the x and y axes; kNm"],
            ["$\\varphi_{NA}$", "Neutral-axis sweep angle from +y; degrees"],
            ["$V_{Ed}$", "Applied design shear action; kN"],
+           ["$\\Delta\\sigma_{Ed}$", "Action-factored fatigue stress range; MPa"],
+           ["$\\Delta\\sigma_{Rsk}$", "Characteristic S-N reference range; MPa"],
+           ["$N^*$", "Reference cycle count at the S-N curve knee"],
+           ["$k_1$, $k_2$", "S-N slopes above and below the knee"],
+           ["$D$", "Palmgren-Miner cumulative damage; limit 1.0"],
+           ["$\\gamma_{Ff}$", "Partial factor on the cyclic fatigue action increment"],
+           ["$f_{cd,fat}$", "Design concrete compressive fatigue strength; MPa"],
            ["$A_{sl}$", "Selected tension-side longitudinal reinforcement; mm2"],
            ["$A_{s,min}$", "Required longitudinal minimum reinforcement; mm2"],
            ["$b_t$", "Mean width of the bending tension zone; mm"],
