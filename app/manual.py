@@ -796,9 +796,11 @@ def manual_blocks() -> list:
        "$V_{Rd,c}$ (which is still shown, to indicate whether links are strictly "
        "required). The link inputs are the effective legs for each direction, the bar diameter and the "
        "spacing $s$ (so $A_{sw} = n_{legs}\\,\\pi\\phi^2/4$), the link yield "
-       "$f_{ywk}$, and the strut-angle bounds $\\cot\\theta_{min}$ / "
-       "$\\cot\\theta_{max}$. Sector auto-optimises $\\theta$ within those bounds to "
-       "maximise $V_{Rd}$.")
+       "$f_{ywk}$, and one compression-strut range $\\cot\\theta_{min}$ / "
+       "$\\cot\\theta_{max}$ entered under **Links / stirrups**. A stand-alone "
+       "capacity check maximises $V_{Rd}$ within that range. When live member "
+       "actions are combined, Sector selects one angle within the same range to "
+       "minimise the governing utilisation.")
     call("standard", "EN 1992-1-1 6.7N (and the DK NA:2024 6.7a NA for class B/C "
          "steel) allow $1 \\leq \\cot\\theta \\leq 2.5$; the DK NA takes the strut "
          "factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 NA) rather "
@@ -811,8 +813,9 @@ def manual_blocks() -> list:
        "$T_{Rd,s}$, the strut-crushing $T_{Rd,max}$, the cracking $T_{Rd,c}$, the "
        "utilisation $T_{Ed}/T_{Rd}$ and the required longitudinal steel "
        "$\\sum A_{sl}$. The signed $T_{Ed}$ is entered per Plastic/capacity row; "
-       "zero means not evaluated for that row. The shared inputs include an optional "
-       "wall-thickness override $t_{ef}$ (0 = auto), and the strut-angle bounds. "
+       "zero means not evaluated for that row. Torsion has an optional wall-thickness "
+       "override $t_{ef}$ (0 = auto). The compression-strut range is entered once "
+       "under **Links / stirrups** and is shared with shear. "
        "The tube $A$, $u$, $t_{ef}$, $A_k$ and $u_k$ are derived from the outline. "
        "The **stirrup is the shared closed stirrup** (defined once under Links / "
        "stirrups, and used by shear too -- one leg of the loop carries the torsion "
@@ -829,9 +832,8 @@ def manual_blocks() -> list:
          "are defined by global centre x/y and b/h (6.3.1(3)). Sector checks that their "
          "non-overlapping union equals the concrete net area, stays inside the outline "
          "and does not enter a void; until that geometric partition is valid, torsion "
-         "and dependent interaction are not evaluated. Older projects that stored only "
-         "sub-tube dimensions must add the centre coordinates before recalculation. "
-         "Multi-cell sections likewise require subdivision. Strut bounds outside the "
+         "and dependent interaction are not evaluated. Multi-cell sections likewise "
+         "require subdivision. Strut bounds outside the "
          "code range remain visible for exploration but receive no code verdict.")
     h2("Combined M-V-T interaction")
     md("With **Check combined M-V-T** on, Sector ties the bending (plastic $M$), "
@@ -839,7 +841,9 @@ def manual_blocks() -> list:
        "edition** (the per-check method selectors are then locked to it). It reports "
        "the concrete-crushing interaction (6.29) and the DK NA "
        "$\\sum(S_{Ed}/S_{Rd}) \\leq 1$ rule (6.3.2(6)), and lists the additional "
-       "longitudinal steel that shear and torsion demand. All three checks (Plastic, "
+       "longitudinal steel that shear and torsion demand. The summary separates the "
+       "three physical component checks: concrete compression strut, shared closed "
+       "stirrup and governing longitudinal reinforcement. All three checks (Plastic, "
        "Shear, Torsion) must be enabled, and the row must have nonzero $V_{Ed}$ and "
        "$T_{Ed}$; otherwise the combined check is not applicable to that row.")
     call("standard", "DK NA 6.3.2(6): $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ sums each "
@@ -928,7 +932,10 @@ def manual_blocks() -> list:
     h2("M-V-T Combined results")
     md("The **M-V-T Combined** view shows the $M$, $V$ and $T$ utilisations, the "
        "DK NA $\\sum(S_{Ed}/S_{Rd})$ sum, the concrete-crushing interaction with a "
-       "$V$-$T$ envelope diagram, and the additional longitudinal steel demand.")
+       "$V$-$T$ envelope diagram, and three explicit physical component results: "
+       "concrete compression strut, shared closed stirrup and governing longitudinal "
+       "reinforcement. The detailed blocks retain each contribution and the selected "
+       "member strut angle.")
     h2("PDF report")
     md("The report reproduces the complete named case register, descriptions, "
        "signed actions, per-Elastic-row acceptance selections and every fatigue "
@@ -1475,10 +1482,10 @@ def manual_blocks() -> list:
          "and the longitudinal-chord tension grow, so the optimum tracks the load "
          "instead of sitting at a band edge. Each $S_{Rd}$ in DK NA 6.3.2(6) is "
          "still the resistance to that action **acting alone** -- Sector only "
-         "reports them all at that shared angle. Should the shear and torsion strut "
-         "bands not overlap, no common angle exists: Sector then reverts to each "
-         "action's own resistance-maximising angle and flags it, as it also does "
-         "for a capacity-only run with no applied shear or torsion.")
+         "reports them all at that shared angle. The user enters one admissible "
+         "$\\cot\\theta$ range for the physical member under **Links / stirrups**. "
+         "A capacity-only run with no live shear or torsion uses the resistance-"
+         "optimising angle within that same range.")
 
     h1("Equilibrium check")
     md("Every numerical solve carries a convergence flag. The plastic solve balances the "

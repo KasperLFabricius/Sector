@@ -503,36 +503,29 @@ def test_app_torsion_subdivided_view_renders():
     assert any("T_{Rd" in lbl for lbl in labels)
 
 
-def test_app_torsion_subdivided_caption_not_shared_angle_when_disjoint():
-    # v0.69 regression (workflow): in disjoint mode the sub-tubes are each at their
-    # OWN resistance-optimum angle (cot differs per tube because tef differs), so the
-    # compound-section caption must NOT claim a single shared "ONE member strut angle";
-    # the per-tube cot is exposed in the sub-tube table so the numbers are verifiable.
+def test_app_torsion_subdivided_uses_the_shared_member_angle():
+    # One physical compression-strut band applies to the live shear and every
+    # torsion sub-tube, so all reported sub-tubes use the selected member angle.
     at = _fresh(); at.run()
     at.checkbox(key="shear_on").set_value(True).run()
     at.checkbox(key="shear_links").set_value(True).run()
-    _set(
-        at,
-        ("number_input", "shear_V", 150.0),
-        ("number_input", "shear_cot_min", 1.0),
-        ("number_input", "shear_cot_max", 1.25),
-    )  # below the torsion band
+    _set(at, ("number_input", "shear_V", 150.0))
     _subdivided(at, T=40.0)
     _set_and_click(
         at,
         "calculate",
-        ("number_input", "torsion_cot_min", 1.35),
-        ("number_input", "torsion_cot_max", 2.5),
-    )  # disjoint from shear
+        ("number_input", "strut_cot_min", 1.35),
+        ("number_input", "strut_cot_max", 2.0),
+    )
     assert not at.exception
     t = at.session_state["results"]["torsion"]
-    assert t["theta_mode"] == "disjoint"
+    assert t["theta_mode"] == "utilisation"
     cots = [s["cot"] for s in t["subtubes"]]
-    assert abs(cots[0] - cots[1]) > 0.01                         # each at its own angle
+    assert all(cot == pytest.approx(t["cot"]) for cot in cots)
     _select_view(at, "Torsion")
     caps = " ".join(c.value for c in at.caption)
-    assert "each sub-tube is at its OWN" in caps
-    assert "ONE member strut angle" not in caps
+    assert "ONE member strut angle" in caps
+    assert "each sub-tube is at its OWN" not in caps
 
 
 def test_app_torsion_subdivided_combined_pairs_web():
@@ -605,7 +598,7 @@ def test_app_combined_shear_torsion_interaction():
 def test_combined_vrdmax_uses_shear_method_not_torsion():
     # The combined VRd,max must follow the SHEAR method and lever arm, not the torsion
     # code / 0.9d. Changing only the torsion method moves TRd,max but leaves VRd,max.
-    # The strut-angle bands are pinned to one cot so the member angle cannot move
+    # The shared strut-angle range is pinned to one cot so the member angle cannot move
     # between the two runs (the torsion method shifts nu_t and hence the chosen
     # angle, which would move VRd,max through theta rather than through the method).
     def inter(torsion_method):
@@ -622,10 +615,10 @@ def test_combined_vrdmax_uses_shear_method_not_torsion():
             ("number_input", "shear_V", 150.0),
             ("number_input", "torsion_T", 40.0),
         )
-        pinned = []
-        for k in ("shear_cot_min", "shear_cot_max",
-                  "torsion_cot_min", "torsion_cot_max"):
-            pinned.append(("number_input", k, 2.0))
+        pinned = [
+            ("number_input", "strut_cot_min", 2.0),
+            ("number_input", "strut_cot_max", 2.0),
+        ]
         pinned.append(("selectbox", "torsion_method", torsion_method))
         _set_and_click(at, "calculate", *pinned)
         assert not at.exception
@@ -902,7 +895,7 @@ def test_app_torsion_out_of_range_withholds_verdict():
         at,
         "calculate",
         ("number_input", "torsion_T", 30.0),
-        ("number_input", "torsion_cot_max", 3.0),
+        ("number_input", "strut_cot_max", 3.0),
     )
     assert not at.exception
     t = at.session_state["results"]["torsion"]

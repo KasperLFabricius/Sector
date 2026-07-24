@@ -1412,7 +1412,11 @@ class ReportBuilder:
                 ])
             for limitation in basis.get("limitations", []):
                 rows.append(["Scope limitation", str(limitation)])
-        if self._result_values("shear") or self._result_values("torsion"):
+        if (
+            self._result_values("shear")
+            or self._result_values("torsion")
+            or self._result_values("combined")
+        ):
             material_id = inp.get("capacity_steel_material_id") or "-"
             material_name = next(
                 (item.get("name", "") for item in
@@ -1423,6 +1427,16 @@ class ReportBuilder:
             rows.append([
                 "Member-check reinforcing material",
                 f"{material_id} - {material_name}" if material_name else material_id,
+            ])
+            rows.extend([
+                [
+                    "Shared compression-strut cot theta<sub>min</sub>",
+                    _fmt(inp.get("strut_cot_min"), 2),
+                ],
+                [
+                    "Shared compression-strut cot theta<sub>max</sub>",
+                    _fmt(inp.get("strut_cot_max"), 2),
+                ],
             ])
         plastic_results = self._result_values("plastic")
         if plastic_results:
@@ -2869,7 +2883,7 @@ class ReportBuilder:
         )
         applicable = c.get("code_applicable", True)
         if not applicable:
-            self._small("Warning: one or more active strut-angle bounds fall outside "
+            self._small("Warning: the shared compression-strut bounds fall outside "
                         "the method's code range. The combined values are exploratory "
                         "and carry no compliance verdict.")
         verdict = _code_verdict(c["dkna_ok"], applicable)
@@ -2888,9 +2902,30 @@ class ReportBuilder:
                 f"{_pct(c['dkna_sum'])}  ({verdict})"
             ),
         )
+        self._h2("Physical resistance components")
+        component_rows = [["Component", "Utilisation", "Status", "QA note"]]
+        component_rows.extend([
+            [
+                component["label"],
+                _pct(component["util"]),
+                component["status"],
+                component["note"],
+            ]
+            for component in presentation.combined_physical_components(c)
+        ])
+        self._table(
+            component_rows,
+            [48 * mm, 28 * mm, 29 * mm, 65 * mm],
+            font=7.5,
+        )
+        self._small(
+            "Concrete strut, closed stirrup and longitudinal reinforcement are "
+            "independent physical checks. The worst value may govern the case, but "
+            "it is not reported as a combined transverse-reinforcement utilisation."
+        )
         cr = c.get("crushing")
         if cr is not None and cr.get("valid"):
-            self._h2("Concrete crushing (6.29)")
+            self._h2("Concrete compression strut (6.29)")
             val = cr["value"]
             vv = _code_verdict(
                 viz.util_ok(val), cr.get("code_applicable", applicable)
@@ -2909,17 +2944,19 @@ class ReportBuilder:
                                                     "code_applicable", applicable)),
                       120, 100)
         elif cr is not None and not cr.get("valid"):
-            self._h2("Concrete crushing (6.29)")
-            self._small("Not evaluated: the shear and torsion cot theta bands do not "
-                        "overlap, so no single strut angle satisfies both.")
+            self._h2("Concrete compression strut (6.29)")
+            self._small(
+                "Not evaluated: the shared member-angle calculation is invalid."
+            )
         tr = c.get("transverse")
         if tr is not None and not tr.get("valid"):
             self._h2("Shared stirrup (shear + torsion transverse steel)")
-            self._small("Not evaluated: the shear and torsion cot theta bands do not "
-                        "overlap, so no single strut angle satisfies both.")
+            self._small(
+                "Not evaluated: the shared member-angle calculation is invalid."
+            )
         elif tr is not None:
             self._h2("Shared stirrup (shear + torsion transverse steel)")
-            vv = _code_verdict(tr["ok"], applicable)
+            vv = _code_verdict(viz.util_ok(tr["u_stirrup"]), applicable)
             if tr["shear_credited"]:
                 note = (f"V<sub>Ed</sub> = {_fmt(tr['v_ed'], 1)} &#8804; V<sub>Rd,c</sub>"
                         f" = {_fmt(tr['vrd_c'], 1)} kN, so the concrete carries the "
@@ -2930,11 +2967,10 @@ class ReportBuilder:
             self._formula(
                 "shear share + torsion share (shared closed stirrup)",
                 subst=f"{_pct(tr['shear_fraction'])} + {_pct(tr['torsion_fraction'])}",
-                result=f"stirrup utilisation = {_pct(tr['u_stirrup'])}")
-            self._formula(
-                "crushing utilisation (both actions, one strut)",
-                result=f"crushing utilisation = {_pct(tr['u_crush'])}")
-            self._p(f"Governing ({tr['governs']}): {_pct(tr['governing'])}  ({vv})")
+                result=(
+                    "closed-stirrup utilisation = "
+                    f"{_pct(tr['u_stirrup'])}  ({vv})"
+                ))
             self._small(note + f" At the member strut angle cot theta = "
                         f"{_fmt(tr['cot'], 2)} "
                         f"(theta = {_fmt(tr['theta_deg'], 1)}&#176;) -- "
@@ -3132,8 +3168,9 @@ class ReportBuilder:
             return
         self._h2("Combined shear + torsion (concrete crushing)")
         if not inter.get("valid"):
-            self._small("Not evaluated: the shear and torsion cot theta bands do not "
-                        "overlap, so no single strut angle satisfies both.")
+            self._small(
+                "Not evaluated: the shared member-angle calculation is invalid."
+            )
             return
         val = inter["value"]
         val_txt = _pct(val)

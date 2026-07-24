@@ -311,7 +311,7 @@ def test_biaxial_directional_vt_table_withholds_out_of_range_verdicts():
         at,
         "calculate",
         ("checkbox", "shear_links", True),
-        ("number_input", "shear_cot_max", 3.0),
+        ("number_input", "strut_cot_max", 3.0),
         ("number_input", "shear_Vx", 10.0),
         ("number_input", "shear_Vy", 12.0),
         ("number_input", "torsion_T", 5.0),
@@ -342,8 +342,7 @@ def _run_member(
     v=0.0,
     t=0.0,
     combined_on=True,
-    shear_band=None,
-    torsion_band=None,
+    strut_band=None,
 ):
     """Configure a complete M-V-T member with only the reruns needed for reveals."""
     _goto_page(at, "Inputs")
@@ -364,15 +363,10 @@ def _run_member(
             ("number_input", "shear_V", v),
             ("number_input", "torsion_T", t),
         ]
-        if shear_band is not None:
+        if strut_band is not None:
             changes.extend([
-                ("number_input", "shear_cot_min", shear_band[0]),
-                ("number_input", "shear_cot_max", shear_band[1]),
-            ])
-        if torsion_band is not None:
-            changes.extend([
-                ("number_input", "torsion_cot_min", torsion_band[0]),
-                ("number_input", "torsion_cot_max", torsion_band[1]),
+                ("number_input", "strut_cot_min", strut_band[0]),
+                ("number_input", "strut_cot_max", strut_band[1]),
             ])
         _set_and_click(at, "calculate", *changes)
         return at
@@ -390,21 +384,14 @@ def _run_member(
         ("number_input", "shear_V", v),
         ("number_input", "torsion_T", t),
     ]
-    if shear_band is None and torsion_band is None:
+    if strut_band is None:
         _set_and_click(at, "calculate", *active)
         return at
     _set(at, *active)
-    bands = []
-    if shear_band is not None:
-        bands.extend([
-            ("number_input", "shear_cot_min", shear_band[0]),
-            ("number_input", "shear_cot_max", shear_band[1]),
-        ])
-    if torsion_band is not None:
-        bands.extend([
-            ("number_input", "torsion_cot_min", torsion_band[0]),
-            ("number_input", "torsion_cot_max", torsion_band[1]),
-        ])
+    bands = [
+        ("number_input", "strut_cot_min", strut_band[0]),
+        ("number_input", "strut_cot_max", strut_band[1]),
+    ]
     _set_and_click(at, "calculate", *bands)
     return at
 
@@ -509,18 +496,23 @@ def test_app_combined_view_renders():
     labels = [m.label for m in at.metric]
     assert any("Bending" in lbl for lbl in labels)
     assert any("S_{Ed}/S_{Rd}" in lbl for lbl in labels)
-    # The shared-stirrup transverse check reports steel demand and crushing
-    # separately, and the OK/Over verdict rides a mechanism-labelled metric so a
-    # crushing-controlled angle is never mislabelled as stirrup demand (Codex).
-    assert any("Stirrup utilisation" in lbl for lbl in labels)
-    assert any("Crushing utilisation" in lbl for lbl in labels)
-    assert any(lbl.startswith("Governing (") for lbl in labels)
+    # The summary exposes physical mechanisms, not an artificial maximum labelled
+    # as transverse-reinforcement utilisation.
+    for expected in (
+        "Concrete compression strut",
+        "Closed stirrup",
+        "Longitudinal reinforcement",
+    ):
+        assert expected in labels
+    assert "Closed-stirrup utilisation" in labels
+    assert not any("Crushing utilisation" in lbl for lbl in labels)
+    assert not any(lbl.startswith("Governing (") for lbl in labels)
 
 
 def test_app_combined_out_of_range_withholds_dependent_verdicts():
     at = _fresh()
     at.run()
-    at.number_input(key="shear_cot_max").set_value(3.0).run()
+    at.number_input(key="strut_cot_max").set_value(3.0).run()
     _enable_all(at)
     assert not at.exception
     c = at.session_state["results"]["combined"]
@@ -532,10 +524,12 @@ def test_app_combined_out_of_range_withholds_dependent_verdicts():
     verdict_labels = (
         r"$\sum(S_{Ed}/S_{Rd})$", "Sum",
         r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+        "Concrete compression strut", "Closed stirrup",
+        "Longitudinal reinforcement", "Closed-stirrup utilisation",
     )
     verdict_metrics = [
         m for m in at.metric
-        if m.label in verdict_labels or m.label.startswith("Governing (")
+        if m.label in verdict_labels
     ]
     assert verdict_metrics
     assert all(not metric.delta for metric in verdict_metrics)
@@ -662,8 +656,8 @@ def test_app_objective_matches_reported_chord_cap():
     assert lk["chord"]["capped"]                                 # cap is active
 
 
-def test_app_zero_torsion_does_not_constrain_the_shear_band():
-    # A zero torsion action is skipped and therefore cannot constrain shear.
+def test_app_zero_torsion_is_skipped_with_the_shared_strut_band():
+    # A zero torsion action is skipped; the live shear check uses the shared band.
     at = _fresh()
     at.run()
     _run_member(
@@ -671,7 +665,7 @@ def test_app_zero_torsion_does_not_constrain_the_shear_band():
         v=500.0,
         t=0.0,
         combined_on=False,
-        torsion_band=(1.0, 1.2),
+        strut_band=(1.0, 2.5),
     )
     r = at.session_state["results"]
     lk = r["shear"]["links"]
@@ -679,7 +673,7 @@ def test_app_zero_torsion_does_not_constrain_the_shear_band():
     assert "torsion" not in r
 
 
-def test_app_dead_shear_companion_stays_in_its_own_band():
+def test_app_dead_shear_companion_uses_the_shared_strut_band():
     # Mirror of the T=0 case: zero shear is skipped while torsion remains live.
     at = _fresh()
     at.run()
@@ -689,8 +683,7 @@ def test_app_dead_shear_companion_stays_in_its_own_band():
         v=0.0,
         t=40.0,
         combined_on=False,
-        shear_band=(2.3, 2.5),
-        torsion_band=(1.0, 1.2),
+        strut_band=(1.0, 1.2),
     )
     r = at.session_state["results"]
     assert "shear" not in r
@@ -743,8 +736,7 @@ def test_app_combined_angle_minimises_the_dkna_governing_sum():
             mx=150.0,
             v=280.0,
             t=100.0,
-            shear_band=band,
-            torsion_band=band,
+            strut_band=band,
         )
         r = at.session_state["results"]
         return r["shear"]["links"]["res"]["cot"], r["combined"]["dkna_sum"]
@@ -767,8 +759,7 @@ def test_app_combined_is_skipped_when_shear_is_zero():
         mx=90.0,
         v=0.0,
         t=60.0,
-        shear_band=(2.3, 2.5),
-        torsion_band=(1.0, 1.4),
+        strut_band=(1.0, 1.4),
     )
     r = at.session_state["results"]
     assert "shear" not in r
@@ -837,9 +828,9 @@ def test_app_combined_transverse_no_credit_when_shear_high():
     assert tr["shear_fraction"] > 0.0
 
 
-def test_app_combined_non_overlapping_cot_bands_are_rejected():
-    # Codex: when the shear and torsion strut-angle bands do not overlap there is no
-    # common angle, so the crushing and shared-stirrup checks are flagged invalid.
+def test_app_combined_uses_one_shared_strut_band():
+    # Shear and torsion use one physical compression-strut range and therefore
+    # report the same member angle for every live combined check.
     at = _fresh()
     at.run()
     _run_member(
@@ -847,23 +838,18 @@ def test_app_combined_non_overlapping_cot_bands_are_rejected():
         mx=100.0,
         v=100.0,
         t=40.0,
-        shear_band=(2.0, 2.5),
-        torsion_band=(0.5, 1.5),
+        strut_band=(1.4, 1.8),
     )
     assert not at.exception
     c = at.session_state["results"]["combined"]
-    assert c["transverse"]["valid"] is False
-    assert c["crushing"]["valid"] is False
-    # Disjoint bands fall back to each action's own resistance angle, so the chord
-    # captions must NOT claim a shared minimising angle (theta_mode drives that).
-    assert at.session_state["results"]["shear"]["links"]["theta_mode"] == "disjoint"
-    assert c["longitudinal"]["theta_mode"] == "disjoint"
-    # The chord note is actually rendered in this state, so the report wording matters.
-    assert c["longitudinal"]["valid"] is True
-    _select_view(at, "M-V-T Combined")
-    assert any("do not overlap" in w.value for w in at.warning)
-    caps = " ".join(cap.value for cap in at.caption)
-    assert "bands do not overlap" in caps and "minimise the governing" not in caps
+    assert c["transverse"]["valid"] is True
+    assert c["crushing"]["valid"] is True
+    shared_cot = c["transverse"]["cot"]
+    assert 1.4 <= shared_cot <= 1.8
+    assert at.session_state["results"]["shear"]["links"]["res"]["cot"] == pytest.approx(
+        shared_cot
+    )
+    assert at.session_state["results"]["torsion"]["cot"] == pytest.approx(shared_cot)
 
 
 def test_app_combined_is_saved_and_restored():

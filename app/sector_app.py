@@ -3064,9 +3064,8 @@ _SHEAR_SIG_KEYS = (
     "shear_dlower",
     "shear_links", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
-    "shear_cot_min", "shear_cot_max",
+    "strut_cot_min", "strut_cot_max",
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
-    "torsion_cot_min", "torsion_cot_max",
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
     "torsion_sub_x2", "torsion_sub_y2", "torsion_sub_x3", "torsion_sub_y3",
@@ -3551,7 +3550,8 @@ def build_inputs(host=st):
     )
     # Shear reinforcement (vertical links). When present, the member's resistance is
     # the variable-strut VRd = min(VRd,s, VRd,max) (sec. 6.2.3) rather than VRd,c; the
-    # strut angle theta is auto-optimised within the cot(theta) bounds below.
+    # strut angle theta is auto-optimised within the shared cot(theta) bounds in
+    # the Links / stirrups block below.
     shear_links = _seeded_checkbox(
         sts, "Shear reinforcement (links) present", False, "shear_links",
         disabled=not shear_on,
@@ -3560,21 +3560,6 @@ def build_inputs(host=st):
              r"$V_{Rd,c}$ is still "
              "shown to indicate whether links are strictly required.")
     _links = shear_on and shear_links
-    shear_cot_min = _seeded_number(
-        sts, r"Strut $\cot\theta$ min", 0.5, 5.0, 1.0, 0.1, "shear_cot_min",
-        disabled=not _links,
-        help="Lower bound for the auto-optimised strut angle. EN 1992-1-1 6.7N (and "
-             r"DK NA:2024 6.7a NA) allow $1\leq\cot\theta\leq2.5$; a value outside that "
-             "is allowed but warned, not blocked.")
-    shear_cot_max = _seeded_number(
-        sts, r"Strut $\cot\theta$ max", 0.5, 5.0, 2.5, 0.1, "shear_cot_max",
-        disabled=not _links,
-        help=r"Upper bound for the auto-optimised strut angle ($\cot\theta=2.5$ is the "
-             r"code maximum; 1.0 corresponds to a 45-degree strut). Sector maximises "
-             r"$V_{Rd}=\min(V_{Rd,s},V_{Rd,max})$ within the entered bounds.")
-    if _links and (shear_cot_min < 1.0 - 1e-9 or shear_cot_max > 2.5 + 1e-9):
-        sts.caption("Note: the strut bounds fall outside the code range 1..2.5 "
-                    "(6.7N / 6.7a NA) -- allowed, but check the value is justified.")
 
     sts.markdown(r"**Torsion ($T_{Rd}$, thin-walled tube)**")
     sts.caption("Torsion resistance from the thin-walled tube idealisation "
@@ -3660,20 +3645,6 @@ def build_inputs(host=st):
                     "intrusion into a void. Sector validates that partition before "
                     "issuing a torsion result. The first rectangle is the web and "
                     "pairs with shear in the combined checks (6.3.1(3)).")
-    torsion_cot_min = _seeded_number(
-        sts, r"Strut $\cot\theta$ min (torsion)", 0.5, 5.0, 1.0, 0.1,
-        "torsion_cot_min", disabled=not _tors,
-        help=r"Lower bound for the auto-optimised torsion strut angle (code range "
-             r"$1\leq\cot\theta\leq2.5$; values outside are warned, not blocked).")
-    torsion_cot_max = _seeded_number(
-        sts, r"Strut $\cot\theta$ max (torsion)", 0.5, 5.0, 2.5, 0.1,
-        "torsion_cot_max", disabled=not _tors,
-        help=r"Upper bound for the auto-optimised torsion strut angle. Sector maximises "
-             r"$T_{Rd}=\min(T_{Rd,s},T_{Rd,max})$ within the entered bounds.")
-    if _tors and (torsion_cot_min < 1.0 - 1e-9 or torsion_cot_max > 2.5 + 1e-9):
-        sts.caption("Note: the torsion strut bounds fall outside the code range "
-                    "1..2.5 (6.7N / 6.7a NA) -- allowed, but check it is justified.")
-
     # One shared stirrup definition for both the shear links and the torsion tube:
     # physically it is the same closed stirrup, whose vertical legs resist shear and
     # whose closed loop resists torsion. Shear uses n legs; torsion uses one leg.
@@ -3682,6 +3653,56 @@ def build_inputs(host=st):
     sts.caption("The same closed stirrup carries shear (through its legs) and "
                  "torsion (through the closed loop). For torsion the stirrup must be "
                  "closed. Enabled when shear links or the torsion check is on.")
+    strut_lo, strut_hi = sts.columns(2)
+    strut_cot_min = _seeded_number(
+        strut_lo,
+        r"Compression strut $\cot\theta_{\min}$",
+        0.5,
+        5.0,
+        1.0,
+        0.1,
+        "strut_cot_min",
+        disabled=not _stirrups,
+        help=r"Lower bound for the compression-strut angle shared by shear and "
+             r"torsion. The 2005 family permits $1\leq\cot\theta\leq2.5$; "
+             "values outside the selected method's range are warned, not blocked.",
+    )
+    strut_cot_max = _seeded_number(
+        strut_hi,
+        r"Compression strut $\cot\theta_{\max}$",
+        0.5,
+        5.0,
+        2.5,
+        0.1,
+        "strut_cot_max",
+        disabled=not _stirrups,
+        help=r"Upper bound for the same physical compression strut. Sector selects "
+             "one angle within this range for all live shear, torsion, concrete, "
+             "stirrup and longitudinal-reinforcement checks.",
+    )
+    if _stirrups:
+        active_strut_codes = []
+        if _links:
+            active_strut_codes.append(_SHEAR_METHODS[_eff_shear_method])
+        if _tors:
+            active_strut_codes.append(
+                _SHEAR_CODES[combined_method if combined_on else torsion_method]
+            )
+        code_cot_min = max(
+            code.shear_cot_min_limit for code in active_strut_codes
+        )
+        code_cot_max = min(
+            code.shear_cot_max_limit for code in active_strut_codes
+        )
+        if (
+            strut_cot_min < code_cot_min - 1e-9
+            or strut_cot_max > code_cot_max + 1e-9
+        ):
+            sts.caption(
+                "Note: the shared strut bounds fall outside the active code range "
+                f"{code_cot_min:g}..{code_cot_max:g}. The values are allowed, but "
+                "the resulting checks carry no code verdict."
+            )
     if "_capacity_steel_pending_material_id" in st.session_state:
         st.session_state["capacity_steel_material_id"] = st.session_state.pop(
             "_capacity_steel_pending_material_id"
@@ -4403,14 +4424,14 @@ def build_inputs(host=st):
                 shear_vx_link_legs=shear_vx_link_legs,
                 shear_vy_link_legs=shear_vy_link_legs,
                 shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
-                shear_fywk=shear_fywk, shear_cot_min=shear_cot_min,
-                shear_cot_max=shear_cot_max,
+                shear_fywk=shear_fywk,
+                strut_cot_min=strut_cot_min,
+                strut_cot_max=strut_cot_max,
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_T=torsion_T, torsion_tef=torsion_tef,
                 torsion_nu_v=torsion_nu_v, torsion_subdivide=torsion_subdivide,
                 torsion_subrects=torsion_subrects,
-                torsion_cot_min=torsion_cot_min, torsion_cot_max=torsion_cot_max,
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
                 minimum_reinforcement_on=minimum_reinforcement_on,
@@ -5133,16 +5154,12 @@ def _run_uniaxial_capacity_checks(inp, out):
                              z_src=z_o_src, axis=o_axis, tension_low=o_tlow,
                              m_off=m_signed, conditional=True))
 
-        # The scan band comes from the LIVE actions only: a companion that is
-        # invalid or carries no load does not constrain the member angle. Bands are
-        # "disjoint" only when BOTH actions are live and their bands do not overlap
-        # (then the legacy per-action angles + "no common strut angle" flags apply).
+        # The scan band comes from the one physical compression-strut input. A
+        # companion that is invalid or carries no load does not join the objective,
+        # but shear and torsion no longer have separate ranges to reconcile.
         band = None
-        bands_disjoint = False
         if shear_live and tors_live:
-            band = (max(link_ctx["cot_min"], tors_ctx["tcot_min"]),
-                    min(link_ctx["cot_max"], tors_ctx["tcot_max"]))
-            bands_disjoint = band[1] < band[0] - 1e-9
+            band = (link_ctx["cot_min"], link_ctx["cot_max"])
         elif shear_live:
             band = (link_ctx["cot_min"], link_ctx["cot_max"])
         elif tors_live:
@@ -5225,27 +5242,25 @@ def _run_uniaxial_capacity_checks(inp, out):
             utils.append(_dkna)
 
         cot_star = None
-        if band is not None and not bands_disjoint and utils:
+        if band is not None and utils:
             cot_star, _ = combined.governing_strut_cot(utils, band[0], band[1])
         # One label for how the member angle was chosen, reused by every payload:
         #   utilisation -> a live load drove the minimax choice (cot_star found);
-        #   disjoint    -> shear and torsion are both live but their cot bands do
-        #                  not overlap, so no single angle is admissible;
-        #   resistance  -> no live transverse load, so each check sits at its own
+        #   resistance  -> no live transverse load, so the capacity result uses its
         #                  resistance-optimum angle (nothing to optimise).
-        theta_mode_str = ("utilisation" if cot_star is not None
-                          else "disjoint" if bands_disjoint else "resistance")
+        theta_mode_str = (
+            "utilisation" if cot_star is not None else "resistance"
+        )
 
-        # ---- torsion payload at the member angle (or its own band when no load
-        # drives the choice / the bands do not overlap) ----
+        # ---- torsion payload at the member angle (or the shared band when no load
+        # drives the choice) ----
         if tors_ctx is not None:
             t_ed = tors_ctx["t_ed"]
             subdivide = tors_ctx["subdivide"]
             tk = tors_ctx["_tk"]
             # Pin to the member angle only when torsion is a LIVE participant. A dead
-            # companion (TEd = 0) does not join the shared-angle objective, so forcing
-            # it to cot_star would report a torsion angle (and TRd) outside the user's
-            # own torsion cot band; leave it at its own resistance-optimum instead.
+            # companion (TEd = 0) does not join the shared-angle objective and remains
+            # at its resistance optimum within the same user-entered range.
             if cot_star is not None and tors_live:
                 tk = dict(tk, cot_min=cot_star, cot_max=cot_star)
             sub_res = [_tube_torsion(tb, te, **tk)
@@ -5306,9 +5321,9 @@ def _run_uniaxial_capacity_checks(inp, out):
         # ---- links payload at the member angle ----
         if link_ctx is not None:
             v_ed = link_ctx["v_ed"]
-            # Pin to the member angle only when shear is a LIVE participant; a dead
-            # shear companion (VEd = 0) keeps its own resistance-optimum rather than
-            # being forced to a torsion-driven angle outside its own cot band.
+            # Pin to the member angle only when shear is a LIVE participant. A dead
+            # companion (VEd = 0) remains at its resistance optimum within the same
+            # user-entered range.
             if cot_star is not None and shear_live:
                 lk = link_ctx["build"](cot_star, cot_star)
             else:
@@ -5330,9 +5345,7 @@ def _run_uniaxial_capacity_checks(inp, out):
             ochk = None
             if chord_faces and lk["valid"]:
                 # The torsion term comes from the BUILT torsion payload (the web
-                # tube's Asl at ITS final angle) -- with disjoint bands the links
-                # angle can lie outside the torsion band, so evaluating Ftd,T there
-                # would use an inadmissible torsion angle.
+                # tube's Asl at its final angle).
                 p_web = out.get("torsion", {}).get("primary")
                 ftd_t_star = (p_web["asl_req"] * tors_ctx["fyd_long"] / 1000.0
                               if (p_web is not None and tors_live) else 0.0)
@@ -5445,41 +5458,31 @@ def _run_uniaxial_capacity_checks(inp, out):
             sh_links = out.get("shear", {}).get("links")
             p_tube, t_ed_p = primary["tube"], primary["t_ed"]
             if sh_links is not None and sh_links["res"]["valid"] and p_tube["valid"]:
-                # The plain band intersection: the fallback angle for a no-load run
-                # and the disjointness test for the 6.29 flag.
-                pl_lo = max(link_ctx["cot_min"], tors_ctx["tcot_min"])
-                pl_hi = min(link_ctx["cot_max"], tors_ctx["tcot_max"])
-                if cot_star is None and pl_hi < pl_lo - 1e-9:
-                    # No strut angle is admissible for both shear and torsion, so the
-                    # shared-angle crushing check (6.29) is undefined -- flag it.
-                    # (With a live single-action scan the member angle exists and the
-                    # zero-load companion does not constrain it.)
-                    out["torsion"]["interaction"] = dict(
-                        valid=False, reason="no common strut angle",
-                        cot_shear=(link_ctx["cot_min"], link_ctx["cot_max"]),
-                        cot_torsion=(tors_ctx["tcot_min"], tors_ctx["tcot_max"]))
-                else:
-                    # The member angle when a load drives it; otherwise the
-                    # least-conservative common angle (cot = 1 clamped to the band).
-                    cot_c = (cot_star if cot_star is not None
-                             else min(max(1.0, pl_lo), pl_hi))
-                    trdmax_c = torsion.trd_max(
-                        tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
-                        p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
-                        closed_detailing=tors_ctx["nu_detail"],
-                        fcd_mpa=tors_ctx["fcd"])
-                    vlk = link_ctx["build"](cot_c, cot_c)
-                    inter = combined.crushing_interaction(
-                        t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
-                    out["torsion"]["interaction"] = dict(
-                        valid=True, cot=cot_c,
-                        theta_deg=math.degrees(math.atan(1.0 / cot_c)),
-                        trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
-                        v_ed=v_ed_s, value=inter,
-                        code_applicable=bool(
-                            out["torsion"].get("code_applicable", True)
-                            and sh_links.get("code_applicable", True)
-                        ))
+                # The member angle when a load drives it; otherwise the
+                # least-conservative angle (cot = 1 clamped to the shared band).
+                pl_lo, pl_hi = link_ctx["cot_min"], link_ctx["cot_max"]
+                cot_c = (
+                    cot_star
+                    if cot_star is not None
+                    else min(max(1.0, pl_lo), pl_hi)
+                )
+                trdmax_c = torsion.trd_max(
+                    tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
+                    p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
+                    closed_detailing=tors_ctx["nu_detail"],
+                    fcd_mpa=tors_ctx["fcd"])
+                vlk = link_ctx["build"](cot_c, cot_c)
+                inter = combined.crushing_interaction(
+                    t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
+                out["torsion"]["interaction"] = dict(
+                    valid=True, cot=cot_c,
+                    theta_deg=math.degrees(math.atan(1.0 / cot_c)),
+                    trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
+                    v_ed=v_ed_s, value=inter,
+                    code_applicable=bool(
+                        out["torsion"].get("code_applicable", True)
+                        and sh_links.get("code_applicable", True)
+                    ))
 
     capacity.finalize_combined(inp, out)
 
@@ -8445,13 +8448,12 @@ _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps screen == rep
 
 
 def _no_common_angle_msg(d):
-    """Message for a combined check whose shear and torsion cot(theta) bands do not
-    overlap, so no single strut angle satisfies both."""
-    cs, ct = d.get("cot_shear", (0, 0)), d.get("cot_torsion", (0, 0))
-    return (f"No common strut angle: the shear cot {_THETA} band "
-            f"[{cs[0]:.2f}, {cs[1]:.2f}] and the torsion band "
-            f"[{ct[0]:.2f}, {ct[1]:.2f}] do not overlap, so no single strut angle "
-            "satisfies both. Align the shear and torsion cot(theta) bounds.")
+    """Message for a defensive failure of the shared member-angle check."""
+    reason = str(d.get("reason") or "no evaluable shared angle")
+    return (
+        "The shared compression-strut check is NOT evaluated: "
+        f"{reason}."
+    )
 
 
 def combined_view(inp, results):
@@ -8562,10 +8564,10 @@ def combined_view(inp, results):
             f"{angle_note}."
         )
     if not c.get("code_applicable", True):
-        st.warning("One or more selected strut-angle bounds fall outside the "
+        st.warning("The selected compression-strut bounds fall outside the "
                    "method's code range. Combined values are exploratory only: "
-                   "NO CODE VERDICT is issued until every active strut band is "
-                   "within its permitted range.")
+                   "NO CODE VERDICT is issued until the shared range is within "
+                   "the permitted limits.")
     m1, m2, m3 = st.columns(3)
     m1.metric(r"Bending $M$", _pct(c["r_m"]))
     m2.metric(r"Shear $V$", _pct(c["r_v"]))
@@ -8589,10 +8591,35 @@ def combined_view(inp, results):
                    "utilisation). Turn on 'M & V separate' if the shear longitudinal "
                    "steel beyond bending is provided (then sum = max(M+T, V+T)).")
 
+    st.markdown("**Physical resistance components**")
+    component_boxes = st.columns(3)
+    for box, component in zip(
+        component_boxes,
+        presentation.combined_physical_components(c),
+    ):
+        status = component["status"]
+        value = _pct(component["util"])
+        if status in {"PASS", "FAIL"}:
+            _verdict_metric(
+                box,
+                component["label"],
+                value,
+                status == "PASS",
+                code_applicable=component["applicable"],
+                help=component["note"],
+            )
+        else:
+            box.metric(component["label"], value, help=component["note"])
+            box.caption(status)
+    st.caption(
+        "Concrete strut, closed stirrup and longitudinal reinforcement are "
+        "independent physical checks; no combined transverse utilisation is shown."
+    )
+
     cr = c.get("crushing")
     if cr is not None and cr.get("valid"):
         st.divider()
-        st.markdown(r"**Concrete crushing (6.29): "
+        st.markdown(r"**Concrete compression strut (6.29): "
                     r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$**")
         val = cr["value"]
         ok_c = viz.util_ok(val)
@@ -8630,12 +8657,11 @@ def combined_view(inp, results):
         t1, t2, t3 = st.columns(3)
         t1.metric("Shear share", _pct(tr["shear_fraction"]))
         t2.metric("Torsion share", _pct(tr["torsion_fraction"]))
-        t3.metric("Stirrup utilisation", _pct(tr["u_stirrup"]))
-        ok_t = tr["ok"]
-        g1, g2 = st.columns(2)
-        g1.metric("Crushing utilisation", _pct(tr["u_crush"]))
         _verdict_metric(
-            g2, f"Governing ({tr['governs']})", _pct(tr["governing"]), ok_t,
+            t3,
+            "Closed-stirrup utilisation",
+            _pct(tr["u_stirrup"]),
+            viz.util_ok(tr["u_stirrup"]),
             code_applicable=c.get("code_applicable", True),
         )
         if tr["shear_credited"]:

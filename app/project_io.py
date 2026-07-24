@@ -114,10 +114,9 @@ SCALAR_KEYS = [
     "shear_dlower",
     "shear_links", "shear_link_legs", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
-    "shear_cot_min", "shear_cot_max",
+    "strut_cot_min", "strut_cot_max",
     # Torsion (thin-walled tube, TRd). The stirrup is the shared shear_link_* one.
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
-    "torsion_cot_min", "torsion_cot_max",
     # Sub-tube subdivision for compound / T-sections (6.3.1(3)).
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",

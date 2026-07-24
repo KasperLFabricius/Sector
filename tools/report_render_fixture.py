@@ -38,10 +38,10 @@ from sector.section import Section  # noqa: E402
 
 # Geometry, concrete law, steel law, two plastic interactions, two plastic
 # states, two elastic states, two elastic strain profiles, one derived shear
-# geometry, one minimum-reinforcement figure, one clear-spacing figure and four
-# grouped-fatigue figures. An intentional fixture change must update this
-# explicit contract.
-_EXPECTED_FIGURE_COUNT = 19
+# geometry, one V-T interaction, one minimum-reinforcement figure, one
+# clear-spacing figure and four grouped-fatigue figures. An intentional fixture
+# change must update this explicit contract.
+_EXPECTED_FIGURE_COUNT = 20
 
 
 class _FixedDateTime(datetime.datetime):
@@ -212,6 +212,8 @@ def _inputs() -> dict:
         "shear_on": True,
         "torsion_on": False,
         "combined_on": False,
+        "strut_cot_min": 1.0,
+        "strut_cot_max": 2.5,
         "minimum_reinforcement_on": True,
         "clear_spacing_on": True,
         "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
@@ -459,6 +461,71 @@ def _results() -> dict:
         "method": codes.EC2_2005_DKNA.label,
         "model_2023": False,
     }
+    combined_payload = {
+        "valid": True,
+        "method": codes.EC2_2005_DKNA.label,
+        "r_m": 0.80,
+        "r_v": 0.30,
+        "r_t": 0.25,
+        "m_v_independent": False,
+        "dkna_sum": 1.35,
+        "dkna_ok": False,
+        "code_applicable": True,
+        "crushing": {
+            "valid": True,
+            "cot": 1.60,
+            "theta_deg": 32.01,
+            "trd_max": 90.0,
+            "vrd_max": 650.0,
+            "t_ed": 25.0,
+            "v_ed": 30.0,
+            "value": 25.0 / 90.0 + 30.0 / 650.0,
+            "code_applicable": True,
+        },
+        "transverse": {
+            "valid": True,
+            "cot": 1.60,
+            "theta_deg": 32.01,
+            "u_stirrup": 0.55,
+            "u_crush": 25.0 / 90.0 + 30.0 / 650.0,
+            "governing": 0.55,
+            "governs": "stirrups",
+            "ok": True,
+            "shear_fraction": 0.20,
+            "torsion_fraction": 0.35,
+            "shear_credited": False,
+            "vrd_c": shear_res["vrd_c"],
+            "v_ed": 30.0,
+        },
+        "longitudinal": {
+            "valid": True,
+            "ok": True,
+            "axis": "x",
+            "tension_low": True,
+            "m_ed": 80.0,
+            "m_rd": 160.0,
+            "ftd_v": 24.0,
+            "ftd_t": 16.0,
+            "z": 0.25,
+            "mv": 6.0,
+            "mt": 2.0,
+            "m_total": 88.0,
+            "util": 0.55,
+            "biaxial": False,
+            "conditional": True,
+            "capped": False,
+            "off_util": 0.0,
+            "m_off": 0.0,
+            "has_torsion": True,
+            "gets_shift": True,
+            "off_not_evaluated": None,
+            "theta_mode": "utilisation",
+            "code_applicable": True,
+        },
+        "asl_torsion": 700.0,
+        "delta_ftd": 24.0,
+        "links": True,
+    }
     plastic_2 = copy.deepcopy(plastic)
     plastic_2.update(util=1.25, applied=(125.0, 0.0))
     elastic_2 = copy.deepcopy(elastic)
@@ -511,11 +578,13 @@ def _results() -> dict:
         "elastic": elastic,
         "fatigue": fatigue,
         "shear": shear_payload,
+        "combined": combined_payload,
         "clear_spacing": spacing,
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
              "results": {
                  "plastic": plastic, "shear": shear_payload,
+                 "combined": combined_payload,
                  "minimum_reinforcement": minimum,
              }},
             {"name": "PL-QA-2", "actions": plastic_rows[1], "evaluated": True,
@@ -689,6 +758,10 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Concrete fatigue",
         "Certified governing-fibre search",
         "Torsion and shear fatigue are not assessed",
+        "Physical resistance components",
+        "Concrete compression strut",
+        "Closed stirrup",
+        "Longitudinal reinforcement",
         "125.0 %",
         "245.000 MPa",
         "Crack-width candidates",
