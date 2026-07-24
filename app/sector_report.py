@@ -24,7 +24,7 @@ import math
 import os
 import re
 import threading
-from html import escape as _html_escape
+from html import escape as _stdlib_html_escape
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -118,6 +118,25 @@ _GREEK = {"eps": "&#949;", "sigma": "&#963;", "lambda": "&#955;", "alpha": "&#94
           "gamma": "&#947;", "kappa": "&#954;", "rho": "&#961;", "phi": "&#966;",
           "theta": "&#952;", "nu": "&#957;", "tau": "&#964;", "permille": "&#8240;"}
 _GREEK_RE = re.compile(r"\b(" + "|".join(_GREEK) + r")\b")
+
+
+def _html_escape(value, quote=True):
+    """Escape literal/user text and shield it from engineering-token rendering.
+
+    Report text intentionally converts trusted standalone tokens such as ``sigma``
+    to Greek glyphs. Numeric entities keep those same words literal when they came
+    from a user-controlled identifier, while remaining safe ReportLab markup.
+    """
+
+    escaped = _stdlib_html_escape(str(value), quote=quote)
+    # A literal user comparison must not be converted by _greek either.
+    escaped = escaped.replace("&lt;=", "&#60;=").replace("&gt;=", "&#62;=")
+    return _GREEK_RE.sub(
+        lambda match: (
+            f"&#{ord(match.group(1)[0])};{match.group(1)[1:]}"
+        ),
+        escaped,
+    )
 
 
 def _greek(s):
@@ -338,7 +357,7 @@ def _fmt(v, nd=3):
     if v is None:
         return "-"
     if isinstance(v, float) and not math.isfinite(v):
-        return "inf"
+        return "-inf" if math.isinf(v) and v < 0.0 else "inf"
     return f"{v:.{nd}f}"
 
 
@@ -347,7 +366,7 @@ def _fmt_sig(v, sig=6):
     if v is None:
         return "-"
     if isinstance(v, float) and not math.isfinite(v):
-        return "inf"
+        return "-inf" if math.isinf(v) and v < 0.0 else "inf"
     return f"{v:.{sig}g}"
 
 
@@ -1669,9 +1688,9 @@ class ReportBuilder:
                 "the cyclic increment."
             )
             self._formula(
-                "delta sigma<sub>i</sub> = sigma(long + "
-                "gamma<sub>Ff</sub> short)<sub>i</sub> - "
-                "sigma(long)<sub>i</sub>",
+                "&#916;sigma<sub>i</sub> = | sigma(long + "
+                "gamma<sub>Ff</sub> &#183; short)<sub>i</sub> - "
+                "sigma(long)<sub>i</sub> |",
                 ref=(
                     "gamma<sub>Ff</sub> is applied to the cyclic section "
                     "actions before solving; stresses are not scaled afterwards."

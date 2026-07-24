@@ -19,6 +19,7 @@ from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 
 _EPS = chr(0x3B5)       # epsilon
 _SIGMA = chr(0x3C3)     # sigma
+_DELTA = chr(0x394)     # uppercase delta
 _PERMILLE = chr(0x2030)  # per-mille sign
 
 
@@ -1003,6 +1004,9 @@ def test_fatigue_sn_figure_has_both_curves_knee_bins_and_log_axes():
     assert knee.x[0] == pytest.approx(2.0e6)
     assert knee.y[0] == pytest.approx(130.0 / 1.15)
     assert characteristic.y[0] > design.y[0]
+    assert _DELTA + _SIGMA in fig.layout.yaxis.title.text
+    for trace in (characteristic, design, knee, applied):
+        assert _DELTA + _SIGMA in trace.hovertemplate
 
 
 def test_fatigue_sn_figure_explicitly_omits_zero_range_on_log_axes():

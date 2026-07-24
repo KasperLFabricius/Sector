@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import pathlib
 import sys
 from types import SimpleNamespace as NS
@@ -401,6 +402,13 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "Annex E.5" in text and "Annex E.7-E.8" in text
     assert "different spectrum names are not combined" in text
     assert "Torsion and shear fatigue are not assessed" in text
+    compact = text.replace(" ", "")
+    delta_sigma = chr(0x394) + chr(0x3C3)
+    sigma = chr(0x3C3)
+    formula_start = compact.index(delta_sigma + "i=")
+    formula = compact[formula_start:formula_start + 90]
+    assert formula.startswith(delta_sigma + "i=|")
+    assert sigma + "(long)i|" in formula
 
 
 def test_report_fatigue_chapter_uses_the_engine_failure_state():
@@ -437,6 +445,31 @@ def test_report_escapes_user_defined_fatigue_settings():
     assert "Register A & B <issued>" in text
     assert "Bar <detail> & coupler" in text
     assert "Drawing A&B <rev 2>" in text
+
+
+def test_report_preserves_literal_engineering_token_identifiers():
+    inp, out = _fatigue_report_fixture()
+    literal_name = "sigma gamma phi alpha"
+    out["fatigue"]["governing_spectrum"] = literal_name
+    out["fatigue"]["spectra"][0].spectrum_name = literal_name
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert literal_name in text
+
+
+def test_report_preserves_negative_infinite_concrete_log_life():
+    inp, out = _fatigue_report_fixture()
+    concrete_bin = out["fatigue"]["spectra"][0].concrete[0].bins[0]
+    concrete_bin.log10_cycles_to_failure = -math.inf
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "-inf" in text
 
 
 def test_report_fatigue_chapter_requests_all_engineering_figures(monkeypatch):

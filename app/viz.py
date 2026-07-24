@@ -228,6 +228,7 @@ _TEMPLATE = "plotly_white+sector"
 # Basic-Multilingual-Plane code points, so they never form surrogate pairs).
 _EPS = chr(0x3B5)       # epsilon
 _SIGMA = chr(0x3C3)     # sigma
+_DELTA = chr(0x394)     # uppercase delta
 _PERMILLE = chr(0x2030)  # per-mille sign
 
 _MID = chr(0x00B7)  # middle dot, for products like k*fytk (BMP, surrogate-safe)
@@ -1304,7 +1305,7 @@ def fatigue_sn_figure(
         line=dict(color=CURVE_CHAR, width=2.0, dash="dash"),
         hovertemplate=(
             "N = %{x:.3g}<br>"
-            f"{_SIGMA} range = %{{y:.3g}} MPa<extra></extra>"
+            f"{_DELTA}{_SIGMA} = %{{y:.3g}} MPa<extra></extra>"
         ),
     ))
     fig.add_trace(go.Scatter(
@@ -1315,7 +1316,7 @@ def fatigue_sn_figure(
         line=dict(color=ENVELOPE, width=2.8),
         hovertemplate=(
             "N = %{x:.3g}<br>"
-            f"design {_SIGMA} range = %{{y:.3g}} MPa<extra></extra>"
+            f"design {_DELTA}{_SIGMA} = %{{y:.3g}} MPa<extra></extra>"
         ),
     ))
     fig.add_trace(go.Scatter(
@@ -1331,7 +1332,7 @@ def fatigue_sn_figure(
         ),
         hovertemplate=(
             "N* = %{x:.3g}<br>"
-            f"design {_SIGMA} range = %{{y:.3g}} MPa<extra></extra>"
+            f"design {_DELTA}{_SIGMA} = %{{y:.3g}} MPa<extra></extra>"
         ),
     ))
 
@@ -1378,7 +1379,7 @@ def fatigue_sn_figure(
             customdata=custom,
             hovertemplate=(
                 "%{customdata[0]}<br>applied cycles = %{x:.3g}<br>"
-                f"design {_SIGMA} range = %{{y:.3g}} MPa<br>"
+                f"design {_DELTA}{_SIGMA} = %{{y:.3g}} MPa<br>"
                 "N_R = %{customdata[1]}<br>"
                 "Miner contribution = %{customdata[2]}<extra></extra>"
             ),
@@ -1419,7 +1420,7 @@ def fatigue_sn_figure(
             exponentformat="power",
         ),
         yaxis=dict(
-            title=f"Stress range, {_SIGMA} (MPa)",
+            title=f"Stress range, {_DELTA}{_SIGMA} (MPa)",
             type="log",
             exponentformat="power",
         ),
