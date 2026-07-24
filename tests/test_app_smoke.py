@@ -3360,6 +3360,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Longitudinal reinforcement & clear spacing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Bulk assignments",
         "About",
         "Report",
         "Save / Load",
