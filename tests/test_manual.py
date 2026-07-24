@@ -373,6 +373,8 @@ def test_latex_to_rl_converts_the_subset():
         r"\log_{10}N_R=C\frac{1-E_{max}}{\sqrt{1-R}}")
     assert "C&#183;" in fatigue
     assert "&#8730;(1-R)" in fatigue
+    assert "log<sub>10</sub>&nbsp;N<sub>R</sub>" in fatigue
+    assert "log&nbsp;<sub>" not in fatigue
     assert "sqrt" not in fatigue and "frac" not in fatigue
 
     shear = manual._latex_to_rl(
@@ -380,6 +382,9 @@ def test_latex_to_rl_converts_the_subset():
     assert "Big" not in shear
     assert "&#8721;" in manual._latex_to_rl(r"\sum_i A_i")
     assert "cot&nbsp;&#952;" in manual._latex_to_rl(r"\cot\theta")
+    cot_squared = manual._latex_to_rl(r"\cot^2\theta")
+    assert "cot<super>2</super>&nbsp;&#952;" in cot_squared
+    assert "cot&nbsp;<super>" not in cot_squared
     assert "&#964;" in shear
 
 

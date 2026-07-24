@@ -1681,14 +1681,21 @@ def _latex_to_rl(s: str) -> str:
         s = flat
     for k in sorted(_LATEX_CMD, key=len, reverse=True):
         s = s.replace(k, _LATEX_CMD[k])
-    operators = "|".join(_LATEX_WORD_OPERATORS)
-    # TeX inserts operator spacing automatically. Use non-breaking gaps on both
-    # sides so adjacent terms remain visibly separated and the operator stays
-    # with its argument in the linear ReportLab rendering.
-    s = re.sub(rf"\\({operators})\b", r"&nbsp;\1&nbsp;", s)
-    s = s.removeprefix("&nbsp;")
     s = re.sub(r"_([A-Za-z0-9])", r"<sub>\1</sub>", s)
     s = re.sub(r"\^([A-Za-z0-9])", r"<super>\1</super>", s)
+    operators = "|".join(_LATEX_WORD_OPERATORS)
+    # TeX inserts operator spacing automatically. Use non-breaking gaps on both
+    # sides so adjacent terms remain visibly separated. Match any operator
+    # sub/superscript as part of the operator, keeping log_10 and cot^2 attached.
+    script = r"((?:<(?:sub|super)>[^<>]*</(?:sub|super)>)*)"
+    s = re.sub(
+        rf"\\({operators})\b{script}",
+        lambda match: (
+            f"&nbsp;{match.group(1)}{match.group(2)}&nbsp;"
+        ),
+        s,
+    )
+    s = s.removeprefix("&nbsp;")
     return s.replace("{", "").replace("}", "").replace("\\", "")
 
 
