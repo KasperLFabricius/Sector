@@ -501,6 +501,8 @@ def test_report_preserves_literal_engineering_token_identifiers():
     )).split())
 
     assert literal_name in text
+    protected = sector_report._greek(sector_report._html_escape(literal_name))
+    assert "&#951;" not in protected  # no beta -> b + Greek eta suffix collision
 
 
 def test_report_outline_decodes_literal_engineering_token_case_id():

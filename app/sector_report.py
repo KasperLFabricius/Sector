@@ -133,8 +133,8 @@ def _html_escape(value, quote=True):
     # A literal user comparison must not be converted by _greek either.
     escaped = escaped.replace("&lt;=", "&#60;=").replace("&gt;=", "&#62;=")
     return _GREEK_RE.sub(
-        lambda match: (
-            f"&#{ord(match.group(1)[0])};{match.group(1)[1:]}"
+        lambda match: "".join(
+            f"&#{ord(character)};" for character in match.group(1)
         ),
         escaped,
     )
