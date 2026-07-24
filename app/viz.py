@@ -1901,8 +1901,15 @@ def detailing_geometry_figure(
         mid_x = 0.5 * (ax + bx)
         mid_y = 0.5 * (ay + by)
         try:
+            # Match the engineering section model: the concrete outline is positive
+            # and every void is negative regardless of the user's input winding.
+            # Otherwise an off-centre CCW void can reverse the selected callout side.
+            centroid_rings = [
+                geometry.orient(outer, ccw=True),
+                *(geometry.orient(hole, ccw=False) for hole in (holes or [])),
+            ]
             section_cx, section_cy = geometry.area_moments_rings(
-                [outer, *(holes or [])]
+                centroid_rings
             ).centroid
             section_cx *= 1000.0
             section_cy *= 1000.0

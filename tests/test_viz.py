@@ -889,6 +889,48 @@ def test_detailing_figure_highlights_checked_bars_and_dimensions_spacing_pair():
     assert spacing_label.ay < -300.0
 
 
+def test_spacing_callout_normalises_off_centre_void_winding():
+    outer = [(-0.30, -0.30), (0.30, -0.30), (0.30, 0.30), (-0.30, 0.30)]
+    hole_ccw = [(-0.10, 0.05), (0.10, 0.05), (0.10, 0.25), (-0.10, 0.25)]
+    elements = [
+        {"id": "R1", "x_mm": -100.0, "y_mm": 0.0, "diameter_mm": 20.0},
+        {"id": "R2", "x_mm": 100.0, "y_mm": 0.0, "diameter_mm": 20.0},
+    ]
+    pair = {
+        "status": "PASS",
+        "first_id": "R1",
+        "second_id": "R2",
+        "phi_first_mm": 20.0,
+        "phi_second_mm": 20.0,
+        "clear_mm": 180.0,
+        "required_mm": 100.0,
+    }
+
+    def spacing_label(hole):
+        fig = viz.detailing_geometry_figure(
+            outer,
+            [hole],
+            [(-0.10, 0.0, 314.0), (0.10, 0.0, 314.0)],
+            [],
+            bar_elements=elements,
+            spacing_pair=pair,
+        )
+        return next(
+            annotation
+            for annotation in fig.layout.annotations
+            if "c<sub>clear</sub>" in str(annotation.text)
+        )
+
+    ccw_label = spacing_label(hole_ccw)
+    cw_label = spacing_label(list(reversed(hole_ccw)))
+
+    # The void lies above the pair, so the net-concrete centroid lies below it:
+    # the callout must go upward and must be invariant to the supplied winding.
+    assert ccw_label.ay > 300.0
+    assert ccw_label.ax == pytest.approx(cw_label.ax)
+    assert ccw_label.ay == pytest.approx(cw_label.ay)
+
+
 def _fatigue_figure_fixture():
     from types import SimpleNamespace as NS
 
