@@ -343,6 +343,37 @@ def _percent(util):
     return "infinite" if not math.isfinite(util) else f"{util * 100:.1f} %"
 
 
+def required_chord_candidates(payload):
+    """Return every retained longitudinal chord needed for a code verdict."""
+    payload = payload or {}
+    preserved = payload.get("longitudinal_candidates")
+    if preserved is None:
+        preserved = payload.get("chord_candidates")
+    if isinstance(preserved, (list, tuple)) and preserved:
+        return [
+            item for item in preserved
+            if item is not None and item.get("valid")
+        ]
+    return [
+        item for item in (
+            payload.get("longitudinal") or payload.get("chord"),
+            payload.get("chord_off"),
+        )
+        if item is not None and item.get("valid")
+    ]
+
+
+def required_chord_fallback(payload):
+    """Return the first required face using a pure-axis fallback, if any."""
+    return next(
+        (
+            item for item in required_chord_candidates(payload)
+            if not item.get("conditional", True)
+        ),
+        None,
+    )
+
+
 def combined_physical_components(combined):
     """Return the three auditable physical M-V-T component assessments.
 
@@ -430,18 +461,12 @@ def combined_physical_components(combined):
             return -math.inf
         return -math.inf if math.isnan(value) else value
 
-    candidates = [
-        item for item in (longitudinal, chord_off)
-        if item is not None and item.get("valid")
-    ]
+    candidates = required_chord_candidates(combined)
     governing = (
         max(candidates, key=candidate_util)
         if candidates else None
     )
-    required_candidates = [
-        item for item in (longitudinal, chord_off)
-        if item is not None and item.get("valid")
-    ]
+    required_candidates = candidates
     coverage = (
         longitudinal.get("off_not_evaluated")
         if longitudinal is not None else None
@@ -449,8 +474,7 @@ def combined_physical_components(combined):
     conditional = bool(
         governing is not None
         and all(
-            not item.get("biaxial", False)
-            or item.get("conditional", True)
+            item.get("conditional", True)
             for item in required_candidates
         )
     )
@@ -485,8 +509,7 @@ def combined_physical_components(combined):
         fallback = next(
             (
                 item for item in required_candidates
-                if item.get("biaxial", False)
-                and not item.get("conditional", True)
+                if not item.get("conditional", True)
             ),
             {},
         )

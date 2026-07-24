@@ -629,6 +629,8 @@ def finalize_combined(inp, out):
     chord_off = links.get("chord_off") if links is not None else None
     if chord_off is not None:
         payload["chord_off"] = chord_off
+    if links is not None and links.get("chord_candidates") is not None:
+        payload["longitudinal_candidates"] = links["chord_candidates"]
 
     if (
         links is not None

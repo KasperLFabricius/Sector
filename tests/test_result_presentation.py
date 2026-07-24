@@ -436,7 +436,7 @@ def test_combined_components_withhold_verdict_for_non_governing_fallback():
         },
         "longitudinal": {
             "valid": True, "util": 0.60, "axis": "x",
-            "tension_low": True, "biaxial": True, "conditional": False,
+            "tension_low": True, "biaxial": False, "conditional": False,
         },
         "chord_off": {
             "valid": True, "util": 0.85, "axis": "y",
@@ -449,6 +449,33 @@ def test_combined_components_withhold_verdict_for_non_governing_fallback():
     assert longitudinal["status"] == "NOT ASSESSED"
     assert longitudinal["applicable"] is False
     assert "pure-axis fallback" in longitudinal["note"]
+    assert "x-axis negative face" in longitudinal["note"]
+
+
+def test_combined_components_preserve_non_governing_face_fallback():
+    exact_governing = {
+        "valid": True, "util": 0.85, "axis": "x",
+        "tension_low": False, "conditional": True,
+    }
+    fallback_face = {
+        "valid": True, "util": 0.60, "axis": "x",
+        "tension_low": True, "conditional": False,
+    }
+    components = presentation.combined_physical_components({
+        "code_applicable": True,
+        "transverse": {
+            "valid": True, "cot": 1.6,
+            "u_crush": 0.40, "u_stirrup": 0.55,
+            "shear_fraction": 0.20, "torsion_fraction": 0.35,
+        },
+        "longitudinal": exact_governing,
+        "longitudinal_candidates": [fallback_face, exact_governing],
+    })
+
+    longitudinal = components[2]
+    assert longitudinal["util"] == pytest.approx(0.85)
+    assert longitudinal["status"] == "NOT ASSESSED"
+    assert longitudinal["applicable"] is False
     assert "x-axis negative face" in longitudinal["note"]
 
 

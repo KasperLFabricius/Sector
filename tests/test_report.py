@@ -1794,12 +1794,39 @@ def test_report_combined_longitudinal_biaxial_fallback_warns():
     c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=300.0,
                              ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
                              util=105.0 / 300.0, ok=True, capped=False,
-                             tension_low=True, off_util=0.83, biaxial=True,
+                             tension_low=True, off_util=0.03, biaxial=False,
                              m_off=90.0, conditional=False)
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "Biaxial bending" in txt                 # the fallback warning
+    assert "required x-axis negative face" in txt
     assert "pure-axis fallback" in txt
+
+
+def test_report_withholds_verdict_for_preserved_non_governing_fallback():
+    out = _out()
+    c = _combined_out()
+    exact = dict(
+        valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=250.0,
+        ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
+        util=105.0 / 250.0, ok=True, capped=False,
+        tension_low=False, conditional=True,
+    )
+    fallback = dict(
+        exact,
+        util=0.20,
+        tension_low=True,
+        conditional=False,
+    )
+    c["longitudinal"] = exact
+    c["longitudinal_candidates"] = [fallback, exact]
+    out["combined"] = c
+
+    txt = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    )).split())
+
+    assert "pure-axis fallback" in txt
+    assert "utilisation = 42.0 % (pure-axis fallback - see note)" in txt
 
 
 def test_report_combined_longitudinal_conditional_mrd():

@@ -491,6 +491,11 @@ def test_app_combined_view_renders():
     at = _fresh()
     at.run()
     _enable_all(at)
+    links = at.session_state["results"]["shear"]["links"]
+    assert len(links["chord_candidates"]) == 4
+    assert {item["role"] for item in links["chord_candidates"]} == {
+        "shear_axis", "off_axis",
+    }
     _select_view(at, "M-V-T Combined")
     assert not at.exception
     labels = [m.label for m in at.metric]

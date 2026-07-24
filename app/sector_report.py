@@ -2742,7 +2742,8 @@ class ReportBuilder:
                 subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
                       f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
-            fell_back = ch.get("biaxial") and not ch.get("conditional", True)
+            fallback = presentation.required_chord_fallback(links)
+            fell_back = fallback is not None
             if coverage:
                 verdict_suffix = (
                     "  (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
@@ -2767,10 +2768,18 @@ class ReportBuilder:
                          "so theta backs off the band edge when the chord would "
                          "otherwise govern.")
             if fell_back:
-                note += (" Biaxial bending is acting but the conditional capacity "
-                         "solve did not converge, so M<sub>Rd</sub> is the pure-axis "
-                         "fallback and this check can be optimistic -- rely on the "
-                         "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
+                fallback_axis = fallback.get("axis", "?")
+                fallback_face = (
+                    "negative" if fallback.get("tension_low", True)
+                    else "positive"
+                )
+                note += (
+                    f" The required {fallback_axis}-axis {fallback_face} face "
+                    "uses a pure-axis fallback because its conditional capacity "
+                    "solve did not converge. The complete chord check can be "
+                    "optimistic; rely on the combined "
+                    "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>)."
+                )
             if coverage == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
@@ -3026,7 +3035,8 @@ class ReportBuilder:
                       f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm")
             biaxial = lg.get("biaxial", False)
-            fell_back = biaxial and not lg.get("conditional", True)
+            fallback = presentation.required_chord_fallback(c)
+            fell_back = fallback is not None
             if coverage:
                 verdict_suffix = (
                     "  (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
@@ -3040,13 +3050,19 @@ class ReportBuilder:
                 subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
                 result=f"utilisation = {_pct(lg['util'])}{verdict_suffix}")
             if fell_back:
-                self._p("Biaxial bending: a moment about the OTHER axis is acting ("
-                        f"{_pct(lg.get('off_util', 0.0))} of that axis' capacity) but "
-                        "the conditional capacity solve did not converge, so "
-                        "M<sub>Rd</sub> is the pure-axis fallback and this chord check "
-                        "can be optimistic -- rely on the "
-                        "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
-                        "which uses the full biaxial bending utilisation.")
+                fallback_axis = fallback.get("axis", "?")
+                fallback_face = (
+                    "negative" if fallback.get("tension_low", True)
+                    else "positive"
+                )
+                self._p(
+                    f"The required {fallback_axis}-axis {fallback_face} face "
+                    "uses a pure-axis fallback because its conditional capacity "
+                    "solve did not converge. The complete chord check can be "
+                    "optimistic; rely on the "
+                    "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
+                    "which uses the full biaxial bending utilisation."
+                )
             note = viz.chord_angle_note(lg.get("theta_mode"))
             if coverage == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "

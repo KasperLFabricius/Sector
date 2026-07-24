@@ -5343,6 +5343,9 @@ def _run_uniaxial_capacity_checks(inp, out):
             # view, so both present the same numbers.
             lchk = None
             ochk = None
+            lchecks = []
+            ochecks = []
+            off_not_evaluated = None
             if chord_faces and lk["valid"]:
                 # The torsion term comes from the BUILT torsion payload (the web
                 # tube's Asl at its final angle).
@@ -5374,17 +5377,19 @@ def _run_uniaxial_capacity_checks(inp, out):
                         _cf["m_ed"], _cf["m_rd"],
                         delta_ftd if _cf["gets_shift"] else 0.0,
                         ftd_t_star, _cf["z_m"])
+                    fchk.update(valid=True, role="shear_axis",
+                                axis=_cf["axis"],
+                                tension_low=_cf["tension_low"],
+                                off_util=_cf["off_util"],
+                                biaxial=bool(_cf["off_util"] > 0.05),
+                                m_off=_cf["m_off"],
+                                conditional=_cf["conditional"],
+                                has_torsion=tors_live,
+                                gets_shift=_cf["gets_shift"],
+                                off_not_evaluated=off_not_evaluated,
+                                theta_mode=theta_mode_str)
+                    lchecks.append(fchk)
                     if lchk is None or fchk["util"] > lchk["util"]:
-                        fchk.update(valid=True, axis=_cf["axis"],
-                                    tension_low=_cf["tension_low"],
-                                    off_util=_cf["off_util"],
-                                    biaxial=bool(_cf["off_util"] > 0.05),
-                                    m_off=_cf["m_off"],
-                                    conditional=_cf["conditional"],
-                                    has_torsion=tors_live,
-                                    gets_shift=_cf["gets_shift"],
-                                    off_not_evaluated=off_not_evaluated,
-                                    theta_mode=theta_mode_str)
                         lchk = fchk
                 # The off-axis chord: bending tension about the OTHER axis plus its
                 # share of the torsion longitudinal force (no shear shift -- the
@@ -5394,22 +5399,22 @@ def _run_uniaxial_capacity_checks(inp, out):
                 for _ocf in chord_off_faces:
                     fchk = combined.longitudinal_check(
                         _ocf["m_ed"], _ocf["m_rd"], 0.0, ftd_t_star, _ocf["z_m"])
+                    fchk.update(valid=True, role="off_axis",
+                                axis=_ocf["axis"],
+                                tension_low=_ocf["tension_low"],
+                                m_off=_ocf["m_off"],
+                                conditional=_ocf["conditional"],
+                                z_src=_ocf.get("z_src"),
+                                theta_mode=theta_mode_str)
+                    ochecks.append(fchk)
                     if ochk is None or fchk["util"] > ochk["util"]:
-                        fchk.update(valid=True, axis=_ocf["axis"],
-                                    tension_low=_ocf["tension_low"],
-                                    m_off=_ocf["m_off"],
-                                    conditional=_ocf["conditional"],
-                                    z_src=_ocf.get("z_src"),
-                                    theta_mode=theta_mode_str)
                         ochk = fchk
             member_code_applicable = bool(
                 not links_out_of_limits
                 and out.get("torsion", {}).get("code_applicable", True)
             )
-            if lchk is not None:
-                lchk["code_applicable"] = member_code_applicable
-            if ochk is not None:
-                ochk["code_applicable"] = member_code_applicable
+            for chord_check in lchecks + ochecks:
+                chord_check["code_applicable"] = member_code_applicable
             out["shear"].update(
                 links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
                            asw_over_s=link_ctx["asw_over_s"],
@@ -5422,6 +5427,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                            code_applicable=not links_out_of_limits,
                            required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
                            chord_off=ochk,
+                           chord_candidates=lchecks + ochecks,
                            theta_mode=(theta_mode_str if shear_live
                                        else "resistance")))
 
@@ -8068,9 +8074,8 @@ def shear_view(inp, results):
                       help="bending + shear shift (+ torsion) as an equivalent "
                            "moment on the governing chord face")
             coverage = ch.get("off_not_evaluated")
-            fell_back = (
-                ch.get("biaxial") and not ch.get("conditional", True)
-            )
+            fallback = presentation.required_chord_fallback(links)
+            fell_back = fallback is not None
             if not ch.get("code_applicable", True):
                 g3.metric(
                     r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
@@ -8113,11 +8118,16 @@ def shear_view(inp, results):
                            "exceed MRd (6.2.3(7)); the strut-angle objective uses "
                            "this same capped demand.")
             if fell_back:
+                fallback_axis = fallback.get("axis", "?")
+                fallback_face = (
+                    "negative" if fallback.get("tension_low", True)
+                    else "positive"
+                )
                 st.warning(
-                    f"Biaxial bending: a moment about the OTHER axis is acting "
-                    f"({_pct(ch['off_util'])} of that axis' capacity) but the "
-                    "conditional capacity solve did not converge, so MRd is the "
-                    "pure-axis fallback and this chord check can be optimistic -- "
+                    f"The required {fallback_axis}-axis {fallback_face} face uses "
+                    "a pure-axis fallback because its conditional capacity solve "
+                    "did not converge. The complete longitudinal chord check can "
+                    "therefore be optimistic -- "
                     "rely on the combined " + chr(0x03A3) + "(SEd/SRd) check.")
             if coverage == "subdivided":
                 st.caption("Compound (subdivided) section: the torsion "
@@ -8727,7 +8737,8 @@ def combined_view(inp, results):
         biaxial = lg.get("biaxial", False)
         ok_l = lg["ok"]
         coverage = lg.get("off_not_evaluated")
-        fell_back = biaxial and not lg.get("conditional", True)
+        fallback = presentation.required_chord_fallback(c)
+        fell_back = fallback is not None
         g1, g2, g3 = st.columns(3)
         g1.metric(fr"$M_{{Ed}}$ (about {ax_lbl})", f"{lg['m_ed']:.1f} kNm")
         g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{lg['m_total']:.1f} kNm",
@@ -8780,11 +8791,16 @@ def combined_view(inp, results):
                        "peak-moment tension; a section tool has no beam peak, so MRd "
                        "is used as that cap).")
         if fell_back:
+            fallback_axis = fallback.get("axis", "?")
+            fallback_face = (
+                "negative" if fallback.get("tension_low", True)
+                else "positive"
+            )
             st.warning(
-                f"Biaxial bending: a moment about the OTHER axis is acting "
-                f"({_pct(lg['off_util'])} of that axis' capacity) but the "
-                "conditional capacity solve did not converge, so MRd is the "
-                "pure-axis fallback and this chord check can be optimistic. Rely "
+                f"The required {fallback_axis}-axis {fallback_face} face uses a "
+                "pure-axis fallback because its conditional capacity solve did "
+                "not converge. The complete longitudinal chord check can therefore "
+                "be optimistic. Rely "
                 "on the " + chr(0x03A3) + "(SEd/SRd) check above, which uses the "
                 "full biaxial bending utilisation.")
         if coverage == "subdivided":
