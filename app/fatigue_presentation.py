@@ -77,6 +77,10 @@ def overall_note(payload, *, stale=False):
     status = overall_status(payload)
     if stale:
         return f"Last status: {status}; inputs changed"
+    errors = items(payload, "errors")
+    if errors:
+        suffix = "" if len(errors) == 1 else "s"
+        return f"{len(errors)} fatigue input error{suffix}; fatigue not assessed"
     if status == "INVALID":
         return "One or more grouped spectra did not converge"
     if status == "FAIL":

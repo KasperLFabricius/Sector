@@ -1634,6 +1634,7 @@ class ReportBuilder:
         elastic_results = self._result_values("elastic")
         minimum_results = self._result_values("minimum_reinforcement")
         fatigue = self._base_out.get("fatigue")
+        fatigue_errors = tuple((fatigue or {}).get("errors") or ())
         if plastic_results:
             material_2023 = "2023" in str(self.inp.get("concrete_preset", ""))
             steel_presets = [
@@ -1682,7 +1683,7 @@ class ReportBuilder:
             if any(result.get("show_cw") for result in elastic_results):
                 self._p("<b>Crack width.</b> The requested crack-width calculation "
                         "follows the selected code method and is worked below.")
-        if fatigue is not None:
+        if fatigue is not None and not fatigue_errors:
             references = fatigue.get("calculation_references") or {}
             self._p(
                 "<b>Grouped fatigue.</b> Each named spectrum is checked "
@@ -1727,6 +1728,12 @@ class ReportBuilder:
             self._small(
                 "Miner damage is accumulated within each named spectrum only; "
                 "different spectrum names are not combined."
+            )
+        elif fatigue_errors:
+            self._p(
+                "<b>Grouped fatigue.</b> Fatigue was requested but not assessed "
+                "because the input preflight was invalid. No fatigue calculation "
+                "method was applied."
             )
         if minimum_results:
             edition = str(self.inp.get("detailing_edition") or "")
@@ -3798,13 +3805,21 @@ class ReportBuilder:
     def _fatigue(self):
         payload = self._base_out["fatigue"]
         status = fatigue_presentation.overall_status(payload)
+        errors = tuple(payload.get("errors") or ())
         governing_name = str(payload.get("governing_spectrum") or "-")
         self._h1("Grouped fatigue")
         self._status_block(
-            f"{status} - {_html_escape(governing_name)} | utilisation "
-            f"{_pct(fatigue_presentation.evidence_number(
-                payload.get('utilisation')
-            ))}",
+            (
+                f"{status} - fatigue not assessed; "
+                "other requested analyses were calculated"
+                if errors
+                else (
+                    f"{status} - {_html_escape(governing_name)} | utilisation "
+                    f"{_pct(fatigue_presentation.evidence_number(
+                        payload.get('utilisation')
+                    ))}"
+                )
+            ),
             status,
         )
         checks = payload.get("checks") or {}
@@ -3823,6 +3838,14 @@ class ReportBuilder:
         warnings = tuple(payload.get("warnings") or ())
         for warning in warnings:
             self._small("<b>Review:</b> " + _html_escape(str(warning)))
+        if errors:
+            self._p(
+                "Fatigue input was incomplete or invalid at calculation time. "
+                "No fatigue resistance verdict has been issued."
+            )
+            for error in errors:
+                self._small("<b>Input error:</b> " + _html_escape(str(error)))
+            return
 
         self._h2("Basis and provenance")
         basis = payload.get("basis") or {}
@@ -4514,7 +4537,8 @@ class ReportBuilder:
                 "strut-angle basis and the applicable interaction expressions."
             )
         fatigue = self._base_out.get("fatigue")
-        if fatigue is not None:
+        fatigue_errors = tuple((fatigue or {}).get("errors") or ())
+        if fatigue is not None and not fatigue_errors:
             references = fatigue.get("calculation_references") or {}
             lines.append(
                 "Grouped fatigue spectra are assessed independently with the "
@@ -4536,6 +4560,12 @@ class ReportBuilder:
                 )
             lines.append(
                 "Torsion and shear fatigue are not assessed in this version."
+            )
+        elif fatigue_errors:
+            lines.append(
+                "Fatigue was requested but not assessed because the input "
+                "preflight was invalid. No fatigue methodology or resistance "
+                "verdict was applied."
             )
         lines.append(
             "The printed gamma<sub>c</sub>, gamma<sub>s</sub> and reinforcement "

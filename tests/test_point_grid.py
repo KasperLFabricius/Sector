@@ -145,6 +145,55 @@ def test_point_grid_sends_persistent_id_and_derivation_contract(monkeypatch):
     assert result.iloc[0]["ID"] == "R1"
 
 
+def test_live_rows_remain_authoritative_when_catalogue_options_change(monkeypatch):
+    """A catalogue rerun must not replace newer browser edits with ``df``."""
+
+    captured = {}
+    live_rows = [{
+        "ID": "R1",
+        "x (mm)": 37.5,
+        "y (mm)": -212.0,
+        "size mode": "Diameter",
+        "area (mm2)": 490.873852,
+        "diameter (mm)": 25.0,
+        "material ID": "M2",
+        "fatigue detail ID": "",
+        "group ID": "live",
+        "spacing group ID": "",
+    }]
+
+    def fake_component(**kwargs):
+        captured.update(kwargs)
+        return {
+            "payload": {
+                "data_version": kwargs["data"]["data_version"],
+                "rows": live_rows,
+            }
+        }
+
+    monkeypatch.setattr(point_grid_module, "_component", fake_component)
+    stale_base = rebar_table.table_from_points(
+        [(0.0, -100.0, 314.0)], "bar"
+    )
+    result = point_grid_module.point_grid(
+        stale_base,
+        rebar_table.COLUMNS,
+        key="bars-live",
+        data_version=7,
+        column_specs=rebar_table.point_grid_specs(
+            "bar", ["M1", "M2", "M3"], ["F1", "F2"]
+        ),
+        component_options=rebar_table.point_grid_options(
+            "bar", ["M1", "M2", "M3"], ["F1", "F2"]
+        ),
+    )
+
+    assert captured["data"]["rows"][0]["x (mm)"] == 0.0
+    assert result.iloc[0]["x (mm)"] == 37.5
+    assert result.iloc[0]["material ID"] == "M2"
+    assert result.iloc[0]["fatigue detail ID"] == ""
+
+
 def test_material_select_preserves_an_unresolved_import_until_user_replaces_it(
     monkeypatch,
 ):
@@ -291,6 +340,13 @@ def test_frontend_uses_only_components_v2_state_api():
     assert 'removeEventListener("click", state.handleAddRow)' in renderer
     assert 'removeEventListener("paste", state.handlePaste, true)' in renderer
     assert "return state.cleanup" in renderer
+    assert "state.updateConfiguration" in renderer
+    assert "const rows = state.currentRows()" in renderer
+    assert "table.replaceData(rows)" in renderer
+    assert "replaceData(data.rows)" not in renderer[
+        renderer.index("state.updateConfiguration = data =>"):
+        renderer.index("state.handleAddRow = () =>")
+    ]
     assert "frozen: true" in renderer
     assert "frozen: isId" in renderer
     assert 'setAttribute("data-size-mode", value)' in renderer
