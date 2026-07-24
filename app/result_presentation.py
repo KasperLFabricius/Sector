@@ -438,15 +438,20 @@ def combined_physical_components(combined):
         max(candidates, key=candidate_util)
         if candidates else None
     )
+    required_candidates = [
+        item for item in (longitudinal, chord_off)
+        if item is not None and item.get("valid")
+    ]
     coverage = (
         longitudinal.get("off_not_evaluated")
         if longitudinal is not None else None
     )
     conditional = bool(
         governing is not None
-        and (
-            not governing.get("biaxial", False)
-            or governing.get("conditional", True)
+        and all(
+            not item.get("biaxial", False)
+            or item.get("conditional", True)
+            for item in required_candidates
         )
     )
     main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
@@ -456,7 +461,10 @@ def combined_physical_components(combined):
         and long_valid
         and conditional
         and not coverage
-        and governing.get("code_applicable", True)
+        and all(
+            item.get("code_applicable", True)
+            for item in required_candidates
+        )
     )
     long_util = governing.get("util") if governing is not None else None
     if not main_valid:
@@ -472,6 +480,21 @@ def combined_physical_components(combined):
             if coverage == "subdivided"
             else "One or more torsion-tensioned chord faces were not solved"
         )
+    elif not conditional:
+        long_status = "NOT ASSESSED"
+        fallback = next(
+            (
+                item for item in required_candidates
+                if item.get("biaxial", False)
+                and not item.get("conditional", True)
+            ),
+            {},
+        )
+        face = "negative" if fallback.get("tension_low", True) else "positive"
+        long_note = (
+            f"Required {fallback.get('axis', '?')}-axis {face} face uses "
+            "a pure-axis fallback; no code verdict"
+        )
     else:
         long_status = _util_summary_status(
             long_util,
@@ -480,8 +503,6 @@ def combined_physical_components(combined):
         )
         face = "negative" if governing.get("tension_low", True) else "positive"
         long_note = f"Governing {governing.get('axis', '?')}-axis {face} face"
-        if not conditional:
-            long_note += "; pure-axis fallback, no code verdict"
     longitudinal_component = {
         "key": "longitudinal",
         "label": "Longitudinal reinforcement",

@@ -426,6 +426,32 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
     assert "y-axis positive face" in longitudinal["note"]
 
 
+def test_combined_components_withhold_verdict_for_non_governing_fallback():
+    components = presentation.combined_physical_components({
+        "code_applicable": True,
+        "transverse": {
+            "valid": True, "cot": 1.6,
+            "u_crush": 0.40, "u_stirrup": 0.55,
+            "shear_fraction": 0.20, "torsion_fraction": 0.35,
+        },
+        "longitudinal": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "tension_low": True, "biaxial": True, "conditional": False,
+        },
+        "chord_off": {
+            "valid": True, "util": 0.85, "axis": "y",
+            "tension_low": False, "biaxial": True, "conditional": True,
+        },
+    })
+
+    longitudinal = components[2]
+    assert longitudinal["util"] == pytest.approx(0.85)
+    assert longitudinal["status"] == "NOT ASSESSED"
+    assert longitudinal["applicable"] is False
+    assert "pure-axis fallback" in longitudinal["note"]
+    assert "x-axis negative face" in longitudinal["note"]
+
+
 def test_combined_physical_components_tolerates_missing_candidate_utilisation():
     components = presentation.combined_physical_components({
         "transverse": None,
