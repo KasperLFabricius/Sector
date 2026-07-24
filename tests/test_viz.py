@@ -1028,6 +1028,22 @@ def test_fatigue_sn_figure_explicitly_omits_zero_range_on_log_axes():
     assert "1 zero-range bin omitted" in text
 
 
+def test_fatigue_sn_figure_handles_finite_near_overflow_life():
+    _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+    steel.bins[0].cycles_to_failure = 1.5e308
+
+    fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
+
+    characteristic = next(
+        trace for trace in fig.data
+        if trace.name == "characteristic S-N curve"
+    )
+    assert all(
+        math.isfinite(float(value)) and float(value) > 0.0
+        for value in characteristic.x
+    )
+
+
 def test_fatigue_damage_figure_shows_bin_cumulative_and_limit():
     _spectrum, steel, _concrete, _properties = _fatigue_figure_fixture()
 
@@ -1078,6 +1094,30 @@ def test_fatigue_damage_figure_caps_and_labels_unbounded_damage():
     assert all(math.isfinite(float(value)) for value in fig.data[0].y)
     assert all(math.isfinite(float(value)) for value in fig.data[1].y)
     assert list(fig.data[0].text) == ["", "inf"]
+    assert "Unbounded Miner damage" in " ".join(
+        annotation.text for annotation in fig.layout.annotations
+    )
+
+
+def test_fatigue_damage_figure_caps_overflowed_cumulative_sum():
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        element_id="R1",
+        bins=(
+            NS(bin_name="FAT-1", cycles=1.0e6, damage=1.0e308),
+            NS(bin_name="FAT-2", cycles=2.0e6, damage=1.0e308),
+        ),
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    cumulative = next(
+        trace for trace in fig.data
+        if trace.name == "cumulative damage"
+    )
+    assert all(math.isfinite(float(value)) for value in cumulative.y)
+    assert list(cumulative.text) == ["", "inf"]
     assert "Unbounded Miner damage" in " ".join(
         annotation.text for annotation in fig.layout.annotations
     )

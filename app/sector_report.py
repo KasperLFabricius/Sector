@@ -475,7 +475,10 @@ class ReportBuilder:
         numbered = f"{self._chapter}. {text}"
         heading = Paragraph(_greek(numbered), self.s["h1"])
         heading._sector_bookmark = f"sector-section-{self._chapter}"
-        heading._sector_outline = numbered
+        # The outline API does not parse Paragraph markup or numeric entities.
+        # Reuse the Paragraph's decoded plain text so escaped user identifiers
+        # appear in bookmarks exactly as they do on the page.
+        heading._sector_outline = heading.getPlainText()
         self.flow.append(heading)
 
     def _h2(self, text):
@@ -3894,7 +3897,7 @@ class ReportBuilder:
             self._h2("Assigned fatigue details")
             rows = [[
                 "ID", "Name", "Type", "Preset", "N*", "k<sub>1</sub>",
-                "k<sub>2</sub>", "delta sigma<sub>Rsk</sub>", "Source",
+                "k<sub>2</sub>", "&#916;sigma<sub>Rsk</sub>", "Source",
             ]]
             rows.extend([
                 [
@@ -4027,7 +4030,7 @@ class ReportBuilder:
                 self._h2("Elastic solver states")
                 rows = [[
                     "Bin", "Status", "gamma<sub>Ff</sub>", "Bond method",
-                    "Max design delta sigma", "Max concrete compression",
+                    "Max design &#916;sigma", "Max concrete compression",
                 ]]
                 rows.extend([
                     [
@@ -4099,7 +4102,7 @@ class ReportBuilder:
                     self._table(
                         [[
                             "Detail", "N*", "k<sub>1</sub>", "k<sub>2</sub>",
-                            "delta sigma<sub>Rsk</sub>", "f<sub>yk</sub> / proof",
+                            "&#916;sigma<sub>Rsk</sub>", "f<sub>yk</sub> / proof",
                             "Bond factor",
                         ], [
                             _html_escape(str(fatigue_presentation.value(
@@ -4151,8 +4154,8 @@ class ReportBuilder:
                     )
                     rows = [[
                         "Bin", "Cycles", "Status", "Long stress",
-                        "Fatigue total", "Design total", "Elastic delta sigma",
-                        "Design delta sigma", "Bond factor / method",
+                        "Fatigue total", "Design total", "Elastic &#916;sigma",
+                        "Design &#916;sigma", "Bond factor / method",
                     ]]
                     rows.extend([
                         [
@@ -4180,13 +4183,13 @@ class ReportBuilder:
                     )
                     self._small(
                         "All stresses are in MPa. Fatigue total includes the bond "
-                        "transformation; elastic delta sigma is the raw solver "
+                        "transformation; elastic &#916;sigma is the raw solver "
                         "range; design values include action-level "
                         "gamma<sub>Ff</sub>."
                     )
                     rows = [[
-                        "Bin", "delta sigma<sub>Rsk</sub>",
-                        "delta sigma<sub>Rd</sub>", "k", "N<sub>R</sub>",
+                        "Bin", "&#916;sigma<sub>Rsk</sub>",
+                        "&#916;sigma<sub>Rd</sub>", "k", "N<sub>R</sub>",
                         "Miner D", "Gov. stress", "Yield / proof", "Yield util.",
                     ]]
                     rows.extend([

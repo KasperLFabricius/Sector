@@ -230,6 +230,8 @@ _EPS = chr(0x3B5)       # epsilon
 _SIGMA = chr(0x3C3)     # sigma
 _DELTA = chr(0x394)     # uppercase delta
 _PERMILLE = chr(0x2030)  # per-mille sign
+_FLOAT_MAX = float.fromhex("0x1.fffffffffffffp+1023")
+_FLOAT_MIN_POSITIVE = float.fromhex("0x0.0000000000001p-1022")
 
 _MID = chr(0x00B7)  # middle dot, for products like k*fytk (BMP, surrogate-safe)
 
@@ -1243,6 +1245,18 @@ def _sn_range_at_cycles(cycles, *, n_star, knee_range, k1, k2):
     return knee_range * (n_star / cycles) ** (1.0 / exponent)
 
 
+def _finite_power_of_ten(exponent):
+    """Return a positive finite float at extreme base-10 exponents."""
+
+    try:
+        value = 10.0 ** exponent
+    except OverflowError:
+        return _FLOAT_MAX
+    if value == 0.0:
+        return _FLOAT_MIN_POSITIVE
+    return min(value, _FLOAT_MAX)
+
+
 def fatigue_sn_figure(
     result,
     properties,
@@ -1277,11 +1291,22 @@ def fatigue_sn_figure(
     ]
     minimum_cycles = min([1.0e3, n_star, *applied_cycles, *finite_lives])
     maximum_cycles = max([1.0e9, n_star, *applied_cycles, *finite_lives])
-    log_min = math.floor(math.log10(minimum_cycles))
-    log_max = math.ceil(math.log10(maximum_cycles))
-    count = max(120, (log_max - log_min) * 30)
+    log_min = max(
+        math.floor(math.log10(minimum_cycles)),
+        math.log10(_FLOAT_MIN_POSITIVE),
+    )
+    log_max = min(
+        math.ceil(math.log10(maximum_cycles)),
+        math.log10(_FLOAT_MAX),
+    )
+    count = min(
+        600,
+        max(120, int(math.ceil((log_max - log_min) * 30))),
+    )
     curve_cycles = [
-        10.0 ** (log_min + (log_max - log_min) * index / (count - 1))
+        _finite_power_of_ten(
+            log_min + (log_max - log_min) * index / (count - 1)
+        )
         for index in range(count)
     ]
     characteristic = [
@@ -1455,10 +1480,16 @@ def fatigue_damage_figure(result, *, title=None):
         value > 0.0 and not math.isfinite(value)
         for value in raw_damage
     ]
-    plot_cap = max(
-        1.10,
-        max([1.0, *finite_damage]) * 1.05,
-        sum(finite_damage) * 1.05,
+    largest_finite = max([1.0, *finite_damage])
+    finite_sum = sum(finite_damage)
+    cap_basis = max(
+        largest_finite,
+        finite_sum if math.isfinite(finite_sum) else largest_finite,
+    )
+    plot_cap = (
+        _FLOAT_MAX
+        if cap_basis >= _FLOAT_MAX / 1.05
+        else max(1.10, cap_basis * 1.05)
     )
     damage = [
         plot_cap if is_unbounded else max(value, 0.0)
@@ -1466,16 +1497,18 @@ def fatigue_damage_figure(result, *, title=None):
     ]
     cumulative_raw = []
     cumulative = []
+    cumulative_unbounded = []
     running = 0.0
     for raw in raw_damage:
         running = running + raw if math.isfinite(running) else running
+        is_unbounded = not math.isfinite(running)
         cumulative_raw.append(running)
-        cumulative.append(
-            plot_cap if not math.isfinite(running) else running
-        )
+        cumulative_unbounded.append(is_unbounded)
+        cumulative.append(plot_cap if is_unbounded else running)
+    any_unbounded = any(unbounded) or any(cumulative_unbounded)
     positive = [value for value in [*damage, *cumulative] if value > 0.0]
     use_log_scale = (
-        not any(unbounded)
+        not any_unbounded
         and bool(positive)
         and max(cumulative, default=0.0) < 0.05
     )
@@ -1537,10 +1570,20 @@ def fatigue_damage_figure(result, *, title=None):
             value if (not use_log_scale or value > 0.0) else None
             for value in cumulative
         ],
-        mode="lines+markers",
+        mode=(
+            "lines+markers+text"
+            if any(cumulative_unbounded)
+            else "lines+markers"
+        ),
         name="cumulative damage",
         line=dict(color=ENVELOPE, width=2.4),
         marker=dict(size=7, symbol="diamond"),
+        text=[
+            "inf" if is_unbounded else ""
+            for is_unbounded in cumulative_unbounded
+        ],
+        textposition="top center",
+        cliponaxis=False,
         customdata=[
             _fatigue_hover_number(value) for value in cumulative_raw
         ],
@@ -1556,7 +1599,7 @@ def fatigue_damage_figure(result, *, title=None):
         annotation_text="D = 1.00 limit",
         annotation_position="top right",
     )
-    if any(unbounded):
+    if any_unbounded:
         fig.add_annotation(
             x=0.01,
             y=0.98,
@@ -1565,7 +1608,8 @@ def fatigue_damage_figure(result, *, title=None):
             xanchor="left",
             yanchor="top",
             text=(
-                "Unbounded Miner damage (inf); red bars are capped for plotting"
+                "Unbounded Miner damage (inf); affected bars or the cumulative "
+                "line are capped for plotting"
             ),
             showarrow=False,
             bgcolor="rgba(253,236,236,0.92)",

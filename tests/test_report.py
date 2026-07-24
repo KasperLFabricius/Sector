@@ -409,6 +409,8 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     formula = compact[formula_start:formula_start + 90]
     assert formula.startswith(delta_sigma + "i=|")
     assert sigma + "(long)i|" in formula
+    assert "delta " + sigma not in text
+    assert text.count(delta_sigma) >= 7
 
 
 def test_report_fatigue_chapter_uses_the_engine_failure_state():
@@ -458,6 +460,28 @@ def test_report_preserves_literal_engineering_token_identifiers():
     )).split())
 
     assert literal_name in text
+
+
+def test_report_outline_decodes_literal_engineering_token_case_id():
+    import io
+    import pypdf
+
+    inp = _inp()
+    inp["plastic_case"]["id"] = "sigma"
+    pdf = sector_report.build_report({}, inp, _out(), figures=False)
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+
+    titles = []
+    pending = list(reader.outline)
+    while pending:
+        item = pending.pop(0)
+        if isinstance(item, list):
+            pending[0:0] = item
+        else:
+            titles.append(str(getattr(item, "title", item)))
+
+    assert any(title.endswith("sigma") for title in titles)
+    assert not any("&#115;igma" in title for title in titles)
 
 
 def test_report_preserves_negative_infinite_concrete_log_life():
