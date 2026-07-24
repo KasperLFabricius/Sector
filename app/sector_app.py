@@ -68,6 +68,7 @@ _EPS, _SIGMA, _RHO, _PHI = chr(0x3B5), chr(0x3C3), chr(0x3C1), chr(0x3C6)
 _KAPPA = chr(0x3BA)
 _THETA, _NU, _ALPHA, _DELTA = chr(0x3B8), chr(0x3BD), chr(0x3B1), chr(0x394)
 _TAU = chr(0x3C4)
+_DEG = chr(0x00B0)
 
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
@@ -1776,15 +1777,15 @@ def _fatigue_spectrum_column_config():
             "Sustained/basic moment about the y-axis.",
         ),
         "n_short_ed_kn": action(
-            "Delta N_Ed [kN]",
+            f"{_DELTA}N_Ed [kN]",
             "Cyclic axial-force increment added to N_Ed,long.",
         ),
         "mx_short_ed_knm": action(
-            "Delta Mx_Ed [kNm]",
+            f"{_DELTA}Mx_Ed [kNm]",
             "Cyclic x-moment increment added to Mx_Ed,long.",
         ),
         "my_short_ed_knm": action(
-            "Delta My_Ed [kNm]",
+            f"{_DELTA}My_Ed [kNm]",
             "Cyclic y-moment increment added to My_Ed,long.",
         ),
     }
@@ -3328,16 +3329,25 @@ def build_inputs(host=st):
     design_basis_slot = aset.container()
 
     aset.markdown("**Neutral-axis sweep (plastic)**")
-    v_min = _seeded_number(aset, r"Start angle $\varphi_{NA,\min}$ (deg)", 0.0, 360.0, 0.0, 5.0,
-                           "v_min", disabled=not plastic_on,
-                           help="First neutral-axis rotation angle of the plastic sweep.")
-    v_max = _seeded_number(aset, r"End angle $\varphi_{NA,\max}$ (deg)", 0.0, 360.0, 360.0, 5.0,
-                           "v_max", disabled=not plastic_on,
-                           help="Last neutral-axis rotation angle of the plastic sweep.")
-    v_inc = _seeded_number(aset, r"Increment $\Delta\varphi_{NA}$ (deg)", 1.0, 90.0, 15.0, 1.0,
-                           "v_inc", disabled=not plastic_on,
-                           help="Angular step between swept neutral-axis angles; "
-                                "a finer step gives a smoother M-M envelope.")
+    v_min = _seeded_number(
+        aset, r"Start angle $\varphi_{NA,\min}$ ($^\circ$)",
+        0.0, 360.0, 0.0, 5.0,
+        "v_min", disabled=not plastic_on,
+        help="First neutral-axis rotation angle of the plastic sweep.",
+    )
+    v_max = _seeded_number(
+        aset, r"End angle $\varphi_{NA,\max}$ ($^\circ$)",
+        0.0, 360.0, 360.0, 5.0,
+        "v_max", disabled=not plastic_on,
+        help="Last neutral-axis rotation angle of the plastic sweep.",
+    )
+    v_inc = _seeded_number(
+        aset, r"Increment $\Delta\varphi_{NA}$ ($^\circ$)",
+        1.0, 90.0, 15.0, 1.0,
+        "v_inc", disabled=not plastic_on,
+        help="Angular step between swept neutral-axis angles; "
+             "a finer step gives a smoother M-M envelope.",
+    )
     check_util = _seeded_checkbox(
         aset, "Check utilisation against applied moment", True, "pl_check_util",
         disabled=not plastic_on,
@@ -6382,7 +6392,7 @@ def _plastic_table(pts, cable, steel_comp=False):
                   if steel_comp else
                   {f"{_EPS}s (%)": [round(pt["eps_s"], 3) for pt in pts]})
     cols = {
-        "NA angle (deg)": [round(pt["V"], 1) for pt in pts],
+        f"NA angle ({_DEG})": [round(pt["V"], 1) for pt in pts],
         "Mx (kNm)": [round(pt["Mx"], 3) for pt in pts],
         "My (kNm)": [round(pt["My"], 3) for pt in pts],
         "NA x (mm)": [_fmt(pt["na_x"] * _MM) for pt in pts],
@@ -6495,7 +6505,7 @@ def plastic_view(inp, results):
         st.session_state["pl_state"] = default_i
     sel = st.selectbox("Neutral-axis state", range(len(pts)), index=default_i,
                        format_func=lambda i: (
-                           f"{i + 1}: NA angle = {pts[i]['V']:.0f} deg"
+                           f"{i + 1}: NA angle = {pts[i]['V']:.0f}{_DEG}"
                        ),
                        key="pl_state",
                        help="Inspect the section state at one swept neutral-axis angle.")
@@ -6536,7 +6546,7 @@ def plastic_view(inp, results):
                                bar_colors=bar_colors, tendons=tendon_xy,
                                tendon_colors=tendon_colors,
                                zones=viz.compression_zones(inp["outer"], hp),
-                               title=f"Section at NA angle = {pt['V']:.0f} deg "
+                               title=f"Section at NA angle = {pt['V']:.0f}{_DEG} "
                                      "(tension + / compression -)",
                                show_labels=True, label_scale=inp["label_scale"],
                                label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
@@ -6585,7 +6595,7 @@ def plastic_view(inp, results):
     with st.expander("Selected neutral-axis state - QA evidence", expanded=False):
         st.caption(
             f"Point-by-point design stress and compatible strain at NA angle = "
-            f"{pt['V']:.0f} deg. Signs are tension positive; reinforcement force "
+            f"{pt['V']:.0f}{_DEG}. Signs are tension positive; reinforcement force "
             "is stress x entered area."
         )
         concrete_rows = evidence["concrete"]
@@ -8011,7 +8021,7 @@ def shear_view(inp, results):
                           "Lever arm z", "Link area/spacing Asw/s", "Design yield fywd",
                           f"Strut factor {_NU}1", f"Chord factor {_ALPHA}cw",
                           f"Extra long. tension {_DELTA}Ftd"],
-             "Value": [f"{lk['theta_deg']:.1f} deg", f"{lk['cot']:.3f}",
+             "Value": [f"{lk['theta_deg']:.1f}{_DEG}", f"{lk['cot']:.3f}",
                        f"{lk['z']:.1f} mm ({links['z_source']})",
                        f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
                        f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
@@ -8328,9 +8338,13 @@ def torsion_view(inp, results):
                       "check and selected to minimise the governing utilisation"
                       if t.get("theta_mode") == "utilisation"
                       else "auto-optimised for the torsion resistance")
-        st.caption(f"{t['theta_deg']:.1f} deg strut (cot {_THETA} = {t['cot']:.3f}, "
-                   f"{theta_note}). Method: {t['method']}. TRd,s = {t['trd_s']:.3f} "
-                   f"kNm, TRd,max = {t['trd_max']:.3f} kNm.")
+        st.caption(
+            f"$\\theta={t['theta_deg']:.1f}^\\circ$ strut "
+            f"($\\cot\\theta={t['cot']:.3f}$, {theta_note}). "
+            f"Method: {t['method']}. "
+            f"$T_{{Rd,s}}={t['trd_s']:.3f}$ kNm, "
+            f"$T_{{Rd,max}}={t['trd_max']:.3f}$ kNm."
+        )
         tef_note = ("user input" if tube["tef_user"]
                     else ("auto A/u, capped at the wall" if tube["tef_capped"]
                           else "auto = A/u"))
@@ -8416,10 +8430,14 @@ def torsion_view(inp, results):
             code_applicable=inter.get("code_applicable", True),
         )
         st.caption(
-            "TEd/TRd,max + VEd/VRd,max <= 1 (6.29), evaluated at a common strut angle "
-            f"cot {_THETA} = {inter['cot']:.2f} ({inter['theta_deg']:.1f} deg) -- both "
-            "TRd,max and VRd,max peak near 45 deg, so this is the least-conservative "
-            "shared angle. TRd,max and VRd,max here are at that common angle, so they "
+            r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$ (6.29), "
+            "evaluated at a common strut angle "
+            f"$\\cot\\theta={inter['cot']:.2f}$ "
+            f"($\\theta={inter['theta_deg']:.1f}^\\circ$) -- both "
+            f"$T_{{Rd,max}}$ and $V_{{Rd,max}}$ peak near $45^\\circ$, so this is the "
+            "least-conservative "
+            "shared angle. The displayed $T_{Rd,max}$ and $V_{Rd,max}$ are evaluated "
+            "at that common angle, so they "
             "differ from the stand-alone values above.")
 
 
@@ -8584,9 +8602,12 @@ def combined_view(inp, results):
             code_applicable=cr.get("code_applicable",
                                    c.get("code_applicable", True)),
         )
-        cc2.caption(f"At a common strut $\\cot\\theta={cr['cot']:.2f}$ "
-                    f"({cr['theta_deg']:.1f} deg). $T_{{Rd,max}}={cr['trd_max']:.1f}$ kNm, "
-                    f"$V_{{Rd,max}}={cr['vrd_max']:.1f}$ kN.")
+        cc2.caption(
+            f"At a common strut $\\cot\\theta={cr['cot']:.2f}$ "
+            f"($\\theta={cr['theta_deg']:.1f}^\\circ$). "
+            f"$T_{{Rd,max}}={cr['trd_max']:.1f}$ kNm, "
+            f"$V_{{Rd,max}}={cr['vrd_max']:.1f}$ kN."
+        )
         st.plotly_chart(viz.vt_interaction_figure(
             cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],
             show_verdict=cr.get("code_applicable",
@@ -8624,10 +8645,12 @@ def combined_view(inp, results):
         else:
             st.caption(f"VEd > VRd,c, so the stirrup carries both: shear and torsion "
                        "demands add on the shared closed stirrup.")
-        st.caption(f"At the member strut angle cot {_THETA} = {tr['cot']:.2f} "
-                   f"({tr['theta_deg']:.1f} deg) -- the ONE angle shared by every "
-                   "shear and torsion check (6.3.2(2)), selected to minimise the "
-                   "governing utilisation.")
+        st.caption(
+            f"At the member strut angle $\\cot\\theta={tr['cot']:.2f}$ "
+            f"($\\theta={tr['theta_deg']:.1f}^\\circ$) -- the ONE angle shared "
+            "by every shear and torsion check (6.3.2(2)), selected to minimise "
+            "the governing utilisation."
+        )
 
     st.divider()
     st.markdown("**Longitudinal reinforcement: combined M + V + T tension chord**")

@@ -347,7 +347,7 @@ def test_latex_to_rl_converts_the_subset():
     assert "&#966;" in out and "&#949;" in out            # phi, eps -> entities
     assert "<sub>cu2</sub>" in out and "<super>2</super>" in out
     assert "(s<sub>na</sub>-s<sub>bar,min</sub>)" in out  # compound denom parenthesised
-    assert "min(" in out
+    assert "min&nbsp;(" in out
     assert "\\" not in out and "{" not in out and "}" not in out  # nothing left over
 
     # A nested fraction (the EC2 7.9 mean strain has a tfrac inside the frac
@@ -378,6 +378,8 @@ def test_latex_to_rl_converts_the_subset():
     shear = manual._latex_to_rl(
         r"V_{Rd,c}=\Big[C_{Rd,c}+\tau_{Rd,c}\Big]")
     assert "Big" not in shear
+    assert "&#8721;" in manual._latex_to_rl(r"\sum_i A_i")
+    assert "cot&nbsp;&#952;" in manual._latex_to_rl(r"\cot\theta")
     assert "&#964;" in shear
 
 

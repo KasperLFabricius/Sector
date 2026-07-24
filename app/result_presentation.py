@@ -15,6 +15,7 @@ import case_analysis
 import viz
 
 _MM = 1000.0
+_DEGREE = chr(0x00B0)
 
 
 def plastic_action_assessment(pl):
@@ -37,7 +38,9 @@ def plastic_action_assessment(pl):
         detail = "Capacity only; applied-moment check disabled"
     elif not complete or util is None:
         status = "NOT ASSESSED"
-        detail = "Open arc; close the 360 deg envelope to assess utilisation"
+        detail = (
+            f"Open arc; close the 360{_DEGREE} envelope to assess utilisation"
+        )
     elif not math.isfinite(util):
         status = "FAIL"
         detail = "No finite capacity intersection"

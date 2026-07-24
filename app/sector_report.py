@@ -1426,9 +1426,12 @@ class ReportBuilder:
             ])
         plastic_results = self._result_values("plastic")
         if plastic_results:
-            rows.append(["Sweep start V.min", f"{_fmt(inp.get('v_min'),0)} deg"])
-            rows.append(["Sweep end V.max", f"{_fmt(inp.get('v_max'),0)} deg"])
-            rows.append(["Sweep increment V.inc", f"max {_fmt(inp.get('v_inc'),0)} deg"])
+            rows.append(["Sweep start phi<sub>NA,min</sub>",
+                         f"{_fmt(inp.get('v_min'),0)}&#176;"])
+            rows.append(["Sweep end phi<sub>NA,max</sub>",
+                         f"{_fmt(inp.get('v_max'),0)}&#176;"])
+            rows.append(["Sweep increment &#916;phi<sub>NA</sub>",
+                         f"max {_fmt(inp.get('v_inc'),0)}&#176;"])
             checked = plastic_results[0].get("check_util", True)
             rows.append(["Utilisation check",
                          "applied moment checked" if checked else "capacity only"])
@@ -1663,7 +1666,7 @@ class ReportBuilder:
             self._p("The compression depth c is solved from axial equilibrium and "
                     "the moments follow from the force resultants:")
             self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
-                          "M = sum( F<sub>i</sub> &#183; d<sub>i</sub> )")
+                          "M = &#8721;(F<sub>i</sub> &#183; d<sub>i</sub>)")
         if elastic_results:
             self._p("<b>Cracked-section elastic stresses.</b> Transformed section "
                     "(reinforcement weighted by the modular ratio), concrete tension "
@@ -1703,7 +1706,7 @@ class ReportBuilder:
                     "The same bin also checks yield or proof stress."
                 )
                 self._formula(
-                    "D = sum(n<sub>i</sub> / N<sub>R,i</sub>) &#8804; 1.00",
+                    "D = &#8721;(n<sub>i</sub> / N<sub>R,i</sub>) &#8804; 1.00",
                     ref=_html_escape(
                         references.get("reinforcement") or "-"
                     ),
@@ -1717,7 +1720,7 @@ class ReportBuilder:
                     "bound."
                 )
                 self._formula(
-                    "D<sub>c</sub> = sum(n<sub>i</sub> / "
+                    "D<sub>c</sub> = &#8721;(n<sub>i</sub> / "
                     "N<sub>R,i</sub>) &#8804; 1.00",
                     ref=_html_escape(references.get("concrete") or "-"),
                 )
@@ -1857,7 +1860,7 @@ class ReportBuilder:
                     )
         elif checks and checks[0].get("type") == "pure tension":
             self._formula(
-                "R<sub>nom</sub> = sum(A<sub>s,i</sub> f<sub>yk,i</sub>) "
+                "R<sub>nom</sub> = &#8721;(A<sub>s,i</sub> f<sub>yk,i</sub>) "
                 "&#8805; R<sub>cr</sub> = A<sub>c</sub> f<sub>ctm</sub>",
                 ref="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
             )
@@ -2136,7 +2139,7 @@ class ReportBuilder:
             font=7.2,
             keep=False,
         )
-        self._small("NA angle in deg; M in kNm; NA x/y, lever L, d<sub>x</sub> "
+        self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever L, d<sub>x</sub> "
                     "and d<sub>y</sub> in mm; strain in %; kappa in 1/m; "
                     "F<sub>c</sub> in kN.")
         # Governing case worked.
@@ -2160,7 +2163,7 @@ class ReportBuilder:
         T = Fc + P                              # tension resultant (solver: Fc - T = -N)
         start = len(self.flow)
         self._h2(heading)
-        self._p(f"Neutral-axis angle = {_fmt(gov['V'],0)} deg. The extreme "
+        self._p(f"Neutral-axis angle = {_fmt(gov['V'],0)}&#176;. The extreme "
                 f"concrete fibre is at the ultimate strain; the curvature scales "
                 f"the strain plane to that limit.")
         comp = (bool(self.inp.get("bars"))
@@ -2284,7 +2287,7 @@ class ReportBuilder:
                 scale=_MM, unit="mm",
                 bar_ids=[item.get("id") for item in inp.get("bar_elements", [])],
                 tendon_ids=[item.get("id") for item in inp.get("tendon_elements", [])],
-                title=f"Plastic state at NA angle = {_fmt(gov['V'],0)} deg "
+                title=f"Plastic state at NA angle = {_fmt(gov['V'],0)}{chr(0x00B0)} "
                       "(tension + / compression -)"), 150, 100)
             self._small(
                 "Blue/plain markers are tension (+); vermillion/x markers are "
@@ -2344,9 +2347,9 @@ class ReportBuilder:
             result=f"tau = {_fmt(res['tau_basic'], 3)} MPa")
         self._formula(
             "tau<sub>Rd,c,min</sub> = (11/gamma<sub>v</sub>) "
-            "sqrt(f<sub>ck</sub>/f<sub>yd</sub> &#183; d<sub>dg</sub>/d)",
+            "&#8730;(f<sub>ck</sub>/f<sub>yd</sub> &#183; d<sub>dg</sub>/d)",
             ref="EN 1992-1-1:2023 (8.20)",
-            subst=f"(11/{_fmt(res['gamma_v'], 2)}) sqrt({_fmt(fck, 0)}/"
+            subst=f"(11/{_fmt(res['gamma_v'], 2)}) &#8730;({_fmt(fck, 0)}/"
                   f"{_fmt(res['fyd'], 1)} &#183; {_fmt(res['ddg'], 1)}/"
                   f"{_fmt(sh['d'], 1)})",
             result=f"tau<sub>min</sub> = {_fmt(res['tau_min'], 3)} MPa")
@@ -2658,7 +2661,8 @@ class ReportBuilder:
                 ["Lever arm", "z",
                  f"{_fmt(lk['z'], 1)} mm ({links.get('z_source', '0.9 d')})"],
                 ["Strut angle", "theta",
-                 f"{_fmt(lk['theta_deg'], 1)} deg (cot theta = {_fmt(lk['cot'], 3)})"],
+                 f"{_fmt(lk['theta_deg'], 1)}&#176; "
+                 f"(cot theta = {_fmt(lk['cot'], 3)})"],
                 ["Strut factor", "nu<sub>1</sub>", f"{_fmt(lk['nu1'], 3)}"],
                 ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(lk['alpha_cw'], 3)}"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
@@ -2745,18 +2749,18 @@ class ReportBuilder:
                 note += (" Biaxial bending is acting but the conditional capacity "
                          "solve did not converge, so M<sub>Rd</sub> is the pure-axis "
                          "fallback and this check can be optimistic -- rely on the "
-                         "combined sum(SEd/SRd).")
+                         "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
             elif ch.get("off_not_evaluated") == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated here -- rely on the combined "
-                         "sum(SEd/SRd).")
+                         "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
             elif ch.get("off_not_evaluated") == "not_solved":
                 note += (" One or more chord faces carrying the torsion share could "
                          "not be evaluated (a conditional solve failed or a face has "
                          "no tension steel), so they are not checked and the governing "
                          "chord shown may not be the critical face -- rely on the "
-                         "combined sum(SEd/SRd).")
+                         "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
             self._small(note)
             self._chord_off_block(links.get("chord_off"))
 
@@ -2859,7 +2863,10 @@ class ReportBuilder:
                 ["Shear V", _pct(c["r_v"])],
                 ["Torsion T", _pct(c["r_t"])]]
         self._table(rows, [90 * mm, 60 * mm])
-        self._h2("DK NA 6.3.2(6): sum(SEd/SRd) &#8804; 1")
+        self._h2(
+            "DK NA 6.3.2(6): "
+            "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) &#8804; 1"
+        )
         applicable = c.get("code_applicable", True)
         if not applicable:
             self._small("Warning: one or more active strut-angle bounds fall outside "
@@ -2873,8 +2880,14 @@ class ReportBuilder:
         else:
             expr = "r<sub>M</sub> + r<sub>V</sub> + r<sub>T</sub>"
             note = "each action alone; N folded into the bending utilisation."
-        self._formula(expr, subst=note,
-                      result=f"sum(SEd/SRd) = {_pct(c['dkna_sum'])}  ({verdict})")
+        self._formula(
+            expr,
+            subst=note,
+            result=(
+                "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = "
+                f"{_pct(c['dkna_sum'])}  ({verdict})"
+            ),
+        )
         cr = c.get("crushing")
         if cr is not None and cr.get("valid"):
             self._h2("Concrete crushing (6.29)")
@@ -2889,7 +2902,7 @@ class ReportBuilder:
                       f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}",
                 result=f"{_pct(val)}  ({vv})")
             self._small(f"At a common strut cot theta = {_fmt(cr['cot'], 2)} "
-                        f"({_fmt(cr['theta_deg'], 1)} deg).")
+                        f"(theta = {_fmt(cr['theta_deg'], 1)}&#176;).")
             self._fig(viz.vt_interaction_figure(cr["vrd_max"], cr["trd_max"],
                                                 cr["v_ed"], cr["t_ed"],
                                                 show_verdict=cr.get(
@@ -2923,7 +2936,8 @@ class ReportBuilder:
                 result=f"crushing utilisation = {_pct(tr['u_crush'])}")
             self._p(f"Governing ({tr['governs']}): {_pct(tr['governing'])}  ({vv})")
             self._small(note + f" At the member strut angle cot theta = "
-                        f"{_fmt(tr['cot'], 2)} ({_fmt(tr['theta_deg'], 1)} deg) -- "
+                        f"{_fmt(tr['cot'], 2)} "
+                        f"(theta = {_fmt(tr['theta_deg'], 1)}&#176;) -- "
                         "the one angle shared by every shear and torsion check "
                         "(6.3.2(2)), selected to minimise the governing utilisation.")
         lg = c.get("longitudinal")
@@ -2974,26 +2988,31 @@ class ReportBuilder:
                         f"{_pct(lg.get('off_util', 0.0))} of that axis' capacity) but "
                         "the conditional capacity solve did not converge, so "
                         "M<sub>Rd</sub> is the pure-axis fallback and this chord check "
-                        "can be optimistic -- rely on the sum(SEd/SRd) check above, "
+                        "can be optimistic -- rely on the "
+                        "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
                         "which uses the full biaxial bending utilisation.")
             note = viz.chord_angle_note(lg.get("theta_mode"))
             if lg.get("off_not_evaluated") == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
-                         "share is not evaluated; the sum(SEd/SRd) check covers the "
+                         "share is not evaluated; the "
+                         "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check covers the "
                          "interaction.")
             elif lg.get("off_not_evaluated") == "not_solved":
                 note += (" One or more chord faces carrying the torsion share could "
                          "not be evaluated (a conditional solve failed or a face has "
                          "no tension steel), so they are NOT checked and the governing "
-                         "chord shown may not be the critical face; the sum(SEd/SRd) "
+                         "chord shown may not be the critical face; the "
+                         "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) "
                          "check above remains the combined verification.")
             elif biaxial and not lg.get("has_torsion"):
                 note += (" The off-axis chord carries only its bending tension (no "
                          "torsion is acting), which the biaxial bending utilisation "
-                         "in the sum(SEd/SRd) check already covers.")
+                         "in the &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) "
+                         "check already covers.")
             elif not biaxial:
-                note += (" The sum(SEd/SRd) check above uses the full biaxial bending "
+                note += (" The &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above "
+                         "uses the full biaxial bending "
                          "utilisation and remains the primary combined check.")
             if lg["capped"]:
                 note = ("The shear shift is capped so bending + shear does not exceed "
@@ -3003,7 +3022,8 @@ class ReportBuilder:
             self._small(note)
             self._chord_off_block(c.get("chord_off"))
         else:
-            self._small(f"Additional longitudinal steel: torsion sum A<sub>sl</sub> = "
+            self._small(f"Additional longitudinal steel: torsion "
+                        "&#8721;A<sub>sl</sub> = "
                         f"{_fmt(c['asl_torsion'], 0)} mm<sup>2</sup> round the perimeter "
                         f"(6.28); shear &#916;F<sub>td</sub> = {_fmt(c['delta_ftd'], 1)} "
                         "kN on the tension chord (6.18) -- both beyond the bending "
@@ -3046,7 +3066,8 @@ class ReportBuilder:
                     "Each chord's capacity is conditional on the OTHER axis' "
                     "bending moment only; the longitudinal steel the two chords "
                     "share also carries both their shear/torsion tensions, an "
-                    "interaction the DK NA sum(SEd/SRd) check captures and which "
+                    "interaction the DK NA "
+                    "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check captures and which "
                     "stays the authoritative combined verification.")
 
     def _subtube_section(self, t):
@@ -3089,9 +3110,10 @@ class ReportBuilder:
             ref=f"worst sub-tube: {gov}", result=f"{util_txt}  ({verdict})")
         self._small("The applied torque is split by stiffness, not capacity, so a "
                     "sub-tube can be overstressed even while T<sub>Ed</sub> &#8804; sum "
-                    "T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}" + " kN.m; the section "
+                    "T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}"
+                    + " kN&#183;m; the section "
                     "passes only when every sub-tube passes. Total longitudinal steel "
-                    "sum A<sub>sl</sub> = " + f"{_fmt(t['asl_req'], 0)}" +
+                    "&#8721;A<sub>sl</sub> = " + f"{_fmt(t['asl_req'], 0)}" +
                     " mm<sup>2</sup> (sum over the sub-tubes), in addition to the "
                     "bending steel; the combined V+T crushing pairs the shear with the "
                     "web sub-tube.")
@@ -3125,7 +3147,8 @@ class ReportBuilder:
                   f"{_fmt(inter['v_ed'], 3)}/{_fmt(inter['vrd_max'], 3)}",
             result=f"{val_txt}  ({verdict_i})")
         self._small("Evaluated at the common strut angle cot theta = "
-                    f"{_fmt(inter['cot'], 2)} ({_fmt(inter['theta_deg'], 1)} deg); "
+                    f"{_fmt(inter['cot'], 2)} "
+                    f"(theta = {_fmt(inter['theta_deg'], 1)}&#176;); "
                     "T<sub>Rd,max</sub> and V<sub>Rd,max</sub> here are at that shared "
                     "angle.")
         self._fig(viz.vt_interaction_figure(inter["vrd_max"], inter["trd_max"],
@@ -3266,7 +3289,8 @@ class ReportBuilder:
                 ["Enclosed area", "A<sub>k</sub>", f"{_fmt(tube['Ak'] * 1e6, 0)} mm<sup>2</sup>"],
                 ["Centre-line perimeter", "u<sub>k</sub>", f"{_fmt(tube['uk'] * 1e3, 0)} mm"],
                 ["Strut angle", "theta",
-                 f"{_fmt(t['theta_deg'], 1)} deg (cot theta = {_fmt(t['cot'], 3)})"],
+                 f"{_fmt(t['theta_deg'], 1)}&#176; "
+                 f"(cot theta = {_fmt(t['cot'], 3)})"],
                 ["Strut factor", "nu", f"{_fmt(t['nu'], 3)}"],
                 ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(t['alpha_cw'], 3)}"],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
@@ -3289,7 +3313,7 @@ class ReportBuilder:
             ref="from EN 1992-1-1 (6.28)",
             subst=f"{_fmt(t['asw_over_s'], 4)} &#183; 2 &#183; {_fmt(tube['Ak'], 4)} "
                   f"&#183; {_fmt(t['fywd'], 1)} &#183; {_fmt(t['cot'], 3)}",
-            result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN.m")
+            result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN&#183;m")
         self._formula(
             "T<sub>Rd,max</sub> = 2 nu alpha<sub>cw</sub> f<sub>cd</sub> "
             "A<sub>k</sub> t<sub>ef</sub> sin theta cos theta",
@@ -3297,11 +3321,11 @@ class ReportBuilder:
             subst=f"2 &#183; {_fmt(t['nu'], 3)} &#183; {_fmt(t['alpha_cw'], 3)} &#183; "
                   f"{_fmt(t['fcd'], 2)} &#183; {_fmt(tube['Ak'], 4)} &#183; "
                   f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; "
-                  f"sincos({_fmt(t['cot'], 3)}) &#183; 1000",
-            result=f"T<sub>Rd,max</sub> = {_fmt(t['trd_max'], 3)} kN.m")
+                  f"{_fmt(t['cot'] / (1.0 + t['cot'] ** 2), 4)} &#183; 1000",
+            result=f"T<sub>Rd,max</sub> = {_fmt(t['trd_max'], 3)} kN&#183;m")
         self._formula(
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
-            result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN.m "
+            result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
                    f"(governed by {t['governs']})")
         self._formula(
             "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
@@ -3309,7 +3333,7 @@ class ReportBuilder:
             subst=f"2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
                   f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; {_fmt(t['fctd'], 3)} "
                   "&#183; 1000",
-            result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN.m")
+            result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN&#183;m")
         util = t["util"]
         util_txt = _pct(util)
         verdict = _code_verdict(
@@ -3320,16 +3344,17 @@ class ReportBuilder:
                       subst=f"{_fmt(t['t_ed'], 3)} / {_fmt(t['trd'], 3)}",
                       result=f"{util_txt}  ({verdict})")
         self._formula(
-            "sum A<sub>sl</sub> = T<sub>Ed</sub> u<sub>k</sub> cot theta / "
+            "&#8721;A<sub>sl</sub> = T<sub>Ed</sub> u<sub>k</sub> cot theta / "
             "(2 A<sub>k</sub> f<sub>yd</sub>)",
             ref="EN 1992-1-1 (6.28)",
             subst=f"{_fmt(t['t_ed'], 3)} &#183; {_fmt(tube['uk'], 4)} &#183; "
                   f"{_fmt(t['cot'], 3)} / (2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
                   f"{_fmt(t['fyd_long'], 1)}) &#183; 1000",
-            result=f"sum A<sub>sl</sub> = {_fmt(t['asl_req'], 0)} mm<sup>2</sup> "
+            result=f"&#8721;A<sub>sl</sub> = {_fmt(t['asl_req'], 0)} mm<sup>2</sup> "
                    "(in addition to the bending steel)")
         self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "
-                    "MN.m to kN.m (resistances) and m<sup>2</sup> to mm<sup>2</sup> "
+                    "MN&#183;m to kN&#183;m (resistances) and m<sup>2</sup> "
+                    "to mm<sup>2</sup> "
                     "(A<sub>sl</sub>).")
         # Biaxial runs report Eq. 6.31 per shear direction above. The standalone
         # torsion payload has no shear companion and must not replace those screens.
@@ -3722,7 +3747,7 @@ class ReportBuilder:
     def _crack_candidates(self, cases):
         """Append the complete sorted per-element crack-width audit table."""
         rows = [["Case", "#", "Element", "x", "y", "c", "phi",
-                 "sigma<sub>s</sub>", "A<sub>c,eff</sub>", "delta eps",
+                 "sigma<sub>s</sub>", "A<sub>c,eff</sub>", "&#916;eps",
                  "s<sub>r</sub>", "w<sub>k</sub>"]]
         for case, label in cases:
             candidates = [] if not case else case.get("candidates", [])
@@ -3762,7 +3787,7 @@ class ReportBuilder:
         self._small(
             "LT = long-term; ST = short-term. Coordinates, c, phi and "
             "s<sub>r</sub> in mm; sigma<sub>s</sub> in MPa; "
-            "A<sub>c,eff</sub> in m<super>2</super>; delta eps "
+            "A<sub>c,eff</sub> in m<super>2</super>; &#916;eps "
             "dimensionless; w<sub>k</sub> in mm. G = governing; "
             "N = within 10% of governing."
         )

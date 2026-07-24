@@ -23,9 +23,26 @@ APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import apply_case_changes, first_case_value  # noqa: E402
 
+_MATH_SPAN_RE = re.compile(r"\${1,2}.*?\${1,2}", flags=re.DOTALL)
+_LEAKED_MATH_RE = re.compile(
+    r"\\[A-Za-z]+|\b(?:sqrt|Cfrac|Big|sincos)\b"
+)
+
 
 def _fresh():
     return AppTest.from_file(APP, default_timeout=90)
+
+
+def _assert_math_text_is_renderable(value):
+    """Guard text surfaces without rejecting valid KaTeX inside ``$...$``."""
+    if not isinstance(value, str) or not value:
+        return
+    assert value.count("$") % 2 == 0, value
+    for expression in _MATH_SPAN_RE.findall(value):
+        assert r"\Cfrac" not in expression
+        assert not re.search(r"\\(?:quad|qquad)[A-Za-z]", expression)
+    plain_text = _MATH_SPAN_RE.sub("", value)
+    assert not _LEAKED_MATH_RE.search(plain_text), value
 
 
 def _fresh_qs(**state):
@@ -768,6 +785,8 @@ def test_plastic_table_splits_steel_strain_when_active_in_compression():
     assert "eps_s_comp" in pts[0]
     active = _plastic_table(pts, False, True)
     assert any(",t (%)" in c for c in active) and any(",c (%)" in c for c in active)
+    assert f"NA angle ({chr(0x00B0)})" in active
+    assert not any("deg" in c for c in active)
     tension = _plastic_table(pts, False, False)
     assert not any(",c (%)" in c for c in tension)          # no compression column
     assert not any(",t (%)" in c for c in tension)          # the single column is eps_s
@@ -3064,7 +3083,7 @@ def test_inputs_carry_help_tooltips():
                     value or "",
                 ), (widget.key, value)
     assert at.number_input(key="v_min").label == (
-        r"Start angle $\varphi_{NA,\min}$ (deg)"
+        r"Start angle $\varphi_{NA,\min}$ ($^\circ$)"
     )
     assert at.number_input(key="sls_wk_limit").label == (
         r"Crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)"
@@ -3112,6 +3131,36 @@ def test_inputs_carry_help_tooltips():
     for key in ("shape", "b_mm", "h_mm", "bot_c_mm", "top_c_mm"):
         w = _widget(at.number_input, key) or _widget(at.selectbox, key)
         assert w is not None and w.help, key
+
+
+def test_streamlit_text_uses_katex_or_plain_display_symbols():
+    """No LaTeX command may escape a supported math span in rendered UI text."""
+    at = _fresh()
+    at.run()
+
+    def check_tree():
+        groups = (
+            "markdown", "caption", "info", "warning", "error", "success",
+            "metric", "number_input", "selectbox", "text_input", "text_area",
+            "radio", "toggle", "checkbox", "button",
+        )
+        for group_name in groups:
+            for element in getattr(at, group_name, ()):
+                for attribute in ("label", "help", "value"):
+                    _assert_math_text_is_renderable(
+                        getattr(element, attribute, None)
+                    )
+        # Dataframe cells are deliberately non-Markdown in Streamlit. Column names
+        # therefore use display glyphs and may never contain raw LaTeX delimiters.
+        for element in at.dataframe:
+            value = element.value
+            for column in getattr(value, "columns", ()):
+                assert "$" not in str(column)
+                assert "\\" not in str(column)
+
+    check_tree()
+    _calculate(at)
+    check_tree()
 
 
 def _widget(seq, key):
@@ -3212,6 +3261,12 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
     ]
+    fatigue_editor = _widget(at.dataframe, "fatigue_spectrum_editor")
+    column_config = json.loads(fatigue_editor.proto.columns)
+    for key in ("n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm"):
+        label = column_config[key]["label"]
+        assert label.startswith(chr(0x394))
+        assert "Delta" not in label and "$" not in label and "\\" not in label
     rendered_keys = {
         widget.key
         for widgets in (at.number_input, at.text_input, at.checkbox)
