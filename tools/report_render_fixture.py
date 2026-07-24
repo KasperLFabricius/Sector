@@ -242,15 +242,13 @@ def _inputs() -> dict:
                 "id": "R1", "x_mm": 0.0, "y_mm": -120.0,
                 "area_mm2": 500.0, "diameter_mm": 25.23,
                 "size_mode": "Area", "material_id": "M1",
-                "fatigue_detail_id": "F1", "group_id": "B1",
-                "spacing_group_id": "",
+                "fatigue_detail_id": "F1",
             },
             {
                 "id": "R2", "x_mm": 0.0, "y_mm": 120.0,
                 "area_mm2": 400.0, "diameter_mm": 22.57,
                 "size_mode": "Area", "material_id": second_id,
-                "fatigue_detail_id": "F1", "group_id": "B2",
-                "spacing_group_id": "",
+                "fatigue_detail_id": "F1",
             },
         ],
         "tendon_elements": [],
@@ -494,8 +492,7 @@ def _results() -> dict:
         "first_kind": "bar", "second_kind": "bar", "clear_mm": 216.1,
         "required_mm": 25.23, "margin_mm": 190.87,
         "centre_distance_mm": 240.0, "phi_first_mm": 25.23,
-        "phi_second_mm": 22.57, "spacing_group_id": "",
-        "declared_exception": False,
+        "phi_second_mm": 22.57,
     }
     spacing = {
         "status": "PASS",
