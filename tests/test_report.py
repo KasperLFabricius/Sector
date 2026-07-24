@@ -465,6 +465,10 @@ def test_report_records_invalid_fatigue_without_suppressing_other_results():
     assert "other requested analyses were calculated" in text
     assert "R1: fatigue detail ID is required" in text
     assert "No fatigue resistance verdict has been issued" in text
+    assert "No fatigue calculation method was applied" in text
+    assert "No fatigue methodology or resistance verdict was applied" in text
+    assert "Each named spectrum is checked independently" not in text
+    assert "Grouped fatigue spectra are assessed independently" not in text
 
 
 def test_report_escapes_user_defined_fatigue_settings():
