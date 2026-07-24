@@ -981,6 +981,43 @@ def test_fatigue_utilisation_map_caps_and_labels_infinite_failure_evidence():
     )
 
 
+def test_fatigue_utilisation_map_caps_extreme_finite_failure_evidence():
+    spectrum, steel, concrete, _properties = _fatigue_figure_fixture()
+    steel.utilisation = 1.5e308
+    steel.damage_utilisation = 1.5e308
+    concrete.utilisation = 1.5e308
+    concrete.damage = 1.5e308
+
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    plotted_colours = [
+        float(value)
+        for trace in fig.data
+        for value in (
+            list(trace.marker.color)
+            if isinstance(getattr(trace.marker, "color", None), (list, tuple))
+            else []
+        )
+    ]
+    ticktext = list(fig.layout.coloraxis.colorbar.ticktext)
+    hover = " ".join(
+        str(value)
+        for trace in fig.data
+        for value in (list(trace.customdata) if trace.customdata is not None else [])
+    )
+    assert max(plotted_colours) == pytest.approx(1.10)
+    assert fig.layout.coloraxis.cmax == pytest.approx(1.10)
+    assert ticktext[-1] == ">= 1.10"
+    assert max(map(len, ticktext)) < 12
+    assert "1.500e+308" in hover
+
+
 def test_fatigue_sn_figure_has_both_curves_knee_bins_and_log_axes():
     _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
 
@@ -1042,6 +1079,35 @@ def test_fatigue_sn_figure_handles_finite_near_overflow_life():
         math.isfinite(float(value)) and float(value) > 0.0
         for value in characteristic.x
     )
+    assert all(
+        math.isfinite(float(value)) and float(value) > 0.0
+        for value in characteristic.y
+    )
+    assert max(float(value) for value in characteristic.x) <= 1.0e9
+
+
+def test_fatigue_sn_figure_handles_finite_subnormal_life():
+    subnormal = float.fromhex("0x0.0000000000001p-1022")
+    _spectrum, steel, _concrete, properties = _fatigue_figure_fixture()
+    steel.bins[0].cycles_to_failure = subnormal
+
+    fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
+
+    characteristic = next(
+        trace for trace in fig.data
+        if trace.name == "characteristic S-N curve"
+    )
+    design = next(trace for trace in fig.data if trace.name == "design S-N curve")
+    applied = next(
+        trace for trace in fig.data if trace.name == "applied spectrum bins"
+    )
+    assert min(float(value) for value in characteristic.x) >= 1.0e3
+    for trace in (characteristic, design):
+        assert all(
+            math.isfinite(float(value)) and float(value) > 0.0
+            for value in trace.y
+        )
+    assert "4.941e-324" in str(applied.customdata[0][1])
 
 
 def test_fatigue_damage_figure_shows_bin_cumulative_and_limit():

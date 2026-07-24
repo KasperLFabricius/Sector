@@ -232,6 +232,9 @@ _DELTA = chr(0x394)     # uppercase delta
 _PERMILLE = chr(0x2030)  # per-mille sign
 _FLOAT_MAX = float.fromhex("0x1.fffffffffffffp+1023")
 _FLOAT_MIN_POSITIVE = float.fromhex("0x0.0000000000001p-1022")
+_LOG_FLOAT_MAX = math.log(_FLOAT_MAX)
+_LOG_FLOAT_MIN_POSITIVE = math.log(_FLOAT_MIN_POSITIVE)
+_FATIGUE_UTILISATION_PLOT_CAP = 1.10
 
 _MID = chr(0x00B7)  # middle dot, for products like k*fytk (BMP, surrogate-safe)
 
@@ -837,15 +840,17 @@ def _fatigue_utilisation_scale(values):
             continue
     finite = [max(value, 0.0) for value in numeric if math.isfinite(value)]
     unbounded = any(value > 0.0 and not math.isfinite(value) for value in numeric)
-    upper = max([1.0, *finite])
+    raw_upper = max([1.0, *finite])
+    capped = unbounded or raw_upper > _FATIGUE_UTILISATION_PLOT_CAP
+    upper = min(raw_upper, _FATIGUE_UTILISATION_PLOT_CAP)
     if unbounded:
-        upper = max(upper, 1.10)
+        upper = _FATIGUE_UTILISATION_PLOT_CAP
     # Cividis is perceptually ordered and remains legible for common colour-vision
     # deficiencies.  The explicit 1.00 tick and x-patterns carry the limit.
     ticks = [0.0, 0.5, 1.0]
     if upper > 1.0 + 1.0e-9:
         ticks.append(upper)
-    return upper, sorted(set(ticks))
+    return upper, sorted(set(ticks)), capped
 
 
 def _fatigue_plot_utilisation(value, upper):
@@ -865,7 +870,14 @@ def _fatigue_hover_number(value, format_spec=".3g"):
         number = float(value)
     except (TypeError, ValueError):
         return "-"
-    return format(number, format_spec) if math.isfinite(number) else "inf"
+    if math.isnan(number):
+        return "-"
+    if math.isinf(number):
+        return "inf" if number > 0.0 else "-inf"
+    magnitude = abs(number)
+    if magnitude >= 1.0e6 or (0.0 < magnitude < 1.0e-4):
+        return format(number, ".3e")
+    return format(number, format_spec)
 
 
 def _fatigue_limit_exceeded(value):
@@ -915,7 +927,9 @@ def fatigue_utilisation_map_figure(
     # The certified upper damage is a bound over a search region, not a sampled
     # point represented by the colour axis. It has a dedicated red indicator below;
     # including it here can collapse every actual point into the bottom of the scale.
-    cmax, tickvals = _fatigue_utilisation_scale(utilisation_values)
+    cmax, tickvals, colour_scale_capped = _fatigue_utilisation_scale(
+        utilisation_values
+    )
 
     fig = go.Figure()
     ox, oy = _ring_xy([
@@ -1180,7 +1194,14 @@ def fatigue_utilisation_map_figure(
             colorbar=dict(
                 title="Utilisation",
                 tickvals=tickvals,
-                ticktext=[f"{tick:.2f}" for tick in tickvals],
+                ticktext=[
+                    (
+                        f">= {tick:.2f}"
+                        if colour_scale_capped and math.isclose(tick, cmax)
+                        else f"{tick:.2f}"
+                    )
+                    for tick in tickvals
+                ],
                 thickness=14,
                 len=0.72,
             ),
@@ -1241,8 +1262,18 @@ def fatigue_utilisation_map_figure(
 
 
 def _sn_range_at_cycles(cycles, *, n_star, knee_range, k1, k2):
+    """Evaluate a positive two-slope S-N ordinate without overflow."""
+
     exponent = k1 if cycles <= n_star else k2
-    return knee_range * (n_star / cycles) ** (1.0 / exponent)
+    log_range = (
+        math.log(knee_range)
+        + (math.log(n_star) - math.log(cycles)) / exponent
+    )
+    if log_range >= _LOG_FLOAT_MAX:
+        return _FLOAT_MAX
+    if log_range <= _LOG_FLOAT_MIN_POSITIVE:
+        return _FLOAT_MIN_POSITIVE
+    return math.exp(log_range)
 
 
 def _finite_power_of_ten(exponent):
@@ -1280,17 +1311,11 @@ def fatigue_sn_figure(
         for item in bins
         if float(_fatigue_value(item, "cycles", 0.0)) > 0.0
     ]
-    finite_lives = [
-        float(_fatigue_value(item, "cycles_to_failure"))
-        for item in bins
-        if (
-            _fatigue_value(item, "cycles_to_failure") is not None
-            and math.isfinite(float(_fatigue_value(item, "cycles_to_failure")))
-            and float(_fatigue_value(item, "cycles_to_failure")) > 0.0
-        )
-    ]
-    minimum_cycles = min([1.0e3, n_star, *applied_cycles, *finite_lives])
-    maximum_cycles = max([1.0e9, n_star, *applied_cycles, *finite_lives])
+    # The curve domain follows the applied spectrum. The derived resistance life
+    # is hover evidence, not a plotted x-coordinate, and must not collapse the
+    # useful domain when it approaches a floating-point limit.
+    minimum_cycles = min([1.0e3, n_star, *applied_cycles])
+    maximum_cycles = max([1.0e9, n_star, *applied_cycles])
     log_min = max(
         math.floor(math.log10(minimum_cycles)),
         math.log10(_FLOAT_MIN_POSITIVE),
@@ -1319,7 +1344,16 @@ def fatigue_sn_figure(
         )
         for cycles in curve_cycles
     ]
-    design = [value / gamma_s for value in characteristic]
+    design = [
+        _sn_range_at_cycles(
+            cycles,
+            n_star=n_star,
+            knee_range=design_knee,
+            k1=k1,
+            k2=k2,
+        )
+        for cycles in curve_cycles
+    ]
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
