@@ -3798,13 +3798,21 @@ class ReportBuilder:
     def _fatigue(self):
         payload = self._base_out["fatigue"]
         status = fatigue_presentation.overall_status(payload)
+        errors = tuple(payload.get("errors") or ())
         governing_name = str(payload.get("governing_spectrum") or "-")
         self._h1("Grouped fatigue")
         self._status_block(
-            f"{status} - {_html_escape(governing_name)} | utilisation "
-            f"{_pct(fatigue_presentation.evidence_number(
-                payload.get('utilisation')
-            ))}",
+            (
+                f"{status} - fatigue not assessed; "
+                "other requested analyses were calculated"
+                if errors
+                else (
+                    f"{status} - {_html_escape(governing_name)} | utilisation "
+                    f"{_pct(fatigue_presentation.evidence_number(
+                        payload.get('utilisation')
+                    ))}"
+                )
+            ),
             status,
         )
         checks = payload.get("checks") or {}
@@ -3823,6 +3831,14 @@ class ReportBuilder:
         warnings = tuple(payload.get("warnings") or ())
         for warning in warnings:
             self._small("<b>Review:</b> " + _html_escape(str(warning)))
+        if errors:
+            self._p(
+                "Fatigue input was incomplete or invalid at calculation time. "
+                "No fatigue resistance verdict has been issued."
+            )
+            for error in errors:
+                self._small("<b>Input error:</b> " + _html_escape(str(error)))
+            return
 
         self._h2("Basis and provenance")
         basis = payload.get("basis") or {}

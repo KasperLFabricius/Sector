@@ -431,6 +431,42 @@ def test_report_fatigue_chapter_uses_the_engine_failure_state():
     assert "120.0 %" in text
 
 
+def test_report_records_invalid_fatigue_without_suppressing_other_results():
+    inp, out = _fatigue_report_fixture()
+    out["fatigue"] = {
+        "valid": False,
+        "converged": False,
+        "passed": False,
+        "errors": (
+            "R1: fatigue detail ID is required",
+            "At least one fatigue spectrum bin is required",
+        ),
+        "warnings": (),
+        "edition": fatigue_inputs.EC2_2023,
+        "checks": {"reinforcement": True, "concrete": True},
+        "basis": inp[fatigue_inputs.BASIS_KEY],
+        "partial_factors": {
+            "gamma_c": 1.50,
+            "gamma_s": 1.15,
+            "gamma_ff": 1.10,
+        },
+        "concrete_parameters": None,
+        "fatigue_detail_basis": (),
+        "spectra": (),
+        "governing_spectrum": None,
+        "utilisation": None,
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "other requested analyses were calculated" in text
+    assert "R1: fatigue detail ID is required" in text
+    assert "No fatigue resistance verdict has been issued" in text
+
+
 def test_report_escapes_user_defined_fatigue_settings():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]

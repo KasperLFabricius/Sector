@@ -496,6 +496,25 @@ def test_concrete_only_check_needs_moduli_but_not_steel_strength_details():
     assert prepared.gamma_s is None
 
 
+def test_invalid_result_preserves_missing_assignments_without_running_fatigue():
+    inp = _base()
+    inp["bar_elements"][0]["fatigue_detail_id"] = ""
+    inp["tendon_elements"][0]["fatigue_detail_id"] = ""
+
+    errors = fatigue_analysis.validation_errors(inp)
+    payload = fatigue_analysis.invalid_result(inp, errors)
+
+    assert payload["valid"] is False
+    assert payload["converged"] is False
+    assert payload["passed"] is False
+    assert payload["spectra"] == ()
+    assert payload["utilisation"] is None
+    assert "R1: fatigue detail ID is required" in payload["errors"]
+    assert "P1: fatigue detail ID is required" in payload["errors"]
+    assert inp["bar_elements"][0]["fatigue_detail_id"] == ""
+    assert inp["tendon_elements"][0]["fatigue_detail_id"] == ""
+
+
 def test_analysis_signature_changes_with_spectrum_basis_and_material_modulus():
     base = _base()
     signature = fatigue_analysis.analysis_signature(base)

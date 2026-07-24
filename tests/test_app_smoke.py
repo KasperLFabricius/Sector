@@ -1892,6 +1892,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     )
     assert "Edition" in set(basis_table["Item"])
     assert "gamma_Ff" in set(basis_table["Item"])
+    assert basis_table["Value"].map(type).eq(str).all()
 
     # Stale results must retain the actions and geometry that produced them. If the
     # live spectrum is edited before recalculation, the result drill-down must not
@@ -1990,14 +1991,59 @@ def test_fatigue_validation_stays_in_the_ui_instead_of_raising():
     at = _fresh()
     at.run()
     at.toggle(key="fatigue_on").set_value(True).run()
+    before = at.session_state["bars_base"].copy(deep=True)
 
     _calculate(at)
 
     assert not at.exception
-    assert "results" not in at.session_state
+    assert "results" in at.session_state
+    assert at.session_state["results"].get("plastic_cases")
+    fatigue = at.session_state["results"]["fatigue"]
+    assert fatigue["valid"] is False
+    assert fatigue["converged"] is False
+    assert fatigue["spectra"] == ()
+    assert not at.session_state["bars_base"].compare(before).size
     errors = " ".join(item.value for item in at.error)
     assert "At least one fatigue spectrum bin is required" in errors
     assert "fatigue detail ID is required" in errors
+
+
+def test_catalogue_revisions_preserve_every_live_reinforcement_cell():
+    import reinforcement_table as rebar_table
+
+    at = _fresh()
+    at.run()
+    version = at.session_state["ed_bars_ver"]
+    row = {
+        rebar_table.ELEMENT_ID: "R1",
+        rebar_table.X: 37.5,
+        rebar_table.Y: -212.0,
+        rebar_table.SIZE_MODE: rebar_table.DIAMETER_MODE,
+        rebar_table.AREA: 490.873852123,
+        rebar_table.DIAMETER: 25.0,
+        rebar_table.MATERIAL_ID: "M1",
+        rebar_table.FATIGUE_DETAIL_ID: "",
+        rebar_table.GROUP_ID: "typed group",
+        rebar_table.SPACING_GROUP_ID: "typed spacing",
+    }
+    at.session_state["ed_bars"] = {
+        "payload": {
+            "data_version": str(version),
+            "rows": [row],
+        }
+    }
+    at.session_state["_material_catalog_revision"] += 1
+    at.session_state["_fatigue_catalog_revision"] += 1
+
+    at.run()
+
+    assert not at.exception
+    actual = at.session_state["bars_base"].iloc[0].to_dict()
+    for key, value in row.items():
+        if isinstance(value, float):
+            assert actual[key] == pytest.approx(value)
+        else:
+            assert actual[key] == value
 
 
 def test_fatigue_authority_widgets_write_the_structured_basis():

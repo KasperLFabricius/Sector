@@ -605,6 +605,67 @@ def validation_warnings(inp: Mapping) -> list[str]:
     return list(dict.fromkeys(warnings))
 
 
+def invalid_result(
+    inp: Mapping,
+    errors: Sequence[str] | None = None,
+) -> dict:
+    """Return a calculation-free INVALID payload without changing ``inp``.
+
+    Fatigue input is allowed to be incomplete while the engineer develops the
+    section.  The application can still calculate independent results and use
+    this payload to preserve a visible, reportable failure of the fatigue
+    preflight instead of blocking the complete calculation.
+    """
+
+    unique_errors = tuple(dict.fromkeys(
+        str(error).strip()
+        for error in (errors if errors is not None else validation_errors(inp))
+        if str(error).strip()
+    ))
+    try:
+        basis = fatigue_inputs.normalise_basis(
+            inp.get(fatigue_inputs.BASIS_KEY)
+        )
+    except (TypeError, ValueError):
+        basis = fatigue_inputs.default_basis()
+    raw_edition = str(inp.get("fatigue_edition") or "").strip()
+    try:
+        edition = _edition(raw_edition)
+    except ValueError:
+        edition = raw_edition or "-"
+    method = str(basis.get("method") or "")
+    return {
+        "valid": False,
+        "converged": False,
+        "passed": False,
+        "errors": unique_errors,
+        "warnings": tuple(validation_warnings(inp)),
+        "edition": edition,
+        "checks": {
+            "reinforcement": bool(inp.get("fatigue_check_steel")),
+            "concrete": bool(inp.get("fatigue_check_concrete")),
+        },
+        "basis": dict(basis),
+        "authority_reference": fatigue_inputs.METHOD_REFERENCES.get(
+            method, "-"
+        ),
+        "calculation_references": {},
+        "partial_factors": {
+            "gamma_c": inp.get("fatigue_gamma_c"),
+            "gamma_s": inp.get("fatigue_gamma_s"),
+            "gamma_ff": inp.get("fatigue_gamma_ff"),
+        },
+        "concrete_parameters": None,
+        "fatigue_detail_basis": (),
+        "t0_days": inp.get("fatigue_t0_days"),
+        "elements": tuple(dict(record) for records in _records(inp)
+                          for record in records if isinstance(record, Mapping)),
+        "spectra": (),
+        "governing_spectrum": None,
+        "utilisation": None,
+    }
+
+
 def _reinforcement_properties(
     records: Sequence[Mapping],
     materials: Sequence,

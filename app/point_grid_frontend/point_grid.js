@@ -26,6 +26,7 @@ function createPointGridInstance(parentElement) {
     compactPasteFields: [],
     layout: "fitColumns",
     dataVersion: null,
+    configurationSignature: null,
     label: "Editable section points",
     pasteAnchorRow: 0,
     setStateValue: null,
@@ -453,7 +454,19 @@ function createPointGridInstance(parentElement) {
     return definitions
   }
 
-  state.build = data => {
+  state.configurationSignatureFor = data => JSON.stringify({
+    columns: data.columns || [],
+    column_specs: data.column_specs || [],
+    id_column: data.id_column || null,
+    id_prefix: data.id_prefix || "",
+    derived_size: data.derived_size || null,
+    default_values: data.default_values || {},
+    compact_paste_fields: data.compact_paste_fields || [],
+    layout: data.layout || "fitColumns",
+    id_start: data.id_start || 1,
+  })
+
+  state.configure = data => {
     state.columns = Array.isArray(data.columns) ? [...data.columns] : []
     const suppliedSpecs = Array.isArray(data.column_specs) ? data.column_specs : []
     const byField = new Map(
@@ -487,11 +500,15 @@ function createPointGridInstance(parentElement) {
     const requestedStart = Number(data.id_start)
     state.idStart = Number.isFinite(requestedStart) ? requestedStart : 1
     state.dataVersion = String(data.data_version ?? "0")
+    state.configurationSignature = state.configurationSignatureFor(data)
     state.label = String(data.label || "Editable section points")
-    state.pasteAnchorRow = 0
     state.gridElement.setAttribute("aria-label", state.label)
     state.addButton.setAttribute("aria-label", `Add row to ${state.label}`)
+  }
 
+  state.build = data => {
+    state.configure(data)
+    state.pasteAnchorRow = 0
     const rows = Array.isArray(data.rows)
       ? data.rows.map(row => {
         const output = {}
@@ -560,6 +577,24 @@ function createPointGridInstance(parentElement) {
     table.on("clipboardPasted", () => {
       state.renumber()
       state.emit()
+    })
+  }
+
+  state.updateConfiguration = data => {
+    if (!state.table) return
+    // Capture the browser's live rows before applying new catalogue choices.
+    // The Python ``data.rows`` mirror can be one interaction behind, so using it
+    // here would overwrite geometry and assignments during a catalogue rerun.
+    const rows = state.currentRows()
+    state.configure(data)
+    state.applyIds(rows)
+    const table = state.table
+    table.setColumns(state.buildColumns())
+    Promise.resolve(table.replaceData(rows)).then(() => {
+      if (state.table !== table) return
+      state.renumber()
+      state.emit()
+      state.redrawIfVisible(true)
     })
   }
 
@@ -646,6 +681,14 @@ export default function renderPointGrid(component) {
     state.clearWarning()
     state.build(nextData)
     state.redrawIfVisible(true)
+    return state.cleanup
+  }
+
+  if (
+    state.configurationSignatureFor(nextData)
+    !== state.configurationSignature
+  ) {
+    state.updateConfiguration(nextData)
     return state.cleanup
   }
 

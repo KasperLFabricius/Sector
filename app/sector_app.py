@@ -1225,16 +1225,17 @@ def _grid_fatigue_detail_ids(kind):
     return fatigue_inputs.detail_ids(catalogue, detail_kind)
 
 
-def _point_data_version(base_key, table_version):
-    """Include assignment-catalogue structure in a reinforcement grid seed."""
+def _point_data_version(_base_key, table_version):
+    """Return the explicit row-seed revision for one point grid.
 
-    if not _reinforcement_kind(base_key):
-        return table_version
-    return (
-        f"{table_version}:m"
-        f"{st.session_state.get('_material_catalog_revision', 0)}:f"
-        f"{st.session_state.get('_fatigue_catalog_revision', 0)}"
-    )
+    Material and fatigue catalogues only change the available select options.
+    They must never make the component rebuild its rows: the browser may contain
+    a more recent edit than the last Python rerun.  Only an intentional table
+    replacement (Load, Clear, Quick Section, Add/Remove void) increments this
+    revision through :func:`_reseed_table`.
+    """
+
+    return table_version
 
 
 def _render_point_table(box, base_key, ed_key, cols, id_start=1):
@@ -1260,11 +1261,28 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
         if kind else None
     )
     with box:
-        return point_grid(st.session_state[base_key], cols, key=ed_key,
-                          id_start=id_start, data_version=data_version,
-                          label=_POINT_TABLE_LABELS.get(base_key,
-                                                        "Editable section points"),
-                          column_specs=specs, component_options=options)
+        edited = point_grid(
+            st.session_state[base_key],
+            cols,
+            key=ed_key,
+            id_start=id_start,
+            data_version=data_version,
+            label=_POINT_TABLE_LABELS.get(
+                base_key, "Editable section points"
+            ),
+            column_specs=specs,
+            component_options=options,
+        )
+    # Keep a durable, non-widget mirror after every frontend report.  Catalogue
+    # buttons, Calculate, navigation and project saving can then all consume the
+    # same current rows without depending on component-cleanup timing.
+    stable = (
+        rebar_table.normalise_table(edited, kind)
+        if kind
+        else edited.reindex(columns=cols).copy(deep=True)
+    )
+    st.session_state[base_key] = stable.copy(deep=True)
+    return stable
 
 
 def _point_editor(box, base_key, ed_key, cols, id_start=1):
@@ -2377,8 +2395,6 @@ def _generate_report(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
-    if inp.get("fatigue_on"):
-        case_errors = list(case_errors) + fatigue_analysis.validation_errors(inp)
     if case_errors:
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
@@ -3739,7 +3755,11 @@ def build_inputs(host=st):
             fatigue_assignment_error = (
                 "Undefined fatigue assignment(s): " + "; ".join(parts) + "."
             )
-            sec.error(fatigue_assignment_error)
+            sec.warning(
+                fatigue_assignment_error
+                + " Other requested analyses can still be calculated; fatigue "
+                "will be reported as INVALID until every assignment is resolved."
+            )
     label_scale, label_min_gap = _section_input_preview(
         sec_preview,
         outer,
@@ -4682,6 +4702,21 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     return out
 
 
+def _run_fatigue_or_invalid(inp):
+    """Run fatigue when valid; otherwise return immutable INVALID evidence.
+
+    Fatigue is independent of the requested plastic/elastic/capacity checks.
+    Invalid fatigue input therefore cannot suppress otherwise valid results.
+    """
+
+    errors = fatigue_analysis.validation_errors(inp)
+    return (
+        fatigue_analysis.invalid_result(inp, errors)
+        if errors
+        else fatigue_analysis.run_analysis(inp)
+    )
+
+
 def run_analysis(
     inp,
     *,
@@ -4721,7 +4756,7 @@ def run_analysis(
             result["fatigue"] = (
                 reuse_fatigue
                 if reuse_fatigue is not None
-                else fatigue_analysis.run_analysis(inp)
+                else _run_fatigue_or_invalid(inp)
             )
         return result
 
@@ -4747,7 +4782,7 @@ def run_analysis(
         result["fatigue"] = (
             reuse_fatigue
             if reuse_fatigue is not None
-            else fatigue_analysis.run_analysis(inp)
+            else _run_fatigue_or_invalid(inp)
         )
     return result
 
@@ -5871,6 +5906,10 @@ def results_overview_view(inp, results, *, stale=False):
                 ),
                 "Result state": (
                     "Stale" if stale and fatigue_result
+                    else "Invalid input" if (
+                        fatigue_result
+                        and fatigue_result.get("errors")
+                    )
                     else "Calculated" if fatigue_result
                     else "Not calculated"
                 ),
@@ -7300,7 +7339,10 @@ def _fatigue_result_basis_panel(payload):
         ("Notes", basis.get("notes") or "-"),
     ]
     _fatigue_result_table([
-        {"Item": label, "Value": value}
+        # A presentation column must have one Arrow-compatible type.  Mixing the
+        # textual provenance rows above with numeric factors made Streamlit coerce
+        # the frame on every render and emit a full serialization traceback.
+        {"Item": label, "Value": str(value)}
         for label, value in rows
         if value is not None
     ], height=760)
@@ -7344,6 +7386,16 @@ def fatigue_view(inp, results, *, stale=False):
         return
 
     status = fatigue_presentation.overall_status(payload, stale=stale)
+    errors = tuple(payload.get("errors") or ())
+    if errors:
+        _fatigue_status_callout(
+            status,
+            "Fatigue not assessed; other requested analyses were calculated",
+        )
+        st.error("Resolve the fatigue input errors, then recalculate fatigue.")
+        for error in errors:
+            st.markdown(f"- {error}")
+        return
     governing_name = str(payload.get("governing_spectrum") or "-")
     utilisation = fatigue_presentation.evidence_number(
         payload.get("utilisation")
@@ -8605,8 +8657,6 @@ def _analysis_workspace(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
-    if inp.get("fatigue_on"):
-        case_errors = list(case_errors) + fatigue_analysis.validation_errors(inp)
     if calc and case_errors:
         st.session_state["_case_error"] = "; ".join(case_errors) + "."
         calc = False
@@ -8729,10 +8779,24 @@ def _analysis_workspace(inp):
 
     for section_err in (
         inp.get("void_error"), inp.get("steel_error"), inp.get("material_error"),
-        inp.get("fatigue_assignment_error"),
     ):
         if section_err:
             st.error(section_err)
+    if inp.get("fatigue_assignment_error"):
+        st.warning(
+            inp["fatigue_assignment_error"]
+            + " Other requested analyses remain available; the fatigue result "
+            "will be INVALID until the assignments are resolved."
+        )
+    fatigue_errors = tuple(
+        ((results or {}).get("fatigue") or {}).get("errors") or ()
+    )
+    if fatigue_errors and view != "Fatigue Results":
+        st.error(
+            "Fatigue not assessed: "
+            + "; ".join(str(error) for error in fatigue_errors)
+            + "."
+        )
 
     # A stale result must be rendered wholly against the inputs that produced it.
     # Apply this before selecting a case or deciding which checks were enabled so
