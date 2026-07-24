@@ -326,30 +326,27 @@ def _crack() -> dict:
     return dict(candidate, gov_bar=1, candidates=[candidate])
 
 
-def _results() -> dict:
+def _results(inp: dict | None = None) -> dict:
+    inp = inp or _inputs()
     code = codes.EC2_2005_DKNA
     link_dia = 10.0
     link_spacing = 150.0
     link_legs = 2.0
     fywk = 500.0
     fywd = fywk / 1.15
+    capacity_material = inp["mild_materials"][
+        inp["capacity_steel_material_id"]
+    ]
+    fyd_long = capacity_material.fytk / capacity_material.gamma_y
     fcd = 30.0 / 1.5
+    shear_z_mm = 243.0
     link_asw = link_legs * math.pi * link_dia ** 2 / 4.0
     link_asw_over_s = link_asw / link_spacing
     torsion_asw = math.pi * link_dia ** 2 / 4.0
     torsion_asw_over_s = torsion_asw / link_spacing
-    tube = {
-        "A": 0.06,
-        "u": 1.0,
-        "tef": 60.0,
-        "Ak": 0.0204,
-        "uk": 0.76,
-        "tef_auto": 60.0,
-        "tef_capped": False,
-        "tef_user": False,
-        "hollow": False,
-        "valid": True,
-    }
+    tube = torsion.tube_properties(
+        inp["outer"], inp.get("holes"), inp.get("torsion_tef", 0.0)
+    )
     shear_res = shear.vrd_c(
         30.0, code, bw_mm=200.0, d_mm=270.0,
         asl_mm2=500.0, n_ed_comp_kn=0.0, ac_m2=0.06, gamma_c=1.5,
@@ -361,7 +358,7 @@ def _results() -> dict:
             30.0, code, bw_mm=200.0, d_mm=270.0,
             asw_over_s=link_asw_over_s, fywk=fywk,
             n_ed_comp_kn=0.0, ac_m2=0.06,
-            cot_min=cot, cot_max=cot, z_mm=243.0,
+            cot_min=cot, cot_max=cot, z_mm=shear_z_mm,
             fcd_mpa=fcd, gamma_s=1.15,
         )
 
@@ -371,14 +368,15 @@ def _results() -> dict:
             tube, 25.0, tcode=code, fck=30.0, fcd=fcd, alpha_cw=1.0,
             fywd=fywd, asw_over_s=torsion_asw_over_s,
             cot_min=cot, cot_max=cot, nu_detail=False,
-            fctd=1.35, fyd_long=fywd,
+            fctd=1.35, fyd_long=fyd_long,
         )
 
     def longitudinal_at(cot: float) -> dict:
         torsion_result = torsion_at(cot)
-        ftd_t_cot = torsion_result["asl_req"] * fywd / 1000.0
+        ftd_t_cot = torsion_result["asl_req"] * fyd_long / 1000.0
         return combined.longitudinal_check(
-            80.0, 100.0, 0.5 * 30.0 * cot, ftd_t_cot, 0.25,
+            80.0, 100.0, 0.5 * 30.0 * cot, ftd_t_cot,
+            shear_z_mm / 1000.0,
         )
 
     angle_utilisations = [
@@ -598,7 +596,7 @@ def _results() -> dict:
         "t_ed": 25.0,
         "fcd": fcd,
         "fywd": fywd,
-        "fyd_long": fywd,
+        "fyd_long": fyd_long,
         "nu": primary_torsion["nu"],
         "alpha_cw": 1.0,
         "fctd": 1.35,
@@ -641,10 +639,10 @@ def _results() -> dict:
     )
     torsion_stirrup_fraction = 25.0 / primary_torsion["trd_s"]
     stirrup_util = shear_fraction + torsion_stirrup_fraction
-    ftd_t = primary_torsion["asl_req"] * fywd / 1000.0
+    ftd_t = primary_torsion["asl_req"] * fyd_long / 1000.0
     longitudinal = combined.longitudinal_check(
         80.0, plastic["max_mx"], shear_payload["links"]["delta_ftd"],
-        ftd_t, 0.25,
+        ftd_t, shear_z_mm / 1000.0,
     )
     longitudinal.update(
         valid=True,
@@ -820,6 +818,17 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
 
     torsion_out = out["torsion"]
     tube = torsion_out["tube"]
+    expected_tube = torsion.tube_properties(
+        inp["outer"], inp.get("holes"), inp.get("torsion_tef", 0.0)
+    )
+    for key in ("A", "u", "tef", "Ak", "uk"):
+        close(f"torsion tube {key}", tube[key], expected_tube[key])
+    capacity_material = inp["mild_materials"][
+        inp["capacity_steel_material_id"]
+    ]
+    expected_fyd_long = capacity_material.fytk / capacity_material.gamma_y
+    close("torsion longitudinal design strength", torsion_out["fyd_long"],
+          expected_fyd_long)
     close("TEd", torsion_out["t_ed"], case["t_ed_knm"])
     close(
         "TRd,s",
@@ -894,7 +903,7 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             alpha_cw=torsion_out["alpha_cw"], fywd=torsion_out["fywd"],
             asw_over_s=torsion_out["asw_over_s"],
             cot_min=cot, cot_max=cot, nu_detail=False,
-            fctd=torsion_out["fctd"], fyd_long=torsion_out["fyd_long"],
+            fctd=torsion_out["fctd"], fyd_long=expected_fyd_long,
         )
 
     def longitudinal_util(cot: float) -> float:
@@ -939,6 +948,11 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
     )
     close("shared member cotangent", lk["cot"], member_cot)
     close("torsion member cotangent", torsion_out["cot"], member_cot)
+    close(
+        "longitudinal lever arm",
+        result["longitudinal"]["z"],
+        lk["z"] / 1000.0,
+    )
 
     expected_longitudinal = combined.longitudinal_check(
         result["longitudinal"]["m_ed"],
@@ -962,7 +976,7 @@ def build_fixture_pdf() -> bytes:
     sector_report.datetime.datetime = _FixedDateTime
     try:
         inp = _inputs()
-        out = _results()
+        out = _results(inp)
         validate_fixture_engineering(inp, out)
         return sector_report.build_report(
             {

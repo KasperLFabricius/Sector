@@ -852,6 +852,22 @@ def test_parse_rejects_foreign_or_broken_json():
         project_io.parse_project("not json at all")
 
 
+def test_parse_rejects_obsolete_separate_strut_angle_settings():
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION - 1,
+        "tables": {},
+        "scalars": {
+            "shear_cot_min": 1.0,
+            "shear_cot_max": 2.5,
+            "torsion_cot_min": 1.2,
+            "torsion_cot_max": 2.0,
+        },
+    })
+    with pytest.raises(ValueError, match="unsupported pre-0.91 project"):
+        project_io.parse_project(text)
+
+
 def test_parse_rejects_malformed_table_object():
     # A table entry that is not a {columns, rows} object (here a bare list) must
     # raise ValueError, not an AttributeError that escapes the caller's handling.

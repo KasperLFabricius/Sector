@@ -14,7 +14,8 @@ from tools.report_render_fixture import (
 
 
 def test_reference_fixture_engineering_is_internally_consistent():
-    validate_fixture_engineering(_inputs(), _results())
+    inp = _inputs()
+    validate_fixture_engineering(inp, _results(inp))
 
 
 def test_issued_report_renders_every_page_and_retains_expected_content():

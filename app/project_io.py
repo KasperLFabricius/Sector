@@ -28,7 +28,24 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 11  # v11: material/detail-only reinforcement assignments
+VERSION = 12  # v12: one shared shear/torsion compression-strut range
+
+_UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
+    "shear_cot_min",
+    "shear_cot_max",
+    "torsion_cot_min",
+    "torsion_cot_max",
+})
+
+
+def _reject_unsupported_strut_settings(raw_scalars: dict) -> None:
+    if _UNSUPPORTED_SEPARATE_STRUT_KEYS.intersection(raw_scalars):
+        raise ValueError(
+            "unsupported pre-0.91 project: separate shear/torsion strut-angle "
+            "settings cannot be loaded; recreate the shared compression-strut "
+            "range explicitly"
+        )
+
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -358,6 +375,7 @@ def project_provenance(text: str) -> dict:
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
+    _reject_unsupported_strut_settings(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
@@ -412,6 +430,7 @@ def parse_project(text: str):
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
+    _reject_unsupported_strut_settings(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
