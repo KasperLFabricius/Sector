@@ -3555,6 +3555,52 @@ def test_interrupted_inputs_build_cannot_replace_the_last_complete_snapshot():
     assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
 
 
+def test_interrupted_inputs_callback_cannot_commit_partial_widget_values():
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_fck").set_value(55.0).run()
+
+    # Quick Section is a callback on the still-visible Inputs page. It must still
+    # navigate, but may not snapshot a partially reconstructed widget namespace.
+    at.session_state["_inputs_build_in_progress"] = True
+    at.session_state["conc_fck"] = 30.0
+    at.button(key="open_qs").click().run()
+
+    assert at.session_state["_main_page"] == "Analysis"
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
+    assert at.session_state["conc_fck"] == 55.0
+    assert not at.exception
+
+
+def test_interrupted_inputs_recovery_preserves_the_new_tab_selection():
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_fck").set_value(55.0).run()
+    section_tab = f"2 {chr(0x00B7)} Section"
+
+    # Streamlit stores the tab event before beginning the replacement rerun.
+    # Restore engineering state, but retain that just-recorded navigation value.
+    at.session_state["_inputs_build_in_progress"] = True
+    at.session_state["conc_fck"] = 30.0
+    at.session_state["_input_tab"] = section_tab
+    at.run()
+
+    assert at.session_state["_input_tab"] == section_tab
+    assert at.session_state["conc_fck"] == 55.0
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
+    assert not at.exception
+
+    _goto_material_tab(at, "Concrete")
+    at.session_state["_inputs_build_in_progress"] = True
+    at.session_state["conc_fck"] = 30.0
+    at.session_state["_material_tab"] = "Prestressing steel"
+    at.run()
+
+    assert at.session_state["_material_tab"] == "Prestressing steel"
+    assert at.session_state["conc_fck"] == 55.0
+    assert not at.exception
+
+
 def test_tracked_input_tabs_survive_page_and_auxiliary_view_lifecycle():
     # Both tracked selections are session preferences, not project inputs. Keep
     # them through runs where the tab widgets are absent and Streamlit cleans up

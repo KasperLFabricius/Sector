@@ -1997,6 +1997,7 @@ _DURABLE_INPUT_SCALARS = tuple(project_io.SCALAR_KEYS) + (
 _INPUT_STATE_KEY = "_durable_input_scalars"
 _INPUT_BUILD_KEY = "_inputs_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
+_INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
 
 
 def _snapshot_input_state(inp=None) -> None:
@@ -2039,20 +2040,28 @@ def _restore_input_state(*, replace: bool = False) -> None:
     last complete values.
     """
     for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items():
-        if replace or key not in st.session_state:
+        # A tab event is written before its callback/rerun. Keep that event while
+        # replacing engineering values from the last complete Inputs render;
+        # otherwise recovery would appear to ignore the engineer's tab click.
+        preserve_navigation = (
+            replace
+            and key in _INPUT_NAVIGATION_KEYS
+            and key in st.session_state
+        )
+        if not preserve_navigation and (replace or key not in st.session_state):
             st.session_state[key] = value
 
 
 def _open_analysis_content(flag: str) -> None:
     """Open a full-width auxiliary view from an input-page button callback."""
-    _snapshot_input_state()
+    _snapshot_completed_input_state()
     st.session_state["_qs_open"] = flag == "quick_section"
     st.session_state["_main_page"] = "Analysis"
 
 
 def _open_manual_dialog() -> None:
     """Open the manual above the current workspace without navigating away."""
-    _snapshot_input_state()
+    _snapshot_completed_input_state()
     st.session_state["_manual_open"] = True
 
 
@@ -4225,7 +4234,7 @@ def build_inputs(host=st):
     material_tabs = mat_tab.tabs(
         material_tab_labels,
         key="_material_tab",
-        on_change=_snapshot_input_state,
+        on_change=_snapshot_completed_input_state,
     )
     conc_tab, mild_tab, pre_tab = material_tabs[:3]
     fatigue_tab = material_tabs[3] if fatigue_on else None
