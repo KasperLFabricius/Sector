@@ -1744,18 +1744,6 @@ def _latex_to_rl(s: str) -> str:
     s = re.sub(r"_\{([^{}]*)\}", r"<sub>\1</sub>", s)
     s = re.sub(r"\^\{([^{}]*)\}", r"<super>\1</super>", s)
 
-    # ReportLab has no TeX layout engine.  Preserve the mathematical meaning of
-    # roots in a compact linear form instead of exposing the command name.
-    while True:
-        rooted = re.sub(
-            r"\\sqrt\{([^{}]*)\}",
-            lambda m: "&#8730;(" + m.group(1) + ")",
-            s,
-        )
-        if rooted == s:
-            break
-        s = rooted
-
     def _frac(m):
         def wrap(x):
             if x.startswith("&#8730;(") and x.endswith(")"):
@@ -1764,18 +1752,31 @@ def _latex_to_rl(s: str) -> str:
 
         return wrap(m.group(1)) + "/" + wrap(m.group(2))
 
-    # Iterate to a fixed point so a nested fraction (an inner tfrac inside the
-    # numerator of an outer frac) is fully flattened: the inner one goes first,
-    # which leaves the outer args brace-free for the next pass.
+    # Iterate roots and fractions together to a fixed point. This handles both a
+    # root inside a fraction and a fraction inside a root without exposing a TeX
+    # command in the issued PDF.
     # An adjacent coefficient (for example C\frac{...}{...}) receives an
     # explicit multiplication dot because a linearised fraction has no fraction
     # bar to make the implied multiplication visually clear.
-    s = re.sub(r"(?<=[A-Za-z0-9)>])(?=\\t?frac\{)", "&#183;", s)
     while True:
-        flat = re.sub(r"\\t?frac\{([^{}]*)\}\{([^{}]*)\}", _frac, s)
-        if flat == s:
+        converted = re.sub(
+            r"\\sqrt\{([^{}]*)\}",
+            lambda m: "&#8730;(" + m.group(1) + ")",
+            s,
+        )
+        converted = re.sub(
+            r"(?<=[A-Za-z0-9)>])(?=\\t?frac\{)",
+            "&#183;",
+            converted,
+        )
+        converted = re.sub(
+            r"\\t?frac\{([^{}]*)\}\{([^{}]*)\}",
+            _frac,
+            converted,
+        )
+        if converted == s:
             break
-        s = flat
+        s = converted
     for k in sorted(_LATEX_CMD, key=len, reverse=True):
         s = s.replace(k, _LATEX_CMD[k])
     s = re.sub(r"_([A-Za-z0-9])", r"<sub>\1</sub>", s)

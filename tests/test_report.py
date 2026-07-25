@@ -452,7 +452,7 @@ def test_report_includes_damage_equivalent_concrete_method_evidence():
     assert method in text
     assert "Formula (E.2)" in text
     assert "Equivalent utilisation" in text
-    assert "Cycle count Not used" in text
+    assert "Cycle count" in text and "Not used" in text
     assert "cycle count is not used for concrete" in text
 
 

@@ -1155,7 +1155,7 @@ def fatigue_utilisation_map_figure(
             name=(
                 "certified equivalent bound > 1.00"
                 if equivalent_concrete
-                else "certified damage bound > 1.00"
+                else "certified search bound > 1.00"
             ),
             marker=dict(
                 size=19,
