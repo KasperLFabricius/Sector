@@ -25,8 +25,10 @@ and grouped fatigue workflows.
 - Added per-case shear/torsion link detailing for active actions: minimum
   ratios, longitudinal stirrup spacing, transverse leg spacing and closed-link
   torsion spacing. Beam/slab applicability and slab spacing limits are explicit;
-  ordinary beams require minimum links, while slab omissions follow the verified
-  no-link resistance. Missing links are reported without changing the input.
+  ordinary 2005 beams require minimum links, while slab omissions follow the
+  verified no-link resistance. The 2023 structural-system condition is explicitly
+  not assessed when it cannot be established. Missing links are reported without
+  changing the input.
   Automatic transverse spacing uses the full web width, and the torsion spacing
   check uses a rotation-invariant physical section dimension.
 - Added member type and slab section-cut direction to detailing. Minimum-bar

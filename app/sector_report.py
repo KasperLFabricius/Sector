@@ -2076,6 +2076,7 @@ class ReportBuilder:
             "transverse_leg_spacing": "Transverse leg spacing",
             "torsion_spacing": "Closed-link spacing",
             "required_links": "Required links",
+            "minimum_link_applicability": "Minimum-link applicability",
         }
         rows = [[
             "Scope", "Check", "Provided", "Limit", "Util.", "Status",

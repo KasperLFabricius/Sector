@@ -348,6 +348,7 @@ def test_manual_documents_modelled_direction_and_link_detailing_scope():
         "minimum links",
         "full web width",
         "rotation-invariant minimum physical section dimension",
+        "statically determinate linear members",
         "s_t \\\\leq 1.5d",
         "350 mm value applies to",
     ):

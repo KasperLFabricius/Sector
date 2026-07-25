@@ -1159,7 +1159,7 @@ def transverse_reinforcement(
         links_present = bool(direction.get("links_present", True))
         links_required = direction.get("links_required", False)
         if not links_present:
-            if member == MEMBER_BEAM:
+            if member == MEMBER_BEAM and edition != EC2_2023:
                 checks.append(_required_links_check(
                     scope,
                     beam_link_requirement_clause,
@@ -1182,6 +1182,32 @@ def transverse_reinforcement(
                     "shear resistance without links is invalid",
                     component=component,
                 ))
+            elif member == MEMBER_BEAM and edition == EC2_2023:
+                try:
+                    depth = float(direction.get("d_mm"))
+                except (TypeError, ValueError):
+                    depth = math.nan
+                if not math.isfinite(depth) or depth <= 0.0:
+                    checks.append(_not_assessed_check(
+                        scope,
+                        "minimum_link_applicability",
+                        "8.2.1(2), 12.2(4)",
+                        "effective depth is unavailable for the 2023 "
+                        "minimum-link applicability check",
+                        component=component,
+                    ))
+                elif depth > 500.0:
+                    checks.append(_not_assessed_check(
+                        scope,
+                        "minimum_link_applicability",
+                        "8.2.1(2), 12.2(4)",
+                        "the 2023 minimum-link requirement for statically "
+                        "determinate beams with d > 500 mm cannot be decided "
+                        "because the structural system is not declared by the "
+                        "section model",
+                        component=component,
+                        d_mm=depth,
+                    ))
             continue
         try:
             bw = float(direction["bw_mm"])

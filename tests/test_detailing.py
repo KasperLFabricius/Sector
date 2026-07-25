@@ -643,6 +643,42 @@ def test_ordinary_beam_requires_minimum_links_for_any_active_shear():
     assert "minimum shear reinforcement" in check["reason"]
 
 
+def test_2023_beam_no_link_applicability_respects_depth_and_system_scope():
+    common = dict(
+        edition=detailing.EC2_2023,
+        member_type=detailing.MEMBER_BEAM,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+    )
+    shallow = detailing.transverse_reinforcement(
+        **common,
+        shear_directions=[{
+            "component": "vx",
+            "links_present": False,
+            "links_required": False,
+            "d_mm": 500.0,
+        }],
+    )
+    deep = detailing.transverse_reinforcement(
+        **common,
+        shear_directions=[{
+            "component": "vx",
+            "links_present": False,
+            "links_required": False,
+            "d_mm": 501.0,
+        }],
+    )
+    assert shallow["status"] == "NOT APPLICABLE"
+    assert shallow["checks"] == []
+    assert deep["status"] == "NOT ASSESSED"
+    check = deep["checks"][0]
+    assert check["kind"] == "minimum_link_applicability"
+    assert check["clause"] == "8.2.1(2), 12.2(4)"
+    assert "statically determinate" in check["reason"]
+
+
 def test_absent_unnecessary_shear_links_are_not_a_detailing_action():
     result = detailing.transverse_reinforcement(
         edition=detailing.EC2_2005_DKNA,

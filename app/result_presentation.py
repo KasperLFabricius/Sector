@@ -803,6 +803,7 @@ def result_summary_rows(inp, results, *, stale=False):
             "transverse_leg_spacing": "transverse leg spacing",
             "torsion_spacing": "closed-link spacing",
             "required_links": "required links",
+            "minimum_link_applicability": "minimum-link applicability",
         }
         for check in checks:
             kind = str(check.get("kind") or "")

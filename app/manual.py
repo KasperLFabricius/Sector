@@ -696,10 +696,12 @@ def manual_blocks() -> list:
        "between effective legs for each shear direction, or leave it at zero for "
        "the conservative automatic value. For the 2023 edition, select the "
        "reinforcement ductility class and explicitly choose whether its favourable "
-       "minimum-ratio reduction is used. An ordinary beam with non-zero shear "
-       "requires minimum links; for a slab, omitted links are assessed against the "
-       "verified no-link resistance. A missing requirement fails without changing "
-       "the input.")
+       "minimum-ratio reduction is used. Under the 2005 method, an ordinary beam "
+       "with non-zero shear requires minimum links; slab omissions follow the "
+       "verified no-link resistance. The 2023 method follows the verified need for "
+       "links; for a beam with $d>500$ mm and no calculated link requirement, "
+       "Sector reports the structural-system condition in 8.2.1(2) as not assessed. "
+       "A missing requirement fails without changing the input.")
     table(["Member", "Vertical shear-link spacing limits"],
           [["Beam", "$s_l \\leq 0.75d$; $s_t \\leq \\min(0.75d,600\\,\\text{mm})$"],
            ["Slab", "$s_l \\leq 0.75d$; $s_t \\leq 1.5d$"]])
@@ -1163,6 +1165,10 @@ def manual_blocks() -> list:
          "Anchorage is assumed; reduce $f_{ywk}$ when full anchorage is not "
          "available. Cover, bends, mandrel diameter, anchorage length, lap length, "
          "bundle equivalence, congestion and construction access are not verified.")
+    call("standard", "EN 1992-1-1:2023 8.2.1(2) requires minimum shear "
+         "reinforcement for statically determinate linear members with "
+         "$d>500$ mm. The section model does not declare the global structural "
+         "system, so that condition is reported as not assessed when relevant.")
     call("standard", "BN1-59-5 and the Danish Road Directorate bridge basis add "
          "project- and existing-structure applicability requirements, including "
          "special treatment of inadequately anchored historic links. Sector does "
