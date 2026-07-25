@@ -43,8 +43,8 @@ def _member_input(**overrides):
         "shear_dlower": 16.0,
         "shear_V": 75.0,
         "shear_links": False,
-        "shear_cot_min": 1.0,
-        "shear_cot_max": 2.5,
+        "strut_cot_min": 1.0,
+        "strut_cot_max": 2.5,
         "shear_link_legs": 2,
         "shear_link_dia": 10.0,
         "shear_link_s": 150.0,
@@ -52,8 +52,6 @@ def _member_input(**overrides):
         "torsion_on": False,
         "torsion_method": codes.EC2_2005_DKNA.label,
         "torsion_tef": 0.0,
-        "torsion_cot_min": 1.0,
-        "torsion_cot_max": 2.5,
         "torsion_nu_v": False,
         "torsion_T": 40.0,
         "torsion_subdivide": False,
@@ -264,3 +262,44 @@ def test_finalize_combined_discloses_missing_component():
         "have_t": False,
         "method": inp["combined_method"],
     }
+
+
+def test_finalize_combined_preserves_every_longitudinal_candidate():
+    inp = _member_input(combined_on=True)
+    fallback = {
+        "valid": True, "util": 0.40, "axis": "x",
+        "tension_low": True, "conditional": False,
+    }
+    exact = {
+        "valid": True, "util": 0.60, "axis": "x",
+        "tension_low": False, "conditional": True,
+    }
+    out = {
+        "plastic": {"util": 0.20},
+        "shear": {
+            "res": {"valid": True, "vrd_c": 100.0},
+            "links": {
+                "res": {"valid": True, "vrd_s": 100.0, "vrd_max": 200.0,
+                        "cot": 1.5},
+                "util": 0.30,
+                "delta_ftd": 15.0,
+                "code_applicable": True,
+                "chord": exact,
+                "chord_candidates": [fallback, exact],
+            },
+            "v_ed": 30.0,
+        },
+        "torsion": {
+            "valid": True,
+            "util": 0.40,
+            "code_applicable": True,
+            "interaction": None,
+            "asl_req": 125.0,
+            "asw_over_s": 0.0,
+        },
+    }
+
+    capacity.finalize_combined(inp, out)
+
+    assert out["combined"]["longitudinal"] is exact
+    assert out["combined"]["longitudinal_candidates"] == [fallback, exact]

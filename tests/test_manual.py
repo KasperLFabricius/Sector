@@ -238,6 +238,10 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     text = "\n".join(str(b) for b in manual.manual_blocks())
     assert "minimise the governing utilisation" in text   # note (a): one shared angle
     assert "shared closed stirrup" in text                # note (b)
+    assert "one compression-strut range" in text
+    assert "three physical component checks" in text
+    assert "bands not overlap" not in text
+    assert "reverts to each" not in text
 
 
 def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():

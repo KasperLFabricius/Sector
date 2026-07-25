@@ -16,6 +16,7 @@ import viz
 
 _MM = 1000.0
 _DEGREE = chr(0x00B0)
+_THETA = chr(0x03B8)
 
 
 def plastic_action_assessment(pl):
@@ -340,6 +341,203 @@ def _percent(util):
     if util is None:
         return "-"
     return "infinite" if not math.isfinite(util) else f"{util * 100:.1f} %"
+
+
+def required_chord_candidates(payload):
+    """Return every retained longitudinal chord needed for a code verdict."""
+    payload = payload or {}
+    preserved = payload.get("longitudinal_candidates")
+    if preserved is None:
+        preserved = payload.get("chord_candidates")
+    if isinstance(preserved, (list, tuple)) and preserved:
+        return [
+            item for item in preserved
+            if item is not None and item.get("valid")
+        ]
+    return [
+        item for item in (
+            payload.get("longitudinal") or payload.get("chord"),
+            payload.get("chord_off"),
+        )
+        if item is not None and item.get("valid")
+    ]
+
+
+def required_chord_fallback(payload):
+    """Return the first required face using a pure-axis fallback, if any."""
+    return next(
+        (
+            item for item in required_chord_candidates(payload)
+            if not item.get("conditional", True)
+        ),
+        None,
+    )
+
+
+def combined_physical_components(combined):
+    """Return the three auditable physical M-V-T component assessments.
+
+    The solver keeps a maximum across mechanisms for angle optimisation and the
+    overall case status. Presentation must not call that maximum a transverse-
+    reinforcement utilisation: concrete strut crushing, closed-stirrup demand and
+    longitudinal-chord demand are different physical checks.
+    """
+    combined = combined or {}
+    applicable = bool(combined.get("code_applicable", True))
+    transverse = combined.get("transverse")
+    if transverse is None:
+        missing_note = "Shear links are required for the combined component checks"
+        concrete = {
+            "key": "concrete",
+            "label": "Concrete compression strut",
+            "status": "NOT ASSESSED",
+            "util": None,
+            "valid": False,
+            "applicable": False,
+            "note": missing_note,
+        }
+        stirrup = {
+            "key": "stirrup",
+            "label": "Closed stirrup",
+            "status": "NOT ASSESSED",
+            "util": None,
+            "valid": False,
+            "applicable": False,
+            "note": missing_note,
+        }
+    else:
+        transverse_valid = bool(transverse.get("valid"))
+        concrete_util = transverse.get("u_crush")
+        stirrup_util = transverse.get("u_stirrup")
+        try:
+            cot = float(transverse.get("cot"))
+        except (TypeError, ValueError):
+            cot = None
+        concrete = {
+            "key": "concrete",
+            "label": "Concrete compression strut",
+            "status": _util_summary_status(
+                concrete_util,
+                valid=transverse_valid,
+                applicable=applicable,
+            ),
+            "util": concrete_util,
+            "valid": transverse_valid,
+            "applicable": applicable,
+            "note": (
+                f"V-T crushing at cot {_THETA} = {cot:.2f}"
+                if transverse_valid and cot is not None
+                else "V-T crushing at the shared member angle"
+                if transverse_valid
+                else "Combined strut check is invalid"
+            ),
+        }
+        stirrup = {
+            "key": "stirrup",
+            "label": "Closed stirrup",
+            "status": _util_summary_status(
+                stirrup_util,
+                valid=transverse_valid,
+                applicable=applicable,
+            ),
+            "util": stirrup_util,
+            "valid": transverse_valid,
+            "applicable": applicable,
+            "note": (
+                f"Shear {_percent(transverse.get('shear_fraction'))} + "
+                f"torsion {_percent(transverse.get('torsion_fraction'))}"
+                if transverse_valid else "Combined stirrup check is invalid"
+            ),
+        }
+
+    longitudinal = combined.get("longitudinal")
+    chord_off = combined.get("chord_off")
+
+    def candidate_util(item):
+        value = item.get("util")
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return -math.inf
+        return -math.inf if math.isnan(value) else value
+
+    candidates = required_chord_candidates(combined)
+    governing = (
+        max(candidates, key=candidate_util)
+        if candidates else None
+    )
+    required_candidates = candidates
+    coverage = (
+        longitudinal.get("off_not_evaluated")
+        if longitudinal is not None else None
+    )
+    conditional = bool(
+        governing is not None
+        and all(
+            item.get("conditional", True)
+            for item in required_candidates
+        )
+    )
+    main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
+    long_valid = governing is not None and main_valid
+    long_applicable = bool(
+        applicable
+        and long_valid
+        and conditional
+        and not coverage
+        and all(
+            item.get("code_applicable", True)
+            for item in required_candidates
+        )
+    )
+    long_util = governing.get("util") if governing is not None else None
+    if not main_valid:
+        long_status = "NOT ASSESSED"
+        long_note = "No valid shear-axis longitudinal chord check"
+    elif not long_valid:
+        long_status = "NOT ASSESSED"
+        long_note = "No valid longitudinal chord check"
+    elif coverage:
+        long_status = "NOT ASSESSED"
+        long_note = (
+            "Incomplete chord coverage for a subdivided section"
+            if coverage == "subdivided"
+            else "One or more torsion-tensioned chord faces were not solved"
+        )
+    elif not conditional:
+        long_status = "NOT ASSESSED"
+        fallback = next(
+            (
+                item for item in required_candidates
+                if not item.get("conditional", True)
+            ),
+            {},
+        )
+        face = "negative" if fallback.get("tension_low", True) else "positive"
+        long_note = (
+            f"Required {fallback.get('axis', '?')}-axis {face} face uses "
+            "a pure-axis fallback; no code verdict"
+        )
+    else:
+        long_status = _util_summary_status(
+            long_util,
+            valid=long_valid,
+            applicable=long_applicable,
+        )
+        face = "negative" if governing.get("tension_low", True) else "positive"
+        long_note = f"Governing {governing.get('axis', '?')}-axis {face} face"
+    longitudinal_component = {
+        "key": "longitudinal",
+        "label": "Longitudinal reinforcement",
+        "status": long_status,
+        "util": long_util,
+        "valid": long_valid,
+        "applicable": long_applicable,
+        "note": long_note,
+        "governing": governing,
+        "coverage": coverage,
+    }
+    return [concrete, stirrup, longitudinal_component]
 
 
 def fatigue_summary_rows(inp, results, *, stale=False):
@@ -785,140 +983,17 @@ def result_summary_rows(inp, results, *, stale=False):
             inp,
         ))
         if valid:
-            crushing = combined.get("crushing")
-            if crushing is None:
+            for component in combined_physical_components(combined):
                 rows.append(_summary_row(
-                    "Combined V-T crushing", "plastic", "NOT ASSESSED",
-                    view="M-V-T Combined",
-                    note="Shear links are required for this check", inp=inp,
-                ))
-            else:
-                crushing_valid = bool(crushing.get("valid"))
-                crushing_applicable = bool(
-                    crushing.get("code_applicable", applicable)
-                )
-                crushing_util = crushing.get("value")
-                rows.append(_summary_row(
-                    "Combined V-T crushing",
+                    f"Combined {component['label'].lower()}",
                     "plastic",
-                    _util_summary_status(
-                        crushing_util,
-                        valid=crushing_valid,
-                        applicable=crushing_applicable,
-                    ),
-                    _percent(crushing_util),
+                    component["status"],
+                    _percent(component["util"]),
                     "<= 100 %",
-                    crushing_util,
+                    component["util"],
                     "M-V-T Combined",
-                    (
-                        "No common strut angle"
-                        if not crushing_valid
-                        else f"cot(theta) = {crushing.get('cot', 0.0):.2f}"
-                    ),
+                    component["note"],
                     inp,
-                ))
-
-            transverse = combined.get("transverse")
-            if transverse is None:
-                rows.append(_summary_row(
-                    "Combined transverse reinforcement",
-                    "plastic",
-                    "NOT ASSESSED",
-                    view="M-V-T Combined",
-                    note="Shear links are required for this check",
-                    inp=inp,
-                ))
-            else:
-                transverse_valid = bool(transverse.get("valid"))
-                transverse_util = transverse.get("governing")
-                rows.append(_summary_row(
-                    "Combined transverse reinforcement",
-                    "plastic",
-                    _util_summary_status(
-                        transverse_util,
-                        valid=transverse_valid,
-                        applicable=applicable,
-                    ),
-                    _percent(transverse_util),
-                    "<= 100 %",
-                    transverse_util,
-                    "M-V-T Combined",
-                    (
-                        str(transverse.get("governs") or "")
-                        if transverse_valid else "No common strut angle"
-                    ),
-                    inp,
-                ))
-
-            longitudinal = combined.get("longitudinal")
-            if longitudinal is None:
-                rows.append(_summary_row(
-                    "Combined longitudinal reinforcement",
-                    "plastic",
-                    "NOT ASSESSED",
-                    view="M-V-T Combined",
-                    note="Shear links are required for this check",
-                    inp=inp,
-                ))
-            else:
-                longitudinal_valid = bool(longitudinal.get("valid"))
-                longitudinal_util = longitudinal.get("util")
-                conditional = (
-                    not longitudinal.get("biaxial", False)
-                    or bool(longitudinal.get("conditional", True))
-                )
-                rows.append(_summary_row(
-                    "Combined longitudinal reinforcement",
-                    "plastic",
-                    _util_summary_status(
-                        longitudinal_util,
-                        valid=longitudinal_valid,
-                        applicable=applicable and conditional,
-                    ),
-                    _percent(longitudinal_util),
-                    "<= 100 %",
-                    longitudinal_util,
-                    "M-V-T Combined",
-                    (
-                        "Pure-axis fallback; no code verdict"
-                        if longitudinal_valid and not conditional
-                        else str(longitudinal.get("axis") or "")
-                    ),
-                    inp,
-                ))
-
-            chord_off = combined.get("chord_off")
-            if chord_off is not None:
-                chord_valid = bool(chord_off.get("valid"))
-                chord_util = chord_off.get("util")
-                rows.append(_summary_row(
-                    "Combined off-axis chord",
-                    "plastic",
-                    _util_summary_status(
-                        chord_util,
-                        valid=chord_valid,
-                        applicable=applicable,
-                    ),
-                    _percent(chord_util),
-                    "<= 100 %",
-                    chord_util,
-                    "M-V-T Combined",
-                    str(chord_off.get("axis") or ""),
-                    inp,
-                ))
-            if (
-                longitudinal is not None
-                and longitudinal.get("off_not_evaluated") == "not_solved"
-            ):
-                rows.append(_summary_row(
-                    "Combined off-axis chord coverage",
-                    "plastic",
-                    "NOT ASSESSED",
-                    view="M-V-T Combined",
-                    note=(
-                        "One or more torsion-tensioned chord faces were not solved"
-                    ),
-                    inp=inp,
                 ))
 
     if stale and results:

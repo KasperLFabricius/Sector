@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from tools.report_render_fixture import (
+    _inputs,
+    _results,
     build_fixture_pdf,
     render_pdf,
+    validate_fixture_engineering,
     validate_pdf_content,
     validate_rendered_pages,
 )
+
+
+def test_reference_fixture_engineering_is_internally_consistent():
+    inp = _inputs()
+    validate_fixture_engineering(inp, _results(inp))
 
 
 def test_issued_report_renders_every_page_and_retains_expected_content():

@@ -13,6 +13,7 @@ import copy
 import datetime
 import functools
 import io
+import math
 import pathlib
 import sys
 
@@ -32,16 +33,17 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
-from sector import codes, shear  # noqa: E402
+from sector import capacity, codes, combined, shear, torsion  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
 
 # Geometry, concrete law, steel law, two plastic interactions, two plastic
 # states, two elastic states, two elastic strain profiles, one derived shear
-# geometry, one minimum-reinforcement figure, one clear-spacing figure and four
+# geometry, one shear-truss figure, one torsion-tube figure, two V-T interaction
+# figures, one minimum-reinforcement figure, one clear-spacing figure and four
 # grouped-fatigue figures. An intentional fixture change must update this
 # explicit contract.
-_EXPECTED_FIGURE_COUNT = 19
+_EXPECTED_FIGURE_COUNT = 23
 
 
 class _FixedDateTime(datetime.datetime):
@@ -88,7 +90,7 @@ def _inputs() -> dict:
             "mx_ed_knm": 80.0,
             "my_ed_knm": 0.0,
             "v_ed_kn": 30.0,
-            "t_ed_knm": 0.0,
+            "t_ed_knm": 25.0,
             "check_minimum_reinforcement": True,
         },
         {
@@ -210,8 +212,20 @@ def _inputs() -> dict:
         fatigue_inputs.SPECTRUM_TABLE_KEY: fatigue_spectrum,
         fatigue_inputs.BASIS_KEY: fatigue_basis,
         "shear_on": True,
-        "torsion_on": False,
-        "combined_on": False,
+        "shear_links": True,
+        "shear_method": codes.EC2_2005_DKNA.label,
+        "shear_vx_link_legs": 2.0,
+        "shear_vy_link_legs": 2.0,
+        "shear_link_dia": 10.0,
+        "shear_link_s": 150.0,
+        "shear_fywk": 500.0,
+        "torsion_on": True,
+        "torsion_method": codes.EC2_2005_DKNA.label,
+        "combined_on": True,
+        "combined_method": codes.EC2_2005_DKNA.label,
+        "combined_mv_independent": False,
+        "strut_cot_min": 1.0,
+        "strut_cot_max": 2.5,
         "minimum_reinforcement_on": True,
         "clear_spacing_on": True,
         "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
@@ -312,10 +326,78 @@ def _crack() -> dict:
     return dict(candidate, gov_bar=1, candidates=[candidate])
 
 
-def _results() -> dict:
+def _results(inp: dict | None = None) -> dict:
+    inp = inp or _inputs()
+    code = codes.EC2_2005_DKNA
+    link_dia = 10.0
+    link_spacing = 150.0
+    link_legs = 2.0
+    fywk = 500.0
+    fywd = fywk / 1.15
+    capacity_material = inp["mild_materials"][
+        inp["capacity_steel_material_id"]
+    ]
+    fyd_long = capacity_material.fytk / capacity_material.gamma_y
+    fcd = 30.0 / 1.5
+    shear_z_mm = 243.0
+    link_asw = link_legs * math.pi * link_dia ** 2 / 4.0
+    link_asw_over_s = link_asw / link_spacing
+    torsion_asw = math.pi * link_dia ** 2 / 4.0
+    torsion_asw_over_s = torsion_asw / link_spacing
+    tube = torsion.tube_properties(
+        inp["outer"], inp.get("holes"), inp.get("torsion_tef", 0.0)
+    )
     shear_res = shear.vrd_c(
-        30.0, codes.EC2_2005_DKNA, bw_mm=200.0, d_mm=270.0,
+        30.0, code, bw_mm=200.0, d_mm=270.0,
         asl_mm2=500.0, n_ed_comp_kn=0.0, ac_m2=0.06, gamma_c=1.5,
+    )
+
+    @functools.lru_cache(maxsize=4096)
+    def link_at(cot: float) -> dict:
+        return shear.vrd_links(
+            30.0, code, bw_mm=200.0, d_mm=270.0,
+            asw_over_s=link_asw_over_s, fywk=fywk,
+            n_ed_comp_kn=0.0, ac_m2=0.06,
+            cot_min=cot, cot_max=cot, z_mm=shear_z_mm,
+            fcd_mpa=fcd, gamma_s=1.15,
+        )
+
+    @functools.lru_cache(maxsize=4096)
+    def torsion_at(cot: float) -> dict:
+        return capacity.tube_torsion(
+            tube, 25.0, tcode=code, fck=30.0, fcd=fcd, alpha_cw=1.0,
+            fywd=fywd, asw_over_s=torsion_asw_over_s,
+            cot_min=cot, cot_max=cot, nu_detail=False,
+            fctd=1.35, fyd_long=fyd_long,
+        )
+
+    def longitudinal_at(cot: float) -> dict:
+        torsion_result = torsion_at(cot)
+        ftd_t_cot = torsion_result["asl_req"] * fyd_long / 1000.0
+        return combined.longitudinal_check(
+            80.0, 100.0, 0.5 * 30.0 * cot, ftd_t_cot,
+            shear_z_mm / 1000.0,
+        )
+
+    angle_utilisations = [
+        lambda cot: combined.ratio(30.0, link_at(cot)["vrd_s"]),
+        lambda cot: combined.ratio(30.0, link_at(cot)["vrd_max"]),
+        lambda cot: torsion_at(cot)["util"],
+        lambda cot: combined.ratio(25.0, torsion_at(cot)["trd_s"]),
+        lambda cot: combined.crushing_interaction(
+            25.0, torsion_at(cot)["trd_max"],
+            30.0, link_at(cot)["vrd_max"],
+        ),
+        lambda cot: longitudinal_at(cot)["util"],
+        lambda cot: combined.dkna_sum(
+            0.80,
+            combined.ratio(30.0, link_at(cot)["vrd"]),
+            torsion_at(cot)["util"],
+            m_v_independent=False,
+        ),
+    ]
+    member_cot, _ = combined.governing_strut_cot(
+        angle_utilisations, 1.0, 2.5,
     )
     plastic = {
         "mx": [100.0, 0.0, -100.0, 0.0],
@@ -456,8 +538,164 @@ def _results() -> dict:
         "n_ed": 0.0,
         "n_prestress": 0.0,
         "centroid": (0.0, 0.0),
-        "method": codes.EC2_2005_DKNA.label,
+        "method": code.label,
         "model_2023": False,
+    }
+    link_resistance = link_at(member_cot)
+    shear_payload["links"] = {
+        "res": link_resistance,
+        "util": 30.0 / link_resistance["vrd"],
+        "asw": link_asw,
+        "asw_over_s": link_asw_over_s,
+        "legs": link_legs,
+        "dia": link_dia,
+        "s": link_spacing,
+        "fywk": fywk,
+        "cot_min": 1.0,
+        "cot_max": 2.5,
+        "delta_ftd": 0.5 * 30.0 * member_cot,
+        "cot_limit_lo": 1.0,
+        "cot_limit_hi": 2.5,
+        "z_source": "plastic internal lever arm",
+        "out_of_limits": False,
+        "code_applicable": True,
+        "required": bool(30.0 > shear_res["vrd_c"]),
+        "theta_mode": "utilisation",
+        "chord": None,
+        "chord_off": None,
+    }
+    primary_torsion = torsion_at(member_cot)
+    interaction = {
+        "valid": True,
+        "cot": member_cot,
+        "theta_deg": primary_torsion["theta_deg"],
+        "trd_max": primary_torsion["trd_max"],
+        "vrd_max": link_resistance["vrd_max"],
+        "t_ed": 25.0,
+        "v_ed": 30.0,
+        "value": combined.crushing_interaction(
+            25.0, primary_torsion["trd_max"],
+            30.0, link_resistance["vrd_max"],
+        ),
+        "code_applicable": True,
+    }
+    minimum_interaction = (
+        25.0 / primary_torsion["trd_c"]
+        + 30.0 / shear_res["vrd_c"]
+    )
+    torsion_payload = {
+        "tube": tube,
+        "trd_s": primary_torsion["trd_s"],
+        "trd_max": primary_torsion["trd_max"],
+        "trd": primary_torsion["trd"],
+        "trd_c": primary_torsion["trd_c"],
+        "cot": primary_torsion["cot"],
+        "theta_deg": primary_torsion["theta_deg"],
+        "util": primary_torsion["util"],
+        "asl_req": primary_torsion["asl_req"],
+        "t_ed": 25.0,
+        "fcd": fcd,
+        "fywd": fywd,
+        "fyd_long": fyd_long,
+        "nu": primary_torsion["nu"],
+        "alpha_cw": 1.0,
+        "fctd": 1.35,
+        "asw_t": torsion_asw,
+        "asw_over_s": torsion_asw_over_s,
+        "dia": link_dia,
+        "s": link_spacing,
+        "cot_min": 1.0,
+        "cot_max": 2.5,
+        "method": code.label,
+        "governs": primary_torsion["governs"],
+        "valid": True,
+        "cot_limit_lo": 1.0,
+        "cot_limit_hi": 2.5,
+        "out_of_limits": False,
+        "code_applicable": True,
+        "subdivided": False,
+        "theta_mode": "utilisation",
+        "primary": primary_torsion,
+        "subtubes": None,
+        "interaction": interaction,
+        "min_reinf": {
+            "applicable": True,
+            "value": minimum_interaction,
+            "ok": bool(minimum_interaction <= 1.0),
+            "t_ed": 25.0,
+            "trd_c": primary_torsion["trd_c"],
+            "v_ed": 30.0,
+            "vrd_c": shear_res["vrd_c"],
+            "solid": True,
+            "model_2023": False,
+        },
+    }
+    shear_util = shear_payload["links"]["util"]
+    torsion_util = torsion_payload["util"]
+    shear_fraction = (
+        0.0
+        if 30.0 <= shear_res["vrd_c"]
+        else 30.0 / link_resistance["vrd_s"]
+    )
+    torsion_stirrup_fraction = 25.0 / primary_torsion["trd_s"]
+    stirrup_util = shear_fraction + torsion_stirrup_fraction
+    ftd_t = primary_torsion["asl_req"] * fyd_long / 1000.0
+    longitudinal = combined.longitudinal_check(
+        80.0, plastic["max_mx"], shear_payload["links"]["delta_ftd"],
+        ftd_t, shear_z_mm / 1000.0,
+    )
+    longitudinal.update(
+        valid=True,
+        axis="x",
+        tension_low=True,
+        biaxial=False,
+        conditional=True,
+        off_util=0.0,
+        m_off=0.0,
+        has_torsion=True,
+        gets_shift=True,
+        off_not_evaluated=None,
+        theta_mode="utilisation",
+        code_applicable=True,
+    )
+    dkna_sum = combined.dkna_sum(
+        plastic["util"], shear_util, torsion_util,
+        m_v_independent=False,
+    )
+    combined_payload = {
+        "valid": True,
+        "method": code.label,
+        "r_m": plastic["util"],
+        "r_v": shear_util,
+        "r_t": torsion_util,
+        "m_v_independent": False,
+        "dkna_sum": dkna_sum,
+        "dkna_ok": bool(dkna_sum <= 1.0),
+        "code_applicable": True,
+        "crushing": interaction,
+        "transverse": {
+            "valid": True,
+            "cot": member_cot,
+            "theta_deg": primary_torsion["theta_deg"],
+            "u_stirrup": stirrup_util,
+            "u_crush": interaction["value"],
+            "governing": max(stirrup_util, interaction["value"]),
+            "governs": (
+                "crushing"
+                if interaction["value"] > stirrup_util
+                else "stirrups"
+            ),
+            "ok": bool(max(stirrup_util, interaction["value"]) <= 1.0),
+            "shear_fraction": shear_fraction,
+            "torsion_fraction": torsion_stirrup_fraction,
+            "shear_credited": bool(shear_fraction == 0.0),
+            "vrd_c": shear_res["vrd_c"],
+            "v_ed": 30.0,
+        },
+        "longitudinal": longitudinal,
+        "asl_torsion": primary_torsion["asl_req"],
+        "delta_ftd": shear_payload["links"]["delta_ftd"],
+        "links": True,
     }
     plastic_2 = copy.deepcopy(plastic)
     plastic_2.update(util=1.25, applied=(125.0, 0.0))
@@ -511,11 +749,15 @@ def _results() -> dict:
         "elastic": elastic,
         "fatigue": fatigue,
         "shear": shear_payload,
+        "torsion": torsion_payload,
+        "combined": combined_payload,
         "clear_spacing": spacing,
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
              "results": {
                  "plastic": plastic, "shear": shear_payload,
+                 "torsion": torsion_payload,
+                 "combined": combined_payload,
                  "minimum_reinforcement": minimum,
              }},
             {"name": "PL-QA-2", "actions": plastic_rows[1], "evaluated": True,
@@ -530,12 +772,212 @@ def _results() -> dict:
     }
 
 
+def validate_fixture_engineering(inp: dict, out: dict) -> None:
+    """Prove that the report fixture's displayed operands reproduce its results."""
+
+    def close(label: str, actual: float, expected: float) -> None:
+        if not math.isclose(actual, expected, rel_tol=1.0e-10, abs_tol=1.0e-10):
+            raise AssertionError(
+                f"inconsistent fixture {label}: {actual!r} != {expected!r}"
+            )
+
+    case = next(
+        row for row in inp["plastic_cases"] if row["name"] == "PL-QA-1"
+    )
+    if not (
+        inp["shear_on"]
+        and inp["shear_links"]
+        and inp["torsion_on"]
+        and inp["combined_on"]
+    ):
+        raise AssertionError("the complete fixture checks are not enabled")
+
+    shear_out = out["shear"]
+    links = shear_out["links"]
+    lk = links["res"]
+    close("VEd", shear_out["v_ed"], case["v_ed_kn"])
+    close(
+        "VRd,s",
+        lk["vrd_s"],
+        links["asw_over_s"] * lk["z"] * lk["fywd"] * lk["cot"] / 1000.0,
+    )
+    close(
+        "VRd,max",
+        lk["vrd_max"],
+        (
+            lk["alpha_cw"]
+            * shear_out["bw"]
+            * lk["z"]
+            * lk["nu1"]
+            * lk["fcd"]
+            / (lk["cot"] + 1.0 / lk["cot"])
+            / 1000.0
+        ),
+    )
+    close("shear utilisation", links["util"], shear_out["v_ed"] / lk["vrd"])
+
+    torsion_out = out["torsion"]
+    tube = torsion_out["tube"]
+    expected_tube = torsion.tube_properties(
+        inp["outer"], inp.get("holes"), inp.get("torsion_tef", 0.0)
+    )
+    for key in ("A", "u", "tef", "Ak", "uk"):
+        close(f"torsion tube {key}", tube[key], expected_tube[key])
+    capacity_material = inp["mild_materials"][
+        inp["capacity_steel_material_id"]
+    ]
+    expected_fyd_long = capacity_material.fytk / capacity_material.gamma_y
+    close("torsion longitudinal design strength", torsion_out["fyd_long"],
+          expected_fyd_long)
+    close("TEd", torsion_out["t_ed"], case["t_ed_knm"])
+    close(
+        "TRd,s",
+        torsion_out["trd_s"],
+        torsion.trd_s(
+            tube["Ak"], torsion_out["fywd"],
+            torsion_out["asw_over_s"], torsion_out["cot"],
+        ),
+    )
+    close(
+        "TRd,max",
+        torsion_out["trd_max"],
+        torsion.trd_max(
+            30.0, codes.EC2_2005_DKNA, tube["Ak"], tube["tef"],
+            torsion_out["alpha_cw"], torsion_out["cot"],
+            fcd_mpa=torsion_out["fcd"],
+        ),
+    )
+    close(
+        "TRd,c",
+        torsion_out["trd_c"],
+        torsion.trd_c(torsion_out["fctd"], tube["Ak"], tube["tef"]),
+    )
+    close(
+        "torsion longitudinal area",
+        torsion_out["asl_req"],
+        torsion.asl_required(
+            torsion_out["t_ed"], tube["uk"], tube["Ak"],
+            torsion_out["fyd_long"], torsion_out["cot"],
+        ),
+    )
+    close(
+        "torsion utilisation",
+        torsion_out["util"],
+        torsion_out["t_ed"] / torsion_out["trd"],
+    )
+
+    result = out["combined"]
+    close(
+        "concrete interaction",
+        result["crushing"]["value"],
+        combined.crushing_interaction(
+            torsion_out["t_ed"], torsion_out["trd_max"],
+            shear_out["v_ed"], lk["vrd_max"],
+        ),
+    )
+    close(
+        "combined utilisation",
+        result["dkna_sum"],
+        combined.dkna_sum(
+            result["r_m"], result["r_v"], result["r_t"],
+            m_v_independent=result["m_v_independent"],
+        ),
+    )
+
+    @functools.lru_cache(maxsize=4096)
+    def link_at(cot: float) -> dict:
+        return shear.vrd_links(
+            shear_out["fck"], codes.EC2_2005_DKNA,
+            bw_mm=shear_out["bw"], d_mm=shear_out["d"],
+            asw_over_s=links["asw_over_s"], fywk=links["fywk"],
+            n_ed_comp_kn=0.0, ac_m2=shear_out["ac"],
+            cot_min=cot, cot_max=cot, z_mm=lk["z"],
+            fcd_mpa=lk["fcd"], gamma_s=lk["gamma_s"],
+        )
+
+    @functools.lru_cache(maxsize=4096)
+    def torsion_at(cot: float) -> dict:
+        return capacity.tube_torsion(
+            tube, torsion_out["t_ed"], tcode=codes.EC2_2005_DKNA,
+            fck=shear_out["fck"], fcd=torsion_out["fcd"],
+            alpha_cw=torsion_out["alpha_cw"], fywd=torsion_out["fywd"],
+            asw_over_s=torsion_out["asw_over_s"],
+            cot_min=cot, cot_max=cot, nu_detail=False,
+            fctd=torsion_out["fctd"], fyd_long=expected_fyd_long,
+        )
+
+    def longitudinal_util(cot: float) -> float:
+        torsion_result = torsion_at(cot)
+        ftd_t_cot = (
+            torsion_result["asl_req"] * torsion_out["fyd_long"] / 1000.0
+        )
+        return combined.longitudinal_check(
+            result["longitudinal"]["m_ed"],
+            result["longitudinal"]["m_rd"],
+            0.5 * shear_out["v_ed"] * cot,
+            ftd_t_cot,
+            result["longitudinal"]["z"],
+        )["util"]
+
+    member_cot, _ = combined.governing_strut_cot(
+        [
+            lambda cot: combined.ratio(
+                shear_out["v_ed"], link_at(cot)["vrd_s"]
+            ),
+            lambda cot: combined.ratio(
+                shear_out["v_ed"], link_at(cot)["vrd_max"]
+            ),
+            lambda cot: torsion_at(cot)["util"],
+            lambda cot: combined.ratio(
+                torsion_out["t_ed"], torsion_at(cot)["trd_s"]
+            ),
+            lambda cot: combined.crushing_interaction(
+                torsion_out["t_ed"], torsion_at(cot)["trd_max"],
+                shear_out["v_ed"], link_at(cot)["vrd_max"],
+            ),
+            longitudinal_util,
+            lambda cot: combined.dkna_sum(
+                result["r_m"],
+                combined.ratio(shear_out["v_ed"], link_at(cot)["vrd"]),
+                torsion_at(cot)["util"],
+                m_v_independent=result["m_v_independent"],
+            ),
+        ],
+        links["cot_min"],
+        links["cot_max"],
+    )
+    close("shared member cotangent", lk["cot"], member_cot)
+    close("torsion member cotangent", torsion_out["cot"], member_cot)
+    close(
+        "longitudinal lever arm",
+        result["longitudinal"]["z"],
+        lk["z"] / 1000.0,
+    )
+
+    expected_longitudinal = combined.longitudinal_check(
+        result["longitudinal"]["m_ed"],
+        result["longitudinal"]["m_rd"],
+        links["delta_ftd"],
+        torsion_out["asl_req"] * torsion_out["fyd_long"] / 1000.0,
+        result["longitudinal"]["z"],
+    )
+    for key in ("ftd_v", "ftd_t", "mv", "mt", "m_total", "util"):
+        close(
+            f"longitudinal {key}",
+            result["longitudinal"][key],
+            expected_longitudinal[key],
+        )
+
+
 @functools.lru_cache(maxsize=1)
 def build_fixture_pdf() -> bytes:
     """Build the report with stable time and the real figure-export path."""
     original_datetime = sector_report.datetime.datetime
     sector_report.datetime.datetime = _FixedDateTime
     try:
+        inp = _inputs()
+        out = _results(inp)
+        validate_fixture_engineering(inp, out)
         return sector_report.build_report(
             {
                 "proj_no": "QA-REFERENCE",
@@ -544,8 +986,8 @@ def build_fixture_pdf() -> bytes:
                 "author": "Sector QA",
                 "source_revision": "fixture000000000000000000000000000000000",
             },
-            _inputs(),
-            _results(),
+            inp,
+            out,
             version=__version__,
             figures=True,
         )
@@ -689,6 +1131,11 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Concrete fatigue",
         "Certified governing-fibre search",
         "Torsion and shear fatigue are not assessed",
+        "Physical resistance components",
+        "Concrete compression strut",
+        "Closed stirrup",
+        "Longitudinal reinforcement",
+        "Torsion (thin-walled tube)",
         "125.0 %",
         "245.000 MPa",
         "Crack-width candidates",

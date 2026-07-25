@@ -28,7 +28,24 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 11  # v11: material/detail-only reinforcement assignments
+VERSION = 12  # v12: one shared shear/torsion compression-strut range
+
+_UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
+    "shear_cot_min",
+    "shear_cot_max",
+    "torsion_cot_min",
+    "torsion_cot_max",
+})
+
+
+def _reject_unsupported_strut_settings(raw_scalars: dict) -> None:
+    if _UNSUPPORTED_SEPARATE_STRUT_KEYS.intersection(raw_scalars):
+        raise ValueError(
+            "unsupported pre-0.91 project: separate shear/torsion strut-angle "
+            "settings cannot be loaded; recreate the shared compression-strut "
+            "range explicitly"
+        )
+
 
 # The four point-table session-state keys (DataFrames, millimetres).
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -114,10 +131,9 @@ SCALAR_KEYS = [
     "shear_dlower",
     "shear_links", "shear_link_legs", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
-    "shear_cot_min", "shear_cot_max",
+    "strut_cot_min", "strut_cot_max",
     # Torsion (thin-walled tube, TRd). The stirrup is the shared shear_link_* one.
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
-    "torsion_cot_min", "torsion_cot_max",
     # Sub-tube subdivision for compound / T-sections (6.3.1(3)).
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
@@ -359,6 +375,7 @@ def project_provenance(text: str) -> dict:
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
+    _reject_unsupported_strut_settings(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
@@ -413,6 +430,7 @@ def parse_project(text: str):
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
+    _reject_unsupported_strut_settings(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):

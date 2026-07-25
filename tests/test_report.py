@@ -1677,10 +1677,14 @@ def _combined_out(mv_independent=False):
 def test_report_includes_combined_section():
     out = _out()
     out["combined"] = _combined_out()
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    inp = _inp()
+    inp.update(strut_cot_min=1.0, strut_cot_max=2.5)
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     assert "Combined bending" in txt or "M-V-T" in txt
     assert "6.3.2(6)" in txt                        # the DK NA combined rule
     assert "EXCEEDED" in txt                        # sum 1.3 > 1
+    assert "Shared compression-strut cot " + chr(0x03B8) + "min" in txt
+    assert "Shared compression-strut cot " + chr(0x03B8) + "max" in txt
 
 
 def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict():
@@ -1790,12 +1794,54 @@ def test_report_combined_longitudinal_biaxial_fallback_warns():
     c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=300.0,
                              ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
                              util=105.0 / 300.0, ok=True, capped=False,
-                             tension_low=True, off_util=0.83, biaxial=True,
+                             tension_low=True, off_util=0.03, biaxial=False,
                              m_off=90.0, conditional=False)
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "Biaxial bending" in txt                 # the fallback warning
+    assert "required x-axis negative face" in txt
     assert "pure-axis fallback" in txt
+
+
+def test_report_withholds_verdict_for_preserved_non_governing_fallback():
+    out = _out()
+    c = _combined_out()
+    exact = dict(
+        valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=250.0,
+        ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
+        util=105.0 / 250.0, ok=True, capped=False,
+        tension_low=False, conditional=True,
+    )
+    fallback = dict(
+        exact,
+        util=0.20,
+        tension_low=True,
+        conditional=False,
+    )
+    off_axis = dict(
+        valid=True, axis="y", z=0.4, m_ed=20.0, m_rd=100.0,
+        ftd_v=0.0, ftd_t=65.0, mv=0.0, mt=13.0, m_total=33.0,
+        util=0.33, ok=True, capped=False,
+        tension_low=True, m_off=20.0, conditional=True,
+    )
+    c["longitudinal"] = exact
+    c["chord_off"] = off_axis
+    c["longitudinal_candidates"] = [fallback, exact, off_axis]
+    out["combined"] = c
+
+    txt = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    )).split())
+
+    assert "pure-axis fallback" in txt
+    assert (
+        "utilisation = 42.0 % "
+        "(NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
+        in txt
+    )
+    assert (
+        "utilisation = 33.0 % (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+        in txt
+    )
 
 
 def test_report_combined_longitudinal_conditional_mrd():
@@ -1833,6 +1879,10 @@ def test_report_off_axis_skip_disclosed_uniaxially():
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
     assert "per sub-tube" in txt                     # the subdivided disclosure fired
+    assert (
+        "utilisation = 57.5 % (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+        in txt
+    )
 
 
 def test_report_partial_torsion_face_coverage_disclosed():
@@ -1851,6 +1901,10 @@ def test_report_partial_torsion_face_coverage_disclosed():
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
     assert "may not be the critical face" in txt
+    assert (
+        "utilisation = 57.5 % (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+        in txt
+    )
 
 
 def test_report_off_axis_chord_block():
@@ -1892,8 +1946,13 @@ def test_report_combined_transverse_shows_shear_credit():
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Shared stirrup" in txt
     assert "concrete carries the shear" in txt      # the VRd,c credit note
-    assert "crushing utilisation" in txt            # crushing shown separately
-    assert "Governing (stirrups)" in txt            # governing labelled by mechanism
+    assert "Physical resistance components" in txt
+    assert "Concrete compression strut" in txt
+    assert "Closed stirrup" in txt
+    assert "Longitudinal reinforcement" in txt
+    assert "closed-stirrup utilisation" in txt
+    assert "crushing utilisation" not in txt
+    assert "Governing (stirrups)" not in txt
 
 
 def test_report_skips_invalid_combined():
@@ -2026,24 +2085,13 @@ def _combined_longitudinal(theta_mode):
     }
 
 
-def test_report_disjoint_longitudinal_note_avoids_a_shared_angle():
-    # theta_mode == "disjoint": shear and torsion bands do not overlap, so the PDF must
-    # not claim a shared member angle -- else reports contradict the on-screen warning.
-    txt = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), _combined_longitudinal("disjoint"), figures=False)).split())
-    assert "do not overlap" in txt
-    assert "resistance-optimum angle" in txt
-    assert "minimise the governing utilisation" not in txt
-    assert "ONE member strut angle shared" not in txt
-
-
-def test_report_no_load_longitudinal_note_is_not_labelled_disjoint():
-    # theta_mode == "resistance": no live shear or torsion. The bands are NOT disjoint
-    # (there is simply nothing to optimise), so the PDF must not say "do not overlap".
+def test_report_no_load_longitudinal_note_states_resistance_optimum():
+    # theta_mode == "resistance": no live shear or torsion, so there is no live
+    # member-angle objective and the capacity result uses its resistance optimum.
     txt = " ".join(_pdf_text(sector_report.build_report(
         {}, _inp(), _combined_longitudinal("resistance"), figures=False)).split())
     assert "No shear or torsion is acting" in txt
-    assert "do not overlap" not in txt
+    assert "resistance-optimum" in txt
     assert "minimise the governing utilisation" not in txt
 
 
@@ -2053,4 +2101,3 @@ def test_report_shared_longitudinal_note_states_the_common_angle():
         {}, _inp(), _combined_longitudinal("utilisation"), figures=False)).split())
     assert "ONE member strut angle shared" in txt
     assert "minimise the governing utilisation" in txt
-    assert "do not overlap" not in txt

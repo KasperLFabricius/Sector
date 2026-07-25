@@ -688,7 +688,7 @@ def test_app_shear_links_flag_out_of_code_bounds():
     _set_and_click(
         at,
         "calculate",
-        ("number_input", "shear_cot_max", 3.0),
+        ("number_input", "strut_cot_max", 3.0),
         ("number_input", "shear_V", 100.0),
     )
     assert not at.exception

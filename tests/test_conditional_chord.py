@@ -550,6 +550,13 @@ def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially()
     assert not lg["biaxial"]                            # uniaxial, yet...
     assert lg["off_not_evaluated"] == "subdivided"      # ...still disclosed
     assert at.session_state["results"]["shear"]["links"]["chord_off"] is None
+    _select_view(at, "M-V-T Combined")
+    metric = next(
+        item for item in at.metric
+        if item.label == r"$M_{Ed,\mathrm{total}}/M_{Rd}$"
+    )
+    assert not metric.delta
+    assert "NOT ASSESSED" in metric.help
 
 
 def test_shear_face_mrd_falls_back_to_pure_axis_on_solve_failure(monkeypatch):

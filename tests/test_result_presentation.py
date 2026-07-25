@@ -290,7 +290,10 @@ def test_combined_summary_cannot_hide_subordinate_failure():
         "dkna_sum": 0.80,
         "crushing": {"valid": True, "value": 1.10, "cot": 1.5},
         "transverse": {
-            "valid": True, "governing": 0.75, "governs": "stirrups",
+            "valid": True, "cot": 1.5,
+            "u_crush": 1.10, "u_stirrup": 0.75,
+            "shear_fraction": 0.30, "torsion_fraction": 0.45,
+            "governing": 1.10, "governs": "crushing",
         },
         "longitudinal": {
             "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
@@ -304,10 +307,14 @@ def test_combined_summary_cannot_hide_subordinate_failure():
     by_check = {row["check"]: row for row in rows}
 
     assert by_check["Combined M-V-T - DK NA sum"]["status"] == "PASS"
-    assert by_check["Combined V-T crushing"]["status"] == "FAIL"
-    assert by_check["Combined transverse reinforcement"]["status"] == "PASS"
+    assert by_check["Combined concrete compression strut"]["status"] == "FAIL"
+    assert by_check["Combined closed stirrup"]["status"] == "PASS"
     assert by_check["Combined longitudinal reinforcement"]["status"] == "PASS"
-    assert by_check["Combined off-axis chord"]["status"] == "PASS"
+    assert by_check["Combined longitudinal reinforcement"]["util"] == pytest.approx(
+        0.65
+    )
+    assert "Combined transverse reinforcement" not in by_check
+    assert "Combined off-axis chord" not in by_check
     assert presentation.overall_summary_status(rows) == "FAIL"
 
 
@@ -330,8 +337,8 @@ def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
     )
     by_check = {row["check"]: row for row in rows}
 
-    assert by_check["Combined V-T crushing"]["status"] == "NOT ASSESSED"
-    assert by_check["Combined transverse reinforcement"]["status"] == "NOT ASSESSED"
+    assert by_check["Combined concrete compression strut"]["status"] == "NOT ASSESSED"
+    assert by_check["Combined closed stirrup"]["status"] == "NOT ASSESSED"
     assert by_check["Combined longitudinal reinforcement"]["status"] == "NOT ASSESSED"
     assert "fallback" in by_check["Combined longitudinal reinforcement"]["note"].lower()
 
@@ -365,7 +372,10 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
         "dkna_sum": 0.80,
         "crushing": {"valid": True, "value": 0.70, "cot": 1.5},
         "transverse": {
-            "valid": True, "governing": 0.75, "governs": "stirrups",
+            "valid": True, "cot": 1.5,
+            "u_crush": 0.70, "u_stirrup": 0.75,
+            "shear_fraction": 0.25, "torsion_fraction": 0.50,
+            "governing": 0.75, "governs": "stirrups",
         },
         "longitudinal": {
             "valid": True,
@@ -381,10 +391,124 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
     )
     by_check = {row["check"]: row for row in rows}
 
-    assert by_check["Combined longitudinal reinforcement"]["status"] == "PASS"
-    assert by_check["Combined off-axis chord coverage"]["status"] == "NOT ASSESSED"
-    assert "not solved" in by_check["Combined off-axis chord coverage"]["note"]
+    assert by_check["Combined longitudinal reinforcement"]["status"] == "NOT ASSESSED"
+    assert "not solved" in by_check["Combined longitudinal reinforcement"]["note"]
+    assert "Combined off-axis chord coverage" not in by_check
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
+
+
+def test_combined_physical_components_uses_the_governing_longitudinal_face():
+    components = presentation.combined_physical_components({
+        "code_applicable": True,
+        "transverse": {
+            "valid": True, "cot": 1.6,
+            "u_crush": 0.40, "u_stirrup": 0.55,
+            "shear_fraction": 0.20, "torsion_fraction": 0.35,
+        },
+        "longitudinal": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "tension_low": True, "biaxial": False,
+        },
+        "chord_off": {
+            "valid": True, "util": 0.85, "axis": "y",
+            "tension_low": False, "biaxial": True, "conditional": True,
+        },
+    })
+
+    assert [item["label"] for item in components] == [
+        "Concrete compression strut",
+        "Closed stirrup",
+        "Longitudinal reinforcement",
+    ]
+    longitudinal = components[2]
+    assert longitudinal["status"] == "PASS"
+    assert longitudinal["util"] == pytest.approx(0.85)
+    assert "y-axis positive face" in longitudinal["note"]
+
+
+def test_combined_components_withhold_verdict_for_non_governing_fallback():
+    components = presentation.combined_physical_components({
+        "code_applicable": True,
+        "transverse": {
+            "valid": True, "cot": 1.6,
+            "u_crush": 0.40, "u_stirrup": 0.55,
+            "shear_fraction": 0.20, "torsion_fraction": 0.35,
+        },
+        "longitudinal": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "tension_low": True, "biaxial": False, "conditional": False,
+        },
+        "chord_off": {
+            "valid": True, "util": 0.85, "axis": "y",
+            "tension_low": False, "biaxial": True, "conditional": True,
+        },
+    })
+
+    longitudinal = components[2]
+    assert longitudinal["util"] == pytest.approx(0.85)
+    assert longitudinal["status"] == "NOT ASSESSED"
+    assert longitudinal["applicable"] is False
+    assert "pure-axis fallback" in longitudinal["note"]
+    assert "x-axis negative face" in longitudinal["note"]
+
+
+def test_combined_components_preserve_non_governing_face_fallback():
+    exact_governing = {
+        "valid": True, "util": 0.85, "axis": "x",
+        "tension_low": False, "conditional": True,
+    }
+    fallback_face = {
+        "valid": True, "util": 0.60, "axis": "x",
+        "tension_low": True, "conditional": False,
+    }
+    components = presentation.combined_physical_components({
+        "code_applicable": True,
+        "transverse": {
+            "valid": True, "cot": 1.6,
+            "u_crush": 0.40, "u_stirrup": 0.55,
+            "shear_fraction": 0.20, "torsion_fraction": 0.35,
+        },
+        "longitudinal": exact_governing,
+        "longitudinal_candidates": [fallback_face, exact_governing],
+    })
+
+    longitudinal = components[2]
+    assert longitudinal["util"] == pytest.approx(0.85)
+    assert longitudinal["status"] == "NOT ASSESSED"
+    assert longitudinal["applicable"] is False
+    assert "x-axis negative face" in longitudinal["note"]
+
+
+def test_combined_physical_components_tolerates_missing_candidate_utilisation():
+    components = presentation.combined_physical_components({
+        "transverse": None,
+        "longitudinal": {"valid": True, "util": None, "axis": "x"},
+        "chord_off": {"valid": True, "util": 0.75, "axis": "y"},
+    })
+    assert components[2]["util"] == pytest.approx(0.75)
+
+
+def test_combined_physical_components_withholds_off_axis_only_verdict():
+    components = presentation.combined_physical_components({
+        "transverse": None,
+        "longitudinal": None,
+        "chord_off": {"valid": True, "util": 0.75, "axis": "y"},
+    })
+    assert components[2]["status"] == "NOT ASSESSED"
+    assert "shear-axis" in components[2]["note"]
+
+
+def test_combined_physical_components_tolerates_missing_strut_angle():
+    components = presentation.combined_physical_components({
+        "transverse": {
+            "valid": True, "cot": None,
+            "u_crush": 0.40, "u_stirrup": 0.55,
+            "shear_fraction": 0.20, "torsion_fraction": 0.35,
+        },
+        "longitudinal": {"valid": True, "util": 0.60, "axis": "x"},
+    })
+    assert components[0]["status"] == "PASS"
+    assert components[0]["note"] == "V-T crushing at the shared member angle"
 
 
 def test_shear_screening_does_not_fail_when_selected_links_pass():

@@ -349,8 +349,8 @@ def _build_shear_face_context(
     if not inp.get("shear_links") or model_2023:
         return payload, None
 
-    cot_min = min(inp["shear_cot_min"], inp["shear_cot_max"])
-    cot_max = max(inp["shear_cot_min"], inp["shear_cot_max"])
+    cot_min = min(inp["strut_cot_min"], inp["strut_cot_max"])
+    cot_max = max(inp["strut_cot_min"], inp["strut_cot_max"])
     asw = link_legs * templates.bar_area(inp["shear_link_dia"])
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
     z_mm, z_source = shear_lever_arm(inp, axis, tension_low, d_mm)
@@ -475,8 +475,8 @@ def build_torsion_context(inp, n_ed_comp):
     fyd_long = design_yield(inp["steel"])
     asw = templates.bar_area(inp["shear_link_dia"])
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
-    cot_min = min(inp["torsion_cot_min"], inp["torsion_cot_max"])
-    cot_max = max(inp["torsion_cot_min"], inp["torsion_cot_max"])
+    cot_min = min(inp["strut_cot_min"], inp["strut_cot_max"])
+    cot_max = max(inp["strut_cot_min"], inp["strut_cot_max"])
     nu_detail = inp["torsion_nu_v"]
     nu_detail_applied = bool(
         nu_detail
@@ -629,6 +629,8 @@ def finalize_combined(inp, out):
     chord_off = links.get("chord_off") if links is not None else None
     if chord_off is not None:
         payload["chord_off"] = chord_off
+    if links is not None and links.get("chord_candidates") is not None:
+        payload["longitudinal_candidates"] = links["chord_candidates"]
 
     if (
         links is not None
@@ -639,9 +641,7 @@ def finalize_combined(inp, out):
         if interaction is not None and not interaction.get("valid"):
             payload["transverse"] = {
                 "valid": False,
-                "reason": "no common strut angle",
-                "cot_shear": interaction.get("cot_shear"),
-                "cot_torsion": interaction.get("cot_torsion"),
+                "reason": "shared member-angle calculation is invalid",
             }
         else:
             v_ed = shear_out["v_ed"]

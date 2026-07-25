@@ -1412,7 +1412,11 @@ class ReportBuilder:
                 ])
             for limitation in basis.get("limitations", []):
                 rows.append(["Scope limitation", str(limitation)])
-        if self._result_values("shear") or self._result_values("torsion"):
+        if (
+            self._result_values("shear")
+            or self._result_values("torsion")
+            or self._result_values("combined")
+        ):
             material_id = inp.get("capacity_steel_material_id") or "-"
             material_name = next(
                 (item.get("name", "") for item in
@@ -1423,6 +1427,16 @@ class ReportBuilder:
             rows.append([
                 "Member-check reinforcing material",
                 f"{material_id} - {material_name}" if material_name else material_id,
+            ])
+            rows.extend([
+                [
+                    "Shared compression-strut cot theta<sub>min</sub>",
+                    _fmt(inp.get("strut_cot_min"), 2),
+                ],
+                [
+                    "Shared compression-strut cot theta<sub>max</sub>",
+                    _fmt(inp.get("strut_cot_max"), 2),
+                ],
             ])
         plastic_results = self._result_values("plastic")
         if plastic_results:
@@ -2717,6 +2731,7 @@ class ReportBuilder:
             self._h2("Longitudinal chord: bending + shear"
                      + (" + torsion" if ch.get("has_torsion") else "") + " tension")
             vv = _code_verdict(ch["ok"], ch.get("code_applicable", True))
+            coverage = ch.get("off_not_evaluated")
             face = viz.tension_face_label(
                 ch.get("tension_low", True), ch.get("axis")
             )
@@ -2727,13 +2742,24 @@ class ReportBuilder:
                 subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
                       f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
-            fell_back = ch.get("biaxial") and not ch.get("conditional", True)
+            fallback = presentation.required_chord_fallback(links)
+            fell_back = fallback is not None
+            if coverage:
+                verdict_suffix = (
+                    "  (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+                )
+            elif fell_back:
+                verdict_suffix = (
+                    "  (NOT ASSESSED - DISPLAYED CAPACITY IS PURE-AXIS FALLBACK)"
+                    if not ch.get("conditional", True)
+                    else "  (NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
+                )
+            else:
+                verdict_suffix = f"  ({vv})"
             self._formula(
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(ch['m_total'], 1)} / {_fmt(ch['m_rd'], 1)}",
-                result=(f"utilisation = {_pct(ch['util'])}"
-                        + ("  (pure-axis fallback -- see note)" if fell_back
-                           else f"  ({vv})")))
+                result=f"utilisation = {_pct(ch['util'])}{verdict_suffix}")
             face_desc = (f"the shear tension face ({face})" if ch.get("gets_shift", True)
                          else f"the shear compression face ({face}) -- the torsion "
                          "tension governs there, with no shear shift and the bending "
@@ -2746,23 +2772,34 @@ class ReportBuilder:
                          "so theta backs off the band edge when the chord would "
                          "otherwise govern.")
             if fell_back:
-                note += (" Biaxial bending is acting but the conditional capacity "
-                         "solve did not converge, so M<sub>Rd</sub> is the pure-axis "
-                         "fallback and this check can be optimistic -- rely on the "
-                         "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
-            elif ch.get("off_not_evaluated") == "subdivided":
+                fallback_axis = fallback.get("axis", "?")
+                fallback_face = (
+                    "negative" if fallback.get("tension_low", True)
+                    else "positive"
+                )
+                note += (
+                    f" The required {fallback_axis}-axis {fallback_face} face "
+                    "uses a pure-axis fallback because its conditional capacity "
+                    "solve did not converge. The complete chord check can be "
+                    "optimistic; rely on the combined "
+                    "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>)."
+                )
+            if coverage == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated here -- rely on the combined "
                          "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
-            elif ch.get("off_not_evaluated") == "not_solved":
+            elif coverage == "not_solved":
                 note += (" One or more chord faces carrying the torsion share could "
                          "not be evaluated (a conditional solve failed or a face has "
                          "no tension steel), so they are not checked and the governing "
                          "chord shown may not be the critical face -- rely on the "
                          "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
             self._small(note)
-            self._chord_off_block(links.get("chord_off"))
+            self._chord_off_block(
+                links.get("chord_off"),
+                assessment_complete=not bool(coverage) and not fell_back,
+            )
 
     def _combined(self):
         aggregate = self.out["combined"]
@@ -2869,7 +2906,7 @@ class ReportBuilder:
         )
         applicable = c.get("code_applicable", True)
         if not applicable:
-            self._small("Warning: one or more active strut-angle bounds fall outside "
+            self._small("Warning: the shared compression-strut bounds fall outside "
                         "the method's code range. The combined values are exploratory "
                         "and carry no compliance verdict.")
         verdict = _code_verdict(c["dkna_ok"], applicable)
@@ -2888,9 +2925,30 @@ class ReportBuilder:
                 f"{_pct(c['dkna_sum'])}  ({verdict})"
             ),
         )
+        self._h2("Physical resistance components")
+        component_rows = [["Component", "Utilisation", "Status", "QA note"]]
+        component_rows.extend([
+            [
+                component["label"],
+                _pct(component["util"]),
+                component["status"],
+                component["note"],
+            ]
+            for component in presentation.combined_physical_components(c)
+        ])
+        self._table(
+            component_rows,
+            [48 * mm, 28 * mm, 29 * mm, 65 * mm],
+            font=7.5,
+        )
+        self._small(
+            "Concrete strut, closed stirrup and longitudinal reinforcement are "
+            "independent physical checks. The worst value may govern the case, but "
+            "it is not reported as a combined transverse-reinforcement utilisation."
+        )
         cr = c.get("crushing")
         if cr is not None and cr.get("valid"):
-            self._h2("Concrete crushing (6.29)")
+            self._h2("Concrete compression strut (6.29)")
             val = cr["value"]
             vv = _code_verdict(
                 viz.util_ok(val), cr.get("code_applicable", applicable)
@@ -2909,17 +2967,19 @@ class ReportBuilder:
                                                     "code_applicable", applicable)),
                       120, 100)
         elif cr is not None and not cr.get("valid"):
-            self._h2("Concrete crushing (6.29)")
-            self._small("Not evaluated: the shear and torsion cot theta bands do not "
-                        "overlap, so no single strut angle satisfies both.")
+            self._h2("Concrete compression strut (6.29)")
+            self._small(
+                "Not evaluated: the shared member-angle calculation is invalid."
+            )
         tr = c.get("transverse")
         if tr is not None and not tr.get("valid"):
             self._h2("Shared stirrup (shear + torsion transverse steel)")
-            self._small("Not evaluated: the shear and torsion cot theta bands do not "
-                        "overlap, so no single strut angle satisfies both.")
+            self._small(
+                "Not evaluated: the shared member-angle calculation is invalid."
+            )
         elif tr is not None:
             self._h2("Shared stirrup (shear + torsion transverse steel)")
-            vv = _code_verdict(tr["ok"], applicable)
+            vv = _code_verdict(viz.util_ok(tr["u_stirrup"]), applicable)
             if tr["shear_credited"]:
                 note = (f"V<sub>Ed</sub> = {_fmt(tr['v_ed'], 1)} &#8804; V<sub>Rd,c</sub>"
                         f" = {_fmt(tr['vrd_c'], 1)} kN, so the concrete carries the "
@@ -2930,11 +2990,10 @@ class ReportBuilder:
             self._formula(
                 "shear share + torsion share (shared closed stirrup)",
                 subst=f"{_pct(tr['shear_fraction'])} + {_pct(tr['torsion_fraction'])}",
-                result=f"stirrup utilisation = {_pct(tr['u_stirrup'])}")
-            self._formula(
-                "crushing utilisation (both actions, one strut)",
-                result=f"crushing utilisation = {_pct(tr['u_crush'])}")
-            self._p(f"Governing ({tr['governs']}): {_pct(tr['governing'])}  ({vv})")
+                result=(
+                    "closed-stirrup utilisation = "
+                    f"{_pct(tr['u_stirrup'])}  ({vv})"
+                ))
             self._small(note + f" At the member strut angle cot theta = "
                         f"{_fmt(tr['cot'], 2)} "
                         f"(theta = {_fmt(tr['theta_deg'], 1)}&#176;) -- "
@@ -2943,7 +3002,11 @@ class ReportBuilder:
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
-            vv = _code_verdict(lg["ok"], applicable)
+            vv = _code_verdict(
+                lg["ok"],
+                applicable and lg.get("code_applicable", True),
+            )
+            coverage = lg.get("off_not_evaluated")
             ax = lg["axis"]
             face = viz.tension_face_label(
                 lg.get("tension_low", True), lg.get("axis")
@@ -2976,29 +3039,46 @@ class ReportBuilder:
                       f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm")
             biaxial = lg.get("biaxial", False)
-            fell_back = biaxial and not lg.get("conditional", True)
+            fallback = presentation.required_chord_fallback(c)
+            fell_back = fallback is not None
+            if coverage:
+                verdict_suffix = (
+                    "  (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+                )
+            elif fell_back:
+                verdict_suffix = (
+                    "  (NOT ASSESSED - DISPLAYED CAPACITY IS PURE-AXIS FALLBACK)"
+                    if not lg.get("conditional", True)
+                    else "  (NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
+                )
+            else:
+                verdict_suffix = f"  ({vv})"
             self._formula(
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
-                result=(f"utilisation = {_pct(lg['util'])}"
-                        + ("  (pure-axis fallback -- see note)" if fell_back
-                           else f"  ({vv})")))
+                result=f"utilisation = {_pct(lg['util'])}{verdict_suffix}")
             if fell_back:
-                self._p("Biaxial bending: a moment about the OTHER axis is acting ("
-                        f"{_pct(lg.get('off_util', 0.0))} of that axis' capacity) but "
-                        "the conditional capacity solve did not converge, so "
-                        "M<sub>Rd</sub> is the pure-axis fallback and this chord check "
-                        "can be optimistic -- rely on the "
-                        "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
-                        "which uses the full biaxial bending utilisation.")
+                fallback_axis = fallback.get("axis", "?")
+                fallback_face = (
+                    "negative" if fallback.get("tension_low", True)
+                    else "positive"
+                )
+                self._p(
+                    f"The required {fallback_axis}-axis {fallback_face} face "
+                    "uses a pure-axis fallback because its conditional capacity "
+                    "solve did not converge. The complete chord check can be "
+                    "optimistic; rely on the "
+                    "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
+                    "which uses the full biaxial bending utilisation."
+                )
             note = viz.chord_angle_note(lg.get("theta_mode"))
-            if lg.get("off_not_evaluated") == "subdivided":
+            if coverage == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated; the "
                          "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check covers the "
                          "interaction.")
-            elif lg.get("off_not_evaluated") == "not_solved":
+            elif coverage == "not_solved":
                 note += (" One or more chord faces carrying the torsion share could "
                          "not be evaluated (a conditional solve failed or a face has "
                          "no tension steel), so they are NOT checked and the governing "
@@ -3020,7 +3100,10 @@ class ReportBuilder:
                         "the peak-moment tension; a section tool uses M<sub>Rd</sub> as "
                         "that cap). ") + note
             self._small(note)
-            self._chord_off_block(c.get("chord_off"))
+            self._chord_off_block(
+                c.get("chord_off"),
+                assessment_complete=not bool(coverage) and not fell_back,
+            )
         else:
             self._small(f"Additional longitudinal steel: torsion "
                         "&#8721;A<sub>sl</sub> = "
@@ -3029,7 +3112,7 @@ class ReportBuilder:
                         "kN on the tension chord (6.18) -- both beyond the bending "
                         "steel. Enable shear links for the full utilisation check.")
 
-    def _chord_off_block(self, och):
+    def _chord_off_block(self, och, *, assessment_complete=True):
         """Off-axis chord check (bending + torsion share), shared by the shear and
         combined sections. Rendered when torsion is live on a single-tube section:
         the chord about the OTHER axis carries its bending tension plus its share
@@ -3061,7 +3144,14 @@ class ReportBuilder:
         self._formula(
             "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
             subst=f"{_fmt(och['m_total'], 1)} / {_fmt(och['m_rd'], 1)}",
-            result=f"utilisation = {_pct(och['util'])}  ({vv})")
+            result=(
+                f"utilisation = {_pct(och['util'])}  "
+                + (
+                    f"({vv})"
+                    if assessment_complete
+                    else "(NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+                )
+            ))
         self._small(f"z = {_fmt(och['z'], 3)} m ({och.get('z_src') or '0.9 d'}). "
                     "Each chord's capacity is conditional on the OTHER axis' "
                     "bending moment only; the longitudinal steel the two chords "
@@ -3132,8 +3222,9 @@ class ReportBuilder:
             return
         self._h2("Combined shear + torsion (concrete crushing)")
         if not inter.get("valid"):
-            self._small("Not evaluated: the shear and torsion cot theta bands do not "
-                        "overlap, so no single strut angle satisfies both.")
+            self._small(
+                "Not evaluated: the shared member-angle calculation is invalid."
+            )
             return
         val = inter["value"]
         val_txt = _pct(val)
