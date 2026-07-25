@@ -8095,7 +8095,13 @@ def shear_view(inp, results):
                 g3.metric(
                     r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
                     _pct(ch["util"]),
-                    help="Pure-axis fallback capacity; see the warning below.",
+                    help=(
+                        "NOT ASSESSED: the displayed capacity is a pure-axis "
+                        "fallback; see the warning below."
+                        if not ch.get("conditional", True)
+                        else "NOT ASSESSED: another required chord face uses a "
+                             "pure-axis fallback; see the warning below."
+                    ),
                 )
             else:
                 g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(ch["util"]),
@@ -8148,13 +8154,13 @@ def shear_view(inp, results):
                            "utilisation already covers.")
             _render_chord_off(
                 links.get("chord_off"),
-                coverage_complete=not bool(coverage) and not fell_back,
+                assessment_complete=not bool(coverage) and not fell_back,
             )
         st.plotly_chart(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                          links["dia"], links["s"]), width="stretch")
 
 
-def _render_chord_off(och, *, coverage_complete=True):
+def _render_chord_off(och, *, assessment_complete=True):
     """Off-axis chord check block, shared by the Shear and Combined views.
 
     Rendered when torsion is live on a single-tube section: the chord about the
@@ -8174,7 +8180,7 @@ def _render_chord_off(och, *, coverage_complete=True):
     g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{och['m_total']:.1f} kNm",
               help="bending + the torsion share as an equivalent moment on "
                    "this chord")
-    if coverage_complete:
+    if assessment_complete:
         _verdict_metric(
             g3,
             r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
@@ -8761,12 +8767,16 @@ def combined_view(inp, results):
                 ),
             )
         elif fell_back:
-            # The conditional biaxial solve failed and MRd fell back to the
-            # pure-axis capacity, so withhold the reassuring OK/Over-limit verdict.
             g3.metric(
                 r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
                 _pct(lg["util"]),
-                help="Pure-axis fallback capacity; see the warning below.",
+                help=(
+                    "NOT ASSESSED: the displayed capacity is a pure-axis "
+                    "fallback; see the warning below."
+                    if not lg.get("conditional", True)
+                    else "NOT ASSESSED: another required chord face uses a "
+                         "pure-axis fallback; see the warning below."
+                ),
             )
         else:
             g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(lg["util"]),
@@ -8827,7 +8837,7 @@ def combined_view(inp, results):
                        "combined check.")
         _render_chord_off(
             c.get("chord_off"),
-            coverage_complete=not bool(coverage) and not fell_back,
+            assessment_complete=not bool(coverage) and not fell_back,
         )
     else:
         st.caption(f"Torsion needs {chr(0x03A3)}Asl = {c['asl_torsion']:.0f} mm2 "

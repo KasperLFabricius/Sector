@@ -2746,10 +2746,14 @@ class ReportBuilder:
             fell_back = fallback is not None
             if coverage:
                 verdict_suffix = (
-                    "  (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+                    "  (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
                 )
             elif fell_back:
-                verdict_suffix = "  (pure-axis fallback - see note)"
+                verdict_suffix = (
+                    "  (NOT ASSESSED - DISPLAYED CAPACITY IS PURE-AXIS FALLBACK)"
+                    if not ch.get("conditional", True)
+                    else "  (NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
+                )
             else:
                 verdict_suffix = f"  ({vv})"
             self._formula(
@@ -2794,7 +2798,7 @@ class ReportBuilder:
             self._small(note)
             self._chord_off_block(
                 links.get("chord_off"),
-                coverage_complete=not bool(coverage) and not fell_back,
+                assessment_complete=not bool(coverage) and not fell_back,
             )
 
     def _combined(self):
@@ -3039,10 +3043,14 @@ class ReportBuilder:
             fell_back = fallback is not None
             if coverage:
                 verdict_suffix = (
-                    "  (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+                    "  (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
                 )
             elif fell_back:
-                verdict_suffix = "  (pure-axis fallback - see note)"
+                verdict_suffix = (
+                    "  (NOT ASSESSED - DISPLAYED CAPACITY IS PURE-AXIS FALLBACK)"
+                    if not lg.get("conditional", True)
+                    else "  (NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
+                )
             else:
                 verdict_suffix = f"  ({vv})"
             self._formula(
@@ -3094,7 +3102,7 @@ class ReportBuilder:
             self._small(note)
             self._chord_off_block(
                 c.get("chord_off"),
-                coverage_complete=not bool(coverage) and not fell_back,
+                assessment_complete=not bool(coverage) and not fell_back,
             )
         else:
             self._small(f"Additional longitudinal steel: torsion "
@@ -3104,7 +3112,7 @@ class ReportBuilder:
                         "kN on the tension chord (6.18) -- both beyond the bending "
                         "steel. Enable shear links for the full utilisation check.")
 
-    def _chord_off_block(self, och, *, coverage_complete=True):
+    def _chord_off_block(self, och, *, assessment_complete=True):
         """Off-axis chord check (bending + torsion share), shared by the shear and
         combined sections. Rendered when torsion is live on a single-tube section:
         the chord about the OTHER axis carries its bending tension plus its share
@@ -3140,8 +3148,8 @@ class ReportBuilder:
                 f"utilisation = {_pct(och['util'])}  "
                 + (
                     f"({vv})"
-                    if coverage_complete
-                    else "(NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+                    if assessment_complete
+                    else "(NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
                 )
             ))
         self._small(f"z = {_fmt(och['z'], 3)} m ({och.get('z_src') or '0.9 d'}). "
