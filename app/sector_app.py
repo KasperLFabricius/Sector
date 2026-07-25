@@ -2340,13 +2340,31 @@ def _reset_autosave_clock() -> None:
     st.session_state["_autosave_t"] = time.time()    # restart the interval on a change
 
 
+def _autosave_preferences(state) -> tuple[bool, int]:
+    """Return live autosave settings, falling back to the durable input mirror."""
+    durable = state.get(_INPUT_STATE_KEY, {})
+    if not isinstance(durable, dict):
+        durable = {}
+    autosave_on = state.get(
+        "autosave_on", durable.get("autosave_on", True))
+    autosave_min = state.get(
+        "autosave_min", durable.get("autosave_min", _AUTOSAVE_DEFAULT_MIN))
+    return bool(autosave_on), max(1, int(autosave_min))
+
+
 def _maybe_autosave() -> None:
     """Autosave on user interaction once the interval has elapsed (the BriCoS model:
     the save rides the reruns that interaction triggers, so the app never reruns or
     saves while idle). Call from the main flow after the inputs are built."""
-    if not st.session_state.get("autosave_on", True):
+    # The Project panel is lazy. Streamlit may remove its widget-owned live keys
+    # when that panel is no longer rendered, while the completed values remain in
+    # the durable input mirror. Analysis-fragment reruns do not execute the outer
+    # input recovery flow, so consult that mirror rather than silently reverting
+    # to the defaults on those reruns.
+    autosave_on, autosave_min = _autosave_preferences(st.session_state)
+    if not autosave_on:
         return
-    interval = max(1, int(st.session_state.get("autosave_min", _AUTOSAVE_DEFAULT_MIN))) * 60
+    interval = autosave_min * 60
     if time.time() - st.session_state.get("_autosave_t", 0.0) < interval:
         return
     st.session_state["_autosave_t"] = time.time()    # reset whether or not it writes

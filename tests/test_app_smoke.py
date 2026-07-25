@@ -11,6 +11,7 @@ import json
 import pathlib
 import re
 import sys
+import time
 
 import pytest
 
@@ -2299,6 +2300,23 @@ def test_autosave_defaults_on_with_five_minutes(tmp_path, monkeypatch):
     assert at.session_state["autosave_min"] == 5
 
 
+def test_autosave_preferences_fall_back_to_durable_hidden_widget_values():
+    import sector_app
+
+    state = {
+        sector_app._INPUT_STATE_KEY: {
+            "autosave_on": False,
+            "autosave_min": 120,
+        },
+    }
+    assert sector_app._autosave_preferences(state) == (False, 120)
+
+    # A currently mounted widget is newer and therefore takes precedence.
+    state["autosave_on"] = True
+    state["autosave_min"] = 15
+    assert sector_app._autosave_preferences(state) == (True, 15)
+
+
 def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     # Once the interval has elapsed, the next rerun (a user interaction) writes the
     # current section to the local autosave file, which parses back to a project.
@@ -2337,6 +2355,45 @@ def test_due_autosave_runs_from_analysis_page(tmp_path, monkeypatch):
     import project_io  # noqa: E402
     _, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
     assert scalars["conc_fck"] == pytest.approx(42.0)
+
+
+def test_analysis_fragment_honours_hidden_disabled_autosave(tmp_path, monkeypatch):
+    """Widget cleanup must not re-enable autosave on a fragment-only rerun."""
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Project & report")
+    at.checkbox(key="autosave_on").set_value(False).run()
+    assert at.session_state["_durable_input_scalars"]["autosave_on"] is False
+    _goto_page(at, "Analysis")
+
+    # Reproduce Streamlit's cleanup of a widget that is no longer rendered.
+    if "autosave_on" in at.session_state:
+        del at.session_state["autosave_on"]
+    at.session_state["_autosave_t"] = 0.0
+    at.selectbox(key="view").set_value("Plastic Results").run()
+
+    assert not at.exception
+    assert not (tmp_path / "autosave.json").exists()
+
+
+def test_analysis_fragment_honours_hidden_autosave_interval(tmp_path, monkeypatch):
+    """A hidden custom interval must not fall back to the five-minute default."""
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Project & report")
+    at.number_input(key="autosave_min").set_value(120).run()
+    assert at.session_state["_durable_input_scalars"]["autosave_min"] == 120
+    _goto_page(at, "Analysis")
+
+    if "autosave_min" in at.session_state:
+        del at.session_state["autosave_min"]
+    at.session_state["_autosave_t"] = time.time() - 6 * 60
+    at.selectbox(key="view").set_value("Plastic Results").run()
+
+    assert not at.exception
+    assert not (tmp_path / "autosave.json").exists()
 
 
 def test_autosave_restores_last_session_on_next_launch(tmp_path, monkeypatch):
