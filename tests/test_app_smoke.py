@@ -475,6 +475,7 @@ def test_about_panel_shows_version_author_and_licensee():
     # The About panel carries the single-source release and ownership metadata.
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Project & report")
     blob = " | ".join(m.value for m in at.markdown) + \
         " | ".join(c.value for c in at.caption)
     from sector import __version__ as version   # single source; no per-bump edit
@@ -2481,11 +2482,15 @@ def test_generate_report_produces_pdf():
     # (figures skipped in the test so it does not need a browser).
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Project & report")
     at.session_state["_report_no_figures"] = True
     assert at.selectbox(key="rep_report_content").value == "Default report"
-    at.session_state["rep_proj_no"] = "T-1"
-    at.session_state["rep_section"] = "S/1"
-    at.session_state["rep_rev"] = "A:2"
+    _set(
+        at,
+        ("text_input", "rep_proj_no", "T-1"),
+        ("text_input", "rep_section", "S/1"),
+        ("text_input", "rep_rev", "A:2"),
+    )
     at.button(key="gen_report").click().run()
     assert not at.exception
     assert "report_buffer" in at.session_state
@@ -2500,10 +2505,14 @@ def test_generate_report_produces_pdf():
 def test_report_download_becomes_stale_after_metadata_change():
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Project & report")
     at.session_state["_report_no_figures"] = True
-    at.session_state["rep_proj_no"] = "T-1"
-    at.session_state["rep_section"] = "S/1"
-    at.session_state["rep_rev"] = "A:2"
+    _set(
+        at,
+        ("text_input", "rep_proj_no", "T-1"),
+        ("text_input", "rep_section", "S/1"),
+        ("text_input", "rep_rev", "A:2"),
+    )
     at.button(key="gen_report").click().run()
     assert not any("Report out of date" in w.value for w in at.warning)
 
@@ -2514,6 +2523,7 @@ def test_report_download_becomes_stale_after_metadata_change():
 def test_report_download_becomes_stale_after_content_choice_change():
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Project & report")
     at.session_state["_report_no_figures"] = True
     at.button(key="gen_report").click().run()
     assert not any("Report out of date" in w.value for w in at.warning)
@@ -2527,6 +2537,7 @@ def test_report_download_becomes_stale_after_content_choice_change():
 def test_report_download_becomes_stale_after_analysis_input_change():
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Project & report")
     at.session_state["_report_no_figures"] = True
     at.button(key="gen_report").click().run()
     assert not any("Report out of date" in w.value for w in at.warning)
@@ -3509,10 +3520,39 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
         "Bulk assignments",
+    ]
+    _goto_input_tab(at, "Project & report")
+    labels = [ex.label for ex in at.expander]
+    assert labels == [
+        "Stress and crack-width criteria (Elastic)",
+        "Reinforcement detailing",
+        "Fatigue",
+        "Shear, torsion & combined (Plastic)",
+        "Bulk assignments",
         "About",
         "Report",
         "Save / Load",
     ]
+
+
+def test_interrupted_inputs_build_cannot_replace_the_last_complete_snapshot():
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_fck").set_value(55.0).run()
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
+
+    # Reproduce the state left by a browser event that supersedes Inputs while
+    # widgets are only partly reconstructed: a default-valued widget key exists,
+    # but the build has not reached its commit point.
+    at.session_state["_inputs_build_in_progress"] = True
+    at.session_state["conc_fck"] = 30.0
+    at.segmented_control(key="_main_page").set_value("Analysis").run()
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
+
+    _goto_page(at, "Inputs")
+    assert not at.exception
+    assert at.session_state["conc_fck"] == 55.0
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
 
 
 def test_tracked_input_tabs_survive_page_and_auxiliary_view_lifecycle():

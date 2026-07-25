@@ -575,7 +575,10 @@ def test_app_transverse_detailing_uses_active_direction_and_renders_view():
         "longitudinal_spacing",
         "transverse_leg_spacing",
     ]
-    assert transverse["checks"][2]["spacing_source"] == "conservative auto"
+    assert (
+        transverse["checks"][2]["spacing_source"]
+        == "gross-web upper-bound screen"
+    )
 
     _select_view(at, "Detailing")
     assert not at.exception
@@ -583,6 +586,38 @@ def test_app_transverse_detailing_uses_active_direction_and_renders_view():
         "Shear/torsion link evidence" in item.value
         for item in at.markdown
     )
+
+
+def test_app_vx_gross_depth_screen_does_not_create_a_false_failure():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "transverse_detailing_on", True),
+        ("checkbox", "shear_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 100.0),
+        ("number_input", "shear_Vy", 0.0),
+    )
+    assert not at.exception
+    case_result = at.session_state["results"]["plastic_cases"][0]["results"]
+    transverse = case_result["transverse_reinforcement"]
+    spacing = next(
+        check for check in transverse["checks"]
+        if check["kind"] == "transverse_leg_spacing"
+    )
+    # Default section: the gross vertical breadth is 600 mm, but no actual
+    # Vx-parallel leg spacing was entered. That upper bound cannot prove failure.
+    assert spacing["component"] == "vx"
+    assert spacing["measurement_axis"] == "y"
+    assert spacing["spacing_source"] == "gross-web upper-bound screen"
+    assert spacing["provided"] == pytest.approx(600.0, abs=1.0)
+    assert spacing["status"] == "NOT ASSESSED"
+    assert spacing["utilisation"] is None
 
 
 def test_app_beam_link_detailing_requires_minimum_links_at_low_shear():

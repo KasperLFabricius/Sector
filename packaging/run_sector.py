@@ -48,6 +48,11 @@ def _streamlit_argv(app_path, port) -> list:
         "--server.address=127.0.0.1",      # desktop app: never expose on the LAN
         "--global.developmentMode=false",
         "--server.headless=false",          # open the browser on launch
+        # Frozen application files never change at runtime. Watching the large
+        # bundled _internal tree adds filesystem/antivirus traffic and can stall
+        # reruns without providing hot-reload value.
+        "--server.fileWatcherType=none",
+        "--server.runOnSave=false",
         "--browser.gatherUsageStats=false",
         "--client.toolbarMode=viewer",
         "--client.showErrorDetails=type",

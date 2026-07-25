@@ -92,6 +92,8 @@ def test_default_port_is_8502_so_it_does_not_clash_with_bricos(monkeypatch):
     argv = run_sector._streamlit_argv("app/sector_app.py", run_sector._port())
     assert "--server.port=8502" in argv
     assert "--server.address=127.0.0.1" in argv
+    assert "--server.fileWatcherType=none" in argv
+    assert "--server.runOnSave=false" in argv
     assert "--browser.gatherUsageStats=false" in argv
     assert "--client.toolbarMode=viewer" in argv
     assert "--client.showErrorDetails=type" in argv

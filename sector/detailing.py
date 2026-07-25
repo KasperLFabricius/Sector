@@ -1090,8 +1090,9 @@ def transverse_reinforcement(
     ``links_present`` and ``links_required`` retain the verified resistance
     decision when links are omitted.  For defined links, ``legs`` is required and
     ``transverse_leg_spacing_mm`` may be zero, in which case the full web width
-    is used as the conservative upper bound when at least two effective legs are
-    present.
+    is used as an upper-bound screen when at least two effective legs are present.
+    That bound can prove compliance, but cannot prove non-compliance because the
+    actual largest gap may be smaller.
 
     ``torsion_tubes`` records require ``tef_mm``, ``uk_mm`` and the
     rotation-invariant ``minimum_dimension_mm`` derived from the tube outline.
@@ -1288,7 +1289,7 @@ def transverse_reinforcement(
             # on the largest gap.  Dividing by (legs - 1) would assume uniform
             # distribution and can be unconservative for clustered legs.
             transverse_spacing = bw
-            source = "conservative auto"
+            source = "gross-web upper-bound screen"
             spacing_reason = None
         else:
             transverse_spacing = None
@@ -1297,7 +1298,7 @@ def transverse_reinforcement(
                 "enter the maximum transverse distance between legs or define "
                 "at least two effective legs"
             )
-        checks.append(_spacing_check(
+        transverse_check = _spacing_check(
             scope,
             "transverse_leg_spacing",
             transverse_spacing,
@@ -1315,8 +1316,27 @@ def transverse_reinforcement(
             provided_label="s_t",
             limit_label="s_t,max",
             spacing_source=source,
+            measurement_axis=str(
+                direction.get("measurement_axis") or ""
+            ).lower() or None,
             d_mm=depth,
-        ))
+        )
+        if (
+            source == "gross-web upper-bound screen"
+            and transverse_check["status"] == "FAIL"
+        ):
+            # An upper bound that is below the limit proves PASS.  An upper bound
+            # above the limit does not prove FAIL: the actual legs may be closer.
+            transverse_check.update(
+                status="NOT ASSESSED",
+                utilisation=None,
+                reason=(
+                    "gross web breadth exceeds the spacing limit; enter the "
+                    "actual maximum centre-to-centre leg spacing for a "
+                    "definitive assessment"
+                ),
+            )
+        checks.append(transverse_check)
 
     for index, tube in enumerate(torsion_tubes, start=1):
         label = str(tube.get("label") or f"Tube {index}")

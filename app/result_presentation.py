@@ -801,6 +801,9 @@ def result_summary_rows(inp, results, *, stale=False):
         }
         for check in checks:
             kind = str(check.get("kind") or "")
+            check_label = labels.get(kind, kind)
+            if kind == "transverse_leg_spacing" and check.get("measurement_axis"):
+                check_label += f" along {check['measurement_axis']}"
             provided = check.get("provided")
             limit = check.get("limit")
             if kind == "required_links":
@@ -841,7 +844,7 @@ def result_summary_rows(inp, results, *, stale=False):
             )
             rows.append(_summary_row(
                 f"{check.get('scope', 'Shear/torsion links')} "
-                f"{labels.get(kind, kind)}",
+                f"{check_label}",
                 "plastic",
                 _map_assessment_status(check.get("status")),
                 result_text,

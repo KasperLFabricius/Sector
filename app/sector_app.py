@@ -14,7 +14,6 @@ import os
 import pathlib
 import re
 import sys
-import threading
 import time
 from datetime import datetime, timezone
 
@@ -106,23 +105,15 @@ st.set_page_config(
 
 @st.cache_resource(show_spinner=False)
 def _warm_solver():
-    """Compile the solver kernels in a background thread, so the ~1 s JIT warm-up
-    does not block the first paint.
+    """Compile the plastic kernels once, immediately before their first use.
 
-    The live section and material previews never call the kernels, so the page is
-    interactive while the thread compiles; by the time a section is defined and
-    Calculate is pressed the warm-up is normally finished. A Calculate that races
-    the thread is safe -- numba's per-dispatcher compile lock makes the second
-    caller wait for the first rather than compile twice. ``cache_resource`` starts
-    the thread exactly once per server.
+    Starting this work at module import competed with Streamlit's first render and
+    could leave a background compiler active while the engineer navigated.  The
+    cached synchronous call keeps startup responsive and makes Calculate own the
+    one-time warm-up it actually needs.
     """
-    thread = threading.Thread(target=kernels.warmup, name="sector-warmup",
-                              daemon=True)
-    thread.start()
-    return thread
-
-
-_warm_solver()
+    kernels.warmup()
+    return True
 
 _logo = ROOT / "assets" / "logo.png"
 if _logo.exists():
@@ -2004,6 +1995,8 @@ _DURABLE_INPUT_SCALARS = tuple(project_io.SCALAR_KEYS) + (
     "_fatigue_catalog_selected", "_fatigue_basis_revision",
 )
 _INPUT_STATE_KEY = "_durable_input_scalars"
+_INPUT_BUILD_KEY = "_inputs_build_in_progress"
+_LAST_WORKSPACE_KEY = "_last_completed_workspace"
 
 
 def _snapshot_input_state(inp=None) -> None:
@@ -2023,10 +2016,31 @@ def _snapshot_input_state(inp=None) -> None:
         st.session_state["_latest_inputs"] = inp
 
 
-def _restore_input_state() -> None:
-    """Restore missing input keys from the durable navigation-state mirror."""
+def _snapshot_completed_input_state() -> None:
+    """Widget callback: commit only a fully rendered Inputs workspace.
+
+    A second browser event can interrupt an Inputs rerun before every widget has
+    been reconstructed.  Committing that partial namespace would replace valid
+    engineering inputs with widget defaults.  The last completed render remains
+    authoritative until the next Inputs build reaches its normal end.
+    """
+    if (
+        st.session_state.get(_LAST_WORKSPACE_KEY) == "Inputs"
+        and not st.session_state.get(_INPUT_BUILD_KEY, False)
+    ):
+        _snapshot_input_state()
+
+
+def _restore_input_state(*, replace: bool = False) -> None:
+    """Restore input keys from the durable navigation-state mirror.
+
+    ``replace`` is used after an interrupted Inputs build.  Keys created during
+    that partial run may still exist, so ``setdefault`` alone cannot recover the
+    last complete values.
+    """
     for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items():
-        st.session_state.setdefault(key, value)
+        if replace or key not in st.session_state:
+            st.session_state[key] = value
 
 
 def _open_analysis_content(flag: str) -> None:
@@ -3157,7 +3171,7 @@ def build_inputs(host=st):
     aset, sec_tab, mat_tab, loads, project = s.tabs(
         input_tab_labels,
         key="_input_tab",
-        on_change=_snapshot_input_state,
+        on_change=_snapshot_completed_input_state,
     )
     # Geometry tables and their drawing remain visible together. The wider input
     # column keeps the four editable point grids practical on a normal laptop.
@@ -3856,29 +3870,36 @@ def build_inputs(host=st):
     spacing_x, spacing_y = sts.columns(2)
     shear_vx_transverse_leg_spacing = _seeded_number(
         spacing_x,
-        r"Max. transverse leg spacing for $V_x$ (mm, 0 = auto)",
+        r"Max. $V_x$-leg spacing along $y$ (mm; 0 = screen)",
         0.0,
         100000.0,
         0.0,
         10.0,
         "shear_vx_transverse_leg_spacing",
         disabled=not (_links and transverse_detailing_on),
-        help=r"Largest transverse distance $s_{t,x}$ between effective stirrup "
-             r"legs. 0 uses the full web width $b_{w,x}$ as a conservative "
-             "upper bound; enter the actual maximum to credit a closer layout.",
+        help=r"Largest centre-to-centre distance $s_{t,x}$, measured along $y$, "
+             r"between adjacent link legs parallel to $V_x$. 0 uses the gross "
+             "web breadth only as an upper-bound screen: it can prove PASS, but "
+             "an actual spacing is required if that bound exceeds the limit.",
     )
     shear_vy_transverse_leg_spacing = _seeded_number(
         spacing_y,
-        r"Max. transverse leg spacing for $V_y$ (mm, 0 = auto)",
+        r"Max. $V_y$-leg spacing along $x$ (mm; 0 = screen)",
         0.0,
         100000.0,
         0.0,
         10.0,
         "shear_vy_transverse_leg_spacing",
         disabled=not (_links and transverse_detailing_on),
-        help=r"Largest transverse distance $s_{t,y}$ between effective stirrup "
-             r"legs. 0 uses the full web width $b_{w,y}$ as a conservative "
-             "upper bound; enter the actual maximum to credit a closer layout.",
+        help=r"Largest centre-to-centre distance $s_{t,y}$, measured along $x$, "
+             r"between adjacent link legs parallel to $V_y$. 0 uses the gross "
+             "web breadth only as an upper-bound screen: it can prove PASS, but "
+             "an actual spacing is required if that bound exceeds the limit.",
+    )
+    sts.caption(
+        r"$s_t$ is the in-section distance between parallel link legs, not the "
+        r"longitudinal stirrup spacing $s$. For $V_x$ it is measured along $y$; "
+        r"for $V_y$ it is measured along $x$."
     )
     shear_link_dia = _seeded_number(
         sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
@@ -4492,29 +4513,35 @@ def build_inputs(host=st):
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
-    with report_slot:
-        _report_panel(sig)
-    with save_slot:
-        _save_load_panel()
-    with about_slot.expander("About", expanded=False):
-        st.markdown("### Sector")
-        st.caption("Reinforced-concrete and prestressed cross-section analysis.")
-        st.markdown(
-            "- **Plastic:** M-M capacity and utilisation\n"
-            "- **Elastic:** cracked-section stresses\n"
-            "- **Acceptance:** stress and crack-width criteria\n"
-            "- **Fatigue:** grouped spectrum assessment\n"
-            "- **Capacity checks:** shear, torsion and combined M-V-T")
-        st.caption("Set inputs, Calculate, review Results Overview, then export.")
-        st.divider()
-        st.markdown(f"**Sector v{APP_VERSION}**")
-        st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
-        st.caption(f"Proprietary software; licensed to {APP_LICENSEE} for internal use.")
-        st.button(
-            "User manual", key="open_manual", width="stretch",
-            help="Open the user manual.",
-            on_click=_open_manual_dialog,
-        )
+    # Project gathering and report/save widgets are among the most expensive
+    # non-calculation parts of an Inputs rerun.  They are independent of the four
+    # engineering input stages, so build them only while their tracked tab is open.
+    if project.open:
+        with report_slot:
+            _report_panel(sig)
+        with save_slot:
+            _save_load_panel()
+        with about_slot.expander("About", expanded=False):
+            st.markdown("### Sector")
+            st.caption("Reinforced-concrete and prestressed cross-section analysis.")
+            st.markdown(
+                "- **Plastic:** M-M capacity and utilisation\n"
+                "- **Elastic:** cracked-section stresses\n"
+                "- **Acceptance:** stress and crack-width criteria\n"
+                "- **Fatigue:** grouped spectrum assessment\n"
+                "- **Capacity checks:** shear, torsion and combined M-V-T")
+            st.caption("Set inputs, Calculate, review Results Overview, then export.")
+            st.divider()
+            st.markdown(f"**Sector v{APP_VERSION}**")
+            st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
+            st.caption(
+                f"Proprietary software; licensed to {APP_LICENSEE} for internal use."
+            )
+            st.button(
+                "User manual", key="open_manual", width="stretch",
+                help="Open the user manual.",
+                on_click=_open_manual_dialog,
+            )
     return dict(section=section, void_error=void_error, steel_error=steel_error,
                 material_error=material_error,
                 fatigue_assignment_error=fatigue_assignment_error,
@@ -4750,6 +4777,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     if inp["mode"] in ("Plastic", "Both") and reuse_plastic is not None:
         out["plastic"] = reuse_plastic
     elif inp["mode"] in ("Plastic", "Both"):
+        _warm_solver()
         vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
         # A full 360 deg turn returns to the start, so the last angle (v_max) repeats
         # the first (v_min) exactly. Sweep only up to the angle before it -- the
@@ -5090,6 +5118,8 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             valid=eout["converged"],
         )
     if inp.get("minimum_reinforcement_on"):
+        if inp.get("detailing_edition") == detailing.EC2_2023:
+            _warm_solver()
         out["minimum_reinforcement"] = detailing.minimum_reinforcement(
             inp["section"],
             inp.get("bar_elements") or [],
@@ -6206,6 +6236,7 @@ def _transverse_detailing_result(inp, out):
                     else "shear_vy_transverse_leg_spacing",
                     0.0,
                 ),
+                "measurement_axis": "y" if component == "vx" else "x",
             })
 
     torsion_specs = []
@@ -6780,11 +6811,12 @@ def detailing_view(inp, results, *, global_results=None):
             kind = check.get("kind")
             ratio = kind == "minimum_ratio"
             required_links = kind == "required_links"
+            check_label = check_labels.get(kind, kind)
+            if kind == "transverse_leg_spacing" and check.get("measurement_axis"):
+                check_label += f" (along {check['measurement_axis']})"
             transverse_rows.append({
                 "Scope": check.get("scope"),
-                "Check": check_labels.get(
-                    check.get("kind"), check.get("kind")
-                ),
+                "Check": check_label,
                 "Provided": None if required_links else check.get("provided"),
                 "Limit": None if required_links else check.get("limit"),
                 "Unit": (
@@ -6998,15 +7030,15 @@ def plastic_view(inp, results):
                                zones=viz.compression_zones(inp["outer"], hp),
                                title=f"Section at NA angle = {pt['V']:.0f}{_DEG} "
                                      "(tension + / compression -)",
-                               show_labels=True, label_scale=inp["label_scale"],
-                               label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
+                               show_labels=False, scale=_MM, unit="mm",
                                bar_hover=bar_hover, tendon_hover=tendon_hover,
                                bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
                                tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])]),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds retain the "
-                   "element type. Hover an element for its design stress and strain.")
+                   "element type. Hover an element for its ID, design stress and "
+                   "strain; complete values are tabulated beside the figure.")
     with cR:
         # Split the bar strain into its tensile and compression extreme only when
         # there are mild bars that are active in compression (a tendon-only section has
@@ -7277,16 +7309,16 @@ def elastic_view(inp, results):
             viz.section_figure(inp["outer"], inp["holes"], bar_xy,
                                bar_colors=bar_colors,
                                tendons=tendon_xy, tendon_colors=tendon_colors,
-                               na_line=na, zones=zones, show_labels=True,
-                               label_scale=inp["label_scale"],
-                               label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
+                               na_line=na, zones=zones, show_labels=False,
+                               scale=_MM, unit="mm",
                                title="Elastic state (tension + / compression -)",
                                bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
                                tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])]),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds identify the "
-                   "element type, so sign and type remain readable without colour.")
+                   "element type. Hover for the element ID; complete values are "
+                   "tabulated below.")
     with strain_col:
         st.plotly_chart(
             viz.elastic_strain_figure(
@@ -9754,25 +9786,34 @@ if next_main_page in {"Inputs", "Analysis"}:
 if quick_section_open:
     st.session_state["_main_page"] = "Analysis"
 st.session_state.setdefault("_main_page", "Inputs")
-_restore_input_state()
+_restore_input_state(
+    replace=bool(st.session_state.get(_INPUT_BUILD_KEY, False))
+)
 
 main_page = st.segmented_control(
     "Workspace",
     ["Inputs", "Analysis"],
     key="_main_page",
-    on_change=_snapshot_input_state,
+    on_change=_snapshot_completed_input_state,
     required=True,
     width="stretch",
     label_visibility="collapsed",
 )
 
 if main_page == "Inputs":
+    # Set this before constructing any input widget.  If Streamlit supersedes the
+    # run, the flag survives and the next run restores the last complete snapshot.
+    st.session_state[_INPUT_BUILD_KEY] = True
     inp = build_inputs(st)
     _snapshot_input_state(inp)
+    st.session_state[_INPUT_BUILD_KEY] = False
+    st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"
     # Autosave rides a normal input/edit rerun once the interval has elapsed.
     _maybe_autosave()
     _generate_report(inp)
 else:
+    st.session_state[_INPUT_BUILD_KEY] = False
+    st.session_state[_LAST_WORKSPACE_KEY] = "Analysis"
     inp = st.session_state.get("_latest_inputs")
     if quick_section_open:
         _quick_section_viewport()
