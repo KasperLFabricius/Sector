@@ -1520,6 +1520,18 @@ class ReportBuilder:
                         ),
                     ],
                 ])
+        if (
+            inp.get("shear_links")
+            and "2023" in str(inp.get("shear_method") or "")
+            and not (
+                inp.get("transverse_detailing_on")
+                and inp.get("detailing_edition") == detailing.EC2_2023
+            )
+        ):
+            rows.append([
+                "Link reinforcement ductility class",
+                str(inp.get("transverse_ductility_class") or "B"),
+            ])
         if inp.get("clear_spacing_on"):
             rows.extend([
                 ["Clear-spacing check", "section-wide"],
@@ -2595,9 +2607,10 @@ class ReportBuilder:
             "axial-force modification. N<sub>Ed</sub> and M<sub>Ed</sub> include "
             "the locked-in tendon prestress effects in accordance with 8.2.1(8). "
             "Tendons are assumed parallel to the member axis "
-            "(cos beta = 1). "
-            "The with-links method (8.2.3) is not implemented."
+            "(cos beta = 1)."
         )
+        if sh.get("links") is not None:
+            self._shear_links(sh)
 
     def _shear(self):
         aggregate = self.out["shear"]
@@ -2856,22 +2869,28 @@ class ReportBuilder:
         links = sh["links"]
         lk = links["res"]
         self._h2("Shear reinforcement (links)")
+        model_2023 = bool(links.get("model_2023"))
+        clause = "8.2.3" if model_2023 else "6.2.3"
         req = ("required (V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>)" if links["required"]
                else "not strictly required (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>); "
                     "minimum reinforcement rules still apply")
-        self._p(f"With vertical links the resistance is the variable-strut "
+        self._p(f"With vertical links the resistance is the compression-field "
                 f"V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>) "
-                f"(EN 1992-1-1 sec. 6.2.3). For this V<sub>Ed</sub>, links are {req}.")
+                f"(EN 1992-1-1 sec. {clause}). For this V<sub>Ed</sub>, links are {req}.")
         if not lk["valid"]:
             self._small("Warning: the link resistance is zero -- check the leg count, "
                         "diameter and spacing (A<sub>sw</sub>/s must be &gt; 0).")
             return
         if links["out_of_limits"]:
+            limit_ref = (
+                (links.get("angle_limits") or {}).get("clause")
+                or "EN 1992-1-1:2005, 6.2.3(2)"
+            )
             self._small(f"Warning: the strut bounds cot theta in "
                         f"[{_fmt(links['cot_min'], 2)}, {_fmt(links['cot_max'], 2)}] "
                         f"fall outside the code range "
                         f"[{_fmt(links['cot_limit_lo'], 1)}, "
-                        f"{_fmt(links['cot_limit_hi'], 1)}] (6.7N / 6.7a NA). "
+                        f"{_fmt(links['cot_limit_hi'], 1)}] ({limit_ref}). "
                         "The values below are exploratory; no compliance verdict "
                         "applies to the links or dependent interaction checks.")
         rows = [["Quantity", "Symbol", "Value"],
@@ -2886,26 +2905,82 @@ class ReportBuilder:
                 ["Strut angle", "theta",
                  f"{_fmt(lk['theta_deg'], 1)}&#176; "
                  f"(cot theta = {_fmt(lk['cot'], 3)})"],
-                ["Strut factor", "nu<sub>1</sub>", f"{_fmt(lk['nu1'], 3)}"],
-                ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(lk['alpha_cw'], 3)}"]]
+                [
+                    "Compression factor" if model_2023 else "Strut factor",
+                    "nu" if model_2023 else "nu<sub>1</sub>",
+                    f"{_fmt(lk['nu'] if model_2023 else lk['nu1'], 3)}",
+                ]]
+        if model_2023:
+            angle_limits = links.get("angle_limits") or {}
+            rows.extend([
+                ["Permitted angle range", "cot theta",
+                 f"{_fmt(links['cot_limit_lo'], 2)} to "
+                 f"{_fmt(links['cot_limit_hi'], 2)} "
+                 f"(class {angle_limits.get('ductility_class', 'B')})"],
+                ["Link ratio", "rho<sub>w</sub>", _fmt(lk["rho_w"], 5)],
+                ["Applied shear stress", "tau<sub>Ed</sub>",
+                 f"{_fmt(lk['tau_ed'], 3)} MPa"],
+                ["Link-yield resistance", "tau<sub>Rd,sy</sub>",
+                 f"{_fmt(lk['tau_rd_sy'], 3)} MPa"],
+                ["Compression-field stress", "sigma<sub>cd</sub>",
+                 f"{_fmt(lk['sigma_cd'], 3)} MPa"],
+                ["Compression-field limit", "nu f<sub>cd</sub>",
+                 f"{_fmt(lk['nu_fcd'], 3)} MPa"],
+                ["Additional chord force", "N<sub>Vd</sub>",
+                 f"{_fmt(links['longitudinal_shear_force'], 1)} kN"],
+            ])
+        else:
+            rows.append(
+                ["Chord factor", "alpha<sub>cw</sub>",
+                 f"{_fmt(lk['alpha_cw'], 3)}"]
+            )
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._fig(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                    links["dia"], links["s"]), 130, 80)
-        self._formula(
-            "V<sub>Rd,s</sub> = (A<sub>sw</sub>/s) z f<sub>ywd</sub> cot theta",
-            ref="EN 1992-1-1 (6.8)",
-            subst=f"{_fmt(links['asw_over_s'], 4)} &#183; {_fmt(lk['z'], 1)} &#183; "
-                  f"{_fmt(lk['fywd'], 1)} &#183; {_fmt(lk['cot'], 3)} / 1000",
-            result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN")
-        self._formula(
-            "V<sub>Rd,max</sub> = alpha<sub>cw</sub> b<sub>w</sub> z nu<sub>1</sub> "
-            "f<sub>cd</sub> / (cot theta + tan theta)",
-            ref="EN 1992-1-1 (6.9)",
-            subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
-                  f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
-                  f"{_fmt(lk['fcd'], 2)} / ({_fmt(lk['cot'], 3)} + "
-                  f"{_fmt(1.0 / lk['cot'], 3)}) / 1000",
-            result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
+        if model_2023:
+            self._formula(
+                "tau<sub>Rd,sy</sub> = rho<sub>w</sub> f<sub>ywd</sub> cot theta",
+                ref="EN 1992-1-1:2023 Formula (8.42)",
+                subst=f"{_fmt(lk['rho_w'], 5)} &#183; {_fmt(lk['fywd'], 1)} "
+                      f"&#183; {_fmt(lk['cot'], 3)}",
+                result=f"tau<sub>Rd,sy</sub> = {_fmt(lk['tau_rd_sy'], 3)} MPa")
+            self._formula(
+                "sigma<sub>cd</sub> = tau<sub>Ed</sub>"
+                "(cot theta + tan theta) &#8804; nu f<sub>cd</sub>",
+                ref="EN 1992-1-1:2023 Formula (8.44)",
+                subst=f"{_fmt(lk['tau_ed'], 3)} &#183; "
+                      f"({_fmt(lk['cot'], 3)} + {_fmt(1.0 / lk['cot'], 3)}) "
+                      f"&#8804; {_fmt(lk['nu'], 3)} &#183; {_fmt(lk['fcd'], 2)}",
+                result=f"sigma<sub>cd</sub> = {_fmt(lk['sigma_cd'], 3)} MPa; "
+                       f"limit = {_fmt(lk['nu_fcd'], 3)} MPa")
+            self._formula(
+                "V<sub>Rd,s</sub> = tau<sub>Rd,sy</sub> b<sub>w</sub> z",
+                subst=f"{_fmt(lk['tau_rd_sy'], 3)} &#183; {_fmt(sh['bw'], 1)} "
+                      f"&#183; {_fmt(lk['z'], 1)} / 1000",
+                result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN")
+            self._formula(
+                "V<sub>Rd,max</sub> = nu f<sub>cd</sub> b<sub>w</sub> z / "
+                "(cot theta + tan theta)",
+                subst=f"{_fmt(lk['nu_fcd'], 3)} &#183; {_fmt(sh['bw'], 1)} "
+                      f"&#183; {_fmt(lk['z'], 1)} / "
+                      f"({_fmt(lk['cot'], 3)} + {_fmt(1.0 / lk['cot'], 3)}) / 1000",
+                result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
+        else:
+            self._formula(
+                "V<sub>Rd,s</sub> = (A<sub>sw</sub>/s) z f<sub>ywd</sub> cot theta",
+                ref="EN 1992-1-1 (6.8)",
+                subst=f"{_fmt(links['asw_over_s'], 4)} &#183; {_fmt(lk['z'], 1)} "
+                      f"&#183; {_fmt(lk['fywd'], 1)} &#183; {_fmt(lk['cot'], 3)} / 1000",
+                result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN")
+            self._formula(
+                "V<sub>Rd,max</sub> = alpha<sub>cw</sub> b<sub>w</sub> z "
+                "nu<sub>1</sub> f<sub>cd</sub> / (cot theta + tan theta)",
+                ref="EN 1992-1-1 (6.9)",
+                subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
+                      f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
+                      f"{_fmt(lk['fcd'], 2)} / ({_fmt(lk['cot'], 3)} + "
+                      f"{_fmt(1.0 / lk['cot'], 3)}) / 1000",
+                result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
         self._formula(
             "V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>)",
             result=f"V<sub>Rd</sub> = {_fmt(lk['vrd'], 3)} kN "
@@ -2919,19 +2994,32 @@ class ReportBuilder:
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
                       result=f"{util_txt}  ({verdict})")
         if links.get("theta_mode") == "utilisation":
-            angle_note = ("The strut angle is the ONE member angle (shared with "
-                          "torsion when enabled, EN 1992-1-1 6.3.2(2)), selected "
-                          "within the bounds to MINIMISE THE GOVERNING UTILISATION: a "
+            shared_note = (
+                "shared with torsion when enabled"
+                if model_2023
+                else "shared with torsion when enabled under 6.3.2(2)"
+            )
+            angle_note = (f"The strut angle is the one member angle ({shared_note}), "
+                          "selected within the bounds to minimise the governing utilisation: a "
                           "flatter strut relaxes the stirrups but raises the crushing "
                           "demand and the longitudinal chord tension, so the angle "
-                          "depends on V<sub>Ed</sub>, M<sub>Ed</sub> and N<sub>Ed</sub>.")
+                          "depends on the applied actions.")
         else:
             angle_note = ("The strut angle is auto-optimised within the bounds to "
                           "maximise V<sub>Rd</sub>.")
-        self._small(angle_note + " The shear adds a longitudinal tension "
-                    "&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
-                    f"{_fmt(links['delta_ftd'], 1)} kN (6.18) that the tension "
-                    "reinforcement must also carry.")
+        if model_2023:
+            self._small(
+                angle_note + " The additional longitudinal force is "
+                "N<sub>Vd</sub> = |V<sub>Ed</sub>| cot theta = "
+                f"{_fmt(links['longitudinal_shear_force'], 1)} kN (8.50). "
+                "The support/load-specific relief in (8.53) is not credited."
+            )
+        else:
+            self._small(
+                angle_note + " The shear adds a longitudinal tension "
+                "&#916;F<sub>td</sub> = 0.5 V<sub>Ed</sub> cot theta = "
+                f"{_fmt(links['longitudinal_shear_force'], 1)} kN (6.18)."
+            )
         # Longitudinal chord under M + V (+ T), at the member strut angle -- the
         # same check the combined section shows; printed here so a shear + bending
         # run without torsion still documents it.
@@ -2944,10 +3032,21 @@ class ReportBuilder:
             face = viz.tension_face_label(
                 ch.get("tension_low", True), ch.get("axis")
             )
+            if model_2023:
+                chord_formula = (
+                    "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
+                    "N<sub>Vd</sub>&#183;z + F<sub>td,T</sub>&#183;z/2"
+                )
+                chord_ref = "EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)"
+            else:
+                chord_formula = (
+                    "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
+                    "&#916;F<sub>td</sub>&#183;z + F<sub>td,T</sub>&#183;z/2"
+                )
+                chord_ref = "EN 1992-1-1 6.2.3(7) + 6.3.2"
             self._formula(
-                "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>"
-                "&#183;z + F<sub>td,T</sub>&#183;z/2",
-                ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
+                chord_formula,
+                ref=chord_ref,
                 subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
                       f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
                 result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
@@ -2977,7 +3076,8 @@ class ReportBuilder:
                     + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
                                           ch.get("conditional", True)) + ".")
             if ch.get("theta_mode") == "utilisation":
-                note += (" This capped demand is part of the strut-angle objective, "
+                demand_word = "uncapped" if model_2023 else "capped"
+                note += (f" This {demand_word} demand is part of the strut-angle objective, "
                          "so theta backs off the band edge when the chord would "
                          "otherwise govern.")
             if fell_back:

@@ -346,11 +346,30 @@ def _build_shear_face_context(
         "ddg": ddg,
         "fyd_flex": fyd_flex,
     }
-    if not inp.get("shear_links") or model_2023:
+    if not inp.get("shear_links"):
         return payload, None
 
     cot_min = min(inp["strut_cot_min"], inp["strut_cot_max"])
     cot_max = max(inp["strut_cot_min"], inp["strut_cot_max"])
+    if model_2023:
+        angle_limits = shear.compression_field_limits_2023(
+            -n_ed_comp,
+            v_ed,
+            inp.get("transverse_ductility_class", "B"),
+        )
+    else:
+        angle_limits = {
+            "minimum": code.shear_cot_min_limit,
+            "maximum": code.shear_cot_max_limit,
+            "basis": "2005-family fixed range",
+            "ductility_class": str(
+                inp.get("transverse_ductility_class", "B")
+            ).upper(),
+            "ductility_factor": 1.0,
+            "axial_tension_applied": False,
+            "compression_extension_credited": False,
+            "clause": "EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
+        }
     asw = link_legs * templates.bar_area(inp["shear_link_dia"])
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
     z_mm, z_source = shear_lever_arm(inp, axis, tension_low, d_mm)
@@ -371,6 +390,7 @@ def _build_shear_face_context(
             n_ed_comp, _area, cot_lo, cot_hi, z_mm=_z,
             fcd_mpa=inp["concrete"].fcd,
             gamma_s=inp["steel"].gamma_y,
+            v_ed_kn=v_ed,
         )
 
     context = {
@@ -388,6 +408,8 @@ def _build_shear_face_context(
         "tension_low": tension_low,
         "component": component,
         "link_legs": link_legs,
+        "model_2023": model_2023,
+        "angle_limits": angle_limits,
     }
     return payload, context
 

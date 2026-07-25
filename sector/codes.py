@@ -158,19 +158,20 @@ class DesignCode:
     k_tc: float = 1.0
     const_strains: bool = False
     # Shear (EN 1992-1-1:2005 sec. 6.2.2 members without shear reinforcement). The
-    # ``shear_model`` selects the resistance formula; "2005" is the variable-strut
-    # family (2005 + DK NA), "2023" the strain-based sec. 8.2. CRd,c and
-    # k1 are the recommended values (the DK NA keeps them); the DK NA changes only
-    # v_min: the recommended v_min = 0.035*k^1.5*sqrt(fck), the DK NA:2024
+    # ``shear_model`` selects the resistance formula; "2005" is the 2005 + DK NA
+    # family, while "2023" uses the strain-based no-links method in 8.2.2 and the
+    # compression-field links method in 8.2.3. CRd,c and k1 are the recommended
+    # values (the DK NA keeps them); the DK NA changes only v_min: the recommended
+    # v_min = 0.035*k^1.5*sqrt(fck), the DK NA:2024
     # v_min = (0.051/gamma_c)*k^1.5*sqrt(fck), selected by ``shear_vmin_over_gamma_c``.
     shear_model: str = "2005"
     shear_crd_c: float = 0.18
     shear_k1: float = 0.15
     shear_vmin_coeff: float = 0.035
     shear_vmin_over_gamma_c: bool = False
-    # Shear WITH links (sec. 6.2.3, variable strut inclination). ``nu1`` is the
-    # strength reduction factor for concrete cracked in shear used in VRd,max: the
-    # recommended nu = 0.6*(1 - fck/250), or -- when ``shear_nu_v`` is set (the
+    # Shear WITH links. For the 2005 family, ``nu1`` is the strength reduction
+    # factor for concrete cracked in shear used in VRd,max: the recommended
+    # nu = 0.6*(1 - fck/250), or -- when ``shear_nu_v`` is set (the
     # DK NA:2024 plasticity pure-shear factor nu_v, 5.103 NA, applied to the truss
     # struts by 5.101 NA) -- nu_v = 0.7 - fck/200 >= 0.45. The strut angle is bounded
     # by cot(theta) in [shear_cot_min_limit, shear_cot_max_limit] (6.7N / 6.7a NA,
@@ -358,7 +359,7 @@ EC2_2023 = DesignCode(
     eta_cc_ref=40.0,
     k_tc=0.85,
     const_strains=True,   # the 2023 ultimate parabola keeps constant strains
-    shear_model="2023",   # strain-based sec. 8.2 (implemented later)
+    shear_model="2023",   # 8.2.2 without links; 8.2.3 with links
 )
 
 # Registry of selectable codes, keyed by their display label.

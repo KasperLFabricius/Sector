@@ -561,6 +561,7 @@ def _results(inp: dict | None = None) -> dict:
         "cot_min": 1.0,
         "cot_max": 2.5,
         "delta_ftd": 0.5 * 30.0 * member_cot,
+        "longitudinal_shear_force": 0.5 * 30.0 * member_cot,
         "cot_limit_lo": 1.0,
         "cot_limit_hi": 2.5,
         "z_source": "plastic internal lever arm",

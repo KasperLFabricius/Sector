@@ -219,7 +219,74 @@ def test_vrd_c_zero_depth_is_invalid():
     assert res["vrd_c"] == 0.0
 
 
-# -- shear WITH links (sec. 6.2.3, variable strut) --------------------------
+# -- shear WITH links (2005 sec. 6.2.3 / 2023 sec. 8.2.3) ------------------
+
+def test_2023_compression_field_angle_limits():
+    ordinary = shear.compression_field_limits_2023(0.0, 200.0, "B")
+    tension = shear.compression_field_limits_2023(400.0, 200.0, "C")
+    class_a = shear.compression_field_limits_2023(0.0, 200.0, "A")
+    compression = shear.compression_field_limits_2023(-1000.0, 200.0, "B")
+    assert ordinary["minimum"] == pytest.approx(1.0)
+    assert ordinary["maximum"] == pytest.approx(2.5)
+    assert tension["maximum"] == pytest.approx(2.3)
+    assert tension["axial_tension_applied"]
+    assert class_a["maximum"] == pytest.approx(2.0)
+    assert compression["maximum"] == pytest.approx(2.5)
+    assert not compression["compression_extension_credited"]
+
+
+def test_vrd_links_2023_hand_calc_and_derived_stresses():
+    # 300 x 600 mm, d=550 mm, z=495 mm, two 10 mm legs at 150 mm,
+    # fywk=500 MPa, gamma_s=1.15, fcd=20 MPa and VEd=300 kN.
+    asw = 2.0 * math.pi * 10.0**2 / 4.0
+    asw_over_s = asw / 150.0
+    result = shear.vrd_links(
+        35.0,
+        codes.EC2_2023,
+        300.0,
+        550.0,
+        asw_over_s,
+        500.0,
+        0.0,
+        0.18,
+        1.0,
+        2.5,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=300.0,
+    )
+    assert result["valid"] and result["model"] == "2023"
+    rho_w = asw_over_s / 300.0
+    assert result["rho_w"] == pytest.approx(rho_w)
+    assert result["nu"] == pytest.approx(0.5)
+    assert result["tau_rd_sy"] == pytest.approx(
+        rho_w * (500.0 / 1.15) * result["cot"]
+    )
+    assert result["tau_ed"] == pytest.approx(300.0 * 1000.0 / (300.0 * 495.0))
+    assert result["sigma_cd"] == pytest.approx(
+        result["tau_ed"] * (result["cot"] + 1.0 / result["cot"])
+    )
+    assert result["nu_fcd"] == pytest.approx(10.0)
+    assert result["vrd"] == pytest.approx(
+        min(result["vrd_s"], result["vrd_max"])
+    )
+
+
+def test_vrd_links_2023_requires_final_fcd():
+    result = shear.vrd_links(
+        35.0,
+        codes.EC2_2023,
+        300.0,
+        550.0,
+        1.0,
+        500.0,
+        0.0,
+        0.18,
+        1.0,
+        2.5,
+    )
+    assert not result["valid"]
+    assert result["fcd"] == 0.0
 
 def test_shear_nu1_edition_dependent():
     # Recommended nu = 0.6(1 - fck/250); DK NA:2024 nu_v = 0.7 - fck/200 >= 0.45.
@@ -852,7 +919,7 @@ def test_app_shear_2023_fyd_from_yield_parameters():
     assert sh["res"]["fyd"] == pytest.approx(fytk / gy)
 
 
-def test_app_shear_2023_skips_links_with_a_note():
+def test_app_shear_2023_links_produce_compression_field_result():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
@@ -864,9 +931,38 @@ def test_app_shear_2023_skips_links_with_a_note():
         ("number_input", "shear_V", 50.0),
     )
     assert not at.exception
-    assert "links" not in at.session_state["results"]["shear"]   # not for 2023
+    links = at.session_state["results"]["shear"]["links"]
+    assert links["res"]["valid"]
+    assert links["model_2023"]
+    assert links["res"]["nu"] == pytest.approx(0.5)
+    assert links["longitudinal_shear_force"] == pytest.approx(
+        50.0 * links["res"]["cot"]
+    )
+    assert links["delta_ftd"] is None
     _select_view(at, "Shear")
-    assert any("8.2.3" in m.value for m in at.info)
+    assert not any("not yet implemented" in m.value for m in at.info)
+
+
+def test_app_shear_2023_class_a_angle_limit_withholds_out_of_range_verdict():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("selectbox", "transverse_ductility_class", "A"),
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "strut_cot_max", 2.5),
+        ("number_input", "shear_V", 100.0),
+    )
+    links = at.session_state["results"]["shear"]["links"]
+    assert links["cot_limit_hi"] == pytest.approx(2.0)
+    assert links["out_of_limits"]
+    assert not links["code_applicable"]
 
 
 def test_app_shear_is_saved_and_restored():

@@ -256,20 +256,185 @@ def optimum_cot_theta(a: float, b: float, cot_min: float, cot_max: float) -> flo
     return min(max(cot_opt, cot_min), cot_max)
 
 
+def compression_field_limits_2023(
+    n_ed_tension_kn: float,
+    v_ed_kn: float,
+    ductility_class: str = "B",
+) -> dict:
+    """EN 1992-1-1:2023, 8.2.3(4), compression-field angle limits.
+
+    Sector uses the directly verifiable branch:
+
+    * class B/C, no axial tension: ``1 <= cot(theta) <= 2.5``;
+    * axial tension: ``cot(theta)_max = max(2.5 - 0.1 NEd/|VEd|, 1)``;
+    * class A: the upper limit is reduced by 20 %.
+
+    The favourable extension towards 3.0 under significant axial compression also
+    requires a sectional proof that the compression-chord depth ``x < 0.25 d``.
+    Sector's isolated section action does not establish that member condition, so
+    the extension is deliberately not credited.
+    """
+    ductility = str(ductility_class or "B").strip().upper()
+    if ductility not in {"A", "B", "C"}:
+        raise ValueError("ductility class must be A, B or C")
+    n_tension = float(n_ed_tension_kn)
+    v_abs = abs(float(v_ed_kn))
+    upper = 2.5
+    basis = "ordinary member; compression extension not credited"
+    axial_tension_applied = bool(n_tension > 0.0 and v_abs > 1.0e-12)
+    if axial_tension_applied:
+        upper = max(2.5 - 0.1 * n_tension / v_abs, 1.0)
+        basis = "axial-tension limit"
+    ductility_factor = 0.8 if ductility == "A" else 1.0
+    upper = max(upper * ductility_factor, 1.0)
+    return {
+        "minimum": 1.0,
+        "maximum": upper,
+        "basis": basis,
+        "ductility_class": ductility,
+        "ductility_factor": ductility_factor,
+        "axial_tension_applied": axial_tension_applied,
+        "compression_extension_credited": False,
+        "clause": "EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)",
+    }
+
+
+def vrd_links_2023(
+    fck: float,
+    code,
+    bw_mm: float,
+    d_mm: float,
+    asw_over_s: float,
+    fywk: float,
+    cot_min: float,
+    cot_max: float,
+    z_mm: Optional[float] = None,
+    *,
+    fcd_mpa: Optional[float] = None,
+    gamma_s: Optional[float] = None,
+    v_ed_kn: float = 0.0,
+) -> dict:
+    """Shear resistance with vertical links, EN 1992-1-1:2023, 8.2.3.
+
+    The simplified compression-field method uses Formulae (8.42)-(8.44):
+    ``tau_Rd,sy = rho_w*f_ywd*cot(theta)`` and
+    ``tau_Ed*(cot(theta) + tan(theta)) <= nu*f_cd``, with ``nu = 0.5``
+    according to 8.2.3(6). The returned ``V_Rd`` is the smaller of reinforcement
+    yielding and compression-field crushing at the resistance-optimal angle inside
+    the user-entered range.
+    """
+    del fck  # The simplified 2023 value nu = 0.5 is independent of fck.
+    z = z_mm if (z_mm and z_mm > 0.0) else 0.9 * d_mm
+    gs = code.gamma_s if gamma_s is None else float(gamma_s)
+    # Callers must supply the final user-defined design strength. Reconstructing it
+    # from a preset here could silently ignore edited partial factors.
+    fcd = 0.0 if fcd_mpa is None else float(fcd_mpa)
+    if (
+        d_mm <= 0.0
+        or bw_mm <= 0.0
+        or asw_over_s <= 0.0
+        or z <= 0.0
+        or fcd <= 0.0
+        or gs <= 0.0
+    ):
+        return dict(
+            vrd_s=0.0,
+            vrd_max=0.0,
+            vrd=0.0,
+            cot=0.0,
+            theta_deg=0.0,
+            z=z,
+            fywd=0.0,
+            nu=0.5,
+            nu1=0.5,
+            alpha_cw=1.0,
+            sigma_cp=0.0,
+            fcd=fcd,
+            gamma_s=gs,
+            asw_over_s=asw_over_s,
+            rho_w=0.0,
+            tau_ed=0.0,
+            tau_rd_sy=0.0,
+            tau_rd_max=0.0,
+            sigma_cd=0.0,
+            nu_fcd=0.5 * max(fcd, 0.0),
+            governs="none",
+            model="2023",
+            valid=False,
+        )
+    fywd = fywk / gs
+    nu = 0.5
+    rho_w = asw_over_s / bw_mm
+    a = asw_over_s * fywd
+    b = bw_mm * nu * fcd
+    cot = optimum_cot_theta(a, b, cot_min, cot_max)
+    tan = 1.0 / cot
+    vrd_s = a * z * cot / 1000.0
+    vrd_max = b * z / (cot + tan) / 1000.0
+    vrd = min(vrd_s, vrd_max)
+    tau_ed = abs(float(v_ed_kn)) * 1000.0 / (bw_mm * z)
+    tau_rd_sy = rho_w * fywd * cot
+    tau_rd_max = nu * fcd / (cot + tan)
+    sigma_cd = tau_ed * (cot + tan)
+    governs = (
+        "links (tau_Rd,sy)" if vrd_s <= vrd_max
+        else "compression field (sigma_cd)"
+    )
+    return dict(
+        vrd_s=vrd_s,
+        vrd_max=vrd_max,
+        vrd=vrd,
+        cot=cot,
+        theta_deg=math.degrees(math.atan(tan)),
+        z=z,
+        fywd=fywd,
+        nu=nu,
+        nu1=nu,
+        alpha_cw=1.0,
+        sigma_cp=0.0,
+        fcd=fcd,
+        gamma_s=gs,
+        asw_over_s=asw_over_s,
+        rho_w=rho_w,
+        tau_ed=tau_ed,
+        tau_rd_sy=tau_rd_sy,
+        tau_rd_max=tau_rd_max,
+        sigma_cd=sigma_cd,
+        nu_fcd=nu * fcd,
+        governs=governs,
+        model="2023",
+        valid=True,
+    )
+
+
 def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
               fywk: float, n_ed_comp_kn: float, ac_m2: float, cot_min: float,
               cot_max: float, z_mm: Optional[float] = None, *,
               fcd_mpa: Optional[float] = None,
-              gamma_s: Optional[float] = None) -> dict:
-    """Shear resistance of a member with vertical links, sec. 6.2.3 (variable strut).
+              gamma_s: Optional[float] = None,
+              v_ed_kn: float = 0.0) -> dict:
+    """Shear resistance of a member with vertical links.
 
-    Returns ``VRd,s`` (6.8) and ``VRd,max`` (6.9) at the strut angle ``theta`` that
-    maximises ``VRd = min(VRd,s, VRd,max)`` over ``cot(theta)`` in
-    ``[cot_min, cot_max]``; the resistance is that minimum. ``asw_over_s`` is the link
-    area per unit length (mm2/mm), ``fywk`` the link characteristic yield (MPa),
-    ``n_ed_comp_kn`` the axial force compression-positive (pass ``-N``), and
-    ``ac_m2`` the gross concrete area (for ``sigma_cp``). ``z`` defaults to ``0.9 d``.
+    Dispatches to the EN 1992-1-1:2023 compression-field method (8.2.3) or the
+    2005-family variable-strut method (6.2.3). In both cases the resistance is
+    ``min(VRd,s, VRd,max)`` at the resistance-optimal angle inside the supplied
+    range.
     """
+    if getattr(code, "shear_model", "2005") == "2023":
+        return vrd_links_2023(
+            fck,
+            code,
+            bw_mm,
+            d_mm,
+            asw_over_s,
+            fywk,
+            cot_min,
+            cot_max,
+            z_mm=z_mm,
+            fcd_mpa=fcd_mpa,
+            gamma_s=gamma_s,
+            v_ed_kn=v_ed_kn,
+        )
     z = z_mm if (z_mm and z_mm > 0.0) else 0.9 * d_mm
     gs = code.gamma_s if gamma_s is None else float(gamma_s)
     if d_mm <= 0.0 or bw_mm <= 0.0 or asw_over_s <= 0.0 or z <= 0.0:
