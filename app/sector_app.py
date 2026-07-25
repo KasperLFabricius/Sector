@@ -3822,8 +3822,8 @@ def build_inputs(host=st):
         "shear_vx_transverse_leg_spacing",
         disabled=not (_links and transverse_detailing_on),
         help=r"Largest transverse distance $s_{t,x}$ between effective stirrup "
-             r"legs. 0 uses the conservative upper bound "
-             r"$b_{w,x}/(n_{\mathrm{legs},x}-1)$.",
+             r"legs. 0 uses the full web width $b_{w,x}$ as a conservative "
+             "upper bound; enter the actual maximum to credit a closer layout.",
     )
     shear_vy_transverse_leg_spacing = _seeded_number(
         spacing_y,
@@ -3835,8 +3835,8 @@ def build_inputs(host=st):
         "shear_vy_transverse_leg_spacing",
         disabled=not (_links and transverse_detailing_on),
         help=r"Largest transverse distance $s_{t,y}$ between effective stirrup "
-             r"legs. 0 uses the conservative upper bound "
-             r"$b_{w,y}/(n_{\mathrm{legs},y}-1)$.",
+             r"legs. 0 uses the full web width $b_{w,y}$ as a conservative "
+             "upper bound; enter the actual maximum to credit a closer layout.",
     )
     shear_link_dia = _seeded_number(
         sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
@@ -6148,25 +6148,20 @@ def _transverse_detailing_result(inp, out):
                     "reason": tube.get("reason"),
                     "tef_mm": tube.get("tef", 0.0),
                     "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
-                    "width_mm": subresult.get("b_mm", 0.0),
-                    "height_mm": subresult.get("h_mm", 0.0),
+                    "minimum_dimension_mm": tube.get(
+                        "minimum_dimension_mm", 0.0
+                    ),
                 })
         else:
             tube = torsion_out.get("tube") or {}
-            outer = inp.get("outer") or []
-            xs = [float(point[0]) for point in outer]
-            ys = [float(point[1]) for point in outer]
             torsion_specs.append({
                 "label": "Tube",
                 "valid": bool(torsion_out.get("valid") and tube.get("valid")),
                 "reason": torsion_out.get("reason") or tube.get("reason"),
                 "tef_mm": tube.get("tef", 0.0),
                 "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
-                "width_mm": (
-                    (max(xs) - min(xs)) * 1000.0 if xs else 0.0
-                ),
-                "height_mm": (
-                    (max(ys) - min(ys)) * 1000.0 if ys else 0.0
+                "minimum_dimension_mm": tube.get(
+                    "minimum_dimension_mm", 0.0
                 ),
             })
 

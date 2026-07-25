@@ -770,9 +770,7 @@ def _results(inp: dict | None = None) -> dict:
             "reason": tube.get("reason"),
             "tef_mm": tube["tef"],
             "uk_mm": tube["uk"] * 1000.0,
-            "width_mm": 200.0,
-            "height_mm": 300.0,
-            "d_ref_mm": shear_payload["d"],
+            "minimum_dimension_mm": tube["minimum_dimension_mm"],
         }],
     )
     inputs = _inputs()
@@ -939,9 +937,7 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         torsion_spacing["limit"],
         min(
             tube["uk"] * 1000.0 / 8.0,
-            200.0,
-            300.0,
-            0.75 * shear_out["d"],
+            tube["minimum_dimension_mm"],
         ),
     )
 

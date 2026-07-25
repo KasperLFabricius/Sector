@@ -587,6 +587,15 @@ def parse_project(text: str):
         scalars.setdefault("detailing_edition", detailing.EC2_2005_DKNA)
         scalars.setdefault("detailing_d_upper", 16.0)
         scalars.setdefault("detailing_include_tendons", False)
+    # v13 adds transverse-link detailing.  Write every new value explicitly so
+    # loading an older/partial development file in a reused Streamlit session
+    # cannot inherit the previous project's enabled check or geometry.
+    if data.get("version", 1) < 13:
+        scalars.setdefault("transverse_detailing_on", False)
+        scalars.setdefault("shear_vx_transverse_leg_spacing", 0.0)
+        scalars.setdefault("shear_vy_transverse_leg_spacing", 0.0)
+        scalars.setdefault("transverse_ductility_class", "B")
+        scalars.setdefault("transverse_apply_ductility_reduction", False)
     if data.get("version", 1) < 14:
         scalars.setdefault("detailing_member_type", detailing.MEMBER_BEAM)
         scalars.setdefault("detailing_cut_direction", detailing.CUT_TRANSVERSE)

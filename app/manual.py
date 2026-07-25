@@ -696,8 +696,10 @@ def manual_blocks() -> list:
        "between effective legs for each shear direction, or leave it at zero for "
        "the conservative automatic value. For the 2023 edition, select the "
        "reinforcement ductility class and explicitly choose whether its favourable "
-       "minimum-ratio reduction is used. If the no-link resistance is insufficient "
-       "and no links are defined, the result fails without changing the input.")
+       "minimum-ratio reduction is used. An ordinary beam with non-zero shear "
+       "requires minimum links; for a slab, omitted links are assessed against the "
+       "verified no-link resistance. A missing requirement fails without changing "
+       "the input.")
     table(["Member", "Vertical shear-link spacing limits"],
           [["Beam", "$s_l \\leq 0.75d$; $s_t \\leq \\min(0.75d,600\\,\\text{mm})$"],
            ["Slab", "$s_l \\leq 0.75d$; $s_t \\leq 1.5d$"]])
@@ -1148,13 +1150,14 @@ def manual_blocks() -> list:
     md("The longitudinal and transverse shear-link spacings are checked against:\n\n"
        "$$s_l\\le0.75d,\\qquad s_t\\le\\min(0.75d,600\\,\\text{mm}).$$\n\n"
        "If the maximum transverse distance between legs is entered as zero, "
-       "Sector uses the conservative upper bound $b_w/(n_{legs}-1)$. With fewer "
+       "Sector uses the full web width $b_w$ as the conservative upper bound. "
+       "Enter the actual maximum distance to credit a closer layout. With fewer "
        "than two effective legs, the user must enter the distance.")
     md("For a closed torsion link, one leg is checked in each effective tube wall:\n\n"
        "$$\\rho_{w,T}=\\frac{A_{leg}}{s\\,t_{ef}}\\ge\\rho_{w,min}.$$\n\n"
-       "The maximum longitudinal spacing is $\\min(u_k/8,b,h)$; the 2005 "
-       "method also applies the $0.75d$ shear-link limit. Each sub-tube is checked "
-       "separately.")
+       "The maximum longitudinal spacing is the lesser of $u_k/8$ and the "
+       "rotation-invariant minimum physical section dimension. Each sub-tube is "
+       "checked separately; an active shear direction has its own $0.75d$ check.")
     call("limit", "Sector models all entered shear reinforcement as vertical "
          "stirrups and all entered torsion reinforcement as closed stirrups. "
          "Anchorage is assumed; reduce $f_{ywk}$ when full anchorage is not "

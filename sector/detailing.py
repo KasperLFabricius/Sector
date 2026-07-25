@@ -1049,7 +1049,14 @@ def _not_assessed_check(
     }
 
 
-def _required_links_check(scope: str, clause: str, **extra):
+def _required_links_check(
+    scope: str,
+    clause: str,
+    *,
+    reason: str = "shear resistance without links is insufficient",
+    criterion: str = "shear links provided where required",
+    **extra,
+):
     return {
         "kind": "required_links",
         "scope": scope,
@@ -1057,9 +1064,9 @@ def _required_links_check(scope: str, clause: str, **extra):
         "provided": 0.0,
         "limit": 1.0,
         "utilisation": math.inf,
-        "criterion": "shear links provided where required by the resistance check",
+        "criterion": criterion,
         "clause": clause,
-        "reason": "shear resistance without links is insufficient",
+        "reason": reason,
         **extra,
     }
 
@@ -1082,12 +1089,13 @@ def transverse_reinforcement(
     ``shear_directions`` records require ``component``, ``bw_mm`` and ``d_mm``.
     ``links_present`` and ``links_required`` retain the verified resistance
     decision when links are omitted.  For defined links, ``legs`` is required and
-    ``transverse_leg_spacing_mm`` may be zero, in which case the conservative
-    upper-bound spacing ``bw/(legs-1)`` is derived when at least two effective
-    legs are present.
+    ``transverse_leg_spacing_mm`` may be zero, in which case the full web width
+    is used as the conservative upper bound when at least two effective legs are
+    present.
 
-    ``torsion_tubes`` records require ``tef_mm``, ``uk_mm``, ``width_mm`` and
-    ``height_mm``.  Beam torsion-link detailing is not applied to slabs.
+    ``torsion_tubes`` records require ``tef_mm``, ``uk_mm`` and the
+    rotation-invariant ``minimum_dimension_mm`` derived from the tube outline.
+    Beam torsion-link detailing is not applied to slabs.
     """
     if edition not in EDITIONS:
         raise ValueError("unknown detailing edition")
@@ -1137,7 +1145,12 @@ def transverse_reinforcement(
     torsion_clause = (
         "Table 12.1, 12.3.3"
         if edition == EC2_2023
-        else "9.2.3(3) and 9.2.2(6)"
+        else "9.2.3(3)"
+    )
+    beam_link_requirement_clause = (
+        "12.2(4), Table 12.1"
+        if edition == EC2_2023
+        else "9.2.2(2), (5)"
     )
 
     for direction in shear_directions:
@@ -1146,7 +1159,16 @@ def transverse_reinforcement(
         links_present = bool(direction.get("links_present", True))
         links_required = direction.get("links_required", False)
         if not links_present:
-            if links_required is True:
+            if member == MEMBER_BEAM:
+                checks.append(_required_links_check(
+                    scope,
+                    beam_link_requirement_clause,
+                    component=component,
+                    requirement="minimum beam shear reinforcement",
+                    reason="minimum shear reinforcement is required for this beam",
+                    criterion="minimum beam shear reinforcement provided",
+                ))
+            elif links_required is True:
                 checks.append(_required_links_check(
                     scope,
                     str(direction.get("requirement_clause") or shear_clause),
@@ -1235,7 +1257,11 @@ def transverse_reinforcement(
             source = "user"
             spacing_reason = None
         elif bw_valid and legs_valid and legs >= 2.0:
-            transverse_spacing = bw / (legs - 1.0)
+            # Without entered leg coordinates or an explicit equal-spacing
+            # declaration, the full web width is the only defensible upper bound
+            # on the largest gap.  Dividing by (legs - 1) would assume uniform
+            # distribution and can be unconservative for clustered legs.
+            transverse_spacing = bw
             source = "conservative auto"
             spacing_reason = None
         else:
@@ -1292,8 +1318,7 @@ def transverse_reinforcement(
         try:
             tef = float(tube["tef_mm"])
             uk = float(tube["uk_mm"])
-            width = float(tube["width_mm"])
-            height = float(tube["height_mm"])
+            minimum_dimension = float(tube["minimum_dimension_mm"])
         except (KeyError, TypeError, ValueError):
             for kind, clause in (
                 ("minimum_ratio", minimum["clause"]),
@@ -1308,7 +1333,7 @@ def transverse_reinforcement(
                 ))
             continue
         if not all(math.isfinite(value) and value > 0.0
-                   for value in (tef, uk, width, height)):
+                   for value in (tef, uk, minimum_dimension)):
             for kind, clause in (
                 ("minimum_ratio", minimum["clause"]),
                 ("torsion_spacing", torsion_clause),
@@ -1335,7 +1360,7 @@ def transverse_reinforcement(
         ))
         spacing_limits = {
             "u_k/8": uk / 8.0,
-            "min(b,h)": min(width, height),
+            "minimum section dimension": minimum_dimension,
         }
         maximum = min(spacing_limits.values())
         checks.append(_spacing_check(

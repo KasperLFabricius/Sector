@@ -884,6 +884,21 @@ def test_transverse_detailing_inputs_round_trip_in_current_project_format():
     assert {key: scalars[key] for key in values} == values
 
 
+def test_pre_v13_project_explicitly_resets_all_link_detailing_inputs():
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 12,
+        "tables": {},
+        "scalars": {},
+    })
+    _tables, scalars = project_io.parse_project(text)
+    assert scalars["transverse_detailing_on"] is False
+    assert scalars["shear_vx_transverse_leg_spacing"] == 0.0
+    assert scalars["shear_vy_transverse_leg_spacing"] == 0.0
+    assert scalars["transverse_ductility_class"] == "B"
+    assert scalars["transverse_apply_ductility_reduction"] is False
+
+
 def test_parse_rejects_malformed_table_object():
     # A table entry that is not a {columns, rows} object (here a bare list) must
     # raise ValueError, not an AttributeError that escapes the caller's handling.

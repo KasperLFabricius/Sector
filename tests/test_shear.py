@@ -518,7 +518,7 @@ def test_app_transverse_detailing_uses_active_direction_and_renders_view():
     )
 
 
-def test_app_link_detailing_fails_when_shear_requires_undefined_links():
+def test_app_beam_link_detailing_requires_minimum_links_at_low_shear():
     at = _fresh()
     at.run()
     _set(
@@ -530,7 +530,7 @@ def test_app_link_detailing_fails_when_shear_requires_undefined_links():
         at,
         "calculate",
         ("checkbox", "shear_links", False),
-        ("number_input", "shear_V", 1000.0),
+        ("number_input", "shear_V", 50.0),
     )
     assert not at.exception
     case_result = at.session_state["results"]["plastic_cases"][0]["results"]
@@ -539,7 +539,8 @@ def test_app_link_detailing_fails_when_shear_requires_undefined_links():
     assert [check["kind"] for check in transverse["checks"]] == [
         "required_links"
     ]
-    assert transverse["checks"][0]["clause"] == "6.2.2"
+    assert transverse["checks"][0]["clause"] == "9.2.2(2), (5)"
+    assert "minimum shear reinforcement" in transverse["checks"][0]["reason"]
     assert at.session_state["shear_links"] is False
 
 

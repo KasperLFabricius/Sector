@@ -39,6 +39,34 @@ def _perimeter(ring: Sequence) -> float:
     return sum(math.dist(ring[i], ring[(i + 1) % n]) for i in range(n))
 
 
+def minimum_caliper_width(ring: Sequence) -> float:
+    """Return the rotation-invariant minimum projection width of a polygon.
+
+    The minimum width of a convex polygon occurs normal to one of its edges.
+    Sector's single-tube resistance is issued only for convex outlines; evaluating
+    every edge normal therefore gives the physical least section dimension without
+    tying it to the global x/y axes.  The same calculation remains conservative for
+    the generated rectangular sub-tubes.
+    """
+    pts = [(float(point[0]), float(point[1])) for point in ring]
+    if len(pts) < 3:
+        return 0.0
+    minimum = math.inf
+    for index, point in enumerate(pts):
+        next_point = pts[(index + 1) % len(pts)]
+        dx = next_point[0] - point[0]
+        dy = next_point[1] - point[1]
+        length = math.hypot(dx, dy)
+        if length <= 1.0e-12:
+            continue
+        nx, ny = -dy / length, dx / length
+        projections = [x * nx + y * ny for x, y in pts]
+        width = max(projections) - min(projections)
+        if width > 1.0e-12:
+            minimum = min(minimum, width)
+    return 0.0 if not math.isfinite(minimum) else minimum
+
+
 def _ensure_ccw(ring: Sequence):
     """Return the ring as a list oriented counter-clockwise (positive signed area)."""
     pts = [(float(p[0]), float(p[1])) for p in ring]
@@ -103,9 +131,11 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
     capped at the real wall thickness (estimated from the concrete area / centre-line
     perimeter). ``tef_override`` (mm, 0 = auto) forces the wall thickness.
     """
+    minimum_dimension_mm = minimum_caliper_width(outer) * 1000.0 if outer else 0.0
     if not outer or len(outer) < 3:
         return dict(A=0.0, u=0.0, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,
                     tef_capped=False, tef_user=False, hollow=bool(holes),
+                    minimum_dimension_mm=minimum_dimension_mm,
                     valid=False, reason="no outline")
     # The single-tube idealisation models a solid section or a single-cell hollow box;
     # a multi-cell section (two or more voids) needs sub-division into separate tubes
@@ -114,12 +144,14 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
     if holes and len(holes) > 1:
         return dict(A=0.0, u=0.0, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,
                     tef_capped=False, tef_user=False, hollow=True,
+                    minimum_dimension_mm=minimum_dimension_mm,
                     valid=False, reason="multi-cell (2+ voids)")
     A = abs(geometry.signed_area(outer))            # outer area incl. hollow, m2
     u = _perimeter(outer)                            # outer perimeter, m
     if A <= 0.0 or u <= 0.0:
         return dict(A=A, u=u, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,
                     tef_capped=False, tef_user=False, hollow=bool(holes),
+                    minimum_dimension_mm=minimum_dimension_mm,
                     valid=False, reason="degenerate outline")
     tef_auto = A / u                                 # m
     hollow = bool(holes)
@@ -156,6 +188,7 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
         uk = u * math.sqrt(Ak / A) if A > 0.0 else 0.0
     return dict(A=A, u=u, tef=tef * 1000.0, Ak=Ak, uk=uk, tef_auto=tef_auto * 1000.0,
                 tef_capped=tef_capped, tef_user=tef_user, hollow=hollow,
+                minimum_dimension_mm=minimum_dimension_mm,
                 valid=Ak > 0.0, reason=None if Ak > 0.0 else "wall exceeds section")
 
 

@@ -345,7 +345,9 @@ def test_manual_documents_modelled_direction_and_link_detailing_scope():
         "transverse cut",
         "longitudinal cut",
         "20% criterion",
-        "no links are defined",
+        "minimum links",
+        "full web width",
+        "rotation-invariant minimum physical section dimension",
         "s_t \\\\leq 1.5d",
         "350 mm value applies to",
     ):
