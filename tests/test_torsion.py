@@ -30,7 +30,20 @@ def test_tube_properties_solid_rectangle():
     assert t["tef"] == pytest.approx(100.0)           # A/u = 0.1 m -> 100 mm
     assert t["Ak"] == pytest.approx(0.1)              # (0.3-0.1)(0.6-0.1)
     assert t["uk"] == pytest.approx(1.4)              # 2(0.2 + 0.5)
+    assert t["minimum_dimension_mm"] == pytest.approx(300.0)
     assert not t["tef_capped"] and not t["tef_user"]
+
+
+def test_tube_minimum_dimension_is_rotation_invariant():
+    angle = math.radians(45.0)
+    cosine, sine = math.cos(angle), math.sin(angle)
+    rotated = [
+        (x * cosine - y * sine, x * sine + y * cosine)
+        for x, y in _rect(0.1, 1.0)
+    ]
+    tube = torsion.tube_properties(rotated, None)
+    assert tube["valid"]
+    assert tube["minimum_dimension_mm"] == pytest.approx(100.0)
 
 
 def test_tube_tef_override():

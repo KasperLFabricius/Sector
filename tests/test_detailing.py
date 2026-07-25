@@ -359,3 +359,351 @@ def test_clear_spacing_excludes_tendons_unless_their_envelope_is_selected():
     assert bars_only["status"] == "PASS"
     assert with_tendon["status"] == "FAIL"
     assert math.isclose(with_tendon["governing"]["clear_mm"], -10.0)
+
+
+def test_minimum_transverse_ratio_uses_dk_na_and_explicit_2023_reduction():
+    dk = detailing.minimum_transverse_ratio(
+        30.0,
+        500.0,
+        edition=detailing.EC2_2005_DKNA,
+    )
+    en = detailing.minimum_transverse_ratio(
+        30.0,
+        500.0,
+        edition=detailing.EC2_2005,
+    )
+    class_c = detailing.minimum_transverse_ratio(
+        30.0,
+        500.0,
+        edition=detailing.EC2_2023,
+        ductility_class="C",
+        apply_ductility_reduction=True,
+    )
+    assert dk["ratio"] == pytest.approx(0.063 * math.sqrt(30.0) / 500.0)
+    assert en["ratio"] == pytest.approx(0.08 * math.sqrt(30.0) / 500.0)
+    assert class_c["ratio"] == pytest.approx(en["ratio"] * 0.80)
+    assert class_c["ductility_reduction_applied"] is True
+
+
+def test_secondary_slab_cut_does_not_apply_primary_direction_minimum_formula():
+    section, elements, materials = _rectangle()
+    result = detailing.minimum_reinforcement(
+        section,
+        elements,
+        materials,
+        Concrete(30.0, gamma_c=1.5),
+        edition=detailing.EC2_2005_DKNA,
+        fctm_mpa=2.9,
+        n_ed_tension_kn=0.0,
+        mx_ed_knm=100.0,
+        my_ed_knm=0.0,
+        member_type=detailing.MEMBER_SLAB,
+        cut_direction=detailing.CUT_LONGITUDINAL,
+    )
+    assert result["status"] == "NOT ASSESSED"
+    assert result["checks"] == []
+    assert result["modelled_reinforcement_direction"] == "transverse"
+    assert result["clause"] == "9.3.1.1(2)"
+    assert "orthogonal primary reinforcement" in result["reason"]
+
+
+def test_transverse_detailing_checks_shear_ratio_and_both_spacings():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        shear_directions=[{
+            "component": "vx",
+            "bw_mm": 300.0,
+            "d_mm": 550.0,
+            "legs": 2.0,
+            "transverse_leg_spacing_mm": 0.0,
+        }],
+    )
+    checks = {check["kind"]: check for check in result["checks"]}
+    assert result["status"] == "PASS"
+    assert checks["minimum_ratio"]["provided"] == pytest.approx(
+        2.0 * math.pi * 10.0 ** 2 / 4.0 / (150.0 * 300.0)
+    )
+    assert checks["longitudinal_spacing"]["limit"] == pytest.approx(412.5)
+    assert checks["transverse_leg_spacing"]["provided"] == pytest.approx(300.0)
+    assert checks["transverse_leg_spacing"]["spacing_source"] == "conservative auto"
+
+
+def test_transverse_detailing_requires_leg_distance_when_it_cannot_be_derived():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2023,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=32.0,
+        spacing_mm=100.0,
+        shear_directions=[{
+            "component": "vy",
+            "bw_mm": 200.0,
+            "d_mm": 500.0,
+            "legs": 1.0,
+            "transverse_leg_spacing_mm": 0.0,
+        }],
+    )
+    transverse = next(
+        check for check in result["checks"]
+        if check["kind"] == "transverse_leg_spacing"
+    )
+    assert result["status"] == "NOT ASSESSED"
+    assert transverse["status"] == "NOT ASSESSED"
+    assert "enter the maximum transverse distance" in transverse["reason"]
+
+
+def test_three_or_more_legs_use_full_web_width_as_the_auto_upper_bound():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=16.0,
+        spacing_mm=100.0,
+        shear_directions=[{
+            "component": "vy",
+            "bw_mm": 600.0,
+            "d_mm": 1000.0,
+            "legs": 3.0,
+            "transverse_leg_spacing_mm": 0.0,
+        }],
+    )
+    transverse = next(
+        check for check in result["checks"]
+        if check["kind"] == "transverse_leg_spacing"
+    )
+    assert transverse["provided"] == pytest.approx(600.0)
+    assert transverse["limit"] == pytest.approx(600.0)
+    assert transverse["status"] == "PASS"
+    assert transverse["spacing_source"] == "conservative auto"
+
+
+def test_torsion_detailing_uses_one_closed_leg_and_perimeter_spacing():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        torsion_tubes=[{
+            "label": "Tube 1",
+            "valid": True,
+            "tef_mm": 100.0,
+            "uk_mm": 2000.0,
+            "minimum_dimension_mm": 300.0,
+        }],
+    )
+    ratio, spacing = result["checks"]
+    assert result["status"] == "PASS"
+    assert ratio["provided"] == pytest.approx(
+        math.pi * 10.0 ** 2 / 4.0 / (150.0 * 100.0)
+    )
+    assert spacing["limit"] == pytest.approx(250.0)
+    assert spacing["governing_limit"] == "u_k/8"
+    assert any(
+        "350 mm" in note and "longitudinal torsion-bar" in note
+        for note in result["limitations"]
+    )
+
+
+def test_torsion_spacing_is_not_restricted_by_shear_effective_depth():
+    tube = {
+        "valid": True,
+        "tef_mm": 100.0,
+        "uk_mm": 2000.0,
+        "minimum_dimension_mm": 300.0,
+    }
+    common = dict(
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=16.0,
+        spacing_mm=100.0,
+        torsion_tubes=[tube],
+    )
+    old = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005,
+        **common,
+    )
+    new = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2023,
+        **common,
+    )
+    old_spacing = old["checks"][1]
+    new_spacing = new["checks"][1]
+    assert old_spacing["limit"] == pytest.approx(250.0)
+    assert old_spacing["status"] == "PASS"
+    assert new_spacing["limit"] == pytest.approx(250.0)
+    assert new_spacing["status"] == "PASS"
+
+
+def test_2005_torsion_spacing_needs_no_shear_effective_depth():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=16.0,
+        spacing_mm=100.0,
+        torsion_tubes=[{
+            "valid": True,
+            "tef_mm": 100.0,
+            "uk_mm": 2000.0,
+            "minimum_dimension_mm": 300.0,
+        }],
+    )
+    spacing = result["checks"][1]
+    assert result["status"] == "PASS"
+    assert spacing["status"] == "PASS"
+    assert spacing["limit"] == pytest.approx(250.0)
+
+
+def test_slab_shear_uses_slab_transverse_leg_spacing_limit():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2023,
+        member_type=detailing.MEMBER_SLAB,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=16.0,
+        spacing_mm=100.0,
+        shear_directions=[{
+            "component": "vy",
+            "bw_mm": 500.0,
+            "d_mm": 200.0,
+            "legs": 2.0,
+            "transverse_leg_spacing_mm": 250.0,
+        }],
+    )
+    checks = {check["kind"]: check for check in result["checks"]}
+    assert result["member_type"] == detailing.MEMBER_SLAB
+    assert checks["longitudinal_spacing"]["limit"] == pytest.approx(150.0)
+    assert checks["transverse_leg_spacing"]["limit"] == pytest.approx(300.0)
+    assert "Table 12.2" in checks["transverse_leg_spacing"]["clause"]
+
+
+def test_slab_does_not_apply_beam_torsion_link_provisions():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005,
+        member_type=detailing.MEMBER_SLAB,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=16.0,
+        spacing_mm=100.0,
+        torsion_tubes=[{
+            "valid": True,
+            "tef_mm": 100.0,
+            "uk_mm": 2000.0,
+            "minimum_dimension_mm": 300.0,
+        }],
+    )
+    assert result["status"] == "NOT ASSESSED"
+    assert all(check["status"] == "NOT ASSESSED" for check in result["checks"])
+    assert all("beam torsion" in check["reason"] for check in result["checks"])
+
+
+def test_missing_required_shear_links_is_a_visible_failure():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        member_type=detailing.MEMBER_SLAB,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        shear_directions=[{
+            "component": "vx",
+            "links_present": False,
+            "links_required": True,
+            "requirement_clause": "6.2.2",
+        }],
+    )
+    assert result["status"] == "FAIL"
+    assert result["checks"][0]["kind"] == "required_links"
+    assert result["checks"][0]["clause"] == "6.2.2"
+
+
+def test_ordinary_beam_requires_minimum_links_for_any_active_shear():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        member_type=detailing.MEMBER_BEAM,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        shear_directions=[{
+            "component": "vx",
+            "links_present": False,
+            "links_required": False,
+        }],
+    )
+    assert result["status"] == "FAIL"
+    check = result["checks"][0]
+    assert check["kind"] == "required_links"
+    assert check["clause"] == "9.2.2(2), (5)"
+    assert "minimum shear reinforcement" in check["reason"]
+
+
+def test_2023_beam_no_link_applicability_respects_depth_and_system_scope():
+    common = dict(
+        edition=detailing.EC2_2023,
+        member_type=detailing.MEMBER_BEAM,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+    )
+    shallow = detailing.transverse_reinforcement(
+        **common,
+        shear_directions=[{
+            "component": "vx",
+            "links_present": False,
+            "links_required": False,
+            "d_mm": 500.0,
+        }],
+    )
+    deep = detailing.transverse_reinforcement(
+        **common,
+        shear_directions=[{
+            "component": "vx",
+            "links_present": False,
+            "links_required": False,
+            "d_mm": 501.0,
+        }],
+    )
+    assert shallow["status"] == "NOT APPLICABLE"
+    assert shallow["checks"] == []
+    assert deep["status"] == "NOT ASSESSED"
+    check = deep["checks"][0]
+    assert check["kind"] == "minimum_link_applicability"
+    assert check["clause"] == "8.2.1(2), 12.2(4)"
+    assert "statically determinate" in check["reason"]
+
+
+def test_absent_unnecessary_shear_links_are_not_a_detailing_action():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        member_type=detailing.MEMBER_SLAB,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        shear_directions=[{
+            "component": "vx",
+            "links_present": False,
+            "links_required": False,
+        }],
+    )
+    assert result["status"] == "NOT APPLICABLE"
+    assert result["checks"] == []
+
+
+def test_transverse_detailing_with_no_active_action_is_not_applicable():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+    )
+    assert result["status"] == "NOT APPLICABLE"
+    assert result["checks"] == []

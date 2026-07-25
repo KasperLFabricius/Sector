@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from sector import capacity, codes, shear
+from sector import capacity, codes, detailing, shear
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works standalone
@@ -483,6 +483,87 @@ def test_app_shear_check_produces_a_resistance():
     assert not sh["bw_user"]                           # auto width
     assert sh["asl_bar_ids"] and sh["asl_cg"] is not None
     assert sh["util"] == pytest.approx(100.0 / sh["res"]["vrd_c"])
+
+
+def test_app_transverse_detailing_uses_active_direction_and_renders_view():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "transverse_detailing_on", True),
+        ("checkbox", "shear_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 100.0),
+    )
+    assert not at.exception
+    case_result = at.session_state["results"]["plastic_cases"][0]["results"]
+    transverse = case_result["transverse_reinforcement"]
+    assert transverse["status"] == "PASS"
+    assert [check["kind"] for check in transverse["checks"]] == [
+        "minimum_ratio",
+        "longitudinal_spacing",
+        "transverse_leg_spacing",
+    ]
+    assert transverse["checks"][2]["spacing_source"] == "conservative auto"
+
+    _select_view(at, "Detailing")
+    assert not at.exception
+    assert any(
+        "Shear/torsion link evidence" in item.value
+        for item in at.markdown
+    )
+
+
+def test_app_beam_link_detailing_requires_minimum_links_at_low_shear():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "transverse_detailing_on", True),
+        ("checkbox", "shear_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", False),
+        ("number_input", "shear_V", 50.0),
+    )
+    assert not at.exception
+    case_result = at.session_state["results"]["plastic_cases"][0]["results"]
+    transverse = case_result["transverse_reinforcement"]
+    assert transverse["status"] == "FAIL"
+    assert [check["kind"] for check in transverse["checks"]] == [
+        "required_links"
+    ]
+    assert transverse["checks"][0]["clause"] == "9.2.2(2), (5)"
+    assert "minimum shear reinforcement" in transverse["checks"][0]["reason"]
+    assert at.session_state["shear_links"] is False
+
+
+def test_app_slab_detailing_exposes_the_modelled_section_cut_direction():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("selectbox", "detailing_member_type", detailing.MEMBER_SLAB),
+    )
+    assert not at.exception
+    assert at.selectbox(key="detailing_cut_direction").value == (
+        detailing.CUT_TRANSVERSE
+    )
+    _set(
+        at,
+        ("selectbox", "detailing_cut_direction", detailing.CUT_LONGITUDINAL),
+    )
+    assert not at.exception
+    assert at.session_state["detailing_member_type"] == detailing.MEMBER_SLAB
+    assert at.session_state["detailing_cut_direction"] == (
+        detailing.CUT_LONGITUDINAL
+    )
 
 
 def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():

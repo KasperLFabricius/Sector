@@ -13,10 +13,12 @@ import fatigue_presentation
 
 import case_analysis
 import viz
+from sector import detailing
 
 _MM = 1000.0
 _DEGREE = chr(0x00B0)
 _THETA = chr(0x03B8)
+_RHO = chr(0x03C1)
 
 
 def plastic_action_assessment(pl):
@@ -685,16 +687,25 @@ def result_summary_rows(inp, results, *, stale=False):
             ))
 
     minimum = results.get("minimum_reinforcement")
+    minimum_direction = str(
+        (minimum or {}).get("modelled_reinforcement_direction")
+        or (
+            "longitudinal"
+            if inp.get("detailing_cut_direction") != detailing.CUT_LONGITUDINAL
+            else "transverse"
+        )
+    ).capitalize()
+    minimum_label = f"{minimum_direction} minimum reinforcement"
     if minimum is None and inp.get("minimum_reinforcement_on"):
         rows.append(_summary_row(
-            "Longitudinal minimum reinforcement", "plastic", "NOT RUN",
+            minimum_label, "plastic", "NOT RUN",
             view="Detailing", note="Calculate required", inp=inp,
         ))
     elif minimum is not None:
         checks = minimum.get("checks") or []
         if not checks:
             rows.append(_summary_row(
-                "Longitudinal minimum reinforcement",
+                minimum_label,
                 "plastic",
                 _map_assessment_status(minimum.get("status")),
                 view="Detailing",
@@ -750,7 +761,7 @@ def result_summary_rows(inp, results, *, stale=False):
             if check.get("reason"):
                 note_parts.append(str(check["reason"]))
             rows.append(_summary_row(
-                f"Longitudinal minimum reinforcement{suffix}",
+                f"{minimum_label}{suffix}",
                 "plastic",
                 _map_assessment_status(check.get("status")),
                 result_text,
@@ -758,6 +769,92 @@ def result_summary_rows(inp, results, *, stale=False):
                 util,
                 "Detailing",
                 "; ".join(part for part in note_parts if part),
+                inp,
+            ))
+
+    transverse = results.get("transverse_reinforcement")
+    if transverse is None and inp.get("transverse_detailing_on"):
+        rows.append(_summary_row(
+            "Shear/torsion link detailing",
+            "plastic",
+            "NOT RUN",
+            view="Detailing",
+            note="Calculate required",
+            inp=inp,
+        ))
+    elif transverse is not None:
+        checks = transverse.get("checks") or []
+        if not checks:
+            rows.append(_summary_row(
+                "Shear/torsion link detailing",
+                "plastic",
+                _map_assessment_status(transverse.get("status")),
+                view="Detailing",
+                note=str(
+                    transverse.get("reason")
+                    or transverse.get("edition")
+                    or ""
+                ),
+                inp=inp,
+            ))
+        labels = {
+            "minimum_ratio": "minimum ratio",
+            "longitudinal_spacing": "longitudinal spacing",
+            "transverse_leg_spacing": "transverse leg spacing",
+            "torsion_spacing": "closed-link spacing",
+            "required_links": "required links",
+            "minimum_link_applicability": "minimum-link applicability",
+        }
+        for check in checks:
+            kind = str(check.get("kind") or "")
+            provided = check.get("provided")
+            limit = check.get("limit")
+            if kind == "required_links":
+                result_text = "No links defined"
+                criterion = "Links required"
+            elif kind == "minimum_ratio":
+                result_text = (
+                    "-"
+                    if provided is None
+                    else f"{_RHO}w,prov = {float(provided):.5f}"
+                )
+                criterion = (
+                    "-"
+                    if limit is None
+                    else f"{_RHO}w,prov >= {_RHO}w,min = {float(limit):.5f}"
+                )
+            else:
+                result_text = (
+                    "-"
+                    if provided is None
+                    else f"sprov = {float(provided):.1f} mm"
+                )
+                criterion = (
+                    "-"
+                    if limit is None
+                    else f"sprov <= smax = {float(limit):.1f} mm"
+                )
+            note = "; ".join(
+                part for part in (
+                    str(check.get("clause") or ""),
+                    str(check.get("reason") or ""),
+                    (
+                        "spacing " + str(check.get("spacing_source"))
+                        if check.get("spacing_source") else ""
+                    ),
+                )
+                if part
+            )
+            rows.append(_summary_row(
+                f"{check.get('scope', 'Shear/torsion links')} "
+                f"{labels.get(kind, kind)}",
+                "plastic",
+                _map_assessment_status(check.get("status")),
+                result_text,
+                criterion,
+                check.get("utilisation"),
+                "Detailing",
+                note,
                 inp,
             ))
 
@@ -1023,6 +1120,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             or bool(inp.get("torsion_on"))
             or bool(inp.get("combined_on"))
             or bool(inp.get("minimum_reinforcement_on"))
+            or bool(inp.get("transverse_detailing_on"))
         ),
         "elastic": mode in {"Elastic", "Both"},
     }
@@ -1085,6 +1183,19 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                     result=zero, view="M-V-T Combined",
                     note="Zero action; not evaluated", inp=case_inp,
                 ))
+            shear_action_live = not v_zero and bool(inp.get("shear_on"))
+            torsion_action_live = not t_zero and bool(inp.get("torsion_on"))
+            transverse_live = shear_action_live or torsion_action_live
+            if inp.get("transverse_detailing_on") and not transverse_live:
+                rows.append(_summary_row(
+                    "Shear/torsion link detailing",
+                    "plastic",
+                    "NOT APPLICABLE",
+                    result="No active non-zero VEd or TEd",
+                    view="Detailing",
+                    note="Zero relevant action; not evaluated",
+                    inp=case_inp,
+                ))
     # Clear spacing is a section-wide result, not a load-case result. Add it once
     # after the case loops rather than repeating it for every Plastic row.
     if inp.get("clear_spacing_on"):
@@ -1094,6 +1205,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             plastic_case={},
             elastic_case={},
             minimum_reinforcement_on=False,
+            transverse_detailing_on=False,
             shear_on=False,
             torsion_on=False,
             combined_on=False,

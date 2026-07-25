@@ -21,7 +21,19 @@ and grouped fatigue workflows.
 - Added per-case longitudinal minimum-reinforcement checks for the 2005/DK NA
   and 2023 Eurocode methods, including resultant biaxial tension-zone geometry.
   Added a section-wide clear-spacing check with tendon-envelope opt-in and
-  explicit lap/bundle review flags.
+  explicit scope limitations for laps and bundles.
+- Added per-case shear/torsion link detailing for active actions: minimum
+  ratios, longitudinal stirrup spacing, transverse leg spacing and closed-link
+  torsion spacing. Beam/slab applicability and slab spacing limits are explicit;
+  ordinary 2005 beams require minimum links, while slab omissions follow the
+  verified no-link resistance. The 2023 structural-system condition is explicitly
+  not assessed when it cannot be established. Missing links are reported without
+  changing the input.
+  Automatic transverse spacing uses the full web width, and the torsion spacing
+  check uses a rotation-invariant physical section dimension.
+- Added member type and slab section-cut direction to detailing. Minimum-bar
+  checks apply only to reinforcement represented by the cut; secondary slab
+  minima are not inferred from an unmodelled orthogonal layer.
 - Added grouped fatigue spectra using the cracked Elastic long-/short-action
   states, stable S-N detail IDs, verified 2005 and 2023 presets and complete
   user-entered partial factors. Authority declarations record VD/BN provenance

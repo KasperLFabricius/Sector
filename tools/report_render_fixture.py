@@ -33,7 +33,7 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
-from sector import capacity, codes, combined, shear, torsion  # noqa: E402
+from sector import capacity, codes, combined, detailing, shear, torsion  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -227,10 +227,17 @@ def _inputs() -> dict:
         "strut_cot_min": 1.0,
         "strut_cot_max": 2.5,
         "minimum_reinforcement_on": True,
+        "transverse_detailing_on": True,
         "clear_spacing_on": True,
         "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "detailing_member_type": detailing.MEMBER_BEAM,
+        "detailing_cut_direction": detailing.CUT_TRANSVERSE,
         "detailing_d_upper": 16.0,
         "detailing_include_tendons": False,
+        "transverse_ductility_class": "B",
+        "transverse_apply_ductility_reduction": False,
+        "shear_vx_transverse_leg_spacing": 0.0,
+        "shear_vy_transverse_leg_spacing": 0.0,
         "plastic_case": {
             "id": "PL-QA-1",
             "type": plastic_cases[0]["description"],
@@ -709,6 +716,9 @@ def _results(inp: dict | None = None) -> dict:
     minimum = {
         "status": "PASS",
         "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "member_type": detailing.MEMBER_BEAM,
+        "cut_direction": detailing.CUT_TRANSVERSE,
+        "modelled_reinforcement_direction": "longitudinal",
         "clause": "9.2.1.1(1), Formula (9.1N)",
         "checks": [{
             "type": "minimum area", "status": "PASS",
@@ -740,6 +750,29 @@ def _results(inp: dict | None = None) -> dict:
         "governing": spacing_pair, "reason": None,
         "limitations": ["Pairwise edge-to-edge distance is checked."],
     }
+    transverse_detailing = detailing.transverse_reinforcement(
+        edition=inp["detailing_edition"],
+        fck_mpa=inp["concrete"].fck,
+        fywk_mpa=fywk,
+        diameter_mm=link_dia,
+        spacing_mm=link_spacing,
+        member_type=inp["detailing_member_type"],
+        shear_directions=[{
+            "component": "vy",
+            "bw_mm": shear_payload["bw"],
+            "d_mm": shear_payload["d"],
+            "legs": link_legs,
+            "transverse_leg_spacing_mm": 0.0,
+        }],
+        torsion_tubes=[{
+            "label": "Tube",
+            "valid": tube["valid"],
+            "reason": tube.get("reason"),
+            "tef_mm": tube["tef"],
+            "uk_mm": tube["uk"] * 1000.0,
+            "minimum_dimension_mm": tube["minimum_dimension_mm"],
+        }],
+    )
     inputs = _inputs()
     plastic_rows = inputs["plastic_cases"]
     elastic_rows = inputs["elastic_cases"]
@@ -751,6 +784,7 @@ def _results(inp: dict | None = None) -> dict:
         "shear": shear_payload,
         "torsion": torsion_payload,
         "combined": combined_payload,
+        "transverse_reinforcement": transverse_detailing,
         "clear_spacing": spacing,
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
@@ -759,6 +793,7 @@ def _results(inp: dict | None = None) -> dict:
                  "torsion": torsion_payload,
                  "combined": combined_payload,
                  "minimum_reinforcement": minimum,
+                 "transverse_reinforcement": transverse_detailing,
              }},
             {"name": "PL-QA-2", "actions": plastic_rows[1], "evaluated": True,
              "results": {"plastic": plastic_2}},
@@ -864,6 +899,46 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         "torsion utilisation",
         torsion_out["util"],
         torsion_out["t_ed"] / torsion_out["trd"],
+    )
+
+    detailing_out = out["transverse_reinforcement"]
+    detailing_checks = {
+        (check["scope"], check["kind"]): check
+        for check in detailing_out["checks"]
+    }
+    leg_area = math.pi * inp["shear_link_dia"] ** 2 / 4.0
+    shear_ratio = detailing_checks[("Shear VY", "minimum_ratio")]
+    close(
+        "shear detailing ratio",
+        shear_ratio["provided"],
+        2.0 * leg_area / (
+            inp["shear_link_s"] * shear_out["bw"]
+        ),
+    )
+    close(
+        "shear longitudinal spacing limit",
+        detailing_checks[("Shear VY", "longitudinal_spacing")]["limit"],
+        0.75 * shear_out["d"],
+    )
+    close(
+        "shear transverse leg spacing",
+        detailing_checks[("Shear VY", "transverse_leg_spacing")]["provided"],
+        shear_out["bw"],
+    )
+    torsion_ratio = detailing_checks[("Torsion Tube", "minimum_ratio")]
+    close(
+        "torsion detailing ratio",
+        torsion_ratio["provided"],
+        leg_area / (inp["shear_link_s"] * tube["tef"]),
+    )
+    torsion_spacing = detailing_checks[("Torsion Tube", "torsion_spacing")]
+    close(
+        "torsion detailing spacing limit",
+        torsion_spacing["limit"],
+        min(
+            tube["uk"] * 1000.0 / 8.0,
+            tube["minimum_dimension_mm"],
+        ),
     )
 
     result = out["combined"]
@@ -1115,6 +1190,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Plastic section capacity - PL-QA-1",
         "Plastic section capacity - PL-QA-2",
         "Longitudinal minimum reinforcement - PL-QA-1",
+        "Shear/torsion link detailing - PL-QA-1",
+        "Closed-link spacing",
         "Reinforcement clear spacing",
         "R1 - R2",
         "Elastic section response and stress limits - EL-QA-1",

@@ -18,6 +18,7 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
+from sector import detailing  # noqa: E402
 
 
 def test_migrate_legacy_torsion_only_stirrup():
@@ -866,6 +867,36 @@ def test_parse_rejects_obsolete_separate_strut_angle_settings():
     })
     with pytest.raises(ValueError, match="unsupported pre-0.91 project"):
         project_io.parse_project(text)
+
+
+def test_transverse_detailing_inputs_round_trip_in_current_project_format():
+    values = {
+        "transverse_detailing_on": True,
+        "detailing_member_type": detailing.MEMBER_SLAB,
+        "detailing_cut_direction": detailing.CUT_LONGITUDINAL,
+        "transverse_ductility_class": "C",
+        "transverse_apply_ductility_reduction": True,
+        "shear_vx_transverse_leg_spacing": 220.0,
+        "shear_vy_transverse_leg_spacing": 180.0,
+    }
+    text = project_io.dump_project({}, values)
+    _tables, scalars = project_io.parse_project(text)
+    assert {key: scalars[key] for key in values} == values
+
+
+def test_pre_v13_project_explicitly_resets_all_link_detailing_inputs():
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 12,
+        "tables": {},
+        "scalars": {},
+    })
+    _tables, scalars = project_io.parse_project(text)
+    assert scalars["transverse_detailing_on"] is False
+    assert scalars["shear_vx_transverse_leg_spacing"] == 0.0
+    assert scalars["shear_vy_transverse_leg_spacing"] == 0.0
+    assert scalars["transverse_ductility_class"] == "B"
+    assert scalars["transverse_apply_ductility_reduction"] is False
 
 
 def test_parse_rejects_malformed_table_object():

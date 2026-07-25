@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import pathlib
 import sys
 
@@ -818,6 +819,108 @@ def test_detailing_summary_reports_values_status_and_target_view():
     assert spacing_row["result"] == "18.0 mm (R1-R2)"
     assert spacing_row["note"] == "8.2(2)"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_transverse_detailing_summary_keeps_ratio_and_spacing_evidence():
+    transverse = {
+        "status": "FAIL",
+        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "checks": [
+            {
+                "kind": "minimum_ratio",
+                "scope": "Shear VX",
+                "status": "PASS",
+                "provided": 0.00120,
+                "limit": 0.00069,
+                "utilisation": 0.575,
+                "clause": "9.2.2(5)",
+            },
+            {
+                "kind": "transverse_leg_spacing",
+                "scope": "Shear VX",
+                "status": "FAIL",
+                "provided": 500.0,
+                "limit": 412.5,
+                "utilisation": 500.0 / 412.5,
+                "clause": "9.2.2(8)",
+                "spacing_source": "user",
+            },
+        ],
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", transverse_detailing_on=True),
+        {"transverse_reinforcement": transverse},
+    )
+    ratio = next(row for row in rows if "minimum ratio" in row["check"])
+    spacing = next(
+        row for row in rows if "transverse leg spacing" in row["check"]
+    )
+    assert ratio["status"] == "PASS"
+    assert "0.00120" in ratio["result"]
+    assert spacing["status"] == "FAIL"
+    assert spacing["criterion"] == "sprov <= smax = 412.5 mm"
+    assert spacing["view"] == "Detailing"
+
+
+def test_link_detailing_summary_states_when_required_links_are_missing():
+    transverse = {
+        "status": "FAIL",
+        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "checks": [{
+            "kind": "required_links",
+            "scope": "Shear VX",
+            "status": "FAIL",
+            "provided": 0.0,
+            "limit": 1.0,
+            "utilisation": math.inf,
+            "clause": "6.2.2",
+            "reason": "shear resistance without links is insufficient",
+        }],
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", transverse_detailing_on=True),
+        {"transverse_reinforcement": transverse},
+    )
+    row = next(item for item in rows if "required links" in item["check"])
+    assert row["status"] == "FAIL"
+    assert row["result"] == "No links defined"
+    assert row["criterion"] == "Links required"
+    assert row["note"] == "6.2.2; shear resistance without links is insufficient"
+
+
+def test_link_detailing_summary_does_not_treat_missing_links_as_not_applicable():
+    plastic_cases = [{
+        "name": "PL-SHEAR",
+        "actions": {
+            "name": "PL-SHEAR",
+            "description": "",
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 0.0,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 50.0,
+            "vy_ed_kn": 0.0,
+            "t_ed_knm": 0.0,
+        },
+        "evaluated": False,
+        "results": {},
+    }]
+    rows = presentation.multi_case_summary_rows(
+        _inp(
+            mode="",
+            transverse_detailing_on=True,
+            shear_on=True,
+            shear_links=False,
+            torsion_on=False,
+            plastic_cases=[plastic_cases[0]["actions"]],
+        ),
+        {"plastic_cases": plastic_cases},
+    )
+    row = next(
+        item for item in rows
+        if item["check"] == "Shear/torsion link detailing"
+    )
+    assert row["status"] == "NOT RUN"
+    assert row["note"] == "Calculate required"
 
 
 def test_detailing_summary_labels_one_biaxial_resultant_check():
