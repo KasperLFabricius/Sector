@@ -34,6 +34,10 @@ and grouped fatigue workflows.
 - Added member type and slab section-cut direction to detailing. Minimum-bar
   checks apply only to reinforcement represented by the cut; secondary slab
   minima are not inferred from an unmodelled orthogonal layer.
+- Added EN 1992-1-1:2023 shear resistance with links using the simplified
+  compression-field method in 8.2.3. Results expose link yielding,
+  compression-field stress, action- and ductility-dependent angle limits and
+  the uncapped longitudinal force from Formula (8.50).
 - Added grouped fatigue spectra using the cracked Elastic long-/short-action
   states, stable S-N detail IDs, verified 2005 and 2023 presets and complete
   user-entered partial factors. Authority declarations record VD/BN provenance

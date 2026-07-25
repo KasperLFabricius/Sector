@@ -2075,6 +2075,7 @@ def _links_out():
             "util": 80.0 / 540.0, "asw": 157.08, "asw_over_s": 1.047, "legs": 2.0,
             "dia": 10.0, "s": 150.0, "fywk": 500.0, "cot_min": 1.0, "cot_max": 2.5,
             "delta_ftd": 375.0, "cot_limit_lo": 1.0, "cot_limit_hi": 2.5,
+            "longitudinal_shear_force": 375.0,
             "z_source": "plastic internal lever arm",
             "out_of_limits": False, "code_applicable": True, "required": True}
 
@@ -2090,6 +2091,58 @@ def test_report_includes_shear_links_section():
     assert "540" in txt                            # VRd,s / VRd
     assert "stirrups" in txt                       # governing mechanism
     assert chr(0x3B8) in txt                       # theta glyph rendered
+
+
+def test_report_includes_2023_shear_links_stress_checks():
+    from sector import codes as _codes, shear as _shear
+
+    out = _out()
+    sh = _shear_out_2023()
+    asw = 2.0 * math.pi * 10.0**2 / 4.0
+    result = _shear.vrd_links(
+        35.0,
+        _codes.EC2_2023,
+        300.0,
+        550.0,
+        asw / 150.0,
+        500.0,
+        0.0,
+        0.18,
+        1.0,
+        2.5,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=50.0,
+    )
+    sh["links"] = {
+        "res": result,
+        "util": 50.0 / result["vrd"],
+        "asw": asw,
+        "asw_over_s": asw / 150.0,
+        "legs": 2.0,
+        "dia": 10.0,
+        "s": 150.0,
+        "fywk": 500.0,
+        "cot_min": 1.0,
+        "cot_max": 2.5,
+        "delta_ftd": None,
+        "longitudinal_shear_force": 50.0 * result["cot"],
+        "cot_limit_lo": 1.0,
+        "cot_limit_hi": 2.5,
+        "angle_limits": {
+            "clause": "EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
+        },
+        "model_2023": True,
+        "z_source": "0.9 d",
+        "out_of_limits": False,
+        "code_applicable": True,
+        "required": False,
+    }
+    out["shear"] = sh
+    text = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    assert "8.42" in text and "8.44" in text and "8.50" in text
+    assert "0.500" in text
+    assert "not implemented" not in text
 
 
 def test_report_shear_links_out_of_limits_note():

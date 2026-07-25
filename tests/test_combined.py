@@ -57,6 +57,24 @@ def test_longitudinal_check_shear_shift_capped():
     assert r["util"] == pytest.approx(1.0)
 
 
+def test_longitudinal_check_2023_shear_force_is_not_peak_moment_capped():
+    # Sector does not establish the direct-support / concentrated-load condition
+    # required for the favourable 2023 Formula (8.53) relief.
+    r = combined.longitudinal_check(
+        100.0,
+        120.0,
+        200.0,
+        0.0,
+        0.5,
+        cap_shear_force=False,
+    )
+    assert r["mv"] == pytest.approx(100.0)
+    assert not r["capped"]
+    assert not r["cap_shear_force"]
+    assert r["m_total"] == pytest.approx(200.0)
+    assert r["util"] == pytest.approx(200.0 / 120.0)
+
+
 def test_longitudinal_check_torsion_uses_half_lever_and_no_cap():
     # Torsion is not subject to the shear cap and acts on z/2 (distributed steel).
     r = combined.longitudinal_check(50.0, 300.0, 0.0, 80.0, 0.6)

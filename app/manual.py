@@ -449,9 +449,9 @@ def manual_blocks() -> list:
     call("standard", "EN 1992-1-1:2023 is a fully selectable design methodology in "
          "Sector. Individual material and check methods remain independently "
          "selectable; the Design-basis alignment status and PDF identify any "
-         "mixed-edition calculation. The 2023 no-links shear and refined crack "
-         "models are implemented, while the UI explicitly identifies checks such "
-         "as 2023 shear with links, torsion and combined M-V-T that are not.")
+         "mixed-edition calculation. The 2023 shear methods with and without links "
+         "and the refined crack model are implemented. Torsion and combined M-V-T "
+         "remain on the 2005 family and are identified as such.")
 
     h2("What Sector computes - at a glance")
     md("- **Plastic bending capacity.** The biaxial $M_x$-$M_y$ interaction "
@@ -800,7 +800,8 @@ def manual_blocks() -> list:
            ["DS/EN 1992-1-1:2005 + DK NA:2024", "As 2005 but the raised "
             "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"],
            ["DS/EN 1992-1-1:2023", "The strain-based $\\tau_{Rd,c}$ (8.2.2) with the "
-            "aggregate size $d_{dg}$ and $\\gamma_V = 1.40$; members without links"]])
+            "aggregate size $d_{dg}$ and $\\gamma_V = 1.40$ without links; the "
+            "compression-field method (8.2.3) with links"]])
     call("standard", "The **2023 method** uses "
           "$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq "
           "\\tau_{Rd,c,min}$ (8.27), with $d_{dg} = 16 + D_{lower}$ ($\\leq 40$ mm, "
@@ -810,14 +811,14 @@ def manual_blocks() -> list:
           "$a_{cs}=\\max(|M_{Ed}/V_{Ed}|,d)$ (8.30-8.31), including locked-in "
           "prestress effects. Tendons are assumed parallel to the member axis "
           "($\\cos\\beta=1$), because a cross-section model has no longitudinal "
-          "tendon inclination. Its method for members **with** links (8.2.3) is "
-          "not implemented; torsion and the combined lock stay on the 2005 family.")
+          "tendon inclination. Members **with** links use the compression-field "
+          "method in 8.2.3; torsion and the combined lock stay on the 2005 family.")
     call("limit", "$A_{sl}$ is the tension-face bars, **assumed fully anchored** "
           "($\\geq l_{bd} + d$). Sector does not check anchorage; where reinforcement "
           "is not fully anchored, the user must enter an appropriately reduced "
           "$f_{yk}$ / $f_{ywk}$ before relying on the result.")
-    md("With **Shear reinforcement (links) present** on, the resistance becomes the "
-       "variable-strut $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3) instead of "
+    md("With **Shear reinforcement (links) present** on, the resistance becomes "
+       "$V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3 or 8.2.3) instead of "
        "$V_{Rd,c}$ (which is still shown, to indicate whether links are strictly "
        "required). The link inputs are the effective legs for each direction, the bar diameter and the "
        "spacing $s$ (so $A_{sw} = n_{legs}\\,\\pi\\phi^2/4$), the link yield "
@@ -832,6 +833,14 @@ def manual_blocks() -> list:
          "than the recommended $\\nu = 0.6(1 - f_{ck}/250)$. Bounds outside the "
          "code range are accepted for exploration, but Sector withholds the code "
          "verdict for the links and every dependent interaction check.")
+    call("standard", "For EN 1992-1-1:2023, "
+         "$\\tau_{Rd,sy}=\\rho_w f_{ywd}\\cot\\theta$ (8.42) and "
+         "$\\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)\\leq\\nu f_{cd}$ "
+         "(8.44), with $\\nu=0.5$. The upper angle limit is 2.5 for class B/C, "
+         "reduced by 20% for class A and reduced further by axial tension per "
+         "8.2.3(4). Sector does not credit the favourable compression extension "
+         "towards 3.0 because the required $x<0.25d$ member condition is not "
+         "established by an isolated section.")
     h2("Torsion (TRd, thin-walled tube)")
     md("With **Check torsion capacity** on, Sector idealises the section as a "
        "thin-walled closed tube (6.3) and reports the closed-stirrup resistance "
@@ -1409,8 +1418,7 @@ def manual_blocks() -> list:
     h2("Members with shear reinforcement (links)")
     md("A member with designed vertical links is a truss: the links are the "
        "tension ties and the concrete web the inclined compression struts at an "
-       "angle $\\theta$ to the axis (6.2.3). The resistance is the smaller of the "
-       "tie yield and the strut crushing,\n\n"
+       "angle $\\theta$ to the axis. For the 2005 family, the resistance is\n\n"
        "$$V_{Rd,s} = \\frac{A_{sw}}{s}\\,z\\,f_{ywd}\\,\\cot\\theta \\quad(6.8), "
        "\\qquad V_{Rd,max} = \\frac{\\alpha_{cw}\\,b_w\\,z\\,\\nu_1\\,f_{cd}}"
        "{\\cot\\theta + \\tan\\theta} \\quad(6.9),$$\n\n"
@@ -1420,6 +1428,14 @@ def manual_blocks() -> list:
        "axial compression per 6.11N). The shear also adds a longitudinal tension "
        "$\\Delta F_{td} = 0.5\\,V_{Ed}\\,\\cot\\theta$ (6.18) that the bottom steel "
        "must carry on top of the bending force.")
+    md("For EN 1992-1-1:2023,\n\n"
+       "$$\\tau_{Rd,sy}=\\rho_w f_{ywd}\\cot\\theta \\quad(8.42),\\qquad "
+       "\\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)"
+       "\\leq\\nu f_{cd}\\quad(8.44),$$\n\n"
+       "where $\\rho_w=A_{sw}/(b_ws)$ and $\\nu=0.5$. Sector reports both stresses "
+       "and the equivalent $V_{Rd,s}$ / $V_{Rd,max}$ resistances. The longitudinal "
+       "addition is $N_{Vd}=|V_{Ed}|\\cot\\theta$ (8.50), applied without the "
+       "support/load-specific relief in (8.53).")
     call("concept", "Rather than the code's $z \\approx 0.9d$ approximation, Sector "
          "uses the **internal lever arm the plastic engine already computes** -- the "
          "separation of the concrete compression resultant and the steel tension "
@@ -1439,6 +1455,11 @@ def manual_blocks() -> list:
          "pure-shear factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 "
          "NA), applied to the truss struts by 5.101 NA. Both editions bound "
          "$1 \\leq \\cot\\theta \\leq 2.5$ (6.7N / 6.7a NA).")
+    call("standard", "For 2023 class B/C links, the directly verifiable range is "
+         "$1\\leq\\cot\\theta\\leq2.5$; axial tension reduces the upper limit to "
+         "$\\max(2.5-0.1N_{Ed}/|V_{Ed}|,1)$ and class A reduces it by 20%. "
+         "The favourable compression extension to 3.0 is not credited because "
+         "Sector does not establish the required compression-chord depth.")
     md("**Worked** (same section, C35, DK NA:2024, 2-leg $\\phi$10 links at "
        "$s = 150$ mm, $f_{ywk} = 500$; taking $z = 0.9d = 495$ mm for illustration): "
        "$f_{ywd} = 417$ MPa, $\\nu_1 = 0.525$, $A_{sw}/s = 1.047$ mm$^2$/mm. The "

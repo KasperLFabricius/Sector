@@ -94,6 +94,28 @@ def test_build_shear_context_returns_payload_without_ui():
     assert payload["centroid"] == pytest.approx((0.15, 0.30))
 
 
+def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd():
+    inp = _member_input(
+        shear_method=codes.EC2_2023.label,
+        shear_links=True,
+        transverse_ductility_class="B",
+    )
+    _payload, links = capacity.build_shear_context(
+        inp,
+        n_prestress=0.0,
+        n_ed_comp=-400.0,
+    )
+
+    assert links is not None and links["model_2023"]
+    assert links["angle_limits"]["axial_tension_applied"]
+    assert links["angle_limits"]["maximum"] == pytest.approx(
+        max(2.5 - 0.1 * 400.0 / inp["shear_V"], 1.0)
+    )
+    result = links["build"](1.0, links["angle_limits"]["maximum"])
+    assert result["valid"]
+    assert result["fcd"] == pytest.approx(inp["concrete"].fcd)
+
+
 def test_directional_shear_contexts_map_components_moments_faces_and_settings():
     inp = _member_input(
         bars=[

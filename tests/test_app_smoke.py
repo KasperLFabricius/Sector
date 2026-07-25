@@ -2820,7 +2820,7 @@ def test_design_basis_summary_identifies_alignment_and_limitations():
         combined_method="DS/EN 1992-1-1:2005 + DK NA:2024",
     )
     assert limited["mixed"] is True
-    assert any("8.2.3" in item for item in limited["limitations"])
+    assert not any("shear with links" in item for item in limited["limitations"])
     assert any("does not implement" in item for item in limited["limitations"])
 
     # An unused material selector must not create a false mixed-edition warning.

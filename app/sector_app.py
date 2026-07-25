@@ -229,11 +229,6 @@ def _design_basis_summary(*, concrete_preset, mild_preset=None,
 
     limitations = []
     concrete_2023 = _edition_family(concrete_preset) == "EN 1992-1-1:2023"
-    if shear_method and "2023" in str(shear_method) and shear_links:
-        limitations.append(
-            "EN 1992-1-1:2023 shear with links (8.2.3) is not implemented; "
-            "the reported 2023 shear result covers the no-links resistance only."
-        )
     if concrete_2023 and (torsion_method or combined_method):
         limitations.append(
             "Torsion and combined M-V-T use a selected 2005-family method; "
@@ -3502,12 +3497,9 @@ def build_inputs(host=st):
         ["A", "B", "C"],
         "B",
         "transverse_ductility_class",
-        disabled=not (
-            transverse_detailing_on
-            and detailing_edition == detailing.EC2_2023
-        ),
-        help="Reinforcement ductility class used only for the explicitly selected "
-             "2023 minimum-ratio reduction below.",
+        help="Physical ductility class of the link reinforcement. EN 1992-1-1:2023 "
+             "uses it for the compression-field angle range and, when explicitly "
+             "selected below, the favourable minimum-ratio reduction.",
     )
     transverse_apply_ductility_reduction = _seeded_checkbox(
         det,
@@ -3605,7 +3597,7 @@ def build_inputs(host=st):
         sts, "Shear method", list(_SHEAR_METHODS), codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
         help=r"Code edition for the shear rules: the 2005 family ($V_{Rd,c}$, 6.2.2(1)) "
-             r"or EN 1992-1-1:2023 (strain-based $\tau_{Rd,c}$, 8.2.2, no links). See the "
+             r"or EN 1992-1-1:2023 (8.2.2 without links; 8.2.3 with links). See the "
              "manual for the difference.")
     _eff_shear_method = combined_method if combined_on else shear_method
     _shear_2023 = (_SHEAR_METHODS.get(_eff_shear_method) is not None
@@ -3630,14 +3622,15 @@ def build_inputs(host=st):
         help=r"Web width for $V_{y,Ed}$ (depth along y; bottom/top faces).",
     )
     # Shear reinforcement (vertical links). When present, the member's resistance is
-    # the variable-strut VRd = min(VRd,s, VRd,max) (sec. 6.2.3) rather than VRd,c; the
-    # strut angle theta is auto-optimised within the shared cot(theta) bounds in
-    # the Links / stirrups block below.
+    # VRd = min(VRd,s, VRd,max) under 6.2.3 or 8.2.3 rather than VRd,c; the strut
+    # angle theta is auto-optimised within the shared cot(theta) bounds in the
+    # Links / stirrups block below.
     shear_links = _seeded_checkbox(
         sts, "Shear reinforcement (links) present", False, "shear_links",
         disabled=not shear_on,
-        help="Add vertical links (stirrups). The resistance becomes the variable-"
-             r"strut $V_{Rd}=\min(V_{Rd,s},V_{Rd,max})$ (EN 1992-1-1 6.2.3); "
+        help="Add vertical links (stirrups). The resistance becomes the smaller "
+             "of link yielding and compression-field crushing (6.2.3 for the "
+             "2005 family; 8.2.3 for 2023); "
              r"$V_{Rd,c}$ is still "
              "shown to indicate whether links are strictly required.")
     _links = shear_on and shear_links
@@ -3775,6 +3768,8 @@ def build_inputs(host=st):
         code_cot_max = min(
             code.shear_cot_max_limit for code in active_strut_codes
         )
+        if _shear_2023 and transverse_ductility_class == "A":
+            code_cot_max = min(code_cot_max, 2.0)
         if (
             strut_cot_min < code_cot_min - 1e-9
             or strut_cot_max > code_cot_max + 1e-9
@@ -5324,6 +5319,15 @@ def _run_uniaxial_capacity_checks(inp, out):
             web = _snap(cot)["subs"][0]
             return web["asl_req"] * tors_ctx["fyd_long"] / 1000.0
 
+        links_model_2023 = bool(
+            link_ctx is not None and link_ctx.get("model_2023")
+        )
+
+        def _ftd_v_at(cot):
+            """Additional longitudinal shear force on the tension chord (kN)."""
+            factor = 1.0 if links_model_2023 else 0.5
+            return factor * v_ed_s * cot
+
         utils = []
         if shear_live:
             utils.append(lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_s"]))
@@ -5349,18 +5353,16 @@ def _run_uniaxial_capacity_checks(inp, out):
             utils.append(_shared_stirrup)
             utils.append(_crush_629)
         for _cf in chord_faces:
-            # The objective sees EXACTLY the reported chord utilisation (capped per
-            # 6.2.3(7)), so the optimiser and the verdicts agree: it steepens the
-            # strut while that genuinely lowers the reported check, and stops once
-            # the cap saturates. Both shear faces join (only the tension face gets
-            # the shear shift). A zero-capacity chord (the off-axis moment exhausts
-            # the envelope) is kept OUT: its utilisation is infinite at every angle,
-            # which would tie the scan and un-constrain the other checks.
+            # The objective sees exactly the reported chord utilisation. The 2005
+            # shear shift is capped per 6.2.3(7); the 2023 NVd force from (8.50) is
+            # not capped because Sector does not establish the support/load-specific
+            # condition in (8.53).
             if _cf["m_rd"] > 0.0 and (shear_live or tors_live):
                 utils.append(lambda c, f=_cf: combined.longitudinal_check(
                     f["m_ed"], f["m_rd"],
-                    (0.5 * v_ed_s * c) if f["gets_shift"] else 0.0,
-                    _ftd_t_at(c), f["z_m"])["util"])
+                    _ftd_v_at(c) if f["gets_shift"] else 0.0,
+                    _ftd_t_at(c), f["z_m"],
+                    cap_shear_force=not links_model_2023)["util"])
         for _ocf in chord_off_faces:
             # Each off-axis face depends on the angle only through Ftd,T; both join
             # the objective (m_rd > 0) so the optimiser and the reported governing
@@ -5468,10 +5470,19 @@ def _run_uniaxial_capacity_checks(inp, out):
             else:
                 lk = link_ctx["build"](link_ctx["cot_min"], link_ctx["cot_max"])
             util_l = (v_ed / lk["vrd"]) if lk["vrd"] > 0.0 else math.inf
-            # delta_Ftd = 0.5*VEd*cot(theta): extra longitudinal tension from shear.
-            delta_ftd = 0.5 * v_ed * lk["cot"] if lk["valid"] else 0.0
-            code = link_ctx["code"]
-            lo, hi = code.shear_cot_min_limit, code.shear_cot_max_limit
+            # Extra longitudinal force from shear: 2005 delta_Ftd = 0.5 VEd cot
+            # theta; 2023 NVd = |VEd| cot theta (8.50).
+            longitudinal_shear_force = (
+                (1.0 if link_ctx.get("model_2023") else 0.5)
+                * v_ed * lk["cot"]
+                if lk["valid"] else 0.0
+            )
+            delta_ftd = (
+                None if link_ctx.get("model_2023")
+                else longitudinal_shear_force
+            )
+            angle_limits = link_ctx["angle_limits"]
+            lo, hi = angle_limits["minimum"], angle_limits["maximum"]
             links_out_of_limits = bool(
                 link_ctx["cot_min"] < lo - 1e-9
                 or link_ctx["cot_max"] > hi + 1e-9
@@ -5514,8 +5525,9 @@ def _run_uniaxial_capacity_checks(inp, out):
                 for _cf in chord_faces:
                     fchk = combined.longitudinal_check(
                         _cf["m_ed"], _cf["m_rd"],
-                        delta_ftd if _cf["gets_shift"] else 0.0,
-                        ftd_t_star, _cf["z_m"])
+                        longitudinal_shear_force if _cf["gets_shift"] else 0.0,
+                        ftd_t_star, _cf["z_m"],
+                        cap_shear_force=not link_ctx.get("model_2023"))
                     fchk.update(valid=True, role="shear_axis",
                                 axis=_cf["axis"],
                                 tension_low=_cf["tension_low"],
@@ -5560,7 +5572,19 @@ def _run_uniaxial_capacity_checks(inp, out):
                            legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
                            s=inp["shear_link_s"], fywk=inp["shear_fywk"],
                            cot_min=link_ctx["cot_min"], cot_max=link_ctx["cot_max"],
-                           delta_ftd=delta_ftd, cot_limit_lo=lo, cot_limit_hi=hi,
+                           delta_ftd=delta_ftd,
+                           longitudinal_shear_force=longitudinal_shear_force,
+                           longitudinal_shear_symbol=(
+                               "NVd" if link_ctx.get("model_2023") else "delta_Ftd"
+                           ),
+                           longitudinal_shear_clause=(
+                               "8.2.3(8), Formula (8.50)"
+                               if link_ctx.get("model_2023")
+                               else "6.2.3(7), Formula (6.18)"
+                           ),
+                           cot_limit_lo=lo, cot_limit_hi=hi,
+                           angle_limits=angle_limits,
+                           model_2023=link_ctx.get("model_2023", False),
                            z_source=link_ctx["z_src"],
                            out_of_limits=links_out_of_limits,
                            code_applicable=not links_out_of_limits,
@@ -8358,11 +8382,6 @@ def shear_view(inp, results):
             r"$A_{sl}$ is the tension reinforcement on the chosen face, assumed fully "
             r"anchored ($\geq l_{bd} + d$) beyond the section.")
 
-    if sh.get("model_2023") and inp.get("shear_links"):
-        st.info("The 2023 method's strain-based check for members WITH shear "
-                "reinforcement (8.2.3) is not yet implemented; only tau_Rd,c is "
-                "shown. Select a 2005 edition for a links check.")
-
     # Shear reinforcement (links): the governing check when present.
     links = sh.get("links")
     if links is not None:
@@ -8373,11 +8392,15 @@ def shear_view(inp, results):
             st.warning("The link resistance could not be computed -- check the leg "
                        "count, diameter and spacing (Asw/s must be > 0).")
         if links["out_of_limits"]:
+            limit_ref = (
+                (links.get("angle_limits") or {}).get("clause")
+                or "EN 1992-1-1 6.7N / DK NA 6.7a NA"
+            )
             st.warning(f"The strut angle bounds (cot {_THETA} in "
                        f"[{links['cot_min']:.2f}, {links['cot_max']:.2f}]) fall "
                        f"outside the code range [{links['cot_limit_lo']:.1f}, "
-                       f"{links['cot_limit_hi']:.1f}] (EN 1992-1-1 6.7N / DK NA 6.7a "
-                       "NA). Values are shown for exploration only: NO CODE VERDICT "
+                       f"{links['cot_limit_hi']:.1f}] ({limit_ref}). "
+                       "Values are shown for exploration only: NO CODE VERDICT "
                        "is issued for the links or dependent interaction checks.")
         req_txt = (r"links are required ($V_{Ed}>V_{Rd,c}$)" if links["required"]
                    else r"links are not strictly required ($V_{Ed}\leq V_{Rd,c}$); minimum "
@@ -8393,34 +8416,96 @@ def shear_view(inp, results):
         ul_txt = _pct(util_l)
         _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l,
                         code_applicable=links.get("code_applicable", True))
-        st.dataframe(
-            {"Quantity": [f"Strut angle {_THETA}", f"cot {_THETA} (auto)",
-                          "Lever arm z", "Link area/spacing Asw/s", "Design yield fywd",
-                          f"Strut factor {_NU}1", f"Chord factor {_ALPHA}cw",
-                          f"Extra long. tension {_DELTA}Ftd"],
-             "Value": [f"{lk['theta_deg']:.1f}{_DEG}", f"{lk['cot']:.3f}",
-                       f"{lk['z']:.1f} mm ({links['z_source']})",
-                       f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
-                       f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
-                       f"{lk['fywd']:.1f} MPa", f"{lk['nu1']:.3f}",
-                       f"{lk['alpha_cw']:.3f}", f"{links['delta_ftd']:.1f} kN"]},
-            hide_index=True, width="stretch")
+        if links.get("model_2023"):
+            st.dataframe(
+                {
+                    "Quantity": [
+                        f"Strut angle {_THETA}",
+                        f"cot {_THETA} (auto)",
+                        f"Permitted cot {_THETA}",
+                        "Lever arm z",
+                        "Link area/spacing Asw/s",
+                        f"Link ratio {_RHO}w",
+                        "Design yield fywd",
+                        f"Compression factor {_NU}",
+                        f"{_TAU}Ed",
+                        f"{_TAU}Rd,sy",
+                        f"Compression stress {_SIGMA}cd",
+                        f"Limit {_NU} fcd",
+                        "Additional chord force NVd",
+                    ],
+                    "Value": [
+                        f"{lk['theta_deg']:.1f}{_DEG}",
+                        f"{lk['cot']:.3f}",
+                        (
+                            f"{links['cot_limit_lo']:.2f} to "
+                            f"{links['cot_limit_hi']:.2f}; "
+                            f"class {(links.get('angle_limits') or {}).get('ductility_class', 'B')}"
+                        ),
+                        f"{lk['z']:.1f} mm ({links['z_source']})",
+                        f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
+                        f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
+                        f"{lk['rho_w']:.5f}",
+                        f"{lk['fywd']:.1f} MPa",
+                        f"{lk['nu']:.3f}",
+                        f"{lk['tau_ed']:.3f} MPa",
+                        f"{lk['tau_rd_sy']:.3f} MPa",
+                        f"{lk['sigma_cd']:.3f} MPa",
+                        f"{lk['nu_fcd']:.3f} MPa",
+                        f"{links['longitudinal_shear_force']:.1f} kN",
+                    ],
+                },
+                hide_index=True,
+                width="stretch",
+            )
+        else:
+            st.dataframe(
+                {"Quantity": [f"Strut angle {_THETA}", f"cot {_THETA} (auto)",
+                              "Lever arm z", "Link area/spacing Asw/s",
+                              "Design yield fywd", f"Strut factor {_NU}1",
+                              f"Chord factor {_ALPHA}cw",
+                              f"Extra long. tension {_DELTA}Ftd"],
+                 "Value": [f"{lk['theta_deg']:.1f}{_DEG}", f"{lk['cot']:.3f}",
+                           f"{lk['z']:.1f} mm ({links['z_source']})",
+                           f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
+                           f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
+                           f"{lk['fywd']:.1f} MPa", f"{lk['nu1']:.3f}",
+                           f"{lk['alpha_cw']:.3f}",
+                           f"{links['longitudinal_shear_force']:.1f} kN"]},
+                hide_index=True, width="stretch")
         if links.get("theta_mode") == "utilisation":
-            theta_txt = ("Sector selects ONE member strut angle " + _THETA +
-                         " (shared with torsion when enabled, EN 1992-1-1 "
-                         "6.3.2(2)) that MINIMISES THE GOVERNING UTILISATION: a "
+            shared_ref = (
+                " (shared with torsion when enabled)"
+                if links.get("model_2023")
+                else " (shared with torsion when enabled, EN 1992-1-1 6.3.2(2))"
+            )
+            theta_txt = ("Sector selects one member strut angle " + _THETA
+                         + shared_ref + " that minimises the governing utilisation: a "
                          "flatter strut relaxes the stirrups but raises the "
                          "crushing demand and the longitudinal chord tension, so "
-                         "the chosen angle depends on VEd, MEd and NEd.")
+                         "the chosen angle depends on the applied actions.")
         else:
             theta_txt = (r"Sector auto-optimises $\theta$ within the bounds to "
                          r"maximise $V_{Rd} = \min(V_{Rd,s}, V_{Rd,max})$.")
-        st.caption(
-            r"$V_{Rd,s} = (A_{sw}/s)\,z f_{ywd}\cot\theta$ (6.8); "
-            r"$V_{Rd,max} = \alpha_{cw} b_w z\,\nu_1 f_{cd}/(\cot\theta+\tan\theta)$ "
-            r"(6.9). " + theta_txt +
-            r" $\Delta F_{td} = 0.5 V_{Ed}\cot\theta$ is the extra longitudinal "
-            "tension the tension chord must also carry.")
+        if links.get("model_2023"):
+            st.caption(
+                r"$\tau_{Rd,sy}=\rho_w f_{ywd}\cot\theta$ (8.42); "
+                r"$\sigma_{cd}=\tau_{Ed}(\cot\theta+\tan\theta)"
+                r"\leq\nu f_{cd}$ (8.44), with $\nu=0.5$. "
+                + theta_txt
+                + r" $N_{Vd}=|V_{Ed}|\cot\theta$ (8.50) is added to the "
+                "longitudinal tension chord without the support-specific (8.53) "
+                "relief."
+            )
+        else:
+            st.caption(
+                r"$V_{Rd,s} = (A_{sw}/s)\,z f_{ywd}\cot\theta$ (6.8); "
+                r"$V_{Rd,max} = \alpha_{cw} b_w z\,\nu_1 f_{cd}/"
+                r"(\cot\theta+\tan\theta)$ (6.9). "
+                + theta_txt
+                + r" $\Delta F_{td}=0.5V_{Ed}\cot\theta$ is the extra "
+                "longitudinal tension the tension chord must also carry."
+            )
         # Longitudinal chord under M + V (+ T): the same check the combined view
         # shows, computed at the member strut angle.
         ch = links.get("chord")
@@ -8439,7 +8524,7 @@ def shear_view(inp, results):
             g1, g2, g3 = st.columns(3)
             g1.metric(fr"$M_{{Ed}}$ (about {ch['axis']})", f"{ch['m_ed']:.1f} kNm")
             g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{ch['m_total']:.1f} kNm",
-                      help="bending + shear shift (+ torsion) as an equivalent "
+                      help="bending + longitudinal shear force (+ torsion) as an equivalent "
                            "moment on the governing chord face")
             coverage = ch.get("off_not_evaluated")
             fallback = presentation.required_chord_fallback(links)
@@ -8479,9 +8564,13 @@ def shear_view(inp, results):
                         + _THETA + " backs off the band edge when the chord would "
                         "otherwise govern."
                         if ch.get("theta_mode") == "utilisation" else "")
+            shear_term = (
+                r"N_{Vd}\,z" if links.get("model_2023")
+                else r"\Delta F_{td}\,z"
+            )
             st.caption(
                 f"Tension chord = {face_desc}. "
-                r"$M_{Ed,total} = M_{Ed} + \Delta F_{td}\,z + F_{td,T}\,z/2 = "
+                rf"$M_{{Ed,total}} = M_{{Ed}} + {shear_term} + F_{{td,T}}\,z/2 = "
                 f"{ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
                 f"{ch['m_total']:.1f}$ kNm vs $M_{{Rd}} = {ch['m_rd']:.1f}$ kNm "
                 + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),

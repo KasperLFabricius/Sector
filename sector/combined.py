@@ -86,8 +86,15 @@ def chord_applied_moment(m_signed: float, tension_low: bool) -> float:
     return max(m_face, 0.0)
 
 
-def longitudinal_check(m_ed: float, m_rd: float, ftd_v: float, ftd_t: float,
-                       z: float) -> dict:
+def longitudinal_check(
+    m_ed: float,
+    m_rd: float,
+    ftd_v: float,
+    ftd_t: float,
+    z: float,
+    *,
+    cap_shear_force: bool = True,
+) -> dict:
     """Longitudinal-steel utilisation on the tension chord under combined M + V + T.
 
     The tension chord about the shear axis carries the bending tension plus the shear
@@ -98,11 +105,12 @@ def longitudinal_check(m_ed: float, m_rd: float, ftd_v: float, ftd_t: float,
 
         MEd,total = MEd + min(delta_Ftd*z, MRd - MEd) + Ftd,T*z/2
 
-    The shear shift is capped so bending + shear does not exceed ``MRd`` -- EN 1992-1-1
-    6.2.3(7) caps ``delta_Ftd`` at the peak-moment tension, and a section check (no beam
-    envelope) uses ``MRd`` as that peak. The torsion force is distributed round the
-    perimeter, so only half of it acts on this one chord (hence ``z/2``). All moments
-    are in the same units (kNm); ``ftd_v``/``ftd_t`` in kN, ``z`` in m.
+    ``cap_shear_force`` applies the 2005 peak-moment cap from 6.2.3(7). It is false
+    for the EN 1992-1-1:2023 additional chord force ``NVd`` from Formula (8.50);
+    Sector does not claim the support/load-specific relief in Formula (8.53).
+    The torsion force is distributed round the perimeter, so only half of it acts
+    on this one chord (hence ``z/2``). All moments are in the same units (kNm);
+    ``ftd_v``/``ftd_t`` are in kN and ``z`` in m.
     """
     mv_uncapped = ftd_v * z
     mt = ftd_t * z / 2.0
@@ -116,13 +124,19 @@ def longitudinal_check(m_ed: float, m_rd: float, ftd_v: float, ftd_t: float,
         util = math.inf if demand > 0.0 else 0.0
         return dict(m_ed=m_ed, m_rd=m_rd, ftd_v=ftd_v, ftd_t=ftd_t, z=z,
                     mv=mv_uncapped, mt=mt, m_total=demand, util=util,
-                    ok=util <= 1.0 + 1e-9, capped=False)
-    mv = min(mv_uncapped, max(m_rd - m_ed, 0.0))
+                    ok=util <= 1.0 + 1e-9, capped=False,
+                    cap_shear_force=cap_shear_force)
+    mv = (
+        min(mv_uncapped, max(m_rd - m_ed, 0.0))
+        if cap_shear_force else mv_uncapped
+    )
     m_total = m_ed + mv + mt
     util = ratio(m_total, m_rd)
     return dict(m_ed=m_ed, m_rd=m_rd, ftd_v=ftd_v, ftd_t=ftd_t, z=z,
                 mv=mv, mt=mt, m_total=m_total, util=util,
-                ok=util <= 1.0 + 1e-9, capped=mv_uncapped > mv + 1e-9)
+                ok=util <= 1.0 + 1e-9,
+                capped=cap_shear_force and mv_uncapped > mv + 1e-9,
+                cap_shear_force=cap_shear_force)
 
 
 def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> float:
