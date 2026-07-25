@@ -180,7 +180,8 @@ def _versioned_rows(value, data_version):
 
 def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
                data_version: int = 0, label: str | None = None,
-               column_specs=None, component_options=None) -> pd.DataFrame:
+               column_specs=None, component_options=None,
+               on_change=None) -> pd.DataFrame:
     """Render the editable grid for ``df`` and return the edited rows.
 
     Numeric-only geometry tables use the legacy auto-numbered display ID. Rich
@@ -207,7 +208,7 @@ def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
         key=key,
         data=data,
         default={"payload": default},
-        on_payload_change=lambda: None,
+        on_payload_change=on_change or (lambda: None),
         width="stretch",
         height="content",
     )

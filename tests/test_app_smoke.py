@@ -3572,6 +3572,22 @@ def test_interrupted_inputs_callback_cannot_commit_partial_widget_values():
     assert not at.exception
 
 
+def test_interrupted_inputs_recovery_replays_the_genuine_engineering_event():
+    at = _fresh()
+    at.run()
+    at.number_input(key="conc_fck").set_value(55.0).run()
+
+    # The browser records the next widget event before the superseding rerun.
+    # Recovery must reject partial defaults but retain this genuine 55 -> 60 edit.
+    at.session_state["_inputs_build_in_progress"] = True
+    at.number_input(key="conc_fck").set_value(60.0).run()
+
+    assert at.session_state["conc_fck"] == 60.0
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == 60.0
+    assert "_pending_input_events" not in at.session_state
+    assert not at.exception
+
+
 def test_interrupted_inputs_recovery_preserves_the_new_tab_selection():
     at = _fresh()
     at.run()
