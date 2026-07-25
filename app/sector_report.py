@@ -2794,7 +2794,7 @@ class ReportBuilder:
             self._small(note)
             self._chord_off_block(
                 links.get("chord_off"),
-                coverage_complete=not bool(coverage),
+                coverage_complete=not bool(coverage) and not fell_back,
             )
 
     def _combined(self):
@@ -3094,7 +3094,7 @@ class ReportBuilder:
             self._small(note)
             self._chord_off_block(
                 c.get("chord_off"),
-                coverage_complete=not bool(coverage),
+                coverage_complete=not bool(coverage) and not fell_back,
             )
         else:
             self._small(f"Additional longitudinal steel: torsion "

@@ -8148,7 +8148,7 @@ def shear_view(inp, results):
                            "utilisation already covers.")
             _render_chord_off(
                 links.get("chord_off"),
-                coverage_complete=not bool(coverage),
+                coverage_complete=not bool(coverage) and not fell_back,
             )
         st.plotly_chart(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                          links["dia"], links["s"]), width="stretch")
@@ -8187,7 +8187,8 @@ def _render_chord_off(och, *, coverage_complete=True):
             r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
             _pct(och["util"]),
             help=(
-                "NOT ASSESSED: one or more longitudinal chord faces are missing."
+                "NOT ASSESSED: the complete longitudinal chord assessment is "
+                "not available."
             ),
         )
     st.caption(
@@ -8826,7 +8827,7 @@ def combined_view(inp, results):
                        "combined check.")
         _render_chord_off(
             c.get("chord_off"),
-            coverage_complete=not bool(coverage),
+            coverage_complete=not bool(coverage) and not fell_back,
         )
     else:
         st.caption(f"Torsion needs {chr(0x03A3)}Asl = {c['asl_torsion']:.0f} mm2 "

@@ -1817,8 +1817,15 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback():
         tension_low=True,
         conditional=False,
     )
+    off_axis = dict(
+        valid=True, axis="y", z=0.4, m_ed=20.0, m_rd=100.0,
+        ftd_v=0.0, ftd_t=65.0, mv=0.0, mt=13.0, m_total=33.0,
+        util=0.33, ok=True, capped=False,
+        tension_low=True, m_off=20.0, conditional=True,
+    )
     c["longitudinal"] = exact
-    c["longitudinal_candidates"] = [fallback, exact]
+    c["chord_off"] = off_axis
+    c["longitudinal_candidates"] = [fallback, exact, off_axis]
     out["combined"] = c
 
     txt = " ".join(_pdf_text(sector_report.build_report(
@@ -1827,6 +1834,10 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback():
 
     assert "pure-axis fallback" in txt
     assert "utilisation = 42.0 % (pure-axis fallback - see note)" in txt
+    assert (
+        "utilisation = 33.0 % (NOT ASSESSED - INCOMPLETE CHORD COVERAGE)"
+        in txt
+    )
 
 
 def test_report_combined_longitudinal_conditional_mrd():
