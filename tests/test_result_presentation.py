@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import pathlib
 import sys
 
@@ -861,7 +862,33 @@ def test_transverse_detailing_summary_keeps_ratio_and_spacing_evidence():
     assert spacing["view"] == "Detailing"
 
 
-def test_transverse_detailing_summary_distinguishes_zero_action_from_no_links():
+def test_link_detailing_summary_states_when_required_links_are_missing():
+    transverse = {
+        "status": "FAIL",
+        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "checks": [{
+            "kind": "required_links",
+            "scope": "Shear VX",
+            "status": "FAIL",
+            "provided": 0.0,
+            "limit": 1.0,
+            "utilisation": math.inf,
+            "clause": "6.2.2",
+            "reason": "shear resistance without links is insufficient",
+        }],
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", transverse_detailing_on=True),
+        {"transverse_reinforcement": transverse},
+    )
+    row = next(item for item in rows if "required links" in item["check"])
+    assert row["status"] == "FAIL"
+    assert row["result"] == "No links defined"
+    assert row["criterion"] == "Links required"
+    assert row["note"] == "6.2.2; shear resistance without links is insufficient"
+
+
+def test_link_detailing_summary_does_not_treat_missing_links_as_not_applicable():
     plastic_cases = [{
         "name": "PL-SHEAR",
         "actions": {
@@ -890,11 +917,10 @@ def test_transverse_detailing_summary_distinguishes_zero_action_from_no_links():
     )
     row = next(
         item for item in rows
-        if item["check"] == "Transverse reinforcement detailing"
+        if item["check"] == "Shear/torsion link detailing"
     )
-    assert row["status"] == "NOT APPLICABLE"
-    assert row["result"] == "Shear links not selected"
-    assert row["note"] == "No transverse reinforcement is active"
+    assert row["status"] == "NOT RUN"
+    assert row["note"] == "Calculate required"
 
 
 def test_detailing_summary_labels_one_biaxial_resultant_check():

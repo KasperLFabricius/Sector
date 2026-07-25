@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from sector import capacity, codes, shear
+from sector import capacity, codes, detailing, shear
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works standalone
@@ -513,8 +513,55 @@ def test_app_transverse_detailing_uses_active_direction_and_renders_view():
     _select_view(at, "Detailing")
     assert not at.exception
     assert any(
-        "Shear / torsion reinforcement evidence" in item.value
+        "Shear/torsion link evidence" in item.value
         for item in at.markdown
+    )
+
+
+def test_app_link_detailing_fails_when_shear_requires_undefined_links():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "transverse_detailing_on", True),
+        ("checkbox", "shear_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", False),
+        ("number_input", "shear_V", 1000.0),
+    )
+    assert not at.exception
+    case_result = at.session_state["results"]["plastic_cases"][0]["results"]
+    transverse = case_result["transverse_reinforcement"]
+    assert transverse["status"] == "FAIL"
+    assert [check["kind"] for check in transverse["checks"]] == [
+        "required_links"
+    ]
+    assert transverse["checks"][0]["clause"] == "6.2.2"
+    assert at.session_state["shear_links"] is False
+
+
+def test_app_slab_detailing_exposes_the_modelled_section_cut_direction():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("selectbox", "detailing_member_type", detailing.MEMBER_SLAB),
+    )
+    assert not at.exception
+    assert at.selectbox(key="detailing_cut_direction").value == (
+        detailing.CUT_TRANSVERSE
+    )
+    _set(
+        at,
+        ("selectbox", "detailing_cut_direction", detailing.CUT_LONGITUDINAL),
+    )
+    assert not at.exception
+    assert at.session_state["detailing_member_type"] == detailing.MEMBER_SLAB
+    assert at.session_state["detailing_cut_direction"] == (
+        detailing.CUT_LONGITUDINAL
     )
 
 

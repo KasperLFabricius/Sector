@@ -637,12 +637,14 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
 
 
-def test_report_includes_transverse_reinforcement_detailing_evidence():
+def test_report_includes_shear_torsion_link_detailing_evidence():
     inp = _inp()
     inp.update({
         "mode": "Plastic",
         "transverse_detailing_on": True,
         "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "detailing_member_type": "Beam",
+        "detailing_cut_direction": "Transverse cut",
         "transverse_ductility_class": "B",
         "transverse_apply_ductility_reduction": False,
         "shear_vx_transverse_leg_spacing": 0.0,
@@ -651,6 +653,7 @@ def test_report_includes_transverse_reinforcement_detailing_evidence():
     result = {
         "status": "FAIL",
         "edition": inp["detailing_edition"],
+        "member_type": inp["detailing_member_type"],
         "diameter_mm": 10.0,
         "spacing_mm": 150.0,
         "fywk_mpa": 500.0,
@@ -694,12 +697,48 @@ def test_report_includes_transverse_reinforcement_detailing_evidence():
         {}, inp, {"transverse_reinforcement": result}, figures=False,
     )).split())
 
-    assert "Shear and torsion reinforcement detailing" in text
+    assert "Shear/torsion link detailing" in text
+    assert "Beam" in text
     assert "Minimum ratio" in text
     assert "Closed-link spacing" in text
     assert "0.00069" in text
     assert "governing limit: u_k/8" in text
     assert "sqrt" not in text
+
+
+def test_report_states_when_required_shear_links_are_not_defined():
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "transverse_detailing_on": True,
+        "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "detailing_member_type": "Beam",
+    })
+    result = {
+        "status": "FAIL",
+        "edition": inp["detailing_edition"],
+        "member_type": "Beam",
+        "diameter_mm": 10.0,
+        "spacing_mm": 150.0,
+        "fywk_mpa": 500.0,
+        "checks": [{
+            "kind": "required_links",
+            "scope": "Shear VX",
+            "status": "FAIL",
+            "provided": 0.0,
+            "limit": 1.0,
+            "utilisation": math.inf,
+            "clause": "6.2.2",
+            "reason": "shear resistance without links is insufficient",
+        }],
+    }
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, {"transverse_reinforcement": result}, figures=False,
+    )).split())
+    assert "Required links" in text
+    assert "not defined" in text
+    assert "required" in text
+    assert "shear resistance without links is insufficient" in text
 
 
 def test_report_keeps_failed_2005_no_bar_result_in_minimum_area_format():

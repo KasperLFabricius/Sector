@@ -41,6 +41,12 @@ EC2_2005 = "EN 1992-1-1:2005"
 EC2_2005_DKNA = "DS/EN 1992-1-1:2005 + DK NA:2024"
 EC2_2023 = "DS/EN 1992-1-1:2023"
 EDITIONS = (EC2_2005_DKNA, EC2_2005, EC2_2023)
+MEMBER_BEAM = "Beam"
+MEMBER_SLAB = "Slab"
+MEMBER_TYPES = (MEMBER_BEAM, MEMBER_SLAB)
+CUT_TRANSVERSE = "Transverse cut"
+CUT_LONGITUDINAL = "Longitudinal cut"
+CUT_DIRECTIONS = (CUT_TRANSVERSE, CUT_LONGITUDINAL)
 
 _TOL = 1.0e-9
 
@@ -742,10 +748,48 @@ def minimum_reinforcement(
     n_ed_tension_kn: float,
     mx_ed_knm: float,
     my_ed_knm: float,
+    member_type: str = MEMBER_BEAM,
+    cut_direction: str = CUT_TRANSVERSE,
 ) -> dict:
     """Dispatch one selected case to its edition-specific check."""
+    if edition not in EDITIONS:
+        raise ValueError("unknown detailing edition")
+    member = str(member_type or MEMBER_BEAM).strip().title()
+    if member not in MEMBER_TYPES:
+        raise ValueError("member_type must be Beam or Slab")
+    cut = str(cut_direction or CUT_TRANSVERSE).strip()
+    if cut not in CUT_DIRECTIONS:
+        raise ValueError("unknown section cut direction")
+    modelled_direction = (
+        "longitudinal" if cut == CUT_TRANSVERSE else "transverse"
+    )
+    if member == MEMBER_SLAB and cut == CUT_LONGITUDINAL:
+        return {
+            "status": "NOT ASSESSED",
+            "edition": edition,
+            "member_type": member,
+            "cut_direction": cut,
+            "modelled_reinforcement_direction": modelled_direction,
+            "clause": (
+                "Table 12.2, item 3"
+                if edition == EC2_2023
+                else "9.3.1.1(2)"
+            ),
+            "n_ed_tension_kn": float(n_ed_tension_kn),
+            "mx_ed_centroid_knm": None,
+            "my_ed_centroid_knm": None,
+            "checks": [],
+            "reason": (
+                "the minimum secondary reinforcement is defined relative to "
+                "orthogonal primary reinforcement, which is not represented in "
+                "this section cut"
+            ),
+            "limitations": [
+                "Only reinforcement acting normal to the modelled section is assessed."
+            ],
+        }
     if edition == EC2_2023:
-        return minimum_reinforcement_2023(
+        result = minimum_reinforcement_2023(
             section,
             elements,
             materials,
@@ -755,16 +799,27 @@ def minimum_reinforcement(
             mx_ed_knm=mx_ed_knm,
             my_ed_knm=my_ed_knm,
         )
-    return minimum_reinforcement_2005(
-        section,
-        elements,
-        materials,
-        fctm_mpa=fctm_mpa,
-        n_ed_tension_kn=n_ed_tension_kn,
-        mx_ed_knm=mx_ed_knm,
-        my_ed_knm=my_ed_knm,
-        edition=edition,
-    )
+    else:
+        result = minimum_reinforcement_2005(
+            section,
+            elements,
+            materials,
+            fctm_mpa=fctm_mpa,
+            n_ed_tension_kn=n_ed_tension_kn,
+            mx_ed_knm=mx_ed_knm,
+            my_ed_knm=my_ed_knm,
+            edition=edition,
+        )
+    result["member_type"] = member
+    result["cut_direction"] = cut
+    result["modelled_reinforcement_direction"] = modelled_direction
+    if member == MEMBER_SLAB:
+        result["clause"] = (
+            "Table 12.2, item 1; 12.2(2)(a), Formula (12.1)"
+            if edition == EC2_2023
+            else "9.3.1.1(1); 9.2.1.1(1), Formula (9.1N)"
+        )
+    return result
 
 
 def clear_spacing(
@@ -994,6 +1049,21 @@ def _not_assessed_check(
     }
 
 
+def _required_links_check(scope: str, clause: str, **extra):
+    return {
+        "kind": "required_links",
+        "scope": scope,
+        "status": "FAIL",
+        "provided": 0.0,
+        "limit": 1.0,
+        "utilisation": math.inf,
+        "criterion": "shear links provided where required by the resistance check",
+        "clause": clause,
+        "reason": "shear resistance without links is insufficient",
+        **extra,
+    }
+
+
 def transverse_reinforcement(
     *,
     edition: str,
@@ -1005,20 +1075,25 @@ def transverse_reinforcement(
     torsion_tubes: Sequence[Mapping] = (),
     ductility_class: str = "B",
     apply_ductility_reduction: bool = False,
+    member_type: str = MEMBER_BEAM,
 ) -> dict:
     """Check minimum ratio and spacing of vertical/closed transverse links.
 
-    ``shear_directions`` records require ``component``, ``bw_mm``, ``d_mm`` and
-    ``legs``.  ``transverse_leg_spacing_mm`` may be zero, in which case the
-    conservative upper-bound spacing ``bw/(legs-1)`` is derived when at least two
-    effective legs are present.
+    ``shear_directions`` records require ``component``, ``bw_mm`` and ``d_mm``.
+    ``links_present`` and ``links_required`` retain the verified resistance
+    decision when links are omitted.  For defined links, ``legs`` is required and
+    ``transverse_leg_spacing_mm`` may be zero, in which case the conservative
+    upper-bound spacing ``bw/(legs-1)`` is derived when at least two effective
+    legs are present.
 
     ``torsion_tubes`` records require ``tef_mm``, ``uk_mm``, ``width_mm`` and
-    ``height_mm``.  The optional ``d_ref_mm`` supplies the 2005 shear-spacing
-    restriction that also applies to torsion links.
+    ``height_mm``.  Beam torsion-link detailing is not applied to slabs.
     """
     if edition not in EDITIONS:
         raise ValueError("unknown detailing edition")
+    member = str(member_type or MEMBER_BEAM).strip().title()
+    if member not in MEMBER_TYPES:
+        raise ValueError("member_type must be Beam or Slab")
     values = {
         "fck": float(fck_mpa),
         "fywk": float(fywk_mpa),
@@ -1047,13 +1122,20 @@ def transverse_reinforcement(
     )
     leg_area = math.pi * values["diameter"] ** 2 / 4.0
     checks = []
-    shear_clause = (
-        "12.2(4), Table 12.1"
-        if edition == EC2_2023
-        else "9.2.2(5)-(8), Formulae (9.4)-(9.8)"
-    )
+    if member == MEMBER_SLAB:
+        shear_clause = (
+            "12.2(4), Table 12.2, 12.4.2"
+            if edition == EC2_2023
+            else "9.3.2(2), (4)-(5)"
+        )
+    else:
+        shear_clause = (
+            "12.2(4), Table 12.1"
+            if edition == EC2_2023
+            else "9.2.2(5)-(8), Formulae (9.4)-(9.8)"
+        )
     torsion_clause = (
-        "Table 12.1"
+        "Table 12.1, 12.3.3"
         if edition == EC2_2023
         else "9.2.3(3) and 9.2.2(6)"
     )
@@ -1061,6 +1143,24 @@ def transverse_reinforcement(
     for direction in shear_directions:
         component = str(direction.get("component") or "?").lower()
         scope = f"Shear {component.upper()}"
+        links_present = bool(direction.get("links_present", True))
+        links_required = direction.get("links_required", False)
+        if not links_present:
+            if links_required is True:
+                checks.append(_required_links_check(
+                    scope,
+                    str(direction.get("requirement_clause") or shear_clause),
+                    component=component,
+                ))
+            elif links_required is None:
+                checks.append(_not_assessed_check(
+                    scope,
+                    "required_links",
+                    str(direction.get("requirement_clause") or shear_clause),
+                    "shear resistance without links is invalid",
+                    component=component,
+                ))
+            continue
         try:
             bw = float(direction["bw_mm"])
             depth = float(direction["d_mm"])
@@ -1149,7 +1249,11 @@ def transverse_reinforcement(
             scope,
             "transverse_leg_spacing",
             transverse_spacing,
-            min(0.75 * depth, 600.0) if depth_valid else None,
+            (
+                1.5 * depth
+                if depth_valid and member == MEMBER_SLAB
+                else min(0.75 * depth, 600.0) if depth_valid else None
+            ),
             shear_clause,
             reason=(
                 spacing_reason
@@ -1165,6 +1269,16 @@ def transverse_reinforcement(
     for index, tube in enumerate(torsion_tubes, start=1):
         label = str(tube.get("label") or f"Tube {index}")
         scope = f"Torsion {label}"
+        if member == MEMBER_SLAB:
+            for kind in ("minimum_ratio", "torsion_spacing"):
+                checks.append(_not_assessed_check(
+                    scope,
+                    kind,
+                    "No slab torsion-link detailing provision selected",
+                    "beam torsion-link detailing is not applied to slabs",
+                    tube=index,
+                ))
+            continue
         if not bool(tube.get("valid", True)):
             reason = str(tube.get("reason") or "invalid torsion tube")
             for kind, clause in (
@@ -1180,7 +1294,6 @@ def transverse_reinforcement(
             uk = float(tube["uk_mm"])
             width = float(tube["width_mm"])
             height = float(tube["height_mm"])
-            d_ref = float(tube.get("d_ref_mm", 0.0))
         except (KeyError, TypeError, ValueError):
             for kind, clause in (
                 ("minimum_ratio", minimum["clause"]),
@@ -1224,25 +1337,6 @@ def transverse_reinforcement(
             "u_k/8": uk / 8.0,
             "min(b,h)": min(width, height),
         }
-        if edition != EC2_2023:
-            if not math.isfinite(d_ref) or d_ref <= 0.0:
-                checks.append(_spacing_check(
-                    scope,
-                    "torsion_spacing",
-                    values["spacing"],
-                    None,
-                    torsion_clause,
-                    reason=(
-                        "effective depth is unavailable for the 2005 "
-                        "shear-spacing restriction"
-                    ),
-                    tube=index,
-                    provided_label="s",
-                    limit_label="s_max",
-                    spacing_limits_mm=spacing_limits,
-                ))
-                continue
-            spacing_limits["0.75d"] = 0.75 * d_ref
         maximum = min(spacing_limits.values())
         checks.append(_spacing_check(
             scope,
@@ -1259,7 +1353,7 @@ def transverse_reinforcement(
 
     if not checks:
         status = "NOT APPLICABLE"
-        reason = "no active shear or torsion action with transverse reinforcement"
+        reason = "no active shear or torsion action requiring link-detailing checks"
     else:
         status = _status([check["status"] for check in checks])
         reason = None
@@ -1278,9 +1372,27 @@ def transverse_reinforcement(
         if any(check.get("utilisation") is not None for check in checks)
         else None
     )
+    limitations = [
+        "All entered shear reinforcement is modelled as vertical stirrups; "
+        "alternative bent-up reinforcement is not represented.",
+        "All entered torsion reinforcement is modelled as closed stirrups.",
+        "Stirrup anchorage is assumed. Reduce fywk when full anchorage is not "
+        "available.",
+        "The section model does not verify cover, bends, mandrel diameter, "
+        "anchorage length or construction access.",
+        "BN1-59-5 and Danish Road Directorate owner provisions are not "
+        "applied automatically.",
+    ]
+    if edition != EC2_2023 and member == MEMBER_BEAM and torsion_tubes:
+        limitations.append(
+            "The 350 mm value in 9.2.3(4) limits longitudinal torsion-bar "
+            "spacing around the link perimeter; it is not a closed-link "
+            "spacing limit and is outside this check."
+        )
     return {
         "status": status,
         "edition": edition,
+        "member_type": member,
         "checks": checks,
         "governing": governing,
         "governing_utilisation": (
@@ -1291,15 +1403,5 @@ def transverse_reinforcement(
         "diameter_mm": values["diameter"],
         "spacing_mm": values["spacing"],
         "fywk_mpa": values["fywk"],
-        "limitations": [
-            "All entered shear reinforcement is modelled as vertical stirrups; "
-            "alternative bent-up reinforcement is not represented.",
-            "All entered torsion reinforcement is modelled as closed stirrups.",
-            "Stirrup anchorage is assumed. Reduce fywk when full anchorage is not "
-            "available.",
-            "The section model does not verify cover, bends, mandrel diameter, "
-            "anchorage length or construction access.",
-            "BN1-59-5 and Danish Road Directorate owner provisions are not "
-            "applied automatically.",
-        ],
+        "limitations": limitations,
     }

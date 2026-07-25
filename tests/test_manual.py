@@ -323,7 +323,7 @@ def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
     )
 
 
-def test_manual_documents_longitudinal_and_transverse_detailing_scope():
+def test_manual_documents_modelled_direction_and_link_detailing_scope():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for expected in (
         "Reinforcement detailing",
@@ -341,6 +341,13 @@ def test_manual_documents_longitudinal_and_transverse_detailing_scope():
         "Bulk assignments",
         "high beam webs",
         "Prestressing tendons are not credited",
+        "Section cut direction",
+        "transverse cut",
+        "longitudinal cut",
+        "20% criterion",
+        "no links are defined",
+        "s_t \\\\leq 1.5d",
+        "350 mm value applies to",
     ):
         assert expected in text
     assert "Lap / bundle ID" not in text

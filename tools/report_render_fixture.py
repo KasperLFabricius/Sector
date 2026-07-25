@@ -230,6 +230,8 @@ def _inputs() -> dict:
         "transverse_detailing_on": True,
         "clear_spacing_on": True,
         "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "detailing_member_type": detailing.MEMBER_BEAM,
+        "detailing_cut_direction": detailing.CUT_TRANSVERSE,
         "detailing_d_upper": 16.0,
         "detailing_include_tendons": False,
         "transverse_ductility_class": "B",
@@ -714,6 +716,9 @@ def _results(inp: dict | None = None) -> dict:
     minimum = {
         "status": "PASS",
         "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "member_type": detailing.MEMBER_BEAM,
+        "cut_direction": detailing.CUT_TRANSVERSE,
+        "modelled_reinforcement_direction": "longitudinal",
         "clause": "9.2.1.1(1), Formula (9.1N)",
         "checks": [{
             "type": "minimum area", "status": "PASS",
@@ -751,6 +756,7 @@ def _results(inp: dict | None = None) -> dict:
         fywk_mpa=fywk,
         diameter_mm=link_dia,
         spacing_mm=link_spacing,
+        member_type=inp["detailing_member_type"],
         shear_directions=[{
             "component": "vy",
             "bw_mm": shear_payload["bw"],
@@ -1188,7 +1194,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Plastic section capacity - PL-QA-1",
         "Plastic section capacity - PL-QA-2",
         "Longitudinal minimum reinforcement - PL-QA-1",
-        "Shear and torsion reinforcement detailing - PL-QA-1",
+        "Shear/torsion link detailing - PL-QA-1",
         "Closed-link spacing",
         "Reinforcement clear spacing",
         "R1 - R2",

@@ -185,6 +185,20 @@ def test_transverse_detailing_runs_only_for_active_reinforced_actions():
     assert zero["transverse_detailing_on"] is False
 
 
+def test_transverse_detailing_keeps_active_shear_without_links_for_requirement_check():
+    base = _base(
+        transverse_detailing_on=True,
+        shear_links=False,
+        shear_on=True,
+        torsion_on=False,
+        combined_on=False,
+    )
+    record = case_analysis.case_records(base, "plastic")[0]
+    mapped = case_analysis.plastic_case_input(base, record)
+    assert mapped["shear_on"] is True
+    assert mapped["transverse_detailing_on"] is True
+
+
 def test_selected_minimum_reinforcement_row_runs_without_plastic_bending():
     calls = []
     inp = _base(

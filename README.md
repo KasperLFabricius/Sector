@@ -77,7 +77,7 @@ sector/        computation core (headless, regression-tested)
   fatigue      grouped S-N/Miner damage using Elastic long/short states
   plastic      nonlinear capacity (neutral-axis sweep, governing failure)
   capacity     headless shear, torsion, and M-V-T result orchestration
-  detailing    longitudinal/transverse reinforcement and clear spacing
+  detailing    modelled-direction reinforcement, link detailing and clear spacing
   serviceability  cracking threshold, tension stiffening, crack width
   templates    parametric section + reinforcement builders
 app/           Streamlit interface and canonical input models

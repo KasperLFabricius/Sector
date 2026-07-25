@@ -18,6 +18,7 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
+from sector import detailing  # noqa: E402
 
 
 def test_migrate_legacy_torsion_only_stirrup():
@@ -871,6 +872,8 @@ def test_parse_rejects_obsolete_separate_strut_angle_settings():
 def test_transverse_detailing_inputs_round_trip_in_current_project_format():
     values = {
         "transverse_detailing_on": True,
+        "detailing_member_type": detailing.MEMBER_SLAB,
+        "detailing_cut_direction": detailing.CUT_LONGITUDINAL,
         "transverse_ductility_class": "C",
         "transverse_apply_ductility_reduction": True,
         "shear_vx_transverse_leg_spacing": 220.0,

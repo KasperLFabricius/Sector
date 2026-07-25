@@ -549,7 +549,7 @@ class ReportBuilder:
                     "V<sub>y,Ed</sub> = "
                     f"{_html_escape(actions.get('vy_face', 'auto'))}."
                 )
-            if title.startswith("Longitudinal minimum reinforcement"):
+            if "minimum reinforcement" in title.lower():
                 self._small(
                     "<b>Minimum reinforcement:</b> "
                     f"{'selected' if actions.get('check_minimum_reinforcement') else 'not selected'}."
@@ -752,7 +752,7 @@ class ReportBuilder:
                 ("plastic", "Plastic capacity", "_plastic"),
                 ("minimum_reinforcement", "Minimum reinforcement",
                  "_minimum_reinforcement"),
-                ("transverse_reinforcement", "Transverse reinforcement",
+                ("transverse_reinforcement", "Shear/torsion link detailing",
                  "_transverse_reinforcement"),
                 ("shear", "Shear resistance", "_shear"),
                 ("torsion", "Torsion resistance", "_torsion"),
@@ -888,8 +888,8 @@ class ReportBuilder:
             ("elastic", "elastic stresses / cracking"),
             ("shear", "shear"),
             ("torsion", "torsion"),
-            ("minimum_reinforcement", "longitudinal minimum reinforcement"),
-            ("transverse_reinforcement", "transverse reinforcement detailing"),
+            ("minimum_reinforcement", "modelled-direction minimum reinforcement"),
+            ("transverse_reinforcement", "shear/torsion link detailing"),
         ):
             count = len(self._result_values(key))
             if count:
@@ -1454,8 +1454,13 @@ class ReportBuilder:
                          "applied moment checked" if checked else "capacity only"])
         if inp.get("minimum_reinforcement_on"):
             rows.extend([
-                ["Longitudinal minimum reinforcement", "selected per capacity case"],
+                ["Minimum reinforcement", "selected per capacity case"],
                 ["Detailing edition", str(inp.get("detailing_edition") or "-")],
+                ["Member type", str(inp.get("detailing_member_type") or "Beam")],
+                [
+                    "Section cut direction",
+                    str(inp.get("detailing_cut_direction") or "Transverse cut"),
+                ],
             ])
             if not self._result_values("elastic"):
                 rows.append([
@@ -1463,18 +1468,24 @@ class ReportBuilder:
                     f"{_fmt(inp.get('sls_fctm'), 3)} MPa",
                 ])
         if inp.get("transverse_detailing_on"):
-            rows.extend([
+            rows.append(
                 [
-                    "Shear/torsion reinforcement detailing",
+                    "Shear/torsion link detailing",
                     "selected per active capacity case",
-                ],
-                [
-                    "Detailing edition",
-                    str(inp.get("detailing_edition") or "-"),
-                ] if not inp.get("minimum_reinforcement_on") else [
-                    "Transverse detailing basis",
-                    str(inp.get("detailing_edition") or "-"),
-                ],
+                ]
+            )
+            if not inp.get("minimum_reinforcement_on"):
+                rows.extend([
+                    [
+                        "Detailing edition",
+                        str(inp.get("detailing_edition") or "-"),
+                    ],
+                    [
+                        "Member type",
+                        str(inp.get("detailing_member_type") or "Beam"),
+                    ],
+                ])
+            rows.extend([
                 [
                     "Maximum transverse leg spacing for V<sub>x</sub>",
                     (
@@ -1495,7 +1506,7 @@ class ReportBuilder:
             if inp.get("detailing_edition") == detailing.EC2_2023:
                 rows.extend([
                     [
-                        "Transverse reinforcement ductility class",
+                        "Link reinforcement ductility class",
                         str(inp.get("transverse_ductility_class") or "B"),
                     ],
                     [
@@ -1803,7 +1814,7 @@ class ReportBuilder:
             edition = str(self.inp.get("detailing_edition") or "")
             if edition == detailing.EC2_2023:
                 self._p(
-                    "<b>Longitudinal minimum reinforcement.</b> The nominal section "
+                    "<b>Minimum reinforcement in the modelled direction.</b> The nominal section "
                     "resistance at characteristic reinforcement yield is compared "
                     "with the cracking action for each selected case. Pure tension "
                     "uses direct force equilibrium."
@@ -1814,7 +1825,7 @@ class ReportBuilder:
                 )
             else:
                 self._p(
-                    "<b>Longitudinal minimum reinforcement.</b> The resultant "
+                    "<b>Minimum reinforcement in the modelled direction.</b> The resultant "
                     "gross-concrete tension zone is checked using "
                     "A<sub>s,min</sub> = max(0.26 "
                     "f<sub>ctm</sub>/f<sub>yk</sub>, 0.0013) b<sub>t</sub>d."
@@ -1826,7 +1837,7 @@ class ReportBuilder:
         if transverse_results:
             edition = str(self.inp.get("detailing_edition") or "")
             self._p(
-                "<b>Shear and torsion reinforcement detailing.</b> Vertical "
+                "<b>Shear/torsion link detailing.</b> Vertical "
                 "shear links are checked for minimum ratio, longitudinal spacing "
                 "and transverse leg spacing. Closed torsion links are checked for "
                 "minimum ratio and longitudinal spacing."
@@ -1861,7 +1872,10 @@ class ReportBuilder:
 
     def _minimum_reinforcement(self):
         result = self.out["minimum_reinforcement"]
-        self._case_heading("Longitudinal minimum reinforcement", "plastic")
+        direction = str(
+            result.get("modelled_reinforcement_direction") or "longitudinal"
+        ).capitalize()
+        self._case_heading(f"{direction} minimum reinforcement", "plastic")
         status = str(result.get("status") or "NOT ASSESSED").upper()
         checks = result.get("checks") or []
         utilisations = [
@@ -1876,7 +1890,9 @@ class ReportBuilder:
         )
         self._status_block(f"{status} - {summary}", status)
         self._small(
-            f"<b>Method:</b> {_html_escape(result.get('edition', '-'))} | "
+            f"<b>Method:</b> {_html_escape(result.get('member_type', '-'))}; "
+            f"{_html_escape(result.get('cut_direction', '-'))} | "
+            f"{_html_escape(result.get('edition', '-'))} | "
             f"{_html_escape(result.get('clause', '-'))}."
         )
 
@@ -2006,7 +2022,7 @@ class ReportBuilder:
 
     def _transverse_reinforcement(self):
         result = self.out["transverse_reinforcement"]
-        self._case_heading("Shear and torsion reinforcement detailing", "plastic")
+        self._case_heading("Shear/torsion link detailing", "plastic")
         status = str(result.get("status") or "NOT ASSESSED").upper()
         governing = result.get("governing") or {}
         utilisation = governing.get("utilisation")
@@ -2034,7 +2050,8 @@ class ReportBuilder:
 
         minimum = result.get("minimum_ratio") or {}
         self._small(
-            f"<b>Method:</b> {_html_escape(result.get('edition', '-'))}; "
+            f"<b>Method:</b> {_html_escape(result.get('member_type', '-'))}; "
+            f"{_html_escape(result.get('edition', '-'))}; "
             f"stirrup &#966; = {_fmt(result.get('diameter_mm'), 1)} mm; "
             f"s = {_fmt(result.get('spacing_mm'), 1)} mm; "
             f"f<sub>ywk</sub> = {_fmt(result.get('fywk_mpa'), 1)} MPa."
@@ -2058,16 +2075,22 @@ class ReportBuilder:
             "longitudinal_spacing": "Longitudinal spacing",
             "transverse_leg_spacing": "Transverse leg spacing",
             "torsion_spacing": "Closed-link spacing",
+            "required_links": "Required links",
         }
         rows = [[
             "Scope", "Check", "Provided", "Limit", "Util.", "Status",
             "Reference",
         ]]
         for check in result.get("checks") or []:
-            ratio = check.get("kind") == "minimum_ratio"
+            kind = check.get("kind")
+            ratio = kind == "minimum_ratio"
+            required_links = kind == "required_links"
             provided = check.get("provided")
             limit = check.get("limit")
-            if ratio:
+            if required_links:
+                provided_text = "not defined"
+                limit_text = "required"
+            elif ratio:
                 provided_text = (
                     "-" if provided is None else _fmt(provided, 5)
                 )

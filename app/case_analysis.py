@@ -110,10 +110,7 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
     )
     transverse_detailing_live = bool(
         base.get("transverse_detailing_on")
-        and (
-            (shear_live and base.get("shear_links"))
-            or torsion_live
-        )
+        and (shear_live or torsion_live)
     )
     out.update(
         mode="Plastic" if bending_live else "Capacity",

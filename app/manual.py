@@ -544,7 +544,7 @@ def manual_blocks() -> list:
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
            ["Fatigue Results", "All spectra; selected spectrum, element, fibre and bin evidence"],
-           ["Detailing", "Selected case: minimum reinforcement; section-wide spacing"],
+           ["Detailing", "Selected case: modelled-direction minimum reinforcement and link detailing; section-wide spacing"],
            ["Shear", "Selected Plastic case: Vx/Vy summary and directional details"],
            ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
            ["M-V-T Combined", "Selected Plastic case: combined interactions"]])
@@ -677,19 +677,33 @@ def manual_blocks() -> list:
     fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the "
         "applied load; the sweep from 0 to 360 degrees closes the curve.")
     h2("Reinforcement detailing")
-    md("Enable **Check longitudinal minimum reinforcement** and select the check on each "
+    md("Select **Beam** or **Slab**. For a slab, use **Section cut direction** to "
+       "identify whether the model is a "
+       "transverse cut (longitudinal reinforcement) or a longitudinal cut "
+       "(transverse reinforcement). Sector checks only bars normal to that section "
+       "plane; it does not request an unmodelled orthogonal layer.")
+    md("Enable **Check minimum reinforcement in modelled direction** and select the check on each "
        "required Plastic/capacity row. The selected detailing edition and the "
-       "global $f_{ctm}$ apply to those rows. Enable **Clear spacing** for one "
+       "global $f_{ctm}$ apply to those rows. A secondary-direction slab minimum is "
+       "reported as not assessed because its 20% criterion depends on primary "
+       "reinforcement outside the modelled cut. Enable **Clear spacing** for one "
        "section-wide pairwise check and enter $D_{upper}$; tendons are excluded "
        "unless explicitly included, in which case their entered diameter must be "
        "the detailing envelope or duct diameter.")
-    md("Enable **Shear and torsion reinforcement detailing** to check each "
+    md("Enable **Check shear/torsion link detailing** to check each "
        "non-zero shear/torsion case. The shared stirrup diameter, longitudinal "
        "spacing and yield strength are used. Enter the maximum transverse distance "
        "between effective legs for each shear direction, or leave it at zero for "
        "the conservative automatic value. For the 2023 edition, select the "
        "reinforcement ductility class and explicitly choose whether its favourable "
-       "minimum-ratio reduction is used.")
+       "minimum-ratio reduction is used. If the no-link resistance is insufficient "
+       "and no links are defined, the result fails without changing the input.")
+    table(["Member", "Vertical shear-link spacing limits"],
+          [["Beam", "$s_l \\leq 0.75d$; $s_t \\leq \\min(0.75d,600\\,\\text{mm})$"],
+           ["Slab", "$s_l \\leq 0.75d$; $s_t \\leq 1.5d$"]])
+    call("standard", "EN 1992-1-1:2005 9.2.3(4)'s 350 mm value applies to "
+         "longitudinal torsion bars around the link perimeter, not to spacing "
+         "between closed links.")
     table(["Edition", "Minimum-reinforcement method"],
           [["EN 1992-1-1:2005 / DK NA:2024",
             "$A_{s,prov} \\geq A_{s,min}$ in the resultant bending-tension zone (9.1N)"],
@@ -922,7 +936,8 @@ def manual_blocks() -> list:
        "yield/proof checks, concrete stress ratios, solver convergence, resistance "
        "sources and the certified concrete-search bound.")
     h2("Detailing results")
-    md("The **Detailing** view gives a concise status for minimum reinforcement and "
+    md("The **Detailing** view gives a concise status for modelled-direction minimum "
+       "reinforcement, shear/torsion link detailing and "
        "clear spacing. The section figure highlights the bars included in the "
        "selected case and dimensions the governing spacing pair. Tables retain "
        "provided and required values, utilisation or margin and element IDs.")
@@ -1581,10 +1596,11 @@ def manual_blocks() -> list:
        "owns the cycle spectrum, dynamic effects, concurrence, authority "
        "adjustments and approvals; provenance fields document them but do not "
        "modify the calculation. Shear and torsion fatigue are not included.\n"
-       "- **Detailing scope.** The longitudinal check does not credit tendons and "
+       "- **Detailing scope.** The modelled-direction check does not credit tendons and "
        "does not verify the DK NA high-web side-face rule. The clear-spacing check "
        "uses the entered section-plane geometry; anchorage, lap length, bundle "
-       "equivalence, cover, maximum spacing and congestion remain separate reviews.")
+       "equivalence, cover and congestion remain separate reviews. Beam torsion-link "
+       "detailing provisions are not applied to slabs.")
     call("limit", "The crack-width models are one-directional: the effective "
          "tension area and the crack spacing are defined for a single bending "
          "direction, so the crack width is reported for the governing bar along the "
@@ -1604,7 +1620,7 @@ def manual_blocks() -> list:
            ["$\\gamma_{Ff}$", "Partial factor on the cyclic fatigue action increment"],
            ["$f_{cd,fat}$", "Design concrete compressive fatigue strength; MPa"],
            ["$A_{sl}$", "Selected tension-side longitudinal reinforcement; mm2"],
-           ["$A_{s,min}$", "Required longitudinal minimum reinforcement; mm2"],
+           ["$A_{s,min}$", "Required minimum reinforcement in the modelled direction; mm2"],
            ["$b_t$", "Mean width of the bending tension zone; mm"],
            ["$D_{upper}$", "Upper aggregate size used in the clear-spacing rule; mm"],
            ["$A_{sw}/s$", "Shear-link area per spacing; mm2/mm"],

@@ -28,7 +28,7 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 13  # v13: transverse shear/torsion reinforcement-detailing inputs
+VERSION = 14  # v14: member type and modelled section-cut direction
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
     "shear_cot_min",
@@ -122,9 +122,10 @@ SCALAR_KEYS = [
     "fatigue_check_concrete", "fatigue_gamma_c", "fatigue_gamma_s",
     "fatigue_gamma_ff", "fatigue_beta_cc_t0", "fatigue_t0_days",
     "fatigue_concrete_k1", "fatigue_concrete_c", "fatigue_source",
-    # Longitudinal/transverse reinforcement detailing and clear spacing.
+    # Modelled-direction reinforcement, shear/torsion links and clear spacing.
     "minimum_reinforcement_on", "transverse_detailing_on",
     "clear_spacing_on", "detailing_edition",
+    "detailing_member_type", "detailing_cut_direction",
     "detailing_d_upper", "detailing_include_tendons",
     "transverse_ductility_class", "transverse_apply_ductility_reduction",
     # Shear (VRd,c without links, and the variable-strut VRd with links).
@@ -586,6 +587,9 @@ def parse_project(text: str):
         scalars.setdefault("detailing_edition", detailing.EC2_2005_DKNA)
         scalars.setdefault("detailing_d_upper", 16.0)
         scalars.setdefault("detailing_include_tendons", False)
+    if data.get("version", 1) < 14:
+        scalars.setdefault("detailing_member_type", detailing.MEMBER_BEAM)
+        scalars.setdefault("detailing_cut_direction", detailing.CUT_TRANSVERSE)
     # The axial force N is now tension-positive; files written before that (version
     # < 2) stored it compression-positive, so negate their axial values to preserve
     # the physical loads. Moments are unchanged.

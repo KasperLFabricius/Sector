@@ -1629,7 +1629,7 @@ def _case_column_config(key):
             ),
             "check_minimum_reinforcement": st.column_config.CheckboxColumn(
                 "Min. reinforcement",
-                help="Assess longitudinal minimum reinforcement for this case.",
+                help="Assess minimum reinforcement in the modelled section direction.",
                 default=False,
                 width="small",
             ),
@@ -3079,6 +3079,7 @@ _CAPACITY_CONTEXT_SIG_KEYS = tuple(
 ) + (
     "minimum_reinforcement_on", "clear_spacing_on",
     "transverse_detailing_on", "detailing_edition",
+    "detailing_member_type", "detailing_cut_direction",
     "detailing_d_upper", "detailing_include_tendons",
     "transverse_ductility_class", "transverse_apply_ductility_reduction",
 )
@@ -3426,21 +3427,49 @@ def build_inputs(host=st):
         help="DK NA fine-system selection for the (h-x)/3 effective-height term. "
              "Ignored by other methods.")
 
+    detailing_member_type = _seeded_selectbox(
+        det,
+        "Member type",
+        list(detailing.MEMBER_TYPES),
+        detailing.MEMBER_BEAM,
+        "detailing_member_type",
+        help="Selects the member-specific detailing clauses. It does not change "
+             "the section analysis or material factors.",
+    )
+    if detailing_member_type == detailing.MEMBER_SLAB:
+        detailing_cut_direction = _seeded_selectbox(
+            det,
+            "Section cut direction",
+            list(detailing.CUT_DIRECTIONS),
+            detailing.CUT_TRANSVERSE,
+            "detailing_cut_direction",
+            format_func=lambda value: (
+                "Transverse cut - longitudinal reinforcement modelled"
+                if value == detailing.CUT_TRANSVERSE
+                else "Longitudinal cut - transverse reinforcement modelled"
+            ),
+            help="The model contains only reinforcement normal to the section "
+                 "plane. Detailing checks are limited to that acting direction.",
+        )
+    else:
+        detailing_cut_direction = detailing.CUT_TRANSVERSE
+        st.session_state["detailing_cut_direction"] = detailing_cut_direction
+
     minimum_reinforcement_on = _seeded_checkbox(
         det,
-        "Check longitudinal minimum reinforcement",
+        "Check minimum reinforcement in modelled direction",
         False,
         "minimum_reinforcement_on",
-        help="Run the selected edition's longitudinal minimum-reinforcement "
-             "criterion for each Plastic/capacity row whose Min. reinforcement "
-             "box is selected.",
+        help="Run the selected edition's minimum-reinforcement criterion in the "
+             "modelled direction for each Plastic/capacity row whose Min. "
+             "reinforcement box is selected.",
     )
     transverse_detailing_on = _seeded_checkbox(
         det,
-        "Check shear and torsion reinforcement detailing",
+        "Check shear/torsion link detailing",
         False,
         "transverse_detailing_on",
-        help="Check the minimum transverse-reinforcement ratio and maximum "
+        help="Check the minimum link-reinforcement ratio and maximum "
              "longitudinal/transverse stirrup spacing for each active shear or "
              "torsion action. Zero actions are not evaluated.",
     )
@@ -3463,13 +3492,13 @@ def build_inputs(host=st):
             or transverse_detailing_on
             or clear_spacing_on
         ),
-        help="Selects the edition-specific longitudinal/transverse "
+        help="Selects the edition-specific flexural-bar and link "
              "reinforcement and spacing clauses. EC2:2023 is a valid selectable "
              "method.",
     )
     transverse_ductility_class = _seeded_selectbox(
         det,
-        "Transverse reinforcement ductility class",
+        "Link reinforcement ductility class",
         ["A", "B", "C"],
         "B",
         "transverse_ductility_class",
@@ -3524,11 +3553,17 @@ def build_inputs(host=st):
     if minimum_reinforcement_on:
         det.caption(
             f"Selected Plastic/capacity cases: {selected_minimum_cases}. "
-            "The case must represent the design situation required by the clause."
+            "The case must represent the design situation required by the clause. "
+            "Modelled bars: "
+            + (
+                "longitudinal."
+                if detailing_cut_direction == detailing.CUT_TRANSVERSE
+                else "transverse."
+            )
         )
     if transverse_detailing_on:
         det.caption(
-            "Transverse checks use the shared closed-stirrup definition and run "
+            "Link-detailing checks use the shared closed-stirrup definition and run "
             "only for non-zero shear/torsion actions."
         )
     det.caption(
@@ -3820,8 +3855,8 @@ def build_inputs(host=st):
              "multiplier.")
     if transverse_detailing_on and not _stirrups:
         sts.warning(
-            "Transverse detailing is selected, but no shear links or torsion "
-            "stirrups are active."
+            "Link detailing is selected, but no links are defined for the active "
+            "shear/torsion actions."
         )
 
     # Pre-flight for the combined check (it needs several things at once): flag what
@@ -4527,6 +4562,8 @@ def build_inputs(host=st):
                 transverse_detailing_on=transverse_detailing_on,
                 clear_spacing_on=clear_spacing_on,
                 detailing_edition=detailing_edition,
+                detailing_member_type=detailing_member_type,
+                detailing_cut_direction=detailing_cut_direction,
                 detailing_d_upper=detailing_d_upper,
                 detailing_include_tendons=detailing_include_tendons,
                 transverse_ductility_class=transverse_ductility_class,
@@ -5019,6 +5056,12 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             n_ed_tension_kn=inp["P_pl"],
             mx_ed_knm=inp["Mx_pl"],
             my_ed_knm=inp["My_pl"],
+            member_type=inp.get(
+                "detailing_member_type", detailing.MEMBER_BEAM
+            ),
+            cut_direction=inp.get(
+                "detailing_cut_direction", detailing.CUT_TRANSVERSE
+            ),
         )
     _run_capacity_checks(inp, out)
     if inp.get("transverse_detailing_on"):
@@ -6022,28 +6065,6 @@ def _run_capacity_checks(inp, out):
         )
 
 
-def _minimum_transverse_detailing_depth(inp):
-    """Conservative effective depth across all four longitudinal faces."""
-    try:
-        _area, cx, cy = capacity.gross_area_centroid(
-            inp.get("outer") or [], inp.get("holes") or []
-        )
-    except (TypeError, ValueError):
-        return 0.0
-    depths = []
-    for axis, centroid in (("x", cy), ("y", cx)):
-        for tension_low in (True, False):
-            _area_s, cg = shear.tension_reinforcement(
-                inp.get("bars") or [], axis, tension_low, centroid
-            )
-            depth = shear.effective_depth(
-                inp.get("outer") or [], axis, tension_low, cg
-            )
-            if math.isfinite(depth) and depth > 0.0:
-                depths.append(depth)
-    return min(depths, default=0.0)
-
-
 def _direction_detailing_depth(direction):
     """Smallest required-face depth retained in one directional shear result."""
     depths = []
@@ -6061,7 +6082,7 @@ def _transverse_detailing_result(inp, out):
     """Translate verified shear/torsion geometry into pure detailing checks."""
     shear_specs = []
     shear_out = out.get("shear") or {}
-    if inp.get("shear_on") and inp.get("shear_links") and shear_out:
+    if inp.get("shear_on") and shear_out:
         directions = shear_out.get("directions")
         if directions:
             items = list(directions.items())
@@ -6072,8 +6093,29 @@ def _transverse_detailing_result(inp, out):
             items = [(component, shear_out)]
         for component, direction in items:
             links = direction.get("links") or {}
+            resistance = direction.get("res") or {}
+            resistance_valid = bool(resistance.get("valid"))
+            vrd_c = resistance.get("vrd_c")
+            v_ed = direction.get("v_ed")
+            if (
+                resistance_valid
+                and vrd_c is not None
+                and v_ed is not None
+                and math.isfinite(float(vrd_c))
+                and math.isfinite(float(v_ed))
+            ):
+                links_required = float(v_ed) > float(vrd_c) + 1.0e-9
+            else:
+                links_required = None
             shear_specs.append({
                 "component": component,
+                "links_present": bool(inp.get("shear_links")),
+                "links_required": links_required,
+                "requirement_clause": (
+                    "8.2.2"
+                    if bool(direction.get("model_2023"))
+                    else "6.2.2"
+                ),
                 "bw_mm": direction.get("bw", 0.0),
                 "d_mm": _direction_detailing_depth(direction),
                 "legs": links.get(
@@ -6096,7 +6138,6 @@ def _transverse_detailing_result(inp, out):
     torsion_specs = []
     torsion_out = out.get("torsion") or {}
     if inp.get("torsion_on") and torsion_out:
-        d_ref = _minimum_transverse_detailing_depth(inp)
         subresults = torsion_out.get("subtubes") or []
         if subresults:
             for index, subresult in enumerate(subresults, start=1):
@@ -6109,7 +6150,6 @@ def _transverse_detailing_result(inp, out):
                     "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
                     "width_mm": subresult.get("b_mm", 0.0),
                     "height_mm": subresult.get("h_mm", 0.0),
-                    "d_ref_mm": d_ref,
                 })
         else:
             tube = torsion_out.get("tube") or {}
@@ -6128,7 +6168,6 @@ def _transverse_detailing_result(inp, out):
                 "height_mm": (
                     (max(ys) - min(ys)) * 1000.0 if ys else 0.0
                 ),
-                "d_ref_mm": d_ref,
             })
 
     return detailing.transverse_reinforcement(
@@ -6142,6 +6181,9 @@ def _transverse_detailing_result(inp, out):
         ductility_class=inp.get("transverse_ductility_class", "B"),
         apply_ductility_reduction=inp.get(
             "transverse_apply_ductility_reduction", False
+        ),
+        member_type=inp.get(
+            "detailing_member_type", detailing.MEMBER_BEAM
         ),
     )
 
@@ -6424,7 +6466,7 @@ def _detailing_status_callout(status, message):
 
 
 def detailing_view(inp, results, *, global_results=None):
-    """Longitudinal/transverse reinforcement and spacing evidence."""
+    """Modelled-direction reinforcement and link-spacing evidence."""
     results = results or {}
     global_results = global_results or results
     minimum = results.get("minimum_reinforcement")
@@ -6434,7 +6476,16 @@ def detailing_view(inp, results, *, global_results=None):
     st.subheader("Detailing")
     min_card, transverse_card, spacing_card = st.columns(3)
     with min_card.container(border=True):
-        st.markdown("**Longitudinal minimum reinforcement**")
+        modelled_direction = str(
+            (minimum or {}).get("modelled_reinforcement_direction")
+            or (
+                "longitudinal"
+                if inp.get("detailing_cut_direction")
+                != detailing.CUT_LONGITUDINAL
+                else "transverse"
+            )
+        )
+        st.markdown(f"**{modelled_direction.capitalize()} minimum reinforcement**")
         if not inp.get("minimum_reinforcement_on"):
             st.caption("Not selected for this case.")
         elif minimum is None:
@@ -6453,11 +6504,13 @@ def detailing_view(inp, results, *, global_results=None):
             )
             _detailing_status_callout(minimum.get("status"), result_text)
             st.caption(
+                f"{minimum.get('member_type', inp.get('detailing_member_type', '-'))}; "
+                f"{minimum.get('cut_direction', inp.get('detailing_cut_direction', '-'))} | "
                 f"{minimum.get('edition', '-')} | {minimum.get('clause', '-')}"
             )
 
     with transverse_card.container(border=True):
-        st.markdown("**Shear / torsion reinforcement**")
+        st.markdown("**Shear/torsion link detailing**")
         if not inp.get("transverse_detailing_on"):
             st.caption("Not selected for this case.")
         elif transverse is None:
@@ -6488,7 +6541,10 @@ def detailing_view(inp, results, *, global_results=None):
                 transverse_status,
                 result_text,
             )
-            st.caption(str(transverse.get("edition") or "-"))
+            st.caption(
+                f"{transverse.get('member_type', inp.get('detailing_member_type', '-'))} | "
+                f"{transverse.get('edition') or '-'}"
+            )
 
     with spacing_card.container(border=True):
         st.markdown("**Clear spacing**")
@@ -6643,24 +6699,31 @@ def detailing_view(inp, results, *, global_results=None):
                     st.markdown(f"- {note}")
 
     if transverse is not None:
-        st.markdown("**Shear / torsion reinforcement evidence**")
+        st.markdown("**Shear/torsion link evidence**")
         check_labels = {
             "minimum_ratio": "Minimum ratio",
             "longitudinal_spacing": "Longitudinal spacing",
             "transverse_leg_spacing": "Transverse leg spacing",
             "torsion_spacing": "Closed-link spacing",
+            "required_links": "Required links",
         }
         transverse_rows = []
         for check in transverse.get("checks") or []:
-            ratio = check.get("kind") == "minimum_ratio"
+            kind = check.get("kind")
+            ratio = kind == "minimum_ratio"
+            required_links = kind == "required_links"
             transverse_rows.append({
                 "Scope": check.get("scope"),
                 "Check": check_labels.get(
                     check.get("kind"), check.get("kind")
                 ),
-                "Provided": check.get("provided"),
-                "Limit": check.get("limit"),
-                "Unit": "-" if ratio else "mm",
+                "Provided": None if required_links else check.get("provided"),
+                "Limit": None if required_links else check.get("limit"),
+                "Unit": (
+                    "not defined"
+                    if required_links
+                    else "-" if ratio else "mm"
+                ),
                 "Utilisation [%]": (
                     100.0 * float(check["utilisation"])
                     if check.get("utilisation") is not None
@@ -6692,7 +6755,7 @@ def detailing_view(inp, results, *, global_results=None):
         if reasons:
             st.caption("Outcome: " + "; ".join(dict.fromkeys(reasons)))
         if transverse.get("limitations"):
-            with st.expander("Transverse-reinforcement method notes"):
+            with st.expander("Shear/torsion link method notes"):
                 for note in transverse["limitations"]:
                     st.markdown(f"- {note}")
 
