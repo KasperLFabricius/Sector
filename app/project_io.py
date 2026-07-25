@@ -65,6 +65,7 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_edition",
     "fatigue_check_steel",
     "fatigue_check_concrete",
+    "fatigue_concrete_method",
     "fatigue_gamma_c",
     "fatigue_gamma_s",
     "fatigue_gamma_ff",
@@ -120,6 +121,7 @@ SCALAR_KEYS = [
     # control-, construction- or consequence-class multipliers.
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
     "fatigue_check_concrete", "fatigue_gamma_c", "fatigue_gamma_s",
+    "fatigue_concrete_method",
     "fatigue_gamma_ff", "fatigue_beta_cc_t0", "fatigue_t0_days",
     "fatigue_concrete_k1", "fatigue_concrete_c", "fatigue_source",
     # Modelled-direction reinforcement, shear/torsion links and clear spacing.

@@ -1638,6 +1638,10 @@ class ReportBuilder:
                 ])
             if checks.get("concrete"):
                 fatigue_rows.extend([
+                    ["Concrete fatigue method",
+                     _html_escape(str(
+                         fatigue.get("concrete_method") or "-"
+                     ))],
                     ["Fatigue gamma<sub>c,fat</sub>",
                      _fmt(factors.get("gamma_c"), 3)],
                     ["Concrete age t<sub>0</sub>",
@@ -4659,10 +4663,17 @@ class ReportBuilder:
 
             concrete_rows = fatigue_presentation.concrete_rows(spectrum)
             if concrete_rows:
+                equivalent_method = any(
+                    row.get("equivalent_utilisation") is not None
+                    for row in concrete_rows
+                )
                 self._h2("Concrete fatigue")
                 rows = [[
                     "Fibre", "Source", "x", "y", "f<sub>cd,fat</sub>",
-                    "Miner D", "Stress util.", "Governing", "Util.", "Status",
+                    (
+                        "Equivalent util." if equivalent_method else "Miner D"
+                    ),
+                    "Stress util.", "Governing", "Util.", "Status",
                 ]]
                 rows.extend([
                     [
@@ -4671,7 +4682,11 @@ class ReportBuilder:
                         _fmt(row["x_mm"], 1),
                         _fmt(row["y_mm"], 1),
                         _fmt(row["fcd_fat_mpa"], 3),
-                        _fmt_sig(row["damage"], 6),
+                        (
+                            _pct(row["equivalent_utilisation"])
+                            if equivalent_method
+                            else _fmt_sig(row["damage"], 6)
+                        ),
                         _pct(row["stress_utilisation"]),
                         row["governing"],
                         _pct(row["utilisation"]),
@@ -4687,8 +4702,8 @@ class ReportBuilder:
                     keep=False,
                 )
                 self._small(
-                    "Coordinates in mm; f<sub>cd,fat</sub> in MPa. Damage and "
-                    "stress are evaluated at the same fixed fibre."
+                    "Coordinates in mm; f<sub>cd,fat</sub> in MPa. The selected "
+                    "criterion and stress are evaluated at the same fixed fibre."
                 )
                 governing_fibre = fatigue_presentation.value(
                     spectrum, "governing_concrete_fibre"
@@ -4717,7 +4732,11 @@ class ReportBuilder:
                 self._fig(
                     viz.fatigue_damage_figure(
                         result,
-                        title=f"Miner damage - concrete fibre {governing_fibre}",
+                        title=(
+                            "Damage-equivalent criterion"
+                            if equivalent_method
+                            else "Miner damage"
+                        ) + f" - concrete fibre {governing_fibre}",
                     ),
                     150,
                     82,
@@ -4736,8 +4755,20 @@ class ReportBuilder:
                     self._h2("Certified governing-fibre search")
                     self._table(
                         [[
-                            "Status", "x", "y", "Point D", "Upper D",
-                            "Abs. gap", "Rel. gap", "Divisions", "Boxes", "Points",
+                            "Status", "x", "y",
+                            (
+                                "Point util. [%]"
+                                if equivalent_method else "Point D"
+                            ),
+                            (
+                                "Upper util. [%]"
+                                if equivalent_method else "Upper D"
+                            ),
+                            (
+                                "Abs. gap [%]"
+                                if equivalent_method else "Abs. gap"
+                            ),
+                            "Rel. gap", "Divisions", "Boxes", "Points",
                         ], [
                             search_status,
                             f"{_fmt(1000.0 * fatigue_presentation.value(
@@ -4746,15 +4777,33 @@ class ReportBuilder:
                             f"{_fmt(1000.0 * fatigue_presentation.value(
                                 search, 'y_m', 0.0
                             ), 2)} mm",
-                            _fmt_sig(fatigue_presentation.value(
-                                search, "damage"
-                            ), 6),
-                            _fmt_sig(fatigue_presentation.value(
-                                search, "upper_damage"
-                            ), 6),
-                            _fmt_sig(fatigue_presentation.value(
-                                search, "absolute_gap"
-                            ), 6),
+                            (
+                                _pct(fatigue_presentation.value(
+                                    search, "damage"
+                                ))
+                                if equivalent_method
+                                else _fmt_sig(fatigue_presentation.value(
+                                    search, "damage"
+                                ), 6)
+                            ),
+                            (
+                                _pct(fatigue_presentation.value(
+                                    search, "upper_damage"
+                                ))
+                                if equivalent_method
+                                else _fmt_sig(fatigue_presentation.value(
+                                    search, "upper_damage"
+                                ), 6)
+                            ),
+                            (
+                                _pct(fatigue_presentation.value(
+                                    search, "absolute_gap"
+                                ))
+                                if equivalent_method
+                                else _fmt_sig(fatigue_presentation.value(
+                                    search, "absolute_gap"
+                                ), 6)
+                            ),
                             _pct(fatigue_presentation.value(
                                 search, "relative_gap"
                             )),
@@ -4803,15 +4852,39 @@ class ReportBuilder:
                     "normalised design compression level."
                 )
                 rows = [[
-                    "Bin", "N<sub>R</sub>", "log<sub>10</sub>N<sub>R</sub>",
-                    "Miner D", "Stress utilisation",
+                    "Bin",
+                    (
+                        "Equivalent utilisation"
+                        if equivalent_method else "N<sub>R</sub>"
+                    ),
+                    (
+                        "Basis" if equivalent_method
+                        else "log<sub>10</sub>N<sub>R</sub>"
+                    ),
+                    (
+                        "Cycle count" if equivalent_method
+                        else "Miner D"
+                    ),
+                    "Stress utilisation",
                 ]]
                 rows.extend([
                     [
                         _html_escape(row["bin"]),
-                        _fmt_sig(row["cycles_to_failure"], 6),
-                        _fmt(row["log10_cycles_to_failure"], 5),
-                        _fmt_sig(row["damage"], 6),
+                        (
+                            _pct(row["equivalent_utilisation"])
+                            if equivalent_method
+                            else _fmt_sig(row["cycles_to_failure"], 6)
+                        ),
+                        (
+                            "N = 10<super>6</super>"
+                            if equivalent_method
+                            else _fmt(row["log10_cycles_to_failure"], 5)
+                        ),
+                        (
+                            "Not used"
+                            if equivalent_method
+                            else _fmt_sig(row["damage"], 6)
+                        ),
                         _pct(row["stress_utilisation"]),
                     ]
                     for row in bin_rows
@@ -4822,6 +4895,14 @@ class ReportBuilder:
                     font=6.5,
                     keep=False,
                 )
+                if equivalent_method:
+                    self._small(
+                        "Concrete criterion: E<sub>cd,max</sub> + 0.43 "
+                        "&#8730;(1 - E<sub>cd,min</sub>/E<sub>cd,max</sub>) "
+                        "&#8804; 1. Each action pair is user-supplied as a "
+                        "damage-equivalent amplitude for 10<super>6</super> "
+                        "cycles; the entered cycle count is not used for concrete."
+                    )
 
     def _appendix(self):
         self.flow.append(PageBreak())

@@ -1218,6 +1218,52 @@ def test_fatigue_damage_figure_shows_bin_cumulative_and_limit():
     )
 
 
+def test_fatigue_damage_figure_shows_equivalent_criterion_without_miner_sum():
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        bins=(
+            NS(bin_name="EQ-1", equivalent_utilisation=0.82),
+            NS(bin_name="EQ-2", equivalent_utilisation=1.04),
+        ),
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    assert [trace.name for trace in fig.data] == ["equivalent criterion"]
+    assert list(fig.data[0].x) == ["EQ-1", "EQ-2"]
+    assert list(fig.data[0].y) == pytest.approx([0.82, 1.04])
+    assert "E_{" in fig.layout.yaxis.title.text
+    assert any(
+        shape.type == "line" and shape.y0 == 1.0 and shape.y1 == 1.0
+        for shape in fig.layout.shapes
+    )
+
+
+def test_fatigue_utilisation_map_labels_equivalent_search_evidence():
+    spectrum, _steel, concrete, _properties = _fatigue_figure_fixture()
+    concrete.equivalent_utilisation = 0.82
+    concrete.damage = 0.0
+    concrete.bins[0].equivalent_utilisation = 0.82
+    spectrum.concrete_search.upper_damage = 1.08
+
+    fig = viz.fatigue_utilisation_map_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [{"id": "R1", "x_mm": 0.0, "y_mm": -220.0}],
+        [],
+        spectrum,
+    )
+
+    names = [getattr(trace, "name", "") or "" for trace in fig.data]
+    concrete_trace = next(
+        trace for trace in fig.data if trace.name == "concrete fibres"
+    )
+    assert "certified equivalent bound > 1.00" in names
+    assert "equivalent utilisation = 0.820" in concrete_trace.customdata[0]
+    assert "<br>damage =" not in concrete_trace.customdata[0]
+
+
 def test_fatigue_damage_figure_uses_log_scale_for_small_contributions():
     from types import SimpleNamespace as NS
 

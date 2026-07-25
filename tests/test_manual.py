@@ -396,6 +396,12 @@ def test_latex_to_rl_converts_the_subset():
     assert "log&nbsp;<sub>" not in fatigue
     assert "sqrt" not in fatigue and "frac" not in fatigue
 
+    nested_root = manual._latex_to_rl(
+        r"E_{max}+0.43\sqrt{1-\frac{E_{min}}{E_{max}}}\leq1"
+    )
+    assert "&#8730;(1-E<sub>min</sub>/E<sub>max</sub>)" in nested_root
+    assert "sqrt" not in nested_root and "frac" not in nested_root
+
     shear = manual._latex_to_rl(
         r"V_{Rd,c}=\Big[C_{Rd,c}+\tau_{Rd,c}\Big]")
     assert "Big" not in shear

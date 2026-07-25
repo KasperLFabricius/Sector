@@ -38,6 +38,9 @@ and grouped fatigue workflows.
   compression-field method in 8.2.3. Results expose link yielding,
   compression-field stress, action- and ductility-dependent angle limits and
   the uncapped longitudinal force from Formula (8.50).
+- Added selectable concrete-fatigue verification: explicit grouped
+  Palmgren-Miner damage or the damage-equivalent 10^6-cycle criterion in
+  Formula (6.72) / Formula (E.2), with method-specific UI and report evidence.
 - Added grouped fatigue spectra using the cracked Elastic long-/short-action
   states, stable S-N detail IDs, verified 2005 and 2023 presets and complete
   user-entered partial factors. Authority declarations record VD/BN provenance

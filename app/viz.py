@@ -914,12 +914,16 @@ def fatigue_utilisation_map_figure(
         for result in _fatigue_items(spectrum, "reinforcement")
     }
     concrete = list(_fatigue_items(spectrum, "concrete"))
+    equivalent_concrete = any(
+        _fatigue_value(result, "equivalent_utilisation") is not None
+        for result in concrete
+    )
     utilisation_values = [
         _fatigue_value(result, "utilisation")
         for result in [*reinforcement.values(), *concrete]
     ]
     search = _fatigue_value(spectrum, "concrete_search")
-    # The certified upper damage is a bound over a search region, not a sampled
+    # The certified upper criterion is a bound over a search region, not a sampled
     # point represented by the colour axis. It has a dedicated red indicator below;
     # including it here can collapse every actual point into the bottom of the scale.
     cmax, tickvals, colour_scale_capped = _fatigue_utilisation_scale(
@@ -1019,16 +1023,34 @@ def fatigue_utilisation_map_figure(
                 + f"<br>x = {x_mm:.1f} mm, y = {y_mm:.1f} mm"
                 + "<br>utilisation = "
                 + _fatigue_hover_number(raw_util, ".3f")
-                + f"<br>damage = "
-                f"{_fatigue_hover_number(_fatigue_value(result, 'damage', 0.0))}"
+                + (
+                    "<br>equivalent utilisation = "
+                    + _fatigue_hover_number(
+                        _fatigue_value(
+                            result, "equivalent_utilisation", 0.0
+                        ),
+                        ".3f",
+                    )
+                    if equivalent_concrete
+                    else (
+                        "<br>damage = "
+                        + _fatigue_hover_number(
+                            _fatigue_value(result, "damage", 0.0)
+                        )
+                    )
+                )
                 + f"<br>stress utilisation = "
                 f"{_fatigue_hover_number(
                     _fatigue_value(result, 'stress_utilisation', 0.0),
                     '.3f',
                 )}"
                 + (
-                    "<br>search upper damage = "
-                    f"{_fatigue_hover_number(search_upper, '.3f')}"
+                    (
+                        "<br>search upper utilisation = "
+                        if equivalent_concrete
+                        else "<br>search upper damage = "
+                    )
+                    + f"{_fatigue_hover_number(search_upper, '.3f')}"
                     + (
                         "<br>search convergence = certified"
                         if search_converged
@@ -1130,7 +1152,11 @@ def fatigue_utilisation_map_figure(
             x=[search_x],
             y=[search_y],
             mode="markers",
-            name="certified search bound > 1.00",
+            name=(
+                "certified equivalent bound > 1.00"
+                if equivalent_concrete
+                else "certified search bound > 1.00"
+            ),
             marker=dict(
                 size=19,
                 symbol="x",
@@ -1138,9 +1164,13 @@ def fatigue_utilisation_map_figure(
                 line=dict(color="#FFFFFF", width=1.0),
             ),
             customdata=[(
-                "Certified upper damage = "
-                f"{_fatigue_hover_number(search_upper, '.3f')}"
-                "<br>Marker is at the worst evaluated fibre; the conservative "
+                (
+                    "Certified upper equivalent utilisation = "
+                    if equivalent_concrete
+                    else "Certified upper damage = "
+                )
+                + f"{_fatigue_hover_number(search_upper, '.3f')}"
+                + "<br>Marker is at the worst evaluated fibre; the conservative "
                 "bound applies to the complete concrete search region."
             )],
             hovertemplate="%{customdata}<extra></extra>",
@@ -1491,13 +1521,63 @@ def fatigue_sn_figure(
 
 
 def fatigue_damage_figure(result, *, title=None):
-    """Plot per-bin and cumulative Palmgren-Miner damage."""
+    """Plot concrete equivalent utilisation or cumulative Miner damage."""
 
     bins = list(_fatigue_items(result, "bins"))
     names = [
         _fatigue_text(_fatigue_value(item, "bin_name", "-"))
         for item in bins
     ]
+    equivalent = [
+        _fatigue_value(item, "equivalent_utilisation")
+        for item in bins
+    ]
+    if any(value is not None for value in equivalent):
+        values = [
+            0.0 if value is None else float(value)
+            for value in equivalent
+        ]
+        fig = go.Figure(go.Bar(
+            x=names,
+            y=values,
+            name="equivalent criterion",
+            marker=dict(
+                color=[
+                    "#9B1C1C" if value > 1.0 else LOAD_POINT
+                    for value in values
+                ],
+                line=dict(color="#111827", width=0.6),
+            ),
+            hovertemplate=(
+                "%{x}<br>equivalent utilisation = %{y:.3f}<extra></extra>"
+            ),
+        ))
+        fig.add_hline(
+            y=1.0,
+            line_width=1.5,
+            line_dash="dash",
+            line_color=BAR_COMPRESSION,
+            annotation_text="limit = 1.00",
+            annotation_position="top right",
+        )
+        fig.update_layout(
+            title=(
+                _fatigue_text(title)
+                if title is not None
+                else "Damage-equivalent concrete fatigue criterion"
+            ),
+            template=_TEMPLATE,
+            height=450,
+            margin=dict(l=70, r=25, t=58, b=96),
+            xaxis_title="Equivalent action pair",
+            yaxis=dict(
+                title=r"$E_{cd,max}+0.43\sqrt{1-E_{cd,min}/E_{cd,max}}$",
+                rangemode="tozero",
+            ),
+            showlegend=False,
+        )
+        return fig
+
     raw_damage = [
         float(_fatigue_value(item, "damage", 0.0))
         for item in bins

@@ -103,6 +103,7 @@ def _base(**overrides):
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
         "fatigue_gamma_c": 1.595,
         "fatigue_gamma_s": 1.32,
         "fatigue_gamma_ff": 1.10,
@@ -446,7 +447,26 @@ def test_run_passes_exact_prepared_contract_and_returns_compact_summary():
         ]
     )
     assert "Annex E.5" in result["calculation_references"]["reinforcement"]
-    assert "Annex E.7" in result["calculation_references"]["concrete"]
+    assert "E.7" in result["calculation_references"]["concrete"]
+
+
+def test_equivalent_concrete_method_is_mapped_and_referenced_explicitly():
+    inp = _base(
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_EQUIVALENT,
+    )
+    prepared = fatigue_analysis.prepare(inp)
+
+    assert prepared.concrete_method == fatigue_analysis.CONCRETE_EQUIVALENT
+    assert (
+        prepared.concrete.method
+        == fatigue_analysis.CONCRETE_EQUIVALENT
+    )
+    references = fatigue_analysis.calculation_references(
+        inp["fatigue_edition"],
+        prepared.concrete_method,
+    )
+    assert "Formula (E.2)" in references["concrete"]
 
 
 def test_adapter_runs_the_real_engine_for_a_mild_reinforced_section():

@@ -22,6 +22,9 @@ import fatigue_inputs
 import load_cases
 import material_catalog as mat_catalog
 from sector.fatigue import (
+    CONCRETE_EQUIVALENT,
+    CONCRETE_METHODS,
+    CONCRETE_MINER,
     ConcreteFatigueProperties,
     FatigueSpectrumResult,
     ReinforcementFatigueProperties,
@@ -58,6 +61,7 @@ class PreparedFatigueAnalysis:
     t0_days: float | None
     basis: Mapping
     warnings: tuple[str, ...]
+    concrete_method: str | None
 
 
 def _positive(value, label: str, errors: list[str]) -> float | None:
@@ -101,16 +105,24 @@ def _edition(value) -> str:
     )
 
 
-def calculation_references(edition: str) -> dict[str, str]:
+def calculation_references(
+    edition: str,
+    concrete_method: str = CONCRETE_MINER,
+) -> dict[str, str]:
     """Return the explicit steel and concrete fatigue-method references."""
 
     selected = _edition(edition)
+    equivalent = concrete_method == CONCRETE_EQUIVALENT
     if "2023" in selected:
         return {
             "reinforcement": (
                 "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2"
             ),
-            "concrete": "DS/EN 1992-1-1:2023, Annex E.7-E.8",
+            "concrete": (
+                "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2)"
+                if equivalent
+                else "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)"
+            ),
         }
     national = (
         " with DK NA:2024 explicit input factors"
@@ -123,9 +135,13 @@ def calculation_references(edition: str) -> dict[str, str]:
             f"Tables 6.3N/6.4N{national}"
         ),
         "concrete": (
-            "DS/EN 1992-2:2005/AC:2008, corrected clause 6.106"
-            f"{national}"
-        ),
+            (
+                "DS/EN 1992-1-1:2005+A1:2014, clause 6.8.7, "
+                "Formula (6.72)"
+            )
+            if equivalent
+            else "DS/EN 1992-2:2005/AC:2008, corrected clause 6.106"
+        ) + national,
     }
 
 
@@ -372,10 +388,20 @@ def validation_errors(inp: Mapping) -> list[str]:
     if check_reinforcement:
         _positive(inp.get("fatigue_gamma_s"), "gamma_s", errors)
     if check_concrete:
+        concrete_method = str(
+            inp.get("fatigue_concrete_method") or CONCRETE_MINER
+        )
+        if concrete_method not in CONCRETE_METHODS:
+            errors.append("Select a valid concrete fatigue method")
         _positive(inp.get("fatigue_gamma_c"), "gamma_c,fat", errors)
         _positive(inp.get("fatigue_beta_cc_t0"), "beta_cc(t0)", errors)
         _positive(inp.get("fatigue_t0_days"), "Concrete age t0", errors)
-        _positive(inp.get("fatigue_concrete_c"), "Concrete fatigue C", errors)
+        if concrete_method == CONCRETE_MINER:
+            _positive(
+                inp.get("fatigue_concrete_c"),
+                "Concrete fatigue C",
+                errors,
+            )
         concrete = inp.get("concrete")
         if concrete is None:
             errors.append("Concrete material is required for concrete fatigue")
@@ -753,6 +779,11 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
     details = fatigue_inputs.entry_map(catalog)
     check_reinforcement = bool(inp.get("fatigue_check_steel"))
     check_concrete = bool(inp.get("fatigue_check_concrete"))
+    concrete_method = (
+        str(inp.get("fatigue_concrete_method") or CONCRETE_MINER)
+        if check_concrete
+        else None
+    )
     proof_errors: list[str] = []
     bar_proof_stresses = (
         _proof_stresses(
@@ -820,7 +851,8 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             k1=(
                 1.0 if is_2023 else float(inp["fatigue_concrete_k1"])
             ),
-            c=float(inp["fatigue_concrete_c"]),
+            c=float(inp.get("fatigue_concrete_c") or 14.0),
+            method=concrete_method,
         )
         if check_concrete
         else None
@@ -876,6 +908,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         ),
         basis=basis,
         warnings=tuple(validation_warnings(inp)),
+        concrete_method=concrete_method,
     )
 
 
@@ -934,6 +967,7 @@ def analysis_signature(inp: Mapping) -> tuple:
             prepared.concrete.alpha_cc,
             prepared.concrete.k1,
             prepared.concrete.c,
+            prepared.concrete.method,
         )
     )
     return (
@@ -980,6 +1014,7 @@ def analysis_signature(inp: Mapping) -> tuple:
         prepared.t0_days,
         fatigue_inputs.basis_signature(prepared.basis),
         prepared.warnings,
+        prepared.concrete_method,
     )
 
 
@@ -1011,7 +1046,10 @@ def run_analysis(
         prestress_stress=prepared.prestress_stress,
     ))
     governing = max(results, key=lambda result: result.utilisation)
-    references = calculation_references(prepared.edition)
+    references = calculation_references(
+        prepared.edition,
+        prepared.concrete_method or CONCRETE_MINER,
+    )
     if (
         prepared.check_reinforcement
         and any(record["custom"] for record in prepared.detail_records)
@@ -1026,6 +1064,7 @@ def run_analysis(
             "reinforcement": prepared.check_reinforcement,
             "concrete": prepared.check_concrete,
         },
+        "concrete_method": prepared.concrete_method,
         "basis": dict(prepared.basis),
         "authority_reference": fatigue_inputs.METHOD_REFERENCES[
             prepared.basis["method"]
@@ -1051,6 +1090,7 @@ def run_analysis(
                 "alpha_cc": prepared.concrete.alpha_cc,
                 "k1": prepared.concrete.k1,
                 "c": prepared.concrete.c,
+                "method": prepared.concrete.method,
             }
             if prepared.concrete is not None
             else None
