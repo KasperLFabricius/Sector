@@ -359,3 +359,168 @@ def test_clear_spacing_excludes_tendons_unless_their_envelope_is_selected():
     assert bars_only["status"] == "PASS"
     assert with_tendon["status"] == "FAIL"
     assert math.isclose(with_tendon["governing"]["clear_mm"], -10.0)
+
+
+def test_minimum_transverse_ratio_uses_dk_na_and_explicit_2023_reduction():
+    dk = detailing.minimum_transverse_ratio(
+        30.0,
+        500.0,
+        edition=detailing.EC2_2005_DKNA,
+    )
+    en = detailing.minimum_transverse_ratio(
+        30.0,
+        500.0,
+        edition=detailing.EC2_2005,
+    )
+    class_c = detailing.minimum_transverse_ratio(
+        30.0,
+        500.0,
+        edition=detailing.EC2_2023,
+        ductility_class="C",
+        apply_ductility_reduction=True,
+    )
+    assert dk["ratio"] == pytest.approx(0.063 * math.sqrt(30.0) / 500.0)
+    assert en["ratio"] == pytest.approx(0.08 * math.sqrt(30.0) / 500.0)
+    assert class_c["ratio"] == pytest.approx(en["ratio"] * 0.80)
+    assert class_c["ductility_reduction_applied"] is True
+
+
+def test_transverse_detailing_checks_shear_ratio_and_both_spacings():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        shear_directions=[{
+            "component": "vx",
+            "bw_mm": 300.0,
+            "d_mm": 550.0,
+            "legs": 2.0,
+            "transverse_leg_spacing_mm": 0.0,
+        }],
+    )
+    checks = {check["kind"]: check for check in result["checks"]}
+    assert result["status"] == "PASS"
+    assert checks["minimum_ratio"]["provided"] == pytest.approx(
+        2.0 * math.pi * 10.0 ** 2 / 4.0 / (150.0 * 300.0)
+    )
+    assert checks["longitudinal_spacing"]["limit"] == pytest.approx(412.5)
+    assert checks["transverse_leg_spacing"]["provided"] == pytest.approx(300.0)
+    assert checks["transverse_leg_spacing"]["spacing_source"] == "conservative auto"
+
+
+def test_transverse_detailing_requires_leg_distance_when_it_cannot_be_derived():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2023,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=32.0,
+        spacing_mm=100.0,
+        shear_directions=[{
+            "component": "vy",
+            "bw_mm": 200.0,
+            "d_mm": 500.0,
+            "legs": 1.0,
+            "transverse_leg_spacing_mm": 0.0,
+        }],
+    )
+    transverse = next(
+        check for check in result["checks"]
+        if check["kind"] == "transverse_leg_spacing"
+    )
+    assert result["status"] == "NOT ASSESSED"
+    assert transverse["status"] == "NOT ASSESSED"
+    assert "enter the maximum transverse distance" in transverse["reason"]
+
+
+def test_torsion_detailing_uses_one_closed_leg_and_perimeter_spacing():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        torsion_tubes=[{
+            "label": "Tube 1",
+            "valid": True,
+            "tef_mm": 100.0,
+            "uk_mm": 2000.0,
+            "width_mm": 300.0,
+            "height_mm": 600.0,
+            "d_ref_mm": 550.0,
+        }],
+    )
+    ratio, spacing = result["checks"]
+    assert result["status"] == "PASS"
+    assert ratio["provided"] == pytest.approx(
+        math.pi * 10.0 ** 2 / 4.0 / (150.0 * 100.0)
+    )
+    assert spacing["limit"] == pytest.approx(250.0)
+    assert spacing["governing_limit"] == "u_k/8"
+
+
+def test_2005_torsion_spacing_includes_shear_depth_but_2023_does_not():
+    tube = {
+        "valid": True,
+        "tef_mm": 100.0,
+        "uk_mm": 2000.0,
+        "width_mm": 300.0,
+        "height_mm": 600.0,
+        "d_ref_mm": 100.0,
+    }
+    common = dict(
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=16.0,
+        spacing_mm=100.0,
+        torsion_tubes=[tube],
+    )
+    old = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005,
+        **common,
+    )
+    new = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2023,
+        **common,
+    )
+    old_spacing = old["checks"][1]
+    new_spacing = new["checks"][1]
+    assert old_spacing["limit"] == pytest.approx(75.0)
+    assert old_spacing["status"] == "FAIL"
+    assert new_spacing["limit"] == pytest.approx(250.0)
+    assert new_spacing["status"] == "PASS"
+
+
+def test_2005_torsion_spacing_is_not_assessed_without_effective_depth():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=16.0,
+        spacing_mm=100.0,
+        torsion_tubes=[{
+            "valid": True,
+            "tef_mm": 100.0,
+            "uk_mm": 2000.0,
+            "width_mm": 300.0,
+            "height_mm": 600.0,
+            "d_ref_mm": 0.0,
+        }],
+    )
+    spacing = result["checks"][1]
+    assert result["status"] == "NOT ASSESSED"
+    assert spacing["status"] == "NOT ASSESSED"
+    assert "effective depth is unavailable" in spacing["reason"]
+
+
+def test_transverse_detailing_with_no_active_action_is_not_applicable():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+    )
+    assert result["status"] == "NOT APPLICABLE"
+    assert result["checks"] == []

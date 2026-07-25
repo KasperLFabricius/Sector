@@ -1,4 +1,4 @@
-"""Longitudinal minimum-reinforcement and clear-spacing checks.
+"""Longitudinal and transverse reinforcement-detailing checks.
 
 The functions in this module are independent of Streamlit.  They consume the
 same explicit section and reinforcement records as the solvers and return plain
@@ -16,6 +16,11 @@ models:
 Neither path applies hidden control-, construction- or consequence-category
 factors.  The concrete law supplied by the caller contains the final effective
 material factors selected by the user.
+
+The transverse checks cover the minimum ratio and maximum link spacing for
+vertical shear links and closed torsion links.  They deliberately consume plain
+geometry records rather than a solver result, so the engineering rules remain
+independently unit-testable and the UI/report can present the same evidence.
 """
 
 from __future__ import annotations
@@ -854,5 +859,447 @@ def clear_spacing(
             "Pairwise edge-to-edge distance is checked in the section plane.",
             "Lap length, bundle arrangement, bond and equivalent bundle diameter are not verified.",
             "For included post-tensioning tendons, the entered diameter must be the detailing envelope or duct diameter.",
+        ],
+    }
+
+
+def minimum_transverse_ratio(
+    fck_mpa: float,
+    fywk_mpa: float,
+    *,
+    edition: str,
+    ductility_class: str = "B",
+    apply_ductility_reduction: bool = False,
+) -> dict:
+    """Return the edition-specific minimum transverse-reinforcement ratio.
+
+    The returned ratio is dimensionless.  The optional 2023 ductility-class
+    reduction is favourable and is therefore applied only after an explicit user
+    selection; class B reduces the base value by 10 %, class C by 20 %, and class A
+    does not reduce it.
+    """
+    if edition not in EDITIONS:
+        raise ValueError("unknown detailing edition")
+    fck = float(fck_mpa)
+    fywk = float(fywk_mpa)
+    if not math.isfinite(fck) or fck <= 0.0:
+        raise ValueError("fck must be a positive finite number")
+    if not math.isfinite(fywk) or fywk <= 0.0:
+        raise ValueError("fywk must be a positive finite number")
+    ductility = str(ductility_class or "B").strip().upper()
+    if ductility not in {"A", "B", "C"}:
+        raise ValueError("ductility class must be A, B or C")
+
+    coefficient = 0.063 if edition == EC2_2005_DKNA else 0.08
+    reduction = 1.0
+    reduction_applied = bool(apply_ductility_reduction and edition == EC2_2023)
+    if reduction_applied:
+        reduction = {"A": 1.0, "B": 0.90, "C": 0.80}[ductility]
+    ratio = coefficient * math.sqrt(fck) / fywk * reduction
+    return {
+        "ratio": ratio,
+        "coefficient": coefficient,
+        "ductility_class": ductility,
+        "ductility_factor": reduction,
+        "ductility_reduction_applied": reduction_applied,
+        "clause": (
+            "12.2(4), Formula (12.4)"
+            if edition == EC2_2023
+            else "9.2.2(5), Formulae (9.4)-(9.5)"
+        ),
+    }
+
+
+def _ratio_check(scope: str, provided: float, required: float, clause: str, **extra):
+    valid = all(math.isfinite(value) and value >= 0.0
+                for value in (provided, required))
+    if not valid:
+        status, utilisation = "INVALID", None
+    elif provided <= _TOL:
+        status, utilisation = "FAIL", math.inf
+    else:
+        utilisation = required / provided
+        status = "PASS" if provided + _TOL >= required else "FAIL"
+    return {
+        "kind": "minimum_ratio",
+        "scope": scope,
+        "status": status,
+        "provided": provided,
+        "limit": required,
+        "utilisation": utilisation,
+        "criterion": "provided ratio >= minimum ratio",
+        "clause": clause,
+        **extra,
+    }
+
+
+def _spacing_check(
+    scope: str,
+    kind: str,
+    provided_mm: float | None,
+    maximum_mm: float | None,
+    clause: str,
+    *,
+    reason: str | None = None,
+    **extra,
+):
+    if (
+        provided_mm is None
+        or maximum_mm is None
+        or not math.isfinite(float(provided_mm))
+        or not math.isfinite(float(maximum_mm))
+        or float(provided_mm) < 0.0
+        or float(maximum_mm) <= 0.0
+    ):
+        status, utilisation = "NOT ASSESSED", None
+    else:
+        utilisation = float(provided_mm) / float(maximum_mm)
+        status = (
+            "PASS"
+            if float(provided_mm) <= float(maximum_mm) + _TOL
+            else "FAIL"
+        )
+    return {
+        "kind": kind,
+        "scope": scope,
+        "status": status,
+        "provided": provided_mm,
+        "limit": maximum_mm,
+        "utilisation": utilisation,
+        "criterion": "provided spacing <= maximum spacing",
+        "clause": clause,
+        "reason": reason,
+        **extra,
+    }
+
+
+def _not_assessed_check(
+    scope: str,
+    kind: str,
+    clause: str,
+    reason: str,
+    **extra,
+):
+    return {
+        "kind": kind,
+        "scope": scope,
+        "status": "NOT ASSESSED",
+        "provided": None,
+        "limit": None,
+        "utilisation": None,
+        "criterion": None,
+        "clause": clause,
+        "reason": reason,
+        **extra,
+    }
+
+
+def transverse_reinforcement(
+    *,
+    edition: str,
+    fck_mpa: float,
+    fywk_mpa: float,
+    diameter_mm: float,
+    spacing_mm: float,
+    shear_directions: Sequence[Mapping] = (),
+    torsion_tubes: Sequence[Mapping] = (),
+    ductility_class: str = "B",
+    apply_ductility_reduction: bool = False,
+) -> dict:
+    """Check minimum ratio and spacing of vertical/closed transverse links.
+
+    ``shear_directions`` records require ``component``, ``bw_mm``, ``d_mm`` and
+    ``legs``.  ``transverse_leg_spacing_mm`` may be zero, in which case the
+    conservative upper-bound spacing ``bw/(legs-1)`` is derived when at least two
+    effective legs are present.
+
+    ``torsion_tubes`` records require ``tef_mm``, ``uk_mm``, ``width_mm`` and
+    ``height_mm``.  The optional ``d_ref_mm`` supplies the 2005 shear-spacing
+    restriction that also applies to torsion links.
+    """
+    if edition not in EDITIONS:
+        raise ValueError("unknown detailing edition")
+    values = {
+        "fck": float(fck_mpa),
+        "fywk": float(fywk_mpa),
+        "diameter": float(diameter_mm),
+        "spacing": float(spacing_mm),
+    }
+    invalid = [
+        name for name, value in values.items()
+        if not math.isfinite(value) or value <= 0.0
+    ]
+    if invalid:
+        return {
+            "status": "INVALID",
+            "edition": edition,
+            "checks": [],
+            "reason": "invalid " + ", ".join(invalid),
+            "limitations": [],
+        }
+
+    minimum = minimum_transverse_ratio(
+        values["fck"],
+        values["fywk"],
+        edition=edition,
+        ductility_class=ductility_class,
+        apply_ductility_reduction=apply_ductility_reduction,
+    )
+    leg_area = math.pi * values["diameter"] ** 2 / 4.0
+    checks = []
+    shear_clause = (
+        "12.2(4), Table 12.1"
+        if edition == EC2_2023
+        else "9.2.2(5)-(8), Formulae (9.4)-(9.8)"
+    )
+    torsion_clause = (
+        "Table 12.1"
+        if edition == EC2_2023
+        else "9.2.3(3) and 9.2.2(6)"
+    )
+
+    for direction in shear_directions:
+        component = str(direction.get("component") or "?").lower()
+        scope = f"Shear {component.upper()}"
+        try:
+            bw = float(direction["bw_mm"])
+            depth = float(direction["d_mm"])
+            legs = float(direction["legs"])
+            entered_transverse = float(
+                direction.get("transverse_leg_spacing_mm", 0.0)
+            )
+        except (KeyError, TypeError, ValueError):
+            for kind in (
+                "minimum_ratio",
+                "longitudinal_spacing",
+                "transverse_leg_spacing",
+            ):
+                checks.append(_not_assessed_check(
+                    scope,
+                    kind,
+                    shear_clause,
+                    "missing shear-link geometry",
+                    component=component,
+                ))
+            continue
+
+        bw_valid = math.isfinite(bw) and bw > 0.0
+        depth_valid = math.isfinite(depth) and depth > 0.0
+        legs_valid = math.isfinite(legs) and legs > 0.0
+        if bw_valid and legs_valid:
+            provided_ratio = legs * leg_area / (values["spacing"] * bw)
+            checks.append(_ratio_check(
+                scope,
+                provided_ratio,
+                minimum["ratio"],
+                minimum["clause"],
+                component=component,
+                provided_label="rho_w",
+                limit_label="rho_w,min",
+                bw_mm=bw,
+                d_mm=depth if depth_valid else None,
+                legs=legs,
+            ))
+        else:
+            checks.append(_not_assessed_check(
+                scope,
+                "minimum_ratio",
+                minimum["clause"],
+                "web width or effective leg count is unavailable",
+                component=component,
+            ))
+
+        if depth_valid:
+            checks.append(_spacing_check(
+                scope,
+                "longitudinal_spacing",
+                values["spacing"],
+                0.75 * depth,
+                shear_clause,
+                component=component,
+                provided_label="s_l",
+                limit_label="s_l,max",
+                d_mm=depth,
+            ))
+        else:
+            checks.append(_not_assessed_check(
+                scope,
+                "longitudinal_spacing",
+                shear_clause,
+                "effective depth is unavailable",
+                component=component,
+            ))
+
+        if math.isfinite(entered_transverse) and entered_transverse > 0.0:
+            transverse_spacing = entered_transverse
+            source = "user"
+            spacing_reason = None
+        elif bw_valid and legs_valid and legs >= 2.0:
+            transverse_spacing = bw / (legs - 1.0)
+            source = "conservative auto"
+            spacing_reason = None
+        else:
+            transverse_spacing = None
+            source = "unavailable"
+            spacing_reason = (
+                "enter the maximum transverse distance between legs or define "
+                "at least two effective legs"
+            )
+        checks.append(_spacing_check(
+            scope,
+            "transverse_leg_spacing",
+            transverse_spacing,
+            min(0.75 * depth, 600.0) if depth_valid else None,
+            shear_clause,
+            reason=(
+                spacing_reason
+                or (None if depth_valid else "effective depth is unavailable")
+            ),
+            component=component,
+            provided_label="s_t",
+            limit_label="s_t,max",
+            spacing_source=source,
+            d_mm=depth,
+        ))
+
+    for index, tube in enumerate(torsion_tubes, start=1):
+        label = str(tube.get("label") or f"Tube {index}")
+        scope = f"Torsion {label}"
+        if not bool(tube.get("valid", True)):
+            reason = str(tube.get("reason") or "invalid torsion tube")
+            for kind, clause in (
+                ("minimum_ratio", minimum["clause"]),
+                ("torsion_spacing", torsion_clause),
+            ):
+                checks.append(_not_assessed_check(
+                    scope, kind, clause, reason, tube=index
+                ))
+            continue
+        try:
+            tef = float(tube["tef_mm"])
+            uk = float(tube["uk_mm"])
+            width = float(tube["width_mm"])
+            height = float(tube["height_mm"])
+            d_ref = float(tube.get("d_ref_mm", 0.0))
+        except (KeyError, TypeError, ValueError):
+            for kind, clause in (
+                ("minimum_ratio", minimum["clause"]),
+                ("torsion_spacing", torsion_clause),
+            ):
+                checks.append(_not_assessed_check(
+                    scope,
+                    kind,
+                    clause,
+                    "missing torsion-link geometry",
+                    tube=index,
+                ))
+            continue
+        if not all(math.isfinite(value) and value > 0.0
+                   for value in (tef, uk, width, height)):
+            for kind, clause in (
+                ("minimum_ratio", minimum["clause"]),
+                ("torsion_spacing", torsion_clause),
+            ):
+                checks.append(_not_assessed_check(
+                    scope,
+                    kind,
+                    clause,
+                    "invalid torsion-link geometry",
+                    tube=index,
+                ))
+            continue
+
+        provided_ratio = leg_area / (values["spacing"] * tef)
+        checks.append(_ratio_check(
+            scope,
+            provided_ratio,
+            minimum["ratio"],
+            minimum["clause"],
+            tube=index,
+            provided_label="rho_w,T",
+            limit_label="rho_w,min",
+            tef_mm=tef,
+        ))
+        spacing_limits = {
+            "u_k/8": uk / 8.0,
+            "min(b,h)": min(width, height),
+        }
+        if edition != EC2_2023:
+            if not math.isfinite(d_ref) or d_ref <= 0.0:
+                checks.append(_spacing_check(
+                    scope,
+                    "torsion_spacing",
+                    values["spacing"],
+                    None,
+                    torsion_clause,
+                    reason=(
+                        "effective depth is unavailable for the 2005 "
+                        "shear-spacing restriction"
+                    ),
+                    tube=index,
+                    provided_label="s",
+                    limit_label="s_max",
+                    spacing_limits_mm=spacing_limits,
+                ))
+                continue
+            spacing_limits["0.75d"] = 0.75 * d_ref
+        maximum = min(spacing_limits.values())
+        checks.append(_spacing_check(
+            scope,
+            "torsion_spacing",
+            values["spacing"],
+            maximum,
+            torsion_clause,
+            tube=index,
+            provided_label="s",
+            limit_label="s_max",
+            spacing_limits_mm=spacing_limits,
+            governing_limit=min(spacing_limits, key=spacing_limits.get),
+        ))
+
+    if not checks:
+        status = "NOT APPLICABLE"
+        reason = "no active shear or torsion action with transverse reinforcement"
+    else:
+        status = _status([check["status"] for check in checks])
+        reason = None
+    governing = (
+        max(
+            (
+                check for check in checks
+                if check.get("utilisation") is not None
+            ),
+            key=lambda check: (
+                math.inf
+                if not math.isfinite(float(check["utilisation"]))
+                else float(check["utilisation"])
+            ),
+        )
+        if any(check.get("utilisation") is not None for check in checks)
+        else None
+    )
+    return {
+        "status": status,
+        "edition": edition,
+        "checks": checks,
+        "governing": governing,
+        "governing_utilisation": (
+            float(governing["utilisation"]) if governing is not None else None
+        ),
+        "reason": reason,
+        "minimum_ratio": minimum,
+        "diameter_mm": values["diameter"],
+        "spacing_mm": values["spacing"],
+        "fywk_mpa": values["fywk"],
+        "limitations": [
+            "All entered shear reinforcement is modelled as vertical stirrups; "
+            "alternative bent-up reinforcement is not represented.",
+            "All entered torsion reinforcement is modelled as closed stirrups.",
+            "Stirrup anchorage is assumed. Reduce fywk when full anchorage is not "
+            "available.",
+            "The section model does not verify cover, bends, mandrel diameter, "
+            "anchorage length or construction access.",
+            "BN1-59-5 and Danish Road Directorate owner provisions are not "
+            "applied automatically.",
         ],
     }

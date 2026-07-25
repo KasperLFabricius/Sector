@@ -676,13 +676,20 @@ def manual_blocks() -> list:
        "capacity only.")
     fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the "
         "applied load; the sweep from 0 to 360 degrees closes the curve.")
-    h2("Minimum reinforcement and clear spacing")
-    md("Enable **Minimum longitudinal reinforcement** and select the check on each "
+    h2("Reinforcement detailing")
+    md("Enable **Check longitudinal minimum reinforcement** and select the check on each "
        "required Plastic/capacity row. The selected detailing edition and the "
        "global $f_{ctm}$ apply to those rows. Enable **Clear spacing** for one "
        "section-wide pairwise check and enter $D_{upper}$; tendons are excluded "
        "unless explicitly included, in which case their entered diameter must be "
        "the detailing envelope or duct diameter.")
+    md("Enable **Shear and torsion reinforcement detailing** to check each "
+       "non-zero shear/torsion case. The shared stirrup diameter, longitudinal "
+       "spacing and yield strength are used. Enter the maximum transverse distance "
+       "between effective legs for each shear direction, or leave it at zero for "
+       "the conservative automatic value. For the 2023 edition, select the "
+       "reinforcement ductility class and explicitly choose whether its favourable "
+       "minimum-ratio reduction is used.")
     table(["Edition", "Minimum-reinforcement method"],
           [["EN 1992-1-1:2005 / DK NA:2024",
             "$A_{s,prov} \\geq A_{s,min}$ in the resultant bending-tension zone (9.1N)"],
@@ -1080,7 +1087,7 @@ def manual_blocks() -> list:
     fig(fig_beam_envelope, "The beam envelope with its applied load; each vertex is "
         "one solved neutral-axis angle.")
 
-    h1("Minimum reinforcement and clear spacing")
+    h1("Reinforcement detailing")
     h2("EN 1992-1-1:2005 and DK NA:2024")
     md("Sector transfers the moments to the gross-concrete centroid and derives "
        "the uncracked gross-concrete strain plane for the complete $M_x$-$M_y$ "
@@ -1113,10 +1120,35 @@ def manual_blocks() -> list:
        "margin governs, and a geometric shortfall is reported as **Fail**. Lap "
        "length, bond, bundle equivalence and longitudinal arrangement remain "
        "separate detailing checks.")
-    call("limit", "The minimum-reinforcement check credits mild bars only. The "
-         "spacing check is section-plane geometry for longitudinal elements; it "
-         "does not verify anchorage, lap length, cover, maximum spacing, congestion "
-         "or shear/torsion detailing.")
+    h2("Shear and torsion reinforcement")
+    md("For vertical shear links, Sector checks the entered legs in each active "
+       "direction using:\n\n"
+       "$$\\rho_w=\\frac{A_{sw}}{s\\,b_w}\\ge\\rho_{w,min},\\qquad"
+       "\\rho_{w,min}=c\\frac{\\sqrt{f_{ck}}}{f_{ywk}}.$$\n\n"
+       "$c=0.063$ for DS/EN 1992-1-1:2005 DK NA:2024 and $c=0.08$ "
+       "for EN 1992-1-1:2005 and EN 1992-1-1:2023. In the 2023 method, "
+       "the optional class-B or class-C reduction is applied only when selected "
+       "explicitly. References: 2005 9.2.2(5), Formulae (9.4)-(9.5); "
+       "2023 12.2(4), Formula (12.4).")
+    md("The longitudinal and transverse shear-link spacings are checked against:\n\n"
+       "$$s_l\\le0.75d,\\qquad s_t\\le\\min(0.75d,600\\,\\text{mm}).$$\n\n"
+       "If the maximum transverse distance between legs is entered as zero, "
+       "Sector uses the conservative upper bound $b_w/(n_{legs}-1)$. With fewer "
+       "than two effective legs, the user must enter the distance.")
+    md("For a closed torsion link, one leg is checked in each effective tube wall:\n\n"
+       "$$\\rho_{w,T}=\\frac{A_{leg}}{s\\,t_{ef}}\\ge\\rho_{w,min}.$$\n\n"
+       "The maximum longitudinal spacing is $\\min(u_k/8,b,h)$; the 2005 "
+       "method also applies the $0.75d$ shear-link limit. Each sub-tube is checked "
+       "separately.")
+    call("limit", "Sector models all entered shear reinforcement as vertical "
+         "stirrups and all entered torsion reinforcement as closed stirrups. "
+         "Anchorage is assumed; reduce $f_{ywk}$ when full anchorage is not "
+         "available. Cover, bends, mandrel diameter, anchorage length, lap length, "
+         "bundle equivalence, congestion and construction access are not verified.")
+    call("standard", "BN1-59-5 and the Danish Road Directorate bridge basis add "
+         "project- and existing-structure applicability requirements, including "
+         "special treatment of inadequately anchored historic links. Sector does "
+         "not apply hidden owner-specific coefficients.")
 
     h1("Cracked-section elastic analysis")
     md("The Elastic solver takes the section as already cracked: concrete "

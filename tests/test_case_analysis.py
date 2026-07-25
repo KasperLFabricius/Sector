@@ -153,6 +153,38 @@ def test_capacity_only_zero_action_case_is_recorded_but_not_run():
     assert calls[0]["mode"] == "Elastic"
 
 
+def test_transverse_detailing_runs_only_for_active_reinforced_actions():
+    base = _base(
+        transverse_detailing_on=True,
+        shear_links=True,
+        combined_on=False,
+    )
+    first, second = [
+        case_analysis.plastic_case_input(base, record)
+        for record in case_analysis.case_records(base, "plastic")
+    ]
+    assert first["transverse_detailing_on"] is True
+    assert second["transverse_detailing_on"] is True
+
+    zero = case_analysis.plastic_case_input(
+        base,
+        {
+            "name": "PL-ZERO",
+            "description": "",
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 0.0,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
+            "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": False,
+        },
+    )
+    assert zero["transverse_detailing_on"] is False
+
+
 def test_selected_minimum_reinforcement_row_runs_without_plastic_bending():
     calls = []
     inp = _base(

@@ -3064,6 +3064,7 @@ _SHEAR_SIG_KEYS = (
     "shear_dlower",
     "shear_links", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
+    "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
     "torsion_subdivide", "torsion_nsub",
@@ -3076,8 +3077,10 @@ _SHEAR_SIG_KEYS = (
 _CAPACITY_CONTEXT_SIG_KEYS = tuple(
     key for key in _SHEAR_SIG_KEYS if key not in {"shear_V", "torsion_T"}
 ) + (
-    "minimum_reinforcement_on", "clear_spacing_on", "detailing_edition",
+    "minimum_reinforcement_on", "clear_spacing_on",
+    "transverse_detailing_on", "detailing_edition",
     "detailing_d_upper", "detailing_include_tendons",
+    "transverse_ductility_class", "transverse_apply_ductility_reduction",
 )
 def build_inputs(host=st):
     """Render staged, full-width input tabs and return the analysis payload.
@@ -3134,9 +3137,7 @@ def build_inputs(host=st):
     # column keeps the four editable point grids practical on a normal laptop.
     sec, sec_preview = sec_tab.columns([1.15, 0.85], gap="large")
     scw = aset.expander("Stress and crack-width criteria (Elastic)", expanded=False)
-    det = aset.expander(
-        "Longitudinal reinforcement & clear spacing", expanded=False
-    )
+    det = aset.expander("Reinforcement detailing", expanded=False)
     fat = aset.expander("Fatigue", expanded=False)
     sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
     about_slot = project.container()
@@ -3434,6 +3435,15 @@ def build_inputs(host=st):
              "criterion for each Plastic/capacity row whose Min. reinforcement "
              "box is selected.",
     )
+    transverse_detailing_on = _seeded_checkbox(
+        det,
+        "Check shear and torsion reinforcement detailing",
+        False,
+        "transverse_detailing_on",
+        help="Check the minimum transverse-reinforcement ratio and maximum "
+             "longitudinal/transverse stirrup spacing for each active shear or "
+             "torsion action. Zero actions are not evaluated.",
+    )
     clear_spacing_on = _seeded_checkbox(
         det,
         "Check reinforcement clear spacing",
@@ -3448,9 +3458,40 @@ def build_inputs(host=st):
         list(detailing.EDITIONS),
         detailing.EC2_2005_DKNA,
         "detailing_edition",
-        disabled=not (minimum_reinforcement_on or clear_spacing_on),
-        help="Selects the edition-specific minimum-reinforcement and spacing "
-             "clauses. EC2:2023 is assessed as a valid selectable method.",
+        disabled=not (
+            minimum_reinforcement_on
+            or transverse_detailing_on
+            or clear_spacing_on
+        ),
+        help="Selects the edition-specific longitudinal/transverse "
+             "reinforcement and spacing clauses. EC2:2023 is a valid selectable "
+             "method.",
+    )
+    transverse_ductility_class = _seeded_selectbox(
+        det,
+        "Transverse reinforcement ductility class",
+        ["A", "B", "C"],
+        "B",
+        "transverse_ductility_class",
+        disabled=not (
+            transverse_detailing_on
+            and detailing_edition == detailing.EC2_2023
+        ),
+        help="Reinforcement ductility class used only for the explicitly selected "
+             "2023 minimum-ratio reduction below.",
+    )
+    transverse_apply_ductility_reduction = _seeded_checkbox(
+        det,
+        "Apply 2023 ductility-class reduction to minimum ratio",
+        False,
+        "transverse_apply_ductility_reduction",
+        disabled=not (
+            transverse_detailing_on
+            and detailing_edition == detailing.EC2_2023
+        ),
+        help="Favourable optional provision in EN 1992-1-1:2023 12.2(4): "
+             "reduce the minimum ratio by 10 % for class B or 20 % for class C. "
+             "Off keeps the unreduced value.",
     )
     detailing_d_upper = _seeded_number(
         det,
@@ -3484,6 +3525,11 @@ def build_inputs(host=st):
         det.caption(
             f"Selected Plastic/capacity cases: {selected_minimum_cases}. "
             "The case must represent the design situation required by the clause."
+        )
+    if transverse_detailing_on:
+        det.caption(
+            "Transverse checks use the shared closed-stirrup definition and run "
+            "only for non-zero shear/torsion actions."
         )
     det.caption(
         "Lap and bundle verification is outside this section-plane spacing check."
@@ -3730,6 +3776,33 @@ def build_inputs(host=st):
         "shear_vy_link_legs", disabled=not _links,
         help=r"Number of stirrup legs crossing the $V_y$ shear plane.",
     )
+    spacing_x, spacing_y = sts.columns(2)
+    shear_vx_transverse_leg_spacing = _seeded_number(
+        spacing_x,
+        r"Max. transverse leg spacing for $V_x$ (mm, 0 = auto)",
+        0.0,
+        100000.0,
+        0.0,
+        10.0,
+        "shear_vx_transverse_leg_spacing",
+        disabled=not (_links and transverse_detailing_on),
+        help=r"Largest transverse distance $s_{t,x}$ between effective stirrup "
+             r"legs. 0 uses the conservative upper bound "
+             r"$b_{w,x}/(n_{\mathrm{legs},x}-1)$.",
+    )
+    shear_vy_transverse_leg_spacing = _seeded_number(
+        spacing_y,
+        r"Max. transverse leg spacing for $V_y$ (mm, 0 = auto)",
+        0.0,
+        100000.0,
+        0.0,
+        10.0,
+        "shear_vy_transverse_leg_spacing",
+        disabled=not (_links and transverse_detailing_on),
+        help=r"Largest transverse distance $s_{t,y}$ between effective stirrup "
+             r"legs. 0 uses the conservative upper bound "
+             r"$b_{w,y}/(n_{\mathrm{legs},y}-1)$.",
+    )
     shear_link_dia = _seeded_number(
         sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
         disabled=not _stirrups,
@@ -3745,6 +3818,11 @@ def build_inputs(host=st):
              "reference material. If the stirrup is not fully anchored, reduce "
              r"$f_{ywk}$ here; Sector assumes anchorage and applies no hidden category "
              "multiplier.")
+    if transverse_detailing_on and not _stirrups:
+        sts.warning(
+            "Transverse detailing is selected, but no shear links or torsion "
+            "stirrups are active."
+        )
 
     # Pre-flight for the combined check (it needs several things at once): flag what
     # is missing in the reserved slot right under its toggle, not only after Calculate.
@@ -4196,7 +4274,12 @@ def build_inputs(host=st):
         combined_method=combined_method if combined_on else None,
         detailing_method=(
             detailing_edition
-            if minimum_reinforcement_on or clear_spacing_on else None
+            if (
+                minimum_reinforcement_on
+                or transverse_detailing_on
+                or clear_spacing_on
+            )
+            else None
         ),
         fatigue_method=fatigue_edition if fatigue_on else None,
     )
@@ -4423,6 +4506,12 @@ def build_inputs(host=st):
                 shear_links=shear_links,
                 shear_vx_link_legs=shear_vx_link_legs,
                 shear_vy_link_legs=shear_vy_link_legs,
+                shear_vx_transverse_leg_spacing=(
+                    shear_vx_transverse_leg_spacing
+                ),
+                shear_vy_transverse_leg_spacing=(
+                    shear_vy_transverse_leg_spacing
+                ),
                 shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
                 shear_fywk=shear_fywk,
                 strut_cot_min=strut_cot_min,
@@ -4435,10 +4524,15 @@ def build_inputs(host=st):
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
                 minimum_reinforcement_on=minimum_reinforcement_on,
+                transverse_detailing_on=transverse_detailing_on,
                 clear_spacing_on=clear_spacing_on,
                 detailing_edition=detailing_edition,
                 detailing_d_upper=detailing_d_upper,
                 detailing_include_tendons=detailing_include_tendons,
+                transverse_ductility_class=transverse_ductility_class,
+                transverse_apply_ductility_reduction=(
+                    transverse_apply_ductility_reduction
+                ),
                 fatigue_on=fatigue_on,
                 fatigue_edition=fatigue_edition,
                 fatigue_check_steel=fatigue_check_steel,
@@ -4927,6 +5021,8 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             my_ed_knm=inp["My_pl"],
         )
     _run_capacity_checks(inp, out)
+    if inp.get("transverse_detailing_on"):
+        out["transverse_reinforcement"] = _transverse_detailing_result(inp, out)
     return out
 
 
@@ -5926,6 +6022,130 @@ def _run_capacity_checks(inp, out):
         )
 
 
+def _minimum_transverse_detailing_depth(inp):
+    """Conservative effective depth across all four longitudinal faces."""
+    try:
+        _area, cx, cy = capacity.gross_area_centroid(
+            inp.get("outer") or [], inp.get("holes") or []
+        )
+    except (TypeError, ValueError):
+        return 0.0
+    depths = []
+    for axis, centroid in (("x", cy), ("y", cx)):
+        for tension_low in (True, False):
+            _area_s, cg = shear.tension_reinforcement(
+                inp.get("bars") or [], axis, tension_low, centroid
+            )
+            depth = shear.effective_depth(
+                inp.get("outer") or [], axis, tension_low, cg
+            )
+            if math.isfinite(depth) and depth > 0.0:
+                depths.append(depth)
+    return min(depths, default=0.0)
+
+
+def _direction_detailing_depth(direction):
+    """Smallest required-face depth retained in one directional shear result."""
+    depths = []
+    for candidate in direction.get("face_candidates") or []:
+        value = (candidate.get("shear") or {}).get("d")
+        if value is not None and math.isfinite(float(value)) and float(value) > 0.0:
+            depths.append(float(value))
+    value = direction.get("d")
+    if value is not None and math.isfinite(float(value)) and float(value) > 0.0:
+        depths.append(float(value))
+    return min(depths, default=0.0)
+
+
+def _transverse_detailing_result(inp, out):
+    """Translate verified shear/torsion geometry into pure detailing checks."""
+    shear_specs = []
+    shear_out = out.get("shear") or {}
+    if inp.get("shear_on") and inp.get("shear_links") and shear_out:
+        directions = shear_out.get("directions")
+        if directions:
+            items = list(directions.items())
+        else:
+            component = str(shear_out.get("component") or (
+                "vy" if shear_out.get("axis") == "x" else "vx"
+            ))
+            items = [(component, shear_out)]
+        for component, direction in items:
+            links = direction.get("links") or {}
+            shear_specs.append({
+                "component": component,
+                "bw_mm": direction.get("bw", 0.0),
+                "d_mm": _direction_detailing_depth(direction),
+                "legs": links.get(
+                    "legs",
+                    inp.get(
+                        "shear_vx_link_legs"
+                        if component == "vx"
+                        else "shear_vy_link_legs",
+                        0.0,
+                    ),
+                ),
+                "transverse_leg_spacing_mm": inp.get(
+                    "shear_vx_transverse_leg_spacing"
+                    if component == "vx"
+                    else "shear_vy_transverse_leg_spacing",
+                    0.0,
+                ),
+            })
+
+    torsion_specs = []
+    torsion_out = out.get("torsion") or {}
+    if inp.get("torsion_on") and torsion_out:
+        d_ref = _minimum_transverse_detailing_depth(inp)
+        subresults = torsion_out.get("subtubes") or []
+        if subresults:
+            for index, subresult in enumerate(subresults, start=1):
+                tube = subresult.get("tube") or {}
+                torsion_specs.append({
+                    "label": f"Tube {index}",
+                    "valid": bool(subresult.get("valid") and tube.get("valid")),
+                    "reason": tube.get("reason"),
+                    "tef_mm": tube.get("tef", 0.0),
+                    "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
+                    "width_mm": subresult.get("b_mm", 0.0),
+                    "height_mm": subresult.get("h_mm", 0.0),
+                    "d_ref_mm": d_ref,
+                })
+        else:
+            tube = torsion_out.get("tube") or {}
+            outer = inp.get("outer") or []
+            xs = [float(point[0]) for point in outer]
+            ys = [float(point[1]) for point in outer]
+            torsion_specs.append({
+                "label": "Tube",
+                "valid": bool(torsion_out.get("valid") and tube.get("valid")),
+                "reason": torsion_out.get("reason") or tube.get("reason"),
+                "tef_mm": tube.get("tef", 0.0),
+                "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
+                "width_mm": (
+                    (max(xs) - min(xs)) * 1000.0 if xs else 0.0
+                ),
+                "height_mm": (
+                    (max(ys) - min(ys)) * 1000.0 if ys else 0.0
+                ),
+                "d_ref_mm": d_ref,
+            })
+
+    return detailing.transverse_reinforcement(
+        edition=inp["detailing_edition"],
+        fck_mpa=inp["concrete"].fck,
+        fywk_mpa=inp["shear_fywk"],
+        diameter_mm=inp["shear_link_dia"],
+        spacing_mm=inp["shear_link_s"],
+        shear_directions=shear_specs,
+        torsion_tubes=torsion_specs,
+        ductility_class=inp.get("transverse_ductility_class", "B"),
+        apply_ductility_reduction=inp.get(
+            "transverse_apply_ductility_reduction", False
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Input previews and result views. Geometry and material laws stay beside their
 # source inputs; the Analysis page therefore contains calculated results only.
@@ -6061,6 +6281,7 @@ def results_overview_view(inp, results, *, stale=False):
             or bool(inp.get("torsion_on"))
             or bool(inp.get("combined_on"))
             or bool(inp.get("minimum_reinforcement_on"))
+            or bool(inp.get("transverse_detailing_on"))
         ) if family == "plastic" else inp.get("mode") in {"Elastic", "Both"}
         if not family_requested:
             continue
@@ -6203,14 +6424,15 @@ def _detailing_status_callout(status, message):
 
 
 def detailing_view(inp, results, *, global_results=None):
-    """Longitudinal minimum-reinforcement and section-wide spacing evidence."""
+    """Longitudinal/transverse reinforcement and spacing evidence."""
     results = results or {}
     global_results = global_results or results
     minimum = results.get("minimum_reinforcement")
+    transverse = results.get("transverse_reinforcement")
     spacing = global_results.get("clear_spacing")
 
     st.subheader("Detailing")
-    min_card, spacing_card = st.columns(2)
+    min_card, transverse_card, spacing_card = st.columns(3)
     with min_card.container(border=True):
         st.markdown("**Longitudinal minimum reinforcement**")
         if not inp.get("minimum_reinforcement_on"):
@@ -6233,6 +6455,40 @@ def detailing_view(inp, results, *, global_results=None):
             st.caption(
                 f"{minimum.get('edition', '-')} | {minimum.get('clause', '-')}"
             )
+
+    with transverse_card.container(border=True):
+        st.markdown("**Shear / torsion reinforcement**")
+        if not inp.get("transverse_detailing_on"):
+            st.caption("Not selected for this case.")
+        elif transverse is None:
+            st.info("Calculate to evaluate this case.")
+        else:
+            governing = transverse.get("governing") or {}
+            transverse_status = str(
+                transverse.get("status") or "NOT ASSESSED"
+            ).upper()
+            incomplete_reason = next((
+                str(check["reason"])
+                for check in transverse.get("checks") or []
+                if check.get("status") == "NOT ASSESSED"
+                and check.get("reason")
+            ), None)
+            if transverse_status == "NOT ASSESSED" and incomplete_reason:
+                result_text = incomplete_reason
+            elif governing:
+                utilisation = governing.get("utilisation")
+                result_text = str(governing.get("scope") or "governing check")
+                if utilisation is not None:
+                    result_text += f"; {_pct(utilisation)}"
+            else:
+                result_text = str(
+                    transverse.get("reason") or "not evaluated"
+                )
+            _detailing_status_callout(
+                transverse_status,
+                result_text,
+            )
+            st.caption(str(transverse.get("edition") or "-"))
 
     with spacing_card.container(border=True):
         st.markdown("**Clear spacing**")
@@ -6384,6 +6640,60 @@ def detailing_view(inp, results, *, global_results=None):
         if spacing.get("limitations"):
             with st.expander("Clear-spacing method notes"):
                 for note in spacing["limitations"]:
+                    st.markdown(f"- {note}")
+
+    if transverse is not None:
+        st.markdown("**Shear / torsion reinforcement evidence**")
+        check_labels = {
+            "minimum_ratio": "Minimum ratio",
+            "longitudinal_spacing": "Longitudinal spacing",
+            "transverse_leg_spacing": "Transverse leg spacing",
+            "torsion_spacing": "Closed-link spacing",
+        }
+        transverse_rows = []
+        for check in transverse.get("checks") or []:
+            ratio = check.get("kind") == "minimum_ratio"
+            transverse_rows.append({
+                "Scope": check.get("scope"),
+                "Check": check_labels.get(
+                    check.get("kind"), check.get("kind")
+                ),
+                "Provided": check.get("provided"),
+                "Limit": check.get("limit"),
+                "Unit": "-" if ratio else "mm",
+                "Utilisation [%]": (
+                    100.0 * float(check["utilisation"])
+                    if check.get("utilisation") is not None
+                    else None
+                ),
+                "Status": check.get("status"),
+                "Reference": check.get("clause"),
+            })
+        if transverse_rows:
+            st.dataframe(
+                transverse_rows,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Provided": st.column_config.NumberColumn(format="%.5g"),
+                    "Limit": st.column_config.NumberColumn(format="%.5g"),
+                    "Utilisation [%]": st.column_config.NumberColumn(
+                        format="%.1f"
+                    ),
+                },
+            )
+        elif transverse.get("reason"):
+            st.caption(str(transverse["reason"]))
+        reasons = [
+            str(check["reason"])
+            for check in transverse.get("checks") or []
+            if check.get("reason")
+        ]
+        if reasons:
+            st.caption("Outcome: " + "; ".join(dict.fromkeys(reasons)))
+        if transverse.get("limitations"):
+            with st.expander("Transverse-reinforcement method notes"):
+                for note in transverse["limitations"]:
                     st.markdown(f"- {note}")
 
 
@@ -9141,7 +9451,10 @@ def _analysis_workspace(inp):
         "elastic" if view == "Elastic Results"
         else "plastic" if (
             view == "Detailing"
-            and result_inp.get("minimum_reinforcement_on")
+            and (
+                result_inp.get("minimum_reinforcement_on")
+                or result_inp.get("transverse_detailing_on")
+            )
         )
         else "plastic" if view in {
             "Plastic Results", "N-M Interaction", "Shear", "Torsion",

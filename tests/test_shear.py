@@ -485,6 +485,39 @@ def test_app_shear_check_produces_a_resistance():
     assert sh["util"] == pytest.approx(100.0 / sh["res"]["vrd_c"])
 
 
+def test_app_transverse_detailing_uses_active_direction_and_renders_view():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "transverse_detailing_on", True),
+        ("checkbox", "shear_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 100.0),
+    )
+    assert not at.exception
+    case_result = at.session_state["results"]["plastic_cases"][0]["results"]
+    transverse = case_result["transverse_reinforcement"]
+    assert transverse["status"] == "PASS"
+    assert [check["kind"] for check in transverse["checks"]] == [
+        "minimum_ratio",
+        "longitudinal_spacing",
+        "transverse_leg_spacing",
+    ]
+    assert transverse["checks"][2]["spacing_source"] == "conservative auto"
+
+    _select_view(at, "Detailing")
+    assert not at.exception
+    assert any(
+        "Shear / torsion reinforcement evidence" in item.value
+        for item in at.markdown
+    )
+
+
 def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
     at = _fresh()
     at.run()

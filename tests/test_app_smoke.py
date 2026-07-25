@@ -3491,7 +3491,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     labels = [ex.label for ex in at.expander]
     assert labels == [
         "Stress and crack-width criteria (Elastic)",
-        "Longitudinal reinforcement & clear spacing",
+        "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
         "Bulk assignments",

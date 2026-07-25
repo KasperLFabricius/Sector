@@ -868,6 +868,19 @@ def test_parse_rejects_obsolete_separate_strut_angle_settings():
         project_io.parse_project(text)
 
 
+def test_transverse_detailing_inputs_round_trip_in_current_project_format():
+    values = {
+        "transverse_detailing_on": True,
+        "transverse_ductility_class": "C",
+        "transverse_apply_ductility_reduction": True,
+        "shear_vx_transverse_leg_spacing": 220.0,
+        "shear_vy_transverse_leg_spacing": 180.0,
+    }
+    text = project_io.dump_project({}, values)
+    _tables, scalars = project_io.parse_project(text)
+    assert {key: scalars[key] for key in values} == values
+
+
 def test_parse_rejects_malformed_table_object():
     # A table entry that is not a {columns, rows} object (here a bare list) must
     # raise ValueError, not an AttributeError that escapes the caller's handling.

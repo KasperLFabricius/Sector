@@ -16,9 +16,9 @@ cross-section and reports, for the same section:
   the elastic result.
 * **Section capacity checks** - shear, torsion and combined M-V-T checks where
   supported by the selected Eurocode method.
-* **Longitudinal detailing checks** - per-case minimum reinforcement, including
-  resultant biaxial tension zones, and a section-wide clear-spacing review with
-  stable element IDs.
+* **Reinforcement detailing checks** - per-case longitudinal minimum
+  reinforcement and shear/torsion link ratio and spacing checks, plus a
+  section-wide clear-spacing review with stable element IDs.
 * **Fatigue analysis** - grouped sustained/basic and cyclic action bins, using
   the cracked elastic section for reinforcing steel, tendons and concrete.
 
@@ -77,7 +77,7 @@ sector/        computation core (headless, regression-tested)
   fatigue      grouped S-N/Miner damage using Elastic long/short states
   plastic      nonlinear capacity (neutral-axis sweep, governing failure)
   capacity     headless shear, torsion, and M-V-T result orchestration
-  detailing    longitudinal minimum reinforcement and clear spacing
+  detailing    longitudinal/transverse reinforcement and clear spacing
   serviceability  cracking threshold, tension stiffening, crack width
   templates    parametric section + reinforcement builders
 app/           Streamlit interface and canonical input models

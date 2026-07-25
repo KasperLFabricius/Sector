@@ -28,7 +28,7 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 12  # v12: one shared shear/torsion compression-strut range
+VERSION = 13  # v13: transverse shear/torsion reinforcement-detailing inputs
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
     "shear_cot_min",
@@ -122,15 +122,18 @@ SCALAR_KEYS = [
     "fatigue_check_concrete", "fatigue_gamma_c", "fatigue_gamma_s",
     "fatigue_gamma_ff", "fatigue_beta_cc_t0", "fatigue_t0_days",
     "fatigue_concrete_k1", "fatigue_concrete_c", "fatigue_source",
-    # Longitudinal minimum reinforcement and clear spacing.
-    "minimum_reinforcement_on", "clear_spacing_on", "detailing_edition",
+    # Longitudinal/transverse reinforcement detailing and clear spacing.
+    "minimum_reinforcement_on", "transverse_detailing_on",
+    "clear_spacing_on", "detailing_edition",
     "detailing_d_upper", "detailing_include_tendons",
+    "transverse_ductility_class", "transverse_apply_ductility_reduction",
     # Shear (VRd,c without links, and the variable-strut VRd with links).
     "shear_on", "shear_method", "shear_axis", "shear_tension", "shear_V", "shear_bw",
     "shear_vx_bw", "shear_vy_bw",
     "shear_dlower",
     "shear_links", "shear_link_legs", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
+    "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
     # Torsion (thin-walled tube, TRd). The stirrup is the shared shear_link_* one.
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",

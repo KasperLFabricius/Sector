@@ -323,19 +323,24 @@ def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
     )
 
 
-def test_manual_documents_longitudinal_minimum_reinforcement_and_spacing_scope():
+def test_manual_documents_longitudinal_and_transverse_detailing_scope():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for expected in (
-        "Minimum reinforcement and clear spacing",
+        "Reinforcement detailing",
         "9.2.1.1(1)",
         "Formula (9.1N)",
         "uncracked gross-concrete strain plane",
         "12.2(2)",
         "D_{upper}",
+        "\\rho_{w,min}",
+        "0.063",
+        "transverse distance between legs",
+        "u_k/8",
+        "Anchorage is assumed",
+        "BN1-59-5",
         "Bulk assignments",
         "high beam webs",
         "Prestressing tendons are not credited",
-        "section-plane geometry",
     ):
         assert expected in text
     assert "Lap / bundle ID" not in text
