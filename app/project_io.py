@@ -152,7 +152,7 @@ SCALAR_KEYS = [
     "label_scale", "label_min_gap",
     # Report metadata.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev", "rep_author",
-    "rep_checker", "rep_approver", "rep_comments",
+    "rep_checker", "rep_approver", "rep_comments", "rep_report_content",
 ]
 
 # A preset prefills its fields only when the selection *changes*; on load we set

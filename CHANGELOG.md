@@ -52,6 +52,9 @@ and grouped fatigue workflows.
 - Added dedicated fatigue summaries and drill-down results, labelled
   colour-accessible section maps, S-N and cumulative-damage figures, complete
   PDF report evidence and matching manual guidance.
+- Added a report-content selector for the default calculation report or the
+  default report plus a consolidated QA appendix. Removed redundant
+  percentage-point margins from utilisation verdicts.
 - Advanced project files through deterministic migrations for the richer
   element, material, shear, detailing and fatigue records.
 

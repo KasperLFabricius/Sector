@@ -977,13 +977,17 @@ def manual_blocks() -> list:
        "reinforcement. The detailed blocks retain each contribution and the selected "
        "member strut angle.")
     h2("PDF report")
-    md("The report reproduces the complete named case register, descriptions, "
+    md("In the Report panel, select **Default report** or **Default report + QA "
+       "appendix** before generating the PDF. Both options reproduce the complete "
+       "named case register, descriptions, "
        "signed actions, per-Elastic-row acceptance selections and every fatigue "
        "spectrum bin. Its overview uses the same statuses and governing rules as "
        "the UI. Every computed case is covered in the bookmarked detail chapters; the "
        "fatigue chapter includes all spectra, figures, element/fibre results, bin "
        "evidence, factors, references and provenance. Zero-action checks remain "
-       "visible as not applicable and are not given a false result.")
+       "visible as not applicable and are not given a false result. The optional "
+       "QA appendix adds one consolidated chapter of standards references and "
+       "implementation notes.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY

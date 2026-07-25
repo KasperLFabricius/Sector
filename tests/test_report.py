@@ -1053,7 +1053,7 @@ def test_report_mirrors_the_views():
     flat = " ".join(txt.split())
     assert "Fc" in txt and "NA x" in txt           # full plastic table columns
     assert "PASS - Plastic bending" in txt
-    assert "margin +20.0 pp" in flat
+    assert " pp" not in flat
     assert "does not exceed" not in flat
     assert "PASS - Crack width | governing" in flat
     assert "Governing concrete corner response" in txt
@@ -1063,6 +1063,20 @@ def test_report_mirrors_the_views():
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
     assert "Utilisation check" in txt              # analysis settings documented
     assert "Max / Min" in txt                      # both extremes for Mx and My
+
+
+def test_report_qa_appendix_is_optional_and_identified_on_the_cover():
+    default_text = _pdf_text(sector_report.build_report(
+        {}, _inp(), _out(), figures=False, qa_appendix=False
+    ))
+    qa_text = _pdf_text(sector_report.build_report(
+        {}, _inp(), _out(), figures=False, qa_appendix=True
+    ))
+
+    assert "Report content Default report" in " ".join(default_text.split())
+    assert "QA appendix - references and notes" not in default_text
+    assert "Default report + QA appendix" in " ".join(qa_text.split())
+    assert "QA appendix - references and notes" in qa_text
 
 
 def test_report_includes_sls_criteria_strain_and_candidate_evidence():
@@ -1330,7 +1344,7 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     failed["plastic"]["util"] = 1.25
     txt = _pdf_text(sector_report.build_report({}, _inp(), failed, figures=False))
     assert "FAIL - Plastic bending" in txt
-    assert "margin -25.0 pp" in txt
+    assert " pp" not in txt
 
     invalid = _out()
     invalid["plastic"]["converged"] = False

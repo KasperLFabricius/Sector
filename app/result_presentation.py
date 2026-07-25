@@ -79,15 +79,9 @@ def plastic_assessment_text(assessment):
     """Return one compact, solver-neutral plastic-bending verdict."""
     parts = [f"{assessment.get('status', 'NOT ASSESSED')} - Plastic bending"]
     util = assessment.get("util")
-    margin = assessment.get("margin")
     if assessment.get("assessed"):
         if util is not None and math.isfinite(util):
-            parts.extend([
-                f"utilisation {util * 100:.1f} %",
-                "limit 100 %",
-            ])
-            if margin is not None and math.isfinite(margin):
-                parts.append(f"margin {margin * 100:+.1f} pp")
+            parts.append(f"utilisation {util * 100:.1f} %")
         else:
             parts.append("utilisation not finite")
     if assessment.get("detail"):

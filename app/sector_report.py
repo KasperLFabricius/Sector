@@ -395,8 +395,17 @@ def _code_verdict(ok, applicable=True):
 class ReportBuilder:
     """Builds the PDF into ``buffer`` from ``meta``, ``inp`` and ``out``."""
 
-    def __init__(self, buffer, meta, inp, out, version="", figures=True,
-                 progress=None):
+    def __init__(
+        self,
+        buffer,
+        meta,
+        inp,
+        out,
+        version="",
+        figures=True,
+        progress=None,
+        qa_appendix=True,
+    ):
         self.buffer = buffer
         self.meta = meta or {}
         self.inp = inp
@@ -409,6 +418,7 @@ class ReportBuilder:
         self._base_out = out or {}
         self.version = version
         self.figures = figures
+        self.qa_appendix = bool(qa_appendix)
         self._progress = progress
         self.s = _styles()
         self.flow = []
@@ -789,7 +799,8 @@ class ReportBuilder:
             self._tick(0.88, "Grouped fatigue...")
             self.flow.append(PageBreak())
             self._fatigue()
-        self._appendix()
+        if self.qa_appendix:
+            self._appendix()
         self._tick(0.92, "Writing PDF...")
         revision_id = short_revision(self.meta.get("source_revision"))
         footer = f"Sector {self.version}  -  {revision_id}  -  {SECTOR_LICENSEE}".strip()
@@ -853,7 +864,14 @@ class ReportBuilder:
                 ["Approver", m.get("approver", "")],
                 ["Date", date],
                 ["Tool version", self.version or "-"],
-                ["Source revision", short_revision(m.get("source_revision"))]]
+                ["Source revision", short_revision(m.get("source_revision"))],
+                [
+                    "Report content",
+                    (
+                        "Default report + QA appendix"
+                        if self.qa_appendix else "Default report"
+                    ),
+                ]]
         if self._case_contexts("plastic"):
             rows.append([
                 "Plastic analysis cases",
@@ -2252,9 +2270,6 @@ class ReportBuilder:
                              f"{_fmt(applied[0], 3)}, {_fmt(applied[1], 3)} kNm"])
             rows.append(["Utilisation (applied direction)",
                          f"{_fmt(pl['util']*100, 3)} %"])
-            if assessment["margin"] is not None:
-                rows.append(["Margin to 100 % limit (pp)",
-                             f"{assessment['margin'] * 100:+.1f}"])
         else:
             rows.append(["Utilisation", "open arc (no closed envelope)"])
         self._table(rows, [90 * mm, 60 * mm])
@@ -4906,7 +4921,7 @@ class ReportBuilder:
 
     def _appendix(self):
         self.flow.append(PageBreak())
-        self._h1("References and notes")
+        self._h1("QA appendix - references and notes")
         lines = []
         plastic_results = self._result_values("plastic")
         elastic_results = self._result_values("elastic")
@@ -5083,14 +5098,31 @@ class ReportBuilder:
         self._small(f"Generated {ts} by Sector {self.version}.")
 
 
-def build_report(meta, inp, out, version="", figures=True, progress=None) -> bytes:
+def build_report(
+    meta,
+    inp,
+    out,
+    version="",
+    figures=True,
+    progress=None,
+    qa_appendix=True,
+) -> bytes:
     """Build the PDF report and return its bytes.
 
     ``progress`` is an optional ``callable(fraction, text)`` invoked as the report
-    is assembled, so the UI can show a progress bar.
+    is assembled, so the UI can show a progress bar. ``qa_appendix`` adds the
+    consolidated references-and-notes chapter.
     """
     buffer = io.BytesIO()
-    ReportBuilder(buffer, meta, inp, out, version=version, figures=figures,
-                  progress=progress).build()
+    ReportBuilder(
+        buffer,
+        meta,
+        inp,
+        out,
+        version=version,
+        figures=figures,
+        progress=progress,
+        qa_appendix=qa_appendix,
+    ).build()
     buffer.seek(0)
     return buffer.getvalue()
