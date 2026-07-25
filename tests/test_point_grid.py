@@ -101,6 +101,7 @@ def test_mixed_grid_round_trip_preserves_ids_text_and_numeric_blanks():
 
 def test_point_grid_sends_only_strict_json_to_streamlit(monkeypatch):
     captured = {}
+    on_change = lambda: None
 
     def fake_component(**kwargs):
         captured.update(kwargs)
@@ -112,11 +113,13 @@ def test_point_grid_sends_only_strict_json_to_streamlit(monkeypatch):
         "y (mm)": [20.0, 30.0],
     })
 
-    result = point_grid_module.point_grid(df, _CORNERS, key="test-grid")
+    result = point_grid_module.point_grid(
+        df, _CORNERS, key="test-grid", on_change=on_change
+    )
 
     assert captured["data"]["rows"][1]["x (mm)"] is None
     assert captured["default"]["payload"]["rows"] == captured["data"]["rows"]
-    assert callable(captured["on_payload_change"])
+    assert captured["on_payload_change"] is on_change
     assert captured["width"] == "stretch"
     assert captured["height"] == "content"
     json.dumps({"data": captured["data"], "default": captured["default"]},

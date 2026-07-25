@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
+from sector import detailing  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -783,6 +784,41 @@ def test_report_states_when_required_shear_links_are_not_defined():
     assert "shear resistance without links is insufficient" in text
 
 
+def test_report_explains_one_sided_transverse_spacing_screen():
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "transverse_detailing_on": True,
+        "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "detailing_member_type": "Beam",
+        "shear_vx_transverse_leg_spacing": 0.0,
+        "shear_vy_transverse_leg_spacing": 0.0,
+    })
+    result = detailing.transverse_reinforcement(
+        edition=inp["detailing_edition"],
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        shear_directions=[{
+            "component": "vx",
+            "bw_mm": 600.0,
+            "d_mm": 305.0,
+            "legs": 2.0,
+            "transverse_leg_spacing_mm": 0.0,
+            "measurement_axis": "y",
+        }],
+    )
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, {"transverse_reinforcement": result}, figures=False,
+    )).split())
+    assert result["status"] == "NOT ASSESSED"
+    assert "Transverse leg spacing (along y)" in text
+    assert "gross-web upper-bound screen" in text
+    assert "actual maximum centre-to-centre leg spacing" in text
+    assert "cannot prove FAIL" in text
+
+
 def test_report_keeps_failed_2005_no_bar_result_in_minimum_area_format():
     inp = _inp()
     inp.update({
@@ -1272,16 +1308,26 @@ def test_ensure_image_server_starts_once(monkeypatch):
     # The app-wide kaleido server starts exactly once per process (even across
     # threads / repeated calls) and is registered to stop only at interpreter exit,
     # not after each report -- so a second report reuses the running browser.
-    calls = {"start": 0, "stop": 0, "atexit": 0}
+    calls = {"start": 0, "stop": 0, "atexit": 0, "kwargs": None}
+    def start(**kwargs):
+        calls["start"] += 1
+        calls["kwargs"] = kwargs
+
     monkeypatch.setattr(sector_report, "_kaleido_server_api",
-                        lambda: ((lambda **k: calls.__setitem__("start", calls["start"] + 1)),
+                        lambda: (start,
                                  (lambda **k: calls.__setitem__("stop", calls["stop"] + 1))))
+    monkeypatch.setattr(
+        sector_report,
+        "_kaleido_page_path",
+        lambda: "persistent-plotly-export.html",
+    )
     monkeypatch.setattr(sector_report.atexit, "register",
                         lambda f: calls.__setitem__("atexit", calls["atexit"] + 1))
     monkeypatch.setattr(sector_report, "_image_server_started", False)
     for _ in range(3):
         sector_report.ensure_image_server()
     assert calls["start"] == 1            # started once despite three calls
+    assert calls["kwargs"]["page_generator"] == "persistent-plotly-export.html"
     assert calls["atexit"] == 1           # stop deferred to interpreter exit
     assert calls["stop"] == 0             # never stopped mid-session
 

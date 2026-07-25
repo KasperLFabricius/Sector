@@ -694,7 +694,9 @@ def manual_blocks() -> list:
        "non-zero shear/torsion case. The shared stirrup diameter, longitudinal "
        "spacing and yield strength are used. Enter the maximum transverse distance "
        "between effective legs for each shear direction, or leave it at zero for "
-       "the conservative automatic value. For the 2023 edition, select the "
+       "a gross-web upper-bound screen. The screen can prove compliance, but an "
+       "actual spacing is required when the bound exceeds the limit. For the 2023 "
+       "edition, select the "
        "reinforcement ductility class and explicitly choose whether its favourable "
        "minimum-ratio reduction is used. Under the 2005 method, an ordinary beam "
        "with non-zero shear requires minimum links; slab omissions follow the "
@@ -705,6 +707,10 @@ def manual_blocks() -> list:
     table(["Member", "Vertical shear-link spacing limits"],
           [["Beam", "$s_l \\leq 0.75d$; $s_t \\leq \\min(0.75d,600\\,\\text{mm})$"],
            ["Slab", "$s_l \\leq 0.75d$; $s_t \\leq 1.5d$"]])
+    md("$s_t$ is measured in the section plane between adjacent parallel link "
+       "legs: along $y$ for $V_x$ and along $x$ for $V_y$. It is not the "
+       "longitudinal spacing $s_l$, and it does not require shortening a closed "
+       "stirrup.")
     call("standard", "EN 1992-1-1:2005 9.2.3(4)'s 350 mm value applies to "
          "longitudinal torsion bars around the link perimeter, not to spacing "
          "between closed links.")
@@ -1170,9 +1176,13 @@ def manual_blocks() -> list:
     md("The longitudinal and transverse shear-link spacings are checked against:\n\n"
        "$$s_l\\le0.75d,\\qquad s_t\\le\\min(0.75d,600\\,\\text{mm}).$$\n\n"
        "If the maximum transverse distance between legs is entered as zero, "
-       "Sector uses the full web width $b_w$ as the conservative upper bound. "
-       "Enter the actual maximum distance to credit a closer layout. With fewer "
-       "than two effective legs, the user must enter the distance.")
+       "Sector uses the gross web breadth $b_w$ as an upper-bound screen. A bound "
+       "within the limit proves **Pass**; a bound above it is **Not assessed**, not "
+       "**Fail**, until the actual maximum spacing is entered. With fewer than two "
+       "effective legs, the user must enter the distance. The distance is measured "
+       "in the section plane: along $y$ between $V_x$-parallel legs and along $x$ "
+       "between $V_y$-parallel legs. It is separate from the longitudinal stirrup "
+       "spacing and does not require reducing the closed-stirrup height.")
     md("For a closed torsion link, one leg is checked in each effective tube wall:\n\n"
        "$$\\rho_{w,T}=\\frac{A_{leg}}{s\\,t_{ef}}\\ge\\rho_{w,min}.$$\n\n"
        "The maximum longitudinal spacing is the lesser of $u_k/8$ and the "

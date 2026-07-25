@@ -429,7 +429,10 @@ def test_transverse_detailing_checks_shear_ratio_and_both_spacings():
     )
     assert checks["longitudinal_spacing"]["limit"] == pytest.approx(412.5)
     assert checks["transverse_leg_spacing"]["provided"] == pytest.approx(300.0)
-    assert checks["transverse_leg_spacing"]["spacing_source"] == "conservative auto"
+    assert (
+        checks["transverse_leg_spacing"]["spacing_source"]
+        == "gross-web upper-bound screen"
+    )
 
 
 def test_transverse_detailing_requires_leg_distance_when_it_cannot_be_derived():
@@ -478,7 +481,62 @@ def test_three_or_more_legs_use_full_web_width_as_the_auto_upper_bound():
     assert transverse["provided"] == pytest.approx(600.0)
     assert transverse["limit"] == pytest.approx(600.0)
     assert transverse["status"] == "PASS"
-    assert transverse["spacing_source"] == "conservative auto"
+    assert transverse["spacing_source"] == "gross-web upper-bound screen"
+
+
+def test_gross_web_upper_bound_cannot_create_a_definitive_spacing_failure():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        shear_directions=[{
+            "component": "vx",
+            "bw_mm": 600.0,
+            "d_mm": 305.0,
+            "legs": 2.0,
+            "transverse_leg_spacing_mm": 0.0,
+            "measurement_axis": "y",
+        }],
+    )
+    transverse = next(
+        check for check in result["checks"]
+        if check["kind"] == "transverse_leg_spacing"
+    )
+    assert result["status"] == "NOT ASSESSED"
+    assert transverse["status"] == "NOT ASSESSED"
+    assert transverse["provided"] == pytest.approx(600.0)
+    assert transverse["limit"] == pytest.approx(0.75 * 305.0)
+    assert transverse["utilisation"] is None
+    assert transverse["measurement_axis"] == "y"
+    assert "actual maximum centre-to-centre" in transverse["reason"]
+
+
+def test_user_entered_transverse_spacing_can_create_a_definitive_failure():
+    result = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        fck_mpa=30.0,
+        fywk_mpa=500.0,
+        diameter_mm=10.0,
+        spacing_mm=150.0,
+        shear_directions=[{
+            "component": "vx",
+            "bw_mm": 600.0,
+            "d_mm": 305.0,
+            "legs": 2.0,
+            "transverse_leg_spacing_mm": 600.0,
+            "measurement_axis": "y",
+        }],
+    )
+    transverse = next(
+        check for check in result["checks"]
+        if check["kind"] == "transverse_leg_spacing"
+    )
+    assert result["status"] == "FAIL"
+    assert transverse["status"] == "FAIL"
+    assert transverse["spacing_source"] == "user"
+    assert transverse["utilisation"] == pytest.approx(600.0 / (0.75 * 305.0))
 
 
 def test_torsion_detailing_uses_one_closed_leg_and_perimeter_spacing():

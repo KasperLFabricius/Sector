@@ -14,7 +14,6 @@ import os
 import pathlib
 import re
 import sys
-import threading
 import time
 from datetime import datetime, timezone
 
@@ -106,23 +105,15 @@ st.set_page_config(
 
 @st.cache_resource(show_spinner=False)
 def _warm_solver():
-    """Compile the solver kernels in a background thread, so the ~1 s JIT warm-up
-    does not block the first paint.
+    """Compile the plastic kernels once, immediately before their first use.
 
-    The live section and material previews never call the kernels, so the page is
-    interactive while the thread compiles; by the time a section is defined and
-    Calculate is pressed the warm-up is normally finished. A Calculate that races
-    the thread is safe -- numba's per-dispatcher compile lock makes the second
-    caller wait for the first rather than compile twice. ``cache_resource`` starts
-    the thread exactly once per server.
+    Starting this work at module import competed with Streamlit's first render and
+    could leave a background compiler active while the engineer navigated.  The
+    cached synchronous call keeps startup responsive and makes Calculate own the
+    one-time warm-up it actually needs.
     """
-    thread = threading.Thread(target=kernels.warmup, name="sector-warmup",
-                              daemon=True)
-    thread.start()
-    return thread
-
-
-_warm_solver()
+    kernels.warmup()
+    return True
 
 _logo = ROOT / "assets" / "logo.png"
 if _logo.exists():
@@ -253,11 +244,35 @@ def _prefill(prefix, preset, presets):
         st.session_state[prev] = preset
 
 
+def _input_widget_kwargs(key, kwargs):
+    """Attach the input-event journal while preserving an existing callback."""
+
+    options = dict(kwargs)
+    callback = options.pop("on_change", None)
+    callback_args = tuple(options.pop("args", ()) or ())
+    callback_kwargs = dict(options.pop("kwargs", {}) or {})
+    options["on_change"] = _record_input_event
+    options["args"] = (key, callback, callback_args, callback_kwargs)
+    return options
+
+
 def _number(box, prefix, field, meta, help_map=None, disabled=False):
     label, lo, hi, step = meta[field]
-    return box.number_input(label, float(lo), float(hi), step=float(step),
-                            key=f"{prefix}_{field}",
-                            help=(help_map or {}).get(field), disabled=disabled)
+    key = f"{prefix}_{field}"
+    return box.number_input(
+        label,
+        float(lo),
+        float(hi),
+        step=float(step),
+        key=key,
+        **_input_widget_kwargs(
+            key,
+            {
+                "help": (help_map or {}).get(field),
+                "disabled": disabled,
+            },
+        ),
+    )
 
 
 def _seeded_number(box, label, lo, hi, default, step, key, **kw):
@@ -270,7 +285,10 @@ def _seeded_number(box, label, lo, hi, default, step, key, **kw):
     warning. Seeding via ``setdefault`` (a no-op once the key exists) and omitting
     ``value=`` avoids it while keeping the same default on a fresh session."""
     st.session_state.setdefault(key, default)
-    return box.number_input(label, lo, hi, step=step, key=key, **kw)
+    return box.number_input(
+        label, lo, hi, step=step, key=key,
+        **_input_widget_kwargs(key, kw),
+    )
 
 
 def _seeded_checkbox(box, label, default, key, **kw):
@@ -278,14 +296,14 @@ def _seeded_checkbox(box, label, default, key, **kw):
     ``value=`` -- same reason as :func:`_seeded_number`: a loaded project writes the
     key before the widget is built, and a ``value=`` alongside it trips the warning."""
     st.session_state.setdefault(key, default)
-    return box.checkbox(label, key=key, **kw)
+    return box.checkbox(label, key=key, **_input_widget_kwargs(key, kw))
 
 
 def _seeded_toggle(box, label, default, key, **kw):
     """A persisted on/off setting without a competing widget default."""
 
     st.session_state.setdefault(key, default)
-    return box.toggle(label, key=key, **kw)
+    return box.toggle(label, key=key, **_input_widget_kwargs(key, kw))
 
 
 def _seeded_selectbox(box, label, options, default, key, **kw):
@@ -295,20 +313,22 @@ def _seeded_selectbox(box, label, options, default, key, **kw):
     st.session_state.setdefault(key, default)
     if st.session_state[key] not in options:
         st.session_state[key] = default
-    return box.selectbox(label, options, key=key, **kw)
+    return box.selectbox(
+        label, options, key=key, **_input_widget_kwargs(key, kw)
+    )
 
 
 def _seeded_text(box, label, default, key, **kw):
     """A persisted text input that does not conflict with loaded session state."""
     st.session_state.setdefault(key, default)
-    return box.text_input(label, key=key, **kw)
+    return box.text_input(label, key=key, **_input_widget_kwargs(key, kw))
 
 
 def _seeded_text_area(box, label, default, key, **kw):
     """A persisted multi-line input without a competing widget default."""
 
     st.session_state.setdefault(key, default)
-    return box.text_area(label, key=key, **kw)
+    return box.text_area(label, key=key, **_input_widget_kwargs(key, kw))
 
 
 def _safe_build(box, builder, curve, vals, **extra):
@@ -485,9 +505,18 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
             or (auto_all and not lock_elastic)):
         st.session_state["sls_fctm"] = fctm_ec
     fctm_val = box.number_input(r"Tensile strength $f_{ctm}$ (MPa)", 0.0, 10.0, step=0.1,
-                                key="sls_fctm", disabled=lock_elastic,
-                                help=r"Mean axial tensile strength for the cracking "
-                                     r"check ($f_{ct,\mathrm{eff}}$). Use Auto for the EC2 value.")
+                                key="sls_fctm",
+                                **_input_widget_kwargs(
+                                    "sls_fctm",
+                                    {
+                                        "disabled": lock_elastic,
+                                        "help": (
+                                            r"Mean axial tensile strength for the "
+                                            r"cracking check ($f_{ct,\mathrm{eff}}$). "
+                                            "Use Auto for the EC2 value."
+                                        ),
+                                    },
+                                ))
 
     # Elastic modulus Ec: only used by the elastic analysis, to derive the modular
     # ratios n = Es/Ec. The Auto button sets the EC2 secant modulus for the grade.
@@ -500,9 +529,18 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
             or (auto_all and not lock_elastic)):
         st.session_state["conc_Ec"] = ecm_gpa
     Ec = box.number_input(r"Elastic modulus $E_c$ (GPa)", 1.0, 100.0, step=0.5,
-                          key="conc_Ec", disabled=lock_elastic,
-                          help="Concrete secant modulus, used only by the elastic "
-                               r"analysis to derive the modular ratios $n=E_s/E_c$.")
+                          key="conc_Ec",
+                          **_input_widget_kwargs(
+                              "conc_Ec",
+                              {
+                                  "disabled": lock_elastic,
+                                  "help": (
+                                      "Concrete secant modulus, used only by the "
+                                      r"elastic analysis to derive the modular "
+                                      r"ratios $n=E_s/E_c$."
+                                  ),
+                              },
+                          ))
     return concrete, fctm_val, Ec, preset, k_tc, eta_cc
 
 
@@ -576,12 +614,23 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
         st.session_state[f"{prefix}_prev"] = preset
     st.session_state.setdefault(f"{prefix}_active_comp", True)
     active_comp = box.checkbox(
-        "Active in compression", key=f"{prefix}_active_comp", disabled=locked,
-        help="On: the bar carries compression and its compression-side inputs "
-             r"($f_{yck}$, $\varepsilon_{0c}$) are used. Off: the reinforcement is tension-only "
-             "(no compression), for every curve type. This applies to the plastic "
-             "capacity; the elastic analysis is linear and treats "
-             "the bars in both directions.")
+        "Active in compression",
+        key=f"{prefix}_active_comp",
+        **_input_widget_kwargs(
+            f"{prefix}_active_comp",
+            {
+                "disabled": locked,
+                "help": (
+                    "On: the bar carries compression and its compression-side "
+                    r"inputs ($f_{yck}$, $\varepsilon_{0c}$) are used. Off: the "
+                    "reinforcement is tension-only (no compression), for every "
+                    "curve type. This applies to the plastic capacity; the "
+                    "elastic analysis is linear and treats the bars in both "
+                    "directions."
+                ),
+            },
+        ),
+    )
     # The compression-side inputs only matter when compression is active.
     comp_only = {"fyck", "ey0c"}
     vals = {f: _number(box, prefix, f, mp.MILD_FIELD_META, mp.MILD_HELP,
@@ -747,7 +796,7 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
               "reference first." if selected in protected else None),
     )
     if add_clicked or duplicate_clicked or delete_clicked:
-        _snapshot_input_state()
+        _snapshot_completed_input_state()
         if add_clicked:
             catalogue, selected = mat_catalog.add_entry(catalogue, kind)
         elif duplicate_clicked:
@@ -768,6 +817,14 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
         st.session_state[key] = catalogue
         st.session_state[pending_select_key] = selected
         _bump_material_catalog_revision()
+        action_keys = [
+            key,
+            pending_select_key,
+            "_material_catalog_revision",
+        ]
+        if "_capacity_steel_pending_material_id" in st.session_state:
+            action_keys.append("_capacity_steel_pending_material_id")
+        _journal_current_input_values(*action_keys)
         st.rerun()
 
     entry = next(item for item in items if item["id"] == selected)
@@ -898,7 +955,7 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         ),
     )
     if add_mild or add_tendon or duplicate or delete:
-        _snapshot_input_state()
+        _snapshot_completed_input_state()
         if add_mild:
             catalogue, selected = fatigue_inputs.add_entry(
                 catalogue,
@@ -924,6 +981,11 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         st.session_state[key] = catalogue
         st.session_state[pending_key] = selected
         _bump_fatigue_catalog_revision()
+        _journal_current_input_values(
+            key,
+            pending_key,
+            "_fatigue_catalog_revision",
+        )
         st.rerun()
 
     entry = next(item for item in items if item["id"] == selected)
@@ -1293,6 +1355,7 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
             ),
             column_specs=specs,
             component_options=options,
+            on_change=functools.partial(_record_input_event, ed_key),
         )
     # Keep a durable, non-widget mirror after every frontend report.  Catalogue
     # buttons, Calculate, navigation and project saving can then all consume the
@@ -1666,12 +1729,17 @@ def _case_table_editor(box, key):
     edited = box.data_editor(
         seed,
         key=editor_key,
-        num_rows="dynamic",
-        hide_index=True,
-        width="stretch",
-        height="auto",
-        column_config=_case_column_config(key),
-        column_order=load_cases.TABLE_COLUMNS[key],
+        **_input_widget_kwargs(
+            editor_key,
+            {
+                "num_rows": "dynamic",
+                "hide_index": True,
+                "width": "stretch",
+                "height": "auto",
+                "column_config": _case_column_config(key),
+                "column_order": load_cases.TABLE_COLUMNS[key],
+            },
+        ),
     )
     current = load_cases.normalise_table(edited, key)
     st.session_state[key] = current.copy(deep=True)
@@ -1801,12 +1869,17 @@ def _fatigue_spectrum_editor(box):
     edited = box.data_editor(
         seed,
         key=_FATIGUE_EDITOR_KEY,
-        num_rows="dynamic",
-        hide_index=True,
-        width="stretch",
-        height="auto",
-        column_config=_fatigue_spectrum_column_config(),
-        column_order=fatigue_inputs.SPECTRUM_COLUMNS,
+        **_input_widget_kwargs(
+            _FATIGUE_EDITOR_KEY,
+            {
+                "num_rows": "dynamic",
+                "hide_index": True,
+                "width": "stretch",
+                "height": "auto",
+                "column_config": _fatigue_spectrum_column_config(),
+                "column_order": fatigue_inputs.SPECTRUM_COLUMNS,
+            },
+        ),
     )
     current = fatigue_inputs.normalise_spectrum_table(edited)
     st.session_state[key] = current.copy(deep=True)
@@ -2004,6 +2077,43 @@ _DURABLE_INPUT_SCALARS = tuple(project_io.SCALAR_KEYS) + (
     "_fatigue_catalog_selected", "_fatigue_basis_revision",
 )
 _INPUT_STATE_KEY = "_durable_input_scalars"
+_INPUT_BUILD_KEY = "_inputs_build_in_progress"
+_LAST_WORKSPACE_KEY = "_last_completed_workspace"
+_PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
+_INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
+
+
+def _record_input_event(
+    key,
+    callback=None,
+    callback_args=(),
+    callback_kwargs=None,
+) -> None:
+    """Journal a real widget event until one Inputs build commits it.
+
+    Streamlit applies the triggering widget value before running its callback.
+    Keeping that value separately lets interrupted-run recovery distinguish the
+    engineer's edit from defaults created while the superseded script was only
+    partly reconstructed. The journal survives further interruptions and is
+    cleared only after a complete Inputs render.
+    """
+
+    if (
+        st.session_state.get("_main_page", "Inputs") == "Inputs"
+        and key in st.session_state
+    ):
+        pending = dict(st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}))
+        pending[key] = copy.deepcopy(st.session_state[key])
+        st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
+    if callback is not None:
+        callback(*(callback_args or ()), **(callback_kwargs or {}))
+
+
+def _journal_current_input_values(*keys) -> None:
+    """Retain deliberate button-driven mutations across their forced rerun."""
+
+    for key in keys:
+        _record_input_event(key)
 
 
 def _snapshot_input_state(inp=None) -> None:
@@ -2023,22 +2133,57 @@ def _snapshot_input_state(inp=None) -> None:
         st.session_state["_latest_inputs"] = inp
 
 
-def _restore_input_state() -> None:
-    """Restore missing input keys from the durable navigation-state mirror."""
+def _snapshot_completed_input_state() -> None:
+    """Widget callback: commit only a fully rendered Inputs workspace.
+
+    A second browser event can interrupt an Inputs rerun before every widget has
+    been reconstructed.  Committing that partial namespace would replace valid
+    engineering inputs with widget defaults.  The last completed render remains
+    authoritative until the next Inputs build reaches its normal end.
+    """
+    if (
+        st.session_state.get(_LAST_WORKSPACE_KEY) == "Inputs"
+        and not st.session_state.get(_INPUT_BUILD_KEY, False)
+    ):
+        _snapshot_input_state()
+        st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+
+
+def _restore_input_state(*, replace: bool = False) -> None:
+    """Restore input keys from the durable navigation-state mirror.
+
+    ``replace`` is used after an interrupted Inputs build.  Keys created during
+    that partial run may still exist, so ``setdefault`` alone cannot recover the
+    last complete values.
+    """
     for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items():
-        st.session_state.setdefault(key, value)
+        # A tab event is written before its callback/rerun. Keep that event while
+        # replacing engineering values from the last complete Inputs render;
+        # otherwise recovery would appear to ignore the engineer's tab click.
+        preserve_navigation = (
+            replace
+            and key in _INPUT_NAVIGATION_KEYS
+            and key in st.session_state
+        )
+        if not preserve_navigation and (replace or key not in st.session_state):
+            st.session_state[key] = value
+    # Replay every genuine edit that has not yet reached a complete Inputs commit.
+    # Multiple rapid events accumulate here, so a later interruption does not
+    # discard an earlier edit from the same burst.
+    for key, value in st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}).items():
+        st.session_state[key] = copy.deepcopy(value)
 
 
 def _open_analysis_content(flag: str) -> None:
     """Open a full-width auxiliary view from an input-page button callback."""
-    _snapshot_input_state()
+    _snapshot_completed_input_state()
     st.session_state["_qs_open"] = flag == "quick_section"
     st.session_state["_main_page"] = "Analysis"
 
 
 def _open_manual_dialog() -> None:
     """Open the manual above the current workspace without navigating away."""
-    _snapshot_input_state()
+    _snapshot_completed_input_state()
     st.session_state["_manual_open"] = True
 
 
@@ -2195,13 +2340,31 @@ def _reset_autosave_clock() -> None:
     st.session_state["_autosave_t"] = time.time()    # restart the interval on a change
 
 
+def _autosave_preferences(state) -> tuple[bool, int]:
+    """Return live autosave settings, falling back to the durable input mirror."""
+    durable = state.get(_INPUT_STATE_KEY, {})
+    if not isinstance(durable, dict):
+        durable = {}
+    autosave_on = state.get(
+        "autosave_on", durable.get("autosave_on", True))
+    autosave_min = state.get(
+        "autosave_min", durable.get("autosave_min", _AUTOSAVE_DEFAULT_MIN))
+    return bool(autosave_on), max(1, int(autosave_min))
+
+
 def _maybe_autosave() -> None:
     """Autosave on user interaction once the interval has elapsed (the BriCoS model:
     the save rides the reruns that interaction triggers, so the app never reruns or
     saves while idle). Call from the main flow after the inputs are built."""
-    if not st.session_state.get("autosave_on", True):
+    # The Project panel is lazy. Streamlit may remove its widget-owned live keys
+    # when that panel is no longer rendered, while the completed values remain in
+    # the durable input mirror. Analysis-fragment reruns do not execute the outer
+    # input recovery flow, so consult that mirror rather than silently reverting
+    # to the defaults on those reruns.
+    autosave_on, autosave_min = _autosave_preferences(st.session_state)
+    if not autosave_on:
         return
-    interval = max(1, int(st.session_state.get("autosave_min", _AUTOSAVE_DEFAULT_MIN))) * 60
+    interval = autosave_min * 60
     if time.time() - st.session_state.get("_autosave_t", 0.0) < interval:
         return
     st.session_state["_autosave_t"] = time.time()    # reset whether or not it writes
@@ -2214,6 +2377,15 @@ def _autosave_startup() -> None:
     re-open where you left off) and start the autosave clock. A missing autosave
     just leaves the default section; an unreadable one starts fresh with a notice.
     An explicitly uploaded project takes precedence over the autosave."""
+    # The Project panel is lazy, but autosave remains an application-level
+    # service. Seed its defaults without constructing hidden widgets. If widget
+    # cleanup removed a previously mounted control, leave it missing here so the
+    # durable mirror can restore the engineer's non-default setting below.
+    durable = st.session_state.get(_INPUT_STATE_KEY, {})
+    if "autosave_on" not in st.session_state and "autosave_on" not in durable:
+        st.session_state["autosave_on"] = True
+    if "autosave_min" not in st.session_state and "autosave_min" not in durable:
+        st.session_state["autosave_min"] = _AUTOSAVE_DEFAULT_MIN
     if st.session_state.get("_autosave_init"):
         return
     st.session_state["_autosave_init"] = True
@@ -2269,6 +2441,9 @@ def _apply_pending_project() -> None:
     except ValueError as exc:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
         return
+    # A valid project load is an explicit whole-input replacement. Do not replay
+    # uncommitted browser events from the project that was open previously.
+    st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
     # Parsing retains historical scalar loads for compatibility with non-UI callers,
     # but the table-native app must not keep them in live or durable state. The
     # migrated canonical tables above contain the same information.
@@ -2520,16 +2695,16 @@ def _report_panel(input_signature):
     box.caption("Fill in the project details, press Generate, then download the PDF. "
                 "The report uses the current inputs and the analyses for the selected "
                 "mode.")
-    box.text_input(_REPORT_FIELDS[0][1], key="rep_proj_no")
-    box.text_input(_REPORT_FIELDS[1][1], key="rep_proj_name")
-    box.text_input(_REPORT_FIELDS[2][1], key="rep_section")
+    _seeded_text(box, _REPORT_FIELDS[0][1], "", "rep_proj_no")
+    _seeded_text(box, _REPORT_FIELDS[1][1], "", "rep_proj_name")
+    _seeded_text(box, _REPORT_FIELDS[2][1], "", "rep_section")
     c1, c2 = box.columns(2)
-    c1.text_input("Revision", key="rep_rev")
-    c2.text_input("Author", key="rep_author")
+    _seeded_text(c1, "Revision", "", "rep_rev")
+    _seeded_text(c2, "Author", "", "rep_author")
     c3, c4 = box.columns(2)
-    c3.text_input("Checker", key="rep_checker")
-    c4.text_input("Approver", key="rep_approver")
-    box.text_area("Comments", key="rep_comments", height=80)
+    _seeded_text(c3, "Checker", "", "rep_checker")
+    _seeded_text(c4, "Approver", "", "rep_approver")
+    _seeded_text_area(box, "Comments", "", "rep_comments", height=80)
     _seeded_selectbox(
         box,
         "Report content",
@@ -3157,7 +3332,7 @@ def build_inputs(host=st):
     aset, sec_tab, mat_tab, loads, project = s.tabs(
         input_tab_labels,
         key="_input_tab",
-        on_change=_snapshot_input_state,
+        on_change=_snapshot_completed_input_state,
     )
     # Geometry tables and their drawing remain visible together. The wider input
     # column keeps the four editable point grids practical on a normal laptop.
@@ -3169,12 +3344,22 @@ def build_inputs(host=st):
     about_slot = project.container()
     report_slot = project.container()
     save_slot = project.container()
-    mode = aset.radio("Bending analysis", ["Plastic", "Elastic", "Both"], key="mode",
-                      help="The bending analysis only -- the shear, torsion and crack "
-                           "checks are separate toggles below. Plastic: the "
-                           "bending capacity (M-M envelope). Elastic: cracked-section "
-                           "concrete and bar stresses for the applied loads. Both: "
-                           "run the two.")
+    mode = aset.radio(
+        "Bending analysis",
+        ["Plastic", "Elastic", "Both"],
+        key="mode",
+        **_input_widget_kwargs(
+            "mode",
+            {
+                "help": (
+                    "The bending analysis only -- the shear, torsion and crack "
+                    "checks are separate toggles below. Plastic: the bending "
+                    "capacity (M-M envelope). Elastic: cracked-section concrete "
+                    "and bar stresses for the applied loads. Both: run the two."
+                ),
+            },
+        ),
+    )
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
     fatigue_on = _seeded_toggle(
@@ -3447,27 +3632,58 @@ def build_inputs(host=st):
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
     sls_bond = scw.selectbox(
         r"Mild-steel bond ($k_1$)",
-        list(_BOND_K1), key="sls_bond", disabled=not (elastic_on and sls_cw),
-        help="EC2 7.11 bond coefficient k1 for the crack spacing, applied to the "
-             "mild reinforcement: 0.8 for ribbed / high-bond bars (e.g. Tentor), "
-             "1.6 for plain round bars. Prestressing tendons always use k1 = 1.6.")
+        list(_BOND_K1),
+        key="sls_bond",
+        **_input_widget_kwargs(
+            "sls_bond",
+            {
+                "disabled": not (elastic_on and sls_cw),
+                "help": (
+                    "EC2 7.11 bond coefficient k1 for the crack spacing, applied "
+                    "to the mild reinforcement: 0.8 for ribbed / high-bond bars "
+                    "(e.g. Tentor), 1.6 for plain round bars. Prestressing "
+                    "tendons always use k1 = 1.6."
+                ),
+            },
+        ),
+    )
     sls_k1 = _BOND_K1[sls_bond]
     # Migrate the pre-coarse-system saved value before the selectbox reads it.
     if st.session_state.get("sls_code") in _CRACK_CODE_ALIASES:
         st.session_state["sls_code"] = _CRACK_CODE_ALIASES[st.session_state["sls_code"]]
     sls_code = scw.selectbox(
-        "Crack-width code", list(_CRACK_CODES), key="sls_code",
-        disabled=not (elastic_on and sls_cw),
-        help="Crack-spacing method. The DK NA reports fine and coarse systems; "
-             "the 2023 option uses the refined model in 9.2.3. See the manual "
-             "for equations and applicability.")
+        "Crack-width code",
+        list(_CRACK_CODES),
+        key="sls_code",
+        **_input_widget_kwargs(
+            "sls_code",
+            {
+                "disabled": not (elastic_on and sls_cw),
+                "help": (
+                    "Crack-spacing method. The DK NA reports fine and coarse "
+                    "systems; the 2023 option uses the refined model in 9.2.3. "
+                    "See the manual for equations and applicability."
+                ),
+            },
+        ),
+    )
     sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
     sls_edition = _CRACK_CODES[sls_code]["edition"]
     sls_member = scw.selectbox(
-        "Member type", ["Beam", "Slab"], key="sls_member",
-        disabled=not (elastic_on and sls_cw and sls_dk_na),
-        help="DK NA fine-system selection for the (h-x)/3 effective-height term. "
-             "Ignored by other methods.")
+        "Member type",
+        ["Beam", "Slab"],
+        key="sls_member",
+        **_input_widget_kwargs(
+            "sls_member",
+            {
+                "disabled": not (elastic_on and sls_cw and sls_dk_na),
+                "help": (
+                    "DK NA fine-system selection for the (h-x)/3 "
+                    "effective-height term. Ignored by other methods."
+                ),
+            },
+        ),
+    )
 
     detailing_member_type = _seeded_selectbox(
         det,
@@ -3856,29 +4072,36 @@ def build_inputs(host=st):
     spacing_x, spacing_y = sts.columns(2)
     shear_vx_transverse_leg_spacing = _seeded_number(
         spacing_x,
-        r"Max. transverse leg spacing for $V_x$ (mm, 0 = auto)",
+        r"Max. $V_x$-leg spacing along $y$ (mm; 0 = screen)",
         0.0,
         100000.0,
         0.0,
         10.0,
         "shear_vx_transverse_leg_spacing",
         disabled=not (_links and transverse_detailing_on),
-        help=r"Largest transverse distance $s_{t,x}$ between effective stirrup "
-             r"legs. 0 uses the full web width $b_{w,x}$ as a conservative "
-             "upper bound; enter the actual maximum to credit a closer layout.",
+        help=r"Largest centre-to-centre distance $s_{t,x}$, measured along $y$, "
+             r"between adjacent link legs parallel to $V_x$. 0 uses the gross "
+             "web breadth only as an upper-bound screen: it can prove PASS, but "
+             "an actual spacing is required if that bound exceeds the limit.",
     )
     shear_vy_transverse_leg_spacing = _seeded_number(
         spacing_y,
-        r"Max. transverse leg spacing for $V_y$ (mm, 0 = auto)",
+        r"Max. $V_y$-leg spacing along $x$ (mm; 0 = screen)",
         0.0,
         100000.0,
         0.0,
         10.0,
         "shear_vy_transverse_leg_spacing",
         disabled=not (_links and transverse_detailing_on),
-        help=r"Largest transverse distance $s_{t,y}$ between effective stirrup "
-             r"legs. 0 uses the full web width $b_{w,y}$ as a conservative "
-             "upper bound; enter the actual maximum to credit a closer layout.",
+        help=r"Largest centre-to-centre distance $s_{t,y}$, measured along $x$, "
+             r"between adjacent link legs parallel to $V_y$. 0 uses the gross "
+             "web breadth only as an upper-bound screen: it can prove PASS, but "
+             "an actual spacing is required if that bound exceeds the limit.",
+    )
+    sts.caption(
+        r"$s_t$ is the in-section distance between parallel link legs, not the "
+        r"longitudinal stirrup spacing $s$. For $V_x$ it is measured along $y$; "
+        r"for $V_y$ it is measured along $x$."
     )
     shear_link_dia = _seeded_number(
         sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
@@ -4204,7 +4427,7 @@ def build_inputs(host=st):
     material_tabs = mat_tab.tabs(
         material_tab_labels,
         key="_material_tab",
-        on_change=_snapshot_input_state,
+        on_change=_snapshot_completed_input_state,
     )
     conc_tab, mild_tab, pre_tab = material_tabs[:3]
     fatigue_tab = material_tabs[3] if fatigue_on else None
@@ -4492,29 +4715,35 @@ def build_inputs(host=st):
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
-    with report_slot:
-        _report_panel(sig)
-    with save_slot:
-        _save_load_panel()
-    with about_slot.expander("About", expanded=False):
-        st.markdown("### Sector")
-        st.caption("Reinforced-concrete and prestressed cross-section analysis.")
-        st.markdown(
-            "- **Plastic:** M-M capacity and utilisation\n"
-            "- **Elastic:** cracked-section stresses\n"
-            "- **Acceptance:** stress and crack-width criteria\n"
-            "- **Fatigue:** grouped spectrum assessment\n"
-            "- **Capacity checks:** shear, torsion and combined M-V-T")
-        st.caption("Set inputs, Calculate, review Results Overview, then export.")
-        st.divider()
-        st.markdown(f"**Sector v{APP_VERSION}**")
-        st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
-        st.caption(f"Proprietary software; licensed to {APP_LICENSEE} for internal use.")
-        st.button(
-            "User manual", key="open_manual", width="stretch",
-            help="Open the user manual.",
-            on_click=_open_manual_dialog,
-        )
+    # Project gathering and report/save widgets are among the most expensive
+    # non-calculation parts of an Inputs rerun.  They are independent of the four
+    # engineering input stages, so build them only while their tracked tab is open.
+    if project.open:
+        with report_slot:
+            _report_panel(sig)
+        with save_slot:
+            _save_load_panel()
+        with about_slot.expander("About", expanded=False):
+            st.markdown("### Sector")
+            st.caption("Reinforced-concrete and prestressed cross-section analysis.")
+            st.markdown(
+                "- **Plastic:** M-M capacity and utilisation\n"
+                "- **Elastic:** cracked-section stresses\n"
+                "- **Acceptance:** stress and crack-width criteria\n"
+                "- **Fatigue:** grouped spectrum assessment\n"
+                "- **Capacity checks:** shear, torsion and combined M-V-T")
+            st.caption("Set inputs, Calculate, review Results Overview, then export.")
+            st.divider()
+            st.markdown(f"**Sector v{APP_VERSION}**")
+            st.caption(f"Author: {APP_AUTHOR}  \nEmail: {APP_EMAIL}")
+            st.caption(
+                f"Proprietary software; licensed to {APP_LICENSEE} for internal use."
+            )
+            st.button(
+                "User manual", key="open_manual", width="stretch",
+                help="Open the user manual.",
+                on_click=_open_manual_dialog,
+            )
     return dict(section=section, void_error=void_error, steel_error=steel_error,
                 material_error=material_error,
                 fatigue_assignment_error=fatigue_assignment_error,
@@ -4750,6 +4979,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     if inp["mode"] in ("Plastic", "Both") and reuse_plastic is not None:
         out["plastic"] = reuse_plastic
     elif inp["mode"] in ("Plastic", "Both"):
+        _warm_solver()
         vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
         # A full 360 deg turn returns to the start, so the last angle (v_max) repeats
         # the first (v_min) exactly. Sweep only up to the angle before it -- the
@@ -5090,6 +5320,8 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             valid=eout["converged"],
         )
     if inp.get("minimum_reinforcement_on"):
+        if inp.get("detailing_edition") == detailing.EC2_2023:
+            _warm_solver()
         out["minimum_reinforcement"] = detailing.minimum_reinforcement(
             inp["section"],
             inp.get("bar_elements") or [],
@@ -6206,6 +6438,7 @@ def _transverse_detailing_result(inp, out):
                     else "shear_vy_transverse_leg_spacing",
                     0.0,
                 ),
+                "measurement_axis": "y" if component == "vx" else "x",
             })
 
     torsion_specs = []
@@ -6780,11 +7013,12 @@ def detailing_view(inp, results, *, global_results=None):
             kind = check.get("kind")
             ratio = kind == "minimum_ratio"
             required_links = kind == "required_links"
+            check_label = check_labels.get(kind, kind)
+            if kind == "transverse_leg_spacing" and check.get("measurement_axis"):
+                check_label += f" (along {check['measurement_axis']})"
             transverse_rows.append({
                 "Scope": check.get("scope"),
-                "Check": check_labels.get(
-                    check.get("kind"), check.get("kind")
-                ),
+                "Check": check_label,
                 "Provided": None if required_links else check.get("provided"),
                 "Limit": None if required_links else check.get("limit"),
                 "Unit": (
@@ -6998,15 +7232,15 @@ def plastic_view(inp, results):
                                zones=viz.compression_zones(inp["outer"], hp),
                                title=f"Section at NA angle = {pt['V']:.0f}{_DEG} "
                                      "(tension + / compression -)",
-                               show_labels=True, label_scale=inp["label_scale"],
-                               label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
+                               show_labels=False, scale=_MM, unit="mm",
                                bar_hover=bar_hover, tendon_hover=tendon_hover,
                                bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
                                tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])]),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds retain the "
-                   "element type. Hover an element for its design stress and strain.")
+                   "element type. Hover an element for its ID, design stress and "
+                   "strain; complete values are tabulated beside the figure.")
     with cR:
         # Split the bar strain into its tensile and compression extreme only when
         # there are mild bars that are active in compression (a tendon-only section has
@@ -7277,16 +7511,16 @@ def elastic_view(inp, results):
             viz.section_figure(inp["outer"], inp["holes"], bar_xy,
                                bar_colors=bar_colors,
                                tendons=tendon_xy, tendon_colors=tendon_colors,
-                               na_line=na, zones=zones, show_labels=True,
-                               label_scale=inp["label_scale"],
-                               label_min_gap=inp["label_min_gap"], scale=_MM, unit="mm",
+                               na_line=na, zones=zones, show_labels=False,
+                               scale=_MM, unit="mm",
                                title="Elastic state (tension + / compression -)",
                                bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
                                tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])]),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds identify the "
-                   "element type, so sign and type remain readable without colour.")
+                   "element type. Hover for the element ID; complete values are "
+                   "tabulated below.")
     with strain_col:
         st.plotly_chart(
             viz.elastic_strain_figure(
@@ -9754,25 +9988,35 @@ if next_main_page in {"Inputs", "Analysis"}:
 if quick_section_open:
     st.session_state["_main_page"] = "Analysis"
 st.session_state.setdefault("_main_page", "Inputs")
-_restore_input_state()
+_restore_input_state(
+    replace=bool(st.session_state.get(_INPUT_BUILD_KEY, False))
+)
 
 main_page = st.segmented_control(
     "Workspace",
     ["Inputs", "Analysis"],
     key="_main_page",
-    on_change=_snapshot_input_state,
+    on_change=_snapshot_completed_input_state,
     required=True,
     width="stretch",
     label_visibility="collapsed",
 )
 
 if main_page == "Inputs":
+    # Set this before constructing any input widget.  If Streamlit supersedes the
+    # run, the flag survives and the next run restores the last complete snapshot.
+    st.session_state[_INPUT_BUILD_KEY] = True
     inp = build_inputs(st)
     _snapshot_input_state(inp)
+    st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    st.session_state[_INPUT_BUILD_KEY] = False
+    st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"
     # Autosave rides a normal input/edit rerun once the interval has elapsed.
     _maybe_autosave()
     _generate_report(inp)
 else:
+    st.session_state[_INPUT_BUILD_KEY] = False
+    st.session_state[_LAST_WORKSPACE_KEY] = "Analysis"
     inp = st.session_state.get("_latest_inputs")
     if quick_section_open:
         _quick_section_viewport()

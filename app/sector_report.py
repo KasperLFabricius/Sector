@@ -158,6 +158,48 @@ def _kaleido_server_api():
             getattr(kaleido, "stop_sync_server", None))
 
 
+def _kaleido_page_path():
+    """Create one persistent Plotly launcher page outside Kaleido's temp tree.
+
+    Kaleido normally writes a fresh ``index.html`` in a random temporary folder
+    every time its browser starts. Endpoint protection can lock that just-created
+    file, which makes report generation time out before the first figure. A stable
+    page also avoids repeated temp-file scanning in the packaged desktop app.
+    """
+    try:
+        import kaleido
+
+        generator = kaleido.PageGenerator(mathjax=False)
+        html = generator.generate_index()
+        configured = (
+            os.environ.get("SECTOR_KALEIDO_DIR")
+            or os.environ.get("SECTOR_AUTOSAVE_DIR")
+        )
+        if configured:
+            folder = os.path.abspath(configured)
+        else:
+            base = os.environ.get("LOCALAPPDATA")
+            folder = (
+                os.path.join(base, "Sector", "kaleido")
+                if base
+                else os.path.join(os.path.expanduser("~"), ".sector", "kaleido")
+            )
+        os.makedirs(folder, exist_ok=True)
+        page = os.path.join(folder, "plotly_export.html")
+        current = None
+        try:
+            with open(page, "r", encoding="utf-8") as handle:
+                current = handle.read()
+        except OSError:
+            pass
+        if current != html:
+            with open(page, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(html)
+        return page
+    except Exception:
+        return None
+
+
 _image_server_started = False
 _image_server_lock = threading.Lock()
 
@@ -193,7 +235,9 @@ def ensure_image_server():
         if start is None:
             return                            # nothing to start; per-image fallback
         try:
-            start(silence_warnings=True)
+            page = _kaleido_page_path()
+            kwargs = {"page_generator": page} if page else {}
+            start(silence_warnings=True, **kwargs)
         except Exception:
             return                            # browser unavailable; per-image fallback
         if stop is not None:
@@ -1505,19 +1549,19 @@ class ReportBuilder:
                 ])
             rows.extend([
                 [
-                    "Maximum transverse leg spacing for V<sub>x</sub>",
+                    "Maximum spacing of V<sub>x</sub>-parallel legs along y",
                     (
                         f"{_fmt(inp.get('shear_vx_transverse_leg_spacing'), 1)} mm"
                         if inp.get("shear_vx_transverse_leg_spacing")
-                        else "conservative auto"
+                        else "gross-web upper-bound screen"
                     ),
                 ],
                 [
-                    "Maximum transverse leg spacing for V<sub>y</sub>",
+                    "Maximum spacing of V<sub>y</sub>-parallel legs along x",
                     (
                         f"{_fmt(inp.get('shear_vy_transverse_leg_spacing'), 1)} mm"
                         if inp.get("shear_vy_transverse_leg_spacing")
-                        else "conservative auto"
+                        else "gross-web upper-bound screen"
                     ),
                 ],
             ])
@@ -1887,6 +1931,12 @@ class ReportBuilder:
                 "reinforcement as closed stirrups. Anchorage is assumed; reduce "
                 "f<sub>ywk</sub> when full anchorage is unavailable."
             )
+            self._small(
+                "Transverse leg spacing is measured in the section plane between "
+                "adjacent parallel legs: along y for V<sub>x</sub> and along x for "
+                "V<sub>y</sub>. It is not the longitudinal stirrup spacing. A gross-"
+                "web upper-bound screen can prove PASS, but cannot prove FAIL."
+            )
         if self._base_out.get("clear_spacing") is not None:
             clause = "11.2(2)" if self.inp.get("detailing_edition") == detailing.EC2_2023 else "8.2(2)"
             self._p(
@@ -2120,6 +2170,9 @@ class ReportBuilder:
             kind = check.get("kind")
             ratio = kind == "minimum_ratio"
             required_links = kind == "required_links"
+            check_label = labels.get(kind, kind or "-")
+            if kind == "transverse_leg_spacing" and check.get("measurement_axis"):
+                check_label += f" (along {check['measurement_axis']})"
             provided = check.get("provided")
             limit = check.get("limit")
             if required_links:
@@ -2139,9 +2192,7 @@ class ReportBuilder:
                 )
             rows.append([
                 _html_escape(check.get("scope") or "-"),
-                _html_escape(labels.get(
-                    check.get("kind"), check.get("kind") or "-"
-                )),
+                _html_escape(check_label),
                 provided_text,
                 limit_text,
                 _pct(check.get("utilisation")),
@@ -2537,7 +2588,7 @@ class ReportBuilder:
             self._fig(viz.section_figure(
                 inp.get("outer", []), inp.get("holes", []), bars,
                 bar_colors=bar_colors, na_line=na, tendons=tendons,
-                tendon_colors=tendon_colors, zones=zones, show_labels=True,
+                tendon_colors=tendon_colors, zones=zones, show_labels=False,
                 scale=_MM, unit="mm",
                 bar_ids=[item.get("id") for item in inp.get("bar_elements", [])],
                 tendon_ids=[item.get("id") for item in inp.get("tendon_elements", [])],
@@ -2546,7 +2597,7 @@ class ReportBuilder:
             self._small(
                 "Blue/plain markers are tension (+); vermillion/x markers are "
                 "compression (-). Bar circles and tendon diamonds identify the "
-                "element type. Status is therefore not communicated by colour alone."
+                "element type. Element IDs and coordinates are tabulated above."
             )
 
     def _shear_2023(self, sh, res):
@@ -3875,14 +3926,14 @@ class ReportBuilder:
                     bar_colors=[sgn(s) for s in total[:nb]],
                     tendons=inp.get("tendons", []),
                     tendon_colors=[sgn(s) for s in total[nb:]], na_line=na, zones=zones,
-                    show_labels=True, scale=_MM, unit="mm",
+                    show_labels=False, scale=_MM, unit="mm",
                     bar_ids=[item.get("id") for item in inp.get("bar_elements", [])],
                     tendon_ids=[item.get("id") for item in inp.get("tendon_elements", [])],
                     title="Elastic state (tension + / compression -)"), 150, 100)
                 self._small(
                     "Blue/plain markers are tension (+); vermillion/x markers are "
                     "compression (-). Bar circles and tendon diamonds identify the "
-                    "element type. Sign is not communicated by colour alone."
+                    "element type. Element IDs and coordinates are tabulated below."
                 )
         if self.figures and el.get("concrete_corners"):
             self._fig(viz.elastic_strain_figure(

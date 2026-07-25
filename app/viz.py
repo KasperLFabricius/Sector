@@ -909,6 +909,13 @@ def fatigue_utilisation_map_figure(
     holes = [] if holes is None else list(holes)
     bar_elements = list(bar_elements or [])
     tendon_elements = list(tendon_elements or [])
+    section_mid_y = (
+        500.0 * (
+            min(float(point[1]) for point in outer)
+            + max(float(point[1]) for point in outer)
+        )
+        if outer else 0.0
+    )
     reinforcement = {
         str(_fatigue_value(result, "element_id", "")): result
         for result in _fatigue_items(spectrum, "reinforcement")
@@ -1072,7 +1079,10 @@ def fatigue_utilisation_map_figure(
                 line=dict(color="#111827", width=0.8),
             ),
             text=labels,
-            textposition="top center",
+            textposition=[
+                "bottom center" if y_mm >= section_mid_y else "top center"
+                for y_mm in concrete_y
+            ],
             textfont=dict(size=9, color=SCHEMATIC_INK),
             customdata=hover,
             hovertemplate="%{customdata}<extra></extra>",
@@ -1110,6 +1120,14 @@ def fatigue_utilisation_map_figure(
             _fatigue_text(record.get("id") or "-")
             for record, _ in selected
         ]
+        text_positions = [
+            (
+                "bottom center"
+                if float(record.get("y_mm", 0.0)) >= section_mid_y
+                else "top center"
+            )
+            for record, _ in selected
+        ]
         hover = []
         for (record, result), util in zip(selected, utils):
             damage = float(_fatigue_value(result, "damage_utilisation", 0.0))
@@ -1139,7 +1157,7 @@ def fatigue_utilisation_map_figure(
                 line=dict(color="#111827", width=1.0),
             ),
             text=labels,
-            textposition="top center",
+            textposition=text_positions,
             textfont=dict(size=10, color=SCHEMATIC_INK),
             customdata=hover,
             hovertemplate="%{customdata}<extra></extra>",
@@ -1204,7 +1222,7 @@ def fatigue_utilisation_map_figure(
         ),
         template=_TEMPLATE,
         height=520,
-        margin=dict(l=20, r=25, t=55, b=96),
+        margin=dict(l=20, r=25, t=88, b=96),
         xaxis=dict(title=dict(text="x (mm)", standoff=10), zeroline=True),
         yaxis=dict(
             title="y (mm)",
@@ -1242,11 +1260,11 @@ def fatigue_utilisation_map_figure(
     )
     fig.add_annotation(
         x=0.99,
-        y=0.99,
+        y=1.08,
         xref="paper",
         yref="paper",
         xanchor="right",
-        yanchor="top",
+        yanchor="bottom",
         text="acceptance limit = 1.00",
         showarrow=False,
         bgcolor="rgba(255,255,255,0.82)",
@@ -1255,11 +1273,11 @@ def fatigue_utilisation_map_figure(
     if search_bound_failed:
         fig.add_annotation(
             x=0.01,
-            y=0.99,
+            y=1.08,
             xref="paper",
             yref="paper",
             xanchor="left",
-            yanchor="top",
+            yanchor="bottom",
             text=(
                 "certified search upper D = "
                 f"{_fatigue_hover_number(search_upper, '.3f')} &gt; 1.00"
@@ -1272,11 +1290,11 @@ def fatigue_utilisation_map_figure(
     if search is not None and not search_converged:
         fig.add_annotation(
             x=0.01,
-            y=0.90 if search_bound_failed else 0.99,
+            y=1.01,
             xref="paper",
             yref="paper",
             xanchor="left",
-            yanchor="top",
+            yanchor="bottom",
             text="adaptive concrete search not converged; result invalid",
             showarrow=False,
             bgcolor="rgba(255,244,214,0.94)",
@@ -1571,7 +1589,10 @@ def fatigue_damage_figure(result, *, title=None):
             margin=dict(l=70, r=25, t=58, b=96),
             xaxis_title="Equivalent action pair",
             yaxis=dict(
-                title=r"$E_{cd,max}+0.43\sqrt{1-E_{cd,min}/E_{cd,max}}$",
+                title=(
+                    "E<sub>cd,max</sub> + 0.43&#8730;"
+                    "(1 &#8722; E<sub>cd,min</sub>/E<sub>cd,max</sub>)"
+                ),
                 rangemode="tozero",
             ),
             showlegend=False,
@@ -1823,7 +1844,7 @@ def detailing_geometry_figure(
         bars,
         title=title,
         tendons=tendons,
-        show_labels=True,
+        show_labels=False,
         scale=1000.0,
         unit="mm",
         height=570,
@@ -2061,7 +2082,8 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
 
     ``axis == 'x'`` means vertical shear / bending about x; ``axis == 'y'``
     means horizontal shear / bending about y. The actual section is retained,
-    the bars counted in ``A_sl`` are marked and numbered, and the displayed
+    the bars counted in ``A_sl`` are marked and identified in the summary/hover,
+    and the displayed
     dimensions use the same derived payload as the resistance calculation.
     ``b_w`` is a callout because an automatic value can be the sum of multiple
     solid web intervals (for example a box section), not one bounding width.
@@ -2096,12 +2118,11 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         fig.add_trace(go.Scatter(
             x=[p[0] * 1000.0 for p in pts],
             y=[p[1] * 1000.0 for p in pts],
-            mode="markers+text", name="included in Asl",
+            mode="markers", name="included in Asl",
             marker=dict(size=18, symbol="star", color=LOAD_POINT,
                         line=dict(color="white", width=1.2)),
-            text=[str(i) for i in selected], textposition="bottom center",
-            textfont=dict(size=10, color=SCHEMATIC_INK),
-            hovertemplate="Bar %{text}<br>included in Asl<extra></extra>",
+            customdata=[str(i) for i in selected],
+            hovertemplate="Bar %{customdata}<br>included in Asl<extra></extra>",
         ))
 
     if axis == "x":
@@ -2209,20 +2230,29 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         arrow_x0, arrow_x1 = (
             (xmin, xmax) if positive_action else (xmax, xmin)
         )
-        fig.add_annotation(x=arrow_x1, y=ymax + 0.12 * span_y,
-                           ax=arrow_x0, ay=ymax + 0.12 * span_y,
+        action_y = ymax + 0.34 * span_y
+        fig.add_trace(go.Scatter(
+            x=[arrow_x0, arrow_x1],
+            y=[action_y, action_y],
+            mode="markers",
+            marker=dict(size=1, opacity=0),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+        fig.add_annotation(x=arrow_x1, y=action_y,
+                           ax=arrow_x0, ay=action_y,
                            axref="x", ayref="y", text="", showarrow=True,
                            arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
                            font=dict(size=11, color=SCHEMATIC_INK))
-        fig.add_annotation(x=(xmin + xmax) / 2.0, y=ymax + 0.12 * span_y,
-                           text=action_label, showarrow=False, yanchor="bottom", yshift=6,
+        fig.add_annotation(x=(xmin + xmax) / 2.0, y=action_y,
+                           text=action_label, showarrow=False, yanchor="top", yshift=-6,
                            font=dict(size=11, color=SCHEMATIC_INK))
         if asl_cg_m is not None and d_mm > 0.0:
             cg = float(asl_cg_m) * 1000.0
             direction = 1.0 if tension_low else -1.0
             comp = xmax if tension_low else xmin
-            dim_y = ymax + 0.13 * span_y
-            z_y = ymax + 0.25 * span_y
+            dim_y = ymax + 0.11 * span_y
+            z_y = ymax + 0.22 * span_y
             fig.add_shape(type="line", x0=cg, x1=comp, y0=dim_y, y1=dim_y,
                           line=dict(color=SCHEMATIC_INK, width=1.2))
             fig.add_annotation(x=comp, y=dim_y,

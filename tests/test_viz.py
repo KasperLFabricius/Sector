@@ -732,7 +732,8 @@ def test_shear_geometry_figure_exposes_derived_geometry_and_selected_bars():
         bw_source="auto minimum solid width",
     )
     selected = next(t for t in fig.data if t.name == "included in Asl")
-    assert list(selected.text) == ["1", "2"]
+    assert selected.mode == "markers"
+    assert list(selected.customdata) == ["1", "2"]
     text = " ".join((a.text or "") for a in fig.layout.annotations)
     assert "d = 550 mm" in text and "z = 495 mm" in text
     assert "400 mm" in text and "auto minimum solid width" in text
@@ -755,6 +756,18 @@ def test_horizontal_shear_geometry_uses_left_tension_face():
     text = " ".join((a.text or "") for a in fig.layout.annotations)
     assert "tension face" in text and "bending about y" in text
     assert "user input" in text
+    selected = next(t for t in fig.data if t.name == "included in Asl")
+    assert selected.mode == "markers"
+    dimension_y = {
+        float(annotation.y)
+        for annotation in fig.layout.annotations
+        if annotation.text and (
+            str(annotation.text).startswith("d =")
+            or str(annotation.text).startswith("z =")
+            or "V<sub>x,Ed</sub>" in str(annotation.text)
+        )
+    }
+    assert len(dimension_y) == 3
 
 
 def test_shear_geometry_compacts_long_selected_bar_list_in_header():
@@ -873,6 +886,13 @@ def test_detailing_figure_highlights_checked_bars_and_dimensions_spacing_pair():
     assert "c<sub>clear</sub> = 180.0 mm" in annotation_text
     assert "c<sub>req</sub> = 205.0 mm" in annotation_text
     assert "tension" in annotation_text
+    # Stable IDs remain available on the highlighted/governing hover traces, but
+    # the underlying section does not repeat labels over the dimension graphics.
+    assert not any(
+        trace.mode and "text" in trace.mode
+        for trace in fig.data
+        if trace.name not in {"included reinforcement", "governing spacing pair"}
+    )
     spacing_label = next(
         annotation
         for annotation in fig.layout.annotations
@@ -1009,6 +1029,12 @@ def test_fatigue_utilisation_map_is_qa_traceable_and_not_colour_only():
     assert "limit = 1.00" in " ".join(
         annotation.text for annotation in fig.layout.annotations
     )
+    limit = next(
+        annotation for annotation in fig.layout.annotations
+        if "limit = 1.00" in annotation.text
+    )
+    assert limit.y > 1.0 and limit.yanchor == "bottom"
+    assert list(reinforcement.textposition) == ["top center"]
 
 
 def test_fatigue_utilisation_map_marks_a_failing_certified_search_bound():
@@ -1233,7 +1259,10 @@ def test_fatigue_damage_figure_shows_equivalent_criterion_without_miner_sum():
     assert [trace.name for trace in fig.data] == ["equivalent criterion"]
     assert list(fig.data[0].x) == ["EQ-1", "EQ-2"]
     assert list(fig.data[0].y) == pytest.approx([0.82, 1.04])
-    assert "E_{" in fig.layout.yaxis.title.text
+    assert "E<sub>cd,max</sub>" in fig.layout.yaxis.title.text
+    assert "&#8730;" in fig.layout.yaxis.title.text
+    assert "$" not in fig.layout.yaxis.title.text
+    assert "sqrt" not in fig.layout.yaxis.title.text
     assert any(
         shape.type == "line" and shape.y0 == 1.0 and shape.y1 == 1.0
         for shape in fig.layout.shapes

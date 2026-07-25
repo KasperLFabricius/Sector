@@ -842,6 +842,7 @@ def test_transverse_detailing_summary_keeps_ratio_and_spacing_evidence():
                 "utilisation": 500.0 / 412.5,
                 "clause": "9.2.2(8)",
                 "spacing_source": "user",
+                "measurement_axis": "y",
             },
         ],
     }
@@ -851,7 +852,7 @@ def test_transverse_detailing_summary_keeps_ratio_and_spacing_evidence():
     )
     ratio = next(row for row in rows if "minimum ratio" in row["check"])
     spacing = next(
-        row for row in rows if "transverse leg spacing" in row["check"]
+        row for row in rows if "transverse leg spacing along y" in row["check"]
     )
     assert ratio["status"] == "PASS"
     assert "0.00120" in ratio["result"]

@@ -765,6 +765,7 @@ def _results(inp: dict | None = None) -> dict:
             "d_mm": shear_payload["d"],
             "legs": link_legs,
             "transverse_leg_spacing_mm": 0.0,
+            "measurement_axis": "x",
         }],
         torsion_tubes=[{
             "label": "Tube",

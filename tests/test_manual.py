@@ -347,7 +347,7 @@ def test_manual_documents_modelled_direction_and_link_detailing_scope():
         "longitudinal cut",
         "20% criterion",
         "minimum links",
-        "full web width",
+        "gross web breadth",
         "rotation-invariant minimum physical section dimension",
         "statically determinate linear members",
         "s_t \\\\leq 1.5d",
@@ -507,6 +507,8 @@ def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     assert at.session_state["_main_page"] == "Inputs"
     # The "User manual" button lives in the About expander. It opens above the
     # current page instead of replacing the workspace.
+    at.session_state["_input_tab"] = "Project & report"
+    at.run()
     at.button(key="open_manual").click().run()
     assert not at.exception
     assert at.session_state["_manual_open"] is True
@@ -541,6 +543,8 @@ def test_native_manual_dismissal_event_closes_and_stays_closed():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()
+    at.session_state["_input_tab"] = "Project & report"
+    at.run()
     at.button(key="open_manual").click().run()
     dialog = next(element for element in at._tree if element.type == "dialog")
     assert dialog.proto.dialog.id
@@ -570,6 +574,8 @@ def test_opening_and_closing_the_manual_keeps_inputs():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()   # a non-default input
+    at.session_state["_input_tab"] = "Project & report"
+    at.run()
     at.button(key="open_manual").click().run()
     at.button(key="manual_close").click().run()
     assert not at.exception
