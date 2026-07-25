@@ -3180,6 +3180,20 @@ def build_inputs(host=st):
         disabled=not fatigue_on,
         help="Assess concrete compression fatigue at the searched section fibres.",
     )
+    fatigue_concrete_method = _seeded_selectbox(
+        fat,
+        "Concrete fatigue method",
+        list(fatigue_analysis.CONCRETE_METHODS),
+        fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_method",
+        disabled=not (fatigue_on and fatigue_check_concrete),
+        help=(
+            "Explicit Palmgren-Miner uses the entered cycles in every spectrum "
+            "bin. Damage-equivalent checks Formula (6.72) or (E.2); each row's "
+            "long/total action pair must then already represent a damage-equivalent "
+            "amplitude for 10^6 cycles, and its Cycles value is ignored for concrete."
+        ),
+    )
     fat.caption(
         "Enter complete partial factors. Sector applies no control-, "
         "construction- or consequence-class multiplier."
@@ -3269,7 +3283,10 @@ def build_inputs(host=st):
         14.0,
         0.5,
         "fatigue_concrete_c",
-        disabled=not (fatigue_on and fatigue_check_concrete),
+        disabled=(
+            not (fatigue_on and fatigue_check_concrete)
+            or fatigue_concrete_method == fatigue_analysis.CONCRETE_EQUIVALENT
+        ),
         help=r"Coefficient in the implemented $\log_{10}N_R$ concrete fatigue-life "
              "relation.",
     )
@@ -4422,6 +4439,7 @@ def build_inputs(host=st):
             fatigue_edition,
             bool(fatigue_check_steel),
             bool(fatigue_check_concrete),
+            fatigue_concrete_method,
             float(concrete.fck),
             float(concrete.alpha_cc),
             float(fatigue_gamma_c),
@@ -4569,6 +4587,7 @@ def build_inputs(host=st):
                 fatigue_edition=fatigue_edition,
                 fatigue_check_steel=fatigue_check_steel,
                 fatigue_check_concrete=fatigue_check_concrete,
+                fatigue_concrete_method=fatigue_concrete_method,
                 fatigue_gamma_c=fatigue_gamma_c,
                 fatigue_gamma_s=fatigue_gamma_s,
                 fatigue_gamma_ff=fatigue_gamma_ff,
@@ -7570,6 +7589,11 @@ def _fatigue_map_signature(inp, spectrum):
                 fatigue_presentation.evidence_number(
                     fatigue_presentation.value(item, "stress_utilisation")
                 ),
+                fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(
+                        item, "equivalent_utilisation"
+                    )
+                ),
             )
             for item in fatigue_presentation.items(spectrum, "concrete")
         ),
@@ -7753,13 +7777,25 @@ def _fatigue_concrete_panel(spectrum):
     if not rows:
         st.info("Concrete fatigue is not included in this calculation.")
         return
+    equivalent_method = any(
+        row.get("equivalent_utilisation") is not None for row in rows
+    )
+    criterion_label = (
+        "Equivalent util. [%]" if equivalent_method else "Miner D"
+    )
+    st.caption(f"Method: {rows[0]['method']}")
     _fatigue_result_table([
         {
             "Fibre": row["fibre_index"],
             "Source": row["source"],
             "x [mm]": row["x_mm"],
             "y [mm]": row["y_mm"],
-            "Miner D": row["damage"],
+            criterion_label: (
+                100.0 * row["equivalent_utilisation"]
+                if equivalent_method
+                and row["equivalent_utilisation"] is not None
+                else row["damage"]
+            ),
             "Stress util. [%]": (
                 None if row["stress_utilisation"] is None
                 else 100.0 * row["stress_utilisation"]
@@ -7795,7 +7831,7 @@ def _fatigue_concrete_panel(spectrum):
             ),
             f"C{index}",
         ),
-        help="Select a fixed fibre for its same-point damage evidence.",
+        help="Select a fixed fibre for its same-point concrete fatigue evidence.",
     )
     result = fatigue_presentation.result_by_fibre(spectrum, selected)
     if result is None:
@@ -7818,6 +7854,15 @@ def _fatigue_concrete_panel(spectrum):
     search = fatigue_presentation.value(spectrum, "concrete_search")
     if search is not None:
         st.markdown("**Certified governing-fibre search**")
+        point_label = (
+            "Point util. [%]" if equivalent_method else "Point D"
+        )
+        upper_label = (
+            "Upper util. [%]" if equivalent_method else "Upper bound D"
+        )
+        point_value = fatigue_presentation.value(search, "damage")
+        upper_value = fatigue_presentation.value(search, "upper_damage")
+        absolute_gap = fatigue_presentation.value(search, "absolute_gap")
         _fatigue_result_table([{
             "Status": (
                 "CERTIFIED"
@@ -7826,11 +7871,18 @@ def _fatigue_concrete_panel(spectrum):
             ),
             "x [mm]": 1000.0 * fatigue_presentation.value(search, "x_m", 0.0),
             "y [mm]": 1000.0 * fatigue_presentation.value(search, "y_m", 0.0),
-            "Point D": fatigue_presentation.value(search, "damage"),
-            "Upper bound D": fatigue_presentation.value(
-                search, "upper_damage"
+            point_label: (
+                100.0 * point_value if equivalent_method else point_value
             ),
-            "Absolute gap": fatigue_presentation.value(search, "absolute_gap"),
+            upper_label: (
+                100.0 * upper_value if equivalent_method else upper_value
+            ),
+            (
+                "Absolute gap [%]" if equivalent_method else "Absolute gap"
+            ): (
+                100.0 * absolute_gap
+                if equivalent_method else absolute_gap
+            ),
             "Relative gap [%]": 100.0 * fatigue_presentation.value(
                 search, "relative_gap", 0.0
             ),
@@ -7840,8 +7892,9 @@ def _fatigue_concrete_panel(spectrum):
         }], height=120)
 
     st.markdown("**Selected-fibre bin results**")
-    _fatigue_result_table([
-        {
+    detail_rows = []
+    for row in bin_rows:
+        detail = {
             "Bin": row["bin"],
             "Cycles": row["cycles"],
             "Status": row["status"],
@@ -7852,15 +7905,28 @@ def _fatigue_concrete_panel(spectrum):
             "Stress ratio": row["stress_ratio"],
             "Ecd,min": row["e_cd_min"],
             "Ecd,max": row["e_cd_max"],
-            "N_R": row["cycles_to_failure"],
-            "Miner D": row["damage"],
-            "Stress util. [%]": (
-                None if row["stress_utilisation"] is None
-                else 100.0 * row["stress_utilisation"]
-            ),
         }
-        for row in bin_rows
-    ], height=560)
+        if equivalent_method:
+            detail["Equivalent util. [%]"] = (
+                100.0 * row["equivalent_utilisation"]
+                if row["equivalent_utilisation"] is not None
+                else None
+            )
+        else:
+            detail["N_R"] = row["cycles_to_failure"]
+            detail["Miner D"] = row["damage"]
+        detail["Stress util. [%]"] = (
+            None if row["stress_utilisation"] is None
+            else 100.0 * row["stress_utilisation"]
+        )
+        detail_rows.append(detail)
+    _fatigue_result_table(detail_rows, height=560)
+    if equivalent_method:
+        st.caption(
+            r"Concrete uses $E_{cd,max}+0.43\sqrt{1-E_{cd,min}/E_{cd,max}}"
+            r"\leq1$. Each action pair must be damage-equivalent for $10^6$ "
+            "cycles; the Cycles column is not used for this concrete check."
+        )
 
 
 def _fatigue_spectrum_panel(inp, spectrum):

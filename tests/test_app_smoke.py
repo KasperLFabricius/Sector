@@ -3049,6 +3049,7 @@ def test_inputs_carry_help_tooltips():
         "fatigue_edition",
         "fatigue_check_steel",
         "fatigue_check_concrete",
+        "fatigue_concrete_method",
         "fatigue_gamma_ff",
         "fatigue_gamma_s",
         "fatigue_gamma_c",

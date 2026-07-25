@@ -37,6 +37,7 @@ from .fatigue import (
     analyse_grouped_spectra,
     concrete_fatigue_life,
     concrete_fatigue_strength,
+    concrete_equivalent_utilisation,
     locate_governing_concrete_fibre,
     steel_fatigue_life,
 )
@@ -74,6 +75,7 @@ __all__ = [
     "steel_fatigue_life",
     "concrete_fatigue_strength",
     "concrete_fatigue_life",
+    "concrete_equivalent_utilisation",
     "locate_governing_concrete_fibre",
     "analyse_fatigue_spectrum",
     "analyse_grouped_spectra",

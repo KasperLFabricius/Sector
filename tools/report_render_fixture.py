@@ -201,6 +201,7 @@ def _inputs() -> dict:
         "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
+        "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
         "fatigue_gamma_ff": 1.0,
         "fatigue_gamma_s": 1.15,
         "fatigue_gamma_c": 1.50,

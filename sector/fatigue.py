@@ -5,14 +5,14 @@ cracked Elastic solver.  Each bin contains a non-cyclic long-term action and a
 cyclic short-term increment.  Reinforcement stress ranges are therefore the
 difference between the combined and long-term Elastic results.
 
-Two explicit Eurocode methods are supported:
+The following Eurocode methods are supported:
 
 * reinforcing and prestressing steel use the two-slope S-N curves and linear
   Palmgren-Miner damage summation in EN 1992-1-1, including the edition-specific
   bond correction for sections combining mild reinforcement and bonded tendons;
-* concrete compression uses the corrected EN 1992-2:2005 expression or the
-  equivalent EN 1992-1-1:2023 Annex E expression, accumulated at each fixed
-  concrete fibre.
+* concrete compression can use either the explicit Palmgren-Miner method or the
+  damage-equivalent criterion for a user-supplied action pair representing
+  10^6 cycles. Both are evaluated at each fixed and adaptively searched fibre.
 
 All partial factors are complete caller inputs.  This module does not apply
 control-class, construction-category, consequence-class or authority-specific
@@ -42,6 +42,9 @@ EC2_2005 = "2005"
 EC2_2023 = "2023"
 MILD = "mild"
 PRESTRESS = "prestress"
+CONCRETE_MINER = "Explicit Palmgren-Miner spectrum"
+CONCRETE_EQUIVALENT = "Damage-equivalent stress amplitude"
+CONCRETE_METHODS = (CONCRETE_MINER, CONCRETE_EQUIVALENT)
 DAMAGE_LIMIT = 1.0
 _MPA_DIVISOR = 1000.0
 _LOG10_FLOAT_MAX = math.log10(np.finfo(float).max)
@@ -77,6 +80,21 @@ def _normalise_edition(value: str) -> str:
     if "2005" in text or "2004" in text:
         return EC2_2005
     raise ValueError("fatigue edition must identify EN 1992:2005 or EN 1992:2023")
+
+
+def _normalise_concrete_method(value: str) -> str:
+    text = str(value or CONCRETE_MINER).strip()
+    if text in CONCRETE_METHODS:
+        return text
+    folded = text.casefold()
+    if "equivalent" in folded:
+        return CONCRETE_EQUIVALENT
+    if "miner" in folded or "explicit" in folded:
+        return CONCRETE_MINER
+    raise ValueError(
+        "concrete fatigue method must identify the explicit Palmgren-Miner "
+        "or damage-equivalent method"
+    )
 
 
 def _pow10(log10_value: float) -> float:
@@ -197,9 +215,11 @@ class ConcreteFatigueProperties:
     alpha_cc: float = 1.0
     k1: float = 0.85
     c: float = 14.0
+    method: str = CONCRETE_MINER
 
     def __post_init__(self) -> None:
         _normalise_edition(self.edition)
+        _normalise_concrete_method(self.method)
         for field in (
             "fck_mpa",
             "gamma_c",
@@ -300,6 +320,7 @@ class ConcreteBinResult:
     log10_cycles_to_failure: float
     damage: float
     stress_utilisation: float
+    equivalent_utilisation: float | None = None
 
 
 @dataclass(frozen=True)
@@ -317,6 +338,9 @@ class ConcreteFibreFatigueResult:
     utilisation: float
     converged: bool
     passed: bool
+    method: str = CONCRETE_MINER
+    equivalent_utilisation: float | None = None
+    governing_equivalent_bin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -333,6 +357,7 @@ class ConcreteFibreSearch:
     absolute_gap: float
     relative_gap: float
     converged: bool
+    method: str = CONCRETE_MINER
 
     @property
     def relative_change(self) -> float:
@@ -354,6 +379,7 @@ class FatigueSpectrumResult:
     utilisation: float
     converged: bool
     passed: bool
+    concrete_method: str | None = None
 
 
 def steel_fatigue_life(
@@ -462,6 +488,31 @@ def concrete_fatigue_life(
         log10_cycles=exponent,
         exponent=exponent,
     )
+
+
+def concrete_equivalent_utilisation(
+    compression_max_mpa: float,
+    compression_min_mpa: float,
+    *,
+    fcd_fat_mpa: float,
+) -> float:
+    """Damage-equivalent concrete criterion for 10^6 cycles.
+
+    This is EN 1992-1-1:2005 Formula (6.72) and EN 1992-1-1:2023
+    Formula (E.2). Compression is supplied as a positive magnitude.
+    """
+
+    sigma_max = _finite(compression_max_mpa, "maximum compression")
+    sigma_min = _finite(compression_min_mpa, "minimum compression")
+    if sigma_min < 0.0 or sigma_max < 0.0:
+        raise ValueError("concrete compression magnitudes cannot be negative")
+    if sigma_min > sigma_max:
+        raise ValueError("minimum compression cannot exceed maximum compression")
+    strength = _positive(fcd_fat_mpa, "fcd,fat")
+    if sigma_max == 0.0:
+        return 0.0
+    ratio = min(max(sigma_min / sigma_max, 0.0), 1.0)
+    return sigma_max / strength + 0.43 * math.sqrt(1.0 - ratio)
 
 
 def _concrete_compression_mpa(
@@ -676,6 +727,7 @@ class _ConcreteSearchData:
     log10_cycles: np.ndarray
     strength_mpa: float
     coefficient_c: float
+    method: str
 
 
 def _concrete_search_data(
@@ -705,6 +757,7 @@ def _concrete_search_data(
         log10_cycles=np.asarray(log10_cycles, dtype=float),
         strength_mpa=concrete_fatigue_strength(properties),
         coefficient_c=float(properties.c),
+        method=_normalise_concrete_method(properties.method),
     )
 
 
@@ -739,6 +792,13 @@ def _search_damage_field(
         rtol=1.0e-12,
         atol=1.0e-12,
     )
+    if data.method == CONCRETE_EQUIVALENT:
+        utilisation = (
+            sigma_max / data.strength_mpa
+            + 0.43 * np.sqrt(np.maximum(1.0 - ratio, 0.0))
+        )
+        utilisation[sigma_max <= 0.0] = 0.0
+        return np.max(utilisation, axis=1)
     denominator = np.sqrt(np.maximum(1.0 - ratio, 0.0))
     exponent = np.full_like(sigma_max, math.inf)
     active = ~no_range
@@ -797,7 +857,10 @@ def _box_damage_upper_bound(
     )
     sigma_max = np.maximum(long_high, total_high)
     active = (sigma_max > 0.0) & (range_high > 1.0e-12)
-    if np.any(active & (sigma_max >= data.strength_mpa)):
+    if (
+        data.method == CONCRETE_MINER
+        and np.any(active & (sigma_max >= data.strength_mpa))
+    ):
         return math.inf
     sigma_min = np.minimum(long_low, total_low)
     ratio = np.divide(
@@ -807,6 +870,13 @@ def _box_damage_upper_bound(
         where=sigma_max > 0.0,
     )
     ratio = np.clip(ratio, 0.0, 1.0)
+    if data.method == CONCRETE_EQUIVALENT:
+        utilisation = (
+            sigma_max / data.strength_mpa
+            + 0.43 * np.sqrt(np.maximum(1.0 - ratio, 0.0))
+        )
+        utilisation[sigma_max <= 0.0] = 0.0
+        return float(np.max(utilisation))
     denominator = np.sqrt(
         np.maximum(1.0 - ratio, np.finfo(float).tiny)
     )
@@ -1023,6 +1093,7 @@ def locate_governing_concrete_fibre(
         absolute_gap=float(absolute_gap),
         relative_gap=float(relative_gap),
         converged=converged,
+        method=search_data.method,
     )
 
 
@@ -1643,7 +1714,7 @@ def assess_concrete_spectrum(
     *,
     gamma_ff: float,
 ) -> tuple[ConcreteFibreFatigueResult, ...]:
-    """Accumulate concrete damage at every fixed input fibre."""
+    """Assess the selected concrete fatigue method at every fixed input fibre."""
 
     points = np.asarray(vertices, dtype=float)
     if points.ndim != 2 or points.shape[1] != 2 or not len(points):
@@ -1659,6 +1730,7 @@ def assess_concrete_spectrum(
     )
     action_factor = _positive(gamma_ff, "gamma_Ff")
     strength = concrete_fatigue_strength(properties)
+    method = _normalise_concrete_method(properties.method)
     for state in solved:
         design_total = (
             state.concrete_compression_design_total_mpa
@@ -1712,13 +1784,23 @@ def assess_concrete_spectrum(
             sigma_total_design = float(design_total[fibre_index])
             sigma_min = min(sigma_long, sigma_total_design)
             sigma_max = max(sigma_long, sigma_total_design)
-            life = concrete_fatigue_life(
-                sigma_max,
-                sigma_min,
-                fcd_fat_mpa=strength,
-                c=properties.c,
-            )
-            damage = _damage(state.cycles, life.log10_cycles)
+            equivalent_utilisation = None
+            if method == CONCRETE_MINER:
+                life = concrete_fatigue_life(
+                    sigma_max,
+                    sigma_min,
+                    fcd_fat_mpa=strength,
+                    c=properties.c,
+                )
+                damage = _damage(state.cycles, life.log10_cycles)
+            else:
+                life = FatigueLife(math.inf, math.inf, 0.0)
+                damage = 0.0
+                equivalent_utilisation = concrete_equivalent_utilisation(
+                    sigma_max,
+                    sigma_min,
+                    fcd_fat_mpa=strength,
+                )
             ratio = sigma_min / sigma_max if sigma_max > 0.0 else 0.0
             e_min = sigma_min / strength
             e_max = sigma_max / strength
@@ -1737,14 +1819,32 @@ def assess_concrete_spectrum(
                 log10_cycles_to_failure=life.log10_cycles,
                 damage=damage,
                 stress_utilisation=e_max,
+                equivalent_utilisation=equivalent_utilisation,
             ))
         damage = sum(result.damage for result in bins)
         damage_governing = max(bins, key=lambda result: result.damage)
         stress_governing = max(
             bins, key=lambda result: result.stress_utilisation
         )
+        equivalent_governing = (
+            max(
+                bins,
+                key=lambda result: result.equivalent_utilisation or 0.0,
+            )
+            if method == CONCRETE_EQUIVALENT
+            else None
+        )
+        equivalent_utilisation = (
+            equivalent_governing.equivalent_utilisation
+            if equivalent_governing is not None
+            else None
+        )
         converged = all(result.converged for result in bins)
-        utilisation = max(damage, stress_governing.stress_utilisation)
+        utilisation = max(
+            damage,
+            stress_governing.stress_utilisation,
+            equivalent_utilisation or 0.0,
+        )
         output.append(ConcreteFibreFatigueResult(
             fibre_index=fibre_index,
             x_m=float(x),
@@ -1762,6 +1862,17 @@ def assess_concrete_spectrum(
                 converged
                 and damage <= DAMAGE_LIMIT
                 and stress_governing.stress_utilisation <= 1.0
+                and (
+                    equivalent_utilisation is None
+                    or equivalent_utilisation <= 1.0
+                )
+            ),
+            method=method,
+            equivalent_utilisation=equivalent_utilisation,
+            governing_equivalent_bin=(
+                equivalent_governing.bin_name
+                if equivalent_governing is not None
+                else None
             ),
         ))
     return tuple(output)
@@ -1860,6 +1971,11 @@ def analyse_fatigue_spectrum(
         )
     if check_concrete and concrete is None:
         raise ValueError(f"{name}: concrete fatigue properties are required")
+    concrete_method = (
+        _normalise_concrete_method(concrete.method)
+        if check_concrete and concrete is not None
+        else None
+    )
     _validated_solver_vector(
         n_mult,
         bar_count,
@@ -1997,6 +2113,7 @@ def analyse_fatigue_spectrum(
                 or concrete_search.upper_damage <= DAMAGE_LIMIT
             )
         ),
+        concrete_method=concrete_method,
     )
 
 

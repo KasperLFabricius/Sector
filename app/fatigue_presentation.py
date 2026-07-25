@@ -280,6 +280,10 @@ def concrete_rows(spectrum):
     search_y = finite_number(value(search, "y_m")) if search else None
     rows = []
     for result in items(spectrum, "concrete"):
+        method = str(value(result, "method", "Explicit Palmgren-Miner spectrum"))
+        equivalent = evidence_number(
+            value(result, "equivalent_utilisation")
+        )
         x_m = finite_number(value(result, "x_m"))
         y_m = finite_number(value(result, "y_m"))
         is_search = bool(
@@ -305,13 +309,23 @@ def concrete_rows(spectrum):
                 value(result, "governing_damage_bin", "-")
             ),
             "stress_utilisation": stress,
+            "method": method,
+            "equivalent_utilisation": equivalent,
+            "governing_equivalent_bin": str(
+                value(result, "governing_equivalent_bin", "-") or "-"
+            ),
             "governing_stress_bin": str(
                 value(result, "governing_stress_bin", "-")
             ),
             "governing": (
-                "Miner damage"
-                if damage is not None and (stress is None or damage >= stress)
-                else "compressive stress"
+                "Equivalent amplitude"
+                if equivalent is not None
+                and (stress is None or equivalent >= stress)
+                else (
+                    "Miner damage"
+                    if damage is not None and (stress is None or damage >= stress)
+                    else "compressive stress"
+                )
             ),
             "utilisation": evidence_number(value(result, "utilisation")),
             "status": result_status(result),
@@ -354,6 +368,9 @@ def concrete_bin_rows(result):
             "damage": evidence_number(value(item, "damage")),
             "stress_utilisation": evidence_number(
                 value(item, "stress_utilisation")
+            ),
+            "equivalent_utilisation": evidence_number(
+                value(item, "equivalent_utilisation")
             ),
         })
     return rows

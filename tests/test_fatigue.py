@@ -229,6 +229,67 @@ def test_concrete_life_is_infinite_without_a_cyclic_range():
     assert math.isinf(constant.cycles)
 
 
+def test_concrete_damage_equivalent_criterion_matches_2005_and_2023_formula():
+    utilisation = fatigue.concrete_equivalent_utilisation(
+        10.0,
+        4.0,
+        fcd_fat_mpa=20.0,
+    )
+
+    assert utilisation == pytest.approx(
+        10.0 / 20.0 + 0.43 * math.sqrt(1.0 - 4.0 / 10.0)
+    )
+
+
+def test_concrete_equivalent_method_ignores_cycles_and_reports_each_pair():
+    vertices = np.asarray([(0.0, 0.0)], dtype=float)
+    states = (
+        _state(
+            "EQ1",
+            1.0,
+            concrete_long=(4.0,),
+            concrete_total=(10.0,),
+        ),
+        _state(
+            "EQ2",
+            1.0e12,
+            concrete_long=(8.0,),
+            concrete_total=(9.0,),
+        ),
+    )
+    properties = fatigue.ConcreteFatigueProperties(
+        edition="2023",
+        fck_mpa=37.5,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+        method=fatigue.CONCRETE_EQUIVALENT,
+    )
+
+    result = fatigue.assess_concrete_spectrum(
+        vertices,
+        states,
+        properties,
+        gamma_ff=1.0,
+    )[0]
+
+    expected = [
+        fatigue.concrete_equivalent_utilisation(
+            max(item.concrete_compression_long_mpa[0],
+                item.concrete_compression_total_mpa[0]),
+            min(item.concrete_compression_long_mpa[0],
+                item.concrete_compression_total_mpa[0]),
+            fcd_fat_mpa=fatigue.concrete_fatigue_strength(properties),
+        )
+        for item in states
+    ]
+    assert [item.damage for item in result.bins] == [0.0, 0.0]
+    assert result.equivalent_utilisation == pytest.approx(max(expected))
+    assert result.utilisation == pytest.approx(max(expected))
+    assert result.governing_equivalent_bin == (
+        states[int(np.argmax(expected))].name
+    )
+
+
 def test_reinforcement_damage_and_yield_are_accumulated_per_element():
     states = (
         _state(
@@ -746,6 +807,55 @@ def test_uniform_compression_matches_transformed_section_hand_calculation():
         result.concrete_search.damage
     )
     assert result.passed is True
+
+
+def test_equivalent_concrete_search_matches_the_fixed_fibre_criterion():
+    section = _section()
+    properties = fatigue.ConcreteFatigueProperties(
+        edition="2023",
+        fck_mpa=37.5,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+        method=fatigue.CONCRETE_EQUIVALENT,
+    )
+    result = fatigue.analyse_fatigue_spectrum(
+        "Equivalent compression",
+        section,
+        (
+            fatigue.SpectrumBin(
+                "EQ-1",
+                9.0e9,
+                p_long_kn=1000.0,
+                p_short_kn=200.0,
+            ),
+        ),
+        nl=10.0,
+        ns=10.0,
+        check_reinforcement=False,
+        concrete=properties,
+        gamma_ff=1.0,
+    )
+
+    state = result.bins[0]
+    expected = fatigue.concrete_equivalent_utilisation(
+        max(
+            state.concrete_compression_long_mpa[0],
+            state.concrete_compression_total_mpa[0],
+        ),
+        min(
+            state.concrete_compression_long_mpa[0],
+            state.concrete_compression_total_mpa[0],
+        ),
+        fcd_fat_mpa=fatigue.concrete_fatigue_strength(properties),
+    )
+    assert result.concrete_method == fatigue.CONCRETE_EQUIVALENT
+    assert result.concrete_search is not None
+    assert result.concrete_search.method == fatigue.CONCRETE_EQUIVALENT
+    assert result.concrete_search.converged is True
+    assert result.concrete_search.damage == pytest.approx(expected)
+    assert result.concrete_search.upper_damage == pytest.approx(expected)
+    assert result.utilisation == pytest.approx(expected)
+    assert result.concrete[0].equivalent_utilisation == pytest.approx(expected)
 
 
 def test_tendon_only_section_is_included_in_fatigue_solver_order():

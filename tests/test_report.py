@@ -153,6 +153,7 @@ def _fatigue_report_fixture():
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
+        "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
         "fatigue_gamma_ff": 1.10,
         "fatigue_gamma_s": 1.15,
         "fatigue_gamma_c": 1.50,
@@ -320,6 +321,7 @@ def _fatigue_report_fixture():
     payload = {
         "edition": fatigue_inputs.EC2_2023,
         "checks": {"reinforcement": True, "concrete": True},
+        "concrete_method": "Explicit Palmgren-Miner spectrum",
         "basis": inp[fatigue_inputs.BASIS_KEY],
         "authority_reference": "Project-defined grouped spectrum",
         "calculation_references": {
@@ -340,6 +342,7 @@ def _fatigue_report_fixture():
             "alpha_cc": 1.0,
             "k1": 1.0,
             "c": 14.0,
+            "method": "Explicit Palmgren-Miner spectrum",
         },
         "reinforcement_properties": (
             NS(
@@ -412,6 +415,45 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "delta " + sigma not in text
     assert text.count(delta_sigma) >= 7
     assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
+
+
+def test_report_includes_damage_equivalent_concrete_method_evidence():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    method = "Damage-equivalent stress amplitude"
+    inp["fatigue_concrete_method"] = method
+    payload["concrete_method"] = method
+    payload["concrete_parameters"]["method"] = method
+    payload["calculation_references"]["concrete"] = (
+        "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2)"
+    )
+    for spectrum in payload["spectra"]:
+        spectrum.concrete_method = method
+        for result in spectrum.concrete:
+            result.method = method
+            result.equivalent_utilisation = 0.82
+            result.governing_equivalent_bin = result.bins[0].bin_name
+            result.damage = 0.0
+            result.damage_utilisation = 0.0
+            result.utilisation = 0.82
+            for item in result.bins:
+                item.damage = 0.0
+                item.cycles_to_failure = math.inf
+                item.log10_cycles_to_failure = math.inf
+                item.equivalent_utilisation = 0.82
+        spectrum.concrete_search.method = method
+        spectrum.concrete_search.damage = 0.82
+        spectrum.concrete_search.upper_damage = 0.821
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert method in text
+    assert "Formula (E.2)" in text
+    assert "Equivalent utilisation" in text
+    assert "Cycle count Not used" in text
+    assert "cycle count is not used for concrete" in text
 
 
 def test_report_fatigue_chapter_uses_the_engine_failure_state():

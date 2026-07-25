@@ -335,6 +335,7 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
         "fatigue_gamma_s": 1.32,
         "fatigue_gamma_ff": 1.0,
         "fatigue_concrete_k1": 0.85,
+        "fatigue_concrete_method": "Damage-equivalent stress amplitude",
     }
 
     text = project_io.dump_project(tables, scalars)
@@ -352,6 +353,10 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     )
     assert restored_scalars["fatigue_gamma_c"] == 1.595
     assert restored_scalars["fatigue_concrete_k1"] == 0.85
+    assert (
+        restored_scalars["fatigue_concrete_method"]
+        == "Damage-equivalent stress amplitude"
+    )
     assert (
         restored_scalars[fatigue_inputs.BASIS_KEY]["method"]
         == fatigue_inputs.METHOD_VD_FLM4

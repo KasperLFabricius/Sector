@@ -737,12 +737,17 @@ def manual_blocks() -> list:
        "**Reinforcement** and/or **Concrete**. Enter the complete project factors "
        "$\\gamma_{Ff}$, $\\gamma_s$ and $\\gamma_{c,fat}$. Sector applies no "
        "control-, construction- or consequence-class multiplier.")
+    md("For concrete, select **Explicit Palmgren-Miner spectrum** or "
+       "**Damage-equivalent stress amplitude**. The explicit method uses every "
+       "entered cycle count. For the equivalent method, each row's long/total "
+       "action pair must already represent an equivalent amplitude for $10^6$ "
+       "cycles; its Cycles value is ignored for concrete.")
     table(["Input", "Use"],
           [["$\\gamma_{Ff}$", "Factors the cyclic action increment before the elastic solve"],
            ["$\\gamma_s$", "Reduces the reinforcement S-N resistance and yield/proof limit"],
            ["$\\gamma_{c,fat}$", "Reduces the concrete fatigue strength"],
            ["$\\beta_{cc}(t_0)$, $t_0$", "Concrete strength at the start of cyclic loading"],
-           ["$k_1$, $C$", "2005 concrete-strength coefficient and concrete fatigue-life coefficient"]])
+           ["$k_1$, $C$", "2005 concrete-strength coefficient; C applies only to the explicit concrete-life method"]])
     md("The **Fatigue details** material tab holds named resistance definitions. "
        "Assign one stable detail ID to every checked bar or tendon. Standard presets "
        "lock $N^*$, the two S-N slopes, the characteristic reference range and its "
@@ -757,11 +762,11 @@ def manual_blocks() -> list:
        "required evidence produces **Review**, not an unstated assumption.")
     table(["Fatigue edition", "Implemented resistance basis"],
           [["DS/EN 1992-1-1:2005",
-            "Steel 6.8.4 and Tables 6.3N/6.4N; corrected concrete expression from DS/EN 1992-2 6.106"],
+            "Steel 6.8.4 and Tables 6.3N/6.4N; concrete 6.72 equivalent method or corrected DS/EN 1992-2 6.106 Miner method"],
            ["DS/EN 1992-1-1:2005 + DK NA:2024",
             "Same calculation models, with the complete Danish project factors entered explicitly"],
            ["DS/EN 1992-1-1:2023",
-            "Reinforcement Annex E.5 and Tables E.1/E.2; concrete Annex E.7-E.8"]])
+            "Reinforcement Annex E.5 and Tables E.1/E.2; concrete E.2 equivalent method or E.7-E.8 Miner method"]])
     call("limit", "Each named spectrum is assessed independently. Sector does not "
          "combine spectra or derive traffic cycles, dynamic allowance or lane/track "
          "concurrence. Fatigue from shear and torsion is not included.")
@@ -1346,9 +1351,16 @@ def manual_blocks() -> list:
        "Miner damage is summed at that same fibre; maxima from different locations "
        "are never combined into a fictitious history. Direct stress utilisation "
        "$E_{max}\\leq1.0$ is checked in parallel.")
+    md("Alternatively, the damage-equivalent method checks each user-supplied "
+       "equivalent action pair using\n\n"
+       "$$E_{max}+0.43\\sqrt{1-\\frac{E_{min}}{E_{max}}}\\leq1.$$\n\n"
+       "This is Formula (6.72) for the 2005 family and Formula (E.2) for 2023. "
+       "The pair represents $10^6$ cycles; Sector does not derive it from the "
+       "entered spectrum. When several equivalent rows are supplied, the largest "
+       "criterion governs.")
     md("Sector checks the section vertices and runs an adaptive branch-and-bound "
        "search over the concrete area. The result includes the largest evaluated "
-       "damage, a conservative upper bound, the absolute and relative gap, sample "
+       "criterion, a conservative upper bound, the absolute and relative gap, sample "
        "and box counts, and convergence. The upper bound governs "
        "acceptance, so an unresolved potentially critical region cannot pass.")
 
@@ -1356,15 +1368,15 @@ def manual_blocks() -> list:
     table(["Edition", "Reinforcement", "Concrete", "Mixed bond"],
           [["DS/EN 1992-1-1:2005",
             "6.8.4; Tables 6.3N/6.4N",
-            "Corrected DS/EN 1992-2:2005/AC:2008 6.106",
+            "6.72 equivalent or corrected DS/EN 1992-2:2005/AC:2008 6.106 Miner",
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2005 + DK NA:2024",
             "Same method; explicit Danish project factors",
-            "Same corrected method; explicit Danish project factors",
+            "Same selectable methods; explicit Danish project factors",
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2023",
             "Annex E.5; Tables E.1/E.2",
-            "Annex E.7-E.8",
+            "E.2 equivalent or E.7-E.8 Miner",
             "10.3(2) equivalent tendon area"]])
     call("limit", "Each spectrum forms its own Miner sum and result. Sector does "
          "not combine spectra. The fatigue implementation covers normal force and "
@@ -1595,9 +1607,9 @@ def manual_blocks() -> list:
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
            ["Reinforcement fatigue (2005)", "DS/EN 1992-1-1:2005+A1:2014 6.8.2, 6.8.4 and Tables 6.3N/6.4N"],
-           ["Concrete fatigue (2005)", "DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
+           ["Concrete fatigue (2005)", "DS/EN 1992-1-1:2005 6.8.7 / Formula (6.72); DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
            ["Reinforcement fatigue (2023)", "DS/EN 1992-1-1:2023 Annex E.5 and Tables E.1/E.2"],
-           ["Concrete fatigue (2023)", "DS/EN 1992-1-1:2023 Annex E.7-E.8"],
+           ["Concrete fatigue (2023)", "DS/EN 1992-1-1:2023 E.4.3 / Formula (E.2); E.5.3 / Formulae (E.7)-(E.8)"],
            ["Minimum reinforcement (2005 / DK NA)", "DS/EN 1992-1-1 9.2.1.1(1), Formula (9.1N); DK NA:2024"],
            ["Minimum reinforcement (2023)", "DS/EN 1992-1-1:2023 12.2(2), Formulae (12.1)-(12.2)"],
            ["Clear spacing (2005 / 2023)", "DS/EN 1992-1-1 8.2(2); DS/EN 1992-1-1:2023 11.2(2)"],
