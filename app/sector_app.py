@@ -2453,6 +2453,9 @@ def _save_load_panel() -> None:
 _REPORT_FIELDS = [("proj_no", "Project no."), ("proj_name", "Project name"),
                   ("section", "Section"), ("rev", "Revision"), ("author", "Author"),
                   ("checker", "Checker"), ("approver", "Approver")]
+_REPORT_DEFAULT = "Default report"
+_REPORT_QA_APPENDIX = "Default report + QA appendix"
+_REPORT_CONTENT_OPTIONS = (_REPORT_DEFAULT, _REPORT_QA_APPENDIX)
 
 # The progress placeholder lives in the Report panel; report generation (which runs
 # later in the same script run) fills it.
@@ -2468,11 +2471,18 @@ def _report_meta():
     return meta
 
 
-def _report_signature(input_signature, meta=None):
+def _report_signature(input_signature, meta=None, report_content=None):
     """Identify the complete input and document-control state behind a PDF."""
     meta = _report_meta() if meta is None else meta
+    report_content = (
+        st.session_state.get("rep_report_content", _REPORT_DEFAULT)
+        if report_content is None else report_content
+    )
     document_values = tuple(str(meta.get(k, "")) for k, _ in _REPORT_FIELDS)
-    document_values += (str(meta.get("comments", "")),)
+    document_values += (
+        str(meta.get("comments", "")),
+        str(report_content),
+    )
     return repr(input_signature), document_values
 
 
@@ -2520,6 +2530,18 @@ def _report_panel(input_signature):
     c3.text_input("Checker", key="rep_checker")
     c4.text_input("Approver", key="rep_approver")
     box.text_area("Comments", key="rep_comments", height=80)
+    _seeded_selectbox(
+        box,
+        "Report content",
+        list(_REPORT_CONTENT_OPTIONS),
+        _REPORT_DEFAULT,
+        "rep_report_content",
+        help=(
+            "The QA appendix adds one chapter of standards references and "
+            "implementation notes. Inputs, results and case evidence are "
+            "included in both options."
+        ),
+    )
     # Flag the request and start a full rerun. The report is then built at the end
     # of that run, once build_inputs has rendered every panel and assembled the
     # complete material, section and load payload.
@@ -2587,13 +2609,21 @@ def _generate_report(inp):
         import sector_report
         meta = _report_meta()
         figs = not st.session_state.get("_report_no_figures", False)
+        report_content = st.session_state.get(
+            "rep_report_content", _REPORT_DEFAULT
+        )
         out = run_analysis(inp)
         pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
-                                         figures=figs, progress=_on_progress)
+                                         figures=figs, progress=_on_progress,
+                                         qa_appendix=(
+                                             report_content
+                                             == _REPORT_QA_APPENDIX
+                                         ))
         st.session_state["report_buffer"] = pdf
         st.session_state["report_signature"] = _report_signature(
             inp.get("signature"),
             meta,
+            report_content,
         )
         st.session_state["report_filename"] = _report_filename(meta)
         st.session_state["_report_msg"] = ("success", "Report generated - use the "

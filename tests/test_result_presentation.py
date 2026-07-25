@@ -74,11 +74,9 @@ def test_plastic_action_assessment_reports_signed_margin_and_governing_angle():
 def test_plastic_assessment_text_is_compact_and_solver_neutral():
     passed = presentation.plastic_action_assessment(_plastic(util=0.8))
     text = presentation.plastic_assessment_text(passed)
-    assert text == (
-        "PASS - Plastic bending | utilisation 80.0 % | limit 100 % | "
-        "margin +20.0 pp"
-    )
+    assert text == "PASS - Plastic bending | utilisation 80.0 %"
     assert "does not exceed" not in text
+    assert "margin" not in text.casefold()
     assert "ULS" not in text and "SLS" not in text
 
     capacity_only = presentation.plastic_action_assessment(

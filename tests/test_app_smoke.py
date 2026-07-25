@@ -622,7 +622,7 @@ def test_full_sweep_reports_utilisation():
     assert at.session_state["results"]["plastic"]["util"] is not None
 
 
-def test_plastic_result_overview_has_explicit_verdict_margin_and_qa_tables():
+def test_plastic_result_overview_has_compact_verdict_and_qa_tables():
     at = _fresh()
     at.run()
     _set_and_click(
@@ -634,9 +634,8 @@ def test_plastic_result_overview_has_explicit_verdict_margin_and_qa_tables():
     assert at.session_state["view"] == "Results Overview"
     _select_view(at, "Plastic Results")
     assert any("PASS - Plastic bending" in item.value for item in at.success)
-    assert any("limit 100 %" in item.value and "margin +" in item.value
-               and " pp" in item.value
-               for item in at.success)
+    assert any("utilisation" in item.value for item in at.success)
+    assert not any("margin" in item.value.casefold() for item in at.success)
     assert not any("does not exceed" in item.value for item in at.success)
 
     # Three short applied-action cards replace the five cramped capacity cards.
@@ -658,7 +657,7 @@ def test_plastic_result_overview_has_explicit_verdict_margin_and_qa_tables():
         ("number_input", "pl_Mx", 100000.0),
     )
     assert any("FAIL - Plastic bending" in item.value for item in at.error)
-    assert any("margin -" in item.value for item in at.error)
+    assert not any("margin" in item.value.casefold() for item in at.error)
 
 
 def test_nm_interaction_is_opt_in_and_renders():
@@ -2483,6 +2482,7 @@ def test_generate_report_produces_pdf():
     at = _fresh()
     at.run()
     at.session_state["_report_no_figures"] = True
+    assert at.selectbox(key="rep_report_content").value == "Default report"
     at.session_state["rep_proj_no"] = "T-1"
     at.session_state["rep_section"] = "S/1"
     at.session_state["rep_rev"] = "A:2"
@@ -2508,6 +2508,19 @@ def test_report_download_becomes_stale_after_metadata_change():
     assert not any("Report out of date" in w.value for w in at.warning)
 
     at.text_input(key="rep_rev").set_value("B").run()
+    assert any("Report out of date" in w.value for w in at.warning)
+
+
+def test_report_download_becomes_stale_after_content_choice_change():
+    at = _fresh()
+    at.run()
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+    assert not any("Report out of date" in w.value for w in at.warning)
+
+    at.selectbox(key="rep_report_content").set_value(
+        "Default report + QA appendix"
+    ).run()
     assert any("Report out of date" in w.value for w in at.warning)
 
 

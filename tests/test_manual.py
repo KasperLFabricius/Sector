@@ -281,6 +281,7 @@ def test_manual_documents_native_case_tables_results_and_report():
         "Select an Elastic case",
         "Every computed case",
         "bookmarked detail chapters",
+        "Default report + QA appendix",
     ):
         assert expected in text
 
