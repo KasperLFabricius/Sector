@@ -796,7 +796,7 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
               "reference first." if selected in protected else None),
     )
     if add_clicked or duplicate_clicked or delete_clicked:
-        _snapshot_input_state()
+        _snapshot_completed_input_state()
         if add_clicked:
             catalogue, selected = mat_catalog.add_entry(catalogue, kind)
         elif duplicate_clicked:
@@ -817,6 +817,14 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
         st.session_state[key] = catalogue
         st.session_state[pending_select_key] = selected
         _bump_material_catalog_revision()
+        action_keys = [
+            key,
+            pending_select_key,
+            "_material_catalog_revision",
+        ]
+        if "_capacity_steel_pending_material_id" in st.session_state:
+            action_keys.append("_capacity_steel_pending_material_id")
+        _journal_current_input_values(*action_keys)
         st.rerun()
 
     entry = next(item for item in items if item["id"] == selected)
@@ -947,7 +955,7 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         ),
     )
     if add_mild or add_tendon or duplicate or delete:
-        _snapshot_input_state()
+        _snapshot_completed_input_state()
         if add_mild:
             catalogue, selected = fatigue_inputs.add_entry(
                 catalogue,
@@ -973,6 +981,11 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         st.session_state[key] = catalogue
         st.session_state[pending_key] = selected
         _bump_fatigue_catalog_revision()
+        _journal_current_input_values(
+            key,
+            pending_key,
+            "_fatigue_catalog_revision",
+        )
         st.rerun()
 
     entry = next(item for item in items if item["id"] == selected)
@@ -2096,6 +2109,13 @@ def _record_input_event(
         callback(*(callback_args or ()), **(callback_kwargs or {}))
 
 
+def _journal_current_input_values(*keys) -> None:
+    """Retain deliberate button-driven mutations across their forced rerun."""
+
+    for key in keys:
+        _record_input_event(key)
+
+
 def _snapshot_input_state(inp=None) -> None:
     """Keep live input values available while their widgets are not mounted."""
     saved = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
@@ -2339,6 +2359,15 @@ def _autosave_startup() -> None:
     re-open where you left off) and start the autosave clock. A missing autosave
     just leaves the default section; an unreadable one starts fresh with a notice.
     An explicitly uploaded project takes precedence over the autosave."""
+    # The Project panel is lazy, but autosave remains an application-level
+    # service. Seed its defaults without constructing hidden widgets. If widget
+    # cleanup removed a previously mounted control, leave it missing here so the
+    # durable mirror can restore the engineer's non-default setting below.
+    durable = st.session_state.get(_INPUT_STATE_KEY, {})
+    if "autosave_on" not in st.session_state and "autosave_on" not in durable:
+        st.session_state["autosave_on"] = True
+    if "autosave_min" not in st.session_state and "autosave_min" not in durable:
+        st.session_state["autosave_min"] = _AUTOSAVE_DEFAULT_MIN
     if st.session_state.get("_autosave_init"):
         return
     st.session_state["_autosave_init"] = True

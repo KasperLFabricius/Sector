@@ -1632,6 +1632,7 @@ def test_save_load_round_trip_through_the_app():
     assert plastic.loc[0, "name"] == "PL-ROUNDTRIP"
     assert plastic.loc[0, "description"] == "Source: Register C7"
     assert at.session_state["_loaded_project_provenance"]["input_hash_valid"] is True
+    _goto_input_tab(at, "Project & report")
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
@@ -2376,6 +2377,7 @@ def test_autosave_disabled_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Project & report")
     at.checkbox(key="autosave_on").set_value(False).run()
     at.session_state["_autosave_t"] = 0.0          # due, but autosave is off
     at.run()
