@@ -348,16 +348,22 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         scalar_payload.setdefault("fatigue_gamma0", 1.0)
         scalar_payload.setdefault("fatigue_gamma3", 1.0)
         scalar_payload.setdefault("fatigue_factor_approval", "")
+        has_numeric_fatigue_factor = (
+            "fatigue_gamma_s" in scalar_payload
+            or "fatigue_gamma_c" in scalar_payload
+        )
+        default_fatigue_factor_mode = fatigue_inputs.FACTOR_MODE_PRESET
+        if has_numeric_fatigue_factor:
+            default_fatigue_factor_mode = (
+                fatigue_inputs.FACTOR_MODE_OVERRIDE
+                if str(
+                    scalar_payload.get("fatigue_factor_approval") or ""
+                ).strip()
+                else fatigue_inputs.FACTOR_MODE_LEGACY
+            )
         scalar_payload.setdefault(
             "fatigue_factor_mode",
-            (
-                fatigue_inputs.FACTOR_MODE_LEGACY
-                if (
-                    "fatigue_gamma_s" in scalar_payload
-                    or "fatigue_gamma_c" in scalar_payload
-                )
-                else fatigue_inputs.FACTOR_MODE_PRESET
-            ),
+            default_fatigue_factor_mode,
         )
     if scalar_payload.get("torsion_on"):
         scalar_payload.setdefault(

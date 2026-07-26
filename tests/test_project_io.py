@@ -401,6 +401,46 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     )
 
 
+def test_implicit_fatigue_factor_mode_round_trips_by_dedicated_approval():
+    approved = {
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_check_steel": True,
+        "fatigue_check_concrete": False,
+        "fatigue_gamma_s": 1.27,
+        "fatigue_factor_approval": "DB-FACT-20 / checker E",
+    }
+
+    approved_text = project_io.dump_project({}, approved)
+    approved_tables, approved_scalars = project_io.parse_project(
+        approved_text
+    )
+
+    assert approved_scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    assert approved_scalars["fatigue_factor_approval"] == (
+        "DB-FACT-20 / checker E"
+    )
+    assert approved_scalars["fatigue_gamma_s"] == pytest.approx(1.27)
+    assert "fatigue_gamma_c" not in approved_scalars
+    assert project_io.input_sha256(
+        approved_tables,
+        approved_scalars,
+    ) == project_io.input_sha256({}, approved)
+
+    unapproved = dict(approved)
+    unapproved.pop("fatigue_factor_approval")
+    _tables, unapproved_scalars = project_io.parse_project(
+        project_io.dump_project({}, unapproved)
+    )
+
+    assert unapproved_scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_LEGACY
+    )
+    assert unapproved_scalars["fatigue_factor_approval"] == ""
+
+
 def test_current_torsion_factor_override_round_trips_with_approval_source():
     values = {
         "torsion_on": True,

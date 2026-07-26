@@ -140,11 +140,11 @@ def _resolved_factor_basis(inp: Mapping, edition: str) -> tuple[float, float, di
     gamma3 = inp.get("fatigue_gamma3", 1.0)
     gamma_s = inp.get("fatigue_gamma_s")
     gamma_c = inp.get("fatigue_gamma_c")
-    if mode == fatigue_inputs.FACTOR_MODE_OVERRIDE and not explicit:
-        # Pre-v15 direct integrations only had to provide the factor for an
-        # enabled check. Supply the inactive side from the edition preset so
-        # that compatibility path remains valid without weakening an explicit
-        # new override, which must be complete.
+    if mode == fatigue_inputs.FACTOR_MODE_OVERRIDE:
+        # Single-check integrations only need the factor that is used. Supply
+        # the inactive side from the edition preset so that compatibility path
+        # remains valid after project serialization makes the mode explicit.
+        # Enabling that check later still requires its own supplied factor.
         preset = fatigue_inputs.fatigue_factor_preset(
             edition,
             gamma0=gamma0,

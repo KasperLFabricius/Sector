@@ -313,7 +313,7 @@ def test_explicit_override_requires_approval_and_legacy_values_require_review():
     )
 
 
-def test_approved_implicit_api_can_omit_the_factor_for_a_disabled_check():
+def test_approved_api_can_omit_inactive_factor_before_and_after_save():
     steel_only = _base(fatigue_check_concrete=False)
     steel_only.pop("fatigue_factor_mode")
     steel_only["fatigue_factor_approval"] = "DB-FACT-20 / checker E"
@@ -325,11 +325,34 @@ def test_approved_implicit_api_can_omit_the_factor_for_a_disabled_check():
 
     prepared_steel = fatigue_analysis.prepare(steel_only)
     prepared_concrete = fatigue_analysis.prepare(concrete_only)
+    saved_steel = fatigue_analysis.prepare({
+        **steel_only,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+    })
+    saved_concrete = fatigue_analysis.prepare({
+        **concrete_only,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+    })
 
     assert prepared_steel.gamma_s == pytest.approx(1.32)
     assert prepared_steel.concrete is None
     assert prepared_concrete.gamma_s is None
     assert prepared_concrete.concrete.gamma_c == pytest.approx(1.595)
+    assert saved_steel.gamma_s == pytest.approx(1.32)
+    assert saved_steel.concrete is None
+    assert saved_concrete.gamma_s is None
+    assert saved_concrete.concrete.gamma_c == pytest.approx(1.595)
+
+    missing_active_factor = {
+        **steel_only,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+    }
+    missing_active_factor.pop("fatigue_gamma_s")
+    with pytest.raises(
+        ValueError,
+        match="final fatigue material factors are required",
+    ):
+        fatigue_analysis.prepare(missing_active_factor)
 
 
 def test_implicit_headless_factors_without_dedicated_approval_are_legacy():
