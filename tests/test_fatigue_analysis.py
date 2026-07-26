@@ -354,6 +354,29 @@ def test_implicit_headless_factors_without_dedicated_approval_are_legacy():
     assert invalid["factor_basis"]["approval_reference"] == ""
 
 
+def test_run_rejects_implicit_legacy_factors_before_invoking_solver():
+    inp = _base()
+    inp.pop("fatigue_factor_mode")
+    inp.pop("fatigue_factor_approval")
+    inp[fatigue_inputs.BASIS_KEY] = _basis(
+        approval_reference="VD-FLM5-AGREEMENT"
+    )
+    solver_called = False
+
+    def forbidden_engine(*_args, **_kwargs):
+        nonlocal solver_called
+        solver_called = True
+        raise AssertionError("legacy factors reached the fatigue solver")
+
+    with pytest.raises(
+        ValueError,
+        match="Legacy saved fatigue factors require review",
+    ):
+        fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
+
+    assert solver_called is False
+
+
 def test_bent_bar_reduction_is_resolved_per_element_diameter():
     inp = _base()
     catalogue = inp[fatigue_inputs.DETAIL_CATALOG_KEY]

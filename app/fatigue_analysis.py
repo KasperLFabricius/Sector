@@ -37,6 +37,10 @@ from sector.section import Section
 
 
 STEEL_REFERENCE_MODULUS_MPA = 200_000.0
+_LEGACY_FACTOR_REVIEW_ERROR = (
+    "Legacy saved fatigue factors require review: select the "
+    "edition-derived preset or an approved final override"
+)
 
 
 @dataclass(frozen=True)
@@ -446,10 +450,7 @@ def validation_errors(inp: Mapping) -> list[str]:
             errors.append(str(exc))
     factor_mode, _ = _factor_mode(inp)
     if factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
-        errors.append(
-            "Legacy saved fatigue factors require review: select the "
-            "edition-derived preset or an approved final override"
-        )
+        errors.append(_LEGACY_FACTOR_REVIEW_ERROR)
 
     check_reinforcement = bool(inp.get("fatigue_check_steel"))
     check_concrete = bool(inp.get("fatigue_check_concrete"))
@@ -881,6 +882,10 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
 
     if not bool(inp.get("fatigue_on")):
         raise ValueError("fatigue analysis is not enabled")
+    if _factor_mode(inp)[0] == fatigue_inputs.FACTOR_MODE_LEGACY:
+        # Keep the public preparation boundary fail-closed even if a custom
+        # integration bypasses presentation-layer validation.
+        raise ValueError(_LEGACY_FACTOR_REVIEW_ERROR)
     errors = validation_errors(inp)
     if errors:
         raise ValueError("; ".join(errors))
