@@ -136,21 +136,46 @@ class TopologyTolerance:
 
     ``relative_length`` is resolved against the largest section bounding-box
     dimension. ``absolute_length`` is a floor in Sector's model units (metres).
-    The resolved length tolerance is used only to classify coincident/touching
-    topology; it never alters coordinates or calculation geometry. The area
-    tolerance is ``length_tolerance * section_scale`` (with the absolute floor
-    squared for a zero-span input).
+    ``coordinate_ulp_multiplier`` adds a conservative floating-point envelope
+    at the largest coordinate magnitude, so translating the same small section
+    to project coordinates cannot turn exact contact into a false clearance.
+    The resolved length tolerance is used only to classify
+    coincident/touching topology; it never alters coordinates or calculation
+    geometry. The area tolerance is ``length_tolerance * section_scale`` (with
+    the absolute floor squared for a zero-span input).
     """
 
     relative_length: float = 1.0e-9
     absolute_length: float = 1.0e-12
+    coordinate_ulp_multiplier: float = 8.0
 
-    def resolved_length(self, scale: float) -> float:
+    def floating_point_allowance(self, coordinate_magnitude: float) -> float:
+        """Roundoff envelope for predicates evaluated at project coordinates."""
+        if (
+            not math.isfinite(self.coordinate_ulp_multiplier)
+            or self.coordinate_ulp_multiplier < 0.0
+        ):
+            raise ValueError(
+                "coordinate ULP multiplier must be finite and non-negative"
+            )
+        if not math.isfinite(coordinate_magnitude) or coordinate_magnitude < 0.0:
+            raise ValueError("coordinate magnitude must be finite and non-negative")
+        return self.coordinate_ulp_multiplier * math.ulp(coordinate_magnitude)
+
+    def resolved_length(
+        self,
+        scale: float,
+        coordinate_magnitude: float = 0.0,
+    ) -> float:
         if not math.isfinite(self.relative_length) or self.relative_length < 0.0:
             raise ValueError("relative topology tolerance must be finite and non-negative")
         if not math.isfinite(self.absolute_length) or self.absolute_length < 0.0:
             raise ValueError("absolute topology tolerance must be finite and non-negative")
-        return max(self.absolute_length, self.relative_length * max(scale, 0.0))
+        return max(
+            self.absolute_length,
+            self.relative_length * max(scale, 0.0),
+            self.floating_point_allowance(coordinate_magnitude),
+        )
 
 
 DEFAULT_TOPOLOGY_TOLERANCE = TopologyTolerance()
@@ -177,6 +202,7 @@ class TopologyValidation:
     scale: float
     length_tolerance: float
     area_tolerance: float
+    floating_point_tolerance: float = 0.0
 
     @property
     def valid(self) -> bool:
@@ -222,16 +248,29 @@ def _topology_scale(arrays: Sequence[np.ndarray]) -> float:
     )
 
 
+def _topology_coordinate_magnitude(arrays: Sequence[np.ndarray]) -> float:
+    """Largest finite absolute coordinate used to resolve the ULP envelope."""
+    finite = [arr[np.isfinite(arr)] for arr in arrays if arr.ndim == 2]
+    finite = [values for values in finite if len(values)]
+    if not finite:
+        return 0.0
+    return max(float(np.max(np.abs(values))) for values in finite)
+
+
 def _point_segment_distance_xy(
     point: np.ndarray, start: np.ndarray, end: np.ndarray
 ) -> float:
     dx = end - start
+    relative = point - start
     length2 = float(np.dot(dx, dx))
     if length2 <= 0.0:
-        return float(np.linalg.norm(point - start))
-    fraction = float(np.dot(point - start, dx) / length2)
+        return float(np.linalg.norm(relative))
+    fraction = float(np.dot(relative, dx) / length2)
     fraction = max(0.0, min(1.0, fraction))
-    return float(np.linalg.norm(point - (start + fraction * dx)))
+    # Form the residual entirely in edge-local coordinates. Reconstructing a
+    # projected global point and subtracting it from ``point`` loses low bits
+    # when a small section is translated to a large project coordinate.
+    return float(np.linalg.norm(relative - fraction * dx))
 
 
 def _cross2(a: np.ndarray, b: np.ndarray) -> float:
@@ -338,13 +377,23 @@ def validate_section_topology(
         arrays.append(arr)
 
     scale = _topology_scale(arrays)
-    length_tol = tolerance.resolved_length(scale)
+    coordinate_magnitude = _topology_coordinate_magnitude(arrays)
+    floating_point_tol = tolerance.floating_point_allowance(coordinate_magnitude)
+    length_tol = tolerance.resolved_length(scale, coordinate_magnitude)
     area_tol = max(tolerance.absolute_length ** 2, length_tol * max(scale, length_tol))
     arrays = [ring_without_terminal_closure(arr) for arr in arrays]
 
     def invalid(issue: TopologyIssue) -> TopologyValidation:
-        return TopologyValidation((issue,), scale, length_tol, area_tol)
+        return TopologyValidation(
+            (issue,),
+            scale,
+            length_tol,
+            area_tol,
+            floating_point_tol,
+        )
 
+    # Shape and finiteness must be established before translating predicate
+    # copies to a local origin.
     for index, arr in enumerate(arrays):
         label = _ring_label(index)
         count = len(arr)
@@ -364,6 +413,16 @@ def validate_section_topology(
                 point=point_index + 1,
             ))
 
+    # All topology predicates operate on copies translated by one common
+    # section origin. This preserves relative geometry and raw point identity
+    # while avoiding global-coordinate cancellation in cross products,
+    # projections, bounding boxes, and the containment ray cast.
+    origin = arrays[0][0].copy()
+    arrays = [arr - origin for arr in arrays]
+
+    for index, arr in enumerate(arrays):
+        label = _ring_label(index)
+        count = len(arr)
         for first in range(count):
             for second in range(first + 1, count):
                 if float(np.linalg.norm(arr[first] - arr[second])) <= length_tol:
@@ -529,7 +588,13 @@ def validate_section_topology(
                     other_ring=second_label,
                 ))
 
-    return TopologyValidation((), scale, length_tol, area_tol)
+    return TopologyValidation(
+        (),
+        scale,
+        length_tol,
+        area_tol,
+        floating_point_tol,
+    )
 
 
 def require_valid_section_topology(

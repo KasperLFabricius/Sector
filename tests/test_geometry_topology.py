@@ -5,6 +5,7 @@ from __future__ import annotations
 from fractions import Fraction
 import itertools
 import json
+import math
 import pathlib
 import sys
 
@@ -342,9 +343,185 @@ def test_validation_is_translation_invariant_at_representative_section_scales(
 
     result = geometry.validate_section_topology(moved(outer), [moved(holes[0])])
     assert result.valid, result.message
-    assert result.length_tolerance == pytest.approx(
-        max(1.0e-12, 4.0 * scale * 1.0e-9)
+    coordinate_magnitude = max(
+        abs(coordinate)
+        for ring in (moved(outer), moved(holes[0]))
+        for point in ring
+        for coordinate in point
     )
+    floating_point_tolerance = (
+        geometry.DEFAULT_TOPOLOGY_TOLERANCE.coordinate_ulp_multiplier
+        * math.ulp(coordinate_magnitude)
+    )
+    assert result.length_tolerance == pytest.approx(
+        max(1.0e-12, 4.0 * scale * 1.0e-9, floating_point_tolerance)
+    )
+    assert result.floating_point_tolerance == pytest.approx(
+        floating_point_tolerance
+    )
+
+
+def _translated_contact_geometry(scale=1.0, translation=(500000.0, 500000.0)):
+    outer = [(0.0, 0.0), (0.08, 0.0), (0.0, 0.08)]
+    # The first point lies exactly on the outer diagonal x + y = 0.08.
+    hole = [(0.04, 0.04), (0.02, 0.04), (0.04, 0.02)]
+
+    def moved(ring):
+        return [
+            (
+                translation[0] + scale * x,
+                translation[1] + scale * y,
+            )
+            for x, y in ring
+        ]
+
+    return moved(outer), moved(hole)
+
+
+def test_qa_translated_contact_reproducer_blocks_all_winding_and_closure_forms():
+    outer, hole = _translated_contact_geometry()
+    nominal_scale_tolerance = 0.08 * 1.0e-9
+
+    for reverse_outer, reverse_hole, close_outer, close_hole in itertools.product(
+        (False, True), repeat=4
+    ):
+        raw_outer = list(reversed(outer)) if reverse_outer else list(outer)
+        raw_hole = list(reversed(hole)) if reverse_hole else list(hole)
+        if close_outer:
+            raw_outer.append(raw_outer[0])
+        if close_hole:
+            raw_hole.append(raw_hole[0])
+        result = geometry.validate_section_topology(raw_outer, [raw_hole])
+        assert not result.valid
+        assert result.issues[0].code == "hole-boundary-contact"
+        assert result.length_tolerance > nominal_scale_tolerance
+        assert result.floating_point_tolerance > nominal_scale_tolerance
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        [(0, 2), (1, 1), (1, 2), (2, 2), (2, 0)],
+        [(0, 2), (1, 1), (2, 2), (2, 1), (2, 0)],
+        [(0, 2), (1, 2), (1, 1), (2, 2), (2, 1), (2, 0)],
+    ],
+    ids=("qa-backtrack-contact-1", "qa-backtrack-contact-2", "qa-contact-3"),
+)
+def test_qa_oracle_translated_contact_and_backtracking_corpus_is_blocked(base):
+    ring = [
+        (1.0e6 + 1.0e-3 * x, -1.0e6 + 1.0e-3 * y)
+        for x, y in base
+    ]
+    reversed_ring = list(reversed(ring))
+    variants = (
+        ring,
+        reversed_ring,
+        [*ring, ring[0]],
+        [*reversed_ring, reversed_ring[0]],
+    )
+
+    for variant in variants:
+        result = geometry.validate_section_topology(variant)
+        assert not result.valid
+        assert result.issues[0].code in {
+            "backtracking-edge",
+            "self-intersection",
+        }
+
+
+@pytest.mark.parametrize("scale", [1.0e-3, 1.0, 1.0e3])
+@pytest.mark.parametrize("translation", [(0.0, 0.0), (500000.0, 500000.0)])
+def test_invalid_contact_and_backtracking_are_translation_safe_across_scales(
+    scale, translation
+):
+    outer, hole = _translated_contact_geometry(scale, translation)
+    contact = geometry.validate_section_topology(outer, [hole])
+    assert not contact.valid
+    assert contact.issues[0].code == "hole-boundary-contact"
+
+    backtracking_base = [
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (0.5, 0.0),
+        (0.0, 1.0),
+    ]
+    backtracking = [
+        (
+            translation[0] + scale * x,
+            translation[1] + scale * y,
+        )
+        for x, y in backtracking_base
+    ]
+    result = geometry.validate_section_topology(backtracking)
+    assert not result.valid
+    assert result.issues[0].code == "backtracking-edge"
+
+
+def test_ulp_aware_translated_boundary_clearance_is_bracketed():
+    origin = 500000.0
+    outer = [
+        (origin, origin),
+        (origin + 0.08, origin),
+        (origin + 0.08, origin + 0.08),
+        (origin, origin + 0.08),
+    ]
+
+    def hole_at(clearance):
+        return [
+            (origin + clearance, origin + 0.02),
+            (origin + 0.04, origin + 0.02),
+            (origin + 0.04, origin + 0.04),
+            (origin + clearance, origin + 0.04),
+        ]
+
+    probe = geometry.validate_section_topology(outer, [hole_at(0.01)])
+    assert probe.valid
+    assert probe.floating_point_tolerance > 0.08 * 1.0e-9
+    assert not geometry.validate_section_topology(
+        outer,
+        [hole_at(0.5 * probe.length_tolerance)],
+    ).valid
+    assert geometry.validate_section_topology(
+        outer,
+        [hole_at(4.0 * probe.length_tolerance)],
+    ).valid
+
+
+def test_translated_contact_is_blocked_at_api_project_and_solver_gates():
+    import project_io
+
+    outer, hole = _translated_contact_geometry()
+    with pytest.raises(geometry.GeometryTopologyError) as api_error:
+        Section.from_polygon(outer, holes=[hole])
+    assert api_error.value.validation.issues[0].code == "hole-boundary-contact"
+
+    payload = _project_payload(outer, [hole])
+    with pytest.raises(ValueError, match="invalid project section geometry"):
+        project_io.parse_project(json.dumps(payload))
+
+    tables = {
+        "corners_base": pd.DataFrame(
+            [[1000.0 * x, 1000.0 * y] for x, y in outer],
+            columns=["x (mm)", "y (mm)"],
+        ),
+        "hole_base": pd.DataFrame(
+            [[1000.0 * x, 1000.0 * y] for x, y in hole],
+            columns=["x (mm)", "y (mm)"],
+        ),
+    }
+    with pytest.raises(ValueError, match="invalid project section geometry"):
+        project_io.dump_project(tables, {})
+
+    valid_hole = [
+        (500000.039, 500000.039),
+        hole[1],
+        hole[2],
+    ]
+    section = Section.from_polygon(outer, holes=[valid_hole])
+    section.concrete[1] = np.asarray(hole, dtype=float)
+    with pytest.raises(geometry.GeometryTopologyError) as solver_error:
+        solve_elastic_uncracked(section, 0.0, 1.0, 0.0, 6.0)
+    assert solver_error.value.validation.issues[0].code == "hole-boundary-contact"
 
 
 def test_all_winding_permutations_keep_point_order_and_analysis_results():

@@ -39,20 +39,28 @@ All coordinates use Sector model units (metres). For all rings in one section,
 let:
 
 - `S = max(global x span, global y span)`;
-- `e_L = max(1e-12 m, 1e-9 S)`; and
+- `C = max(abs(x), abs(y))` over the finite input coordinates;
+- `e_FP = 8 ulp(C)`, an eight-unit-in-the-last-place floating-point envelope;
+- `e_L = max(1e-12 m, 1e-9 S, e_FP)`; and
 - `e_A = max((1e-12 m)^2, e_L max(S, e_L))`.
 
 Distances at or below `e_L` classify vertices or non-adjacent boundaries as
 coincident/contacting and therefore invalid. Ring area magnitude must be
 strictly greater than `e_A`. The validator never snaps or changes engineering
-coordinates. Translation and representative scale tests bracket each limit
-from both sides.
+coordinates. Eight ULPs conservatively cover input rounding plus the
+subtractions, projection, and cross-product operations used by the predicates.
+Predicate copies are also translated to one common section-local origin before
+classification. Translation and representative scale tests bracket each limit
+from both sides, including exact contact and backtracking at large project
+coordinates.
 
 ## Diagnostics and compatibility
 
 Validation stops at the first causal defect and returns a stable issue code plus
 the one-based ring, point, and/or edge location. Boundary-contact diagnostics
-also report the measured clearance and resolved tolerance.
+also report the measured clearance and resolved effective tolerance. The
+validation result exposes the floating-point component separately as
+`floating_point_tolerance` for audit.
 
 Project format version 14 is unchanged. Mixed-winding projects and exactly
 closed rings continue to round-trip without reordering. A legacy representation
