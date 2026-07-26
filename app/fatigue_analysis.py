@@ -113,13 +113,19 @@ def _factor_mode(inp: Mapping) -> tuple[str, bool]:
     raw = inp.get("fatigue_factor_mode")
     if raw in (None, ""):
         # Before project v15 the numeric controls were already complete user
-        # inputs. Preserve direct API/test integrations that supply those values;
-        # project migration separately marks saved legacy factors for review.
+        # inputs, but they carried no factor-specific approval. Treat them as
+        # legacy/review-required unless a headless integration now supplies the
+        # dedicated approval source. Project migration applies the same rule to
+        # saved values.
         if (
             inp.get("fatigue_gamma_s") is not None
             or inp.get("fatigue_gamma_c") is not None
         ):
-            return fatigue_inputs.FACTOR_MODE_OVERRIDE, False
+            return (
+                fatigue_inputs.FACTOR_MODE_OVERRIDE
+                if str(inp.get("fatigue_factor_approval") or "").strip()
+                else fatigue_inputs.FACTOR_MODE_LEGACY
+            ), False
         return fatigue_inputs.FACTOR_MODE_PRESET, False
     return str(raw), True
 
@@ -438,7 +444,7 @@ def validation_errors(inp: Mapping) -> list[str]:
             )
         except (TypeError, ValueError) as exc:
             errors.append(str(exc))
-    factor_mode, factor_mode_explicit = _factor_mode(inp)
+    factor_mode, _ = _factor_mode(inp)
     if factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
         errors.append(
             "Legacy saved fatigue factors require review: select the "
@@ -526,8 +532,7 @@ def validation_errors(inp: Mapping) -> list[str]:
         errors.append(str(exc))
         basis = fatigue_inputs.default_basis()
     if (
-        factor_mode_explicit
-        and factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
         and not str(inp.get("fatigue_factor_approval") or "").strip()
     ):
         errors.append(

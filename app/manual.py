@@ -747,6 +747,8 @@ def manual_blocks() -> list:
        "override** only for a deliberate project value and record its dedicated "
        "**Fatigue-factor approval / source**. The spectrum-method approval/reference "
        "is separate and cannot authorize a material-factor change. "
+       "Headless numeric factors without the dedicated source are treated as "
+       "legacy values requiring review. "
        "$\\gamma_{Ff}$ remains the explicit action factor.")
     md("For concrete, select **Explicit Palmgren-Miner spectrum** or "
        "**Damage-equivalent stress amplitude**. The explicit method uses every "

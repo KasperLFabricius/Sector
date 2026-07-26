@@ -104,6 +104,8 @@ def _base(**overrides):
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "TEST-FACTOR-APPROVAL",
         "fatigue_gamma_c": 1.595,
         "fatigue_gamma_s": 1.32,
         "fatigue_gamma_ff": 1.10,
@@ -285,7 +287,8 @@ def test_prepare_retains_explicit_approved_fatigue_override():
 
 def test_explicit_override_requires_approval_and_legacy_values_require_review():
     override = _base(
-        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_factor_approval="",
     )
     override[fatigue_inputs.BASIS_KEY] = _basis(
         approval_reference="VD-FLM5-APPROVAL"
@@ -310,10 +313,14 @@ def test_explicit_override_requires_approval_and_legacy_values_require_review():
     )
 
 
-def test_legacy_direct_api_can_omit_the_factor_for_a_disabled_check():
+def test_approved_implicit_api_can_omit_the_factor_for_a_disabled_check():
     steel_only = _base(fatigue_check_concrete=False)
+    steel_only.pop("fatigue_factor_mode")
+    steel_only["fatigue_factor_approval"] = "DB-FACT-20 / checker E"
     steel_only.pop("fatigue_gamma_c")
     concrete_only = _base(fatigue_check_steel=False)
+    concrete_only.pop("fatigue_factor_mode")
+    concrete_only["fatigue_factor_approval"] = "DB-FACT-20 / checker E"
     concrete_only.pop("fatigue_gamma_s")
 
     prepared_steel = fatigue_analysis.prepare(steel_only)
@@ -323,6 +330,28 @@ def test_legacy_direct_api_can_omit_the_factor_for_a_disabled_check():
     assert prepared_steel.concrete is None
     assert prepared_concrete.gamma_s is None
     assert prepared_concrete.concrete.gamma_c == pytest.approx(1.595)
+
+
+def test_implicit_headless_factors_without_dedicated_approval_are_legacy():
+    inp = _base()
+    inp.pop("fatigue_factor_mode")
+    inp.pop("fatigue_factor_approval")
+    inp[fatigue_inputs.BASIS_KEY] = _basis(
+        approval_reference="VD-FLM5-AGREEMENT"
+    )
+
+    errors = fatigue_analysis.validation_errors(inp)
+    invalid = fatigue_analysis.invalid_result(inp, errors)
+
+    assert any(
+        "Legacy saved fatigue factors require review" in error
+        for error in errors
+    )
+    assert invalid["valid"] is False
+    assert invalid["factor_basis"]["mode"] == (
+        fatigue_inputs.FACTOR_MODE_LEGACY
+    )
+    assert invalid["factor_basis"]["approval_reference"] == ""
 
 
 def test_bent_bar_reduction_is_resolved_per_element_diameter():
