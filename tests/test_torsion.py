@@ -475,6 +475,15 @@ def test_app_torsion_override_withholds_verdict_until_approved():
     assert blocked["valid"] is False
     assert "requires a stated approval/source" in blocked["reason"]
     _select_view(at, "Torsion")
+    assert any(
+        "approved final concrete tensile-factor override has no approval/source"
+        in message.value
+        for message in at.error
+    )
+    assert not any(
+        "tube could not be formed" in message.value
+        for message in at.warning
+    )
     assert not any(
         metric.label == r"Utilisation $T_{Ed}/T_{Rd}$"
         for metric in at.metric
@@ -491,6 +500,50 @@ def test_app_torsion_override_withholds_verdict_until_approved():
     assert approved["valid"] is True
     assert approved["material_factor_basis"]["approval_reference"] == (
         "DB-TOR-05 / checker D"
+    )
+
+
+def test_biaxial_unapproved_torsion_override_withholds_dependent_screens():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    at.selectbox(key="torsion_factor_mode").set_value(
+        codes.FACTOR_MODE_OVERRIDE
+    ).run()
+    at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_Vx", 20.0),
+        ("number_input", "shear_Vy", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    torsion_result = results["torsion"]
+    assert torsion_result["valid"] is False
+    for direction in results["shear"]["directions"].values():
+        for candidate in direction["face_candidates"]:
+            assert candidate["torsion_status"] == "NOT ASSESSED"
+            assert candidate["min_reinf_status"] == "NOT ASSESSED"
+    for item in torsion_result["directional_interactions"].values():
+        assert item["directional_interaction_status"] == "NOT ASSESSED"
+        assert item["interaction"]["valid"] is False
+        assert "value" not in item["interaction"]
+        assert item["min_reinf"]["applicable"] is False
+        assert item["directional_min_reinf_status"] == "NOT ASSESSED"
+        assert "approval/source" in item["interaction"]["reason"]
+        assert "approval/source" in item["min_reinf"]["reason"]
+
+    _select_view(at, "Torsion")
+    assert any("No torsion, V+T (6.29)" in message.value for message in at.error)
+    assert not any(
+        "Directional screen" in frame.value.columns
+        or "Directional 6.31 screen" in frame.value.columns
+        for frame in at.dataframe
     )
 
 

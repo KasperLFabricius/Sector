@@ -3660,6 +3660,19 @@ class ReportBuilder:
                    "minimise the governing utilisation)."
                    if t.get("theta_mode") == "utilisation"
                    else "(auto-optimised for the torsion resistance)."))
+        if t.get("factor_approval_valid") is False:
+            self._status_block(
+                "INVALID - concrete tensile-factor override approval/source missing",
+                "INVALID",
+            )
+            self._small(
+                "Torsion is not assessed because the selected approved final "
+                "concrete tensile-factor override has no approval/source. Enter the "
+                "project decision, design-basis clause, or checker approval and "
+                "recalculate. No torsion, V+T (6.29), minimum-reinforcement (6.31), "
+                "or combined compliance verdict is issued."
+            )
+            return
         directional = t.get("directional_interactions") or {}
         if directional:
             self._status_block(

@@ -6168,7 +6168,13 @@ def _run_uniaxial_capacity_checks(inp, out):
             # reinforcement (only the minimum) is needed if TEd/TRd,c + VEd/VRd,c <= 1.
             sh_ms = out.get("shear")
             _trdc = primary["trd_c"]
-            if tors_ctx["subdivide"]:
+            if not tors_ctx["factor_approval_valid"]:
+                out["torsion"]["min_reinf"] = dict(
+                    applicable=False,
+                    reason=tors_ctx["factor_approval_reason"],
+                    factor_approval_valid=False,
+                )
+            elif tors_ctx["subdivide"]:
                 # 6.31 is written for an approximately solid rectangular section, so
                 # it does not apply to a subdivided compound section.
                 out["torsion"]["min_reinf"] = dict(
@@ -6192,31 +6198,39 @@ def _run_uniaxial_capacity_checks(inp, out):
             sh_links = out.get("shear", {}).get("links")
             p_tube, t_ed_p = primary["tube"], primary["t_ed"]
             if sh_links is not None and sh_links["res"]["valid"] and p_tube["valid"]:
-                # The member angle when a load drives it; otherwise the
-                # least-conservative angle (cot = 1 clamped to the shared band).
-                pl_lo, pl_hi = link_ctx["cot_min"], link_ctx["cot_max"]
-                cot_c = (
-                    cot_star
-                    if cot_star is not None
-                    else min(max(1.0, pl_lo), pl_hi)
-                )
-                trdmax_c = torsion.trd_max(
-                    tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
-                    p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
-                    closed_detailing=tors_ctx["nu_detail"],
-                    fcd_mpa=tors_ctx["fcd"])
-                vlk = link_ctx["build"](cot_c, cot_c)
-                inter = combined.crushing_interaction(
-                    t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
-                out["torsion"]["interaction"] = dict(
-                    valid=True, cot=cot_c,
-                    theta_deg=math.degrees(math.atan(1.0 / cot_c)),
-                    trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
-                    v_ed=v_ed_s, value=inter,
-                    code_applicable=bool(
-                        out["torsion"].get("code_applicable", True)
-                        and sh_links.get("code_applicable", True)
-                    ))
+                if not tors_ctx["factor_approval_valid"]:
+                    out["torsion"]["interaction"] = dict(
+                        valid=False,
+                        code_applicable=False,
+                        reason=tors_ctx["factor_approval_reason"],
+                        factor_approval_valid=False,
+                    )
+                else:
+                    # The member angle when a load drives it; otherwise the
+                    # least-conservative angle (cot = 1 clamped to the shared band).
+                    pl_lo, pl_hi = link_ctx["cot_min"], link_ctx["cot_max"]
+                    cot_c = (
+                        cot_star
+                        if cot_star is not None
+                        else min(max(1.0, pl_lo), pl_hi)
+                    )
+                    trdmax_c = torsion.trd_max(
+                        tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
+                        p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
+                        closed_detailing=tors_ctx["nu_detail"],
+                        fcd_mpa=tors_ctx["fcd"])
+                    vlk = link_ctx["build"](cot_c, cot_c)
+                    inter = combined.crushing_interaction(
+                        t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
+                    out["torsion"]["interaction"] = dict(
+                        valid=True, cot=cot_c,
+                        theta_deg=math.degrees(math.atan(1.0 / cot_c)),
+                        trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
+                        v_ed=v_ed_s, value=inter,
+                        code_applicable=bool(
+                            out["torsion"].get("code_applicable", True)
+                            and sh_links.get("code_applicable", True)
+                        ))
 
     capacity.finalize_combined(inp, out)
 
@@ -9311,6 +9325,14 @@ def torsion_view(inp, results):
         return
     t = results["torsion"]
     _member_material_note(inp)
+    if t.get("factor_approval_valid") is False:
+        st.error(
+            "INVALID - the selected approved final concrete tensile-factor override "
+            "has no approval/source. Enter the project decision, design-basis clause, "
+            "or checker approval and recalculate. No torsion, V+T (6.29), "
+            "minimum-reinforcement (6.31), or combined verdict is issued."
+        )
+        return
     directional_interactions = t.get("directional_interactions") or {}
     if directional_interactions:
         st.warning(

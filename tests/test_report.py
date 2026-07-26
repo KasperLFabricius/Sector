@@ -1854,6 +1854,47 @@ def test_report_directional_vt_table_withholds_out_of_range_verdict():
     assert "left (-x)" in text and "bottom (-y)" in text
 
 
+def test_report_identifies_unapproved_torsion_override_and_withholds_screens():
+    out = _out()
+    torsion = _torsion_out(interaction=True)
+    stale_direction = copy.deepcopy(torsion)
+    stale_direction.update(
+        directional_interaction_status="PASS",
+        min_reinf=dict(
+            applicable=True, value=0.52, ok=True, t_ed=40.0,
+            trd_c=100.0, v_ed=12.0, vrd_c=100.0, solid=True,
+            model_2023=False,
+        ),
+    )
+    torsion.update(
+        valid=False,
+        factor_approval_required=True,
+        factor_approval_valid=False,
+        factor_approval_reason=(
+            "approved final concrete tensile-factor override requires a stated "
+            "approval/source"
+        ),
+        reason=(
+            "approved final concrete tensile-factor override requires a stated "
+            "approval/source"
+        ),
+        directional_interactions={
+            "vx": stale_direction,
+            "vy": copy.deepcopy(stale_direction),
+        },
+    )
+    out["torsion"] = torsion
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+    assert "tensile-factor override approval/source missing" in text
+    assert "No torsion, V+T (6.29), minimum-reinforcement (6.31)" in text
+    assert "tube could not be formed" not in text
+    assert "Directional minimum-reinforcement screens" not in text
+    assert "minimum sufficient" not in text
+
+
 def test_report_compound_torsion_requires_subdivision():
     out = _out()
     t = _torsion_out()
