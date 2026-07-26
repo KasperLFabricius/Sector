@@ -1817,7 +1817,8 @@ def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
 
     # The fresh session already contains both preset numbers. Loading an approved
     # steel-only override with no steel factor must clear that stale value. The
-    # inactive concrete factor may receive the documented compatibility fallback.
+    # inactive concrete fallback belongs only to calculation preflight and must not
+    # become a persisted/widget value that could later masquerade as approved.
     at.session_state["_pending_project"] = project_io.dump_project(
         tables,
         {
@@ -1831,11 +1832,25 @@ def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
     assert not at.exception
     assert at.number_input(key="fatigue_gamma_s").value is None
     assert at.session_state["fatigue_gamma_s"] is None
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.595)
+    assert at.number_input(key="fatigue_gamma_c").value is None
+    assert at.session_state["fatigue_gamma_c"] is None
     steel_errors = fatigue_analysis.validation_errors(
         at.session_state["_latest_inputs"]
     )
     assert "final fatigue material factors are required" in steel_errors
+    at.number_input(key="fatigue_gamma_s").set_value(1.27).run()
+    steel_only_errors = fatigue_analysis.validation_errors(
+        at.session_state["_latest_inputs"]
+    )
+    assert "final fatigue material factors are required" not in steel_only_errors
+    at.toggle(key="fatigue_check_concrete").set_value(True).run()
+    assert at.number_input(key="fatigue_gamma_c").value is None
+    assert (
+        "final fatigue material factors are required"
+        in fatigue_analysis.validation_errors(
+            at.session_state["_latest_inputs"]
+        )
+    )
 
     # Repeat in the opposite direction in the same session. This proves that the
     # durable mirror cannot reintroduce the concrete value seeded by the first load.
@@ -1852,7 +1867,8 @@ def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
     assert not at.exception
     assert at.number_input(key="fatigue_gamma_c").value is None
     assert at.session_state["fatigue_gamma_c"] is None
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.32)
+    assert at.number_input(key="fatigue_gamma_s").value is None
+    assert at.session_state["fatigue_gamma_s"] is None
     concrete_errors = fatigue_analysis.validation_errors(
         at.session_state["_latest_inputs"]
     )
@@ -1869,6 +1885,14 @@ def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
         at.session_state["_latest_inputs"]
     )
     assert "final fatigue material factors are required" not in repaired_errors
+    at.toggle(key="fatigue_check_steel").set_value(True).run()
+    assert at.number_input(key="fatigue_gamma_s").value is None
+    assert (
+        "final fatigue material factors are required"
+        in fatigue_analysis.validation_errors(
+            at.session_state["_latest_inputs"]
+        )
+    )
 
 
 def test_app_fatigue_override_does_not_reuse_spectrum_method_approval():

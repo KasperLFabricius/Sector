@@ -3525,7 +3525,6 @@ def build_inputs(host=st):
             None
             if (
                 fatigue_factor_mode != fatigue_inputs.FACTOR_MODE_PRESET
-                and fatigue_check_steel
                 and "fatigue_gamma_s" not in st.session_state
             )
             else fatigue_factor_preset["gamma_s"]
@@ -3549,7 +3548,6 @@ def build_inputs(host=st):
             None
             if (
                 fatigue_factor_mode != fatigue_inputs.FACTOR_MODE_PRESET
-                and fatigue_check_concrete
                 and "fatigue_gamma_c" not in st.session_state
             )
             else fatigue_factor_preset["gamma_c"]
@@ -3564,13 +3562,23 @@ def build_inputs(host=st):
         help=r"Final material factor in the design concrete fatigue strength "
              r"$f_{cd,\mathrm{fat}}$.",
     )
+    fatigue_display_gamma_s = (
+        fatigue_factor_preset["gamma_s"]
+        if fatigue_gamma_s is None and not fatigue_check_steel
+        else fatigue_gamma_s
+    )
+    fatigue_display_gamma_c = (
+        fatigue_factor_preset["gamma_c"]
+        if fatigue_gamma_c is None and not fatigue_check_concrete
+        else fatigue_gamma_c
+    )
     try:
         _resolved_s, _resolved_c, fatigue_factor_display = (
             fatigue_inputs.resolve_fatigue_factors(
                 fatigue_edition,
                 mode=fatigue_factor_mode,
-                gamma_s=fatigue_gamma_s,
-                gamma_c=fatigue_gamma_c,
+                gamma_s=fatigue_display_gamma_s,
+                gamma_c=fatigue_display_gamma_c,
                 gamma0=fatigue_gamma0,
                 gamma3=fatigue_gamma3,
             )
