@@ -3280,6 +3280,8 @@ _SHEAR_SIG_KEYS = (
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
+    "torsion_factor_mode", "torsion_gamma0", "torsion_gamma3",
+    "torsion_gamma_ct", "torsion_factor_approval",
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
     "torsion_sub_x2", "torsion_sub_y2", "torsion_sub_x3", "torsion_sub_y3",
@@ -3391,6 +3393,69 @@ def build_inputs(host=st):
         disabled=not fatigue_on,
         help="Selects the Eurocode fatigue-resistance expressions and preset values.",
     )
+    fatigue_factor_mode = _seeded_selectbox(
+        fat,
+        "Fatigue material-factor source",
+        list(fatigue_inputs.FACTOR_MODES),
+        fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_factor_mode",
+        disabled=not fatigue_on,
+        help=(
+            "Edition-derived resolves the material factors and every displayed "
+            "multiplier from the selected edition. Approved final override keeps "
+            "deliberate project values when the edition changes."
+        ),
+    )
+    fg1, fg2 = fat.columns(2)
+    fatigue_uses_categories = bool(
+        fatigue_inputs.FATIGUE_FACTOR_PRESETS[fatigue_edition][
+            "uses_gamma0_gamma3"
+        ]
+    )
+    fatigue_gamma0 = _seeded_number(
+        fg1,
+        r"$\gamma_0$",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "fatigue_gamma0",
+        disabled=not (
+            fatigue_on
+            and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
+            and fatigue_uses_categories
+        ),
+        help=(
+            "Danish multiplier for structural parts in geotechnical structures. "
+            "Use 1.0 when it does not apply."
+        ),
+    )
+    fatigue_gamma3 = _seeded_number(
+        fg2,
+        r"$\gamma_3$",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "fatigue_gamma3",
+        disabled=not (
+            fatigue_on
+            and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
+            and fatigue_uses_categories
+        ),
+        help=(
+            "Danish execution-control multiplier established by the project "
+            "design basis."
+        ),
+    )
+    fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
+        fatigue_edition,
+        gamma0=fatigue_gamma0,
+        gamma3=fatigue_gamma3,
+    )
+    if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET:
+        st.session_state["fatigue_gamma_s"] = fatigue_factor_preset["gamma_s"]
+        st.session_state["fatigue_gamma_c"] = fatigue_factor_preset["gamma_c"]
     fatigue_check_steel = _seeded_toggle(
         fat,
         "Reinforcement",
@@ -3422,9 +3487,15 @@ def build_inputs(host=st):
             "amplitude for 10^6 cycles, and its Cycles value is ignored for concrete."
         ),
     )
+    if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
+        fat.error(
+            "Legacy saved fatigue factors are retained but not approved. Select "
+            "the edition-derived preset or explicitly approve the final override "
+            "before calculation."
+        )
     fat.caption(
-        "Enter complete partial factors. Sector applies no control-, "
-        "construction- or consequence-class multiplier."
+        "No category is inferred. Edition-derived values use only the displayed "
+        "gamma0/gamma3 inputs; approved overrides remain final values."
     )
     ff1, ff2, ff3 = fat.columns(3)
     fatigue_gamma_ff = _seeded_number(
@@ -3444,10 +3515,14 @@ def build_inputs(host=st):
         r"$\gamma_s$",
         0.1,
         10.0,
-        1.15,
+        fatigue_factor_preset["gamma_s"],
         0.05,
         "fatigue_gamma_s",
-        disabled=not (fatigue_on and fatigue_check_steel),
+        disabled=(
+            not (fatigue_on and fatigue_check_steel)
+            or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
+            or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY
+        ),
         help=r"Final material factor reducing $\Delta\sigma_{Rsk}$ and the "
              "reinforcement yield or proof-stress limit.",
     )
@@ -3456,12 +3531,33 @@ def build_inputs(host=st):
         r"$\gamma_{c,\mathrm{fat}}$",
         0.1,
         10.0,
-        1.50,
+        fatigue_factor_preset["gamma_c"],
         0.05,
         "fatigue_gamma_c",
-        disabled=not (fatigue_on and fatigue_check_concrete),
+        disabled=(
+            not (fatigue_on and fatigue_check_concrete)
+            or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
+            or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY
+        ),
         help=r"Final material factor in the design concrete fatigue strength "
              r"$f_{cd,\mathrm{fat}}$.",
+    )
+    _resolved_s, _resolved_c, fatigue_factor_display = (
+        fatigue_inputs.resolve_fatigue_factors(
+            fatigue_edition,
+            mode=fatigue_factor_mode,
+            gamma_s=fatigue_gamma_s,
+            gamma_c=fatigue_gamma_c,
+            gamma0=fatigue_gamma0,
+            gamma3=fatigue_gamma3,
+        )
+    )
+    fat.caption(
+        "Reinforcement derivation: "
+        f"{fatigue_factor_display['gamma_s_derivation']}. "
+        "Concrete derivation: "
+        f"{fatigue_factor_display['gamma_c_derivation']}. "
+        f"Edition provision: {fatigue_factor_display['reference']}."
     )
     fc1, fc2 = fat.columns(2)
     fatigue_beta_cc_t0 = _seeded_number(
@@ -3520,6 +3616,15 @@ def build_inputs(host=st):
     )
     fat.markdown("**Spectrum basis**")
     fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
+    if (
+        fatigue_on
+        and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        and not str(fatigue_basis.get("approval_reference") or "").strip()
+    ):
+        fat.warning(
+            "An approved final-factor override needs an approval reference in "
+            "Spectrum basis before a fatigue verdict can be issued."
+        )
 
     # Load tables are rendered before the acceptance controls so their per-case
     # checkboxes can enable the relevant crack-width settings in the same rerun.
@@ -3929,6 +4034,132 @@ def build_inputs(host=st):
              r"place of the recommended $\nu=0.6(1-f_{ck}/250)$.")
     if combined_on:
         sts.caption(f"Torsion method set by Combined: {combined_method}")
+    effective_torsion_method = combined_method if combined_on else torsion_method
+    torsion_code = _SHEAR_CODES[effective_torsion_method]
+    torsion_factor_mode = _seeded_selectbox(
+        sts,
+        "Concrete tensile-factor source",
+        list(codes.FACTOR_MODES),
+        codes.FACTOR_MODE_PRESET,
+        "torsion_factor_mode",
+        disabled=not torsion_on,
+        help=(
+            "Edition-derived resolves the concrete-tension factor from the "
+            "selected torsion method. Approved final override retains a deliberate "
+            "project value across method switches."
+        ),
+    )
+    tf1, tf2 = sts.columns(2)
+    torsion_uses_categories = bool(
+        torsion_code.material_factors_use_gamma0_gamma3
+    )
+    torsion_gamma0 = _seeded_number(
+        tf1,
+        r"$\gamma_0$",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "torsion_gamma0",
+        disabled=not (
+            torsion_on
+            and torsion_factor_mode == codes.FACTOR_MODE_PRESET
+            and torsion_uses_categories
+        ),
+        help=(
+            "Danish factor for structural parts in geotechnical structures. "
+            "Use 1.0 when it does not apply."
+        ),
+    )
+    torsion_gamma3 = _seeded_number(
+        tf2,
+        r"$\gamma_3$",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "torsion_gamma3",
+        disabled=not (
+            torsion_on
+            and torsion_factor_mode == codes.FACTOR_MODE_PRESET
+            and torsion_uses_categories
+        ),
+        help=(
+            "Danish execution-control multiplier. Enter the value established "
+            "by the project design basis."
+        ),
+    )
+    torsion_factor_preset = torsion_code.material_factor_basis(
+        gamma0=torsion_gamma0,
+        gamma3=torsion_gamma3,
+    )
+    if torsion_factor_mode == codes.FACTOR_MODE_PRESET:
+        st.session_state["torsion_gamma_ct"] = (
+            torsion_factor_preset["tension_final"]
+        )
+    torsion_gamma_ct = _seeded_number(
+        sts,
+        r"Final concrete tension factor $\gamma_{ct}$",
+        0.1,
+        10.0,
+        torsion_factor_preset["tension_final"],
+        0.01,
+        "torsion_gamma_ct",
+        disabled=(
+            not torsion_on
+            or torsion_factor_mode == codes.FACTOR_MODE_PRESET
+        ),
+        help=(
+            "Final factor applied to fctk,0.05 for torsional concrete cracking. "
+            "It is separate from the compression factor used by fcd."
+        ),
+    )
+    torsion_factor_approval = _seeded_text(
+        sts,
+        "Tensile-factor approval / source",
+        "",
+        "torsion_factor_approval",
+        disabled=not (
+            torsion_on
+            and torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
+        ),
+        help=(
+            "Project decision, design-basis clause, or checker approval supporting "
+            "an overridden final tensile factor."
+        ),
+    )
+    _resolved_gamma_ct, torsion_factor_display = (
+        torsion_code.resolve_concrete_tension_factor(
+            mode=torsion_factor_mode,
+            gamma_ct=torsion_gamma_ct,
+            gamma0=torsion_gamma0,
+            gamma3=torsion_gamma3,
+        )
+    )
+    if torsion_uses_categories:
+        sts.caption(
+            "DK NA Table 2.1Na NA: compression basis "
+            f"{torsion_factor_preset['compression_base']:.2f} x gamma0 x gamma3 "
+            f"= {torsion_factor_preset['compression_final']:.3f}; tension basis "
+            f"{torsion_factor_display['tension_derivation']}. "
+            "Torsional fctd uses the final tensile factor; fcd retains the final "
+            "compression factor from the concrete material panel."
+        )
+    else:
+        sts.caption(
+            "Selected base-EN tensile-factor basis: "
+            f"{torsion_factor_display['tension_derivation']}. "
+            "Torsional fctd and compressive fcd use separately reported factors."
+        )
+    if (
+        torsion_on
+        and torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
+        and not str(torsion_factor_approval).strip()
+    ):
+        sts.warning(
+            "The final tensile-factor override is retained, but its project "
+            "approval/source is not stated."
+        )
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
     sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
@@ -4715,6 +4946,9 @@ def build_inputs(host=st):
             bool(fatigue_check_steel),
             bool(fatigue_check_concrete),
             fatigue_concrete_method,
+            fatigue_factor_mode,
+            float(fatigue_gamma0),
+            float(fatigue_gamma3),
             float(concrete.fck),
             float(concrete.alpha_cc),
             float(fatigue_gamma_c),
@@ -4849,7 +5083,13 @@ def build_inputs(host=st):
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_T=torsion_T, torsion_tef=torsion_tef,
-                torsion_nu_v=torsion_nu_v, torsion_subdivide=torsion_subdivide,
+                torsion_nu_v=torsion_nu_v,
+                torsion_factor_mode=torsion_factor_mode,
+                torsion_gamma0=torsion_gamma0,
+                torsion_gamma3=torsion_gamma3,
+                torsion_gamma_ct=torsion_gamma_ct,
+                torsion_factor_approval=torsion_factor_approval,
+                torsion_subdivide=torsion_subdivide,
                 torsion_subrects=torsion_subrects,
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
@@ -4870,6 +5110,9 @@ def build_inputs(host=st):
                 fatigue_check_steel=fatigue_check_steel,
                 fatigue_check_concrete=fatigue_check_concrete,
                 fatigue_concrete_method=fatigue_concrete_method,
+                fatigue_factor_mode=fatigue_factor_mode,
+                fatigue_gamma0=fatigue_gamma0,
+                fatigue_gamma3=fatigue_gamma3,
                 fatigue_gamma_c=fatigue_gamma_c,
                 fatigue_gamma_s=fatigue_gamma_s,
                 fatigue_gamma_ff=fatigue_gamma_ff,
@@ -5746,8 +5989,11 @@ def _run_uniaxial_capacity_checks(inp, out):
                 theta_deg=primary["theta_deg"], util=util_t, asl_req=asl_req,
                 t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
                 fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
-                alpha_cw=tors_ctx["alpha_cw"], fctd=tors_ctx["fctd"],
-                gamma_c=tors_ctx["gamma_c"], gamma_s=tors_ctx["gamma_s"],
+                alpha_cw=tors_ctx["alpha_cw"], fctk_005=tors_ctx["fctk_005"],
+                fctd=tors_ctx["fctd"],
+                gamma_c=tors_ctx["gamma_c"], gamma_ct=tors_ctx["gamma_ct"],
+                gamma_s=tors_ctx["gamma_s"],
+                material_factor_basis=tors_ctx["material_factor_basis"],
                 nu_v_detailing=tors_ctx["nu_detail_applied"],
                 sigma_cp=tors_ctx["sigma_cp"], n_prestress=n_prestress,
                 asw_t=tors_ctx["asw_t"], asw_over_s=tors_ctx["asw_over_s_t"],
@@ -8267,6 +8513,7 @@ def _fatigue_spectrum_panel(inp, spectrum):
 def _fatigue_result_basis_panel(payload):
     basis = payload.get("basis") or {}
     factors = payload.get("partial_factors") or {}
+    factor_basis = payload.get("factor_basis") or {}
     checks = payload.get("checks") or {}
     parameters = payload.get("concrete_parameters") or {}
     rows = [
@@ -8293,6 +8540,18 @@ def _fatigue_result_basis_panel(payload):
         ("Atypical traffic", basis.get("atypical_traffic") or "-"),
         ("Approval reference", basis.get("approval_reference") or "-"),
         ("Authority adjustments", basis.get("authority_adjustments") or "-"),
+        ("Factor source", factor_basis.get("mode") or "-"),
+        ("Factor provision", factor_basis.get("reference") or "-"),
+        ("gamma0", factor_basis.get("gamma0")),
+        ("gamma3", factor_basis.get("gamma3")),
+        (
+            "gamma_s derivation",
+            factor_basis.get("gamma_s_derivation") or "-",
+        ),
+        (
+            "gamma_c,fat derivation",
+            factor_basis.get("gamma_c_derivation") or "-",
+        ),
         ("gamma_Ff", factors.get("gamma_ff")),
         ("gamma_s", factors.get("gamma_s")),
         ("gamma_c,fat", factors.get("gamma_c")),
@@ -9155,6 +9414,16 @@ def torsion_view(inp, results):
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
         _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok,
                         code_applicable=t.get("code_applicable", True))
+
+    factor_basis = t.get("material_factor_basis") or {}
+    st.caption(
+        "Concrete material factors: compression "
+        f"gamma_c = {t['gamma_c']:.3f} (final concrete material input); "
+        f"tension gamma_ct = {t['gamma_ct']:.3f} "
+        f"({factor_basis.get('mode') or 'factor basis unavailable'}). "
+        f"fctd = fctk,0.05/gamma_ct = {t['fctd']:.3f} MPa. "
+        f"Source: {factor_basis.get('reference') or '-'}."
+    )
 
     if t.get("subdivided"):
         subs = t["subtubes"]

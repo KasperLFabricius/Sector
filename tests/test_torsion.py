@@ -264,14 +264,26 @@ def test_trd_max_accepts_final_user_fcd():
     assert custom == pytest.approx(0.8 * preset)
 
 
-def test_trd_c_cracking_moment():
-    code = codes.EC2_2005_DKNA
+def test_trd_c_hand_calculation_separates_base_en_and_dk_tension_factors():
     t = _tube()
     fctm = codes.fctm(35.0)
-    fctd = 0.7 * fctm / code.gamma_c                   # fctk,0.05 / gamma_c
-    tc = torsion.trd_c(fctd, t["Ak"], t["tef"])
-    assert tc == pytest.approx(2.0 * t["Ak"] * (t["tef"] / 1000.0) * fctd * 1000.0)
-    assert tc == pytest.approx(31.0, abs=1.5)
+    results = {}
+    for code in (codes.EC2_2005, codes.EC2_2005_DKNA):
+        gamma_ct, _basis = code.resolve_concrete_tension_factor()
+        fctd = 0.7 * fctm / gamma_ct
+        result = torsion.trd_c(fctd, t["Ak"], t["tef"])
+        expected = (
+            2.0 * t["Ak"] * (t["tef"] / 1000.0) * fctd * 1000.0
+        )
+        assert result == pytest.approx(expected)
+        results[code.key] = result
+
+    assert results[codes.EC2_2005.key] == pytest.approx(29.96, abs=0.05)
+    assert results[codes.EC2_2005_DKNA.key] == pytest.approx(26.44, abs=0.05)
+    assert (
+        results[codes.EC2_2005.key] / results[codes.EC2_2005_DKNA.key]
+        == pytest.approx(1.70 / 1.50)
+    )
 
 
 def test_asl_required_longitudinal_steel():
@@ -400,8 +412,45 @@ def test_app_torsion_uses_final_material_factors():
         at.session_state["conc_alpha_cc"]
         * at.session_state["conc_fck"] / 1.80
     )
+    assert t["gamma_ct"] == pytest.approx(1.70)
+    assert t["fctd"] == pytest.approx(
+        0.7 * codes.fctm(at.session_state["conc_fck"]) / 1.70
+    )
     assert t["gamma_s"] == pytest.approx(1.35)
     assert t["fywd"] == pytest.approx(at.session_state["shear_fywk"] / 1.35)
+
+
+def test_app_torsion_factor_preset_switch_and_override_persistence():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+
+    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.70)
+    at.selectbox(key="torsion_method").set_value(codes.EC2_2005.label).run()
+    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.50)
+
+    at.selectbox(key="torsion_method").set_value(
+        codes.EC2_2005_DKNA.label
+    ).run()
+    at.number_input(key="torsion_gamma0").set_value(0.95).run()
+    at.number_input(key="torsion_gamma3").set_value(1.10).run()
+    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(
+        1.70 * 0.95 * 1.10
+    )
+
+    at.selectbox(key="torsion_factor_mode").set_value(
+        codes.FACTOR_MODE_OVERRIDE
+    ).run()
+    at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
+    at.text_input(key="torsion_factor_approval").set_value(
+        "DB-TOR-04 / checker C"
+    ).run()
+    at.selectbox(key="torsion_method").set_value(codes.EC2_2005.label).run()
+
+    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.62)
+    assert at.session_state["torsion_factor_approval"] == (
+        "DB-TOR-04 / checker C"
+    )
 
 
 def test_app_torsion_view_renders():
@@ -811,6 +860,56 @@ def test_app_min_reinf_screen_over_limit():
     assert mr["applicable"] is True
     assert mr["value"] > 1.0
     assert mr["ok"] is False
+
+
+def test_app_dk_tensile_factor_changes_the_eq_631_governing_state():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("selectbox", "shear_method", codes.EC2_2005.label),
+        ("selectbox", "torsion_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 1.0),
+        ("number_input", "torsion_T", 1.0),
+    )
+    base = at.session_state["results"]["torsion"]["min_reinf"]
+
+    _set(
+        at,
+        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
+        ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label),
+    )
+    _calculate(at)
+    dk = at.session_state["results"]["torsion"]["min_reinf"]
+
+    base_limit = base["trd_c"] * (1.0 - base["v_ed"] / base["vrd_c"])
+    dk_limit = dk["trd_c"] * (1.0 - dk["v_ed"] / dk["vrd_c"])
+    assert base_limit > dk_limit
+    transition_demand = 0.5 * (base_limit + dk_limit)
+
+    _set(
+        at,
+        ("selectbox", "shear_method", codes.EC2_2005.label),
+        ("selectbox", "torsion_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at, "calculate", ("number_input", "torsion_T", transition_demand)
+    )
+    assert at.session_state["results"]["torsion"]["min_reinf"]["ok"] is True
+
+    _set(
+        at,
+        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
+        ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label),
+    )
+    _calculate(at)
+    assert at.session_state["results"]["torsion"]["min_reinf"]["ok"] is False
 
 
 def test_biaxial_torsion_retains_and_presents_directional_631_screens():

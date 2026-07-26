@@ -11,9 +11,10 @@ long-term/short-term convention:
 * the combined state is ``long + short``.
 
 The pure helpers in this module are shared by project I/O, the fatigue
-application adapter and the Streamlit interface.  Authority selections are
-traceability metadata and validation rules only: they never alter section
-forces, cycle counts or user-entered partial factors.
+application adapter and the Streamlit interface. Authority selections remain
+traceability metadata and validation rules only. Edition factor presets are a
+separate, explicit workflow: their complete derivation is returned with the
+final values, while approved overrides remain unchanged.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 
 import pandas as pd
+
+from sector import codes
 
 
 VERSION = 2
@@ -49,6 +52,149 @@ EC2_2005 = "DS/EN 1992-1-1:2005"
 EC2_2005_DKNA = "DS/EN 1992-1-1:2005 + DK NA:2024"
 EC2_2023 = "DS/EN 1992-1-1:2023"
 EDITIONS = (EC2_2005, EC2_2005_DKNA, EC2_2023)
+
+FACTOR_MODE_PRESET = codes.FACTOR_MODE_PRESET
+FACTOR_MODE_OVERRIDE = codes.FACTOR_MODE_OVERRIDE
+FACTOR_MODE_LEGACY = "Legacy saved factors - review required"
+FACTOR_MODES = (
+    FACTOR_MODE_PRESET,
+    FACTOR_MODE_OVERRIDE,
+    FACTOR_MODE_LEGACY,
+)
+
+# Edition-aligned starting points. The Danish annex first gives the material
+# bases as gamma0*gamma3 multiples in Table 2.1Na NA and then requires both
+# fatigue material factors to be multiplied by 1.1. No project/control category
+# is inferred: gamma0 and gamma3 remain explicit inputs.
+FATIGUE_FACTOR_PRESETS = {
+    EC2_2005: {
+        "gamma_s_base": 1.15,
+        "gamma_c_base": 1.50,
+        "fatigue_multiplier": 1.0,
+        "uses_gamma0_gamma3": False,
+        "reference": (
+            "EN 1992-1-1:2004 + AC:2010 + A1:2014, "
+            "2.4.2.4 and fatigue material factors"
+        ),
+    },
+    EC2_2005_DKNA: {
+        "gamma_s_base": 1.20,
+        "gamma_c_base": 1.45,
+        "fatigue_multiplier": 1.10,
+        "uses_gamma0_gamma3": True,
+        "reference": (
+            "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01, "
+            "2.4.2.4(1), Table 2.1Na NA and fatigue paragraph"
+        ),
+    },
+    EC2_2023: {
+        "gamma_s_base": 1.15,
+        "gamma_c_base": 1.50,
+        "fatigue_multiplier": 1.0,
+        "uses_gamma0_gamma3": False,
+        "reference": "DS/EN 1992-1-1:2023, fatigue material factors",
+    },
+}
+
+
+def fatigue_factor_preset(
+    edition: str,
+    gamma0: float = 1.0,
+    gamma3: float = 1.0,
+) -> dict:
+    """Return resolved edition defaults and their complete derivation."""
+    if edition not in FATIGUE_FACTOR_PRESETS:
+        raise ValueError(f"unknown fatigue edition: {edition}")
+    preset = FATIGUE_FACTOR_PRESETS[edition]
+    g0, g3 = float(gamma0), float(gamma3)
+    if not all(math.isfinite(value) and value > 0.0 for value in (g0, g3)):
+        raise ValueError("fatigue gamma0 and gamma3 must be finite and positive")
+    uses_categories = bool(preset["uses_gamma0_gamma3"])
+    applied_g0 = g0 if uses_categories else 1.0
+    applied_g3 = g3 if uses_categories else 1.0
+    multiplier = (
+        float(preset["fatigue_multiplier"]) * applied_g0 * applied_g3
+    )
+    gamma_s = float(preset["gamma_s_base"]) * multiplier
+    gamma_c = float(preset["gamma_c_base"]) * multiplier
+    return {
+        "edition": edition,
+        "reference": preset["reference"],
+        "uses_gamma0_gamma3": uses_categories,
+        "gamma0": applied_g0,
+        "gamma3": applied_g3,
+        "gamma_s_base": float(preset["gamma_s_base"]),
+        "gamma_c_base": float(preset["gamma_c_base"]),
+        "fatigue_multiplier": float(preset["fatigue_multiplier"]),
+        "gamma_s": gamma_s,
+        "gamma_c": gamma_c,
+        "gamma_s_derivation": (
+            f"{float(preset['gamma_s_base']):.2f} x "
+            f"{float(preset['fatigue_multiplier']):.2f} x "
+            f"{applied_g0:.3f} x {applied_g3:.3f} = {gamma_s:.3f}"
+            if uses_categories
+            else f"{gamma_s:.3f} (edition tabulated value)"
+        ),
+        "gamma_c_derivation": (
+            f"{float(preset['gamma_c_base']):.2f} x "
+            f"{float(preset['fatigue_multiplier']):.2f} x "
+            f"{applied_g0:.3f} x {applied_g3:.3f} = {gamma_c:.3f}"
+            if uses_categories
+            else f"{gamma_c:.3f} (edition tabulated value)"
+        ),
+    }
+
+
+def resolve_fatigue_factors(
+    edition: str,
+    *,
+    mode: str = FACTOR_MODE_PRESET,
+    gamma_s: float | None = None,
+    gamma_c: float | None = None,
+    gamma0: float = 1.0,
+    gamma3: float = 1.0,
+) -> tuple[float, float, dict]:
+    """Resolve final steel/concrete factors without hiding preset multipliers."""
+    preset = fatigue_factor_preset(edition, gamma0=gamma0, gamma3=gamma3)
+    preset_s, preset_c = preset["gamma_s"], preset["gamma_c"]
+    if mode == FACTOR_MODE_PRESET:
+        final_s, final_c = preset_s, preset_c
+        derivation_s = preset["gamma_s_derivation"]
+        derivation_c = preset["gamma_c_derivation"]
+    elif mode in (FACTOR_MODE_OVERRIDE, FACTOR_MODE_LEGACY):
+        try:
+            final_s, final_c = float(gamma_s), float(gamma_c)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("final fatigue material factors are required") from exc
+        if not all(
+            math.isfinite(value) and value > 0.0
+            for value in (final_s, final_c)
+        ):
+            raise ValueError(
+                "final fatigue material factors must be finite and positive"
+            )
+        qualifier = (
+            "approved final override"
+            if mode == FACTOR_MODE_OVERRIDE
+            else "legacy saved final value - review required"
+        )
+        derivation_s = f"{qualifier} = {final_s:.3f}"
+        derivation_c = f"{qualifier} = {final_c:.3f}"
+    else:
+        raise ValueError(f"unknown fatigue factor mode: {mode}")
+    return final_s, final_c, {
+        **preset,
+        "mode": mode,
+        "preset_gamma_s": preset_s,
+        "preset_gamma_c": preset_c,
+        "gamma_s": final_s,
+        "gamma_c": final_c,
+        "gamma_s_derivation": derivation_s,
+        "gamma_c_derivation": derivation_c,
+        "override": mode == FACTOR_MODE_OVERRIDE,
+        "legacy_review_required": mode == FACTOR_MODE_LEGACY,
+    }
+
 
 PRESET_2005_BARS = "EC2:2005 - straight reinforcing bars"
 PRESET_2005_BENT_BARS = "EC2:2005 - bent reinforcing bars"

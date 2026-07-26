@@ -10,10 +10,10 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 
 | Finding | Owning PR | Implementation status | Calculation or presentation behavior | Independent oracle or benchmark | Regression tests and generated artifact evidence | Codex Review iterations / reviewed head | Independent adversarial closure SHA | Merged PR | Accepted residual limitation |
 |---|---|---|---|---|---|---|---|---|---|
-| F-001 | PR-01 | Implemented on branch; review and closure pending | One winding-independent, scale-aware topology gate now blocks malformed, non-finite, degenerate, repeated, backtracking, self-contacting/crossing, outside/touching/crossing-hole, overlapping, and nested-hole geometry in UI, project I/O, API, raw helpers, and solver entries. | Frozen `G-VALID-CONCAVE`, `G-INVALID-BOWTIE`, `G-INVALID-COLLINEAR`, `G-INVALID-HOLE-OUTSIDE`, and `G-INVALID-HOLE-OVERLAP` cases; test-only exact-rational segment/containment oracle. | `tests/test_geometry_topology.py`; `tests/fixtures/geometry_topology_f001.json`; focused Streamlit pre-solver smoke test; project v14 mixed-winding round trip; existing geometry, solver, shear, torsion, fatigue, capacity, and hand-calculation regressions. | `0ae7e0a7cb2f2c904f3c44c46853db6ef93ac50e`: three actionable comments; terminal-closure analysis normalization, empty mutable-container diagnostic, and orphan-hole rejection implemented for re-review. | Pending | Pending | Exact terminal closure markers and forward intermediate collinear vertices remain valid; raw winding/order is preserved, terminal markers are removed from analysis copies, and analysis rings are oriented canonically. |
-| F-002 | PR-02 | Planned | Separate Danish concrete compression and tension material-factor routing for torsional concrete resistance. | To be established in owning PR from separate base EN and DK/NA hand calculations. | Pending | Pending | Pending | Pending | None accepted. |
+| F-001 | PR-01 | Closed and merged | One winding-independent, scale-aware topology gate now blocks malformed, non-finite, degenerate, repeated, backtracking, self-contacting/crossing, outside/touching/crossing-hole, overlapping, and nested-hole geometry in UI, project I/O, API, raw helpers, and solver entries. | Frozen `G-VALID-CONCAVE`, `G-INVALID-BOWTIE`, `G-INVALID-COLLINEAR`, `G-INVALID-HOLE-OUTSIDE`, and `G-INVALID-HOLE-OVERLAP` cases; test-only exact-rational segment/containment oracle. | `tests/test_geometry_topology.py`; `tests/fixtures/geometry_topology_f001.json`; focused Streamlit pre-solver smoke test; project v14 mixed-winding round trip; existing geometry, solver, shear, torsion, fatigue, capacity, and hand-calculation regressions; full local suite 1,399 passed and 1 skipped. | Three actionable comments on `0ae7e0a7cb2f2c904f3c44c46853db6ef93ac50e` were fixed; Codex Review accepted exact head `f3d609499af0d7c8fc9520e6131e81fcf72b19ef`. | `QA CLOSURE ACCEPTED — f3d609499af0d7c8fc9520e6131e81fcf72b19ef` | [PR #204](https://github.com/KasperLFabricius/Sector/pull/204); squash `91b2470e463a29c70e6cc6b08b123bcee84aa78d` | Exact terminal closure markers and forward intermediate collinear vertices remain valid; raw winding/order is preserved, terminal markers are removed from analysis copies, and analysis rings are oriented canonically. |
+| F-002 | PR-02 | Implemented on branch; review and closure pending | Concrete compression and tension factors have distinct resolved values and provenance. `T_Rd,c` now uses `f_ctk,0.05 / gamma_ct`; the DK preset is `gamma_ct = 1.70 gamma0 gamma3`, while compressive `f_cd` continues to use the separately reported final concrete material input. | Independent 300 x 600 mm C35 tube hand calculation: base EN `T_Rd,c = 29.96 kNm` (`gamma_ct = 1.50`) and DK/NA `T_Rd,c = 26.44 kNm` (`gamma_ct = 1.70`) at unity category factors; non-unity category and Eq. 6.31 governing-state transitions are also checked. | `tests/test_codes.py`; `tests/test_torsion.py::test_trd_c_hand_calculation_separates_base_en_and_dk_tension_factors`; category-factor, approved-override, method-switch, report-derivation, project-round-trip, and Eq. 6.31 transition tests. | Pending | Pending | Pending | No category is inferred. The selected edition remains a project design-basis decision. |
 | F-003 | PR-03 | Planned | Apply reinforcement type/bond and `xi1`-weighted prestress contribution to 2023 effective reinforcement ratio. | To be established in owning PR for mixed reinforcement and limiting `xi1` cases. | Pending | Pending | Pending | Pending | None accepted. |
-| F-004 | PR-02 | Planned | Edition-aligned Danish fatigue defaults with derived provenance and persistent explicit overrides. | To be established in owning PR from Danish fatigue provisions. | Pending | Pending | Pending | Pending | None accepted. |
+| F-004 | PR-02 | Implemented on branch; review and closure pending | Danish fatigue presets resolve `gamma_s,fat = 1.20 x 1.10 x gamma0 x gamma3` and `gamma_c,fat = 1.45 x 1.10 x gamma0 x gamma3`; preset, approved-final override, and migrated legacy values have distinct persisted states and report derivations. | At unity category factors, `gamma_s,fat = 1.32` and `gamma_c,fat = 1.595`; all three edition selections, non-unity categories, override persistence, and legacy blocking are independently asserted. | `tests/test_fatigue_inputs.py`; `tests/test_fatigue_analysis.py`; `tests/test_project_io.py`; Streamlit switching/reload tests in `tests/test_app_smoke.py`; PDF evidence in `tests/test_report.py`. | Pending | Pending | Pending | Old saved numeric factors are retained but require an explicit preset-or-approved-override decision before a fatigue verdict. |
 | F-005 | PR-04 | Planned | Add distinct DS/EN 1992-2:2005 + AC:2008 methodology with explicit inheritance, bridge overrides, applicability, and non-pass unsupported states. | To be established in owning PR from the four-layer standards comparison and independent bridge examples. | Pending | Pending | Pending | Pending | None accepted. |
 | F-006 | PR-05 | Planned | Add distinct DS/EN 1992-2 + DK/NA:2015 methodology and Danish bridge choices. | To be established in owning PR for road, footbridge, and railway cases. | Pending | Pending | Pending | Pending | None accepted. |
 | F-007 | PR-03 | Planned | Add standard-supported uniform/direct-tension crack-width path and blocking unsupported-scope state. | To be established in owning PR for pure tension, near-zero curvature, and decompression. | Pending | Pending | Pending | Pending | None accepted. |
@@ -72,5 +72,55 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
   warnings in 901.32 s with four fixed workers; version remained exactly `0.91`.
 - Reviewed v14 project evidence: the supplied `sector_section.json` loads through
   the canonical gate without migration or point reordering.
-- Review, CI, independent closure, and merge fields remain pending until they
-  refer to the same immutable full head SHA.
+- Exact reviewed implementation head:
+  `f3d609499af0d7c8fc9520e6131e81fcf72b19ef`.
+- GitHub CI run 170, current-head Codex Review, and the original independent QA
+  reviewer all accepted that exact SHA.
+- Independent closure statement:
+  `QA CLOSURE ACCEPTED — f3d609499af0d7c8fc9520e6131e81fcf72b19ef`.
+- [PR #204](https://github.com/KasperLFabricius/Sector/pull/204) was squash
+  merged as `91b2470e463a29c70e6cc6b08b123bcee84aa78d`.
+
+## PR-02 evidence log
+
+- Scope: F-002 and F-004 only.
+- Primary Danish source: `DS/EN 1992-1-1 DK NA:2024`, revision
+  2024-02-01, pages 8-9. Table 2.1Na NA gives the general reinforced-concrete
+  compression, concrete-tension, and reinforcement bases as
+  `1.45 gamma0 gamma3`, `1.70 gamma0 gamma3`, and
+  `1.20 gamma0 gamma3`. The following fatigue paragraph applies a further 1.1
+  multiplier to the concrete and reinforcement fatigue factors.
+- Source verification: the locally controlled Design Basis copy was checked
+  by text extraction and page raster review. No normative wording was sourced
+  from the reviewed output PDFs or from an undocumented combined standard/NA
+  branch.
+- Applicability qualification: Sector reports the selected method and provision
+  but does not infer that this edition is applicable to a particular project;
+  that decision remains with the project design basis.
+- F-002 oracle: for the documented 300 x 600 mm C35 solid rectangle,
+  `A_k = 0.100 m2`, `t_ef = 100 mm`, and
+  `f_ctk,0.05 = 0.7 f_ctm`; the independent base-EN and DK results are
+  29.96 kNm and 26.44 kNm. A demand between the corresponding Eq. 6.31
+  boundaries passes under base EN and fails under the DK tensile factor.
+- F-004 oracle: unity category factors give
+  `gamma_s,fat = 1.20 x 1.10 = 1.32` and
+  `gamma_c,fat = 1.45 x 1.10 = 1.595`. Tests also use non-unity
+  `gamma0 = 0.95`, `gamma3 = 1.10`.
+- Supplied-project migration evidence: the reviewed v14
+  `sector_section.json` retains its saved 1.15/1.50 fatigue values as
+  `Legacy saved factors - review required`, while its Danish torsion method
+  migrates to the edition-derived `gamma_ct = 1.70` preset. No source project
+  file was modified.
+- Focused validation before immutable-head review: 137 pure factor, capacity,
+  fatigue-analysis, and project-I/O tests passed; 11 targeted Streamlit and PDF
+  tests passed; the final compatibility/manual/fixture correction set passed
+  its three focused regressions.
+- Complete local suite: 1,432 passed with 32 known Kaleido warnings in
+  558.40 s using four fixed workers; version remained exactly `0.91`.
+- Fresh generated artifacts: the computed report fixture rendered 41 pages and
+  the manual rendered 31 pages. Their structural/raster preflights passed, and
+  the input-settings, torsion-factor, material-factor-basis, fatigue-basis,
+  manual UI-guidance, Danish fatigue-equation, and worked-torsion pages were
+  visually inspected.
+- CI, Codex Review, and independent closure fields remain pending until they
+  refer to one immutable full head SHA.

@@ -18,7 +18,7 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from sector import detailing  # noqa: E402
+from sector import codes, detailing  # noqa: E402
 
 
 def test_migrate_legacy_torsion_only_stirrup():
@@ -324,7 +324,7 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
             "cycle_counting": fatigue_inputs.COUNTING_OTHER,
             "concurrence_basis": "Simultaneous trucks excluded by study T-4",
             "atypical_traffic": fatigue_inputs.ATYPICAL_CONSIDERED,
-            "approval_reference": "",
+            "approval_reference": "DB-FAT-12 / approval 7",
             "authority_adjustments": (
                 "FLM4 traffic factors included in action export"
             ),
@@ -332,6 +332,9 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
         },
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_gamma0": 0.95,
+        "fatigue_gamma3": 1.10,
         "fatigue_gamma_c": 1.595,
         "fatigue_gamma_s": 1.32,
         "fatigue_gamma_ff": 1.0,
@@ -353,6 +356,15 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
         tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
     )
     assert restored_scalars["fatigue_gamma_c"] == 1.595
+    assert restored_scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    assert restored_scalars["fatigue_gamma0"] == pytest.approx(0.95)
+    assert restored_scalars["fatigue_gamma3"] == pytest.approx(1.10)
+    assert (
+        restored_scalars[fatigue_inputs.BASIS_KEY]["approval_reference"]
+        == "DB-FAT-12 / approval 7"
+    )
     assert restored_scalars["fatigue_concrete_k1"] == 0.85
     assert (
         restored_scalars["fatigue_concrete_method"]
@@ -383,6 +395,51 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     assert project_io.input_sha256(restored, restored_scalars) == (
         project_io.input_sha256(tables, scalars)
     )
+
+
+def test_current_torsion_factor_override_round_trips_with_approval_source():
+    values = {
+        "torsion_on": True,
+        "torsion_method": codes.EC2_2005_DKNA.label,
+        "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
+        "torsion_gamma0": 0.95,
+        "torsion_gamma3": 1.10,
+        "torsion_gamma_ct": 1.62,
+        "torsion_factor_approval": "DB-TOR-04 / checker C",
+    }
+
+    text = project_io.dump_project({}, values)
+    _tables, scalars = project_io.parse_project(text)
+
+    assert {key: scalars[key] for key in values} == values
+
+
+def test_v14_migrates_torsion_safely_and_flags_saved_fatigue_factors():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 14,
+        "tables": {},
+        "scalars": {
+            "torsion_on": True,
+            "torsion_method": codes.EC2_2005_DKNA.label,
+            "fatigue_on": True,
+            "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+            "fatigue_gamma_s": 1.15,
+            "fatigue_gamma_c": 1.50,
+        },
+    }
+
+    _tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars["torsion_factor_mode"] == codes.FACTOR_MODE_PRESET
+    assert scalars["torsion_gamma0"] == pytest.approx(1.0)
+    assert scalars["torsion_gamma3"] == pytest.approx(1.0)
+    assert scalars["torsion_gamma_ct"] == pytest.approx(1.70)
+    assert scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_LEGACY
+    )
+    assert scalars["fatigue_gamma_s"] == pytest.approx(1.15)
+    assert scalars["fatigue_gamma_c"] == pytest.approx(1.50)
 
 
 def test_v9_fatigue_project_migrates_to_neutral_unmodified_basis():

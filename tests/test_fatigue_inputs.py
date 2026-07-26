@@ -6,6 +6,82 @@ import pytest
 from app import fatigue_inputs as fi
 
 
+@pytest.mark.parametrize(
+    ("edition", "gamma_s", "gamma_c"),
+    [
+        (fi.EC2_2005, 1.15, 1.50),
+        (fi.EC2_2005_DKNA, 1.32, 1.595),
+        (fi.EC2_2023, 1.15, 1.50),
+    ],
+)
+def test_edition_factor_presets_resolve_expected_unity_category_values(
+    edition, gamma_s, gamma_c
+):
+    basis = fi.fatigue_factor_preset(edition)
+
+    assert basis["gamma_s"] == pytest.approx(gamma_s)
+    assert basis["gamma_c"] == pytest.approx(gamma_c)
+    assert basis["reference"]
+
+
+def test_dk_fatigue_factor_derivation_exposes_every_multiplier():
+    basis = fi.fatigue_factor_preset(
+        fi.EC2_2005_DKNA,
+        gamma0=0.95,
+        gamma3=1.10,
+    )
+
+    expected_s = 1.20 * 1.10 * 0.95 * 1.10
+    expected_c = 1.45 * 1.10 * 0.95 * 1.10
+    assert basis["gamma_s"] == pytest.approx(expected_s)
+    assert basis["gamma_c"] == pytest.approx(expected_c)
+    assert basis["gamma_s_derivation"] == (
+        f"1.20 x 1.10 x 0.950 x 1.100 = {expected_s:.3f}"
+    )
+    assert basis["gamma_c_derivation"] == (
+        f"1.45 x 1.10 x 0.950 x 1.100 = {expected_c:.3f}"
+    )
+
+
+def test_approved_fatigue_override_survives_edition_switches_unchanged():
+    finals = []
+    for edition in fi.EDITIONS:
+        gamma_s, gamma_c, basis = fi.resolve_fatigue_factors(
+            edition,
+            mode=fi.FACTOR_MODE_OVERRIDE,
+            gamma_s=1.27,
+            gamma_c=1.61,
+            gamma0=0.95,
+            gamma3=1.10,
+        )
+        finals.append((gamma_s, gamma_c))
+        assert basis["gamma_s_derivation"] == (
+            "approved final override = 1.270"
+        )
+        assert basis["gamma_c_derivation"] == (
+            "approved final override = 1.610"
+        )
+
+    assert all(
+        gamma_s == pytest.approx(1.27)
+        and gamma_c == pytest.approx(1.61)
+        for gamma_s, gamma_c in finals
+    )
+
+
+def test_legacy_fatigue_values_are_retained_but_identified_for_review():
+    gamma_s, gamma_c, basis = fi.resolve_fatigue_factors(
+        fi.EC2_2005_DKNA,
+        mode=fi.FACTOR_MODE_LEGACY,
+        gamma_s=1.15,
+        gamma_c=1.50,
+    )
+
+    assert (gamma_s, gamma_c) == pytest.approx((1.15, 1.50))
+    assert basis["legacy_review_required"] is True
+    assert "review required" in basis["gamma_s_derivation"]
+
+
 def test_builtin_detail_presets_match_the_two_eurocode_editions():
     old_bar = fi.default_entry(preset=fi.PRESET_2005_BARS)
     new_bar = fi.default_entry(preset=fi.PRESET_2023_BARS)

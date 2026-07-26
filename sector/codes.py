@@ -44,6 +44,14 @@ from typing import Optional
 
 from .materials import Concrete, MildSteel
 
+# Final-factor workflows shared by the torsion and fatigue application layers.
+# A preset is recalculated from the selected edition and its exposed category
+# multipliers. An override is a deliberately retained final value whose approval
+# reference is carried by the calling workflow.
+FACTOR_MODE_PRESET = "Edition-derived preset"
+FACTOR_MODE_OVERRIDE = "Approved final override"
+FACTOR_MODES = (FACTOR_MODE_PRESET, FACTOR_MODE_OVERRIDE)
+
 # Concrete strength classes -> characteristic cylinder strength fck (MPa).
 CONCRETE_CLASSES = {
     "C12/15": 12.0,
@@ -132,8 +140,10 @@ class DesignCode:
     ----------
     key, label:
         Short identifier and the human-readable code designation shown in the UI.
-    gamma_c, gamma_s:
-        Partial safety factors for concrete and reinforcement.
+    gamma_c, gamma_ct, gamma_s:
+        Base partial safety factors for concrete compression, concrete tension,
+        and reinforcement. ``gamma_ct`` defaults to ``gamma_c`` for editions
+        without a distinct tensile value.
     alpha_cc:
         Constant coefficient on the design concrete strength (editions that use a
         fixed ``alpha_cc``).
@@ -153,6 +163,9 @@ class DesignCode:
     label: str
     gamma_c: float
     gamma_s: float
+    gamma_ct: Optional[float] = None
+    material_factor_reference: str = ""
+    material_factors_use_gamma0_gamma3: bool = False
     alpha_cc: float = 1.0
     eta_cc_ref: Optional[float] = None
     k_tc: float = 1.0
@@ -186,6 +199,88 @@ class DesignCode:
     # axial/action factor k_vp. gamma_v is the shear partial factor (Table 4.3:
     # 1.40 recommended); ddg the aggregate size parameter.
     shear_gamma_v: float = 1.40
+
+    def material_factor_basis(
+        self,
+        gamma0: float = 1.0,
+        gamma3: float = 1.0,
+    ) -> dict:
+        """Resolved compression/tension/steel factor basis for this edition.
+
+        The Danish annex expresses its Table 2.1Na NA values as a base factor
+        multiplied by ``gamma0*gamma3``. Other editions use their tabulated
+        factors directly, so the two Danish multipliers are reported as not
+        applied even if a headless caller supplied stray values.
+        """
+        g0, g3 = float(gamma0), float(gamma3)
+        if not all(math.isfinite(value) and value > 0.0 for value in (g0, g3)):
+            raise ValueError("gamma0 and gamma3 must be finite and positive")
+        uses_categories = self.material_factors_use_gamma0_gamma3
+        applied_g0 = g0 if uses_categories else 1.0
+        applied_g3 = g3 if uses_categories else 1.0
+        multiplier = applied_g0 * applied_g3
+        gamma_ct_base = (
+            self.gamma_c if self.gamma_ct is None else float(self.gamma_ct)
+        )
+        return {
+            "method": self.label,
+            "reference": self.material_factor_reference,
+            "uses_gamma0_gamma3": uses_categories,
+            "gamma0": applied_g0,
+            "gamma3": applied_g3,
+            "compression_base": float(self.gamma_c),
+            "tension_base": gamma_ct_base,
+            "steel_base": float(self.gamma_s),
+            "compression_final": float(self.gamma_c) * multiplier,
+            "tension_final": gamma_ct_base * multiplier,
+            "steel_final": float(self.gamma_s) * multiplier,
+            "derivation": (
+                "base x gamma0 x gamma3"
+                if uses_categories
+                else "edition tabulated value"
+            ),
+        }
+
+    def resolve_concrete_tension_factor(
+        self,
+        *,
+        mode: str = FACTOR_MODE_PRESET,
+        gamma_ct: float | None = None,
+        gamma0: float = 1.0,
+        gamma3: float = 1.0,
+    ) -> tuple[float, dict]:
+        """Return the final tensile factor and complete calculation provenance."""
+        basis = self.material_factor_basis(gamma0=gamma0, gamma3=gamma3)
+        preset = float(basis["tension_final"])
+        if mode == FACTOR_MODE_PRESET:
+            final = preset
+            derivation = (
+                f"{basis['tension_base']:.2f} x {basis['gamma0']:.3f} x "
+                f"{basis['gamma3']:.3f} = {final:.3f}"
+                if basis["uses_gamma0_gamma3"]
+                else f"{final:.3f} (edition tabulated value)"
+            )
+        elif mode == FACTOR_MODE_OVERRIDE:
+            if gamma_ct is None:
+                raise ValueError(
+                    "an approved final concrete tensile factor is required"
+                )
+            final = float(gamma_ct)
+            if not math.isfinite(final) or final <= 0.0:
+                raise ValueError(
+                    "the final concrete tensile factor must be finite and positive"
+                )
+            derivation = f"approved final override = {final:.3f}"
+        else:
+            raise ValueError(f"unknown material-factor mode: {mode}")
+        return final, {
+            **basis,
+            "mode": mode,
+            "tension_preset": preset,
+            "tension_final": final,
+            "tension_derivation": derivation,
+            "tension_override": mode == FACTOR_MODE_OVERRIDE,
+        }
 
     def shear_ddg(self, fck: float, d_lower_mm: float) -> float:
         """Aggregate size parameter ``ddg`` (mm), sec. 8.2.1(4).
@@ -325,6 +420,10 @@ EC2_2005 = DesignCode(
     label="EN 1992-1-1:2005",
     gamma_c=1.5,
     gamma_s=1.15,
+    gamma_ct=1.5,
+    material_factor_reference=(
+        "EN 1992-1-1:2004 + AC:2010 + A1:2014, Table 2.1N"
+    ),
     alpha_cc=1.0,
 )
 
@@ -337,6 +436,12 @@ EC2_2005_DKNA = DesignCode(
     label="DS/EN 1992-1-1:2005 + DK NA:2024",
     gamma_c=1.45,
     gamma_s=1.20,
+    gamma_ct=1.70,
+    material_factor_reference=(
+        "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01, "
+        "2.4.2.4(1), Table 2.1Na NA"
+    ),
+    material_factors_use_gamma0_gamma3=True,
     alpha_cc=1.0,
     # DK NA:2024 sec. 6.2.2(1): v_min = (0.051/gamma_c)*k^1.5*sqrt(fck).
     shear_vmin_coeff=0.051,
@@ -356,6 +461,8 @@ EC2_2023 = DesignCode(
     label="DS/EN 1992-1-1:2023",
     gamma_c=1.5,
     gamma_s=1.15,
+    gamma_ct=1.5,
+    material_factor_reference="DS/EN 1992-1-1:2023, material partial factors",
     eta_cc_ref=40.0,
     k_tc=0.85,
     const_strains=True,   # the 2023 ultimate parabola keeps constant strains

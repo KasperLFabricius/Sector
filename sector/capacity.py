@@ -522,7 +522,31 @@ def build_torsion_context(inp, n_ed_comp):
         != tcode.torsion_nu(fck, closed_detailing=False)
     )
     gamma_c = inp["concrete"].gamma_c
-    fctd = 0.7 * codes.fctm(fck) / gamma_c
+    factor_mode = str(
+        inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
+    )
+    gamma0 = float(inp.get("torsion_gamma0", 1.0))
+    gamma3 = float(inp.get("torsion_gamma3", 1.0))
+    gamma_ct, material_factor_basis = (
+        tcode.resolve_concrete_tension_factor(
+            mode=factor_mode,
+            gamma_ct=inp.get("torsion_gamma_ct"),
+            gamma0=gamma0,
+            gamma3=gamma3,
+        )
+    )
+    material_factor_basis["compression_preset"] = (
+        material_factor_basis["compression_final"]
+    )
+    material_factor_basis["compression_final"] = float(gamma_c)
+    material_factor_basis["compression_source"] = (
+        "final concrete material input"
+    )
+    material_factor_basis["approval_reference"] = str(
+        inp.get("torsion_factor_approval") or ""
+    ).strip()
+    fctk_005 = 0.7 * codes.fctm(fck)
+    fctd = fctk_005 / gamma_ct
     t_ed = inp["torsion_T"]
     tube_kwargs = {
         "tcode": tcode,
@@ -603,10 +627,13 @@ def build_torsion_context(inp, n_ed_comp):
         "tcot_max": cot_max,
         "nu_detail": nu_detail,
         "nu_detail_applied": nu_detail_applied,
+        "fctk_005": fctk_005,
         "fctd": fctd,
         "sigma_cp": sigma_cp,
         "gamma_c": gamma_c,
+        "gamma_ct": gamma_ct,
         "gamma_s": gamma_s,
+        "material_factor_basis": material_factor_basis,
         "compound_detected": compound_detected,
         "subdivision_requested": subdivision_requested,
         "subdivision_valid": subdivision_valid,

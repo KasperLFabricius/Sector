@@ -184,6 +184,26 @@ def _base(**overrides):
     return value
 
 
+def _use_2005_fatigue_details(inp):
+    catalogue = inp[fatigue_inputs.DETAIL_CATALOG_KEY]
+    converted = []
+    for item in catalogue["items"]:
+        updated = fatigue_inputs.apply_preset(
+            item,
+            (
+                fatigue_inputs.PRESET_2005_BARS
+                if item["kind"] == fatigue_inputs.MILD
+                else fatigue_inputs.PRESET_2005_PRETENSION
+            ),
+        )
+        for key in ("bond_ratio_xi", "bond_equivalent_diameter_mm"):
+            if item.get(key):
+                updated[key] = item[key]
+        converted.append(updated)
+    catalogue["items"] = converted
+    return inp
+
+
 def test_prepare_maps_signs_materials_details_and_full_factors_once():
     prepared = fatigue_analysis.prepare(_base())
 
@@ -210,6 +230,88 @@ def test_prepare_maps_signs_materials_details_and_full_factors_once():
     assert prepared.concrete.k1 == 1.0
     assert prepared.gamma_s == 1.32
     assert prepared.gamma_ff == 1.10
+
+
+def test_prepare_resolves_dk_fatigue_preset_from_edition_and_categories():
+    inp = _use_2005_fatigue_details(_base(
+        fatigue_edition=fatigue_inputs.EC2_2005_DKNA,
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_PRESET,
+        fatigue_gamma0=0.95,
+        fatigue_gamma3=1.10,
+        # Stale widget values must not override an explicit preset selection.
+        fatigue_gamma_s=1.15,
+        fatigue_gamma_c=1.50,
+    ))
+
+    prepared = fatigue_analysis.prepare(inp)
+
+    assert prepared.gamma_s == pytest.approx(1.20 * 1.10 * 0.95 * 1.10)
+    assert prepared.concrete.gamma_c == pytest.approx(
+        1.45 * 1.10 * 0.95 * 1.10
+    )
+    assert prepared.factor_basis["mode"] == (
+        fatigue_inputs.FACTOR_MODE_PRESET
+    )
+    assert prepared.factor_basis["gamma_s_derivation"].startswith(
+        "1.20 x 1.10 x 0.950 x 1.100"
+    )
+
+
+def test_prepare_retains_explicit_approved_fatigue_override():
+    inp = _base(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_gamma_s=1.27,
+        fatigue_gamma_c=1.61,
+        fatigue_gamma0=0.95,
+        fatigue_gamma3=1.10,
+    )
+    inp[fatigue_inputs.BASIS_KEY] = _basis(
+        approval_reference="DB-FAT-09 / checker A"
+    )
+
+    prepared = fatigue_analysis.prepare(inp)
+
+    assert prepared.gamma_s == pytest.approx(1.27)
+    assert prepared.concrete.gamma_c == pytest.approx(1.61)
+    assert prepared.factor_basis["approval_reference"] == (
+        "DB-FAT-09 / checker A"
+    )
+    assert prepared.factor_basis["gamma_c_derivation"] == (
+        "approved final override = 1.610"
+    )
+
+
+def test_explicit_override_requires_approval_and_legacy_values_require_review():
+    override = _base(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    legacy = _base(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_LEGACY
+    )
+
+    assert (
+        "Approved final fatigue-factor override requires an approval reference"
+        in fatigue_analysis.validation_errors(override)
+    )
+    assert any(
+        "Legacy saved fatigue factors require review" in error
+        for error in fatigue_analysis.validation_errors(legacy)
+    )
+
+
+def test_legacy_direct_api_can_omit_the_factor_for_a_disabled_check():
+    steel_only = _base(fatigue_check_concrete=False)
+    steel_only.pop("fatigue_gamma_c")
+    concrete_only = _base(fatigue_check_steel=False)
+    concrete_only.pop("fatigue_gamma_s")
+
+    prepared_steel = fatigue_analysis.prepare(steel_only)
+    prepared_concrete = fatigue_analysis.prepare(concrete_only)
+
+    assert prepared_steel.gamma_s == pytest.approx(1.32)
+    assert prepared_steel.concrete is None
+    assert prepared_concrete.gamma_s is None
+    assert prepared_concrete.concrete.gamma_c == pytest.approx(1.595)
 
 
 def test_bent_bar_reduction_is_resolved_per_element_diameter():
@@ -267,7 +369,7 @@ def test_concrete_parameters_follow_the_selected_edition():
         fatigue_inputs.EC2_2005_DKNA
     )
     assert "DS/EN 1992-2:2005" in references["concrete"]
-    assert "DK NA:2024 explicit input factors" in references["reinforcement"]
+    assert "DK NA:2024 resolved final factors" in references["reinforcement"]
 
 
 def test_standard_detail_presets_must_match_the_selected_fatigue_edition():

@@ -202,9 +202,12 @@ def _inputs() -> dict:
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma0": 1.0,
+        "fatigue_gamma3": 1.0,
         "fatigue_gamma_ff": 1.0,
-        "fatigue_gamma_s": 1.15,
-        "fatigue_gamma_c": 1.50,
+        "fatigue_gamma_s": 1.32,
+        "fatigue_gamma_c": 1.595,
         "fatigue_beta_cc_t0": 1.0,
         "fatigue_t0_days": 28.0,
         "fatigue_concrete_k1": 0.85,
@@ -222,6 +225,11 @@ def _inputs() -> dict:
         "shear_fywk": 500.0,
         "torsion_on": True,
         "torsion_method": codes.EC2_2005_DKNA.label,
+        "torsion_factor_mode": codes.FACTOR_MODE_PRESET,
+        "torsion_gamma0": 1.0,
+        "torsion_gamma3": 1.0,
+        "torsion_gamma_ct": 1.70,
+        "torsion_factor_approval": "",
         "combined_on": True,
         "combined_method": codes.EC2_2005_DKNA.label,
         "combined_mv_independent": False,
@@ -346,7 +354,27 @@ def _results(inp: dict | None = None) -> dict:
         inp["capacity_steel_material_id"]
     ]
     fyd_long = capacity_material.fytk / capacity_material.gamma_y
-    fcd = 30.0 / 1.5
+    fcd = inp["concrete"].fcd
+    gamma_ct, material_factor_basis = (
+        code.resolve_concrete_tension_factor(
+            mode=inp["torsion_factor_mode"],
+            gamma_ct=inp["torsion_gamma_ct"],
+            gamma0=inp["torsion_gamma0"],
+            gamma3=inp["torsion_gamma3"],
+        )
+    )
+    material_factor_basis["compression_preset"] = (
+        material_factor_basis["compression_final"]
+    )
+    material_factor_basis["compression_final"] = inp["concrete"].gamma_c
+    material_factor_basis["compression_source"] = (
+        "final concrete material input"
+    )
+    material_factor_basis["approval_reference"] = (
+        inp["torsion_factor_approval"]
+    )
+    fctk_005 = 0.7 * codes.fctm(inp["concrete"].fck)
+    fctd = fctk_005 / gamma_ct
     shear_z_mm = 243.0
     link_asw = link_legs * math.pi * link_dia ** 2 / 4.0
     link_asw_over_s = link_asw / link_spacing
@@ -376,7 +404,7 @@ def _results(inp: dict | None = None) -> dict:
             tube, 25.0, tcode=code, fck=30.0, fcd=fcd, alpha_cw=1.0,
             fywd=fywd, asw_over_s=torsion_asw_over_s,
             cot_min=cot, cot_max=cot, nu_detail=False,
-            fctd=1.35, fyd_long=fyd_long,
+            fctd=fctd, fyd_long=fyd_long,
         )
 
     def longitudinal_at(cot: float) -> dict:
@@ -608,7 +636,12 @@ def _results(inp: dict | None = None) -> dict:
         "fyd_long": fyd_long,
         "nu": primary_torsion["nu"],
         "alpha_cw": 1.0,
-        "fctd": 1.35,
+        "fctk_005": fctk_005,
+        "fctd": fctd,
+        "gamma_c": inp["concrete"].gamma_c,
+        "gamma_ct": gamma_ct,
+        "gamma_s": 1.15,
+        "material_factor_basis": material_factor_basis,
         "asw_t": torsion_asw,
         "asw_over_s": torsion_asw_over_s,
         "dia": link_dia,
@@ -890,6 +923,12 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         torsion_out["trd_c"],
         torsion.trd_c(torsion_out["fctd"], tube["Ak"], tube["tef"]),
     )
+    close("torsion gamma_ct", torsion_out["gamma_ct"], 1.70)
+    close(
+        "torsion fctd",
+        torsion_out["fctd"],
+        0.7 * codes.fctm(inp["concrete"].fck) / 1.70,
+    )
     close(
         "torsion longitudinal area",
         torsion_out["asl_req"],
@@ -1045,6 +1084,20 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             result["longitudinal"][key],
             expected_longitudinal[key],
         )
+
+    fatigue_out = out["fatigue"]
+    close(
+        "fatigue gamma_s",
+        fatigue_out["partial_factors"]["gamma_s"],
+        1.20 * 1.10,
+    )
+    close(
+        "fatigue gamma_c",
+        fatigue_out["partial_factors"]["gamma_c"],
+        1.45 * 1.10,
+    )
+    if fatigue_out["factor_basis"]["mode"] != fatigue_inputs.FACTOR_MODE_PRESET:
+        raise AssertionError("the rendered fixture does not use the DK preset")
 
 
 @functools.lru_cache(maxsize=1)
@@ -1202,6 +1255,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Cracking and crack width - EL-QA-1",
         "Cracking threshold - EL-QA-2",
         "Grouped fatigue",
+        "1.20 x 1.10 x 1.000 x 1.000 = 1.320",
+        "1.45 x 1.10 x 1.000 x 1.000 = 1.595",
         "Road traffic",
         "FAT-QA-H",
         "FAT-QA-M",
@@ -1216,6 +1271,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Closed stirrup",
         "Longitudinal reinforcement",
         "Torsion (thin-walled tube)",
+        "1.70 x 1.000 x 1.000 = 1.700",
         "125.0 %",
         "245.000 MPa",
         "Crack-width candidates",

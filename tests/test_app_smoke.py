@@ -1685,7 +1685,11 @@ def test_app_restores_fatigue_inputs_into_the_ui():
             fatigue_inputs.DETAIL_CATALOG_KEY:
                 fatigue_inputs.default_catalog(),
             "fatigue_on": True,
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+            "fatigue_gamma0": 1.0,
+            "fatigue_gamma3": 1.0,
             "fatigue_gamma_s": 1.32,
+            "fatigue_gamma_c": 1.595,
         },
     )
 
@@ -1699,6 +1703,9 @@ def test_app_restores_fatigue_inputs_into_the_ui():
     assert at.toggle(key="fatigue_on").value is True
     assert at.selectbox(key="fatigue_edition").value == (
         fatigue_inputs.EC2_2005_DKNA
+    )
+    assert at.selectbox(key="fatigue_factor_mode").value == (
+        fatigue_inputs.FACTOR_MODE_PRESET
     )
     assert "fatigue_spectrum_editor" in at.session_state
     assert at.selectbox(key="_fatigue_catalog_selected").value == "F1"
@@ -1730,6 +1737,55 @@ def test_app_restores_fatigue_inputs_into_the_ui():
         restored_tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
     ) == fatigue_inputs.spectrum_records(spectrum)
     assert restored_scalars["fatigue_gamma_s"] == 1.32
+
+
+def test_app_fatigue_factor_switches_and_approved_override_persist():
+    import fatigue_inputs
+
+    at = _fresh()
+    at.run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.32)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.595)
+
+    at.selectbox(key="fatigue_edition").set_value(
+        fatigue_inputs.EC2_2005
+    ).run()
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.15)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.50)
+
+    at.selectbox(key="fatigue_edition").set_value(
+        fatigue_inputs.EC2_2005_DKNA
+    ).run()
+    at.number_input(key="fatigue_gamma0").set_value(0.95).run()
+    at.number_input(key="fatigue_gamma3").set_value(1.10).run()
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(
+        1.20 * 1.10 * 0.95 * 1.10
+    )
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(
+        1.45 * 1.10 * 0.95 * 1.10
+    )
+
+    at.selectbox(key="fatigue_factor_mode").set_value(
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    ).run()
+    at.number_input(key="fatigue_gamma_s").set_value(1.27).run()
+    at.number_input(key="fatigue_gamma_c").set_value(1.61).run()
+    next(
+        widget
+        for widget in at.text_input
+        if widget.label == "Approval/reference"
+    ).set_value("DB-FAT-09 / checker A").run()
+    at.selectbox(key="fatigue_edition").set_value(
+        fatigue_inputs.EC2_2023
+    ).run()
+
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.27)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.61)
+    assert at.session_state[fatigue_inputs.BASIS_KEY][
+        "approval_reference"
+    ] == "DB-FAT-09 / checker A"
 
 
 def test_loading_nonfatigue_project_clears_prior_fatigue_state():
@@ -1775,7 +1831,7 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
     assert fatigue_inputs.spectrum_records(
         at.session_state[fatigue_inputs.SPECTRUM_TABLE_KEY]
     ) == []
-    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.50)
+    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.595)
     assert at.session_state[fatigue_inputs.BASIS_KEY] == (
         fatigue_inputs.default_basis()
     )
@@ -1797,7 +1853,7 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
     payload = json.loads(saved)
     assert payload["fatigue"]["spectrum"] == []
     assert payload["scalars"]["fatigue_on"] is False
-    assert payload["scalars"]["fatigue_gamma_c"] == pytest.approx(1.50)
+    assert payload["scalars"]["fatigue_gamma_c"] == pytest.approx(1.595)
 
 
 def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
@@ -1838,7 +1894,11 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": False,
-        "fatigue_gamma_s": 1.15,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma0": 1.0,
+        "fatigue_gamma3": 1.0,
+        "fatigue_gamma_s": 1.32,
+        "fatigue_gamma_c": 1.595,
         "fatigue_gamma_ff": 1.0,
         fatigue_inputs.DETAIL_CATALOG_KEY: fatigue_inputs.default_catalog(),
         fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
@@ -1855,6 +1915,10 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     fatigue = at.session_state["results"]["fatigue"]
     assert fatigue["governing_spectrum"] == "Traffic"
     assert len(fatigue["spectra"]) == 1
+    assert fatigue["partial_factors"]["gamma_s"] == pytest.approx(1.32)
+    assert fatigue["factor_basis"]["gamma_s_derivation"] == (
+        "1.20 x 1.10 x 1.000 x 1.000 = 1.320"
+    )
     assert at.session_state["result_fatigue_sig"] == (
         at.session_state["_latest_inputs"]["fatigue_sig"]
     )
@@ -2004,6 +2068,14 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     at.number_input(key="conc_alpha_cc").set_value(changed_alpha_cc).run()
     assert at.session_state["_latest_inputs"]["fatigue_sig"] != fck_fatigue_sig
 
+    at.selectbox(key="fatigue_factor_mode").set_value(
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    ).run()
+    next(
+        widget
+        for widget in at.text_input
+        if widget.label == "Approval/reference"
+    ).set_value("DB-FAT-10 / checker B").run()
     at.number_input(key="fatigue_gamma_s").set_value(1.20).run()
     assert at.session_state["result_sig"] != (
         at.session_state["_latest_inputs"]["signature"]
@@ -3161,6 +3233,9 @@ def test_inputs_carry_help_tooltips():
         assert w is not None and w.help, key
     for key in (
         "fatigue_edition",
+        "fatigue_factor_mode",
+        "fatigue_gamma0",
+        "fatigue_gamma3",
         "fatigue_check_steel",
         "fatigue_check_concrete",
         "fatigue_concrete_method",

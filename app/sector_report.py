@@ -1674,6 +1674,7 @@ class ReportBuilder:
         if fatigue is not None:
             checks = fatigue.get("checks") or {}
             factors = fatigue.get("partial_factors") or {}
+            factor_basis = fatigue.get("factor_basis") or {}
             concrete = fatigue.get("concrete_parameters") or {}
             fatigue_basis = fatigue.get("basis") or {}
             fatigue_rows = [["Setting", "Value"]]
@@ -1692,11 +1693,27 @@ class ReportBuilder:
                 ],
                 ["Fatigue gamma<sub>Ff</sub>",
                  _fmt(factors.get("gamma_ff"), 3)],
+                ["Fatigue factor source",
+                 _html_escape(str(factor_basis.get("mode") or "-"))],
+                ["Fatigue factor provision",
+                 _html_escape(str(factor_basis.get("reference") or "-"))],
+                ["Fatigue gamma<sub>0</sub>",
+                 _fmt(factor_basis.get("gamma0"), 3)],
+                ["Fatigue gamma<sub>3</sub>",
+                 _fmt(factor_basis.get("gamma3"), 3)],
             ])
             if checks.get("reinforcement"):
-                fatigue_rows.append([
-                    "Fatigue gamma<sub>s</sub>",
-                    _fmt(factors.get("gamma_s"), 3),
+                fatigue_rows.extend([
+                    [
+                        "Fatigue gamma<sub>s</sub>",
+                        _fmt(factors.get("gamma_s"), 3),
+                    ],
+                    [
+                        "gamma<sub>s</sub> derivation",
+                        _html_escape(str(
+                            factor_basis.get("gamma_s_derivation") or "-"
+                        )),
+                    ],
                 ])
             if checks.get("concrete"):
                 fatigue_rows.extend([
@@ -1706,6 +1723,10 @@ class ReportBuilder:
                      ))],
                     ["Fatigue gamma<sub>c,fat</sub>",
                      _fmt(factors.get("gamma_c"), 3)],
+                    ["gamma<sub>c,fat</sub> derivation",
+                     _html_escape(str(
+                         factor_basis.get("gamma_c_derivation") or "-"
+                     ))],
                     ["Concrete age t<sub>0</sub>",
                      f"{_fmt(fatigue.get('t0_days'), 2)} days"],
                     ["beta<sub>cc</sub>(t<sub>0</sub>)",
@@ -3763,6 +3784,10 @@ class ReportBuilder:
                  f"(cot theta = {_fmt(t['cot'], 3)})"],
                 ["Strut factor", "nu", f"{_fmt(t['nu'], 3)}"],
                 ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(t['alpha_cw'], 3)}"],
+                ["Concrete compression factor", "gamma<sub>c</sub>",
+                 _fmt(t.get("gamma_c"), 3)],
+                ["Concrete tension factor", "gamma<sub>ct</sub>",
+                 _fmt(t.get("gamma_ct"), 3)],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
@@ -3776,6 +3801,34 @@ class ReportBuilder:
             self._small("nu = nu<sub>v</sub> (raised from nu<sub>t</sub>) under DK NA "
                         "Figur 5.100 NA: closed stirrups round the periphery and "
                         "distributed longitudinal steel on both faces.")
+        factor_basis = t.get("material_factor_basis") or {}
+        self._h2("Material-factor basis")
+        factor_rows = [
+            ["Item", "Value"],
+            ["Factor source",
+             _html_escape(str(factor_basis.get("mode") or "-"))],
+            ["Provision",
+             _html_escape(str(factor_basis.get("reference") or "-"))],
+            ["gamma<sub>0</sub>", _fmt(factor_basis.get("gamma0"), 3)],
+            ["gamma<sub>3</sub>", _fmt(factor_basis.get("gamma3"), 3)],
+            ["Compression preset",
+             _fmt(factor_basis.get("compression_preset"), 3)],
+            ["Final compression factor",
+             _fmt(factor_basis.get("compression_final"), 3)],
+            ["Tension base", _fmt(factor_basis.get("tension_base"), 3)],
+            ["Tension derivation",
+             _html_escape(str(
+                 factor_basis.get("tension_derivation") or "-"
+             ))],
+            ["Final tension factor",
+             _fmt(factor_basis.get("tension_final"), 3)],
+        ]
+        if factor_basis.get("approval_reference"):
+            factor_rows.append([
+                "Override approval/source",
+                _html_escape(str(factor_basis["approval_reference"])),
+            ])
+        self._table(factor_rows, [55 * mm, 110 * mm], keep=False)
         self._h2("Resistances")
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
@@ -3797,6 +3850,13 @@ class ReportBuilder:
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
             result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
                    f"(governed by {t['governs']})")
+        self._formula(
+            "f<sub>ctd</sub> = f<sub>ctk,0.05</sub> / "
+            "gamma<sub>ct</sub> = 0.7 f<sub>ctm</sub> / gamma<sub>ct</sub>",
+            ref=_html_escape(str(factor_basis.get("reference") or "-")),
+            subst=f"{_fmt(t.get('fctk_005'), 3)} / "
+                  f"{_fmt(t.get('gamma_ct'), 3)}",
+            result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")
         self._formula(
             "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
             ref="cracking (tau = f<sub>ctd</sub>)",
@@ -4340,6 +4400,7 @@ class ReportBuilder:
         self._h2("Basis and provenance")
         basis = payload.get("basis") or {}
         factors = payload.get("partial_factors") or {}
+        factor_basis = payload.get("factor_basis") or {}
         concrete_parameters = payload.get("concrete_parameters") or {}
         basis_rows = [
             ["Item", "Value"],
@@ -4363,15 +4424,33 @@ class ReportBuilder:
              _html_escape(str(basis.get("approval_reference") or "-"))],
             ["Authority adjustments",
              _html_escape(str(basis.get("authority_adjustments") or "-"))],
+            ["Factor source",
+             _html_escape(str(factor_basis.get("mode") or "-"))],
+            ["Factor provision",
+             _html_escape(str(factor_basis.get("reference") or "-"))],
+            ["gamma<sub>0</sub>", _fmt(factor_basis.get("gamma0"), 3)],
+            ["gamma<sub>3</sub>", _fmt(factor_basis.get("gamma3"), 3)],
             ["gamma<sub>Ff</sub>", _fmt(factors.get("gamma_ff"), 3)],
         ]
         if checks.get("reinforcement"):
-            basis_rows.append([
-                "gamma<sub>s</sub>", _fmt(factors.get("gamma_s"), 3)
+            basis_rows.extend([
+                ["gamma<sub>s</sub>", _fmt(factors.get("gamma_s"), 3)],
+                [
+                    "gamma<sub>s</sub> derivation",
+                    _html_escape(str(
+                        factor_basis.get("gamma_s_derivation") or "-"
+                    )),
+                ],
             ])
         if checks.get("concrete"):
             basis_rows.extend([
                 ["gamma<sub>c,fat</sub>", _fmt(factors.get("gamma_c"), 3)],
+                [
+                    "gamma<sub>c,fat</sub> derivation",
+                    _html_escape(str(
+                        factor_basis.get("gamma_c_derivation") or "-"
+                    )),
+                ],
                 ["t<sub>0</sub> (days)", _fmt(payload.get("t0_days"), 2)],
                 ["beta<sub>cc</sub>(t<sub>0</sub>)",
                  _fmt(concrete_parameters.get("beta_cc_t0"), 4)],

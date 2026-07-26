@@ -619,10 +619,11 @@ def manual_blocks() -> list:
        "or tendon in the Section table. An assigned definition cannot be deleted. "
        "A preset supplies starting values for the selected definition; every value "
        "can then be adjusted.")
-    call("limit", "Enter the **final effective** material partial factors in the "
-         "material panels, including every applicable national increase or reduction "
-         "for construction, control and consequence category. Sector does not ask for "
-         "those categories and applies no hidden category multiplier.")
+    call("limit", "Material inputs are **final effective** factors. The torsion and "
+         "fatigue panels additionally offer edition-derived factor bases with explicit "
+         "$\\gamma_0$ / $\\gamma_3$ inputs and a separately identified approved-final "
+         "override. Sector does not infer a construction, control or consequence "
+         "category and applies no hidden multiplier.")
     h2("Concrete")
     md("The concrete stress-strain law is chosen by the *Preset*: **Curve 2 "
        "(parabola-rectangle)**, the EC2 design law used throughout this manual, or "
@@ -740,9 +741,11 @@ def manual_blocks() -> list:
          "Part C derives every model in full with the worked crack width.")
     h2("Grouped fatigue")
     md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
-       "**Reinforcement** and/or **Concrete**. Enter the complete project factors "
-       "$\\gamma_{Ff}$, $\\gamma_s$ and $\\gamma_{c,fat}$. Sector applies no "
-       "control-, construction- or consequence-class multiplier.")
+       "**Reinforcement** and/or **Concrete**. The edition-derived factor source "
+       "resolves and displays $\\gamma_s$ and $\\gamma_{c,fat}$; for the Danish "
+       "annex it also exposes $\\gamma_0$ and $\\gamma_3$. Select **Approved final "
+       "override** only for a deliberate project value and record its approval "
+       "reference. $\\gamma_{Ff}$ remains the explicit action factor.")
     md("For concrete, select **Explicit Palmgren-Miner spectrum** or "
        "**Damage-equivalent stress amplitude**. The explicit method uses every "
        "entered cycle count. For the equivalent method, each row's long/total "
@@ -770,7 +773,7 @@ def manual_blocks() -> list:
           [["DS/EN 1992-1-1:2005",
             "Steel 6.8.4 and Tables 6.3N/6.4N; concrete 6.72 equivalent method or corrected DS/EN 1992-2 6.106 Miner method"],
            ["DS/EN 1992-1-1:2005 + DK NA:2024",
-            "Same calculation models, with the complete Danish project factors entered explicitly"],
+            "Same models; preset gamma_s,fat = 1.20 x 1.10 x gamma0 x gamma3 and gamma_c,fat = 1.45 x 1.10 x gamma0 x gamma3"],
            ["DS/EN 1992-1-1:2023",
             "Reinforcement Annex E.5 and Tables E.1/E.2; concrete E.2 equivalent method or E.7-E.8 Miner method"]])
     call("limit", "Each named spectrum is assessed independently. Sector does not "
@@ -866,6 +869,12 @@ def manual_blocks() -> list:
        "stirrups, and used by shear too -- one leg of the loop carries the torsion "
        "shear flow), and the longitudinal steel $\\sum A_{sl}$ uses the section's "
        "mild-reinforcement design yield.")
+    md("The torsion panel resolves the concrete tensile material factor separately "
+       "from the compression factor used in $f_{cd}$. Under DK NA:2024 the displayed "
+       "bases are $\\gamma_c=1.45\\gamma_0\\gamma_3$ for reinforced-concrete "
+       "compression and $\\gamma_{ct}=1.70\\gamma_0\\gamma_3$ for concrete tension. "
+       "$T_{Rd,c}$ uses the final tensile factor. A project-approved final override "
+       "is retained across method switches and carries its source in the report.")
     call("standard", "$T_{Rd,max}$ uses the code torsion strut factor: recommended "
          "$\\nu = 0.6(1 - f_{ck}/250)$, or the DK NA:2024 pure-torsion "
          "$\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA). When shear links are also "
@@ -1314,6 +1323,11 @@ def manual_blocks() -> list:
     call("concept", "$\\gamma_{Ff}$ is applied once, at action level. The resulting "
          "design stress range enters the S-N or concrete-life check; it is not "
          "applied again to the resistance curve.")
+    call("standard", "For the general reinforced-concrete row in DS/EN 1992-1-1 "
+         "DK NA:2024 Table 2.1Na NA, the persistent-situation fatigue factors are "
+         "$\\gamma_{s,fat}=1.20\\cdot1.10\\cdot\\gamma_0\\gamma_3$ and "
+         "$\\gamma_{c,fat}=1.45\\cdot1.10\\cdot\\gamma_0\\gamma_3$. With "
+         "$\\gamma_0=\\gamma_3=1$, Sector therefore seeds 1.32 and 1.595.")
 
     h2("Reinforcement S-N and Miner check")
     md("For each bar or tendon, the selected fatigue detail supplies $N^*$, slopes "
@@ -1382,11 +1396,11 @@ def manual_blocks() -> list:
     table(["Edition", "Reinforcement", "Concrete", "Mixed bond"],
           [["DS/EN 1992-1-1:2005",
             "6.8.4; Tables 6.3N/6.4N",
-            "6.72 equivalent or corrected DS/EN 1992-2:2005/AC:2008 6.106 Miner",
+           "6.72 equivalent or corrected DS/EN 1992-2:2005/AC:2008 6.106 Miner",
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2005 + DK NA:2024",
-            "Same method; explicit Danish project factors",
-            "Same selectable methods; explicit Danish project factors",
+            "Same method; derived or approved Danish final factors",
+            "Same selectable methods; derived or approved Danish final factors",
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2023",
             "Annex E.5; Tables E.1/E.2",
@@ -1509,7 +1523,13 @@ def manual_blocks() -> list:
        "longitudinal steel $\\sum A_{sl} = T_{Ed}\\,u_k\\,\\cot\\theta/(2A_k\\,"
        "f_{yd})$ (6.28), **in addition** to the bending reinforcement on the "
        "tension side, and the cracking torque is $T_{Rd,c} = 2A_k\\,t_{ef}\\,"
-       "f_{ctd}$ ($\\tau = f_{ctd}$).")
+       "f_{ctd}$ ($\\tau = f_{ctd}$), with "
+       "$f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}=0.7f_{ctm}/\\gamma_{ct}$.")
+    call("standard", "DS/EN 1992-1-1 DK NA:2024, 2.4.2.4(1), Table "
+         "2.1Na NA gives the general in-situ bases 1.45 for reinforced-concrete "
+         "compression and 1.70 for concrete tension, each multiplied by "
+         "$\\gamma_0\\gamma_3$. The tensile factor applies when concrete failure "
+         "is governed by tension.")
     md("As for shear, $T_{Rd,s}$ rises with $\\cot\\theta$ and $T_{Rd,max}$ peaks "
        "at 45 degrees, so $T_{Rd} = \\min$ is largest at the crossover, which "
        "Sector auto-optimises within the $\\cot\\theta$ bounds. When shear and "
@@ -1534,7 +1554,7 @@ def manual_blocks() -> list:
        "$A_k = 0.1$ m$^2$, $u_k = 1.4$ m, $\\nu_t = 0.368$. At the optimum "
        "$\\cot\\theta = 1.75$ the stirrups and struts meet at "
        "$T_{Rd} \\approx 76.4$ kN$\\cdot$m, with "
-       "$T_{Rd,c} \\approx 31$ kN$\\cdot$m.")
+       "$\\gamma_{ct}=1.70$ and $T_{Rd,c} \\approx 26.4$ kN$\\cdot$m.")
 
     h1("Combined M-V-T interaction")
     md("Bending, shear and torsion act together, so their checks are tied together "
