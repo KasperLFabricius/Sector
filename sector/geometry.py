@@ -546,12 +546,14 @@ def polygon_is_convex(verts: Vertices, tol: float = 1e-12) -> bool:
     """Whether a simple polygon has no re-entrant (concave) corner.
 
     Collinear edge points are ignored, so a rectangle with intermediate points
-    remains convex. Fewer than three vertices and zero-area rings are not valid
-    convex polygons. Sector uses this as a conservative compound-section screen:
-    a concave T/L/I/flanged outline must be explicitly subdivided before the
-    thin-walled torsion model may issue a resistance verdict.
+    remains convex. An exact terminal copy of the first point is a serialization
+    marker, not a second corner, and is removed from this analysis copy. Fewer
+    than three vertices and zero-area rings are not valid convex polygons.
+    Sector uses this as a conservative compound-section screen: a concave
+    T/L/I/flanged outline must be explicitly subdivided before the thin-walled
+    torsion model may issue a resistance verdict.
     """
-    arr = _as_array(verts)
+    arr = ring_without_terminal_closure(verts)
     n = arr.shape[0]
     area = signed_area(arr)
     if n < 3 or abs(area) <= tol:

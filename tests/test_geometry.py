@@ -146,6 +146,25 @@ def test_polygon_is_convex_detects_compound_reentrant_outline():
     assert not polygon_is_convex([(0.0, 0.0), (1.0, 0.0)])
 
 
+def test_polygon_is_convex_ignores_terminal_closure_at_reentrant_start():
+    from sector.geometry import polygon_is_convex
+
+    # This L-ring has exactly one re-entrant corner and deliberately starts
+    # there. Without terminal-marker normalization the duplicate endpoint
+    # hides that turn behind zero-length first/last edges.
+    concave = [
+        (1.0, 1.0),
+        (1.0, 2.0),
+        (0.0, 2.0),
+        (0.0, 0.0),
+        (2.0, 0.0),
+        (2.0, 1.0),
+    ]
+    for winding in (concave, list(reversed(concave))):
+        assert not polygon_is_convex(winding)
+        assert not polygon_is_convex([*winding, winding[0]])
+
+
 def test_positioned_rectangles_form_valid_t_section_partition():
     from sector import templates
 

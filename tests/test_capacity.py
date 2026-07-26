@@ -246,6 +246,27 @@ def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     assert "invalid sub-tube partition" in bad["tube"]["reason"]
 
 
+def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_corner():
+    concave = [
+        (0.1, 0.1),
+        (0.1, 0.2),
+        (0.0, 0.2),
+        (0.0, 0.0),
+        (0.2, 0.0),
+        (0.2, 0.1),
+    ]
+    closed = [*concave, concave[0]]
+
+    ctx = capacity.build_torsion_context(
+        _member_input(torsion_on=True, outer=closed),
+        0.0,
+    )
+
+    assert ctx["compound_detected"] is True
+    assert ctx["tube"]["valid"] is False
+    assert ctx["tube"]["reason"] == "compound outline requires subdivision"
+
+
 def test_finalize_combined_builds_valid_payload():
     inp = _member_input(combined_on=True)
     out = {
