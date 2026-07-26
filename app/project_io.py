@@ -175,6 +175,12 @@ TORSION_FACTOR_SCALAR_KEYS = (
     "torsion_factor_approval",
 )
 
+OPTIONAL_FACTOR_VALUE_KEYS = (
+    "fatigue_gamma_s",
+    "fatigue_gamma_c",
+    "torsion_gamma_ct",
+)
+
 # Every scalar / string input that makes up a project. Missing keys are skipped on
 # save, so an older or partial file still loads what it has.
 SCALAR_KEYS = [
@@ -344,6 +350,12 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
         )
     }
+    # Empty override widgets use ``None`` in Streamlit state. Persist them exactly
+    # like absent optional values so a no-edit load/save keeps the canonical input
+    # hash stable and never synthesises an approved numeric factor.
+    for key in OPTIONAL_FACTOR_VALUE_KEYS:
+        if scalar_payload.get(key) is None:
+            scalar_payload.pop(key, None)
     # These v6 controls were global because one shear component existed. Their
     # values are consumed only by the v7 migration and are not written again.
     for key in ("shear_axis", "shear_tension", "shear_bw", "shear_link_legs"):

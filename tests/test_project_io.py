@@ -441,6 +441,42 @@ def test_implicit_fatigue_factor_mode_round_trips_by_dedicated_approval():
     assert unapproved_scalars["fatigue_factor_approval"] == ""
 
 
+def test_missing_optional_factor_values_are_canonical_absences():
+    absent = {
+        "fatigue_on": True,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-FACT-21 / checker F",
+        "torsion_on": True,
+        "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
+        "torsion_factor_approval": "DB-TOR-05 / checker F",
+    }
+    blank = {
+        **absent,
+        "fatigue_gamma_s": None,
+        "fatigue_gamma_c": None,
+        "torsion_gamma_ct": None,
+    }
+
+    text = project_io.dump_project({}, blank)
+    payload = json.loads(text)
+    _tables, restored = project_io.parse_project(text)
+
+    for key in project_io.OPTIONAL_FACTOR_VALUE_KEYS:
+        assert key not in payload["scalars"]
+        assert key not in restored
+    assert restored["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    assert restored["fatigue_factor_approval"] == (
+        "DB-FACT-21 / checker F"
+    )
+    assert restored["torsion_factor_mode"] == codes.FACTOR_MODE_OVERRIDE
+    assert restored["torsion_factor_approval"] == "DB-TOR-05 / checker F"
+    assert project_io.input_sha256({}, blank) == (
+        project_io.input_sha256({}, absent)
+    )
+
+
 def test_current_torsion_factor_override_round_trips_with_approval_source():
     values = {
         "torsion_on": True,
