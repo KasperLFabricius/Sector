@@ -167,6 +167,14 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_source",
 )
 
+TORSION_FACTOR_SCALAR_KEYS = (
+    "torsion_factor_mode",
+    "torsion_gamma0",
+    "torsion_gamma3",
+    "torsion_gamma_ct",
+    "torsion_factor_approval",
+)
+
 # Every scalar / string input that makes up a project. Missing keys are skipped on
 # save, so an older or partial file still loads what it has.
 SCALAR_KEYS = [

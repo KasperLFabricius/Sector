@@ -265,6 +265,26 @@ def test_build_torsion_context_marks_unapproved_final_factor_invalid():
     assert ctx["material_factor_basis"]["approval_valid"] is False
 
 
+def test_torsion_factor_preflight_rejects_missing_or_non_positive_override():
+    missing = _member_input(
+        torsion_on=True,
+        torsion_factor_mode=codes.FACTOR_MODE_OVERRIDE,
+        torsion_factor_approval="DB-TOR-06 / checker E",
+    )
+    non_positive = dict(missing, torsion_gamma_ct=0.0)
+    valid = dict(missing, torsion_gamma_ct=1.62)
+
+    assert (
+        capacity.torsion_factor_validation_error(missing)
+        == "an approved final concrete tensile factor is required"
+    )
+    assert (
+        capacity.torsion_factor_validation_error(non_positive)
+        == "the final concrete tensile factor must be finite and positive"
+    )
+    assert capacity.torsion_factor_validation_error(valid) is None
+
+
 def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_corner():
     concave = [
         (0.1, 0.1),

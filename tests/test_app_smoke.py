@@ -1794,6 +1794,83 @@ def test_app_fatigue_factor_switches_and_approved_override_persist():
     ] == "TRAFFIC-09 / authority B"
 
 
+def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
+    import fatigue_analysis
+    import fatigue_inputs
+    import project_io
+
+    at = _fresh()
+    at.run()
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    common = {
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-FACT-21 / checker F",
+        "fatigue_gamma0": 1.0,
+        "fatigue_gamma3": 1.0,
+    }
+
+    # The fresh session already contains both preset numbers. Loading an approved
+    # steel-only override with no steel factor must clear that stale value. The
+    # inactive concrete factor may receive the documented compatibility fallback.
+    at.session_state["_pending_project"] = project_io.dump_project(
+        tables,
+        {
+            **common,
+            "fatigue_check_steel": True,
+            "fatigue_check_concrete": False,
+        },
+    )
+    at.run()
+
+    assert not at.exception
+    assert at.number_input(key="fatigue_gamma_s").value is None
+    assert at.session_state["fatigue_gamma_s"] is None
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.595)
+    steel_errors = fatigue_analysis.validation_errors(
+        at.session_state["_latest_inputs"]
+    )
+    assert "final fatigue material factors are required" in steel_errors
+
+    # Repeat in the opposite direction in the same session. This proves that the
+    # durable mirror cannot reintroduce the concrete value seeded by the first load.
+    at.session_state["_pending_project"] = project_io.dump_project(
+        tables,
+        {
+            **common,
+            "fatigue_check_steel": False,
+            "fatigue_check_concrete": True,
+        },
+    )
+    at.run()
+
+    assert not at.exception
+    assert at.number_input(key="fatigue_gamma_c").value is None
+    assert at.session_state["fatigue_gamma_c"] is None
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.32)
+    concrete_errors = fatigue_analysis.validation_errors(
+        at.session_state["_latest_inputs"]
+    )
+    assert "final fatigue material factors are required" in concrete_errors
+
+    _calculate(at)
+    blocked = at.session_state["results"]["fatigue"]
+    assert blocked["valid"] is False
+    assert "final fatigue material factors are required" in blocked["errors"]
+
+    _goto_page(at, "Inputs")
+    at.number_input(key="fatigue_gamma_c").set_value(1.61).run()
+    repaired_errors = fatigue_analysis.validation_errors(
+        at.session_state["_latest_inputs"]
+    )
+    assert "final fatigue material factors are required" not in repaired_errors
+
+
 def test_app_fatigue_override_does_not_reuse_spectrum_method_approval():
     import fatigue_inputs
 

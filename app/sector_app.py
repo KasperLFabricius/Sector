@@ -2457,9 +2457,15 @@ def _apply_pending_project() -> None:
     }
     for key in load_cases.LEGACY_SCALAR_KEYS:
         st.session_state.pop(key, None)
-    # A project that predates fatigue inputs must not inherit those settings from
-    # the project previously open in this Streamlit session.
-    for key in project_io.FATIGUE_SCALAR_KEYS:
+    # Optional factor inputs must never leak from the project previously open in
+    # this Streamlit session. In particular, a current approved-override project
+    # may deliberately be incomplete; preserving that absence is what prevents a
+    # stale/preset number from being reported as its approved final factor.
+    replaceable_factor_keys = (
+        *project_io.FATIGUE_SCALAR_KEYS,
+        *project_io.TORSION_FACTOR_SCALAR_KEYS,
+    )
+    for key in replaceable_factor_keys:
         st.session_state.pop(key, None)
     _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
@@ -2513,7 +2519,7 @@ def _apply_pending_project() -> None:
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
         if (
             key not in load_cases.LEGACY_SCALAR_KEYS
-            and key not in project_io.FATIGUE_SCALAR_KEYS
+            and key not in replaceable_factor_keys
         )
     }
     durable.update(scalars)
@@ -3515,7 +3521,15 @@ def build_inputs(host=st):
         r"$\gamma_s$",
         0.1,
         10.0,
-        fatigue_factor_preset["gamma_s"],
+        (
+            None
+            if (
+                fatigue_factor_mode != fatigue_inputs.FACTOR_MODE_PRESET
+                and fatigue_check_steel
+                and "fatigue_gamma_s" not in st.session_state
+            )
+            else fatigue_factor_preset["gamma_s"]
+        ),
         0.05,
         "fatigue_gamma_s",
         disabled=(
@@ -3531,7 +3545,15 @@ def build_inputs(host=st):
         r"$\gamma_{c,\mathrm{fat}}$",
         0.1,
         10.0,
-        fatigue_factor_preset["gamma_c"],
+        (
+            None
+            if (
+                fatigue_factor_mode != fatigue_inputs.FACTOR_MODE_PRESET
+                and fatigue_check_concrete
+                and "fatigue_gamma_c" not in st.session_state
+            )
+            else fatigue_factor_preset["gamma_c"]
+        ),
         0.05,
         "fatigue_gamma_c",
         disabled=(
@@ -3542,23 +3564,33 @@ def build_inputs(host=st):
         help=r"Final material factor in the design concrete fatigue strength "
              r"$f_{cd,\mathrm{fat}}$.",
     )
-    _resolved_s, _resolved_c, fatigue_factor_display = (
-        fatigue_inputs.resolve_fatigue_factors(
-            fatigue_edition,
-            mode=fatigue_factor_mode,
-            gamma_s=fatigue_gamma_s,
-            gamma_c=fatigue_gamma_c,
-            gamma0=fatigue_gamma0,
-            gamma3=fatigue_gamma3,
+    try:
+        _resolved_s, _resolved_c, fatigue_factor_display = (
+            fatigue_inputs.resolve_fatigue_factors(
+                fatigue_edition,
+                mode=fatigue_factor_mode,
+                gamma_s=fatigue_gamma_s,
+                gamma_c=fatigue_gamma_c,
+                gamma0=fatigue_gamma0,
+                gamma3=fatigue_gamma3,
+            )
         )
-    )
-    fat.caption(
-        "Reinforcement derivation: "
-        f"{fatigue_factor_display['gamma_s_derivation']}. "
-        "Concrete derivation: "
-        f"{fatigue_factor_display['gamma_c_derivation']}. "
-        f"Edition provision: {fatigue_factor_display['reference']}."
-    )
+    except ValueError as exc:
+        fatigue_factor_display = None
+        if fatigue_on:
+            fat.error(
+                "Fatigue material-factor input is incomplete: "
+                f"{exc}. Enter every enabled approved final factor before "
+                "calculation."
+            )
+    if fatigue_factor_display is not None:
+        fat.caption(
+            "Reinforcement derivation: "
+            f"{fatigue_factor_display['gamma_s_derivation']}. "
+            "Concrete derivation: "
+            f"{fatigue_factor_display['gamma_c_derivation']}. "
+            f"Edition provision: {fatigue_factor_display['reference']}."
+        )
     fatigue_factor_approval = _seeded_text(
         fat,
         "Fatigue-factor approval / source",
@@ -4118,7 +4150,14 @@ def build_inputs(host=st):
         r"Final concrete tension factor $\gamma_{ct}$",
         0.1,
         10.0,
-        torsion_factor_preset["tension_final"],
+        (
+            None
+            if (
+                torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
+                and "torsion_gamma_ct" not in st.session_state
+            )
+            else torsion_factor_preset["tension_final"]
+        ),
         0.01,
         "torsion_gamma_ct",
         disabled=(
@@ -4144,15 +4183,24 @@ def build_inputs(host=st):
             "an overridden final tensile factor."
         ),
     )
-    _resolved_gamma_ct, torsion_factor_display = (
-        torsion_code.resolve_concrete_tension_factor(
-            mode=torsion_factor_mode,
-            gamma_ct=torsion_gamma_ct,
-            gamma0=torsion_gamma0,
-            gamma3=torsion_gamma3,
+    try:
+        _resolved_gamma_ct, torsion_factor_display = (
+            torsion_code.resolve_concrete_tension_factor(
+                mode=torsion_factor_mode,
+                gamma_ct=torsion_gamma_ct,
+                gamma0=torsion_gamma0,
+                gamma3=torsion_gamma3,
+            )
         )
-    )
-    if torsion_uses_categories:
+    except ValueError as exc:
+        torsion_factor_display = None
+        if torsion_on:
+            sts.error(
+                "Concrete tensile-factor input is incomplete: "
+                f"{exc}. Enter a positive approved final factor before "
+                "calculation."
+            )
+    if torsion_factor_display is not None and torsion_uses_categories:
         sts.caption(
             "DK NA Table 2.1Na NA: compression basis "
             f"{torsion_factor_preset['compression_base']:.2f} x gamma0 x gamma3 "
@@ -4161,7 +4209,7 @@ def build_inputs(host=st):
             "Torsional fctd uses the final tensile factor; fcd retains the final "
             "compression factor from the concrete material panel."
         )
-    else:
+    elif torsion_factor_display is not None:
         sts.caption(
             "Selected base-EN tensile-factor basis: "
             f"{torsion_factor_display['tension_derivation']}. "
@@ -4968,8 +5016,16 @@ def build_inputs(host=st):
             float(fatigue_gamma3),
             float(concrete.fck),
             float(concrete.alpha_cc),
-            float(fatigue_gamma_c),
-            float(fatigue_gamma_s),
+            (
+                None
+                if fatigue_gamma_c is None
+                else float(fatigue_gamma_c)
+            ),
+            (
+                None
+                if fatigue_gamma_s is None
+                else float(fatigue_gamma_s)
+            ),
             float(fatigue_gamma_ff),
             float(fatigue_beta_cc_t0),
             float(fatigue_t0_days),
@@ -5645,6 +5701,66 @@ def _run_fatigue_or_invalid(inp):
     )
 
 
+def _invalid_torsion_factor_result(inp, reason):
+    """Immutable INVALID evidence for a missing/non-positive torsion factor."""
+    factor_mode = str(
+        inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
+    )
+    approval_reference = str(
+        inp.get("torsion_factor_approval") or ""
+    ).strip()
+    approval_required = factor_mode == codes.FACTOR_MODE_OVERRIDE
+    approval_valid = not approval_required or bool(approval_reference)
+    factor_reason = f"concrete tensile-factor input invalid: {reason}"
+    return {
+        "tube": {"valid": False, "reason": factor_reason},
+        "t_ed": float(inp.get("torsion_T", 0.0) or 0.0),
+        "trd_s": None,
+        "trd_max": None,
+        "trd_c": None,
+        "trd": None,
+        "util": None,
+        "asl_req": None,
+        "method": inp.get("torsion_method"),
+        "governs": None,
+        "valid": False,
+        "reason": factor_reason,
+        "code_applicable": False,
+        "factor_input_valid": False,
+        "factor_input_reason": reason,
+        "factor_approval_required": approval_required,
+        "factor_approval_valid": approval_valid,
+        "factor_approval_reason": (
+            ""
+            if approval_valid
+            else (
+                "approved final concrete tensile-factor override requires a "
+                "stated approval/source"
+            )
+        ),
+        "material_factor_basis": {
+            "mode": factor_mode,
+            "tension_override": factor_mode == codes.FACTOR_MODE_OVERRIDE,
+            "tension_final": None,
+            "tension_derivation": "not resolved - factor input invalid",
+            "approval_reference": approval_reference,
+            "approval_required": approval_required,
+            "approval_valid": approval_valid,
+        },
+        "interaction": {
+            "valid": False,
+            "code_applicable": False,
+            "reason": factor_reason,
+            "factor_input_valid": False,
+        },
+        "min_reinf": {
+            "applicable": False,
+            "reason": factor_reason,
+            "factor_input_valid": False,
+        },
+    }
+
+
 def run_analysis(
     inp,
     *,
@@ -5734,7 +5850,12 @@ def _run_uniaxial_capacity_checks(inp, out):
     )
     if shear_payload is not None:
         out["shear"] = shear_payload
-    tors_ctx = capacity.build_torsion_context(inp, n_ed_comp)
+    torsion_factor_error = capacity.torsion_factor_validation_error(inp)
+    tors_ctx = (
+        None
+        if torsion_factor_error is not None
+        else capacity.build_torsion_context(inp, n_ed_comp)
+    )
 
     # ---- Member strut angle (EN 1992-1-1 6.3.2(2)) ----------------------------
     # One strut angle serves shear AND torsion (the same web struts carry both).
@@ -6033,6 +6154,8 @@ def _run_uniaxial_capacity_checks(inp, out):
                 code_applicable=not torsion_out_of_limits,
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
+                factor_input_valid=True,
+                factor_input_reason="",
                 factor_approval_required=tors_ctx["factor_approval_required"],
                 factor_approval_valid=factor_approval_valid,
                 factor_approval_reason=tors_ctx["factor_approval_reason"],
@@ -6250,6 +6373,10 @@ def _run_uniaxial_capacity_checks(inp, out):
                             and sh_links.get("code_applicable", True)
                         ))
 
+    if torsion_factor_error is not None:
+        out["torsion"] = _invalid_torsion_factor_result(
+            inp, torsion_factor_error
+        )
     capacity.finalize_combined(inp, out)
 
 
@@ -9350,6 +9477,14 @@ def torsion_view(inp, results):
         return
     t = results["torsion"]
     _member_material_note(inp)
+    if t.get("factor_input_valid") is False:
+        st.error(
+            "INVALID - the approved final concrete tensile factor is missing or "
+            "not positive. Enter an explicit positive value and recalculate. No "
+            "torsion, V+T (6.29), minimum-reinforcement (6.31), or combined "
+            "verdict is issued."
+        )
+        return
     if t.get("factor_approval_valid") is False:
         st.error(
             "INVALID - the selected approved final concrete tensile-factor override "

@@ -3654,8 +3654,21 @@ class ReportBuilder:
 
     def _torsion(self):
         t = self.out["torsion"]
-        tube = t["tube"]
         self._case_heading("Torsion (thin-walled tube)", "plastic")
+        if t.get("factor_input_valid") is False:
+            self._status_block(
+                "INVALID - concrete tensile-factor override missing or invalid",
+                "INVALID",
+            )
+            self._small(
+                "Torsion is not assessed because the approved final concrete "
+                "tensile factor is missing or not positive. Enter an explicit "
+                "positive value and recalculate. No torsion, V+T (6.29), "
+                "minimum-reinforcement (6.31), or combined compliance verdict "
+                "is issued."
+            )
+            return
+        tube = t["tube"]
         self._p("Torsion resistance from the thin-walled closed-tube idealisation "
                 "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
                 "tube is derived from the outline; the closed stirrups and the "

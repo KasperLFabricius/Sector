@@ -1954,6 +1954,36 @@ def test_report_identifies_unapproved_torsion_override_and_withholds_screens():
     assert "minimum sufficient" not in text
 
 
+def test_report_identifies_missing_approved_torsion_factor_and_withholds_screens():
+    out = _out()
+    torsion = _torsion_out(interaction=True)
+    torsion.update(
+        valid=False,
+        util=None,
+        factor_input_valid=False,
+        factor_input_reason=(
+            "an approved final concrete tensile factor is required"
+        ),
+        factor_approval_required=True,
+        factor_approval_valid=True,
+        reason="concrete tensile-factor input invalid",
+        min_reinf=dict(
+            applicable=False,
+            reason="concrete tensile-factor input invalid",
+        ),
+    )
+    out["torsion"] = torsion
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+    assert "concrete tensile-factor override missing or invalid" in text
+    assert "No torsion, V+T (6.29), minimum-reinforcement (6.31)" in text
+    assert "76.4" not in text
+    assert "Combined shear" not in text
+    assert "minimum sufficient" not in text
+
+
 def test_report_compound_torsion_requires_subdivision():
     out = _out()
     t = _torsion_out()

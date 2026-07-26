@@ -494,6 +494,36 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
     )
 
 
+def torsion_factor_validation_error(inp):
+    """Return the active torsion factor error without constructing a resistance.
+
+    A current project may intentionally retain an approved-override mode while its
+    final tensile factor is absent.  This preflight keeps that missing state out of
+    the resistance model and lets callers issue an explicit INVALID result instead
+    of substituting an edition value.
+    """
+    if not inp.get("torsion_on") or inp.get("section") is None:
+        return None
+    factor_mode = str(
+        inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
+    )
+    if factor_mode != codes.FACTOR_MODE_OVERRIDE:
+        return None
+    tcode = SHEAR_CODES.get(
+        inp.get("torsion_method"), codes.EC2_2005_DKNA
+    )
+    try:
+        tcode.resolve_concrete_tension_factor(
+            mode=factor_mode,
+            gamma_ct=inp.get("torsion_gamma_ct"),
+            gamma0=inp.get("torsion_gamma0", 1.0),
+            gamma3=inp.get("torsion_gamma3", 1.0),
+        )
+    except (TypeError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
 def build_torsion_context(inp, n_ed_comp):
     """Return the angle-independent context for the active torsion check."""
     if not inp.get("torsion_on") or inp["section"] is None:

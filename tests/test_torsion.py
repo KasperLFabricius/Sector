@@ -453,6 +453,77 @@ def test_app_torsion_factor_preset_switch_and_override_persistence():
     )
 
 
+def test_loaded_approved_torsion_override_keeps_missing_factor_empty():
+    import project_io
+
+    at = _fresh()
+    at.run()
+    assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.70)
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+
+    # Load into a session whose live and durable mirrors already contain a preset.
+    # The current v15 project deliberately omits gamma_ct despite carrying an
+    # approval, so no preset/stale number may be promoted to the approved value.
+    at.session_state["_pending_project"] = project_io.dump_project(
+        tables,
+        {
+            "torsion_on": True,
+            "torsion_method": codes.EC2_2005_DKNA.label,
+            "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
+            "torsion_gamma0": 1.0,
+            "torsion_gamma3": 1.0,
+            "torsion_factor_approval": "DB-TOR-06 / checker E",
+        },
+    )
+    at.run()
+
+    assert not at.exception
+    assert at.number_input(key="torsion_gamma_ct").value is None
+    assert at.session_state["torsion_gamma_ct"] is None
+    assert at.session_state["_latest_inputs"]["torsion_gamma_ct"] is None
+    assert any(
+        "approved final concrete tensile factor is required" in message.value
+        for message in at.error
+    )
+
+    _set(at, ("number_input", "torsion_T", 40.0))
+    _calculate(at)
+
+    assert not at.exception
+    blocked = at.session_state["results"]["torsion"]
+    assert blocked["factor_input_valid"] is False
+    assert blocked["factor_approval_valid"] is True
+    assert blocked["valid"] is False
+    assert blocked["util"] is None
+    assert blocked["interaction"]["valid"] is False
+    assert "value" not in blocked["interaction"]
+    assert blocked["min_reinf"]["applicable"] is False
+    _select_view(at, "Torsion")
+    assert any(
+        "approved final concrete tensile factor is missing or not positive"
+        in message.value
+        for message in at.error
+    )
+    assert not any(
+        metric.label == r"Utilisation $T_{Ed}/T_{Rd}$"
+        for metric in at.metric
+    )
+
+    _goto_page(at, "Inputs")
+    at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
+    _calculate(at)
+
+    repaired = at.session_state["results"]["torsion"]
+    assert repaired["factor_input_valid"] is True
+    assert repaired["factor_approval_valid"] is True
+    assert repaired["valid"] is True
+    assert repaired["gamma_ct"] == pytest.approx(1.62)
+
+
 def test_app_torsion_override_withholds_verdict_until_approved():
     at = _fresh()
     at.run()
