@@ -181,6 +181,16 @@ OPTIONAL_FACTOR_VALUE_KEYS = (
     "torsion_gamma_ct",
 )
 
+FACTOR_NUMERIC_SCALAR_KEYS = (
+    "fatigue_gamma0",
+    "fatigue_gamma3",
+    "fatigue_gamma_s",
+    "fatigue_gamma_c",
+    "torsion_gamma0",
+    "torsion_gamma3",
+    "torsion_gamma_ct",
+)
+
 # Every scalar / string input that makes up a project. Missing keys are skipped on
 # save, so an older or partial file still loads what it has.
 SCALAR_KEYS = [
@@ -278,6 +288,20 @@ def _scalar(value):
     return value
 
 
+def _validate_factor_scalars(scalars: dict) -> None:
+    """Reject non-numeric/Boolean factors at every project-file boundary."""
+    for key in FACTOR_NUMERIC_SCALAR_KEYS:
+        if key not in scalars:
+            continue
+        value = scalars[key]
+        if value is None and key in OPTIONAL_FACTOR_VALUE_KEYS:
+            continue
+        try:
+            codes.strict_positive_real(value, key)
+        except ValueError as exc:
+            raise ValueError(f"invalid project material factor: {exc}") from exc
+
+
 def _cell(v):
     """A cell as a finite float, or ``None`` for a blank / non-numeric value.
 
@@ -356,6 +380,7 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
     for key in OPTIONAL_FACTOR_VALUE_KEYS:
         if scalar_payload.get(key) is None:
             scalar_payload.pop(key, None)
+    _validate_factor_scalars(scalar_payload)
     # These v6 controls were global because one shear component existed. Their
     # values are consumed only by the v7 migration and are not written again.
     for key in ("shear_axis", "shear_tension", "shear_bw", "shear_link_legs"):
@@ -513,6 +538,11 @@ def project_provenance(text: str) -> dict:
         raise ValueError("not valid JSON") from exc
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError("not a Sector project file")
+    raw_scalars = data.get("scalars") or {}
+    if not isinstance(raw_scalars, dict):
+        raise ValueError("malformed 'tables' or 'scalars' section")
+    _reject_unsupported_strut_settings(raw_scalars)
+    _validate_factor_scalars(raw_scalars)
     provenance = data.get("provenance")
     if not isinstance(provenance, dict):
         return {
@@ -527,10 +557,8 @@ def project_provenance(text: str) -> dict:
     raw_tables = data.get("tables") or {}
     raw_load_cases = data.get("load_cases")
     raw_fatigue = data.get("fatigue")
-    raw_scalars = data.get("scalars") or {}
-    if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
+    if not isinstance(raw_tables, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
-    _reject_unsupported_strut_settings(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
@@ -586,6 +614,7 @@ def parse_project(text: str):
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
     _reject_unsupported_strut_settings(raw_scalars)
+    _validate_factor_scalars(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):

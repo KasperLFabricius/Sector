@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from numbers import Real
 from typing import Optional
 
 from .materials import Concrete, MildSteel
@@ -51,6 +52,33 @@ from .materials import Concrete, MildSteel
 FACTOR_MODE_PRESET = "Edition-derived preset"
 FACTOR_MODE_OVERRIDE = "Approved final override"
 FACTOR_MODES = (FACTOR_MODE_PRESET, FACTOR_MODE_OVERRIDE)
+
+
+def strict_positive_real(value, label: str) -> float:
+    """Return a finite positive real while rejecting Boolean coercion.
+
+    ``bool`` is a subclass of ``int`` and ``float(True)`` is therefore ``1.0``.
+    Material factors are engineering numbers, not truth values, so accept only
+    genuine real-number instances. This also rejects NumPy Boolean scalars,
+    which deliberately do not implement :class:`numbers.Real`.
+    """
+    value_type = type(value)
+    is_boolean = isinstance(value, bool) or (
+        value_type.__name__ == "bool"
+        and value_type.__module__.split(".", 1)[0] in {"numpy", "pandas"}
+    )
+    if is_boolean:
+        raise ValueError(
+            f"{label} must be a finite positive real number; "
+            "Boolean values are not accepted"
+        )
+    if not isinstance(value, Real):
+        raise ValueError(f"{label} must be a finite positive real number")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{label} must be a finite positive real number")
+    return number
+
 
 # Concrete strength classes -> characteristic cylinder strength fck (MPa).
 CONCRETE_CLASSES = {
@@ -212,9 +240,8 @@ class DesignCode:
         factors directly, so the two Danish multipliers are reported as not
         applied even if a headless caller supplied stray values.
         """
-        g0, g3 = float(gamma0), float(gamma3)
-        if not all(math.isfinite(value) and value > 0.0 for value in (g0, g3)):
-            raise ValueError("gamma0 and gamma3 must be finite and positive")
+        g0 = strict_positive_real(gamma0, "gamma0")
+        g3 = strict_positive_real(gamma3, "gamma3")
         uses_categories = self.material_factors_use_gamma0_gamma3
         applied_g0 = g0 if uses_categories else 1.0
         applied_g3 = g3 if uses_categories else 1.0
@@ -265,11 +292,10 @@ class DesignCode:
                 raise ValueError(
                     "an approved final concrete tensile factor is required"
                 )
-            final = float(gamma_ct)
-            if not math.isfinite(final) or final <= 0.0:
-                raise ValueError(
-                    "the final concrete tensile factor must be finite and positive"
-                )
+            final = strict_positive_real(
+                gamma_ct,
+                "the final concrete tensile factor",
+            )
             derivation = f"approved final override = {final:.3f}"
         else:
             raise ValueError(f"unknown material-factor mode: {mode}")

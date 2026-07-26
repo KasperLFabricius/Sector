@@ -400,6 +400,34 @@ def test_run_rejects_implicit_legacy_factors_before_invoking_solver():
     assert solver_called is False
 
 
+@pytest.mark.parametrize(
+    ("field", "boolean_value"),
+    [
+        ("fatigue_gamma_s", True),
+        ("fatigue_gamma_c", np.bool_(True)),
+        ("fatigue_gamma0", True),
+        ("fatigue_gamma3", np.bool_(True)),
+    ],
+)
+def test_run_rejects_boolean_factors_before_invoking_solver(
+    field,
+    boolean_value,
+):
+    inp = _base()
+    inp[field] = boolean_value
+    solver_called = False
+
+    def forbidden_engine(*_args, **_kwargs):
+        nonlocal solver_called
+        solver_called = True
+        raise AssertionError("Boolean material factor reached fatigue solver")
+
+    with pytest.raises(ValueError, match="positive real number"):
+        fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
+
+    assert solver_called is False
+
+
 def test_bent_bar_reduction_is_resolved_per_element_diameter():
     inp = _base()
     catalogue = inp[fatigue_inputs.DETAIL_CATALOG_KEY]

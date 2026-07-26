@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -80,6 +81,34 @@ def test_legacy_fatigue_values_are_retained_but_identified_for_review():
     assert (gamma_s, gamma_c) == pytest.approx((1.15, 1.50))
     assert basis["legacy_review_required"] is True
     assert "review required" in basis["gamma_s_derivation"]
+
+
+@pytest.mark.parametrize("boolean_value", [True, np.bool_(True)])
+def test_fatigue_factor_resolvers_reject_boolean_numbers(boolean_value):
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        fi.fatigue_factor_preset(
+            fi.EC2_2005_DKNA,
+            gamma0=boolean_value,
+        )
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        fi.fatigue_factor_preset(
+            fi.EC2_2005_DKNA,
+            gamma3=boolean_value,
+        )
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        fi.resolve_fatigue_factors(
+            fi.EC2_2005_DKNA,
+            mode=fi.FACTOR_MODE_OVERRIDE,
+            gamma_s=boolean_value,
+            gamma_c=1.595,
+        )
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        fi.resolve_fatigue_factors(
+            fi.EC2_2005_DKNA,
+            mode=fi.FACTOR_MODE_OVERRIDE,
+            gamma_s=1.32,
+            gamma_c=boolean_value,
+        )
 
 
 def test_builtin_detail_presets_match_the_two_eurocode_editions():

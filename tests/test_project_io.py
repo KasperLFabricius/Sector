@@ -477,6 +477,33 @@ def test_missing_optional_factor_values_are_canonical_absences():
     )
 
 
+def test_v15_project_boundaries_reject_boolean_material_factors():
+    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS:
+        project = {
+            "format": project_io.FORMAT,
+            "version": project_io.VERSION,
+            "tables": {},
+            "scalars": {key: True},
+        }
+        text = json.dumps(project)
+
+        with pytest.raises(
+            ValueError,
+            match="Boolean values are not accepted",
+        ):
+            project_io.parse_project(text)
+        with pytest.raises(
+            ValueError,
+            match="Boolean values are not accepted",
+        ):
+            project_io.project_provenance(text)
+        with pytest.raises(
+            ValueError,
+            match="Boolean values are not accepted",
+        ):
+            project_io.dump_project({}, {key: np.bool_(True)})
+
+
 def test_current_torsion_factor_override_round_trips_with_approval_source():
     values = {
         "torsion_on": True,

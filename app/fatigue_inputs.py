@@ -106,9 +106,8 @@ def fatigue_factor_preset(
     if edition not in FATIGUE_FACTOR_PRESETS:
         raise ValueError(f"unknown fatigue edition: {edition}")
     preset = FATIGUE_FACTOR_PRESETS[edition]
-    g0, g3 = float(gamma0), float(gamma3)
-    if not all(math.isfinite(value) and value > 0.0 for value in (g0, g3)):
-        raise ValueError("fatigue gamma0 and gamma3 must be finite and positive")
+    g0 = codes.strict_positive_real(gamma0, "fatigue gamma0")
+    g3 = codes.strict_positive_real(gamma3, "fatigue gamma3")
     uses_categories = bool(preset["uses_gamma0_gamma3"])
     applied_g0 = g0 if uses_categories else 1.0
     applied_g3 = g3 if uses_categories else 1.0
@@ -162,17 +161,16 @@ def resolve_fatigue_factors(
         derivation_s = preset["gamma_s_derivation"]
         derivation_c = preset["gamma_c_derivation"]
     elif mode in (FACTOR_MODE_OVERRIDE, FACTOR_MODE_LEGACY):
-        try:
-            final_s, final_c = float(gamma_s), float(gamma_c)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("final fatigue material factors are required") from exc
-        if not all(
-            math.isfinite(value) and value > 0.0
-            for value in (final_s, final_c)
-        ):
-            raise ValueError(
-                "final fatigue material factors must be finite and positive"
-            )
+        if gamma_s is None or gamma_c is None:
+            raise ValueError("final fatigue material factors are required")
+        final_s = codes.strict_positive_real(
+            gamma_s,
+            "the final reinforcement fatigue material factor",
+        )
+        final_c = codes.strict_positive_real(
+            gamma_c,
+            "the final concrete fatigue material factor",
+        )
         qualifier = (
             "approved final override"
             if mode == FACTOR_MODE_OVERRIDE

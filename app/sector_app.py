@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import functools
+import hashlib
 import math
 import os
 import pathlib
@@ -2080,7 +2081,96 @@ _INPUT_STATE_KEY = "_durable_input_scalars"
 _INPUT_BUILD_KEY = "_inputs_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
+_INVALID_FACTOR_INPUT_KEYS_KEY = "_invalid_factor_input_keys"
 _INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
+_FATIGUE_NUMERIC_FACTOR_KEYS = frozenset(
+    key
+    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS
+    if key.startswith("fatigue_")
+)
+_TORSION_NUMERIC_FACTOR_KEYS = frozenset(
+    key
+    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS
+    if key.startswith("torsion_")
+)
+
+
+def _invalid_factor_input_keys() -> tuple[str, ...]:
+    """Return the canonical rejected-factor marker from live session state."""
+
+    raw = st.session_state.get(_INVALID_FACTOR_INPUT_KEYS_KEY, ())
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return ()
+    allowed = set(project_io.FACTOR_NUMERIC_SCALAR_KEYS)
+    return tuple(sorted({str(key) for key in raw if key in allowed}))
+
+
+def _invalid_factor_input_error(domain: str, keys) -> str | None:
+    """Describe rejected state for one material-factor domain, if present."""
+
+    rejected = tuple(
+        key for key in _invalid_factor_input_keys() if key in set(keys)
+    )
+    if not rejected:
+        return None
+    return (
+        f"Boolean/non-numeric values are not accepted for {domain} material "
+        f"factors ({', '.join(rejected)}). Enter explicit positive numeric "
+        "values before calculation."
+    )
+
+
+def _sanitise_factor_input_state() -> None:
+    """Turn malformed factor state into an explicit missing value before widgets.
+
+    Project parsing rejects such values outright. This second boundary covers
+    browser/session/autosave mirrors and custom integrations that mutate
+    ``session_state`` directly. Mapping invalid values to ``None`` preserves a
+    visible blank control while all public calculation preflights fail closed.
+    """
+
+    allowed = set(project_io.FACTOR_NUMERIC_SCALAR_KEYS)
+    invalid_keys = set(_invalid_factor_input_keys())
+    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {})
+    explicit_repairs = set()
+    if isinstance(pending, dict):
+        for key in allowed:
+            if key not in pending:
+                continue
+            try:
+                codes.strict_positive_real(pending[key], key)
+            except ValueError:
+                continue
+            explicit_repairs.add(key)
+    invalid_keys.difference_update(explicit_repairs)
+
+    def sanitise(mapping) -> bool:
+        changed = False
+        for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS:
+            if key not in mapping or mapping[key] is None:
+                continue
+            try:
+                codes.strict_positive_real(mapping[key], key)
+            except ValueError:
+                mapping[key] = None
+                if key not in explicit_repairs:
+                    invalid_keys.add(key)
+                changed = True
+        return changed
+
+    sanitise(st.session_state)
+    for state_key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
+        state = st.session_state.get(state_key)
+        if isinstance(state, dict):
+            state = dict(state)
+            if sanitise(state):
+                st.session_state[state_key] = state
+    if invalid_keys:
+        st.session_state[_INVALID_FACTOR_INPUT_KEYS_KEY] = tuple(
+            sorted(invalid_keys)
+        )
+    else:
+        st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
 
 
 def _record_input_event(
@@ -2264,11 +2354,24 @@ def _project_state():
 
 def _project_input_hash() -> str:
     tables, scalars = _project_state()
-    return project_io.input_sha256(tables, scalars)
+    digest = project_io.input_sha256(tables, scalars)
+    rejected = _invalid_factor_input_keys()
+    if not rejected:
+        return digest
+    # A calculation made while a rejected widget value is held fail-closed must
+    # never appear to match the same reconstructed numeric defaults after repair.
+    invalid_state = "\0".join((digest, "rejected-factor-inputs", *rejected))
+    return hashlib.sha256(invalid_state.encode("utf-8")).hexdigest()
 
 
 def _gather_project() -> str:
     """Serialise current inputs with their source and calculation provenance."""
+    rejected = _invalid_factor_input_keys()
+    if rejected:
+        raise ValueError(
+            "Boolean/non-numeric project material-factor input was rejected "
+            f"({', '.join(rejected)}); repair every listed value before saving"
+        )
     tables, scalars = _project_state()
     return project_io.dump_project(
         tables,
@@ -2447,6 +2550,7 @@ def _apply_pending_project() -> None:
     # A valid project load is an explicit whole-input replacement. Do not replay
     # uncommitted browser events from the project that was open previously.
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
     # Parsing retains historical scalar loads for compatibility with non-UI callers,
     # but the table-native app must not keep them in live or durable state. The
     # migrated canonical tables above contain the same information.
@@ -3454,11 +3558,18 @@ def build_inputs(host=st):
             "design basis."
         ),
     )
-    fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
-        fatigue_edition,
-        gamma0=fatigue_gamma0,
-        gamma3=fatigue_gamma3,
-    )
+    try:
+        fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
+            fatigue_edition,
+            gamma0=fatigue_gamma0,
+            gamma3=fatigue_gamma3,
+        )
+    except ValueError:
+        # Display-only fallback. The raw invalid/missing category inputs continue
+        # into validation and block calculation before the fatigue engine.
+        fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
+            fatigue_edition
+        )
     if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET:
         st.session_state["fatigue_gamma_s"] = fatigue_factor_preset["gamma_s"]
         st.session_state["fatigue_gamma_c"] = fatigue_factor_preset["gamma_c"]
@@ -3585,12 +3696,25 @@ def build_inputs(host=st):
         )
     except ValueError as exc:
         fatigue_factor_display = None
-        if fatigue_on:
+        if (
+            fatigue_on
+            and _invalid_factor_input_error(
+                "fatigue",
+                _FATIGUE_NUMERIC_FACTOR_KEYS,
+            )
+            is None
+        ):
             fat.error(
                 "Fatigue material-factor input is incomplete: "
                 f"{exc}. Enter every enabled approved final factor before "
                 "calculation."
             )
+    fatigue_factor_state_error = _invalid_factor_input_error(
+        "fatigue",
+        _FATIGUE_NUMERIC_FACTOR_KEYS,
+    )
+    if fatigue_on and fatigue_factor_state_error is not None:
+        fat.error(fatigue_factor_state_error)
     if fatigue_factor_display is not None:
         fat.caption(
             "Reinforcement derivation: "
@@ -4145,10 +4269,15 @@ def build_inputs(host=st):
             "by the project design basis."
         ),
     )
-    torsion_factor_preset = torsion_code.material_factor_basis(
-        gamma0=torsion_gamma0,
-        gamma3=torsion_gamma3,
-    )
+    try:
+        torsion_factor_preset = torsion_code.material_factor_basis(
+            gamma0=torsion_gamma0,
+            gamma3=torsion_gamma3,
+        )
+    except ValueError:
+        # Display-only fallback; the raw invalid/missing category value is still
+        # passed to the public torsion preflight and cannot reach resistance.
+        torsion_factor_preset = torsion_code.material_factor_basis()
     if torsion_factor_mode == codes.FACTOR_MODE_PRESET:
         st.session_state["torsion_gamma_ct"] = (
             torsion_factor_preset["tension_final"]
@@ -4202,12 +4331,25 @@ def build_inputs(host=st):
         )
     except ValueError as exc:
         torsion_factor_display = None
-        if torsion_on:
+        if (
+            torsion_on
+            and _invalid_factor_input_error(
+                "torsion",
+                _TORSION_NUMERIC_FACTOR_KEYS,
+            )
+            is None
+        ):
             sts.error(
                 "Concrete tensile-factor input is incomplete: "
                 f"{exc}. Enter a positive approved final factor before "
                 "calculation."
             )
+    torsion_factor_state_error = _invalid_factor_input_error(
+        "torsion",
+        _TORSION_NUMERIC_FACTOR_KEYS,
+    )
+    if torsion_on and torsion_factor_state_error is not None:
+        sts.error(torsion_factor_state_error)
     if torsion_factor_display is not None and torsion_uses_categories:
         sts.caption(
             "DK NA Table 2.1Na NA: compression basis "
@@ -4986,6 +5128,20 @@ def build_inputs(host=st):
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.
     _get = lambda keys: tuple(st.session_state.get(k) for k in keys)
+
+    def _factor_signature_value(value):
+        if value is None:
+            return None
+        try:
+            return codes.strict_positive_real(value, "material factor")
+        except ValueError:
+            return (
+                "invalid-material-factor",
+                type(value).__module__,
+                type(value).__qualname__,
+                repr(value),
+            )
+
     material_sig = (
         mat_catalog.signature(mild_catalogue, "mild"),
         mat_catalog.signature(prestress_catalogue, "prestress"),
@@ -4994,7 +5150,10 @@ def build_inputs(host=st):
     shared_sig = geom_sig + material_sig + _get(_SHARED_SIG_KEYS)
     plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
     elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
-    capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS)
+    invalid_factor_input_keys = _invalid_factor_input_keys()
+    capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS) + (
+        ("invalid_factor_input_keys", invalid_factor_input_keys),
+    )
     plastic_case_context_sig = (
         plastic_bending_context_sig + capacity_context_sig
     )
@@ -5020,19 +5179,20 @@ def build_inputs(host=st):
             fatigue_concrete_method,
             fatigue_factor_mode,
             str(fatigue_factor_approval).strip(),
-            float(fatigue_gamma0),
-            float(fatigue_gamma3),
+            ("invalid_factor_input_keys", invalid_factor_input_keys),
+            _factor_signature_value(fatigue_gamma0),
+            _factor_signature_value(fatigue_gamma3),
             float(concrete.fck),
             float(concrete.alpha_cc),
             (
                 None
                 if fatigue_gamma_c is None
-                else float(fatigue_gamma_c)
+                else _factor_signature_value(fatigue_gamma_c)
             ),
             (
                 None
                 if fatigue_gamma_s is None
-                else float(fatigue_gamma_s)
+                else _factor_signature_value(fatigue_gamma_s)
             ),
             float(fatigue_gamma_ff),
             float(fatigue_beta_cc_t0),
@@ -5197,6 +5357,7 @@ def build_inputs(host=st):
                 fatigue_gamma3=fatigue_gamma3,
                 fatigue_gamma_c=fatigue_gamma_c,
                 fatigue_gamma_s=fatigue_gamma_s,
+                invalid_factor_input_keys=invalid_factor_input_keys,
                 fatigue_gamma_ff=fatigue_gamma_ff,
                 fatigue_beta_cc_t0=fatigue_beta_cc_t0,
                 fatigue_t0_days=fatigue_t0_days,
@@ -10491,6 +10652,7 @@ st.session_state.setdefault("_main_page", "Inputs")
 _restore_input_state(
     replace=bool(st.session_state.get(_INPUT_BUILD_KEY, False))
 )
+_sanitise_factor_input_state()
 
 main_page = st.segmented_control(
     "Workspace",

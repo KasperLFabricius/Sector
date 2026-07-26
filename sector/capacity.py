@@ -504,11 +504,27 @@ def torsion_factor_validation_error(inp):
     """
     if not inp.get("torsion_on") or inp.get("section") is None:
         return None
+    factor_keys = {
+        "torsion_gamma0",
+        "torsion_gamma3",
+        "torsion_gamma_ct",
+    }
+    rejected_factor_keys = sorted(
+        {
+            key
+            for key in (inp.get("invalid_factor_input_keys") or ())
+            if key in factor_keys
+        }
+    )
+    if rejected_factor_keys:
+        return (
+            "Boolean/non-numeric values are not accepted for torsion material "
+            f"factors ({', '.join(rejected_factor_keys)}); enter explicit "
+            "positive numeric values"
+        )
     factor_mode = str(
         inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
     )
-    if factor_mode != codes.FACTOR_MODE_OVERRIDE:
-        return None
     tcode = SHEAR_CODES.get(
         inp.get("torsion_method"), codes.EC2_2005_DKNA
     )
@@ -528,6 +544,9 @@ def build_torsion_context(inp, n_ed_comp):
     """Return the angle-independent context for the active torsion check."""
     if not inp.get("torsion_on") or inp["section"] is None:
         return None
+    factor_error = torsion_factor_validation_error(inp)
+    if factor_error is not None:
+        raise ValueError(factor_error)
     _require_valid_input_geometry(inp)
     tcode = SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
     fck = inp["concrete"].fck
@@ -570,8 +589,8 @@ def build_torsion_context(inp, n_ed_comp):
             "approval/source"
         )
     )
-    gamma0 = float(inp.get("torsion_gamma0", 1.0))
-    gamma3 = float(inp.get("torsion_gamma3", 1.0))
+    gamma0 = inp.get("torsion_gamma0", 1.0)
+    gamma3 = inp.get("torsion_gamma3", 1.0)
     gamma_ct, material_factor_basis = (
         tcode.resolve_concrete_tension_factor(
             mode=factor_mode,

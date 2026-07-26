@@ -6,6 +6,7 @@ import ast
 import pathlib
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from sector import capacity, codes
@@ -280,9 +281,36 @@ def test_torsion_factor_preflight_rejects_missing_or_non_positive_override():
     )
     assert (
         capacity.torsion_factor_validation_error(non_positive)
-        == "the final concrete tensile factor must be finite and positive"
+        == "the final concrete tensile factor must be a finite positive real number"
     )
     assert capacity.torsion_factor_validation_error(valid) is None
+
+
+@pytest.mark.parametrize(
+    ("mode", "field", "boolean_value"),
+    [
+        (codes.FACTOR_MODE_OVERRIDE, "torsion_gamma_ct", True),
+        (codes.FACTOR_MODE_PRESET, "torsion_gamma0", np.bool_(True)),
+        (codes.FACTOR_MODE_PRESET, "torsion_gamma3", True),
+    ],
+)
+def test_torsion_factor_preflight_rejects_boolean_values(
+    mode,
+    field,
+    boolean_value,
+):
+    inp = _member_input(
+        torsion_on=True,
+        torsion_factor_mode=mode,
+        torsion_factor_approval="DB-TOR-07 / checker F",
+    )
+    inp[field] = boolean_value
+
+    error = capacity.torsion_factor_validation_error(inp)
+
+    assert "Boolean values are not accepted" in error
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        capacity.build_torsion_context(inp, 0.0)
 
 
 def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_corner():

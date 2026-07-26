@@ -22,6 +22,7 @@ import numpy as np
 import fatigue_inputs
 import load_cases
 import material_catalog as mat_catalog
+from sector import codes
 from sector.fatigue import (
     CONCRETE_EQUIVALENT,
     CONCRETE_METHODS,
@@ -73,14 +74,15 @@ class PreparedFatigueAnalysis:
 
 def _positive(value, label: str, errors: list[str]) -> float | None:
     try:
-        number = float(value)
-    except (TypeError, ValueError):
-        errors.append(f"{label} must be a finite number greater than zero")
+        return codes.strict_positive_real(value, label)
+    except ValueError as exc:
+        message = str(exc)
+        errors.append(
+            message
+            if "Boolean values are not accepted" in message
+            else f"{label} must be a finite number greater than zero"
+        )
         return None
-    if not math.isfinite(number) or number <= 0.0:
-        errors.append(f"{label} must be a finite number greater than zero")
-        return None
-    return number
 
 
 def _finite_attribute(value, label: str, errors: list[str], *, positive=False):
@@ -420,6 +422,25 @@ def validation_errors(inp: Mapping) -> list[str]:
     if not bool(inp.get("fatigue_on")):
         return []
     errors: list[str] = []
+    factor_keys = {
+        "fatigue_gamma0",
+        "fatigue_gamma3",
+        "fatigue_gamma_s",
+        "fatigue_gamma_c",
+    }
+    rejected_factor_keys = sorted(
+        {
+            key
+            for key in (inp.get("invalid_factor_input_keys") or ())
+            if key in factor_keys
+        }
+    )
+    if rejected_factor_keys:
+        errors.append(
+            "Boolean/non-numeric values are not accepted for fatigue material "
+            f"factors ({', '.join(rejected_factor_keys)}); enter explicit "
+            "positive numeric values"
+        )
     section = inp.get("section")
     if not isinstance(section, Section):
         errors.append("A valid section is required for fatigue analysis")

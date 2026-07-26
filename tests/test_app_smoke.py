@@ -13,6 +13,7 @@ import re
 import sys
 import time
 
+import numpy as np
 import pytest
 
 from streamlit.testing.v1 import AppTest
@@ -1893,6 +1894,101 @@ def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
             at.session_state["_latest_inputs"]
         )
     )
+
+
+def test_boolean_factor_session_state_fails_closed_in_both_mirrors(
+    tmp_path,
+    monkeypatch,
+):
+    import fatigue_analysis
+    import fatigue_inputs
+    import project_io
+    from sector import capacity, codes
+
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    factor_state = {
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-FACT-22 / checker G",
+        "fatigue_check_steel": True,
+        "fatigue_check_concrete": True,
+        "fatigue_gamma0": True,
+        "fatigue_gamma3": np.bool_(True),
+        "fatigue_gamma_s": True,
+        "fatigue_gamma_c": np.bool_(True),
+        "torsion_on": True,
+        "torsion_method": codes.EC2_2005_DKNA.label,
+        "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
+        "torsion_factor_approval": "DB-TOR-08 / checker G",
+        "torsion_gamma0": True,
+        "torsion_gamma3": np.bool_(True),
+        "torsion_gamma_ct": np.bool_(True),
+    }
+    for key, value in factor_state.items():
+        at.session_state[key] = value
+    durable = dict(at.session_state["_durable_input_scalars"])
+    durable.update(factor_state)
+    at.session_state["_durable_input_scalars"] = durable
+
+    at.run()
+
+    assert not at.exception
+    expected_keys = tuple(sorted(project_io.FACTOR_NUMERIC_SCALAR_KEYS))
+    assert at.session_state["_invalid_factor_input_keys"] == expected_keys
+    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS:
+        assert not isinstance(at.session_state[key], (bool, np.bool_))
+        assert not isinstance(
+            at.session_state["_durable_input_scalars"][key],
+            (bool, np.bool_),
+        )
+    inp = at.session_state["_latest_inputs"]
+    assert inp["invalid_factor_input_keys"] == expected_keys
+    assert any(
+        "Boolean/non-numeric values are not accepted" in error
+        for error in fatigue_analysis.validation_errors(inp)
+    )
+    assert (
+        "Boolean/non-numeric values are not accepted"
+        in capacity.torsion_factor_validation_error(inp)
+    )
+    assert any(
+        "Boolean/non-numeric values are not accepted" in message.value
+        for message in at.error
+    )
+    solver_called = False
+
+    def forbidden_engine(*_args, **_kwargs):
+        nonlocal solver_called
+        solver_called = True
+        raise AssertionError("Rejected session factor reached fatigue solver")
+
+    with pytest.raises(
+        ValueError,
+        match="Boolean/non-numeric values are not accepted",
+    ):
+        fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
+    assert solver_called is False
+    with pytest.raises(
+        ValueError,
+        match="Boolean/non-numeric values are not accepted",
+    ):
+        capacity.build_torsion_context(inp, 0.0)
+
+    # Autosave/download share _gather_project. Neither may turn Streamlit's
+    # reconstructed numeric widget defaults into an apparently valid project.
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+    assert not (tmp_path / "autosave.json").exists()
+
+    # A real widget event is the explicit repair path; hidden/default-driven
+    # reconstruction alone cannot clear a rejected key.
+    at.number_input(key="fatigue_gamma_s").set_value(1.32).run()
+    repaired = at.session_state["_invalid_factor_input_keys"]
+    assert "fatigue_gamma_s" not in repaired
+    assert set(repaired) == set(expected_keys) - {"fatigue_gamma_s"}
 
 
 def test_app_fatigue_override_does_not_reuse_spectrum_method_approval():

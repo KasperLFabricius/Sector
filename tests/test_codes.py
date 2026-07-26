@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from sector import codes
@@ -131,6 +132,25 @@ def test_material_factor_override_is_final_and_base_en_ignores_dk_categories():
     assert resolved["tension_preset"] == pytest.approx(1.70 * 0.95 * 1.10)
     assert resolved["tension_derivation"] == "approved final override = 1.620"
     assert resolved["tension_override"] is True
+
+
+@pytest.mark.parametrize("boolean_value", [True, np.bool_(True)])
+def test_material_factor_resolvers_reject_boolean_numbers(boolean_value):
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        codes.EC2_2005_DKNA.material_factor_basis(
+            gamma0=boolean_value,
+            gamma3=1.0,
+        )
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        codes.EC2_2005_DKNA.material_factor_basis(
+            gamma0=1.0,
+            gamma3=boolean_value,
+        )
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        codes.EC2_2005_DKNA.resolve_concrete_tension_factor(
+            mode=codes.FACTOR_MODE_OVERRIDE,
+            gamma_ct=boolean_value,
+        )
 
 
 def test_ec2_2023_eta_cc_is_strength_dependent():
