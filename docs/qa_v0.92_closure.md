@@ -10,7 +10,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 
 | Finding | Owning PR | Implementation status | Calculation or presentation behavior | Independent oracle or benchmark | Regression tests and generated artifact evidence | Codex Review iterations / reviewed head | Independent adversarial closure SHA | Merged PR | Accepted residual limitation |
 |---|---|---|---|---|---|---|---|---|---|
-| F-001 | PR-01 | Implemented on branch; review and closure pending | One winding-independent, scale-aware topology gate now blocks malformed, non-finite, degenerate, repeated, backtracking, self-contacting/crossing, outside/touching/crossing-hole, overlapping, and nested-hole geometry in UI, project I/O, API, raw helpers, and solver entries. | Frozen `G-VALID-CONCAVE`, `G-INVALID-BOWTIE`, `G-INVALID-COLLINEAR`, `G-INVALID-HOLE-OUTSIDE`, and `G-INVALID-HOLE-OVERLAP` cases; test-only exact-rational segment/containment oracle. | `tests/test_geometry_topology.py`; `tests/fixtures/geometry_topology_f001.json`; focused Streamlit pre-solver smoke test; project v14 mixed-winding round trip; existing geometry, solver, shear, torsion, fatigue, capacity, and hand-calculation regressions. | Pending | Pending | Pending | Exact terminal closure markers and forward intermediate collinear vertices remain valid; raw winding/order is preserved and analysis copies are oriented canonically. |
+| F-001 | PR-01 | Implemented on branch; review and closure pending | One winding-independent, scale-aware topology gate now blocks malformed, non-finite, degenerate, repeated, backtracking, self-contacting/crossing, outside/touching/crossing-hole, overlapping, and nested-hole geometry in UI, project I/O, API, raw helpers, and solver entries. | Frozen `G-VALID-CONCAVE`, `G-INVALID-BOWTIE`, `G-INVALID-COLLINEAR`, `G-INVALID-HOLE-OUTSIDE`, and `G-INVALID-HOLE-OVERLAP` cases; test-only exact-rational segment/containment oracle. | `tests/test_geometry_topology.py`; `tests/fixtures/geometry_topology_f001.json`; focused Streamlit pre-solver smoke test; project v14 mixed-winding round trip; existing geometry, solver, shear, torsion, fatigue, capacity, and hand-calculation regressions. | `0ae7e0a7cb2f2c904f3c44c46853db6ef93ac50e`: three actionable comments; terminal-closure analysis normalization, empty mutable-container diagnostic, and orphan-hole rejection implemented for re-review. | Pending | Pending | Exact terminal closure markers and forward intermediate collinear vertices remain valid; raw winding/order is preserved, terminal markers are removed from analysis copies, and analysis rings are oriented canonically. |
 | F-002 | PR-02 | Planned | Separate Danish concrete compression and tension material-factor routing for torsional concrete resistance. | To be established in owning PR from separate base EN and DK/NA hand calculations. | Pending | Pending | Pending | Pending | None accepted. |
 | F-003 | PR-03 | Planned | Apply reinforcement type/bond and `xi1`-weighted prestress contribution to 2023 effective reinforcement ratio. | To be established in owning PR for mixed reinforcement and limiting `xi1` cases. | Pending | Pending | Pending | Pending | None accepted. |
 | F-004 | PR-02 | Planned | Edition-aligned Danish fatigue defaults with derived provenance and persistent explicit overrides. | To be established in owning PR from Danish fatigue provisions. | Pending | Pending | Pending | Pending | None accepted. |
@@ -62,11 +62,14 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 - Frozen evidence: `tests/fixtures/geometry_topology_f001.json`.
 - Independent oracle: exact rational area, segment-intersection, and containment
   predicates implemented only in `tests/test_geometry_topology.py`.
-- Focused evidence: 48 topology/entry tests; 140 geometry/section/project tests;
+- Focused evidence: 50 topology/entry tests; 142 geometry/section/project tests;
   201 complete Streamlit smoke tests; solver-family, hand-calculation, shear,
   torsion, fatigue, version, packaging, and compatibility batches all green.
-- Full local suite: 1,396 passed, 1 skipped, 32 rendering warnings; version
-  remained exactly `0.91`.
+- First review fixes: accepted terminal closure markers no longer perturb torsion;
+  emptied mutable ring containers retain `GeometryTopologyError`; orphan holes
+  are rejected on both project save and load.
+- Full local suite after review fixes: 1,399 passed, 1 skipped, 32 rendering
+  warnings in 901.32 s with four fixed workers; version remained exactly `0.91`.
 - Reviewed v14 project evidence: the supplied `sector_section.json` loads through
   the canonical gate without migration or point reordering.
 - Review, CI, independent closure, and merge fields remain pending until they

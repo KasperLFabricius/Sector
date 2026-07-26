@@ -69,7 +69,8 @@ def minimum_caliper_width(ring: Sequence) -> float:
 
 def _ensure_ccw(ring: Sequence):
     """Return the ring as a list oriented counter-clockwise (positive signed area)."""
-    pts = [(float(p[0]), float(p[1])) for p in ring]
+    analysis_ring = geometry.ring_without_terminal_closure(ring)
+    pts = [(float(p[0]), float(p[1])) for p in analysis_ring]
     if geometry.signed_area(pts) < 0.0:
         pts.reverse()
     return pts

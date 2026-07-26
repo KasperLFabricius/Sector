@@ -85,15 +85,10 @@ def _geometry_points(frame: pd.DataFrame, label: str) -> list[tuple[float, float
     return points
 
 
-def _project_geometry(tables: dict) -> tuple[list, list[list]] | None:
-    """Return project outer/void rings in metres, or ``None`` when intentionally blank."""
-    outer_frame = tables.get("corners_base")
-    if outer_frame is None or outer_frame.empty:
-        return None
-    outer = _geometry_points(outer_frame, "outer ring")
-    hole_frame = tables.get("hole_base")
+def _project_holes(hole_frame: pd.DataFrame | None) -> list[list[tuple[float, float]]]:
+    """Read separator-delimited project hole rings in metres."""
     if hole_frame is None or hole_frame.empty:
-        return outer, []
+        return []
     if not all(column in hole_frame.columns for column in _GEOMETRY_COLUMNS):
         raise ValueError(
             "hole table must contain columns "
@@ -125,6 +120,18 @@ def _project_geometry(tables: dict) -> tuple[list, list[list]] | None:
         current.append(point)
     if current:
         holes.append(current)
+    return holes
+
+
+def _project_geometry(tables: dict) -> tuple[list, list[list]] | None:
+    """Return project outer/void rings in metres, or ``None`` when intentionally blank."""
+    holes = _project_holes(tables.get("hole_base"))
+    outer_frame = tables.get("corners_base")
+    if outer_frame is None or outer_frame.empty:
+        if holes:
+            raise ValueError("hole geometry requires a non-empty outer ring")
+        return None
+    outer = _geometry_points(outer_frame, "outer ring")
     return outer, holes
 
 

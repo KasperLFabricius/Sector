@@ -22,6 +22,7 @@ import numpy as np
 from .geometry import (
     TopologyValidation,
     orient,
+    ring_without_terminal_closure,
     signed_area,
     validate_section_topology,
 )
@@ -104,7 +105,12 @@ class Section:
 
     def validate_geometry(self) -> TopologyValidation:
         """Run Sector's canonical polygon-topology gate for this section."""
-        return validate_section_topology(self.concrete[0], self.concrete[1:])
+        try:
+            rings = list(self.concrete)
+        except TypeError:
+            rings = []
+        outer = rings[0] if rings else np.empty((0, 2), dtype=float)
+        return validate_section_topology(outer, rings[1:])
 
     def require_valid_geometry(self) -> None:
         """Raise before analysis if the stored rings no longer form valid concrete.
@@ -121,8 +127,14 @@ class Section:
         Summing signed area integrals over these rings yields the solid minus
         the holes.
         """
-        out = [orient(self.concrete[0], ccw=True)]
-        out += [orient(r, ccw=False) for r in self.concrete[1:]]
+        self.require_valid_geometry()
+        out = [
+            orient(ring_without_terminal_closure(self.concrete[0]), ccw=True)
+        ]
+        out += [
+            orient(ring_without_terminal_closure(r), ccw=False)
+            for r in self.concrete[1:]
+        ]
         return out
 
     def concrete_vertices(self) -> np.ndarray:

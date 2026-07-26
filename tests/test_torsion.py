@@ -34,6 +34,15 @@ def test_tube_properties_solid_rectangle():
     assert not t["tef_capped"] and not t["tef_user"]
 
 
+def test_exact_terminal_closure_marker_preserves_tube_properties():
+    open_ring = _rect(0.3, 0.6)
+    closed_ring = [*open_ring, open_ring[0]]
+    reference = torsion.tube_properties(open_ring, None)
+    closed = torsion.tube_properties(closed_ring, None)
+    for key in ("A", "u", "tef", "Ak", "uk", "minimum_dimension_mm"):
+        assert closed[key] == pytest.approx(reference[key])
+
+
 def test_tube_minimum_dimension_is_rotation_invariant():
     angle = math.radians(45.0)
     cosine, sine = math.cos(angle), math.sin(angle)

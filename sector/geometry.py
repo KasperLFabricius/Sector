@@ -117,6 +117,19 @@ def signed_area(verts: Vertices) -> float:
     return 0.5 * float(np.sum(x * y1 - x1 * y))
 
 
+def ring_without_terminal_closure(verts: Vertices) -> np.ndarray:
+    """Return an analysis copy without one exact terminal closure marker.
+
+    A repeated final copy of the first point is accepted as a serialization
+    convention. Removing it from calculation copies avoids a zero-length edge
+    while leaving the caller's raw coordinates untouched.
+    """
+    arr = _as_array(verts)
+    if len(arr) >= 2 and np.array_equal(arr[0], arr[-1]):
+        return arr[:-1].copy()
+    return arr.copy()
+
+
 @dataclass(frozen=True)
 class TopologyTolerance:
     """Scale-aware tolerance policy for section-topology validation.
@@ -327,10 +340,7 @@ def validate_section_topology(
     scale = _topology_scale(arrays)
     length_tol = tolerance.resolved_length(scale)
     area_tol = max(tolerance.absolute_length ** 2, length_tol * max(scale, length_tol))
-    arrays = [
-        arr[:-1] if len(arr) >= 2 and np.array_equal(arr[0], arr[-1]) else arr
-        for arr in arrays
-    ]
+    arrays = [ring_without_terminal_closure(arr) for arr in arrays]
 
     def invalid(issue: TopologyIssue) -> TopologyValidation:
         return TopologyValidation((issue,), scale, length_tol, area_tol)

@@ -480,6 +480,22 @@ def test_capacity_orchestrator_entries_do_not_swallow_topology_errors(entry):
         entry(inp)
 
 
+def test_empty_mutated_ring_container_keeps_canonical_solver_and_ui_diagnostic():
+    import fatigue_analysis
+
+    section = Section.from_polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    section.concrete.clear()
+    with pytest.raises(geometry.GeometryTopologyError) as caught:
+        solve_elastic_uncracked(section, 0.0, 1.0, 0.0, 6.0)
+    assert caught.value.validation.issues[0].ring == "outer ring"
+
+    errors = fatigue_analysis.validation_errors({
+        "fatigue_on": True,
+        "section": section,
+    })
+    assert any("Invalid section geometry" in error for error in errors)
+
+
 def _project_payload(outer, holes, *, version=14):
     hole_rows = []
     for index, hole in enumerate(holes):
@@ -543,3 +559,28 @@ def test_project_save_rejects_invalid_geometry_before_serialisation():
     }
     with pytest.raises(ValueError, match="outer ring.*edge"):
         project_io.dump_project(tables, {})
+
+
+def test_project_save_and_load_reject_orphan_holes_without_an_outer_ring():
+    import project_io
+
+    hole = {
+        "x (mm)": [100.0, 200.0, 200.0, 100.0],
+        "y (mm)": [100.0, 100.0, 200.0, 200.0],
+    }
+    with pytest.raises(ValueError, match="requires a non-empty outer ring"):
+        project_io.dump_project({"hole_base": pd.DataFrame(hole)}, {})
+
+    payload = {
+        "format": "sector-project",
+        "version": 14,
+        "tables": {
+            "hole_base": {
+                "columns": ["x (mm)", "y (mm)"],
+                "rows": list(map(list, zip(hole["x (mm)"], hole["y (mm)"]))),
+            },
+        },
+        "scalars": {},
+    }
+    with pytest.raises(ValueError, match="requires a non-empty outer ring"):
+        project_io.parse_project(json.dumps(payload))

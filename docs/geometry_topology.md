@@ -20,8 +20,9 @@ A section has one outer ring and zero or more hole rings. Every ring must:
 Intentional intermediate collinear points are valid when the boundary continues
 in the same direction. One final point exactly equal to the first is also valid
 as a conventional serialization closure marker. It is ignored for topology
-classification, but the caller's raw point order is preserved. A merely
-near-coincident terminal point is invalid under the tolerance policy.
+classification and removed from analysis copies, but the caller's raw point
+order is preserved. A merely near-coincident terminal point is invalid under
+the tolerance policy.
 
 Every hole must be strictly inside the outer ring. A hole boundary must not
 touch or cross the outer boundary. Hole boundaries must not touch, cross, or
