@@ -463,6 +463,34 @@ def test_report_includes_dk_fatigue_factor_derivations():
     assert "1.45 x 1.10 x 1.000 x 1.000 = 1.595" in text
 
 
+def test_report_keeps_spectrum_and_factor_approvals_distinct():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["basis"]["approval_reference"] = "VD-FLM5-AGREEMENT"
+    payload["factor_basis"].update({
+        "mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "override": True,
+        "approval_reference": "DB-FACT-12 / checker D",
+        "gamma_s_derivation": "approved final override = 1.270",
+        "gamma_c_derivation": "approved final override = 1.610",
+    })
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=True
+    )).split())
+    appendix = text[text.index("QA appendix - references and notes"):]
+
+    assert "Spectrum-method approval/reference VD-FLM5-AGREEMENT" in text
+    assert (
+        "Factor override approval/source DB-FACT-12 / checker D"
+        in text
+    )
+    assert "approval/source: DB-FACT-12 / checker D" in appendix
+    assert "VD-FLM5-AGREEMENT" not in appendix.split(
+        "Partial-factor provenance", 1
+    )[1]
+
+
 def test_report_includes_damage_equivalent_concrete_method_evidence():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]

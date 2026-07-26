@@ -333,6 +333,7 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-FACT-12 / checker D",
         "fatigue_gamma0": 0.95,
         "fatigue_gamma3": 1.10,
         "fatigue_gamma_c": 1.595,
@@ -361,6 +362,9 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     )
     assert restored_scalars["fatigue_gamma0"] == pytest.approx(0.95)
     assert restored_scalars["fatigue_gamma3"] == pytest.approx(1.10)
+    assert restored_scalars["fatigue_factor_approval"] == (
+        "DB-FACT-12 / checker D"
+    )
     assert (
         restored_scalars[fatigue_inputs.BASIS_KEY]["approval_reference"]
         == "DB-FAT-12 / approval 7"
@@ -440,6 +444,32 @@ def test_v14_migrates_torsion_safely_and_flags_saved_fatigue_factors():
     )
     assert scalars["fatigue_gamma_s"] == pytest.approx(1.15)
     assert scalars["fatigue_gamma_c"] == pytest.approx(1.50)
+    assert scalars["fatigue_factor_approval"] == ""
+
+
+def test_early_v15_spectrum_approval_does_not_authorize_factor_override():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 15,
+        "tables": {},
+        "scalars": {
+            "fatigue_on": True,
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "fatigue_gamma_s": 1.27,
+            "fatigue_gamma_c": 1.61,
+            fatigue_inputs.BASIS_KEY: {
+                **fatigue_inputs.default_basis(),
+                "approval_reference": "VD-FLM5-AGREEMENT",
+            },
+        },
+    }
+
+    _tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars["fatigue_factor_approval"] == ""
+    assert scalars[fatigue_inputs.BASIS_KEY]["approval_reference"] == (
+        "VD-FLM5-AGREEMENT"
+    )
 
 
 def test_v9_fatigue_project_migrates_to_neutral_unmodified_basis():

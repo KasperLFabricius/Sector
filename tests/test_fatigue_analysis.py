@@ -264,9 +264,10 @@ def test_prepare_retains_explicit_approved_fatigue_override():
         fatigue_gamma_c=1.61,
         fatigue_gamma0=0.95,
         fatigue_gamma3=1.10,
+        fatigue_factor_approval="DB-FACT-09 / checker A",
     )
     inp[fatigue_inputs.BASIS_KEY] = _basis(
-        approval_reference="DB-FAT-09 / checker A"
+        approval_reference="TRAFFIC-09 / authority B"
     )
 
     prepared = fatigue_analysis.prepare(inp)
@@ -274,8 +275,9 @@ def test_prepare_retains_explicit_approved_fatigue_override():
     assert prepared.gamma_s == pytest.approx(1.27)
     assert prepared.concrete.gamma_c == pytest.approx(1.61)
     assert prepared.factor_basis["approval_reference"] == (
-        "DB-FAT-09 / checker A"
+        "DB-FACT-09 / checker A"
     )
+    assert prepared.basis["approval_reference"] == "TRAFFIC-09 / authority B"
     assert prepared.factor_basis["gamma_c_derivation"] == (
         "approved final override = 1.610"
     )
@@ -285,13 +287,22 @@ def test_explicit_override_requires_approval_and_legacy_values_require_review():
     override = _base(
         fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE
     )
+    override[fatigue_inputs.BASIS_KEY] = _basis(
+        approval_reference="VD-FLM5-APPROVAL"
+    )
     legacy = _base(
         fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_LEGACY
     )
 
     assert (
-        "Approved final fatigue-factor override requires an approval reference"
+        "Approved final fatigue-factor override requires a dedicated "
+        "approval/source"
         in fatigue_analysis.validation_errors(override)
+    )
+    override["fatigue_factor_approval"] = "DB-FACT-10 / checker C"
+    assert not any(
+        "fatigue-factor override requires" in error
+        for error in fatigue_analysis.validation_errors(override)
     )
     assert any(
         "Legacy saved fatigue factors require review" in error

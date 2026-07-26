@@ -1772,20 +1772,60 @@ def test_app_fatigue_factor_switches_and_approved_override_persist():
     ).run()
     at.number_input(key="fatigue_gamma_s").set_value(1.27).run()
     at.number_input(key="fatigue_gamma_c").set_value(1.61).run()
+    at.text_input(key="fatigue_factor_approval").set_value(
+        "DB-FACT-09 / checker A"
+    ).run()
     next(
         widget
         for widget in at.text_input
         if widget.label == "Approval/reference"
-    ).set_value("DB-FAT-09 / checker A").run()
+    ).set_value("TRAFFIC-09 / authority B").run()
     at.selectbox(key="fatigue_edition").set_value(
         fatigue_inputs.EC2_2023
     ).run()
 
     assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.27)
     assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.61)
+    assert at.session_state["fatigue_factor_approval"] == (
+        "DB-FACT-09 / checker A"
+    )
     assert at.session_state[fatigue_inputs.BASIS_KEY][
         "approval_reference"
-    ] == "DB-FAT-09 / checker A"
+    ] == "TRAFFIC-09 / authority B"
+
+
+def test_app_fatigue_override_does_not_reuse_spectrum_method_approval():
+    import fatigue_inputs
+
+    at = _fresh()
+    at.run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+    at.selectbox(key="fatigue_factor_mode").set_value(
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    ).run()
+    next(
+        widget
+        for widget in at.text_input
+        if widget.label == "Approval/reference"
+    ).set_value("VD-FLM5-AGREEMENT").run()
+
+    assert at.text_input(key="fatigue_factor_approval").value == ""
+    assert any(
+        "does not authorize material-factor changes" in warning.value
+        for warning in at.warning
+    )
+
+    at.text_input(key="fatigue_factor_approval").set_value(
+        "DB-FACT-11 / checker C"
+    ).run()
+
+    assert not any(
+        "does not authorize material-factor changes" in warning.value
+        for warning in at.warning
+    )
+    assert at.session_state[fatigue_inputs.BASIS_KEY][
+        "approval_reference"
+    ] == "VD-FLM5-AGREEMENT"
 
 
 def test_loading_nonfatigue_project_clears_prior_fatigue_state():
@@ -2071,11 +2111,9 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     at.selectbox(key="fatigue_factor_mode").set_value(
         fatigue_inputs.FACTOR_MODE_OVERRIDE
     ).run()
-    next(
-        widget
-        for widget in at.text_input
-        if widget.label == "Approval/reference"
-    ).set_value("DB-FAT-10 / checker B").run()
+    at.text_input(key="fatigue_factor_approval").set_value(
+        "DB-FACT-10 / checker B"
+    ).run()
     at.number_input(key="fatigue_gamma_s").set_value(1.20).run()
     assert at.session_state["result_sig"] != (
         at.session_state["_latest_inputs"]["signature"]
@@ -3253,6 +3291,7 @@ def test_inputs_carry_help_tooltips():
             or _widget(at.toggle, key)
         )
         assert w is not None and w.help, key
+    assert at.text_input(key="fatigue_factor_approval").help
     assert at.number_input(key="fatigue_gamma_ff").label == r"$\gamma_{Ff}$"
     assert at.number_input(key="fatigue_gamma_s").label == r"$\gamma_s$"
     assert at.number_input(key="fatigue_gamma_c").label == (

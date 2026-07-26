@@ -154,6 +154,7 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_check_concrete",
     "fatigue_concrete_method",
     "fatigue_factor_mode",
+    "fatigue_factor_approval",
     "fatigue_gamma0",
     "fatigue_gamma3",
     "fatigue_gamma_c",
@@ -211,6 +212,7 @@ SCALAR_KEYS = [
     # overrides remain complete approved final inputs.
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
     "fatigue_check_concrete", "fatigue_factor_mode",
+    "fatigue_factor_approval",
     "fatigue_gamma0", "fatigue_gamma3",
     "fatigue_gamma_c", "fatigue_gamma_s",
     "fatigue_concrete_method",
@@ -345,6 +347,7 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
     ):
         scalar_payload.setdefault("fatigue_gamma0", 1.0)
         scalar_payload.setdefault("fatigue_gamma3", 1.0)
+        scalar_payload.setdefault("fatigue_factor_approval", "")
         scalar_payload.setdefault(
             "fatigue_factor_mode",
             (
@@ -749,6 +752,7 @@ def parse_project(text: str):
 
         scalars.setdefault("fatigue_gamma0", 1.0)
         scalars.setdefault("fatigue_gamma3", 1.0)
+        scalars.setdefault("fatigue_factor_approval", "")
         has_legacy_fatigue_factors = any(
             isinstance(raw_scalars.get(key), (int, float))
             for key in ("fatigue_gamma_s", "fatigue_gamma_c")
@@ -761,6 +765,15 @@ def parse_project(text: str):
                 else fatigue_inputs.FACTOR_MODE_PRESET
             ),
         )
+    if (
+        bool(scalars.get("fatigue_on"))
+        or "fatigue_factor_mode" in scalars
+        or "fatigue_gamma_s" in scalars
+        or "fatigue_gamma_c" in scalars
+    ):
+        # Early v15 development files predate the dedicated factor-approval
+        # field. Never promote the spectrum-method approval to this role.
+        scalars.setdefault("fatigue_factor_approval", "")
     if (
         "torsion_factor_mode" in scalars
         and scalars["torsion_factor_mode"] not in codes.FACTOR_MODES

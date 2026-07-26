@@ -3559,6 +3559,21 @@ def build_inputs(host=st):
         f"{fatigue_factor_display['gamma_c_derivation']}. "
         f"Edition provision: {fatigue_factor_display['reference']}."
     )
+    fatigue_factor_approval = _seeded_text(
+        fat,
+        "Fatigue-factor approval / source",
+        "",
+        "fatigue_factor_approval",
+        disabled=not (
+            fatigue_on
+            and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        ),
+        help=(
+            "Project decision, design-basis clause, or checker approval supporting "
+            "the overridden final fatigue material factors. This is separate from "
+            "the spectrum-method approval/reference below."
+        ),
+    )
     fc1, fc2 = fat.columns(2)
     fatigue_beta_cc_t0 = _seeded_number(
         fc1,
@@ -3619,11 +3634,12 @@ def build_inputs(host=st):
     if (
         fatigue_on
         and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
-        and not str(fatigue_basis.get("approval_reference") or "").strip()
+        and not str(fatigue_factor_approval).strip()
     ):
         fat.warning(
-            "An approved final-factor override needs an approval reference in "
-            "Spectrum basis before a fatigue verdict can be issued."
+            "An approved final-factor override needs a dedicated fatigue-factor "
+            "approval/source before a fatigue verdict can be issued. The spectrum-"
+            "method approval/reference does not authorize material-factor changes."
         )
 
     # Load tables are rendered before the acceptance controls so their per-case
@@ -4947,6 +4963,7 @@ def build_inputs(host=st):
             bool(fatigue_check_concrete),
             fatigue_concrete_method,
             fatigue_factor_mode,
+            str(fatigue_factor_approval).strip(),
             float(fatigue_gamma0),
             float(fatigue_gamma3),
             float(concrete.fck),
@@ -5111,6 +5128,7 @@ def build_inputs(host=st):
                 fatigue_check_concrete=fatigue_check_concrete,
                 fatigue_concrete_method=fatigue_concrete_method,
                 fatigue_factor_mode=fatigue_factor_mode,
+                fatigue_factor_approval=fatigue_factor_approval,
                 fatigue_gamma0=fatigue_gamma0,
                 fatigue_gamma3=fatigue_gamma3,
                 fatigue_gamma_c=fatigue_gamma_c,
@@ -8565,10 +8583,17 @@ def _fatigue_result_basis_panel(payload):
         ("Cycle counting", basis.get("cycle_counting") or "-"),
         ("Concurrence basis", basis.get("concurrence_basis") or "-"),
         ("Atypical traffic", basis.get("atypical_traffic") or "-"),
-        ("Approval reference", basis.get("approval_reference") or "-"),
+        (
+            "Spectrum-method approval/reference",
+            basis.get("approval_reference") or "-",
+        ),
         ("Authority adjustments", basis.get("authority_adjustments") or "-"),
         ("Factor source", factor_basis.get("mode") or "-"),
         ("Factor provision", factor_basis.get("reference") or "-"),
+        (
+            "Factor override approval/source",
+            factor_basis.get("approval_reference") or "-",
+        ),
         ("gamma0", factor_basis.get("gamma0")),
         ("gamma3", factor_basis.get("gamma3")),
         (

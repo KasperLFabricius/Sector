@@ -1697,6 +1697,10 @@ class ReportBuilder:
                  _html_escape(str(factor_basis.get("mode") or "-"))],
                 ["Fatigue factor provision",
                  _html_escape(str(factor_basis.get("reference") or "-"))],
+                ["Fatigue factor override approval/source",
+                 _html_escape(str(
+                     factor_basis.get("approval_reference") or "-"
+                 ))],
                 ["Fatigue gamma<sub>0</sub>",
                  _fmt(factor_basis.get("gamma0"), 3)],
                 ["Fatigue gamma<sub>3</sub>",
@@ -1770,7 +1774,7 @@ class ReportBuilder:
                  _html_escape(str(
                      fatigue_basis.get("atypical_traffic") or "-"
                  ))],
-                ["Approval reference",
+                ["Spectrum-method approval/reference",
                  _html_escape(str(
                      fatigue_basis.get("approval_reference") or "-"
                  ))],
@@ -4433,7 +4437,7 @@ class ReportBuilder:
              _html_escape(str(basis.get("concurrence_basis") or "-"))],
             ["Atypical traffic",
              _html_escape(str(basis.get("atypical_traffic") or "-"))],
-            ["Approval reference",
+            ["Spectrum-method approval/reference",
              _html_escape(str(basis.get("approval_reference") or "-"))],
             ["Authority adjustments",
              _html_escape(str(basis.get("authority_adjustments") or "-"))],
@@ -4441,6 +4445,10 @@ class ReportBuilder:
              _html_escape(str(factor_basis.get("mode") or "-"))],
             ["Factor provision",
              _html_escape(str(factor_basis.get("reference") or "-"))],
+            ["Factor override approval/source",
+             _html_escape(str(
+                 factor_basis.get("approval_reference") or "-"
+             ))],
             ["gamma<sub>0</sub>", _fmt(factor_basis.get("gamma0"), 3)],
             ["gamma<sub>3</sub>", _fmt(factor_basis.get("gamma3"), 3)],
             ["gamma<sub>Ff</sub>", _fmt(factors.get("gamma_ff"), 3)],

@@ -295,6 +295,7 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "gamma_0",
         "gamma_3",
         "Approved final override",
+        "Fatigue-factor approval / source",
         "gamma_{Ff}",
         r"\\Delta\\sigma_{Ed,i}",
         "N_{R,i}",

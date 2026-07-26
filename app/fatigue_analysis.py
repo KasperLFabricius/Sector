@@ -153,14 +153,11 @@ def _resolved_factor_basis(inp: Mapping, edition: str) -> tuple[float, float, di
         gamma3=gamma3,
     )
     basis["mode_explicit"] = explicit
-    basis["approval_reference"] = str(
-        (
-            inp.get(fatigue_inputs.BASIS_KEY)
-            if isinstance(inp.get(fatigue_inputs.BASIS_KEY), Mapping)
-            else {}
-        ).get("approval_reference")
-        or ""
-    ).strip()
+    basis["approval_reference"] = (
+        str(inp.get("fatigue_factor_approval") or "").strip()
+        if mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        else ""
+    )
     return gamma_s, gamma_c, basis
 
 
@@ -531,10 +528,11 @@ def validation_errors(inp: Mapping) -> list[str]:
     if (
         factor_mode_explicit
         and factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
-        and not str(basis.get("approval_reference") or "").strip()
+        and not str(inp.get("fatigue_factor_approval") or "").strip()
     ):
         errors.append(
-            "Approved final fatigue-factor override requires an approval reference"
+            "Approved final fatigue-factor override requires a dedicated "
+            "approval/source"
         )
     if fatigue_inputs.method_requires_single_bin(basis["method"]):
         for name, rows in groups.items():
@@ -766,9 +764,11 @@ def invalid_result(
             "gamma_s": resolved_gamma_s,
             "gamma_c": resolved_gamma_c,
             "reference": "-",
-            "approval_reference": str(
-                basis.get("approval_reference") or ""
-            ).strip(),
+            "approval_reference": (
+                str(inp.get("fatigue_factor_approval") or "").strip()
+                if factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+                else ""
+            ),
         }
     return {
         "valid": False,

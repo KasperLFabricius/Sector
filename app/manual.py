@@ -744,8 +744,10 @@ def manual_blocks() -> list:
        "**Reinforcement** and/or **Concrete**. The edition-derived factor source "
        "resolves and displays $\\gamma_s$ and $\\gamma_{c,fat}$; for the Danish "
        "annex it also exposes $\\gamma_0$ and $\\gamma_3$. Select **Approved final "
-       "override** only for a deliberate project value and record its approval "
-       "reference. $\\gamma_{Ff}$ remains the explicit action factor.")
+       "override** only for a deliberate project value and record its dedicated "
+       "**Fatigue-factor approval / source**. The spectrum-method approval/reference "
+       "is separate and cannot authorize a material-factor change. "
+       "$\\gamma_{Ff}$ remains the explicit action factor.")
     md("For concrete, select **Explicit Palmgren-Miner spectrum** or "
        "**Damage-equivalent stress amplitude**. The explicit method uses every "
        "entered cycle count. For the equivalent method, each row's long/total "
@@ -766,8 +768,9 @@ def manual_blocks() -> list:
        "also needs the bond ratio $\\xi$ and equivalent tendon diameter.")
     md("The **Spectrum basis** records the authority method, spectrum and cycle-"
        "count sources, dynamic effects, cycle-counting method, concurrence, atypical "
-       "traffic, approvals and authority adjustments. These are provenance fields: "
-       "they do not alter actions, cycles or resistance automatically. Missing "
+       "traffic, method approvals and authority adjustments. These are spectrum "
+       "provenance fields: they do not alter actions, cycles or resistance "
+       "automatically and are not accepted as factor-override approval. Missing "
        "required evidence produces **Review**, not an unstated assumption.")
     table(["Fatigue edition", "Implemented resistance basis"],
           [["DS/EN 1992-1-1:2005",
