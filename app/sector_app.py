@@ -4156,9 +4156,9 @@ def build_inputs(host=st):
         and torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
         and not str(torsion_factor_approval).strip()
     ):
-        sts.warning(
-            "The final tensile-factor override is retained, but its project "
-            "approval/source is not stated."
+        sts.error(
+            "The final tensile-factor override is retained, but an approval/source "
+            "is required before a torsion verdict can be issued."
         )
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
@@ -5742,8 +5742,11 @@ def _run_uniaxial_capacity_checks(inp, out):
                     if link_ctx is not None else None)
         links_valid = bool(lk_probe is not None and lk_probe["valid"]
                            and lk_probe["vrd_s"] > 0.0 and lk_probe["vrd_max"] > 0.0)
-        tors_valid = bool(tors_ctx is not None
-                          and all(tb["valid"] for tb in tors_ctx["subtubes"]))
+        tors_valid = bool(
+            tors_ctx is not None
+            and tors_ctx["factor_approval_valid"]
+            and all(tb["valid"] for tb in tors_ctx["subtubes"])
+        )
         shear_live = links_valid and v_ed_s > 0.0
         tors_live = tors_valid and t_ed_s > 0.0
 
@@ -5977,6 +5980,13 @@ def _run_uniaxial_capacity_checks(inp, out):
                 trd, asl_req = primary["trd"], primary["asl_req"]
                 tube_main, valid = tors_ctx["tube"], tors_ctx["tube"]["valid"]
                 util_t = (t_ed / trd) if trd > 0.0 else math.inf
+            factor_approval_valid = tors_ctx["factor_approval_valid"]
+            valid = bool(valid and factor_approval_valid)
+            reason = (
+                tors_ctx["factor_approval_reason"]
+                if not factor_approval_valid
+                else tube_main.get("reason")
+            )
             tcode = tors_ctx["tcode"]
             tcot_min, tcot_max = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
             lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
@@ -6000,11 +6010,14 @@ def _run_uniaxial_capacity_checks(inp, out):
                 dia=inp["shear_link_dia"], s=inp["shear_link_s"], cot_min=tcot_min,
                 cot_max=tcot_max, method=inp["torsion_method"],
                 governs=primary["governs"], valid=valid,
-                reason=tube_main.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
+                reason=reason, cot_limit_lo=lo_t, cot_limit_hi=hi_t,
                 out_of_limits=torsion_out_of_limits,
                 code_applicable=not torsion_out_of_limits,
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
+                factor_approval_required=tors_ctx["factor_approval_required"],
+                factor_approval_valid=factor_approval_valid,
+                factor_approval_reason=tors_ctx["factor_approval_reason"],
                 compound_detected=tors_ctx["compound_detected"],
                 subdivision_requested=tors_ctx["subdivision_requested"],
                 subdivision_valid=tors_ctx["subdivision_valid"],

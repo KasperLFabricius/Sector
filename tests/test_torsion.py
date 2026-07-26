@@ -453,6 +453,47 @@ def test_app_torsion_factor_preset_switch_and_override_persistence():
     )
 
 
+def test_app_torsion_override_withholds_verdict_until_approved():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    at.selectbox(key="torsion_factor_mode").set_value(
+        codes.FACTOR_MODE_OVERRIDE
+    ).run()
+    at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
+    assert any(
+        "required before a torsion verdict" in message.value
+        for message in at.error
+    )
+    _set(at, ("number_input", "torsion_T", 40.0))
+    _calculate(at)
+
+    assert not at.exception
+    blocked = at.session_state["results"]["torsion"]
+    assert blocked["factor_approval_required"] is True
+    assert blocked["factor_approval_valid"] is False
+    assert blocked["valid"] is False
+    assert "requires a stated approval/source" in blocked["reason"]
+    _select_view(at, "Torsion")
+    assert not any(
+        metric.label == r"Utilisation $T_{Ed}/T_{Rd}$"
+        for metric in at.metric
+    )
+
+    _set(
+        at,
+        ("text_input", "torsion_factor_approval", "DB-TOR-05 / checker D"),
+    )
+    _calculate(at)
+
+    approved = at.session_state["results"]["torsion"]
+    assert approved["factor_approval_valid"] is True
+    assert approved["valid"] is True
+    assert approved["material_factor_basis"]["approval_reference"] == (
+        "DB-TOR-05 / checker D"
+    )
+
+
 def test_app_torsion_view_renders():
     at = _fresh()
     at.run()

@@ -525,6 +525,21 @@ def build_torsion_context(inp, n_ed_comp):
     factor_mode = str(
         inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
     )
+    approval_reference = str(
+        inp.get("torsion_factor_approval") or ""
+    ).strip()
+    factor_approval_required = factor_mode == codes.FACTOR_MODE_OVERRIDE
+    factor_approval_valid = (
+        not factor_approval_required or bool(approval_reference)
+    )
+    factor_approval_reason = (
+        ""
+        if factor_approval_valid
+        else (
+            "approved final concrete tensile-factor override requires a stated "
+            "approval/source"
+        )
+    )
     gamma0 = float(inp.get("torsion_gamma0", 1.0))
     gamma3 = float(inp.get("torsion_gamma3", 1.0))
     gamma_ct, material_factor_basis = (
@@ -542,9 +557,9 @@ def build_torsion_context(inp, n_ed_comp):
     material_factor_basis["compression_source"] = (
         "final concrete material input"
     )
-    material_factor_basis["approval_reference"] = str(
-        inp.get("torsion_factor_approval") or ""
-    ).strip()
+    material_factor_basis["approval_reference"] = approval_reference
+    material_factor_basis["approval_required"] = factor_approval_required
+    material_factor_basis["approval_valid"] = factor_approval_valid
     fctk_005 = 0.7 * codes.fctm(fck)
     fctd = fctk_005 / gamma_ct
     t_ed = inp["torsion_T"]
@@ -634,6 +649,9 @@ def build_torsion_context(inp, n_ed_comp):
         "gamma_ct": gamma_ct,
         "gamma_s": gamma_s,
         "material_factor_basis": material_factor_basis,
+        "factor_approval_required": factor_approval_required,
+        "factor_approval_valid": factor_approval_valid,
+        "factor_approval_reason": factor_approval_reason,
         "compound_detected": compound_detected,
         "subdivision_requested": subdivision_requested,
         "subdivision_valid": subdivision_valid,

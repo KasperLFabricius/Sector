@@ -246,6 +246,25 @@ def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     assert "invalid sub-tube partition" in bad["tube"]["reason"]
 
 
+def test_build_torsion_context_marks_unapproved_final_factor_invalid():
+    ctx = capacity.build_torsion_context(
+        _member_input(
+            torsion_on=True,
+            torsion_factor_mode=codes.FACTOR_MODE_OVERRIDE,
+            torsion_gamma_ct=1.62,
+            torsion_factor_approval="  ",
+        ),
+        0.0,
+    )
+
+    assert ctx["gamma_ct"] == pytest.approx(1.62)
+    assert ctx["factor_approval_required"] is True
+    assert ctx["factor_approval_valid"] is False
+    assert "requires a stated approval/source" in ctx["factor_approval_reason"]
+    assert ctx["material_factor_basis"]["approval_reference"] == ""
+    assert ctx["material_factor_basis"]["approval_valid"] is False
+
+
 def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_corner():
     concave = [
         (0.1, 0.1),
