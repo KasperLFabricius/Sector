@@ -24,6 +24,7 @@ import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
 from sector import detailing
+from sector import geometry
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
@@ -57,6 +58,93 @@ _CASE_PAYLOAD_KEYS = {
     load_cases.PLASTIC_TABLE_KEY: "plastic",
     load_cases.ELASTIC_TABLE_KEY: "elastic",
 }
+_GEOMETRY_COLUMNS = ("x (mm)", "y (mm)")
+
+
+def _geometry_points(frame: pd.DataFrame, label: str) -> list[tuple[float, float]]:
+    """Read one project geometry frame without silently dropping bad rows."""
+    if not all(column in frame.columns for column in _GEOMETRY_COLUMNS):
+        raise ValueError(
+            f"{label} table must contain columns "
+            f"'{_GEOMETRY_COLUMNS[0]}' and '{_GEOMETRY_COLUMNS[1]}'"
+        )
+    points: list[tuple[float, float]] = []
+    for row_number, (_, row) in enumerate(frame.iterrows(), start=1):
+        values = [row.get(column) for column in _GEOMETRY_COLUMNS]
+        try:
+            point = tuple(float(value) / 1000.0 for value in values)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{label} point {row_number} is not numeric"
+            ) from exc
+        if not all(math.isfinite(value) for value in point):
+            raise ValueError(
+                f"{label} point {row_number} contains a non-finite coordinate"
+            )
+        points.append(point)
+    return points
+
+
+def _project_holes(hole_frame: pd.DataFrame | None) -> list[list[tuple[float, float]]]:
+    """Read separator-delimited project hole rings in metres."""
+    if hole_frame is None or hole_frame.empty:
+        return []
+    if not all(column in hole_frame.columns for column in _GEOMETRY_COLUMNS):
+        raise ValueError(
+            "hole table must contain columns "
+            f"'{_GEOMETRY_COLUMNS[0]}' and '{_GEOMETRY_COLUMNS[1]}'"
+        )
+
+    holes: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+    for row_number, (_, row) in enumerate(hole_frame.iterrows(), start=1):
+        raw = [row.get(column) for column in _GEOMETRY_COLUMNS]
+        blank = [pd.isna(value) for value in raw]
+        if all(blank):
+            if current:
+                holes.append(current)
+                current = []
+            continue
+        if any(blank):
+            raise ValueError(
+                f"hole table row {row_number} is a partial separator/point"
+            )
+        try:
+            point = tuple(float(value) / 1000.0 for value in raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"hole point {row_number} is not numeric") from exc
+        if not all(math.isfinite(value) for value in point):
+            raise ValueError(
+                f"hole point {row_number} contains a non-finite coordinate"
+            )
+        current.append(point)
+    if current:
+        holes.append(current)
+    return holes
+
+
+def _project_geometry(tables: dict) -> tuple[list, list[list]] | None:
+    """Return project outer/void rings in metres, or ``None`` when intentionally blank."""
+    holes = _project_holes(tables.get("hole_base"))
+    outer_frame = tables.get("corners_base")
+    if outer_frame is None or outer_frame.empty:
+        if holes:
+            raise ValueError("hole geometry requires a non-empty outer ring")
+        return None
+    outer = _geometry_points(outer_frame, "outer ring")
+    return outer, holes
+
+
+def _validate_project_geometry(tables: dict) -> None:
+    """Apply the same canonical topology gate used by the API, UI, and solvers."""
+    rings = _project_geometry(tables)
+    if rings is None:
+        return
+    outer, holes = rings
+    try:
+        geometry.require_valid_section_topology(outer, holes)
+    except geometry.GeometryTopologyError as exc:
+        raise ValueError(f"invalid project section geometry: {exc}") from exc
 
 FATIGUE_SCALAR_KEYS = (
     fatigue_inputs.DETAIL_CATALOG_KEY,
@@ -326,6 +414,7 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
     ``tables`` maps the table keys to DataFrames; ``scalars`` maps the input keys
     to their values. Unknown scalar keys are dropped so the file stays canonical.
     """
+    _validate_project_geometry(tables)
     content = _canonical_inputs(tables, scalars)
     digest = input_sha256(tables, scalars)
     revision = str(revision or source_revision())
@@ -666,4 +755,5 @@ def parse_project(text: str):
                 )
             case_tables = load_cases.tables_from_legacy_scalars(legacy_scalars)
     tables.update(case_tables)
+    _validate_project_geometry(tables)
     return tables, scalars

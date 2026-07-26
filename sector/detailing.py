@@ -112,6 +112,7 @@ def tension_zone_mean_width(
     rectangle and the web width of a T-section when its flange is in compression,
     while retaining an auditable automatic value for polygonal sections.
     """
+    section.require_valid_geometry()
     moments = _moments(section)
     if moments.area <= 0.0:
         return 0.0, 0.0
@@ -245,6 +246,7 @@ def minimum_reinforcement_2005(
     edition: str = EC2_2005,
 ) -> dict:
     """Check Formula (9.1N) in the resultant bending tension zone."""
+    section.require_valid_geometry()
     if edition not in {EC2_2005, EC2_2005_DKNA}:
         raise ValueError("a 2005-family edition is required")
     mx_c, my_c = _centroid_moments(
@@ -597,6 +599,7 @@ def minimum_reinforcement_2023(
     my_ed_knm: float,
 ) -> dict:
     """Check EN 1992-1-1:2023, 12.2(2), for one selected case."""
+    section.require_valid_geometry()
     if len(elements) != len(section.bars) or len(materials) != len(section.bars):
         raise ValueError("one element record and material are required per bar")
     centred = _recentred_without_tendons(section)
@@ -752,6 +755,7 @@ def minimum_reinforcement(
     cut_direction: str = CUT_TRANSVERSE,
 ) -> dict:
     """Dispatch one selected case to its edition-specific check."""
+    section.require_valid_geometry()
     if edition not in EDITIONS:
         raise ValueError("unknown detailing edition")
     member = str(member_type or MEMBER_BEAM).strip().title()

@@ -706,9 +706,16 @@ def test_v7_project_clears_new_detailing_settings_deterministically():
 
 def test_blank_separator_row_survives_round_trip():
     # A void table with a NaN separator row keeps the NaN (so two voids stay split).
+    outer = pd.DataFrame({
+        "x (mm)": [-100.0, 100.0, 100.0, -100.0],
+        "y (mm)": [-100.0, -100.0, 100.0, 100.0],
+    })
     holes = pd.DataFrame({"x (mm)": [-20.0, 20.0, 0.0, np.nan, 30.0, 50.0, 40.0],
                           "y (mm)": [-10.0, -10.0, 10.0, np.nan, -10.0, -10.0, 10.0]})
-    rt, _ = project_io.parse_project(project_io.dump_project({"hole_base": holes}, {}))
+    rt, _ = project_io.parse_project(project_io.dump_project(
+        {"corners_base": outer, "hole_base": holes},
+        {},
+    ))
     assert int(rt["hole_base"].isna().any(axis=1).sum()) == 1
 
 

@@ -939,6 +939,7 @@ def locate_governing_concrete_fibre(
     tolerance; repeated equal samples alone can never certify a pass.
     """
 
+    section.require_valid_geometry()
     solved = tuple(states)
     if not solved:
         raise ValueError("at least one fatigue bin is required")
@@ -1203,6 +1204,7 @@ def solve_fatigue_bin(
 ) -> FatigueBinState:
     """Solve characteristic and action-factored cyclic endpoints."""
 
+    section.require_valid_geometry()
     _positive(nl, "long-term modular ratio")
     _positive(ns, "short-term modular ratio")
     action_factor = _positive(gamma_ff, "gamma_Ff")
@@ -1913,6 +1915,7 @@ def analyse_fatigue_spectrum(
     ),
 ) -> FatigueSpectrumResult:
     """Solve and assess one independent grouped fatigue spectrum."""
+    section.require_valid_geometry()
 
     name = str(spectrum_name).strip()
     if not name:
@@ -2126,6 +2129,7 @@ def analyse_grouped_spectra(
 ) -> tuple[FatigueSpectrumResult, ...]:
     """Assess each named spectrum independently and preserve input order."""
 
+    section.require_valid_geometry()
     if not isinstance(spectra, Mapping) or not spectra:
         raise ValueError("at least one grouped fatigue spectrum is required")
     seen: dict[str, str] = {}

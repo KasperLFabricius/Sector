@@ -1,0 +1,48 @@
+{
+  "oracle": "Exact rational segment and containment predicates implemented only in tests; production validator is not used to derive expected classifications.",
+  "cases": [
+    {
+      "benchmark_id": "G-VALID-CONCAVE",
+      "description": "Simple concave L-section",
+      "outer": [[0, 0], [4, 0], [4, 1], [1, 1], [1, 4], [0, 4]],
+      "holes": [],
+      "valid": true,
+      "expected_code": null
+    },
+    {
+      "benchmark_id": "G-INVALID-BOWTIE",
+      "description": "Self-intersecting outer ring",
+      "outer": [[0, 0], [4, 4], [0, 4], [4, 0]],
+      "holes": [],
+      "valid": false,
+      "expected_code": "self-intersection"
+    },
+    {
+      "benchmark_id": "G-INVALID-COLLINEAR",
+      "description": "Zero-area collinear outer ring",
+      "outer": [[0, 0], [1, 0], [2, 0], [3, 0]],
+      "holes": [],
+      "valid": false,
+      "expected_code": "degenerate-area"
+    },
+    {
+      "benchmark_id": "G-INVALID-HOLE-OUTSIDE",
+      "description": "Hole lies outside the outer ring",
+      "outer": [[0, 0], [10, 0], [10, 10], [0, 10]],
+      "holes": [[[12, 2], [14, 2], [14, 4], [12, 4]]],
+      "valid": false,
+      "expected_code": "hole-outside"
+    },
+    {
+      "benchmark_id": "G-INVALID-HOLE-OVERLAP",
+      "description": "Two holes overlap",
+      "outer": [[0, 0], [10, 0], [10, 10], [0, 10]],
+      "holes": [
+        [[2, 2], [6, 2], [6, 6], [2, 6]],
+        [[5, 3], [8, 3], [8, 7], [5, 7]]
+      ],
+      "valid": false,
+      "expected_code": "hole-overlap"
+    }
+  ]
+}

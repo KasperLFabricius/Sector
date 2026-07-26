@@ -303,6 +303,7 @@ def _prep_section(section: Section, include_tendons: bool) -> _SectionPrep:
     The pure-Python ring point-lists are built only when the kernel is unavailable --
     the compiled path never reads them.
     """
+    section.require_valid_geometry()
     int_rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
     if include_tendons:

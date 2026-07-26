@@ -1532,6 +1532,37 @@ def test_void_slicing_the_section_is_rejected():
     assert "plastic" not in at.session_state["results"]
 
 
+def test_bow_tie_outline_is_blocked_in_ui_before_solver_entry():
+    import pandas as pd
+
+    at = _fresh()
+    at.run()
+    _replace_base_table(
+        at,
+        "corners_base",
+        pd.DataFrame({
+            "x (mm)": [-200.0, 200.0, -200.0, 200.0],
+            "y (mm)": [-300.0, 300.0, 300.0, -300.0],
+        }),
+    )
+    _goto_page(at, "Analysis")
+    errors = [item.value for item in at.error]
+    assert any(
+        "Invalid section geometry" in message
+        and "outer ring" in message
+        and "edge 1" in message
+        and "edge 3" in message
+        for message in errors
+    )
+    _calculate(at)
+    assert not at.exception
+    try:
+        results = at.session_state["results"]
+    except KeyError:
+        results = None
+    assert not results
+
+
 def test_bar_outside_the_concrete_is_rejected():
     # A bar beyond the concrete outline carries no force: the app flags it and
     # refuses to compute (the default section spans y in [-300, 300] mm).

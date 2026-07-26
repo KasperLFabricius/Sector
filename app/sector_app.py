@@ -2328,7 +2328,10 @@ def _perform_autosave() -> bool:
         return False
     if digest == st.session_state.get("_autosave_hash"):
         return False                                 # unchanged since the last save
-    data = _gather_project()
+    try:
+        data = _gather_project()
+    except ValueError:
+        return False
     if _write_autosave(data, _autosave_path()):
         st.session_state["_autosave_hash"] = digest
         st.session_state["_autosave_last"] = datetime.now().strftime("%H:%M:%S")
@@ -2578,11 +2581,20 @@ def _save_load_panel() -> None:
     full rerun needed to rebuild every dependent input.
     """
     box = st.expander("Save / Load", expanded=False)
-    box.download_button("Download project", data=_gather_project(),
+    try:
+        project_data = _gather_project()
+        project_error = None
+    except ValueError as exc:
+        project_data = b""
+        project_error = str(exc)
+    box.download_button("Download project", data=project_data,
                         file_name="sector_section.json", mime="application/json",
+                        disabled=project_error is not None,
                         width="stretch",
                         help="Save the section, materials, loads and settings to a "
                              "JSON file.")
+    if project_error:
+        box.error(f"Project download blocked: {project_error}.")
     box.caption(f"Saved with Sector {APP_VERSION}, source "
                 f"{short_revision()}; results are recalculated on load.")
     loaded = st.session_state.get("_loaded_project_provenance")
@@ -2755,7 +2767,8 @@ def _generate_report(inp):
     """Build the PDF from the current inputs when the Generate button was pressed."""
     if not st.session_state.pop("_generating_report", False):
         return
-    if (inp.get("section") is None or inp.get("void_error")
+    if (inp.get("section") is None or inp.get("geometry_error")
+            or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
         _clear_report_artifact()
         st.session_state["_report_msg"] = ("error", "Define a valid section (and "
@@ -4609,9 +4622,18 @@ def build_inputs(host=st):
         mild_material_map, prestress_material_map, ec_mpa, phi_creep,
     )
 
-    section = (Section.from_polygon(corners=outer, bars_xy_area_mm2=bars,
-                                    tendons_xy_area_mm2=tendons, holes=holes)
-               if len(outer) >= 3 else None)
+    geometry_error = None
+    section = None
+    if len(outer) >= 3:
+        try:
+            section = Section.from_polygon(
+                corners=outer,
+                bars_xy_area_mm2=bars,
+                tendons_xy_area_mm2=tendons,
+                holes=holes,
+            )
+        except geometry.GeometryTopologyError as exc:
+            geometry_error = f"Invalid section geometry: {exc}"
     # A void must not split the concrete into disconnected pieces (e.g. a slot
     # reaching across the section): such a section has no valid capacity.
     void_error = None
@@ -4744,7 +4766,8 @@ def build_inputs(host=st):
                 help="Open the user manual.",
                 on_click=_open_manual_dialog,
             )
-    return dict(section=section, void_error=void_error, steel_error=steel_error,
+    return dict(section=section, geometry_error=geometry_error,
+                void_error=void_error, steel_error=steel_error,
                 material_error=material_error,
                 fatigue_assignment_error=fatigue_assignment_error,
                 concrete=concrete, steel=reference_steel,
@@ -4973,7 +4996,8 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     the affected half.
     """
     out = {}
-    if (inp["section"] is None or inp.get("void_error")
+    if (inp["section"] is None or inp.get("geometry_error")
+            or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
         return out                          # invalid section -> nothing to run
     if inp["mode"] in ("Plastic", "Both") and reuse_plastic is not None:
@@ -5378,7 +5402,8 @@ def run_analysis(
     gating remains the caller's responsibility; matching rows are then reused by
     name and exact action signature.
     """
-    if (inp["section"] is None or inp.get("void_error")
+    if (inp["section"] is None or inp.get("geometry_error")
+            or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
         return {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
@@ -9900,7 +9925,10 @@ def _analysis_workspace(inp):
         st.error(st.session_state["_case_error"])
 
     for section_err in (
-        inp.get("void_error"), inp.get("steel_error"), inp.get("material_error"),
+        inp.get("geometry_error"),
+        inp.get("void_error"),
+        inp.get("steel_error"),
+        inp.get("material_error"),
     ):
         if section_err:
             st.error(section_err)
