@@ -107,11 +107,429 @@ def signed_area(verts: Vertices) -> float:
     arr = _as_array(verts)
     if arr.shape[0] < 3:
         return 0.0
-    x = arr[:, 0]
-    y = arr[:, 1]
+    # Translate to a local origin before forming cross products. Polygon area is
+    # translation invariant, while subtracting two O(origin^2) shoelace sums is
+    # numerically fragile for a small section at a large project coordinate.
+    x = arr[:, 0] - arr[0, 0]
+    y = arr[:, 1] - arr[0, 1]
     x1 = np.roll(x, -1)
     y1 = np.roll(y, -1)
     return 0.5 * float(np.sum(x * y1 - x1 * y))
+
+
+@dataclass(frozen=True)
+class TopologyTolerance:
+    """Scale-aware tolerance policy for section-topology validation.
+
+    ``relative_length`` is resolved against the largest section bounding-box
+    dimension. ``absolute_length`` is a floor in Sector's model units (metres).
+    The resolved length tolerance is used only to classify coincident/touching
+    topology; it never alters coordinates or calculation geometry. The area
+    tolerance is ``length_tolerance * section_scale`` (with the absolute floor
+    squared for a zero-span input).
+    """
+
+    relative_length: float = 1.0e-9
+    absolute_length: float = 1.0e-12
+
+    def resolved_length(self, scale: float) -> float:
+        if not math.isfinite(self.relative_length) or self.relative_length < 0.0:
+            raise ValueError("relative topology tolerance must be finite and non-negative")
+        if not math.isfinite(self.absolute_length) or self.absolute_length < 0.0:
+            raise ValueError("absolute topology tolerance must be finite and non-negative")
+        return max(self.absolute_length, self.relative_length * max(scale, 0.0))
+
+
+DEFAULT_TOPOLOGY_TOLERANCE = TopologyTolerance()
+
+
+@dataclass(frozen=True)
+class TopologyIssue:
+    """One blocking section-topology defect with an auditable location."""
+
+    code: str
+    message: str
+    ring: str
+    point: int | None = None
+    edge: int | None = None
+    other_ring: str | None = None
+    other_edge: int | None = None
+
+
+@dataclass(frozen=True)
+class TopologyValidation:
+    """Result of the canonical section-topology validator."""
+
+    issues: tuple[TopologyIssue, ...]
+    scale: float
+    length_tolerance: float
+    area_tolerance: float
+
+    @property
+    def valid(self) -> bool:
+        return not self.issues
+
+    @property
+    def message(self) -> str:
+        return "; ".join(issue.message for issue in self.issues)
+
+    def require_valid(self) -> None:
+        if not self.valid:
+            raise GeometryTopologyError(self)
+
+
+class GeometryTopologyError(ValueError):
+    """Raised before analysis when a section has invalid polygon topology."""
+
+    def __init__(self, validation: TopologyValidation):
+        self.validation = validation
+        super().__init__(validation.message)
+
+
+def _ring_label(index: int) -> str:
+    return "outer ring" if index == 0 else f"hole {index}"
+
+
+def _edge_label(index: int, count: int) -> str:
+    return (
+        f"edge {index + 1} "
+        f"(point {index + 1} to point {(index + 1) % count + 1})"
+    )
+
+
+def _topology_scale(arrays: Sequence[np.ndarray]) -> float:
+    finite = [arr[np.isfinite(arr).all(axis=1)] for arr in arrays if arr.ndim == 2]
+    finite = [arr for arr in finite if len(arr)]
+    if not finite:
+        return 0.0
+    points = np.vstack(finite)
+    return max(
+        float(np.ptp(points[:, 0])),
+        float(np.ptp(points[:, 1])),
+    )
+
+
+def _point_segment_distance_xy(
+    point: np.ndarray, start: np.ndarray, end: np.ndarray
+) -> float:
+    dx = end - start
+    length2 = float(np.dot(dx, dx))
+    if length2 <= 0.0:
+        return float(np.linalg.norm(point - start))
+    fraction = float(np.dot(point - start, dx) / length2)
+    fraction = max(0.0, min(1.0, fraction))
+    return float(np.linalg.norm(point - (start + fraction * dx)))
+
+
+def _cross2(a: np.ndarray, b: np.ndarray) -> float:
+    return float(a[0] * b[1] - a[1] * b[0])
+
+
+def _segment_clearance(
+    a0: np.ndarray,
+    a1: np.ndarray,
+    b0: np.ndarray,
+    b1: np.ndarray,
+    tolerance: float,
+) -> float:
+    """Minimum segment clearance, with crossings/touches reported as zero."""
+    if (
+        max(a0[0], a1[0]) + tolerance < min(b0[0], b1[0])
+        or max(b0[0], b1[0]) + tolerance < min(a0[0], a1[0])
+        or max(a0[1], a1[1]) + tolerance < min(b0[1], b1[1])
+        or max(b0[1], b1[1]) + tolerance < min(a0[1], a1[1])
+    ):
+        return math.inf
+
+    ab = a1 - a0
+    cd = b1 - b0
+    cross_a0 = _cross2(ab, b0 - a0)
+    cross_a1 = _cross2(ab, b1 - a0)
+    cross_b0 = _cross2(cd, a0 - b0)
+    cross_b1 = _cross2(cd, a1 - b0)
+    cross_tol_a = tolerance * max(float(np.linalg.norm(ab)), tolerance)
+    cross_tol_b = tolerance * max(float(np.linalg.norm(cd)), tolerance)
+
+    proper_crossing = (
+        (cross_a0 < -cross_tol_a and cross_a1 > cross_tol_a)
+        or (cross_a0 > cross_tol_a and cross_a1 < -cross_tol_a)
+    ) and (
+        (cross_b0 < -cross_tol_b and cross_b1 > cross_tol_b)
+        or (cross_b0 > cross_tol_b and cross_b1 < -cross_tol_b)
+    )
+    if proper_crossing:
+        return 0.0
+
+    return min(
+        _point_segment_distance_xy(a0, b0, b1),
+        _point_segment_distance_xy(a1, b0, b1),
+        _point_segment_distance_xy(b0, a0, a1),
+        _point_segment_distance_xy(b1, a0, a1),
+    )
+
+
+def _strictly_inside(point: np.ndarray, polygon: np.ndarray) -> bool:
+    return bool(
+        _points_in_polygon(
+            np.asarray([point[0]], dtype=float),
+            np.asarray([point[1]], dtype=float),
+            polygon,
+        )[0]
+    )
+
+
+def validate_section_topology(
+    outer: Vertices,
+    holes: Iterable[Vertices] = (),
+    *,
+    tolerance: TopologyTolerance = DEFAULT_TOPOLOGY_TOLERANCE,
+) -> TopologyValidation:
+    """Validate one outer polygon and zero or more void rings before analysis.
+
+    This is Sector's canonical topology gate. It rejects:
+
+    * malformed, non-finite, short, repeated, or zero-area rings;
+    * self-crossing, self-touching, overlapping, or backtracking ring edges;
+    * holes outside, touching, or crossing the outer boundary; and
+    * holes that touch, cross, overlap, or nest inside one another.
+
+    Concave simple polygons and intentional intermediate collinear points remain
+    valid. One terminal point exactly equal to the first is accepted as a common
+    serialisation closure marker and ignored only for topology classification;
+    near-duplicate closure points remain invalid under the tolerance policy.
+    Ring winding is a representation convention, not topology, and is normalised
+    separately by :meth:`sector.section.Section.integration_rings`. The validator
+    returns the first causal defect so UI/API messages name the relevant one-based
+    ring point and/or edge without overwhelming the user.
+    """
+    raw_rings = [outer, *list(holes)]
+    arrays: list[np.ndarray] = []
+    for index, ring in enumerate(raw_rings):
+        label = _ring_label(index)
+        try:
+            arr = np.asarray(ring, dtype=float)
+        except (TypeError, ValueError) as exc:
+            issue = TopologyIssue(
+                "malformed-ring",
+                f"{label} is not a numeric (N, 2) sequence of points",
+                label,
+            )
+            return TopologyValidation((issue,), 0.0, 0.0, 0.0)
+        if arr.ndim != 2 or arr.shape[1:] != (2,):
+            issue = TopologyIssue(
+                "malformed-ring",
+                f"{label} must be an (N, 2) sequence of (x, y) points",
+                label,
+            )
+            return TopologyValidation((issue,), 0.0, 0.0, 0.0)
+        arrays.append(arr)
+
+    scale = _topology_scale(arrays)
+    length_tol = tolerance.resolved_length(scale)
+    area_tol = max(tolerance.absolute_length ** 2, length_tol * max(scale, length_tol))
+    arrays = [
+        arr[:-1] if len(arr) >= 2 and np.array_equal(arr[0], arr[-1]) else arr
+        for arr in arrays
+    ]
+
+    def invalid(issue: TopologyIssue) -> TopologyValidation:
+        return TopologyValidation((issue,), scale, length_tol, area_tol)
+
+    for index, arr in enumerate(arrays):
+        label = _ring_label(index)
+        count = len(arr)
+        if count < 3:
+            return invalid(TopologyIssue(
+                "too-few-points",
+                f"{label} has {count} points; at least 3 are required",
+                label,
+            ))
+        nonfinite = np.argwhere(~np.isfinite(arr))
+        if len(nonfinite):
+            point_index = int(nonfinite[0, 0])
+            return invalid(TopologyIssue(
+                "non-finite-point",
+                f"{label} point {point_index + 1} contains a non-finite coordinate",
+                label,
+                point=point_index + 1,
+            ))
+
+        for first in range(count):
+            for second in range(first + 1, count):
+                if float(np.linalg.norm(arr[first] - arr[second])) <= length_tol:
+                    edge_index = first if second == (first + 1) % count else None
+                    if first == 0 and second == count - 1:
+                        edge_index = count - 1
+                    location = (
+                        f"{_edge_label(edge_index, count)} has coincident endpoints"
+                        if edge_index is not None
+                        else f"points {first + 1} and {second + 1} are repeated"
+                    )
+                    return invalid(TopologyIssue(
+                        "repeated-point",
+                        f"{label} {location} within the topology tolerance "
+                        f"({length_tol:.3g} model units)",
+                        label,
+                        point=first + 1,
+                        edge=(edge_index + 1 if edge_index is not None else None),
+                    ))
+
+        area = signed_area(arr)
+        if abs(area) <= area_tol:
+            anchor = arr[0]
+            distances = np.linalg.norm(arr - anchor, axis=1)
+            farthest = arr[int(np.argmax(distances))]
+            if all(
+                _point_segment_distance_xy(point, anchor, farthest) <= length_tol
+                for point in arr
+            ):
+                return invalid(TopologyIssue(
+                    "degenerate-area",
+                    f"{label} is degenerate or collinear: |area|={abs(area):.6g} "
+                    f"is not greater than the topology area tolerance {area_tol:.6g}",
+                    label,
+                ))
+
+        for vertex in range(count):
+            previous = arr[vertex - 1]
+            current = arr[vertex]
+            following = arr[(vertex + 1) % count]
+            incoming = current - previous
+            outgoing = following - current
+            cross = abs(_cross2(incoming, outgoing))
+            collinear_tol = length_tol * max(
+                float(np.linalg.norm(incoming)),
+                float(np.linalg.norm(outgoing)),
+                length_tol,
+            )
+            if cross <= collinear_tol and float(np.dot(incoming, outgoing)) < 0.0:
+                return invalid(TopologyIssue(
+                    "backtracking-edge",
+                    f"{label} edges {vertex or count} and {vertex + 1} overlap or "
+                    f"backtrack at point {vertex + 1}",
+                    label,
+                    point=vertex + 1,
+                    edge=vertex + 1,
+                ))
+
+        for first in range(count):
+            a0 = arr[first]
+            a1 = arr[(first + 1) % count]
+            for second in range(first + 1, count):
+                if second == first + 1 or (first == 0 and second == count - 1):
+                    continue
+                b0 = arr[second]
+                b1 = arr[(second + 1) % count]
+                clearance = _segment_clearance(a0, a1, b0, b1, length_tol)
+                if clearance <= length_tol:
+                    return invalid(TopologyIssue(
+                        "self-intersection",
+                        f"{label} {_edge_label(first, count)} intersects or touches "
+                        f"{_edge_label(second, count)} (clearance "
+                        f"{clearance:.6g} <= tolerance {length_tol:.6g})",
+                        label,
+                        edge=first + 1,
+                        other_ring=label,
+                        other_edge=second + 1,
+                    ))
+        if abs(area) <= area_tol:
+            return invalid(TopologyIssue(
+                "degenerate-area",
+                f"{label} has indeterminate orientation: |area|={abs(area):.6g} "
+                f"is not greater than the topology area tolerance {area_tol:.6g}",
+                label,
+            ))
+
+    outer_arr = arrays[0]
+    outer_count = len(outer_arr)
+    for hole_index, hole in enumerate(arrays[1:], start=1):
+        hole_label = _ring_label(hole_index)
+        hole_count = len(hole)
+        for hole_edge in range(hole_count):
+            h0 = hole[hole_edge]
+            h1 = hole[(hole_edge + 1) % hole_count]
+            for outer_edge in range(outer_count):
+                o0 = outer_arr[outer_edge]
+                o1 = outer_arr[(outer_edge + 1) % outer_count]
+                clearance = _segment_clearance(h0, h1, o0, o1, length_tol)
+                if clearance <= length_tol:
+                    return invalid(TopologyIssue(
+                        "hole-boundary-contact",
+                        f"{hole_label} {_edge_label(hole_edge, hole_count)} touches "
+                        f"or crosses outer ring {_edge_label(outer_edge, outer_count)} "
+                        f"(clearance {clearance:.6g} <= tolerance "
+                        f"{length_tol:.6g}); this invalid boundary contact can "
+                        "create disconnected concrete",
+                        hole_label,
+                        edge=hole_edge + 1,
+                        other_ring="outer ring",
+                        other_edge=outer_edge + 1,
+                    ))
+        if not _strictly_inside(hole[0], outer_arr):
+            return invalid(TopologyIssue(
+                "hole-outside",
+                f"{hole_label} is outside the outer ring (point 1 is not inside)",
+                hole_label,
+                point=1,
+                other_ring="outer ring",
+            ))
+
+    for first_index, first_hole in enumerate(arrays[1:], start=1):
+        first_label = _ring_label(first_index)
+        first_count = len(first_hole)
+        for second_index in range(first_index + 1, len(arrays)):
+            second_hole = arrays[second_index]
+            second_label = _ring_label(second_index)
+            second_count = len(second_hole)
+            for first_edge in range(first_count):
+                a0 = first_hole[first_edge]
+                a1 = first_hole[(first_edge + 1) % first_count]
+                for second_edge in range(second_count):
+                    b0 = second_hole[second_edge]
+                    b1 = second_hole[(second_edge + 1) % second_count]
+                    clearance = _segment_clearance(a0, a1, b0, b1, length_tol)
+                    if clearance <= length_tol:
+                        return invalid(TopologyIssue(
+                            "hole-overlap",
+                            f"{first_label} {_edge_label(first_edge, first_count)} "
+                            f"touches or crosses {second_label} "
+                            f"{_edge_label(second_edge, second_count)} (clearance "
+                            f"{clearance:.6g} <= tolerance {length_tol:.6g})",
+                            first_label,
+                            edge=first_edge + 1,
+                            other_ring=second_label,
+                            other_edge=second_edge + 1,
+                        ))
+            if _strictly_inside(second_hole[0], first_hole):
+                return invalid(TopologyIssue(
+                    "nested-hole",
+                    f"{second_label} is nested inside {first_label}; nested void "
+                    "rings are not a valid concrete topology",
+                    second_label,
+                    point=1,
+                    other_ring=first_label,
+                ))
+            if _strictly_inside(first_hole[0], second_hole):
+                return invalid(TopologyIssue(
+                    "nested-hole",
+                    f"{first_label} is nested inside {second_label}; nested void "
+                    "rings are not a valid concrete topology",
+                    first_label,
+                    point=1,
+                    other_ring=second_label,
+                ))
+
+    return TopologyValidation((), scale, length_tol, area_tol)
+
+
+def require_valid_section_topology(
+    outer: Vertices,
+    holes: Iterable[Vertices] = (),
+    *,
+    tolerance: TopologyTolerance = DEFAULT_TOPOLOGY_TOLERANCE,
+) -> None:
+    """Raise :class:`GeometryTopologyError` for invalid section topology."""
+    validate_section_topology(outer, holes, tolerance=tolerance).require_valid()
 
 
 def polygon_is_convex(verts: Vertices, tol: float = 1e-12) -> bool:

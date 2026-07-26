@@ -131,6 +131,7 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
     capped at the real wall thickness (estimated from the concrete area / centre-line
     perimeter). ``tef_override`` (mm, 0 = auto) forces the wall thickness.
     """
+    geometry.require_valid_section_topology(outer, holes or [])
     minimum_dimension_mm = minimum_caliper_width(outer) * 1000.0 if outer else 0.0
     if not outer or len(outer) < 3:
         return dict(A=0.0, u=0.0, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,

@@ -331,6 +331,7 @@ def solve_elastic(
         Strain plane, per-bar stresses, the maximum concrete compression and
         its location, the neutral-axis intercepts, and convergence info.
     """
+    section.require_valid_geometry()
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
 
@@ -369,6 +370,7 @@ def solve_elastic_uncracked(
     the cracked solver); the ``(n - 1)`` displaced-concrete refinement is not
     applied, a sub-percent effect on the cracking load.
     """
+    section.require_valid_geometry()
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
     target = np.array([-float(P), -float(Mx), -float(My)], dtype=float)
@@ -424,6 +426,7 @@ def transformed_properties(
     at ``n*A`` in both cases, or ``n*n_mult*A`` per bar when ``n_mult`` is given
     (e.g. ``Ep/Es`` for prestressing tendons folded into the bar set).
     """
+    section.require_valid_geometry()
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
     cm = AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -526,6 +529,7 @@ def solve_elastic_combined(
     added to the reported tendon stresses. Being locked-in, it does not creep, so
     it is kept out of the ``s2`` neutralising step.
     """
+    section.require_valid_geometry()
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
     pre = _prestress_resultant(prestress_stress, bx, by, ba)   # constant tendon force

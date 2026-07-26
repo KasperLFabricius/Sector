@@ -19,7 +19,12 @@ from typing import Sequence
 
 import numpy as np
 
-from .geometry import orient, signed_area
+from .geometry import (
+    TopologyValidation,
+    orient,
+    signed_area,
+    validate_section_topology,
+)
 
 MM2_TO_M2 = 1.0e-6
 
@@ -66,12 +71,11 @@ class Section:
     tendons: list[Bar] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        self.concrete = [np.asarray(r, dtype=float) for r in self.concrete]
-        if not self.concrete:
+        rings = list(self.concrete)
+        if not rings:
             raise ValueError("a section needs at least one concrete ring")
-        for r in self.concrete:
-            if r.ndim != 2 or r.shape[1] != 2 or r.shape[0] < 3:
-                raise ValueError("each ring must be (N>=3, 2) (x, y) vertices")
+        validate_section_topology(rings[0], rings[1:]).require_valid()
+        self.concrete = [np.array(r, dtype=float, copy=True) for r in rings]
 
     # -- construction helpers ------------------------------------------------
 
@@ -90,14 +94,26 @@ class Section:
         ``(x, y, area_mm2)`` with the area in mm^2 (the usual engineering unit),
         converted to m^2 on the way in.
         """
-        rings = [np.asarray(corners, dtype=float)]
-        rings += [np.asarray(h, dtype=float) for h in holes]
+        rings = [corners, *holes]
         bars = [Bar(float(x), float(y), float(a) * MM2_TO_M2) for x, y, a in bars_xy_area_mm2]
         tendons = [Bar(float(x), float(y), float(a) * MM2_TO_M2)
                    for x, y, a in tendons_xy_area_mm2]
         return cls(rings, bars, tendons)
 
     # -- derived geometry ----------------------------------------------------
+
+    def validate_geometry(self) -> TopologyValidation:
+        """Run Sector's canonical polygon-topology gate for this section."""
+        return validate_section_topology(self.concrete[0], self.concrete[1:])
+
+    def require_valid_geometry(self) -> None:
+        """Raise before analysis if the stored rings no longer form valid concrete.
+
+        Validation also runs at construction. Solver entry points call this method
+        defensively because ``concrete`` remains a public list for compatibility
+        and a caller can replace a ring after creating the section.
+        """
+        self.validate_geometry().require_valid()
 
     def integration_rings(self) -> list[np.ndarray]:
         """Rings oriented for signed integration: outer CCW, holes CW.

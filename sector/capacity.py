@@ -18,8 +18,19 @@ SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
 
 
+def _require_valid_input_geometry(inp):
+    """Validate either a real Section or the raw headless geometry payload."""
+    section = inp.get("section")
+    validator = getattr(section, "require_valid_geometry", None)
+    if callable(validator):
+        validator()
+        return
+    geometry.require_valid_section_topology(inp["outer"], inp.get("holes") or [])
+
+
 def gross_area_centroid(outer, holes):
     """Return net concrete area (m2) and centroid ``(cx, cy)`` in metres."""
+    geometry.require_valid_section_topology(outer, holes or [])
     mo = geometry.area_moments(outer)
     area = abs(mo.area)
     if area <= 0.0:
@@ -75,6 +86,7 @@ def shear_lever_arm(inp, axis, tension_low, d_mm):
     fallback = (0.9 * d_mm, "0.9 d (fallback)")
     if inp["section"] is None:
         return fallback
+    _require_valid_input_geometry(inp)
     angle = FACE_ANGLE[(axis, tension_low)]
     prestress = inp["prestress"] if inp["tendons"] else None
     try:
@@ -96,6 +108,7 @@ def shear_face_mrd(inp, axis, tension_low, m_off=0.0):
     """Return chord ``M_Rd`` conditional on the coexisting off-axis moment."""
     if inp["section"] is None:
         return 0.0, False
+    _require_valid_input_geometry(inp)
     prestress = inp["prestress"] if inp["tendons"] else None
     try:
         mrd, exact = conditional_capacity(
@@ -423,6 +436,7 @@ def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
     """
     if not inp.get("shear_on"):
         return {}
+    _require_valid_input_geometry(inp)
     definitions = shear_direction_specs(inp)
     contexts = {}
     for component, definition in definitions.items():
@@ -464,6 +478,7 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
     """
     if not inp.get("shear_on"):
         return None, None
+    _require_valid_input_geometry(inp)
     axis = inp["shear_axis"]
     return _build_shear_face_context(
         inp,
@@ -483,6 +498,7 @@ def build_torsion_context(inp, n_ed_comp):
     """Return the angle-independent context for the active torsion check."""
     if not inp.get("torsion_on") or inp["section"] is None:
         return None
+    _require_valid_input_geometry(inp)
     tcode = SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
     fck = inp["concrete"].fck
     fcd = inp["concrete"].fcd

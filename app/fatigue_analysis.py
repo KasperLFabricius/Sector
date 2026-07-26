@@ -31,6 +31,7 @@ from sector.fatigue import (
     SpectrumBin,
     analyse_grouped_spectra,
 )
+from sector.geometry import GeometryTopologyError
 from sector.section import Section
 
 
@@ -358,7 +359,13 @@ def validation_errors(inp: Mapping) -> list[str]:
     if not isinstance(section, Section):
         errors.append("A valid section is required for fatigue analysis")
         section = None
-    for key in ("void_error", "steel_error", "material_error"):
+    else:
+        try:
+            section.require_valid_geometry()
+        except GeometryTopologyError as exc:
+            errors.append(f"Invalid section geometry: {exc}")
+            section = None
+    for key in ("geometry_error", "void_error", "steel_error", "material_error"):
         if inp.get(key):
             errors.append(str(inp[key]))
 

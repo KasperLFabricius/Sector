@@ -627,6 +627,7 @@ def analyse_cracking(
         Cracking decision, ``lambda_cr``, ``zeta``, the Stage I and Stage II
         solves, the mean tension-stiffened strain plane, and the crack width.
     """
+    section.require_valid_geometry()
     uncr = solve_elastic_uncracked(section, P, Mx, My, n, n_mult=n_mult,
                                    prestress_stress=prestress_stress)
     sigma_ct = uncr.max_concrete_tension / _KPA_PER_MPA  # MPa, peak total tension
@@ -688,6 +689,7 @@ def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
     the peak concrete tension (MPa) and ``lambda_cr = f_ctm/sigma_ct`` (or the
     decompression factor with prestress), mirroring :func:`analyse_cracking`.
     """
+    section.require_valid_geometry()
     verts = section.concrete_vertices()
 
     def _sig(P, Mx, My, n, pre):
@@ -744,6 +746,7 @@ def crack_width(
     strain gradient and the per-bar steel stress; the bar with the largest ``wk``
     governs. See :func:`analyse_cracking` for the remaining parameters.
     """
+    section.require_valid_geometry()
     return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
                         k1, k2, k3, k4, bar_diameter,
                         k3_cover_dependent=k3_cover_dependent,

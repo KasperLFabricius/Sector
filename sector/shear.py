@@ -27,6 +27,8 @@ from __future__ import annotations
 import math
 from typing import Optional, Sequence
 
+from . import geometry
+
 
 def _coord(point, axis: str) -> float:
     """The along-shear-axis coordinate of a point: y for vertical shear (axis 'x',
@@ -71,6 +73,7 @@ def effective_depth(outer: Sequence, axis: str, tension_low: bool,
     """Effective depth ``d`` (mm): the distance from the extreme compression fibre
     (opposite the tension face) to the tension-reinforcement centroid, along the
     shear axis. Returns 0 when there is no tension reinforcement."""
+    geometry.require_valid_section_topology(outer)
     if tension_cg_coord is None or not len(outer):
         return 0.0
     coords = [_coord(p, axis) for p in outer]
@@ -113,6 +116,7 @@ def min_web_width(outer: Sequence, holes: Optional[Sequence], axis: str) -> floa
     rectangular / T / box sections; a circular (or otherwise curved) section should
     have ``bw`` entered by hand, and the caller echoes the derived value for review.
     """
+    geometry.require_valid_section_topology(outer, holes or [])
     if not len(outer):
         return 0.0
     coords = [_coord(p, axis) for p in outer]

@@ -26,9 +26,27 @@ _spec.loader.exec_module(_fix)
 CASES = _fix.CASES
 
 
+def _rings(case):
+    """Map legacy annulus fixtures to the canonical outer-plus-hole topology.
+
+    Eight circular hand-calculation cases store two independently closed
+    37-point rings back-to-back. Their numerical expectations remain unchanged,
+    but the concatenated self-touching polygon is not a valid section boundary.
+    """
+    corners = case["corners"]
+    for index in range(2, len(corners) - 2):
+        if corners[index] == corners[0]:
+            possible_hole = corners[index + 1:]
+            if possible_hole and possible_hole[-1] == possible_hole[0]:
+                return corners[:index + 1], [possible_hole]
+    return corners, []
+
+
 def _build(case):
+    corners, holes = _rings(case)
     section = Section.from_polygon(
-        corners=case["corners"],
+        corners=corners,
+        holes=holes,
         bars_xy_area_mm2=case["bars"],
         tendons_xy_area_mm2=case["tendons"],
     )
@@ -40,6 +58,15 @@ def _build(case):
 
 def test_fixtures_present():
     assert len(CASES) >= 12
+
+
+def test_legacy_annulus_fixtures_are_mapped_to_two_valid_rings():
+    annulus_cases = [case for case in CASES if len(case["corners"]) == 74]
+    assert len(annulus_cases) == 8
+    for case in annulus_cases:
+        outer, holes = _rings(case)
+        section = Section.from_polygon(outer, holes=holes)
+        assert len(section.concrete) == 2
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
