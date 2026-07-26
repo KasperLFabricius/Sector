@@ -1822,6 +1822,37 @@ def test_report_includes_torsion_section():
     )
 
 
+def test_qa_appendix_distinguishes_factor_provenance_modes():
+    inp, out = _fatigue_report_fixture()
+    torsion = _torsion_out()
+    torsion["gamma_ct"] = 1.63
+    torsion["material_factor_basis"].update({
+        "mode": "Approved final override",
+        "tension_override": True,
+        "tension_final": 1.63,
+        "tension_derivation": "approved final override = 1.630",
+        "approval_reference": "DB-TOR-05 / checker D",
+    })
+    out["torsion"] = torsion
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=True
+    )).split())
+    appendix = text[text.index("QA appendix - references and notes"):]
+
+    assert "Partial-factor provenance" in appendix
+    assert "torsion" in appendix and "Approved final override" in appendix
+    assert "approval/source: DB-TOR-05 / checker D" in appendix
+    assert "fatigue factors - Edition-derived preset" in appendix
+    assert "provision: DS/EN 1992-1-1:2023" in appendix
+    assert "final user-entered partial factors" not in appendix
+    assert "final factors used in each calculation" in appendix
+    assert (
+        "distinguish edition-derived presets from approved final overrides"
+        in appendix
+    )
+
+
 def test_report_directional_vt_table_withholds_out_of_range_verdict():
     out = _out()
     torsion = _torsion_out(interaction=True)

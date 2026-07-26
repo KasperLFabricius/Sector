@@ -5226,10 +5226,74 @@ class ReportBuilder:
                 "preflight was invalid. No fatigue methodology or resistance "
                 "verdict was applied."
             )
+        factor_provenance = []
+        if torsion_results:
+            torsion_basis = (
+                torsion_results[0].get("material_factor_basis") or {}
+            )
+            torsion_mode = str(torsion_basis.get("mode") or "").strip()
+            if torsion_mode:
+                torsion_override = bool(
+                    torsion_basis.get("tension_override")
+                    or torsion_mode == "Approved final override"
+                )
+                torsion_reference = str(
+                    (
+                        torsion_basis.get("approval_reference")
+                        if torsion_override
+                        else torsion_basis.get("reference")
+                    )
+                    or "not stated"
+                ).strip()
+                torsion_reference_label = (
+                    "approval/source" if torsion_override else "provision"
+                )
+                factor_provenance.append(
+                    "torsion gamma<sub>ct</sub> - "
+                    f"{_html_escape(torsion_mode)}; "
+                    f"{torsion_reference_label}: "
+                    f"{_html_escape(torsion_reference)}"
+                )
+        if fatigue is not None and not fatigue_errors:
+            fatigue_factor_basis = fatigue.get("factor_basis") or {}
+            fatigue_mode = str(
+                fatigue_factor_basis.get("mode") or ""
+            ).strip()
+            if fatigue_mode:
+                fatigue_override = bool(
+                    fatigue_factor_basis.get("override")
+                    or fatigue_mode == "Approved final override"
+                )
+                fatigue_reference = str(
+                    (
+                        fatigue_factor_basis.get("approval_reference")
+                        if fatigue_override
+                        else fatigue_factor_basis.get("reference")
+                    )
+                    or "not stated"
+                ).strip()
+                fatigue_reference_label = (
+                    "approval/source" if fatigue_override else "provision"
+                )
+                factor_provenance.append(
+                    "fatigue factors - "
+                    f"{_html_escape(fatigue_mode)}; "
+                    f"{fatigue_reference_label}: "
+                    f"{_html_escape(fatigue_reference)}"
+                )
+        if factor_provenance:
+            lines.append(
+                "Partial-factor provenance - "
+                + "; ".join(factor_provenance)
+                + "."
+            )
         lines.append(
-            "The printed gamma<sub>c</sub>, gamma<sub>s</sub> and reinforcement "
-            "factors are the final user-entered partial factors. Sector applies no "
-            "hidden construction-, control- or consequence-category multiplier."
+            "The printed partial factors are the final factors used in each "
+            "calculation. For torsion and fatigue, the provenance above and the "
+            "factor-basis tables distinguish edition-derived presets from approved "
+            "final overrides and state the governing provision or approval/source. "
+            "Sector applies no hidden construction-, control- or consequence-"
+            "category multiplier."
         )
         lines.append(
             "All results follow from the documented inputs and cited formulas; "
