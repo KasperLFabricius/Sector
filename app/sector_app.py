@@ -6711,6 +6711,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 sls_core.COMBINATION_UNSPECIFIED,
             ),
         )
+        elastic_case_id = str(
+            (inp.get("elastic_case") or {}).get("id") or ""
+        ).strip()
         response_contexts = {
             name: {
                 "combination": combination_map[state],
@@ -6719,7 +6722,10 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     if state == "long"
                     else "Instantaneous total (long + short) response"
                 ),
-                "response_id": state,
+                "response_id": (
+                    f"{elastic_case_id}:{state}"
+                    if elastic_case_id else state
+                ),
                 "provenance": provenance_map.get(state),
                 "solver_provenance": {
                     "state": state,
@@ -8333,7 +8339,10 @@ def results_overview_view(inp, results, *, stale=False):
         st.error(headline)
     else:
         st.warning(headline)
-    if any(row["check"] == "Crack width" for row in rows):
+    if any(
+        row["check"] in {"Crack width", "Decompression"}
+        for row in rows
+    ):
         st.warning(
             "Crack-control conclusion limitation: "
             f"{CRACK_DIRECTIONAL_LIMITATION}"
@@ -9281,7 +9290,7 @@ def _crack_width_panel(e):
     """
     cl, cs = e.get("crack"), e.get("crack_short")
     clc, csc = e.get("crack_coarse"), e.get("crack_short_coarse")
-    st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
+    st.markdown(f"**Crack control** ({e.get('crack_code', 'EC2 7.3.4')})")
     no_results = cl is None and cs is None and clc is None and csc is None
     assessment = e.get("crack_assessment", {})
     status = assessment.get("status", "NOT ASSESSED")
@@ -9291,14 +9300,38 @@ def _crack_width_panel(e):
     case = assessment.get("case") or "-"
     governing = assessment.get("governing") or "-"
     margin = assessment.get("margin")
+    decompression_governs = (
+        assessment.get("criterion") == sls_core.CRITERION_DECOMPRESSION
+    )
+    result_label = (
+        "governing concrete stress"
+        if decompression_governs else "governing $w_k$"
+    )
+    result_value = (
+        "-"
+        if value is None
+        else f"{value:.3f} {'MPa' if decompression_governs else 'mm'}"
+    )
+    limit_text = (
+        "compression required"
+        if decompression_governs
+        else (
+            "not supplied"
+            if limit is None or limit <= 0.0
+            else f"{limit:.3f} mm"
+        )
+    )
+    status_label = (
+        "Decompression" if decompression_governs else "Crack width"
+    )
     message = (
-        f"**{display_status} - Crack width** | governing $w_k$ "
-        f"{'-' if value is None else f'{value:.3f} mm'} | limit "
-        f"{'not supplied' if limit is None or limit <= 0.0 else f'{limit:.3f} mm'} | "
+        f"**{display_status} - {status_label}** | {result_label} "
+        f"{result_value} | limit {limit_text} | "
         f"case {case} | element {governing}"
     )
     if margin is not None:
-        message += f" | margin {margin:+.3f} mm"
+        margin_unit = "MPa" if decompression_governs else "mm"
+        message += f" | margin {margin:+.3f} {margin_unit}"
     if status == "OK":
         st.success(message)
     elif status in {"EXCEEDED", "INVALID"}:
@@ -9312,22 +9345,43 @@ def _crack_width_panel(e):
         f"{assessment.get('required_combination') or 'not established'}; "
         f"source: {assessment.get('criterion_source') or e.get('sls_limit_source', '-')}."
     )
-    criterion_rows = [
-        {
+    criterion_rows = []
+    for item in assessment.get("criteria", []):
+        is_decompression = (
+            item.get("kind") == sls_core.CRITERION_DECOMPRESSION
+        )
+        criterion_limit = item.get("limit")
+        criterion_value = item.get("value")
+        criterion_rows.append({
             "Criterion": item.get("kind"),
             "Source type": item.get("criterion_source_type"),
             "Required combination": item.get("required_combination") or "-",
-            "Matched response": ", ".join(item.get("matched_responses") or [])
-            or "-",
-            "Limit (mm)": item.get("limit"),
-            "Result (mm)": item.get("value"),
+            "Matched response": ", ".join(
+                item.get("matched_responses") or []
+            ) or "-",
+            "Limit / requirement": (
+                "compression required"
+                if is_decompression
+                else (
+                    "-"
+                    if criterion_limit is None
+                    else f"{criterion_limit:.3f} mm"
+                )
+            ),
+            "Result": (
+                "-"
+                if criterion_value is None
+                else (
+                    f"{criterion_value:.3f} MPa"
+                    if is_decompression
+                    else f"{criterion_value:.3f} mm"
+                )
+            ),
             "Status": presentation.assessment_status_label(
                 item.get("status")
             ),
             "Source": item.get("criterion_source") or "-",
-        }
-        for item in assessment.get("criteria", [])
-    ]
+        })
     if criterion_rows:
         st.dataframe(
             criterion_rows,

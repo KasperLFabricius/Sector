@@ -92,9 +92,22 @@ CRACK_NUMERIC_INPUT_KEYS = (
 )
 
 
+def _optional_text(value) -> str | None:
+    """Return stripped text without coercing containers or Booleans."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _upper_text(value) -> str:
+    """Return a normalized typed status/configuration token."""
+    return (_optional_text(value) or "").upper()
+
+
 def canonical_combination(value) -> str:
     """Return a stable SLS-combination token without inferring from duration."""
-    text = str(value or "").strip()
+    text = _optional_text(value) or ""
     aliases = {
         "": COMBINATION_UNSPECIFIED,
         "none": COMBINATION_UNSPECIFIED,
@@ -159,6 +172,52 @@ def contains_boolean_value(value) -> bool:
     return False
 
 
+def _contains_non_finite_numeric_value(value) -> bool:
+    """Return whether structured audit evidence contains NaN or infinity."""
+    if value is None or is_boolean_value(value):
+        return False
+    if isinstance(value, (str, bytes, bytearray)):
+        return False
+
+    value_type = type(value)
+    module_root = value_type.__module__.split(".", 1)[0]
+    if module_root == "pandas":
+        to_numpy = getattr(value, "to_numpy", None)
+        if callable(to_numpy):
+            return _contains_non_finite_numeric_value(to_numpy())
+
+    if isinstance(value, Mapping):
+        return (
+            any(
+                _contains_non_finite_numeric_value(item)
+                for item in value.keys()
+            )
+            or any(
+                _contains_non_finite_numeric_value(item)
+                for item in value.values()
+            )
+        )
+
+    if isinstance(value, IterableCollection):
+        try:
+            iterator = iter(value)
+        except TypeError:
+            item = getattr(value, "item", None)
+            if module_root == "numpy" and callable(item):
+                return _contains_non_finite_numeric_value(item())
+            return False
+        return any(
+            _contains_non_finite_numeric_value(item)
+            for item in iterator
+        )
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return not math.isfinite(number)
+
+
 def crack_width_numeric_value(value) -> float | None:
     """Return a finite non-negative crack width without Boolean coercion."""
     if contains_boolean_value(value):
@@ -187,16 +246,69 @@ def _finite_signed_numeric_value(value) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _explicit_evidence_field(value) -> bool:
+def _explicit_evidence_field(
+    value,
+    *,
+    allow_nested_booleans: bool = False,
+) -> bool:
     """Return whether an audit-evidence field is explicit and non-empty."""
-    if value is None or contains_boolean_value(value):
+    if (
+        value is None
+        or (
+            is_boolean_value(value)
+            if allow_nested_booleans
+            else contains_boolean_value(value)
+        )
+        or _contains_non_finite_numeric_value(value)
+    ):
         return False
     if isinstance(value, (str, bytes)):
         return bool(value.strip())
     try:
         return len(value) > 0
     except TypeError:
-        return True
+        return _finite_signed_numeric_value(value) is not None
+
+
+def _validated_response_context(
+    raw_context,
+) -> tuple[dict, tuple[str, ...]]:
+    """Normalize typed response identity/routing evidence."""
+    if not isinstance(raw_context, Mapping):
+        return {
+            "combination": COMBINATION_UNSPECIFIED,
+            "duration": None,
+            "response_id": None,
+            "provenance": None,
+            "solver_provenance": None,
+        }, ("context is absent or not a mapping",)
+
+    raw = dict(raw_context)
+    issues = []
+    for key, label in (
+        ("combination", "SLS combination"),
+        ("duration", "duration state"),
+        ("response_id", "response identity"),
+        ("provenance", "mapping provenance"),
+    ):
+        if raw.get(key) is not None and not isinstance(raw.get(key), str):
+            issues.append(f"{label} is not typed text")
+    solver_provenance = raw.get("solver_provenance")
+    if (
+        solver_provenance is not None
+        and not _explicit_evidence_field(
+            solver_provenance,
+            allow_nested_booleans=True,
+        )
+    ):
+        issues.append("solver provenance is invalid")
+    return {
+        "combination": canonical_combination(raw.get("combination")),
+        "duration": _optional_text(raw.get("duration")),
+        "response_id": _optional_text(raw.get("response_id")),
+        "provenance": _optional_text(raw.get("provenance")),
+        "solver_provenance": copy.deepcopy(solver_provenance),
+    }, tuple(issues)
 
 
 def _validated_decompression_evidence(
@@ -208,27 +320,189 @@ def _validated_decompression_evidence(
     if not isinstance(raw_evidence, Mapping):
         return None, ("evidence is absent or not a mapping",)
 
-    evidence = dict(raw_evidence)
-    status = str(evidence.get("status") or "").strip().upper()
+    raw = dict(raw_evidence)
+    status = _upper_text(raw.get("status"))
     if status not in {"OK", "EXCEEDED", "NOT APPLICABLE"}:
         return None, ("acceptance status is missing or invalid",)
-    evidence["status"] = status
-
-    if evidence.get("solver_provenance") is None:
-        evidence["solver_provenance"] = fallback_solver_provenance
+    evidence = {"status": status}
+    raw_value = raw.get("value")
+    raw_governing = raw.get("governing")
+    explicit_solver_provenance = raw.get("solver_provenance")
+    solver_provenance = explicit_solver_provenance
+    if solver_provenance is None:
+        solver_provenance = fallback_solver_provenance
 
     issues = []
-    if status in {"OK", "EXCEEDED"}:
-        value = _finite_signed_numeric_value(evidence.get("value"))
+    if status in {"OK", "EXCEEDED"} or raw_value is not None:
+        value = _finite_signed_numeric_value(raw_value)
         if value is None:
             issues.append("concrete-stress value is not a finite numeric scalar")
         else:
             evidence["value"] = value
-        if not _explicit_evidence_field(evidence.get("governing")):
+    if (
+        status in {"OK", "EXCEEDED"}
+        or raw_governing is not None
+    ):
+        if not _explicit_evidence_field(raw_governing):
             issues.append("governing concrete location is missing")
-    if not _explicit_evidence_field(evidence.get("solver_provenance")):
+        else:
+            evidence["governing"] = copy.deepcopy(raw_governing)
+    if not _explicit_evidence_field(
+        solver_provenance,
+        allow_nested_booleans=True,
+    ):
         issues.append("solver provenance is missing")
+    else:
+        evidence["solver_provenance"] = copy.deepcopy(solver_provenance)
+    if (
+        explicit_solver_provenance is not None
+        and fallback_solver_provenance is not None
+        and (
+            not _explicit_evidence_field(
+                fallback_solver_provenance,
+                allow_nested_booleans=True,
+            )
+            or not _evidence_values_equal(
+                explicit_solver_provenance,
+                fallback_solver_provenance,
+            )
+        )
+    ):
+        issues.append(
+            "solver provenance conflicts with the response context"
+        )
+    reason = _optional_text(raw.get("reason"))
+    if reason:
+        evidence["reason"] = reason
     return (None if issues else evidence), tuple(issues)
+
+
+def _evidence_values_equal(left, right) -> bool:
+    """Compare normalized structured evidence without unsafe truth coercion."""
+    try:
+        return bool(left == right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _decompression_evidence_conflicts(
+    reference: Mapping,
+    candidate: Mapping,
+) -> tuple[str, ...]:
+    """Return acceptance-relevant fields that differ between two responses."""
+    conflicts = []
+    if reference.get("status") != candidate.get("status"):
+        conflicts.append("status")
+    left_value = reference.get("value")
+    right_value = candidate.get("value")
+    if left_value is None or right_value is None:
+        values_equal = left_value is None and right_value is None
+    else:
+        left_number = _finite_signed_numeric_value(left_value)
+        right_number = _finite_signed_numeric_value(right_value)
+        values_equal = (
+            left_number is not None
+            and right_number is not None
+            and math.isclose(
+                left_number,
+                right_number,
+                rel_tol=1e-9,
+                abs_tol=1e-12,
+            )
+        )
+    if not values_equal:
+        conflicts.append("value")
+    if not _evidence_values_equal(
+        reference.get("governing"),
+        candidate.get("governing"),
+    ):
+        conflicts.append("governing location")
+    if not _evidence_values_equal(
+        reference.get("solver_provenance"),
+        candidate.get("solver_provenance"),
+    ):
+        conflicts.append("solver provenance")
+    return tuple(conflicts)
+
+
+_CRACK_CRITERION_STATUSES = {
+    "INVALID",
+    "EXCEEDED",
+    "NOT ASSESSED",
+    "OK",
+    "NOT APPLICABLE",
+}
+
+
+def _crack_criteria_outcome(
+    criteria: Sequence[Mapping],
+) -> tuple[str, Mapping]:
+    """Apply the one canonical aggregate precedence to criterion results."""
+    items = list(criteria)
+    statuses = [_upper_text(item.get("status")) for item in items]
+    if any(status == "INVALID" for status in statuses):
+        overall_status = "INVALID"
+    elif any(status == "EXCEEDED" for status in statuses):
+        overall_status = "EXCEEDED"
+    elif any(status == "NOT ASSESSED" for status in statuses):
+        overall_status = "NOT ASSESSED"
+    elif any(status == "OK" for status in statuses):
+        overall_status = "OK"
+    else:
+        overall_status = "NOT APPLICABLE"
+
+    if overall_status in {"INVALID", "NOT ASSESSED"}:
+        governing = next(
+            item
+            for item in items
+            if _upper_text(item.get("status")) == overall_status
+        )
+    elif overall_status in {"EXCEEDED", "OK"}:
+        candidates = [
+            item
+            for item in items
+            if _upper_text(item.get("status")) == overall_status
+        ]
+
+        def utilisation(item):
+            value = _finite_signed_numeric_value(item.get("util"))
+            return value if value is not None else 0.0
+
+        governing = max(candidates, key=utilisation)
+    else:
+        governing = items[0]
+    return overall_status, governing
+
+
+def _crack_aggregate_fields(criteria: Sequence[Mapping]) -> dict:
+    """Build top-level acceptance fields from the governing criterion."""
+    overall_status, governing = _crack_criteria_outcome(criteria)
+    verdict = {
+        "OK": "PASS",
+        "EXCEEDED": "FAIL",
+        "NOT APPLICABLE": "NOT APPLICABLE",
+    }.get(overall_status, "REVIEW")
+    return {
+        "value": governing.get("value"),
+        "limit": governing.get("limit"),
+        "util": governing.get("util"),
+        "margin": governing.get("margin"),
+        "status": overall_status,
+        "verdict": verdict,
+        "case": governing.get("case"),
+        "governing": governing.get("governing"),
+        "criterion": governing.get("kind"),
+        "required_combination": governing.get("required_combination"),
+        "criterion_source": governing.get("criterion_source"),
+        "applicability": governing.get("applicability"),
+        "response_duration": governing.get("response_duration"),
+        "response_provenance": governing.get("response_provenance"),
+        "solver_provenance": governing.get("solver_provenance"),
+        "matched_responses": list(
+            governing.get("matched_responses") or []
+        ),
+        "reason": governing.get("reason"),
+    }
 
 
 def publication_safe_crack_assessment(
@@ -292,11 +566,15 @@ def publication_safe_crack_assessment(
         },
     )
     criteria = []
-    for raw in safe.get("criteria") or []:
+    raw_criteria = safe.get("criteria")
+    iterable_criteria = (
+        raw_criteria if isinstance(raw_criteria, (list, tuple)) else ()
+    )
+    for raw in iterable_criteria:
         if not isinstance(raw, Mapping):
             continue
         item = copy.deepcopy(dict(raw))
-        if str(item.get("status") or "").upper() != "NOT APPLICABLE":
+        if _upper_text(item.get("status")) != "NOT APPLICABLE":
             item.update(
                 status="NOT ASSESSED",
                 value=None,
@@ -346,7 +624,9 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
             raw_responses = []
         responses = []
         rejected = []
+        current_responses = {}
         criterion_responses = {}
+        response_names = set()
         for response_index, raw_response in enumerate(raw_responses):
             if not isinstance(raw_response, Mapping):
                 name = f"response {response_index + 1}"
@@ -361,8 +641,9 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                 }
             else:
                 response = copy.deepcopy(dict(raw_response))
-                name = str(
-                    response.get("name") or f"response {response_index + 1}"
+                name = (
+                    _optional_text(response.get("name"))
+                    or f"response {response_index + 1}"
                 )
                 width = response.get("wk_mm")
                 if (
@@ -376,26 +657,77 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     )
                 elif (
                     width is None
-                    and str(response.get("solver_status") or "").upper()
+                    and _upper_text(response.get("solver_status"))
                     != "NOT APPLICABLE"
-                    and not str(
-                        response.get("result_validation") or ""
-                    ).strip()
+                    and not _optional_text(
+                        response.get("result_validation")
+                    )
                 ):
                     response["result_validation"] = (
                         "Stored crack response has no validated numeric width."
                     )
+            response["name"] = name
 
-            validation = str(
-                response.get("result_validation") or ""
-            ).strip()
-            width = crack_width_numeric_value(response.get("wk_mm"))
-            context = response.get("context")
-            solver = (
-                context.get("solver_provenance")
-                if isinstance(context, Mapping)
-                else None
+            duplicate_name = name in response_names
+            response_names.add(name)
+            raw_context = response.get("context")
+            context, context_issues = _validated_response_context(
+                raw_context
             )
+            response["context"] = context
+            solver = context.get("solver_provenance")
+            if context_issues:
+                prior_validation = _optional_text(
+                    response.get("result_validation")
+                )
+                context_validation = (
+                    "Stored crack-response context rejected: "
+                    + "; ".join(context_issues)
+                    + "."
+                )
+                response["result_validation"] = " ".join(
+                    part
+                    for part in (prior_validation, context_validation)
+                    if part
+                )
+            if response.get("decompression") is not None:
+                evidence, evidence_issues = (
+                    _validated_decompression_evidence(
+                        response.get("decompression"),
+                        fallback_solver_provenance=solver,
+                    )
+                )
+                if evidence_issues:
+                    response.pop("decompression", None)
+                    response["decompression_validation"] = (
+                        "Stored decompression evidence rejected: "
+                        + "; ".join(evidence_issues)
+                        + "."
+                    )
+                else:
+                    response["decompression"] = evidence
+            validation = (
+                _optional_text(response.get("result_validation")) or ""
+            )
+            if duplicate_name:
+                rejected.append({
+                    "response": name,
+                    "reason": (
+                        "Stored crack-response identities are duplicated; "
+                        f"{name!r} is not unique."
+                    ),
+                    "solver_provenance": solver,
+                })
+            role = str(
+                _optional_text(response.get("acceptance_role")) or ""
+            ).lower()
+            response["acceptance_role"] = (
+                "informational"
+                if role == "informational"
+                else "criterion input"
+            )
+            if not duplicate_name:
+                current_responses[name] = response
             if validation:
                 rejected.append({
                     "response": name,
@@ -403,8 +735,8 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     "solver_provenance": solver,
                 })
             elif (
-                str(response.get("acceptance_role") or "").lower()
-                != "informational"
+                not duplicate_name
+                and response["acceptance_role"] != "informational"
             ):
                 criterion_responses[name] = response
             responses.append(response)
@@ -414,21 +746,86 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
             if isinstance(case.get("assessment"), Mapping)
             else {}
         )
+        raw_criteria = assessment.get("criteria")
+        normalized_criteria = []
+        criteria_issue = None
+        if raw_criteria is not None:
+            if not isinstance(raw_criteria, (list, tuple)):
+                criteria_issue = (
+                    "Stored crack criteria are not a structured list."
+                )
+            elif raw_criteria:
+                for criterion_index, raw_criterion in enumerate(raw_criteria):
+                    if not isinstance(raw_criterion, Mapping):
+                        criteria_issue = (
+                            "Stored crack criterion "
+                            f"{criterion_index + 1} is not a mapping."
+                        )
+                        break
+                    criterion = copy.deepcopy(dict(raw_criterion))
+                    status = _upper_text(criterion.get("status"))
+                    if status not in _CRACK_CRITERION_STATUSES:
+                        criteria_issue = (
+                            "Stored crack criterion "
+                            f"{criterion_index + 1} has no valid status."
+                        )
+                        break
+                    criterion["status"] = status
+                    normalized_criteria.append(criterion)
+        if criteria_issue:
+            assessment["criteria"] = []
+            rejected.append({
+                "response": "assessment criteria",
+                "reason": criteria_issue,
+                "solver_provenance": assessment.get(
+                    "solver_provenance"
+                ),
+            })
+        elif normalized_criteria:
+            assessment["criteria"] = normalized_criteria
+            assessment.update(
+                _crack_aggregate_fields(normalized_criteria)
+            )
+        elif raw_criteria is not None:
+            assessment["criteria"] = []
+        if (
+            normalized_criteria
+            or "response_contexts" in assessment
+            or "informational_responses" in assessment
+        ):
+            assessment["response_contexts"] = {
+                (
+                    _optional_text(response.get("name"))
+                    or f"response {index + 1}"
+                ): copy.deepcopy(response.get("context") or {})
+                for index, response in enumerate(responses)
+            }
+            assessment["informational_responses"] = [
+                (
+                    _optional_text(response.get("name"))
+                    or f"response {index + 1}"
+                )
+                for index, response in enumerate(responses)
+                if response.get("acceptance_role") == "informational"
+            ]
+
         acceptance_items = []
         if (
-            str(assessment.get("verdict") or "").upper()
-            in {"PASS", "FAIL"}
-            or str(assessment.get("status") or "").upper()
+            _upper_text(assessment.get("verdict")) in {"PASS", "FAIL"}
+            or _upper_text(assessment.get("status"))
             in {"OK", "EXCEEDED"}
         ):
             acceptance_items.append(("assessment", assessment))
+        assessment_criteria = assessment.get("criteria")
         for criterion_index, raw_criterion in enumerate(
-            assessment.get("criteria") or []
+            assessment_criteria
+            if isinstance(assessment_criteria, (list, tuple))
+            else ()
         ):
             if not isinstance(raw_criterion, Mapping):
                 continue
             criterion = dict(raw_criterion)
-            if str(criterion.get("status") or "").upper() in {
+            if _upper_text(criterion.get("status")) in {
                 "OK",
                 "EXCEEDED",
             }:
@@ -438,13 +835,13 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
 
         def item_response_names(item):
             names = []
-            case_name = str(item.get("case") or "").strip()
+            case_name = _optional_text(item.get("case"))
             if case_name:
                 names.append(case_name)
             matched = item.get("matched_responses")
             if isinstance(matched, (list, tuple)):
                 for raw_name in matched:
-                    name = str(raw_name).strip()
+                    name = _optional_text(raw_name)
                     if name and name not in names:
                         names.append(name)
             return names
@@ -459,20 +856,21 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     return context.get("solver_provenance")
             return assessment.get("solver_provenance")
 
-        def finite_numeric_value(value):
-            if value is None or contains_boolean_value(value):
-                return None
-            try:
-                number = float(value)
-            except (TypeError, ValueError):
-                return None
-            return number if math.isfinite(number) else None
-
-        def evidence_values_equal(left, right):
-            try:
-                return bool(left == right)
-            except (TypeError, ValueError):
-                return False
+        def acceptance_metadata_issue(label, item):
+            source = (
+                item.get("criterion_source")
+                or item.get("source")
+            )
+            if not isinstance(source, str) or not source.strip():
+                return (
+                    f"Stored {label} has no explicit criterion source."
+                )
+            if not isinstance(item.get("applicability"), Mapping):
+                return (
+                    f"Stored {label} has no structured criterion "
+                    "applicability."
+                )
+            return None
 
         def acceptance_evidence_issue(label, item):
             names = item_response_names(item)
@@ -522,7 +920,7 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     names,
                 )
             response_ids = {
-                str(contexts[name].get("response_id") or "").strip()
+                _optional_text(contexts[name].get("response_id")) or ""
                 for name in names
             }
             if "" in response_ids or len(response_ids) != 1:
@@ -531,11 +929,77 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     "response identity across all matched responses.",
                     names,
                 )
+            response_id = next(iter(response_ids))
+            current_required_names = []
+            identity_names = []
+            for current_name, response in current_responses.items():
+                context = response.get("context")
+                context = context if isinstance(context, Mapping) else {}
+                if canonical_combination(
+                    context.get("combination")
+                ) == required:
+                    current_required_names.append(current_name)
+                if (
+                    (_optional_text(context.get("response_id")) or "")
+                    == response_id
+                ):
+                    identity_names.append(current_name)
+            unaccounted = [
+                name
+                for name in current_required_names
+                if name not in names
+            ]
+            if unaccounted:
+                return (
+                    f"Stored {label} does not account for current "
+                    f"response(s) {', '.join(unaccounted)} mapped to the "
+                    f"required {required} combination; every such response "
+                    "must remain a criterion input.",
+                    names + unaccounted,
+                )
+            reference_context = contexts[names[0]]
+            identity_conflicts = []
+            for identity_name in identity_names:
+                context = current_responses[identity_name].get("context")
+                context = context if isinstance(context, Mapping) else {}
+                fields = []
+                if canonical_combination(
+                    context.get("combination")
+                ) != required:
+                    fields.append("SLS combination")
+                if (
+                    _optional_text(context.get("duration"))
+                    != _optional_text(reference_context.get("duration"))
+                ):
+                    fields.append("duration state")
+                if (
+                    _optional_text(context.get("provenance"))
+                    != _optional_text(reference_context.get("provenance"))
+                ):
+                    fields.append("mapping provenance")
+                if not _evidence_values_equal(
+                    context.get("solver_provenance"),
+                    reference_context.get("solver_provenance"),
+                ):
+                    fields.append("solver provenance")
+                if fields:
+                    identity_conflicts.append(
+                        f"{identity_name} ({', '.join(fields)})"
+                    )
+            if identity_conflicts:
+                return (
+                    f"Stored {label} response identity {response_id!r} "
+                    "has conflicting current structured context: "
+                    f"{'; '.join(identity_conflicts)}.",
+                    identity_names,
+                )
 
             kind = str(
-                item.get("kind") or item.get("criterion") or ""
+                _optional_text(item.get("kind"))
+                or _optional_text(item.get("criterion"))
+                or ""
             )
-            expected_status = str(item.get("status") or "").upper()
+            expected_status = _upper_text(item.get("status"))
             if kind == CRITERION_DECOMPRESSION:
                 stored_evidence, stored_issues = (
                     _validated_decompression_evidence({
@@ -571,56 +1035,40 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                             f"{'; '.join(evidence_issues)}.",
                             names,
                         )
-                    evidence_status = evidence["status"]
-                    if evidence_status != expected_status:
+                    conflicts = _decompression_evidence_conflicts(
+                        stored_evidence,
+                        evidence,
+                    )
+                    if "status" in conflicts:
                         return (
                             f"Stored {label} status {expected_status or '-'} "
                             f"does not match current {name} decompression "
-                            f"status {evidence_status or '-'}.",
+                            f"status {evidence['status'] or '-'}.",
                             names,
                         )
-                    stored_value = stored_evidence.get("value")
-                    current_value = evidence.get("value")
-                    if stored_value is None and current_value is None:
-                        pass
-                    else:
-                        stored_number = finite_numeric_value(stored_value)
-                        current_number = finite_numeric_value(current_value)
-                        if (
-                            stored_number is None
-                            or current_number is None
-                            or not math.isclose(
-                                stored_number,
-                                current_number,
-                                rel_tol=1e-9,
-                                abs_tol=1e-12,
-                            )
-                        ):
-                            return (
-                                f"Stored {label} decompression value does "
-                                f"not match current {name} evidence.",
-                                names,
-                            )
-                    if not evidence_values_equal(
-                        stored_evidence.get("governing"),
-                        evidence.get("governing"),
-                    ):
+                    if "value" in conflicts:
+                        return (
+                            f"Stored {label} decompression value does "
+                            f"not match current {name} evidence.",
+                            names,
+                        )
+                    if "governing location" in conflicts:
                         return (
                             f"Stored {label} governing decompression "
                             f"location does not match current {name} "
                             "evidence.",
                             names,
                         )
-                    if not evidence_values_equal(
-                        stored_evidence.get("solver_provenance"),
-                        evidence.get("solver_provenance"),
-                    ):
+                    if "solver provenance" in conflicts:
                         return (
                             f"Stored {label} decompression solver "
                             f"provenance does not match current {name} "
                             "evidence.",
                             names,
                         )
+                metadata_issue = acceptance_metadata_issue(label, item)
+                if metadata_issue:
+                    return metadata_issue, names
                 return None
 
             expected_value = crack_width_numeric_value(item.get("value"))
@@ -640,7 +1088,27 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     names,
                 )
             current_value = max(widths)
-            governing_name = str(item.get("case") or "").strip()
+            current_limit = _finite_positive(item.get("limit"))
+            if current_limit is None:
+                return (
+                    f"Stored {label} has no positive crack-width limit "
+                    "for its acceptance status.",
+                    names,
+                )
+            current_status = (
+                "OK"
+                if current_value <= current_limit
+                else "EXCEEDED"
+            )
+            if expected_status != current_status:
+                return (
+                    f"Stored {label} status {expected_status or '-'} does "
+                    f"not match current crack-width evidence "
+                    f"({current_value:.12g} mm against "
+                    f"{current_limit:.12g} mm gives {current_status}).",
+                    names,
+                )
+            governing_name = _optional_text(item.get("case"))
             if (
                 governing_name
                 and not math.isclose(
@@ -668,7 +1136,7 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     f"{current_value:.12g} mm.",
                     names,
                 )
-            if governing_name and not evidence_values_equal(
+            if governing_name and not _evidence_values_equal(
                 item.get("governing"),
                 criterion_responses[governing_name].get("element_id"),
             ):
@@ -677,6 +1145,9 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     f"current {governing_name} evidence.",
                     names,
                 )
+            metadata_issue = acceptance_metadata_issue(label, item)
+            if metadata_issue:
+                return metadata_issue, names
             return None
 
         if not rejected:
@@ -694,6 +1165,36 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     "solver_provenance": response_solver_provenance(names),
                 })
                 break
+        if not rejected:
+            def canonicalize_acceptance_metrics(item):
+                kind = str(
+                    _optional_text(item.get("kind"))
+                    or _optional_text(item.get("criterion"))
+                    or ""
+                )
+                status = _upper_text(item.get("status"))
+                if kind == CRITERION_DECOMPRESSION:
+                    item["limit"] = None
+                    item["util"] = None
+                    item["margin"] = None
+                elif status in {"OK", "EXCEEDED"}:
+                    value = crack_width_numeric_value(item.get("value"))
+                    limit = _finite_positive(item.get("limit"))
+                    if value is not None and limit is not None:
+                        item["value"] = value
+                        item["limit"] = limit
+                        item["util"] = value / limit
+                        item["margin"] = limit - value
+
+            published_criteria = assessment.get("criteria")
+            if isinstance(published_criteria, list) and published_criteria:
+                for item in published_criteria:
+                    canonicalize_acceptance_metrics(item)
+                assessment.update(
+                    _crack_aggregate_fields(published_criteria)
+                )
+            else:
+                canonicalize_acceptance_metrics(assessment)
         case["assessment"] = publication_safe_crack_assessment(
             assessment,
             rejected,
@@ -747,7 +1248,7 @@ def _standard_reference(edition: str, kind: str, dk_na: bool) -> str:
 
 
 def _criterion_source(reference: str, project_source: str) -> str:
-    project_source = str(project_source or "").strip()
+    project_source = _optional_text(project_source) or ""
     return (
         f"{reference}; project applicability source: {project_source}"
         if project_source
@@ -767,14 +1268,14 @@ def _criterion_record(
     configuration_reason: str | None = None,
     configuration_status: str | None = None,
 ) -> dict:
-    status = str(configuration_status or "").strip().upper()
+    status = _upper_text(configuration_status)
     if not status:
         status = "NOT ASSESSED" if configuration_reason else "READY"
     return {
         "id": criterion_id,
         "kind": kind,
         "source_type": source_type,
-        "source": str(source or "").strip(),
+        "source": _optional_text(source) or "",
         "required_combination": (
             canonical_combination(required_combination)
             if required_combination is not None
@@ -1382,7 +1883,31 @@ def crack_assessment(
     every other calculated response stays informational. Missing or duplicate
     response-state mappings fail closed as ``NOT ASSESSED``.
     """
-    supplied_criteria = [dict(item) for item in (criteria or [])]
+    supplied_criteria = []
+    criteria_invalid = False
+    if criteria is not None:
+        if not isinstance(criteria, (list, tuple)):
+            criteria_invalid = True
+        else:
+            for raw_criterion in criteria:
+                if not isinstance(raw_criterion, Mapping):
+                    criteria_invalid = True
+                    break
+                supplied_criteria.append(dict(raw_criterion))
+    if criteria_invalid:
+        supplied_criteria = [_criterion_record(
+            "calculated-criterion-integrity",
+            "Crack-control criterion configuration",
+            source_type="Configuration validation",
+            source="Structured criterion integrity gate",
+            required_combination=None,
+            limit_mm=None,
+            applicability={},
+            configuration_reason=(
+                "Crack-control criteria are not a structured list of "
+                "criterion mappings."
+            ),
+        )]
     if not supplied_criteria:
         supplied_criteria = [_criterion_record(
             "legacy-call-ambiguous",
@@ -1398,42 +1923,102 @@ def crack_assessment(
             ),
         )]
 
+    routing_integrity_issues = []
+    if response_contexts is not None and not isinstance(
+        response_contexts, Mapping
+    ):
+        routing_integrity_issues.append(
+            "Response contexts are not a structured mapping."
+        )
+    context_map = response_contexts if isinstance(
+        response_contexts, Mapping
+    ) else {}
     contexts = {}
     for name in cases:
-        raw = (response_contexts or {}).get(name) or {}
-        contexts[name] = {
-            "combination": canonical_combination(raw.get("combination")),
-            "duration": str(raw.get("duration") or "").strip() or None,
-            "response_id": str(
-                raw.get("response_id") or name
-            ).strip(),
-            "provenance": str(raw.get("provenance") or "").strip() or None,
-            "solver_provenance": raw.get("solver_provenance"),
-        }
+        raw = context_map.get(name)
+        if raw is None:
+            raw = {}
+        context, context_issues = _validated_response_context(raw)
+        if context_issues:
+            routing_integrity_issues.append(
+                f"Response context for {name} is invalid: "
+                f"{'; '.join(context_issues)}."
+            )
+        contexts[name] = context
+
+    if response_mapping_scope is None:
+        raw_mapping_scope = ()
+    elif isinstance(
+        response_mapping_scope,
+        (Mapping, str, bytes, bytearray),
+    ) or is_boolean_value(response_mapping_scope):
+        routing_integrity_issues.append(
+            "Table-wide response mapping scope is not a structured sequence."
+        )
+        raw_mapping_scope = ()
+    else:
+        try:
+            raw_mapping_scope = tuple(response_mapping_scope)
+        except TypeError:
+            routing_integrity_issues.append(
+                "Table-wide response mapping scope is not iterable."
+            )
+            raw_mapping_scope = ()
 
     mapping_scope = []
-    for index, raw in enumerate(response_mapping_scope or ()):
+    for index, raw in enumerate(raw_mapping_scope):
         if not isinstance(raw, Mapping):
+            routing_integrity_issues.append(
+                f"Table-wide response mapping {index + 1} is not a mapping."
+            )
             continue
-        response_id = str(raw.get("response_id") or "").strip()
+        scope_context, scope_issues = _validated_response_context(raw)
+        if scope_issues:
+            routing_integrity_issues.append(
+                f"Table-wide response mapping {index + 1} is invalid: "
+                f"{'; '.join(scope_issues)}."
+            )
+        response_id = scope_context["response_id"]
+        if not response_id:
+            routing_integrity_issues.append(
+                f"Table-wide response mapping {index + 1} has no explicit "
+                "response identity."
+            )
         mapping_scope.append({
-            "combination": canonical_combination(raw.get("combination")),
-            "duration": str(raw.get("duration") or "").strip() or None,
-            "response": str(
-                raw.get("response")
-                or raw.get("response_id")
+            "combination": scope_context["combination"],
+            "duration": scope_context["duration"],
+            "response": (
+                _optional_text(raw.get("response"))
+                or response_id
                 or f"response {index + 1}"
-            ).strip(),
-            "response_id": response_id or f"scope-response-{index + 1}",
+            ),
+            "response_id": response_id or None,
             "elastic_case": (
-                str(raw.get("elastic_case") or "").strip() or None
+                _optional_text(raw.get("elastic_case"))
             ),
-            "state": str(raw.get("state") or "").strip() or None,
-            "provenance": (
-                str(raw.get("provenance") or "").strip() or None
-            ),
-            "solver_provenance": raw.get("solver_provenance"),
+            "state": _optional_text(raw.get("state")),
+            "provenance": scope_context["provenance"],
+            "solver_provenance": scope_context["solver_provenance"],
         })
+    if response_mapping_scope is not None and not raw_mapping_scope:
+        routing_integrity_issues.append(
+            "Table-wide response mapping scope contains no response mappings."
+        )
+    scope_ids = [
+        context["response_id"]
+        for context in mapping_scope
+        if context["response_id"] is not None
+    ]
+    duplicate_scope_ids = sorted({
+        response_id
+        for response_id in scope_ids
+        if scope_ids.count(response_id) > 1
+    })
+    if duplicate_scope_ids:
+        routing_integrity_issues.append(
+            "Table-wide response mapping scope duplicates response "
+            f"identity: {', '.join(duplicate_scope_ids)}."
+        )
 
     if not valid:
         out = upper_limit_assessment(None, limit_mm, valid=False)
@@ -1468,7 +2053,49 @@ def crack_assessment(
         else:
             validated_widths[name] = width
 
+    disposition_map = (
+        dispositions if isinstance(dispositions, Mapping) else {}
+    )
+    if dispositions is not None and not isinstance(dispositions, Mapping):
+        routing_integrity_issues.append(
+            "Solver dispositions are not a structured mapping."
+        )
+    else:
+        for name in cases:
+            if (
+                name in disposition_map
+                and disposition_map[name] is not None
+                and not isinstance(disposition_map[name], Mapping)
+            ):
+                routing_integrity_issues.append(
+                    f"Solver disposition for {name} is not structured "
+                    "evidence."
+                )
+
     criterion_results = []
+    if routing_integrity_issues:
+        criterion_results.append({
+            "criterion_id": "crack-routing-integrity",
+            "kind": "Crack-control routing evidence integrity",
+            "criterion_source_type": "Routing validation",
+            "criterion_source": "Structured response-routing integrity gate",
+            "applicability": {
+                "issues": list(dict.fromkeys(routing_integrity_issues)),
+            },
+            "required_combination": None,
+            "limit": None,
+            "util": None,
+            "margin": None,
+            "value": None,
+            "case": None,
+            "governing": None,
+            "response_duration": None,
+            "response_provenance": None,
+            "solver_provenance": None,
+            "matched_responses": [],
+            "status": "NOT ASSESSED",
+            "reason": " ".join(dict.fromkeys(routing_integrity_issues)),
+        })
     if rejected_widths:
         criterion_results.append({
             "criterion_id": "calculated-crack-response-integrity",
@@ -1514,8 +2141,16 @@ def crack_assessment(
                 "verdict was issued."
             ),
         })
+    if routing_integrity_issues:
+        outcome = _crack_aggregate_fields(criterion_results)
+        outcome.update({
+            "criteria": criterion_results,
+            "response_contexts": contexts,
+            "response_mapping_scope": mapping_scope,
+            "informational_responses": list(cases),
+        })
+        return outcome
     matched_names: set[str] = set()
-    disposition_map = dispositions or {}
 
     for criterion in supplied_criteria:
         item = dict(criterion)
@@ -1524,13 +2159,19 @@ def crack_assessment(
             canonical_combination(required) if required is not None else None
         )
         limit = _finite_positive(item.get("limit_mm"))
-        label = str(item.get("kind") or "Crack width")
+        label = _optional_text(item.get("kind")) or "Crack width"
+        raw_applicability = item.get("applicability")
+        applicability = (
+            dict(raw_applicability)
+            if isinstance(raw_applicability, Mapping)
+            else {}
+        )
         base = {
             "criterion_id": item.get("id"),
             "kind": label,
             "criterion_source_type": item.get("source_type"),
             "criterion_source": item.get("source"),
-            "applicability": dict(item.get("applicability") or {}),
+            "applicability": applicability,
             "required_combination": required,
             "limit": limit,
             "util": None,
@@ -1544,9 +2185,40 @@ def crack_assessment(
             "matched_responses": [],
         }
         configuration_reason = item.get("configuration_reason")
-        configuration_status = str(
-            item.get("configuration_status") or ""
-        ).upper()
+        missing_metadata = [
+            field
+            for field, value in (
+                ("criterion identity", item.get("id")),
+                ("criterion source type", item.get("source_type")),
+                ("criterion source", item.get("source")),
+            )
+            if not isinstance(value, str) or not value.strip()
+        ]
+        if missing_metadata and not configuration_reason:
+            configuration_reason = (
+                "Criterion configuration lacks explicit "
+                + ", ".join(missing_metadata)
+                + "."
+            )
+        if (
+            raw_applicability is not None
+            and not isinstance(raw_applicability, Mapping)
+        ):
+            configuration_reason = (
+                "Criterion applicability is not structured evidence."
+            )
+        configuration_status = _upper_text(
+            item.get("configuration_status")
+        )
+        if configuration_status not in {
+            "",
+            "READY",
+            "NOT APPLICABLE",
+            "NOT ASSESSED",
+        }:
+            configuration_reason = (
+                "Criterion configuration status is invalid."
+            )
         if configuration_status == "NOT APPLICABLE":
             base.update(
                 status="NOT APPLICABLE",
@@ -1587,6 +2259,11 @@ def crack_assessment(
             context["response_id"] for context in scoped_candidates
         }
         if len(scoped_response_ids) > 1:
+            matched_names.update(
+                name
+                for name, context in contexts.items()
+                if context["combination"] == required
+            )
             base.update(
                 status="NOT ASSESSED",
                 case=", ".join(
@@ -1658,7 +2335,38 @@ def crack_assessment(
             )
             criterion_results.append(base)
             continue
+        if None in response_ids:
+            matched_names.update(candidates)
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(candidates),
+                matched_responses=candidates,
+                response_provenance=[
+                    {
+                        "response": name,
+                        "response_id": contexts[name]["response_id"],
+                        "combination": contexts[name]["combination"],
+                        "duration": contexts[name]["duration"],
+                        "mapping": contexts[name]["provenance"],
+                    }
+                    for name in candidates
+                ],
+                solver_provenance=[
+                    {
+                        "response": name,
+                        "solver": contexts[name]["solver_provenance"],
+                    }
+                    for name in candidates
+                ],
+                reason=(
+                    f"The {required} combination has no explicit current "
+                    "response identity; applicability cannot be correlated."
+                ),
+            )
+            criterion_results.append(base)
+            continue
         if len(response_ids) != 1:
+            matched_names.update(candidates)
             base.update(
                 status="NOT ASSESSED",
                 case=", ".join(candidates),
@@ -1686,23 +2394,160 @@ def crack_assessment(
             )
             criterion_results.append(base)
             continue
+        if (
+            scoped_response_ids
+            and response_ids != scoped_response_ids
+        ):
+            matched_names.update(candidates)
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(candidates),
+                matched_responses=candidates,
+                response_provenance=[
+                    {
+                        "response": name,
+                        "response_id": contexts[name]["response_id"],
+                        "combination": contexts[name]["combination"],
+                        "duration": contexts[name]["duration"],
+                        "mapping": contexts[name]["provenance"],
+                    }
+                    for name in candidates
+                ],
+                solver_provenance=[
+                    {
+                        "response": name,
+                        "solver": contexts[name]["solver_provenance"],
+                    }
+                    for name in candidates
+                ],
+                reason=(
+                    f"The current {required} response identity does not "
+                    "match the table-wide structured mapping scope. No "
+                    "acceptance verdict was issued."
+                ),
+            )
+            criterion_results.append(base)
+            continue
 
-        matched_names.update(candidates)
-        base["matched_responses"] = candidates
+        response_id = next(iter(response_ids))
+        if mapping_scope:
+            scoped_identity = [
+                context
+                for context in mapping_scope
+                if context["response_id"] == response_id
+            ]
+            if len(scoped_identity) != 1:
+                matched_names.update(candidates)
+                base.update(
+                    status="NOT ASSESSED",
+                    case=", ".join(candidates),
+                    matched_responses=candidates,
+                    reason=(
+                        f"The current {required} response identity "
+                        f"{response_id!r} is not represented exactly once in "
+                        "the table-wide structured mapping scope."
+                    ),
+                )
+                criterion_results.append(base)
+                continue
+            if scoped_identity[0]["combination"] != required:
+                matched_names.update(candidates)
+                base.update(
+                    status="NOT ASSESSED",
+                    case=", ".join(candidates),
+                    matched_responses=candidates,
+                    response_provenance=[scoped_identity[0]],
+                    reason=(
+                        f"The table-wide mapping for response identity "
+                        f"{response_id!r} designates "
+                        f"{scoped_identity[0]['combination']}, not the "
+                        f"required {required} combination."
+                    ),
+                )
+                criterion_results.append(base)
+                continue
+        aliases = [
+            name
+            for name, context in contexts.items()
+            if context["response_id"] == response_id
+        ]
+        reference_context = contexts[candidates[0]]
+        alias_conflicts = []
+        for alias in aliases:
+            context = contexts[alias]
+            fields = []
+            if context["combination"] != required:
+                fields.append("SLS combination")
+            if context["duration"] != reference_context["duration"]:
+                fields.append("duration state")
+            if context["provenance"] != reference_context["provenance"]:
+                fields.append("mapping provenance")
+            if not _evidence_values_equal(
+                context["solver_provenance"],
+                reference_context["solver_provenance"],
+            ):
+                fields.append("solver provenance")
+            if fields:
+                alias_conflicts.append(
+                    f"{alias} ({', '.join(fields)})"
+                )
+        if alias_conflicts:
+            matched_names.update(aliases)
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(aliases),
+                matched_responses=aliases,
+                response_provenance=[
+                    {
+                        "response": name,
+                        "response_id": contexts[name]["response_id"],
+                        "combination": contexts[name]["combination"],
+                        "duration": contexts[name]["duration"],
+                        "mapping": contexts[name]["provenance"],
+                    }
+                    for name in aliases
+                ],
+                solver_provenance=[
+                    {
+                        "response": name,
+                        "solver": contexts[name]["solver_provenance"],
+                    }
+                    for name in aliases
+                ],
+                reason=(
+                    f"Response labels sharing identity {response_id!r} have "
+                    "conflicting structured context: "
+                    f"{'; '.join(alias_conflicts)}. No acceptance verdict was "
+                    "issued."
+                ),
+            )
+            criterion_results.append(base)
+            continue
+
+        matched_names.update(aliases)
+        base["matched_responses"] = aliases
         base["response_duration"] = contexts[candidates[0]]["duration"]
         base["response_provenance"] = contexts[candidates[0]]["provenance"]
         base["solver_provenance"] = contexts[candidates[0]][
             "solver_provenance"
         ]
-        candidate_dispositions = [
-            (name, disposition_map.get(name))
-            for name in candidates
-            if disposition_map.get(name) is not None
-        ]
+        candidate_dispositions = []
+        for name in candidates:
+            disposition = disposition_map.get(name)
+            if disposition is None:
+                continue
+            if not isinstance(disposition, Mapping):
+                disposition = {
+                    "status": "NOT ASSESSED",
+                    "reason": (
+                        "Solver disposition is not structured evidence."
+                    ),
+                }
+            candidate_dispositions.append((name, disposition))
         blocking = [
             (name, disposition)
             for name, disposition in candidate_dispositions
-            if str(disposition.get("status") or "").upper()
+            if _upper_text(disposition.get("status"))
             in {"NOT ASSESSED", "INVALID"}
         ]
         if blocking:
@@ -1806,56 +2651,15 @@ def crack_assessment(
                 criterion_results.append(base)
                 continue
 
-            def _decompression_values_equal(left, right):
-                if left is None or right is None:
-                    return left is None and right is None
-                if contains_boolean_value(left) or contains_boolean_value(right):
-                    return False
-                try:
-                    left_number = float(left)
-                    right_number = float(right)
-                except (TypeError, ValueError):
-                    return False
-                return (
-                    math.isfinite(left_number)
-                    and math.isfinite(right_number)
-                    and math.isclose(
-                        left_number,
-                        right_number,
-                        rel_tol=1e-9,
-                        abs_tol=1e-12,
-                    )
-                )
-
-            def _decompression_fields_equal(left, right):
-                try:
-                    return bool(left == right)
-                except (TypeError, ValueError):
-                    return False
-
             name = candidates[0]
             evidence = decompression[name]
             conflicts = []
             for other_name in candidates[1:]:
                 other = decompression[other_name]
-                fields = []
-                if evidence["status"] != other["status"]:
-                    fields.append("status")
-                if not _decompression_values_equal(
-                    evidence.get("value"),
-                    other.get("value"),
-                ):
-                    fields.append("value")
-                if not _decompression_fields_equal(
-                    evidence.get("governing"),
-                    other.get("governing"),
-                ):
-                    fields.append("governing location")
-                if not _decompression_fields_equal(
-                    evidence.get("solver_provenance"),
-                    other.get("solver_provenance"),
-                ):
-                    fields.append("solver provenance")
+                fields = _decompression_evidence_conflicts(
+                    evidence,
+                    other,
+                )
                 if fields:
                     conflicts.append(
                         f"{other_name} ({', '.join(fields)})"
@@ -1961,77 +2765,15 @@ def crack_assessment(
         )
         criterion_results.append(base)
 
-    statuses = [item["status"] for item in criterion_results]
-    if any(status == "INVALID" for status in statuses):
-        overall_status = "INVALID"
-    elif any(status == "EXCEEDED" for status in statuses):
-        overall_status = "EXCEEDED"
-    elif any(status == "NOT ASSESSED" for status in statuses):
-        overall_status = "NOT ASSESSED"
-    elif any(status == "OK" for status in statuses):
-        overall_status = "OK"
-    else:
-        overall_status = "NOT APPLICABLE"
-
-    if overall_status in {"INVALID", "NOT ASSESSED"}:
-        governing_criterion = next(
-            item
-            for item in criterion_results
-            if item["status"] == overall_status
-            or (
-                overall_status == "NOT ASSESSED"
-                and item["status"] == "NOT ASSESSED"
-            )
-        )
-    elif overall_status == "EXCEEDED":
-        governing_criterion = max(
-            (
-                item
-                for item in criterion_results
-                if item["status"] == "EXCEEDED"
-            ),
-            key=lambda item: float(item.get("util") or 0.0),
-        )
-    elif overall_status == "OK":
-        governing_criterion = max(
-            (item for item in criterion_results if item["status"] == "OK"),
-            key=lambda item: float(item.get("util") or 0.0),
-        )
-    else:
-        governing_criterion = criterion_results[0]
-
     informational = [name for name in cases if name not in matched_names]
-    verdict = {
-        "OK": "PASS",
-        "EXCEEDED": "FAIL",
-        "NOT APPLICABLE": "NOT APPLICABLE",
-    }.get(overall_status, "REVIEW")
-    return {
-        "value": governing_criterion.get("value"),
-        "limit": governing_criterion.get("limit"),
-        "util": governing_criterion.get("util"),
-        "margin": governing_criterion.get("margin"),
-        "status": overall_status,
-        "verdict": verdict,
-        "case": governing_criterion.get("case"),
-        "governing": governing_criterion.get("governing"),
-        "criterion": governing_criterion.get("kind"),
-        "required_combination": governing_criterion.get(
-            "required_combination"
-        ),
-        "criterion_source": governing_criterion.get("criterion_source"),
-        "applicability": governing_criterion.get("applicability"),
-        "response_duration": governing_criterion.get("response_duration"),
-        "response_provenance": governing_criterion.get(
-            "response_provenance"
-        ),
-        "solver_provenance": governing_criterion.get("solver_provenance"),
-        "reason": governing_criterion.get("reason"),
+    outcome = _crack_aggregate_fields(criterion_results)
+    outcome.update({
         "criteria": criterion_results,
         "response_contexts": contexts,
         "response_mapping_scope": mapping_scope,
         "informational_responses": informational,
-    }
+    })
+    return outcome
 
 
 def element_rows(

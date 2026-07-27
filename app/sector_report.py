@@ -649,7 +649,10 @@ class ReportBuilder:
         governing = presentation.summary_governing_case_flags(rows)
         overall = presentation.overall_summary_status(rows)
         self._h2(f"Results overview - {overall}")
-        if any(row["check"] == "Crack width" for row in rows):
+        if any(
+            row["check"] in {"Crack width", "Decompression"}
+            for row in rows
+        ):
             self._p(
                 "<b>Crack-control conclusion limitation.</b> "
                 f"{CRACK_DIRECTIONAL_LIMITATION}"
@@ -4460,15 +4463,43 @@ class ReportBuilder:
         value = assessment.get("value")
         limit = assessment.get("limit")
         margin = assessment.get("margin")
+        decompression_governs = (
+            assessment.get("criterion") == sls_core.CRITERION_DECOMPRESSION
+        )
+        status_label = (
+            "Decompression" if decompression_governs else "Crack width"
+        )
+        result_label = (
+            "governing concrete stress"
+            if decompression_governs else "governing w<sub>k</sub>"
+        )
+        result_text = (
+            "-"
+            if value is None
+            else (
+                f"{_fmt(value, 3)} MPa"
+                if decompression_governs
+                else f"{_fmt(value, 3)} mm"
+            )
+        )
+        limit_text = (
+            "compression required"
+            if decompression_governs
+            else (
+                "not supplied"
+                if limit is None or limit <= 0.0
+                else f"{_fmt(limit, 3)} mm"
+            )
+        )
         text = (
-            f"{display_status} - Crack width | governing w<sub>k</sub> "
-            f"{'-' if value is None else _fmt(value, 3) + ' mm'} | limit "
-            f"{'not supplied' if limit is None or limit <= 0.0 else _fmt(limit, 3) + ' mm'} | "
+            f"{display_status} - {status_label} | {result_label} "
+            f"{result_text} | limit {limit_text} | "
             f"case {assessment.get('case') or '-'} | "
             f"element {assessment.get('governing') or '-'}"
         )
         if margin is not None:
-            text += f" | margin {_fmt(margin, 3)} mm"
+            margin_unit = "MPa" if decompression_governs else "mm"
+            text += f" | margin {_fmt(margin, 3)} {margin_unit}"
         self._status_block(text, status)
         self._small(
             "Acceptance route: "
@@ -4486,6 +4517,17 @@ class ReportBuilder:
             )
         criteria = assessment.get("criteria") or []
         if criteria:
+            def criterion_measure(item, key):
+                value = item.get(key)
+                if value is None:
+                    return "-"
+                unit = (
+                    "MPa"
+                    if item.get("kind") == sls_core.CRITERION_DECOMPRESSION
+                    else "mm"
+                )
+                return f"{_fmt(value, 3)} {unit}"
+
             rows = [[
                 "Criterion", "Required combination", "Matched response",
                 "Limit", "Result", "Status", "Source",
@@ -4498,13 +4540,12 @@ class ReportBuilder:
                         ", ".join(item.get("matched_responses") or []) or "-"
                     ),
                     (
-                        f"{_fmt(item.get('limit'), 3)} mm"
-                        if item.get("limit") is not None else "-"
+                        "compression required"
+                        if item.get("kind")
+                        == sls_core.CRITERION_DECOMPRESSION
+                        else criterion_measure(item, "limit")
                     ),
-                    (
-                        f"{_fmt(item.get('value'), 3)} mm"
-                        if item.get("value") is not None else "-"
-                    ),
+                    criterion_measure(item, "value"),
                     _html_escape(
                         presentation.assessment_status_label(item.get("status"))
                     ),

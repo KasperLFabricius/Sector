@@ -1503,6 +1503,141 @@ def test_report_preserves_dk_coarse_matched_response_as_criterion_input():
     assert "NOT ASSESSED - Crack width" not in text
 
 
+def test_report_formats_decompression_as_concrete_stress_not_crack_width():
+    out = _out()
+    elastic = out["elastic"]
+    response = dict(
+        elastic["crack"],
+        decompression={
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "solver_provenance": {"state": "long"},
+        },
+    )
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "long",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total (long + short)": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "response_id": "total",
+            "solver_provenance": {"state": "total"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {
+            "Long-term": response,
+            "Total (long + short)": elastic["crack_short"],
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    assert assessment["criterion"] == sls.CRITERION_DECOMPRESSION
+    elastic.update(
+        crack=response,
+        crack_responses={
+            "Long-term": response,
+            "Total (long + short)": elastic["crack_short"],
+        },
+        crack_response_contexts=contexts,
+        crack_assessment=assessment,
+    )
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "PASS - Decompression" in compact
+    assert "-0.250 MPa" in compact
+    assert "compression required" in compact
+    assert "-0.250 mm" not in compact
+
+
+def test_report_reapplies_failure_precedence_over_incomplete_criterion():
+    out = _out()
+    elastic = out["elastic"]
+    elastic["crack"]["wk"] = 0.31
+    elastic["crack"]["element_id"] = "bar 1"
+    elastic["crack_assessment"] = {
+        "status": "NOT ASSESSED",
+        "verdict": "REVIEW",
+        "criteria": [
+            {
+                "kind": sls.CRITERION_DURABILITY,
+                "status": "EXCEEDED",
+                "criterion_source": (
+                    "QA controlled durability criterion"
+                ),
+                "applicability": {
+                    "prestress_class": (
+                        sls.PRESTRESS_REINFORCED_UNBONDED
+                    ),
+                },
+                "case": "Long-term",
+                "matched_responses": ["Long-term"],
+                "value": 0.31,
+                "limit": 0.30,
+                "util": 0.31 / 0.30,
+                "margin": -0.01,
+                "governing": "bar 1",
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+            },
+            {
+                "kind": sls.CRITERION_DECOMPRESSION,
+                "status": "NOT ASSESSED",
+                "criterion_source": (
+                    "QA controlled decompression criterion"
+                ),
+                "applicability": {
+                    "prestress_class": (
+                        sls.PRESTRESS_REINFORCED_UNBONDED
+                    ),
+                },
+                "matched_responses": [],
+                "required_combination": sls.COMBINATION_FREQUENT,
+                "reason": "Concrete-stress evidence is unavailable.",
+            },
+        ],
+        "response_contexts": {
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "long",
+                "duration": "Sustained / long-term response",
+            },
+            "Total (long + short)": {
+                "combination": sls.COMBINATION_CHARACTERISTIC,
+                "response_id": "total",
+                "duration": "Instantaneous total response",
+            },
+        },
+        "informational_responses": ["Total (long + short)"],
+    }
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "FAIL - Crack width" in compact
+    assert "NOT ASSESSED - Crack width" not in compact
+    assert "0.310 mm" in compact
+
+
 def test_report_invalidates_stale_pass_when_governing_width_changes():
     out = _out()
     elastic = out["elastic"]

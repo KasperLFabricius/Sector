@@ -370,6 +370,424 @@ def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
     assert result["informational_responses"] == ["Total"]
 
 
+@pytest.mark.parametrize(
+    (
+        "responses",
+        "contexts",
+        "expected_status",
+        "expected_matched",
+        "reason_fragment",
+    ),
+    [
+        pytest.param(
+            {"Other": {"wk": 0.22, "element_id": "R1"}},
+            {
+                "Other": {
+                    "combination": sls.COMBINATION_CHARACTERISTIC,
+                    "response_id": "other",
+                },
+            },
+            "NOT ASSESSED",
+            [],
+            "No calculated response",
+            id="zero-matched",
+        ),
+        pytest.param(
+            {"QP": {"wk": 0.22, "element_id": "R1"}},
+            {
+                "QP": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
+                },
+            },
+            "OK",
+            ["QP"],
+            None,
+            id="one-explicit",
+        ),
+        pytest.param(
+            {
+                "Fine": {"wk": 0.22, "element_id": "R1"},
+                "Coarse": {"wk": 0.18, "element_id": "R2"},
+            },
+            {
+                name: {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "duration": "sustained",
+                    "response_id": "long",
+                    "provenance": "controlled QP mapping",
+                    "solver_provenance": {"state": "long"},
+                }
+                for name in ("Fine", "Coarse")
+            },
+            "OK",
+            ["Fine", "Coarse"],
+            None,
+            id="many-fine-coarse-aliases",
+        ),
+        pytest.param(
+            {
+                "QP-A": {"wk": 0.22, "element_id": "R1"},
+                "QP-B": {"wk": 0.18, "element_id": "R2"},
+            },
+            {
+                "QP-A": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp-a",
+                },
+                "QP-B": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp-b",
+                },
+            },
+            "NOT ASSESSED",
+            ["QP-A", "QP-B"],
+            "ambiguous",
+            id="many-independent",
+        ),
+        pytest.param(
+            {"QP": {"wk": 0.22, "element_id": "R1"}},
+            {
+                "QP": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                },
+            },
+            "NOT ASSESSED",
+            ["QP"],
+            "no explicit current response identity",
+            id="missing-identity",
+        ),
+        pytest.param(
+            {
+                "Fine": {"wk": 0.22, "element_id": "R1"},
+                "Coarse": {"wk": 0.18, "element_id": "R2"},
+            },
+            {
+                "Fine": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "long",
+                },
+                "Coarse": {
+                    "combination": sls.COMBINATION_FREQUENT,
+                    "response_id": "long",
+                },
+            },
+            "NOT ASSESSED",
+            ["Fine", "Coarse"],
+            "conflicting structured context",
+            id="same-identity-combination-conflict",
+        ),
+    ],
+)
+def test_crack_response_identity_state_matrix(
+    responses,
+    contexts,
+    expected_status,
+    expected_matched,
+    reason_fragment,
+):
+    result = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts=contexts,
+    )
+
+    assert result["status"] == expected_status
+    assert result["matched_responses"] == expected_matched
+    assert not (
+        set(expected_matched)
+        & set(result["informational_responses"])
+    )
+    if reason_fragment is not None:
+        assert reason_fragment in result["reason"]
+
+
+@pytest.mark.parametrize(
+    ("current_responses", "reason_fragment"),
+    [
+        pytest.param(
+            [
+                {
+                    "name": "Fine",
+                    "wk_mm": 0.22,
+                    "element_id": "R1",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "long",
+                    },
+                },
+                {
+                    "name": "Coarse",
+                    "wk_mm": 0.18,
+                    "element_id": "R2",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "long",
+                    },
+                },
+            ],
+            "does not account for current response",
+            id="new-fine-coarse-alias",
+        ),
+        pytest.param(
+            [
+                {
+                    "name": "Fine",
+                    "wk_mm": 0.22,
+                    "element_id": "R1",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "long",
+                    },
+                },
+                {
+                    "name": "Coarse",
+                    "wk_mm": 0.18,
+                    "element_id": "R2",
+                    "acceptance_role": "informational",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "long",
+                    },
+                },
+            ],
+            "does not account for current response",
+            id="required-alias-misclassified-informational",
+        ),
+        pytest.param(
+            [
+                {
+                    "name": "Fine",
+                    "wk_mm": 0.22,
+                    "element_id": "R1",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "long",
+                    },
+                },
+                {
+                    "name": "Fine",
+                    "wk_mm": 0.18,
+                    "element_id": "R2",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "long",
+                    },
+                },
+            ],
+            "identities are duplicated",
+            id="duplicate-name",
+        ),
+        pytest.param(
+            [
+                {
+                    "name": "Fine",
+                    "wk_mm": 0.22,
+                    "element_id": "R1",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "long",
+                    },
+                },
+                {
+                    "name": "Coarse",
+                    "wk_mm": 0.18,
+                    "element_id": "R2",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_FREQUENT,
+                        "response_id": "long",
+                    },
+                },
+            ],
+            "conflicting current structured context",
+            id="alias-combination-conflict",
+        ),
+        pytest.param(
+            [
+                {
+                    "name": "Fine",
+                    "wk_mm": 0.22,
+                    "element_id": "R1",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "long",
+                    },
+                },
+                {
+                    "name": "Other QP",
+                    "wk_mm": 0.18,
+                    "element_id": "R2",
+                    "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "other",
+                    },
+                },
+            ],
+            "does not account for current response",
+            id="new-independent-response",
+        ),
+    ],
+)
+def test_publication_response_identity_state_matrix(
+    current_responses,
+    reason_fragment,
+):
+    assessment = sls.crack_assessment(
+        {"Fine": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "Fine": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "long",
+            },
+        },
+    )
+    assert assessment["verdict"] == "PASS"
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": assessment,
+            "responses": current_responses,
+        }],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert published["value"] is None
+    assert reason_fragment in published["publication_validation"]["reason"]
+    assert set(published["response_contexts"]) == {
+        item["name"] for item in current_responses
+    }
+
+
+def test_publication_rejects_status_not_supported_by_current_width():
+    record = sls.publication_safe_crack_control_record({
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "case": "QP",
+                "value": 0.31,
+                "limit": 0.30,
+                "governing": "R1",
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+            },
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.31,
+                "element_id": "R1",
+                "acceptance_role": "criterion input",
+                "context": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
+                },
+            }],
+        }],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert "gives EXCEEDED" in published["publication_validation"]["reason"]
+
+
+def test_publication_rebuilds_width_metrics_from_current_evidence():
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+    assessment["util"] = 99.0
+    assessment["margin"] = -99.0
+    assessment["criteria"][0]["util"] = 99.0
+    assessment["criteria"][0]["margin"] = -99.0
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": assessment,
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.22,
+                "element_id": "R1",
+                "acceptance_role": "criterion input",
+                "context": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
+                },
+            }],
+        }],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["verdict"] == "PASS"
+    assert published["util"] == pytest.approx(0.22 / 0.30)
+    assert published["margin"] == pytest.approx(0.08)
+    assert published["criteria"][0]["util"] == pytest.approx(0.22 / 0.30)
+    assert published["criteria"][0]["margin"] == pytest.approx(0.08)
+
+
+def test_publication_rejects_acceptance_without_criterion_source():
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+    assessment["criteria"][0]["criterion_source"] = ""
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": assessment,
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.22,
+                "element_id": "R1",
+                "acceptance_role": "criterion input",
+                "context": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
+                },
+            }],
+        }],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert "no explicit criterion source" in (
+        published["publication_validation"]["reason"]
+    )
+
+
 def test_unrelated_not_assessed_response_cannot_block_qp_criterion():
     result = sls.crack_assessment(
         {
@@ -454,7 +872,40 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
 @pytest.mark.parametrize(
     "evidence",
     [
-        pytest.param({"status": "OK"}, id="status-only"),
+        pytest.param(
+            {
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            id="missing-status",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            id="missing-value",
+        ),
+        pytest.param(
+            {
+                "status": True,
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            id="boolean-status",
+        ),
+        pytest.param(
+            {
+                "status": np.asarray(["OK"]),
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            id="non-scalar-status",
+        ),
         pytest.param(
             {
                 "status": "OK",
@@ -463,6 +914,15 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
                 "solver_provenance": {"state": "long"},
             },
             id="boolean-value",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": float("nan"),
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            id="non-finite-value",
         ),
         pytest.param(
             {
@@ -477,9 +937,66 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
             {
                 "status": "OK",
                 "value": -0.25,
+                "governing": False,
+                "solver_provenance": {"state": "long"},
+            },
+            id="boolean-location",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
                 "governing": "concrete point 1",
             },
             id="missing-provenance",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": False,
+            },
+            id="boolean-provenance",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": float("nan"),
+                "solver_provenance": {"state": "long"},
+            },
+            id="non-finite-location",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": float("inf"),
+            },
+            id="non-finite-provenance",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": {"point": float("nan")},
+                "solver_provenance": {"state": "long"},
+            },
+            id="nested-non-finite-location",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": {
+                    "state": "long",
+                    "residual": float("inf"),
+                },
+            },
+            id="nested-non-finite-provenance",
         ),
     ],
 )
@@ -516,6 +1033,124 @@ def test_decompression_rejects_incomplete_acceptance_evidence(evidence):
     assert "Decompression evidence is incomplete" in result["reason"]
 
 
+def test_decompression_rejects_solver_provenance_context_conflict():
+    result = sls.crack_assessment(
+        {
+            "QP": {
+                "wk": 0.18,
+                "element_id": "T1",
+                "decompression": {
+                    "status": "OK",
+                    "value": -0.25,
+                    "governing": "concrete point 1",
+                    "solver_provenance": {"state": "decompression"},
+                },
+            },
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+                "solver_provenance": {"state": "response"},
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert "conflicts with the response context" in result["reason"]
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected_status"),
+    [
+        pytest.param(
+            {
+                "status": "NOT APPLICABLE",
+                "solver_provenance": {
+                    "state": "long",
+                    "converged": True,
+                },
+            },
+            "NOT APPLICABLE",
+            id="valid-not-applicable",
+        ),
+        pytest.param(
+            {
+                "status": "NOT APPLICABLE",
+                "value": True,
+                "solver_provenance": {"state": "long"},
+            },
+            "NOT ASSESSED",
+            id="boolean-present-value",
+        ),
+        pytest.param(
+            {
+                "status": "NOT APPLICABLE",
+                "governing": float("inf"),
+                "solver_provenance": {"state": "long"},
+            },
+            "NOT ASSESSED",
+            id="non-finite-present-location",
+        ),
+        pytest.param(
+            {
+                "status": "NOT APPLICABLE",
+                "solver_provenance": False,
+            },
+            "NOT ASSESSED",
+            id="boolean-provenance",
+        ),
+    ],
+)
+def test_decompression_not_applicable_evidence_state_matrix(
+    evidence,
+    expected_status,
+):
+    result = sls.crack_assessment(
+        {
+            "QP": {
+                "wk": 0.18,
+                "element_id": "T1",
+                "decompression": evidence,
+            },
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+
+    assert result["status"] == expected_status
+    assert result["verdict"] == (
+        "NOT APPLICABLE"
+        if expected_status == "NOT APPLICABLE"
+        else "REVIEW"
+    )
+
+
 @pytest.mark.parametrize(
     ("coarse_evidence", "expected_status"),
     [
@@ -533,12 +1168,42 @@ def test_decompression_rejects_incomplete_acceptance_evidence(evidence):
         pytest.param(
             {
                 "status": "EXCEEDED",
-                "value": 0.10,
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            "NOT ASSESSED",
+            id="conflicting-status",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.10,
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            "NOT ASSESSED",
+            id="conflicting-value",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
                 "governing": "concrete point 2",
                 "solver_provenance": {"state": "long"},
             },
             "NOT ASSESSED",
-            id="conflicting",
+            id="conflicting-location",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "changed"},
+            },
+            "NOT ASSESSED",
+            id="conflicting-provenance",
         ),
     ],
 )
@@ -1017,6 +1682,125 @@ def test_non_mapping_response_fails_closed_before_decompression_routing():
     }]
 
 
+@pytest.mark.parametrize(
+    ("routing_override", "reason_fragment"),
+    [
+        pytest.param(
+            {"response_contexts": True},
+            "Response contexts are not a structured mapping",
+            id="non-mapping-context-container",
+        ),
+        pytest.param(
+            {"response_contexts": {"QP": True}},
+            "context is absent or not a mapping",
+            id="non-mapping-response-context",
+        ),
+        pytest.param(
+            {"criteria": True},
+            "not a structured list",
+            id="non-sequence-criteria",
+        ),
+        pytest.param(
+            {"criteria": [True]},
+            "not a structured list",
+            id="non-mapping-criterion",
+        ),
+        pytest.param(
+            {"dispositions": {"QP": True}},
+            "not structured evidence",
+            id="non-mapping-disposition",
+        ),
+        pytest.param(
+            {"dispositions": True},
+            "Solver dispositions are not a structured mapping",
+            id="non-mapping-disposition-container",
+        ),
+        pytest.param(
+            {"response_mapping_scope": True},
+            "Table-wide response mapping scope is not a structured sequence",
+            id="non-sequence-mapping-scope",
+        ),
+        pytest.param(
+            {"response_mapping_scope": [True]},
+            "Table-wide response mapping 1 is not a mapping",
+            id="non-mapping-scope-entry",
+        ),
+        pytest.param(
+            {"response_mapping_scope": []},
+            "contains no response mappings",
+            id="empty-mapping-scope",
+        ),
+        pytest.param(
+            {
+                "response_mapping_scope": [{
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                }],
+            },
+            "has no explicit response identity",
+            id="missing-scope-response-identity",
+        ),
+        pytest.param(
+            {
+                "response_mapping_scope": [
+                    {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "EL-QP:long",
+                    },
+                    {
+                        "combination": sls.COMBINATION_FREQUENT,
+                        "response_id": "EL-QP:long",
+                    },
+                ],
+            },
+            "duplicates response identity",
+            id="duplicate-scope-response-identity",
+        ),
+        pytest.param(
+            {
+                "criteria": [{
+                    "id": "qa-width",
+                    "kind": sls.CRITERION_DURABILITY,
+                    "source_type": sls.CRITERION_MODE_STANDARD,
+                    "source": "",
+                    "required_combination": (
+                        sls.COMBINATION_QUASI_PERMANENT
+                    ),
+                    "limit_mm": 0.30,
+                    "applicability": {},
+                }],
+            },
+            "lacks explicit criterion source",
+            id="missing-criterion-source",
+        ),
+    ],
+)
+def test_malformed_routing_evidence_fails_closed(
+    routing_override,
+    reason_fragment,
+):
+    arguments = {
+        "criteria": sls.crack_criteria_from_inputs(_standard_inputs()),
+        "response_contexts": {
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    }
+    arguments.update(routing_override)
+
+    result = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        **arguments,
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["value"] is None
+    assert reason_fragment in result["reason"]
+
+
 def test_missing_required_combination_is_review_with_response_provenance():
     result = sls.crack_assessment(
         {"Long-term": {"wk": 0.18, "element_id": "bar 2"}},
@@ -1142,6 +1926,60 @@ def test_duplicate_required_combination_across_elastic_cases_is_review():
     ] == ["EL-QP-A:long", "EL-QP-B:long"]
     assert result["response_mapping_scope"][1]["provenance"].endswith(
         "long_combination table field"
+    )
+
+
+def test_required_combination_must_match_table_scope_response_identity():
+    result = sls.crack_assessment(
+        {"Long-term": {"wk": 0.18, "element_id": "bar 1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "stale:long",
+            },
+        },
+        response_mapping_scope=[{
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response": "EL-QP / long",
+            "response_id": "EL-QP:long",
+            "elastic_case": "EL-QP",
+            "state": "long",
+        }],
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["value"] is None
+    assert "does not match the table-wide" in result["reason"]
+
+
+def test_required_combination_must_match_table_scope_combination():
+    result = sls.crack_assessment(
+        {"Long-term": {"wk": 0.18, "element_id": "bar 1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "EL-QP:long",
+            },
+        },
+        response_mapping_scope=[{
+            "combination": sls.COMBINATION_FREQUENT,
+            "response": "EL-QP / long",
+            "response_id": "EL-QP:long",
+            "elastic_case": "EL-QP",
+            "state": "long",
+        }],
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["value"] is None
+    assert "designates Frequent, not the required Quasi-permanent" in (
+        result["reason"]
     )
 
 

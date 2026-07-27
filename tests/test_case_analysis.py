@@ -313,7 +313,7 @@ def test_duplicate_crack_mapping_scope_is_global_and_invalidates_row_cache():
             response_contexts={
                 "Long-term": {
                     "combination": case_inp["sls_long_combination"],
-                    "response_id": "long",
+                    "response_id": f"{case_name}:long",
                 }
             },
             response_mapping_scope=case_inp["sls_response_mapping_scope"],

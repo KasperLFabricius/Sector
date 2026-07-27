@@ -5444,6 +5444,11 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
         ("value", -0.10, "decompression value does not match"),
         ("value", True, "decompression evidence is incomplete"),
         (
+            "solver_provenance",
+            float("nan"),
+            "decompression evidence is incomplete",
+        ),
+        (
             "governing",
             "concrete point 2",
             "governing decompression location does not match",
@@ -5578,6 +5583,186 @@ def test_changed_non_governing_decompression_evidence_invalidates_pass():
     assert "current Coarse evidence" in (
         recorded["publication_validation"]["reason"]
     )
+
+
+def test_download_and_autosave_share_decompression_publication_guard(
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "qp",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    invalid_response = copy.deepcopy(response)
+    invalid_response["decompression"]["solver_provenance"][
+        "residual"
+    ] = float("inf")
+    stale_record = {
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": assessment,
+            "responses": [{
+                "name": "QP",
+                "wk_mm": invalid_response["wk"],
+                "element_id": invalid_response["element_id"],
+                "decompression": invalid_response["decompression"],
+                "acceptance_role": "criterion input",
+                "context": contexts["QP"],
+            }],
+        }],
+    }
+    calculation = {
+        "input_sha256": "stale",
+        "crack_control": stale_record,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(sector_app, "_project_state", lambda: ({}, {}))
+
+    download_text = sector_app._gather_project()
+    download_record = json.loads(download_text)["calculation"][
+        "crack_control"
+    ]
+    download_assessment = download_record["cases"][0]["assessment"]
+    assert download_assessment["status"] == "NOT ASSESSED"
+    assert download_assessment["verdict"] == "REVIEW"
+    assert "Infinity" not in download_text
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: "current-input-hash",
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        captured["path"] = path
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+    saved = json.loads(captured["data"])["calculation"][
+        "crack_control"
+    ]["cases"][0]["assessment"]
+    assert durable["status"] == "NOT ASSESSED"
+    assert saved["status"] == "NOT ASSESSED"
+    assert "Infinity" not in captured["data"]
+
+
+def test_crack_panel_labels_decompression_evidence_in_mpa(monkeypatch):
+    import sector_app
+
+    rendered = {
+        "success": [],
+        "dataframes": [],
+    }
+    fake_st = SimpleNamespace(
+        markdown=lambda *_args, **_kwargs: None,
+        caption=lambda *_args, **_kwargs: None,
+        success=lambda message, **_kwargs: rendered["success"].append(message),
+        error=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        info=lambda *_args, **_kwargs: None,
+        dataframe=lambda data, **_kwargs: rendered["dataframes"].append(data),
+    )
+    monkeypatch.setattr(sector_app, "st", fake_st)
+    sector_app._crack_width_panel({
+        "crack": None,
+        "crack_short": None,
+        "crack_code": "EN 1992-1-1:2023",
+        "crack_assessment": {
+            "status": "OK",
+            "criterion": sls.CRITERION_DECOMPRESSION,
+            "value": -0.25,
+            "limit": None,
+            "case": "QP",
+            "governing": "concrete point 1",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "criterion_source": "QA controlled criterion",
+            "criteria": [{
+                "kind": sls.CRITERION_DECOMPRESSION,
+                "status": "OK",
+                "value": -0.25,
+                "limit": None,
+                "matched_responses": ["QP"],
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+            }],
+            "response_contexts": {},
+        },
+    })
+
+    assert len(rendered["success"]) == 1
+    assert "-0.250 MPa" in rendered["success"][0]
+    assert "-0.250 mm" not in rendered["success"][0]
+    criterion_row = rendered["dataframes"][0][0]
+    assert criterion_row["Limit / requirement"] == "compression required"
+    assert criterion_row["Result"] == "-0.250 MPa"
 
 
 def test_2023_protection_route_change_invalidates_elastic_cache():

@@ -13,7 +13,7 @@ import fatigue_presentation
 
 import case_analysis
 import viz
-from sector import detailing
+from sector import detailing, sls
 
 _MM = 1000.0
 _DEGREE = chr(0x00B0)
@@ -668,12 +668,21 @@ def result_summary_rows(inp, results, *, stale=False):
                 else _map_assessment_status(assessment.get("status"))
             )
             value, limit = assessment.get("value"), assessment.get("limit")
-            result = "-" if value is None else f"{value:.3f} mm"
-            criterion = (
-                "not supplied"
-                if limit is None or limit <= 0.0
-                else f"<= {limit:.3f} mm"
+            decompression = (
+                assessment.get("criterion") == sls.CRITERION_DECOMPRESSION
             )
+            if decompression:
+                result = "-" if value is None else f"{value:.3f} MPa"
+                criterion = "concrete stress <= 0 MPa"
+                check = "Decompression"
+            else:
+                result = "-" if value is None else f"{value:.3f} mm"
+                criterion = (
+                    "not supplied"
+                    if limit is None or limit <= 0.0
+                    else f"<= {limit:.3f} mm"
+                )
+                check = "Crack width"
             note_parts = []
             if assessment.get("reason"):
                 note_parts.append(str(assessment["reason"]))
@@ -682,7 +691,7 @@ def result_summary_rows(inp, results, *, stale=False):
             if elastic.get("crack_scope_note"):
                 note_parts.append(str(elastic["crack_scope_note"]))
             rows.append(_summary_row(
-                "Crack width", "elastic", status, result, criterion,
+                check, "elastic", status, result, criterion,
                 assessment.get("util"), "Elastic Results",
                 " ".join(note_parts), inp,
             ))
