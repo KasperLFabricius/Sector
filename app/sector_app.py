@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import functools
+import hashlib
 import math
 import os
 import pathlib
@@ -2080,7 +2081,239 @@ _INPUT_STATE_KEY = "_durable_input_scalars"
 _INPUT_BUILD_KEY = "_inputs_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
+_INVALID_FACTOR_INPUT_KEYS_KEY = "_invalid_factor_input_keys"
 _INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
+_FATIGUE_NUMERIC_FACTOR_KEYS = frozenset(
+    key
+    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS
+    if key.startswith("fatigue_")
+)
+_TORSION_NUMERIC_FACTOR_KEYS = frozenset(
+    key
+    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS
+    if key.startswith("torsion_")
+)
+_FACTOR_MODE_STATE = {
+    "fatigue": {
+        "mode_key": "fatigue_factor_mode",
+        "override_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "value_keys": ("fatigue_gamma_s", "fatigue_gamma_c"),
+        "approval_key": "fatigue_factor_approval",
+        "snapshot_key": "_fatigue_override_factor_snapshot",
+        "previous_mode_key": "_fatigue_factor_mode_previous",
+    },
+    "torsion": {
+        "mode_key": "torsion_factor_mode",
+        "override_mode": codes.FACTOR_MODE_OVERRIDE,
+        "value_keys": ("torsion_gamma_ct",),
+        "approval_key": "torsion_factor_approval",
+        "snapshot_key": "_torsion_override_factor_snapshot",
+        "previous_mode_key": "_torsion_factor_mode_previous",
+    },
+}
+_FACTOR_MODE_RUNTIME_KEYS = tuple(
+    key
+    for spec in _FACTOR_MODE_STATE.values()
+    for key in (spec["snapshot_key"], spec["previous_mode_key"])
+)
+
+
+def _invalid_factor_input_keys() -> tuple[str, ...]:
+    """Return the canonical rejected-factor marker from live session state."""
+
+    raw = st.session_state.get(_INVALID_FACTOR_INPUT_KEYS_KEY, ())
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return ()
+    allowed = set(project_io.FACTOR_NUMERIC_SCALAR_KEYS)
+    return tuple(sorted({str(key) for key in raw if key in allowed}))
+
+
+def _invalid_factor_input_error(domain: str, keys) -> str | None:
+    """Describe rejected state for one material-factor domain, if present."""
+
+    rejected = tuple(
+        key for key in _invalid_factor_input_keys() if key in set(keys)
+    )
+    if not rejected:
+        return None
+    return (
+        f"Boolean/non-numeric values are not accepted for {domain} material "
+        f"factors ({', '.join(rejected)}). Enter explicit positive numeric "
+        "values before calculation."
+    )
+
+
+def _sanitise_factor_input_state() -> None:
+    """Turn malformed factor state into an explicit missing value before widgets.
+
+    Project parsing rejects such values outright. This second boundary covers
+    browser/session/autosave mirrors and custom integrations that mutate
+    ``session_state`` directly. Invalid values map to ``None`` where Streamlit
+    supports an empty numeric control. The persistent rejection marker still
+    blocks calculation and saving if a browser reconstructs a numeric default;
+    only a real edit or explicit repair confirmation can clear that marker.
+    """
+
+    allowed = set(project_io.FACTOR_NUMERIC_SCALAR_KEYS)
+    invalid_keys = set(_invalid_factor_input_keys())
+    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {})
+    explicit_repairs = set()
+    if isinstance(pending, dict):
+        for key in allowed:
+            if key not in pending:
+                continue
+            try:
+                codes.strict_positive_real(pending[key], key)
+            except ValueError:
+                continue
+            explicit_repairs.add(key)
+    invalid_keys.difference_update(explicit_repairs)
+
+    def sanitise(mapping) -> bool:
+        changed = False
+        for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS:
+            if key not in mapping or mapping[key] is None:
+                continue
+            try:
+                codes.strict_positive_real(mapping[key], key)
+            except ValueError:
+                mapping[key] = None
+                if key not in explicit_repairs:
+                    invalid_keys.add(key)
+                changed = True
+        return changed
+
+    sanitise(st.session_state)
+    for state_key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
+        state = st.session_state.get(state_key)
+        if isinstance(state, dict):
+            state = dict(state)
+            if sanitise(state):
+                st.session_state[state_key] = state
+    if invalid_keys:
+        st.session_state[_INVALID_FACTOR_INPUT_KEYS_KEY] = tuple(
+            sorted(invalid_keys)
+        )
+    else:
+        st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
+
+
+def _capture_factor_override_state(domain: str) -> None:
+    """Retain one domain's approved final factors outside preset widget state."""
+
+    spec = _FACTOR_MODE_STATE[domain]
+    snapshot = {
+        key: copy.deepcopy(st.session_state.get(key))
+        for key in spec["value_keys"]
+    }
+    snapshot[spec["approval_key"]] = copy.deepcopy(
+        st.session_state.get(spec["approval_key"], "")
+    )
+    st.session_state[spec["snapshot_key"]] = snapshot
+
+
+def _restore_factor_override_state(domain: str) -> None:
+    """Restore an earlier override, or make a first override explicitly empty."""
+
+    spec = _FACTOR_MODE_STATE[domain]
+    snapshot = st.session_state.get(spec["snapshot_key"])
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    for key in spec["value_keys"]:
+        st.session_state[key] = copy.deepcopy(snapshot.get(key))
+    approval_key = spec["approval_key"]
+    st.session_state[approval_key] = copy.deepcopy(snapshot.get(approval_key, ""))
+    _journal_current_input_values(*spec["value_keys"], approval_key)
+
+
+def _factor_mode_changed(domain: str) -> None:
+    """Keep preset-derived values separate from approved override values."""
+
+    spec = _FACTOR_MODE_STATE[domain]
+    mode_key = spec["mode_key"]
+    previous_key = spec["previous_mode_key"]
+    current_mode = st.session_state.get(mode_key)
+    previous_mode = st.session_state.get(previous_key)
+    if (
+        previous_mode == spec["override_mode"]
+        and current_mode != previous_mode
+    ):
+        _capture_factor_override_state(domain)
+    elif (
+        current_mode == spec["override_mode"]
+        and previous_mode != current_mode
+    ):
+        _restore_factor_override_state(domain)
+    st.session_state[previous_key] = current_mode
+
+
+def _prepare_factor_mode_state(domain: str, default_mode: str) -> None:
+    """Initialise mode tracking and safely absorb non-widget project injection."""
+
+    spec = _FACTOR_MODE_STATE[domain]
+    mode_key = spec["mode_key"]
+    previous_key = spec["previous_mode_key"]
+    st.session_state.setdefault(mode_key, default_mode)
+    current_mode = st.session_state[mode_key]
+    if previous_key not in st.session_state:
+        st.session_state[previous_key] = current_mode
+        if current_mode == spec["override_mode"]:
+            _capture_factor_override_state(domain)
+        return
+
+    previous_mode = st.session_state[previous_key]
+    if previous_mode == current_mode:
+        return
+    # Widget transitions run _factor_mode_changed before the rerun and therefore
+    # arrive here already synchronised. A mismatch is a project/custom-integration
+    # replacement. Preserve explicit approved values, but never silently promote
+    # preset values into a first unapproved override.
+    if previous_mode == spec["override_mode"]:
+        _capture_factor_override_state(domain)
+    elif current_mode == spec["override_mode"]:
+        if isinstance(st.session_state.get(spec["snapshot_key"]), dict):
+            _restore_factor_override_state(domain)
+        elif str(st.session_state.get(spec["approval_key"], "")).strip():
+            _capture_factor_override_state(domain)
+        else:
+            _restore_factor_override_state(domain)
+    st.session_state[previous_key] = current_mode
+
+
+def _confirm_factor_repairs(keys) -> None:
+    """Journal currently displayed positive factors as an explicit repair."""
+
+    for key in keys:
+        try:
+            codes.strict_positive_real(st.session_state.get(key), key)
+        except ValueError:
+            continue
+        _record_input_event(key)
+
+
+def _render_factor_repair_control(box, domain: str, keys) -> None:
+    """Expose a same-value repair path for rejected factor widget state."""
+
+    rejected = tuple(
+        key for key in _invalid_factor_input_keys() if key in set(keys)
+    )
+    if not rejected:
+        return
+    box.warning(
+        "Rejected material-factor state remains blocked. Edit each enabled "
+        "listed field, or confirm the displayed positive values after checking "
+        f"them ({', '.join(rejected)})."
+    )
+    box.button(
+        f"Confirm repaired {domain} factor values",
+        key=f"confirm_{domain}_factor_repairs",
+        on_click=_confirm_factor_repairs,
+        args=(rejected,),
+        help=(
+            "This is an explicit engineering confirmation. It does not approve "
+            "or change any final-factor override."
+        ),
+    )
 
 
 def _record_input_event(
@@ -2264,11 +2497,24 @@ def _project_state():
 
 def _project_input_hash() -> str:
     tables, scalars = _project_state()
-    return project_io.input_sha256(tables, scalars)
+    digest = project_io.input_sha256(tables, scalars)
+    rejected = _invalid_factor_input_keys()
+    if not rejected:
+        return digest
+    # A calculation made while a rejected widget value is held fail-closed must
+    # never appear to match the same reconstructed numeric defaults after repair.
+    invalid_state = "\0".join((digest, "rejected-factor-inputs", *rejected))
+    return hashlib.sha256(invalid_state.encode("utf-8")).hexdigest()
 
 
 def _gather_project() -> str:
     """Serialise current inputs with their source and calculation provenance."""
+    rejected = _invalid_factor_input_keys()
+    if rejected:
+        raise ValueError(
+            "Boolean/non-numeric project material-factor input was rejected "
+            f"({', '.join(rejected)}); repair every listed value before saving"
+        )
     tables, scalars = _project_state()
     return project_io.dump_project(
         tables,
@@ -2445,8 +2691,15 @@ def _apply_pending_project() -> None:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
         return
     # A valid project load is an explicit whole-input replacement. Do not replay
-    # uncommitted browser events from the project that was open previously.
+    # uncommitted browser events or expose the immutable solver payload from the
+    # project that was open previously. A rapid navigation event can supersede the
+    # Inputs rebuild, so Analysis must stay unavailable until build_inputs() reaches
+    # its normal commit point and _snapshot_input_state() installs a new payload.
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    st.session_state.pop("_latest_inputs", None)
+    st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
+    for key in _FACTOR_MODE_RUNTIME_KEYS:
+        st.session_state.pop(key, None)
     # Parsing retains historical scalar loads for compatibility with non-UI callers,
     # but the table-native app must not keep them in live or durable state. The
     # migrated canonical tables above contain the same information.
@@ -2457,9 +2710,15 @@ def _apply_pending_project() -> None:
     }
     for key in load_cases.LEGACY_SCALAR_KEYS:
         st.session_state.pop(key, None)
-    # A project that predates fatigue inputs must not inherit those settings from
-    # the project previously open in this Streamlit session.
-    for key in project_io.FATIGUE_SCALAR_KEYS:
+    # Optional factor inputs must never leak from the project previously open in
+    # this Streamlit session. In particular, a current approved-override project
+    # may deliberately be incomplete; preserving that absence is what prevents a
+    # stale/preset number from being reported as its approved final factor.
+    replaceable_factor_keys = (
+        *project_io.FATIGUE_SCALAR_KEYS,
+        *project_io.TORSION_FACTOR_SCALAR_KEYS,
+    )
+    for key in replaceable_factor_keys:
         st.session_state.pop(key, None)
     _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
@@ -2513,7 +2772,7 @@ def _apply_pending_project() -> None:
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
         if (
             key not in load_cases.LEGACY_SCALAR_KEYS
-            and key not in project_io.FATIGUE_SCALAR_KEYS
+            and key not in replaceable_factor_keys
         )
     }
     durable.update(scalars)
@@ -3280,6 +3539,8 @@ _SHEAR_SIG_KEYS = (
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
+    "torsion_factor_mode", "torsion_gamma0", "torsion_gamma3",
+    "torsion_gamma_ct", "torsion_factor_approval",
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
     "torsion_sub_x2", "torsion_sub_y2", "torsion_sub_x3", "torsion_sub_y3",
@@ -3391,6 +3652,88 @@ def build_inputs(host=st):
         disabled=not fatigue_on,
         help="Selects the Eurocode fatigue-resistance expressions and preset values.",
     )
+    _prepare_factor_mode_state(
+        "fatigue", fatigue_inputs.FACTOR_MODE_PRESET
+    )
+    fatigue_factor_mode = _seeded_selectbox(
+        fat,
+        "Fatigue material-factor source",
+        list(fatigue_inputs.FACTOR_MODES),
+        fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_factor_mode",
+        disabled=not fatigue_on,
+        on_change=_factor_mode_changed,
+        args=("fatigue",),
+        help=(
+            "Edition-derived resolves the material factors and every displayed "
+            "multiplier from the selected edition. Approved final override keeps "
+            "deliberate project values when the edition changes."
+        ),
+    )
+    fg1, fg2 = fat.columns(2)
+    fatigue_uses_categories = bool(
+        fatigue_inputs.FATIGUE_FACTOR_PRESETS[fatigue_edition][
+            "uses_gamma0_gamma3"
+        ]
+    )
+    invalid_factor_keys = set(_invalid_factor_input_keys())
+    fatigue_gamma0 = _seeded_number(
+        fg1,
+        r"$\gamma_0$",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "fatigue_gamma0",
+        disabled=(
+            not (
+                fatigue_on
+                and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
+                and fatigue_uses_categories
+            )
+            and "fatigue_gamma0" not in invalid_factor_keys
+        ),
+        help=(
+            "Danish multiplier for structural parts in geotechnical structures. "
+            "Use 1.0 when it does not apply."
+        ),
+    )
+    fatigue_gamma3 = _seeded_number(
+        fg2,
+        r"$\gamma_3$",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "fatigue_gamma3",
+        disabled=(
+            not (
+                fatigue_on
+                and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
+                and fatigue_uses_categories
+            )
+            and "fatigue_gamma3" not in invalid_factor_keys
+        ),
+        help=(
+            "Danish execution-control multiplier established by the project "
+            "design basis."
+        ),
+    )
+    try:
+        fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
+            fatigue_edition,
+            gamma0=fatigue_gamma0,
+            gamma3=fatigue_gamma3,
+        )
+    except ValueError:
+        # Display-only fallback. The raw invalid/missing category inputs continue
+        # into validation and block calculation before the fatigue engine.
+        fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
+            fatigue_edition
+        )
+    if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET:
+        st.session_state["fatigue_gamma_s"] = fatigue_factor_preset["gamma_s"]
+        st.session_state["fatigue_gamma_c"] = fatigue_factor_preset["gamma_c"]
     fatigue_check_steel = _seeded_toggle(
         fat,
         "Reinforcement",
@@ -3422,9 +3765,15 @@ def build_inputs(host=st):
             "amplitude for 10^6 cycles, and its Cycles value is ignored for concrete."
         ),
     )
+    if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
+        fat.error(
+            "Legacy saved fatigue factors are retained but not approved. Select "
+            "the edition-derived preset or explicitly approve the final override "
+            "before calculation."
+        )
     fat.caption(
-        "Enter complete partial factors. Sector applies no control-, "
-        "construction- or consequence-class multiplier."
+        "No category is inferred. Edition-derived values use only the displayed "
+        "gamma0/gamma3 inputs; approved overrides remain final values."
     )
     ff1, ff2, ff3 = fat.columns(3)
     fatigue_gamma_ff = _seeded_number(
@@ -3444,10 +3793,24 @@ def build_inputs(host=st):
         r"$\gamma_s$",
         0.1,
         10.0,
-        1.15,
+        (
+            None
+            if (
+                fatigue_factor_mode != fatigue_inputs.FACTOR_MODE_PRESET
+                and "fatigue_gamma_s" not in st.session_state
+            )
+            else fatigue_factor_preset["gamma_s"]
+        ),
         0.05,
         "fatigue_gamma_s",
-        disabled=not (fatigue_on and fatigue_check_steel),
+        disabled=(
+            (
+                not (fatigue_on and fatigue_check_steel)
+                or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
+                or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY
+            )
+            and "fatigue_gamma_s" not in invalid_factor_keys
+        ),
         help=r"Final material factor reducing $\Delta\sigma_{Rsk}$ and the "
              "reinforcement yield or proof-stress limit.",
     )
@@ -3456,12 +3819,96 @@ def build_inputs(host=st):
         r"$\gamma_{c,\mathrm{fat}}$",
         0.1,
         10.0,
-        1.50,
+        (
+            None
+            if (
+                fatigue_factor_mode != fatigue_inputs.FACTOR_MODE_PRESET
+                and "fatigue_gamma_c" not in st.session_state
+            )
+            else fatigue_factor_preset["gamma_c"]
+        ),
         0.05,
         "fatigue_gamma_c",
-        disabled=not (fatigue_on and fatigue_check_concrete),
+        disabled=(
+            (
+                not (fatigue_on and fatigue_check_concrete)
+                or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
+                or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY
+            )
+            and "fatigue_gamma_c" not in invalid_factor_keys
+        ),
         help=r"Final material factor in the design concrete fatigue strength "
              r"$f_{cd,\mathrm{fat}}$.",
+    )
+    fatigue_display_gamma_s = (
+        fatigue_factor_preset["gamma_s"]
+        if fatigue_gamma_s is None and not fatigue_check_steel
+        else fatigue_gamma_s
+    )
+    fatigue_display_gamma_c = (
+        fatigue_factor_preset["gamma_c"]
+        if fatigue_gamma_c is None and not fatigue_check_concrete
+        else fatigue_gamma_c
+    )
+    try:
+        _resolved_s, _resolved_c, fatigue_factor_display = (
+            fatigue_inputs.resolve_fatigue_factors(
+                fatigue_edition,
+                mode=fatigue_factor_mode,
+                gamma_s=fatigue_display_gamma_s,
+                gamma_c=fatigue_display_gamma_c,
+                gamma0=fatigue_gamma0,
+                gamma3=fatigue_gamma3,
+            )
+        )
+    except ValueError as exc:
+        fatigue_factor_display = None
+        if (
+            fatigue_on
+            and _invalid_factor_input_error(
+                "fatigue",
+                _FATIGUE_NUMERIC_FACTOR_KEYS,
+            )
+            is None
+        ):
+            fat.error(
+                "Fatigue material-factor input is incomplete: "
+                f"{exc}. Enter every enabled approved final factor before "
+                "calculation."
+            )
+    fatigue_factor_state_error = _invalid_factor_input_error(
+        "fatigue",
+        _FATIGUE_NUMERIC_FACTOR_KEYS,
+    )
+    if fatigue_on and fatigue_factor_state_error is not None:
+        fat.error(fatigue_factor_state_error)
+    if fatigue_factor_display is not None:
+        fat.caption(
+            "Reinforcement derivation: "
+            f"{fatigue_factor_display['gamma_s_derivation']}. "
+            "Concrete derivation: "
+            f"{fatigue_factor_display['gamma_c_derivation']}. "
+            f"Edition provision: {fatigue_factor_display['reference']}."
+        )
+    fatigue_factor_approval = _seeded_text(
+        fat,
+        "Fatigue-factor approval / source",
+        "",
+        "fatigue_factor_approval",
+        disabled=not (
+            fatigue_on
+            and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        ),
+        help=(
+            "Project decision, design-basis clause, or checker approval supporting "
+            "the overridden final fatigue material factors. This is separate from "
+            "the spectrum-method approval/reference below."
+        ),
+    )
+    _render_factor_repair_control(
+        fat,
+        "fatigue",
+        _FATIGUE_NUMERIC_FACTOR_KEYS,
     )
     fc1, fc2 = fat.columns(2)
     fatigue_beta_cc_t0 = _seeded_number(
@@ -3520,6 +3967,16 @@ def build_inputs(host=st):
     )
     fat.markdown("**Spectrum basis**")
     fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
+    if (
+        fatigue_on
+        and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        and not str(fatigue_factor_approval).strip()
+    ):
+        fat.warning(
+            "An approved final-factor override needs a dedicated fatigue-factor "
+            "approval/source before a fatigue verdict can be issued. The spectrum-"
+            "method approval/reference does not authorize material-factor changes."
+        )
 
     # Load tables are rendered before the acceptance controls so their per-case
     # checkboxes can enable the relevant crack-width settings in the same rerun.
@@ -3929,6 +4386,183 @@ def build_inputs(host=st):
              r"place of the recommended $\nu=0.6(1-f_{ck}/250)$.")
     if combined_on:
         sts.caption(f"Torsion method set by Combined: {combined_method}")
+    effective_torsion_method = combined_method if combined_on else torsion_method
+    torsion_code = _SHEAR_CODES[effective_torsion_method]
+    _prepare_factor_mode_state("torsion", codes.FACTOR_MODE_PRESET)
+    torsion_factor_mode = _seeded_selectbox(
+        sts,
+        "Concrete tensile-factor source",
+        list(codes.FACTOR_MODES),
+        codes.FACTOR_MODE_PRESET,
+        "torsion_factor_mode",
+        disabled=not torsion_on,
+        on_change=_factor_mode_changed,
+        args=("torsion",),
+        help=(
+            "Edition-derived resolves the concrete-tension factor from the "
+            "selected torsion method. Approved final override retains a deliberate "
+            "project value across method switches."
+        ),
+    )
+    tf1, tf2 = sts.columns(2)
+    torsion_uses_categories = bool(
+        torsion_code.material_factors_use_gamma0_gamma3
+    )
+    torsion_gamma0 = _seeded_number(
+        tf1,
+        r"$\gamma_0$",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "torsion_gamma0",
+        disabled=(
+            not (
+                torsion_on
+                and torsion_factor_mode == codes.FACTOR_MODE_PRESET
+                and torsion_uses_categories
+            )
+            and "torsion_gamma0" not in invalid_factor_keys
+        ),
+        help=(
+            "Danish factor for structural parts in geotechnical structures. "
+            "Use 1.0 when it does not apply."
+        ),
+    )
+    torsion_gamma3 = _seeded_number(
+        tf2,
+        r"$\gamma_3$",
+        0.1,
+        10.0,
+        1.0,
+        0.05,
+        "torsion_gamma3",
+        disabled=(
+            not (
+                torsion_on
+                and torsion_factor_mode == codes.FACTOR_MODE_PRESET
+                and torsion_uses_categories
+            )
+            and "torsion_gamma3" not in invalid_factor_keys
+        ),
+        help=(
+            "Danish execution-control multiplier. Enter the value established "
+            "by the project design basis."
+        ),
+    )
+    try:
+        torsion_factor_preset = torsion_code.material_factor_basis(
+            gamma0=torsion_gamma0,
+            gamma3=torsion_gamma3,
+        )
+    except ValueError:
+        # Display-only fallback; the raw invalid/missing category value is still
+        # passed to the public torsion preflight and cannot reach resistance.
+        torsion_factor_preset = torsion_code.material_factor_basis()
+    if torsion_factor_mode == codes.FACTOR_MODE_PRESET:
+        st.session_state["torsion_gamma_ct"] = (
+            torsion_factor_preset["tension_final"]
+        )
+    torsion_gamma_ct = _seeded_number(
+        sts,
+        r"Final concrete tension factor $\gamma_{ct}$",
+        0.1,
+        10.0,
+        (
+            None
+            if (
+                torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
+                and "torsion_gamma_ct" not in st.session_state
+            )
+            else torsion_factor_preset["tension_final"]
+        ),
+        0.01,
+        "torsion_gamma_ct",
+        disabled=(
+            (
+                not torsion_on
+                or torsion_factor_mode == codes.FACTOR_MODE_PRESET
+            )
+            and "torsion_gamma_ct" not in invalid_factor_keys
+        ),
+        help=(
+            "Final factor applied to fctk,0.05 for torsional concrete cracking. "
+            "It is separate from the compression factor used by fcd."
+        ),
+    )
+    torsion_factor_approval = _seeded_text(
+        sts,
+        "Tensile-factor approval / source",
+        "",
+        "torsion_factor_approval",
+        disabled=not (
+            torsion_on
+            and torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
+        ),
+        help=(
+            "Project decision, design-basis clause, or checker approval supporting "
+            "an overridden final tensile factor."
+        ),
+    )
+    _render_factor_repair_control(
+        sts,
+        "torsion",
+        _TORSION_NUMERIC_FACTOR_KEYS,
+    )
+    try:
+        _resolved_gamma_ct, torsion_factor_display = (
+            torsion_code.resolve_concrete_tension_factor(
+                mode=torsion_factor_mode,
+                gamma_ct=torsion_gamma_ct,
+                gamma0=torsion_gamma0,
+                gamma3=torsion_gamma3,
+            )
+        )
+    except ValueError as exc:
+        torsion_factor_display = None
+        if (
+            torsion_on
+            and _invalid_factor_input_error(
+                "torsion",
+                _TORSION_NUMERIC_FACTOR_KEYS,
+            )
+            is None
+        ):
+            sts.error(
+                "Concrete tensile-factor input is incomplete: "
+                f"{exc}. Enter a positive approved final factor before "
+                "calculation."
+            )
+    torsion_factor_state_error = _invalid_factor_input_error(
+        "torsion",
+        _TORSION_NUMERIC_FACTOR_KEYS,
+    )
+    if torsion_on and torsion_factor_state_error is not None:
+        sts.error(torsion_factor_state_error)
+    if torsion_factor_display is not None and torsion_uses_categories:
+        sts.caption(
+            "DK NA Table 2.1Na NA: compression basis "
+            f"{torsion_factor_preset['compression_base']:.2f} x gamma0 x gamma3 "
+            f"= {torsion_factor_preset['compression_final']:.3f}; tension basis "
+            f"{torsion_factor_display['tension_derivation']}. "
+            "Torsional fctd uses the final tensile factor; fcd retains the final "
+            "compression factor from the concrete material panel."
+        )
+    elif torsion_factor_display is not None:
+        sts.caption(
+            "Selected base-EN tensile-factor basis: "
+            f"{torsion_factor_display['tension_derivation']}. "
+            "Torsional fctd and compressive fcd use separately reported factors."
+        )
+    if (
+        torsion_on
+        and torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
+        and not str(torsion_factor_approval).strip()
+    ):
+        sts.error(
+            "The final tensile-factor override is retained, but an approval/source "
+            "is required before a torsion verdict can be issued."
+        )
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
     sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
@@ -4683,6 +5317,20 @@ def build_inputs(host=st):
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.
     _get = lambda keys: tuple(st.session_state.get(k) for k in keys)
+
+    def _factor_signature_value(value):
+        if value is None:
+            return None
+        try:
+            return codes.strict_positive_real(value, "material factor")
+        except ValueError:
+            return (
+                "invalid-material-factor",
+                type(value).__module__,
+                type(value).__qualname__,
+                repr(value),
+            )
+
     material_sig = (
         mat_catalog.signature(mild_catalogue, "mild"),
         mat_catalog.signature(prestress_catalogue, "prestress"),
@@ -4691,7 +5339,10 @@ def build_inputs(host=st):
     shared_sig = geom_sig + material_sig + _get(_SHARED_SIG_KEYS)
     plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
     elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
-    capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS)
+    invalid_factor_input_keys = _invalid_factor_input_keys()
+    capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS) + (
+        ("invalid_factor_input_keys", invalid_factor_input_keys),
+    )
     plastic_case_context_sig = (
         plastic_bending_context_sig + capacity_context_sig
     )
@@ -4715,10 +5366,23 @@ def build_inputs(host=st):
             bool(fatigue_check_steel),
             bool(fatigue_check_concrete),
             fatigue_concrete_method,
+            fatigue_factor_mode,
+            str(fatigue_factor_approval).strip(),
+            ("invalid_factor_input_keys", invalid_factor_input_keys),
+            _factor_signature_value(fatigue_gamma0),
+            _factor_signature_value(fatigue_gamma3),
             float(concrete.fck),
             float(concrete.alpha_cc),
-            float(fatigue_gamma_c),
-            float(fatigue_gamma_s),
+            (
+                None
+                if fatigue_gamma_c is None
+                else _factor_signature_value(fatigue_gamma_c)
+            ),
+            (
+                None
+                if fatigue_gamma_s is None
+                else _factor_signature_value(fatigue_gamma_s)
+            ),
             float(fatigue_gamma_ff),
             float(fatigue_beta_cc_t0),
             float(fatigue_t0_days),
@@ -4849,7 +5513,13 @@ def build_inputs(host=st):
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_T=torsion_T, torsion_tef=torsion_tef,
-                torsion_nu_v=torsion_nu_v, torsion_subdivide=torsion_subdivide,
+                torsion_nu_v=torsion_nu_v,
+                torsion_factor_mode=torsion_factor_mode,
+                torsion_gamma0=torsion_gamma0,
+                torsion_gamma3=torsion_gamma3,
+                torsion_gamma_ct=torsion_gamma_ct,
+                torsion_factor_approval=torsion_factor_approval,
+                torsion_subdivide=torsion_subdivide,
                 torsion_subrects=torsion_subrects,
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
@@ -4870,8 +5540,13 @@ def build_inputs(host=st):
                 fatigue_check_steel=fatigue_check_steel,
                 fatigue_check_concrete=fatigue_check_concrete,
                 fatigue_concrete_method=fatigue_concrete_method,
+                fatigue_factor_mode=fatigue_factor_mode,
+                fatigue_factor_approval=fatigue_factor_approval,
+                fatigue_gamma0=fatigue_gamma0,
+                fatigue_gamma3=fatigue_gamma3,
                 fatigue_gamma_c=fatigue_gamma_c,
                 fatigue_gamma_s=fatigue_gamma_s,
+                invalid_factor_input_keys=invalid_factor_input_keys,
                 fatigue_gamma_ff=fatigue_gamma_ff,
                 fatigue_beta_cc_t0=fatigue_beta_cc_t0,
                 fatigue_t0_days=fatigue_t0_days,
@@ -5384,6 +6059,66 @@ def _run_fatigue_or_invalid(inp):
     )
 
 
+def _invalid_torsion_factor_result(inp, reason):
+    """Immutable INVALID evidence for a missing/non-positive torsion factor."""
+    factor_mode = str(
+        inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
+    )
+    approval_reference = str(
+        inp.get("torsion_factor_approval") or ""
+    ).strip()
+    approval_required = factor_mode == codes.FACTOR_MODE_OVERRIDE
+    approval_valid = not approval_required or bool(approval_reference)
+    factor_reason = f"concrete tensile-factor input invalid: {reason}"
+    return {
+        "tube": {"valid": False, "reason": factor_reason},
+        "t_ed": float(inp.get("torsion_T", 0.0) or 0.0),
+        "trd_s": None,
+        "trd_max": None,
+        "trd_c": None,
+        "trd": None,
+        "util": None,
+        "asl_req": None,
+        "method": inp.get("torsion_method"),
+        "governs": None,
+        "valid": False,
+        "reason": factor_reason,
+        "code_applicable": False,
+        "factor_input_valid": False,
+        "factor_input_reason": reason,
+        "factor_approval_required": approval_required,
+        "factor_approval_valid": approval_valid,
+        "factor_approval_reason": (
+            ""
+            if approval_valid
+            else (
+                "approved final concrete tensile-factor override requires a "
+                "stated approval/source"
+            )
+        ),
+        "material_factor_basis": {
+            "mode": factor_mode,
+            "tension_override": factor_mode == codes.FACTOR_MODE_OVERRIDE,
+            "tension_final": None,
+            "tension_derivation": "not resolved - factor input invalid",
+            "approval_reference": approval_reference,
+            "approval_required": approval_required,
+            "approval_valid": approval_valid,
+        },
+        "interaction": {
+            "valid": False,
+            "code_applicable": False,
+            "reason": factor_reason,
+            "factor_input_valid": False,
+        },
+        "min_reinf": {
+            "applicable": False,
+            "reason": factor_reason,
+            "factor_input_valid": False,
+        },
+    }
+
+
 def run_analysis(
     inp,
     *,
@@ -5473,7 +6208,12 @@ def _run_uniaxial_capacity_checks(inp, out):
     )
     if shear_payload is not None:
         out["shear"] = shear_payload
-    tors_ctx = capacity.build_torsion_context(inp, n_ed_comp)
+    torsion_factor_error = capacity.torsion_factor_validation_error(inp)
+    tors_ctx = (
+        None
+        if torsion_factor_error is not None
+        else capacity.build_torsion_context(inp, n_ed_comp)
+    )
 
     # ---- Member strut angle (EN 1992-1-1 6.3.2(2)) ----------------------------
     # One strut angle serves shear AND torsion (the same web struts carry both).
@@ -5499,8 +6239,11 @@ def _run_uniaxial_capacity_checks(inp, out):
                     if link_ctx is not None else None)
         links_valid = bool(lk_probe is not None and lk_probe["valid"]
                            and lk_probe["vrd_s"] > 0.0 and lk_probe["vrd_max"] > 0.0)
-        tors_valid = bool(tors_ctx is not None
-                          and all(tb["valid"] for tb in tors_ctx["subtubes"]))
+        tors_valid = bool(
+            tors_ctx is not None
+            and tors_ctx["factor_approval_valid"]
+            and all(tb["valid"] for tb in tors_ctx["subtubes"])
+        )
         shear_live = links_valid and v_ed_s > 0.0
         tors_live = tors_valid and t_ed_s > 0.0
 
@@ -5734,6 +6477,13 @@ def _run_uniaxial_capacity_checks(inp, out):
                 trd, asl_req = primary["trd"], primary["asl_req"]
                 tube_main, valid = tors_ctx["tube"], tors_ctx["tube"]["valid"]
                 util_t = (t_ed / trd) if trd > 0.0 else math.inf
+            factor_approval_valid = tors_ctx["factor_approval_valid"]
+            valid = bool(valid and factor_approval_valid)
+            reason = (
+                tors_ctx["factor_approval_reason"]
+                if not factor_approval_valid
+                else tube_main.get("reason")
+            )
             tcode = tors_ctx["tcode"]
             tcot_min, tcot_max = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
             lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
@@ -5746,19 +6496,27 @@ def _run_uniaxial_capacity_checks(inp, out):
                 theta_deg=primary["theta_deg"], util=util_t, asl_req=asl_req,
                 t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
                 fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
-                alpha_cw=tors_ctx["alpha_cw"], fctd=tors_ctx["fctd"],
-                gamma_c=tors_ctx["gamma_c"], gamma_s=tors_ctx["gamma_s"],
+                alpha_cw=tors_ctx["alpha_cw"], fctk_005=tors_ctx["fctk_005"],
+                fctd=tors_ctx["fctd"],
+                gamma_c=tors_ctx["gamma_c"], gamma_ct=tors_ctx["gamma_ct"],
+                gamma_s=tors_ctx["gamma_s"],
+                material_factor_basis=tors_ctx["material_factor_basis"],
                 nu_v_detailing=tors_ctx["nu_detail_applied"],
                 sigma_cp=tors_ctx["sigma_cp"], n_prestress=n_prestress,
                 asw_t=tors_ctx["asw_t"], asw_over_s=tors_ctx["asw_over_s_t"],
                 dia=inp["shear_link_dia"], s=inp["shear_link_s"], cot_min=tcot_min,
                 cot_max=tcot_max, method=inp["torsion_method"],
                 governs=primary["governs"], valid=valid,
-                reason=tube_main.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
+                reason=reason, cot_limit_lo=lo_t, cot_limit_hi=hi_t,
                 out_of_limits=torsion_out_of_limits,
                 code_applicable=not torsion_out_of_limits,
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
+                factor_input_valid=True,
+                factor_input_reason="",
+                factor_approval_required=tors_ctx["factor_approval_required"],
+                factor_approval_valid=factor_approval_valid,
+                factor_approval_reason=tors_ctx["factor_approval_reason"],
                 compound_detected=tors_ctx["compound_detected"],
                 subdivision_requested=tors_ctx["subdivision_requested"],
                 subdivision_valid=tors_ctx["subdivision_valid"],
@@ -5909,7 +6667,13 @@ def _run_uniaxial_capacity_checks(inp, out):
             # reinforcement (only the minimum) is needed if TEd/TRd,c + VEd/VRd,c <= 1.
             sh_ms = out.get("shear")
             _trdc = primary["trd_c"]
-            if tors_ctx["subdivide"]:
+            if not tors_ctx["factor_approval_valid"]:
+                out["torsion"]["min_reinf"] = dict(
+                    applicable=False,
+                    reason=tors_ctx["factor_approval_reason"],
+                    factor_approval_valid=False,
+                )
+            elif tors_ctx["subdivide"]:
                 # 6.31 is written for an approximately solid rectangular section, so
                 # it does not apply to a subdivided compound section.
                 out["torsion"]["min_reinf"] = dict(
@@ -5933,32 +6697,44 @@ def _run_uniaxial_capacity_checks(inp, out):
             sh_links = out.get("shear", {}).get("links")
             p_tube, t_ed_p = primary["tube"], primary["t_ed"]
             if sh_links is not None and sh_links["res"]["valid"] and p_tube["valid"]:
-                # The member angle when a load drives it; otherwise the
-                # least-conservative angle (cot = 1 clamped to the shared band).
-                pl_lo, pl_hi = link_ctx["cot_min"], link_ctx["cot_max"]
-                cot_c = (
-                    cot_star
-                    if cot_star is not None
-                    else min(max(1.0, pl_lo), pl_hi)
-                )
-                trdmax_c = torsion.trd_max(
-                    tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
-                    p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
-                    closed_detailing=tors_ctx["nu_detail"],
-                    fcd_mpa=tors_ctx["fcd"])
-                vlk = link_ctx["build"](cot_c, cot_c)
-                inter = combined.crushing_interaction(
-                    t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
-                out["torsion"]["interaction"] = dict(
-                    valid=True, cot=cot_c,
-                    theta_deg=math.degrees(math.atan(1.0 / cot_c)),
-                    trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
-                    v_ed=v_ed_s, value=inter,
-                    code_applicable=bool(
-                        out["torsion"].get("code_applicable", True)
-                        and sh_links.get("code_applicable", True)
-                    ))
+                if not tors_ctx["factor_approval_valid"]:
+                    out["torsion"]["interaction"] = dict(
+                        valid=False,
+                        code_applicable=False,
+                        reason=tors_ctx["factor_approval_reason"],
+                        factor_approval_valid=False,
+                    )
+                else:
+                    # The member angle when a load drives it; otherwise the
+                    # least-conservative angle (cot = 1 clamped to the shared band).
+                    pl_lo, pl_hi = link_ctx["cot_min"], link_ctx["cot_max"]
+                    cot_c = (
+                        cot_star
+                        if cot_star is not None
+                        else min(max(1.0, pl_lo), pl_hi)
+                    )
+                    trdmax_c = torsion.trd_max(
+                        tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
+                        p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
+                        closed_detailing=tors_ctx["nu_detail"],
+                        fcd_mpa=tors_ctx["fcd"])
+                    vlk = link_ctx["build"](cot_c, cot_c)
+                    inter = combined.crushing_interaction(
+                        t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
+                    out["torsion"]["interaction"] = dict(
+                        valid=True, cot=cot_c,
+                        theta_deg=math.degrees(math.atan(1.0 / cot_c)),
+                        trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
+                        v_ed=v_ed_s, value=inter,
+                        code_applicable=bool(
+                            out["torsion"].get("code_applicable", True)
+                            and sh_links.get("code_applicable", True)
+                        ))
 
+    if torsion_factor_error is not None:
+        out["torsion"] = _invalid_torsion_factor_result(
+            inp, torsion_factor_error
+        )
     capacity.finalize_combined(inp, out)
 
 
@@ -8267,6 +9043,7 @@ def _fatigue_spectrum_panel(inp, spectrum):
 def _fatigue_result_basis_panel(payload):
     basis = payload.get("basis") or {}
     factors = payload.get("partial_factors") or {}
+    factor_basis = payload.get("factor_basis") or {}
     checks = payload.get("checks") or {}
     parameters = payload.get("concrete_parameters") or {}
     rows = [
@@ -8291,8 +9068,27 @@ def _fatigue_result_basis_panel(payload):
         ("Cycle counting", basis.get("cycle_counting") or "-"),
         ("Concurrence basis", basis.get("concurrence_basis") or "-"),
         ("Atypical traffic", basis.get("atypical_traffic") or "-"),
-        ("Approval reference", basis.get("approval_reference") or "-"),
+        (
+            "Spectrum-method approval/reference",
+            basis.get("approval_reference") or "-",
+        ),
         ("Authority adjustments", basis.get("authority_adjustments") or "-"),
+        ("Factor source", factor_basis.get("mode") or "-"),
+        ("Factor provision", factor_basis.get("reference") or "-"),
+        (
+            "Factor override approval/source",
+            factor_basis.get("approval_reference") or "-",
+        ),
+        ("gamma0", factor_basis.get("gamma0")),
+        ("gamma3", factor_basis.get("gamma3")),
+        (
+            "gamma_s derivation",
+            factor_basis.get("gamma_s_derivation") or "-",
+        ),
+        (
+            "gamma_c,fat derivation",
+            factor_basis.get("gamma_c_derivation") or "-",
+        ),
         ("gamma_Ff", factors.get("gamma_ff")),
         ("gamma_s", factors.get("gamma_s")),
         ("gamma_c,fat", factors.get("gamma_c")),
@@ -9039,6 +9835,22 @@ def torsion_view(inp, results):
         return
     t = results["torsion"]
     _member_material_note(inp)
+    if t.get("factor_input_valid") is False:
+        st.error(
+            "INVALID - the approved final concrete tensile factor is missing or "
+            "not positive. Enter an explicit positive value and recalculate. No "
+            "torsion, V+T (6.29), minimum-reinforcement (6.31), or combined "
+            "verdict is issued."
+        )
+        return
+    if t.get("factor_approval_valid") is False:
+        st.error(
+            "INVALID - the selected approved final concrete tensile-factor override "
+            "has no approval/source. Enter the project decision, design-basis clause, "
+            "or checker approval and recalculate. No torsion, V+T (6.29), "
+            "minimum-reinforcement (6.31), or combined verdict is issued."
+        )
+        return
     directional_interactions = t.get("directional_interactions") or {}
     if directional_interactions:
         st.warning(
@@ -9155,6 +9967,16 @@ def torsion_view(inp, results):
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
         _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok,
                         code_applicable=t.get("code_applicable", True))
+
+    factor_basis = t.get("material_factor_basis") or {}
+    st.caption(
+        "Concrete material factors: compression "
+        f"gamma_c = {t['gamma_c']:.3f} (final concrete material input); "
+        f"tension gamma_ct = {t['gamma_ct']:.3f} "
+        f"({factor_basis.get('mode') or 'factor basis unavailable'}). "
+        f"fctd = fctk,0.05/gamma_ct = {t['fctd']:.3f} MPa. "
+        f"Source: {factor_basis.get('reference') or '-'}."
+    )
 
     if t.get("subdivided"):
         subs = t["subtubes"]
@@ -10019,6 +10841,7 @@ st.session_state.setdefault("_main_page", "Inputs")
 _restore_input_state(
     replace=bool(st.session_state.get(_INPUT_BUILD_KEY, False))
 )
+_sanitise_factor_input_state()
 
 main_page = st.segmented_control(
     "Workspace",

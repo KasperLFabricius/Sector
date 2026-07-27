@@ -155,6 +155,9 @@ def _fatigue_report_fixture():
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma0": 1.0,
+        "fatigue_gamma3": 1.0,
         "fatigue_gamma_ff": 1.10,
         "fatigue_gamma_s": 1.15,
         "fatigue_gamma_c": 1.50,
@@ -337,6 +340,17 @@ def _fatigue_report_fixture():
             "gamma_s": 1.15,
             "gamma_ff": 1.10,
         },
+        "factor_basis": {
+            "edition": fatigue_inputs.EC2_2023,
+            "mode": fatigue_inputs.FACTOR_MODE_PRESET,
+            "reference": "DS/EN 1992-1-1:2023, fatigue material factors",
+            "gamma0": 1.0,
+            "gamma3": 1.0,
+            "gamma_s": 1.15,
+            "gamma_c": 1.50,
+            "gamma_s_derivation": "1.150 (edition tabulated value)",
+            "gamma_c_derivation": "1.500 (edition tabulated value)",
+        },
         "concrete_parameters": {
             "fck_mpa": 30.0,
             "beta_cc_t0": 0.92,
@@ -404,6 +418,8 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "raw solver range" in text
     assert "action-level" in text
     assert "Annex E.5" in text and "Annex E.7-E.8" in text
+    assert fatigue_inputs.FACTOR_MODE_PRESET in text
+    assert "1.150 (edition tabulated value)" in text
     assert "different spectrum names are not combined" in text
     assert "Torsion and shear fatigue are not assessed" in text
     compact = text.replace(" ", "")
@@ -416,6 +432,63 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "delta " + sigma not in text
     assert text.count(delta_sigma) >= 7
     assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
+
+
+def test_report_includes_dk_fatigue_factor_derivations():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["edition"] = fatigue_inputs.EC2_2005_DKNA
+    payload["partial_factors"].update(gamma_s=1.32, gamma_c=1.595)
+    payload["factor_basis"] = {
+        "edition": fatigue_inputs.EC2_2005_DKNA,
+        "mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "reference": (
+            "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01, "
+            "2.4.2.4(1), Table 2.1Na NA and fatigue paragraph"
+        ),
+        "gamma0": 1.0,
+        "gamma3": 1.0,
+        "gamma_s": 1.32,
+        "gamma_c": 1.595,
+        "gamma_s_derivation": "1.20 x 1.10 x 1.000 x 1.000 = 1.320",
+        "gamma_c_derivation": "1.45 x 1.10 x 1.000 x 1.000 = 1.595",
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Table 2.1Na NA" in text
+    assert "1.20 x 1.10 x 1.000 x 1.000 = 1.320" in text
+    assert "1.45 x 1.10 x 1.000 x 1.000 = 1.595" in text
+
+
+def test_report_keeps_spectrum_and_factor_approvals_distinct():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["basis"]["approval_reference"] = "VD-FLM5-AGREEMENT"
+    payload["factor_basis"].update({
+        "mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "override": True,
+        "approval_reference": "DB-FACT-12 / checker D",
+        "gamma_s_derivation": "approved final override = 1.270",
+        "gamma_c_derivation": "approved final override = 1.610",
+    })
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=True
+    )).split())
+    appendix = text[text.index("QA appendix - references and notes"):]
+
+    assert "Spectrum-method approval/reference VD-FLM5-AGREEMENT" in text
+    assert (
+        "Factor override approval/source DB-FACT-12 / checker D"
+        in text
+    )
+    assert "approval/source: DB-FACT-12 / checker D" in appendix
+    assert "VD-FLM5-AGREEMENT" not in appendix.split(
+        "Partial-factor provenance", 1
+    )[1]
 
 
 def test_report_includes_damage_equivalent_concrete_method_evidence():
@@ -1723,10 +1796,28 @@ def _torsion_out(interaction=False):
     tube = {"A": 0.18, "u": 1.8, "tef": 100.0, "Ak": 0.1, "uk": 1.4,
             "tef_auto": 100.0, "tef_capped": False, "tef_user": False,
             "hollow": False, "valid": True}
-    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4, "trd_c": 31.0,
+    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4, "trd_c": 26.44,
            "cot": 1.751, "theta_deg": 29.7, "util": 40.0 / 76.4, "asl_req": 1176.0,
            "t_ed": 40.0, "fcd": 24.14, "fywd": 416.67, "fyd_long": 416.67,
-           "nu": 0.3675, "alpha_cw": 1.0, "fctd": 1.55, "asw_t": 78.5,
+           "nu": 0.3675, "alpha_cw": 1.0, "fctk_005": 2.248,
+           "fctd": 1.322, "gamma_c": 1.45, "gamma_ct": 1.70,
+           "material_factor_basis": {
+               "mode": "Edition-derived preset",
+               "reference": (
+                   "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01, "
+                   "2.4.2.4(1), Table 2.1Na NA"
+               ),
+               "gamma0": 1.0,
+               "gamma3": 1.0,
+               "compression_preset": 1.45,
+               "compression_final": 1.45,
+               "tension_base": 1.70,
+               "tension_final": 1.70,
+               "tension_derivation": (
+                   "1.70 x 1.000 x 1.000 = 1.700"
+               ),
+           },
+           "asw_t": 78.5,
            "asw_over_s": 0.5236, "dia": 10.0, "s": 150.0, "cot_min": 1.0,
            "cot_max": 2.5, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
            "governs": "stirrups (TRd,s)", "valid": True, "cot_limit_lo": 1.0,
@@ -1746,6 +1837,9 @@ def test_report_includes_torsion_section():
     assert "Torsion" in txt
     assert "6.30" in txt and "6.28" in txt          # the clause formulae
     assert "76.4" in txt                            # TRd
+    assert "Table 2.1Na NA" in txt
+    assert "1.70 x 1.000 x 1.000 = 1.700" in txt
+    assert "26.44" in txt
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1176" in txt                            # required Asl
     assert chr(0x2211) in txt                       # summation operator
@@ -1753,6 +1847,37 @@ def test_report_includes_torsion_section():
     assert chr(0x00B0) in txt                       # degree symbol
     assert not any(
         token in txt for token in ("sqrt", "Cfrac", "Big", "sincos", "sum A", "kN.m")
+    )
+
+
+def test_qa_appendix_distinguishes_factor_provenance_modes():
+    inp, out = _fatigue_report_fixture()
+    torsion = _torsion_out()
+    torsion["gamma_ct"] = 1.63
+    torsion["material_factor_basis"].update({
+        "mode": "Approved final override",
+        "tension_override": True,
+        "tension_final": 1.63,
+        "tension_derivation": "approved final override = 1.630",
+        "approval_reference": "DB-TOR-05 / checker D",
+    })
+    out["torsion"] = torsion
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=True
+    )).split())
+    appendix = text[text.index("QA appendix - references and notes"):]
+
+    assert "Partial-factor provenance" in appendix
+    assert "torsion" in appendix and "Approved final override" in appendix
+    assert "approval/source: DB-TOR-05 / checker D" in appendix
+    assert "fatigue factors - Edition-derived preset" in appendix
+    assert "provision: DS/EN 1992-1-1:2023" in appendix
+    assert "final user-entered partial factors" not in appendix
+    assert "final factors used in each calculation" in appendix
+    assert (
+        "distinguish edition-derived presets from approved final overrides"
+        in appendix
     )
 
 
@@ -1786,6 +1911,77 @@ def test_report_directional_vt_table_withholds_out_of_range_verdict():
     assert "Directional minimum-reinforcement screens" in text
     assert "minimum sufficient" in text
     assert "left (-x)" in text and "bottom (-y)" in text
+
+
+def test_report_identifies_unapproved_torsion_override_and_withholds_screens():
+    out = _out()
+    torsion = _torsion_out(interaction=True)
+    stale_direction = copy.deepcopy(torsion)
+    stale_direction.update(
+        directional_interaction_status="PASS",
+        min_reinf=dict(
+            applicable=True, value=0.52, ok=True, t_ed=40.0,
+            trd_c=100.0, v_ed=12.0, vrd_c=100.0, solid=True,
+            model_2023=False,
+        ),
+    )
+    torsion.update(
+        valid=False,
+        factor_approval_required=True,
+        factor_approval_valid=False,
+        factor_approval_reason=(
+            "approved final concrete tensile-factor override requires a stated "
+            "approval/source"
+        ),
+        reason=(
+            "approved final concrete tensile-factor override requires a stated "
+            "approval/source"
+        ),
+        directional_interactions={
+            "vx": stale_direction,
+            "vy": copy.deepcopy(stale_direction),
+        },
+    )
+    out["torsion"] = torsion
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+    assert "tensile-factor override approval/source missing" in text
+    assert "No torsion, V+T (6.29), minimum-reinforcement (6.31)" in text
+    assert "tube could not be formed" not in text
+    assert "Directional minimum-reinforcement screens" not in text
+    assert "minimum sufficient" not in text
+
+
+def test_report_identifies_missing_approved_torsion_factor_and_withholds_screens():
+    out = _out()
+    torsion = _torsion_out(interaction=True)
+    torsion.update(
+        valid=False,
+        util=None,
+        factor_input_valid=False,
+        factor_input_reason=(
+            "an approved final concrete tensile factor is required"
+        ),
+        factor_approval_required=True,
+        factor_approval_valid=True,
+        reason="concrete tensile-factor input invalid",
+        min_reinf=dict(
+            applicable=False,
+            reason="concrete tensile-factor input invalid",
+        ),
+    )
+    out["torsion"] = torsion
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, _inp(), out, figures=False)
+    ).split())
+    assert "concrete tensile-factor override missing or invalid" in text
+    assert "No torsion, V+T (6.29), minimum-reinforcement (6.31)" in text
+    assert "76.4" not in text
+    assert "Combined shear" not in text
+    assert "minimum sufficient" not in text
 
 
 def test_report_compound_torsion_requires_subdivision():

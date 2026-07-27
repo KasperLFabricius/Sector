@@ -23,13 +23,12 @@ import fatigue_inputs
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
-from sector import detailing
-from sector import geometry
+from sector import codes, detailing, geometry
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 14  # v14: member type and modelled section-cut direction
+VERSION = 15  # v15: explicit tensile/fatigue factor bases and provenance
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
     "shear_cot_min",
@@ -154,6 +153,10 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_check_steel",
     "fatigue_check_concrete",
     "fatigue_concrete_method",
+    "fatigue_factor_mode",
+    "fatigue_factor_approval",
+    "fatigue_gamma0",
+    "fatigue_gamma3",
     "fatigue_gamma_c",
     "fatigue_gamma_s",
     "fatigue_gamma_ff",
@@ -162,6 +165,30 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_concrete_k1",
     "fatigue_concrete_c",
     "fatigue_source",
+)
+
+TORSION_FACTOR_SCALAR_KEYS = (
+    "torsion_factor_mode",
+    "torsion_gamma0",
+    "torsion_gamma3",
+    "torsion_gamma_ct",
+    "torsion_factor_approval",
+)
+
+OPTIONAL_FACTOR_VALUE_KEYS = (
+    "fatigue_gamma_s",
+    "fatigue_gamma_c",
+    "torsion_gamma_ct",
+)
+
+FACTOR_NUMERIC_SCALAR_KEYS = (
+    "fatigue_gamma0",
+    "fatigue_gamma3",
+    "fatigue_gamma_s",
+    "fatigue_gamma_c",
+    "torsion_gamma0",
+    "torsion_gamma3",
+    "torsion_gamma_ct",
 )
 
 # Every scalar / string input that makes up a project. Missing keys are skipped on
@@ -205,10 +232,13 @@ SCALAR_KEYS = [
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
-    # Fatigue. Partial factors are complete user inputs; Sector does not apply
-    # control-, construction- or consequence-class multipliers.
+    # Fatigue factor provenance. Presets expose every applied multiplier;
+    # overrides remain complete approved final inputs.
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
-    "fatigue_check_concrete", "fatigue_gamma_c", "fatigue_gamma_s",
+    "fatigue_check_concrete", "fatigue_factor_mode",
+    "fatigue_factor_approval",
+    "fatigue_gamma0", "fatigue_gamma3",
+    "fatigue_gamma_c", "fatigue_gamma_s",
     "fatigue_concrete_method",
     "fatigue_gamma_ff", "fatigue_beta_cc_t0", "fatigue_t0_days",
     "fatigue_concrete_k1", "fatigue_concrete_c", "fatigue_source",
@@ -228,6 +258,8 @@ SCALAR_KEYS = [
     "strut_cot_min", "strut_cot_max",
     # Torsion (thin-walled tube, TRd). The stirrup is the shared shear_link_* one.
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
+    "torsion_factor_mode", "torsion_gamma0", "torsion_gamma3",
+    "torsion_gamma_ct", "torsion_factor_approval",
     # Sub-tube subdivision for compound / T-sections (6.3.1(3)).
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
@@ -254,6 +286,20 @@ def _scalar(value):
     if hasattr(value, "item"):           # numpy / pandas scalar
         return value.item()
     return value
+
+
+def _validate_factor_scalars(scalars: dict) -> None:
+    """Reject non-numeric/Boolean factors at every project-file boundary."""
+    for key in FACTOR_NUMERIC_SCALAR_KEYS:
+        if key not in scalars:
+            continue
+        value = scalars[key]
+        if value is None and key in OPTIONAL_FACTOR_VALUE_KEYS:
+            continue
+        try:
+            codes.strict_positive_real(value, key)
+        except ValueError as exc:
+            raise ValueError(f"invalid project material factor: {exc}") from exc
 
 
 def _cell(v):
@@ -328,10 +374,49 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
         )
     }
+    # Empty override widgets use ``None`` in Streamlit state. Persist them exactly
+    # like absent optional values so a no-edit load/save keeps the canonical input
+    # hash stable and never synthesises an approved numeric factor.
+    for key in OPTIONAL_FACTOR_VALUE_KEYS:
+        if scalar_payload.get(key) is None:
+            scalar_payload.pop(key, None)
+    _validate_factor_scalars(scalar_payload)
     # These v6 controls were global because one shear component existed. Their
     # values are consumed only by the v7 migration and are not written again.
     for key in ("shear_axis", "shear_tension", "shear_bw", "shear_link_legs"):
         scalar_payload.pop(key, None)
+    if (
+        scalar_payload.get("fatigue_on")
+        or "fatigue_gamma_s" in scalar_payload
+        or "fatigue_gamma_c" in scalar_payload
+    ):
+        scalar_payload.setdefault("fatigue_gamma0", 1.0)
+        scalar_payload.setdefault("fatigue_gamma3", 1.0)
+        scalar_payload.setdefault("fatigue_factor_approval", "")
+        has_numeric_fatigue_factor = (
+            "fatigue_gamma_s" in scalar_payload
+            or "fatigue_gamma_c" in scalar_payload
+        )
+        default_fatigue_factor_mode = fatigue_inputs.FACTOR_MODE_PRESET
+        if has_numeric_fatigue_factor:
+            default_fatigue_factor_mode = (
+                fatigue_inputs.FACTOR_MODE_OVERRIDE
+                if str(
+                    scalar_payload.get("fatigue_factor_approval") or ""
+                ).strip()
+                else fatigue_inputs.FACTOR_MODE_LEGACY
+            )
+        scalar_payload.setdefault(
+            "fatigue_factor_mode",
+            default_fatigue_factor_mode,
+        )
+    if scalar_payload.get("torsion_on"):
+        scalar_payload.setdefault(
+            "torsion_factor_mode", codes.FACTOR_MODE_PRESET
+        )
+        scalar_payload.setdefault("torsion_gamma0", 1.0)
+        scalar_payload.setdefault("torsion_gamma3", 1.0)
+        scalar_payload.setdefault("torsion_factor_approval", "")
     # Current project files write only the catalogue representation. External
     # callers may still supply the former flat material values; migrate them at
     # the save/hash boundary so two equivalent inputs have one canonical form.
@@ -453,6 +538,11 @@ def project_provenance(text: str) -> dict:
         raise ValueError("not valid JSON") from exc
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError("not a Sector project file")
+    raw_scalars = data.get("scalars") or {}
+    if not isinstance(raw_scalars, dict):
+        raise ValueError("malformed 'tables' or 'scalars' section")
+    _reject_unsupported_strut_settings(raw_scalars)
+    _validate_factor_scalars(raw_scalars)
     provenance = data.get("provenance")
     if not isinstance(provenance, dict):
         return {
@@ -467,10 +557,8 @@ def project_provenance(text: str) -> dict:
     raw_tables = data.get("tables") or {}
     raw_load_cases = data.get("load_cases")
     raw_fatigue = data.get("fatigue")
-    raw_scalars = data.get("scalars") or {}
-    if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
+    if not isinstance(raw_tables, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
-    _reject_unsupported_strut_settings(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
@@ -526,6 +614,7 @@ def parse_project(text: str):
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
     _reject_unsupported_strut_settings(raw_scalars)
+    _validate_factor_scalars(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
@@ -690,6 +779,66 @@ def parse_project(text: str):
     if data.get("version", 1) < 14:
         scalars.setdefault("detailing_member_type", detailing.MEMBER_BEAM)
         scalars.setdefault("detailing_cut_direction", detailing.CUT_TRANSVERSE)
+    # v15 separates the torsional tensile factor from the concrete compression
+    # factor and records fatigue-factor derivations. Old fatigue numbers are
+    # retained but require an explicit engineer decision; they are never silently
+    # relabelled as the new edition preset or an approved override.
+    if data.get("version", 1) < 15:
+        torsion_method = str(
+            (
+                raw_scalars.get("combined_method")
+                if raw_scalars.get("combined_on")
+                else raw_scalars.get("torsion_method")
+            )
+            or codes.EC2_2005_DKNA.label
+        )
+        torsion_code = {
+            code.label: code
+            for code in (codes.EC2_2005, codes.EC2_2005_DKNA)
+        }.get(torsion_method, codes.EC2_2005_DKNA)
+        scalars.setdefault("torsion_factor_mode", codes.FACTOR_MODE_PRESET)
+        scalars.setdefault("torsion_gamma0", 1.0)
+        scalars.setdefault("torsion_gamma3", 1.0)
+        scalars.setdefault(
+            "torsion_gamma_ct",
+            torsion_code.material_factor_basis()["tension_final"],
+        )
+        scalars.setdefault("torsion_factor_approval", "")
+
+        scalars.setdefault("fatigue_gamma0", 1.0)
+        scalars.setdefault("fatigue_gamma3", 1.0)
+        scalars.setdefault("fatigue_factor_approval", "")
+        has_legacy_fatigue_factors = any(
+            isinstance(raw_scalars.get(key), (int, float))
+            for key in ("fatigue_gamma_s", "fatigue_gamma_c")
+        )
+        scalars.setdefault(
+            "fatigue_factor_mode",
+            (
+                fatigue_inputs.FACTOR_MODE_LEGACY
+                if has_legacy_fatigue_factors
+                else fatigue_inputs.FACTOR_MODE_PRESET
+            ),
+        )
+    if (
+        bool(scalars.get("fatigue_on"))
+        or "fatigue_factor_mode" in scalars
+        or "fatigue_gamma_s" in scalars
+        or "fatigue_gamma_c" in scalars
+    ):
+        # Early v15 development files predate the dedicated factor-approval
+        # field. Never promote the spectrum-method approval to this role.
+        scalars.setdefault("fatigue_factor_approval", "")
+    if (
+        "torsion_factor_mode" in scalars
+        and scalars["torsion_factor_mode"] not in codes.FACTOR_MODES
+    ):
+        raise ValueError("unknown torsion material-factor source")
+    if (
+        "fatigue_factor_mode" in scalars
+        and scalars["fatigue_factor_mode"] not in fatigue_inputs.FACTOR_MODES
+    ):
+        raise ValueError("unknown fatigue material-factor source")
     # The axial force N is now tension-positive; files written before that (version
     # < 2) stored it compression-positive, so negate their axial values to preserve
     # the physical loads. Moments are unchanged.

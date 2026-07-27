@@ -18,7 +18,7 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from sector import detailing  # noqa: E402
+from sector import codes, detailing  # noqa: E402
 
 
 def test_migrate_legacy_torsion_only_stirrup():
@@ -324,7 +324,7 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
             "cycle_counting": fatigue_inputs.COUNTING_OTHER,
             "concurrence_basis": "Simultaneous trucks excluded by study T-4",
             "atypical_traffic": fatigue_inputs.ATYPICAL_CONSIDERED,
-            "approval_reference": "",
+            "approval_reference": "DB-FAT-12 / approval 7",
             "authority_adjustments": (
                 "FLM4 traffic factors included in action export"
             ),
@@ -332,6 +332,10 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
         },
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-FACT-12 / checker D",
+        "fatigue_gamma0": 0.95,
+        "fatigue_gamma3": 1.10,
         "fatigue_gamma_c": 1.595,
         "fatigue_gamma_s": 1.32,
         "fatigue_gamma_ff": 1.0,
@@ -353,6 +357,18 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
         tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
     )
     assert restored_scalars["fatigue_gamma_c"] == 1.595
+    assert restored_scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    assert restored_scalars["fatigue_gamma0"] == pytest.approx(0.95)
+    assert restored_scalars["fatigue_gamma3"] == pytest.approx(1.10)
+    assert restored_scalars["fatigue_factor_approval"] == (
+        "DB-FACT-12 / checker D"
+    )
+    assert (
+        restored_scalars[fatigue_inputs.BASIS_KEY]["approval_reference"]
+        == "DB-FAT-12 / approval 7"
+    )
     assert restored_scalars["fatigue_concrete_k1"] == 0.85
     assert (
         restored_scalars["fatigue_concrete_method"]
@@ -382,6 +398,180 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     )
     assert project_io.input_sha256(restored, restored_scalars) == (
         project_io.input_sha256(tables, scalars)
+    )
+
+
+def test_implicit_fatigue_factor_mode_round_trips_by_dedicated_approval():
+    approved = {
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_check_steel": True,
+        "fatigue_check_concrete": False,
+        "fatigue_gamma_s": 1.27,
+        "fatigue_factor_approval": "DB-FACT-20 / checker E",
+    }
+
+    approved_text = project_io.dump_project({}, approved)
+    approved_tables, approved_scalars = project_io.parse_project(
+        approved_text
+    )
+
+    assert approved_scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    assert approved_scalars["fatigue_factor_approval"] == (
+        "DB-FACT-20 / checker E"
+    )
+    assert approved_scalars["fatigue_gamma_s"] == pytest.approx(1.27)
+    assert "fatigue_gamma_c" not in approved_scalars
+    assert project_io.input_sha256(
+        approved_tables,
+        approved_scalars,
+    ) == project_io.input_sha256({}, approved)
+
+    unapproved = dict(approved)
+    unapproved.pop("fatigue_factor_approval")
+    _tables, unapproved_scalars = project_io.parse_project(
+        project_io.dump_project({}, unapproved)
+    )
+
+    assert unapproved_scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_LEGACY
+    )
+    assert unapproved_scalars["fatigue_factor_approval"] == ""
+
+
+def test_missing_optional_factor_values_are_canonical_absences():
+    absent = {
+        "fatigue_on": True,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-FACT-21 / checker F",
+        "torsion_on": True,
+        "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
+        "torsion_factor_approval": "DB-TOR-05 / checker F",
+    }
+    blank = {
+        **absent,
+        "fatigue_gamma_s": None,
+        "fatigue_gamma_c": None,
+        "torsion_gamma_ct": None,
+    }
+
+    text = project_io.dump_project({}, blank)
+    payload = json.loads(text)
+    _tables, restored = project_io.parse_project(text)
+
+    for key in project_io.OPTIONAL_FACTOR_VALUE_KEYS:
+        assert key not in payload["scalars"]
+        assert key not in restored
+    assert restored["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    assert restored["fatigue_factor_approval"] == (
+        "DB-FACT-21 / checker F"
+    )
+    assert restored["torsion_factor_mode"] == codes.FACTOR_MODE_OVERRIDE
+    assert restored["torsion_factor_approval"] == "DB-TOR-05 / checker F"
+    assert project_io.input_sha256({}, blank) == (
+        project_io.input_sha256({}, absent)
+    )
+
+
+def test_v15_project_boundaries_reject_boolean_material_factors():
+    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS:
+        project = {
+            "format": project_io.FORMAT,
+            "version": project_io.VERSION,
+            "tables": {},
+            "scalars": {key: True},
+        }
+        text = json.dumps(project)
+
+        with pytest.raises(
+            ValueError,
+            match="Boolean values are not accepted",
+        ):
+            project_io.parse_project(text)
+        with pytest.raises(
+            ValueError,
+            match="Boolean values are not accepted",
+        ):
+            project_io.project_provenance(text)
+        with pytest.raises(
+            ValueError,
+            match="Boolean values are not accepted",
+        ):
+            project_io.dump_project({}, {key: np.bool_(True)})
+
+
+def test_current_torsion_factor_override_round_trips_with_approval_source():
+    values = {
+        "torsion_on": True,
+        "torsion_method": codes.EC2_2005_DKNA.label,
+        "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
+        "torsion_gamma0": 0.95,
+        "torsion_gamma3": 1.10,
+        "torsion_gamma_ct": 1.62,
+        "torsion_factor_approval": "DB-TOR-04 / checker C",
+    }
+
+    text = project_io.dump_project({}, values)
+    _tables, scalars = project_io.parse_project(text)
+
+    assert {key: scalars[key] for key in values} == values
+
+
+def test_v14_migrates_torsion_safely_and_flags_saved_fatigue_factors():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 14,
+        "tables": {},
+        "scalars": {
+            "torsion_on": True,
+            "torsion_method": codes.EC2_2005_DKNA.label,
+            "fatigue_on": True,
+            "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+            "fatigue_gamma_s": 1.15,
+            "fatigue_gamma_c": 1.50,
+        },
+    }
+
+    _tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars["torsion_factor_mode"] == codes.FACTOR_MODE_PRESET
+    assert scalars["torsion_gamma0"] == pytest.approx(1.0)
+    assert scalars["torsion_gamma3"] == pytest.approx(1.0)
+    assert scalars["torsion_gamma_ct"] == pytest.approx(1.70)
+    assert scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_LEGACY
+    )
+    assert scalars["fatigue_gamma_s"] == pytest.approx(1.15)
+    assert scalars["fatigue_gamma_c"] == pytest.approx(1.50)
+    assert scalars["fatigue_factor_approval"] == ""
+
+
+def test_early_v15_spectrum_approval_does_not_authorize_factor_override():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 15,
+        "tables": {},
+        "scalars": {
+            "fatigue_on": True,
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "fatigue_gamma_s": 1.27,
+            "fatigue_gamma_c": 1.61,
+            fatigue_inputs.BASIS_KEY: {
+                **fatigue_inputs.default_basis(),
+                "approval_reference": "VD-FLM5-AGREEMENT",
+            },
+        },
+    }
+
+    _tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars["fatigue_factor_approval"] == ""
+    assert scalars[fatigue_inputs.BASIS_KEY]["approval_reference"] == (
+        "VD-FLM5-AGREEMENT"
     )
 
 

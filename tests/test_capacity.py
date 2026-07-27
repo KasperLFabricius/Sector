@@ -6,6 +6,7 @@ import ast
 import pathlib
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from sector import capacity, codes
@@ -244,6 +245,72 @@ def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     assert not bad["subdivide"]
     assert not bad["tube"]["valid"]
     assert "invalid sub-tube partition" in bad["tube"]["reason"]
+
+
+def test_build_torsion_context_marks_unapproved_final_factor_invalid():
+    ctx = capacity.build_torsion_context(
+        _member_input(
+            torsion_on=True,
+            torsion_factor_mode=codes.FACTOR_MODE_OVERRIDE,
+            torsion_gamma_ct=1.62,
+            torsion_factor_approval="  ",
+        ),
+        0.0,
+    )
+
+    assert ctx["gamma_ct"] == pytest.approx(1.62)
+    assert ctx["factor_approval_required"] is True
+    assert ctx["factor_approval_valid"] is False
+    assert "requires a stated approval/source" in ctx["factor_approval_reason"]
+    assert ctx["material_factor_basis"]["approval_reference"] == ""
+    assert ctx["material_factor_basis"]["approval_valid"] is False
+
+
+def test_torsion_factor_preflight_rejects_missing_or_non_positive_override():
+    missing = _member_input(
+        torsion_on=True,
+        torsion_factor_mode=codes.FACTOR_MODE_OVERRIDE,
+        torsion_factor_approval="DB-TOR-06 / checker E",
+    )
+    non_positive = dict(missing, torsion_gamma_ct=0.0)
+    valid = dict(missing, torsion_gamma_ct=1.62)
+
+    assert (
+        capacity.torsion_factor_validation_error(missing)
+        == "an approved final concrete tensile factor is required"
+    )
+    assert (
+        capacity.torsion_factor_validation_error(non_positive)
+        == "the final concrete tensile factor must be a finite positive real number"
+    )
+    assert capacity.torsion_factor_validation_error(valid) is None
+
+
+@pytest.mark.parametrize(
+    ("mode", "field", "boolean_value"),
+    [
+        (codes.FACTOR_MODE_OVERRIDE, "torsion_gamma_ct", True),
+        (codes.FACTOR_MODE_PRESET, "torsion_gamma0", np.bool_(True)),
+        (codes.FACTOR_MODE_PRESET, "torsion_gamma3", True),
+    ],
+)
+def test_torsion_factor_preflight_rejects_boolean_values(
+    mode,
+    field,
+    boolean_value,
+):
+    inp = _member_input(
+        torsion_on=True,
+        torsion_factor_mode=mode,
+        torsion_factor_approval="DB-TOR-07 / checker F",
+    )
+    inp[field] = boolean_value
+
+    error = capacity.torsion_factor_validation_error(inp)
+
+    assert "Boolean values are not accepted" in error
+    with pytest.raises(ValueError, match="Boolean values are not accepted"):
+        capacity.build_torsion_context(inp, 0.0)
 
 
 def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_corner():

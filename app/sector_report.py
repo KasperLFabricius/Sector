@@ -1674,6 +1674,7 @@ class ReportBuilder:
         if fatigue is not None:
             checks = fatigue.get("checks") or {}
             factors = fatigue.get("partial_factors") or {}
+            factor_basis = fatigue.get("factor_basis") or {}
             concrete = fatigue.get("concrete_parameters") or {}
             fatigue_basis = fatigue.get("basis") or {}
             fatigue_rows = [["Setting", "Value"]]
@@ -1692,11 +1693,31 @@ class ReportBuilder:
                 ],
                 ["Fatigue gamma<sub>Ff</sub>",
                  _fmt(factors.get("gamma_ff"), 3)],
+                ["Fatigue factor source",
+                 _html_escape(str(factor_basis.get("mode") or "-"))],
+                ["Fatigue factor provision",
+                 _html_escape(str(factor_basis.get("reference") or "-"))],
+                ["Fatigue factor override approval/source",
+                 _html_escape(str(
+                     factor_basis.get("approval_reference") or "-"
+                 ))],
+                ["Fatigue gamma<sub>0</sub>",
+                 _fmt(factor_basis.get("gamma0"), 3)],
+                ["Fatigue gamma<sub>3</sub>",
+                 _fmt(factor_basis.get("gamma3"), 3)],
             ])
             if checks.get("reinforcement"):
-                fatigue_rows.append([
-                    "Fatigue gamma<sub>s</sub>",
-                    _fmt(factors.get("gamma_s"), 3),
+                fatigue_rows.extend([
+                    [
+                        "Fatigue gamma<sub>s</sub>",
+                        _fmt(factors.get("gamma_s"), 3),
+                    ],
+                    [
+                        "gamma<sub>s</sub> derivation",
+                        _html_escape(str(
+                            factor_basis.get("gamma_s_derivation") or "-"
+                        )),
+                    ],
                 ])
             if checks.get("concrete"):
                 fatigue_rows.extend([
@@ -1706,6 +1727,10 @@ class ReportBuilder:
                      ))],
                     ["Fatigue gamma<sub>c,fat</sub>",
                      _fmt(factors.get("gamma_c"), 3)],
+                    ["gamma<sub>c,fat</sub> derivation",
+                     _html_escape(str(
+                         factor_basis.get("gamma_c_derivation") or "-"
+                     ))],
                     ["Concrete age t<sub>0</sub>",
                      f"{_fmt(fatigue.get('t0_days'), 2)} days"],
                     ["beta<sub>cc</sub>(t<sub>0</sub>)",
@@ -1749,7 +1774,7 @@ class ReportBuilder:
                  _html_escape(str(
                      fatigue_basis.get("atypical_traffic") or "-"
                  ))],
-                ["Approval reference",
+                ["Spectrum-method approval/reference",
                  _html_escape(str(
                      fatigue_basis.get("approval_reference") or "-"
                  ))],
@@ -3629,8 +3654,21 @@ class ReportBuilder:
 
     def _torsion(self):
         t = self.out["torsion"]
-        tube = t["tube"]
         self._case_heading("Torsion (thin-walled tube)", "plastic")
+        if t.get("factor_input_valid") is False:
+            self._status_block(
+                "INVALID - concrete tensile-factor override missing or invalid",
+                "INVALID",
+            )
+            self._small(
+                "Torsion is not assessed because the approved final concrete "
+                "tensile factor is missing or not positive. Enter an explicit "
+                "positive value and recalculate. No torsion, V+T (6.29), "
+                "minimum-reinforcement (6.31), or combined compliance verdict "
+                "is issued."
+            )
+            return
+        tube = t["tube"]
         self._p("Torsion resistance from the thin-walled closed-tube idealisation "
                 "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
                 "tube is derived from the outline; the closed stirrups and the "
@@ -3639,6 +3677,19 @@ class ReportBuilder:
                    "minimise the governing utilisation)."
                    if t.get("theta_mode") == "utilisation"
                    else "(auto-optimised for the torsion resistance)."))
+        if t.get("factor_approval_valid") is False:
+            self._status_block(
+                "INVALID - concrete tensile-factor override approval/source missing",
+                "INVALID",
+            )
+            self._small(
+                "Torsion is not assessed because the selected approved final "
+                "concrete tensile-factor override has no approval/source. Enter the "
+                "project decision, design-basis clause, or checker approval and "
+                "recalculate. No torsion, V+T (6.29), minimum-reinforcement (6.31), "
+                "or combined compliance verdict is issued."
+            )
+            return
         directional = t.get("directional_interactions") or {}
         if directional:
             self._status_block(
@@ -3763,6 +3814,10 @@ class ReportBuilder:
                  f"(cot theta = {_fmt(t['cot'], 3)})"],
                 ["Strut factor", "nu", f"{_fmt(t['nu'], 3)}"],
                 ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(t['alpha_cw'], 3)}"],
+                ["Concrete compression factor", "gamma<sub>c</sub>",
+                 _fmt(t.get("gamma_c"), 3)],
+                ["Concrete tension factor", "gamma<sub>ct</sub>",
+                 _fmt(t.get("gamma_ct"), 3)],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
@@ -3776,6 +3831,34 @@ class ReportBuilder:
             self._small("nu = nu<sub>v</sub> (raised from nu<sub>t</sub>) under DK NA "
                         "Figur 5.100 NA: closed stirrups round the periphery and "
                         "distributed longitudinal steel on both faces.")
+        factor_basis = t.get("material_factor_basis") or {}
+        self._h2("Material-factor basis")
+        factor_rows = [
+            ["Item", "Value"],
+            ["Factor source",
+             _html_escape(str(factor_basis.get("mode") or "-"))],
+            ["Provision",
+             _html_escape(str(factor_basis.get("reference") or "-"))],
+            ["gamma<sub>0</sub>", _fmt(factor_basis.get("gamma0"), 3)],
+            ["gamma<sub>3</sub>", _fmt(factor_basis.get("gamma3"), 3)],
+            ["Compression preset",
+             _fmt(factor_basis.get("compression_preset"), 3)],
+            ["Final compression factor",
+             _fmt(factor_basis.get("compression_final"), 3)],
+            ["Tension base", _fmt(factor_basis.get("tension_base"), 3)],
+            ["Tension derivation",
+             _html_escape(str(
+                 factor_basis.get("tension_derivation") or "-"
+             ))],
+            ["Final tension factor",
+             _fmt(factor_basis.get("tension_final"), 3)],
+        ]
+        if factor_basis.get("approval_reference"):
+            factor_rows.append([
+                "Override approval/source",
+                _html_escape(str(factor_basis["approval_reference"])),
+            ])
+        self._table(factor_rows, [55 * mm, 110 * mm], keep=False)
         self._h2("Resistances")
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
@@ -3797,6 +3880,13 @@ class ReportBuilder:
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
             result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
                    f"(governed by {t['governs']})")
+        self._formula(
+            "f<sub>ctd</sub> = f<sub>ctk,0.05</sub> / "
+            "gamma<sub>ct</sub> = 0.7 f<sub>ctm</sub> / gamma<sub>ct</sub>",
+            ref=_html_escape(str(factor_basis.get("reference") or "-")),
+            subst=f"{_fmt(t.get('fctk_005'), 3)} / "
+                  f"{_fmt(t.get('gamma_ct'), 3)}",
+            result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")
         self._formula(
             "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
             ref="cracking (tau = f<sub>ctd</sub>)",
@@ -4340,6 +4430,7 @@ class ReportBuilder:
         self._h2("Basis and provenance")
         basis = payload.get("basis") or {}
         factors = payload.get("partial_factors") or {}
+        factor_basis = payload.get("factor_basis") or {}
         concrete_parameters = payload.get("concrete_parameters") or {}
         basis_rows = [
             ["Item", "Value"],
@@ -4359,19 +4450,41 @@ class ReportBuilder:
              _html_escape(str(basis.get("concurrence_basis") or "-"))],
             ["Atypical traffic",
              _html_escape(str(basis.get("atypical_traffic") or "-"))],
-            ["Approval reference",
+            ["Spectrum-method approval/reference",
              _html_escape(str(basis.get("approval_reference") or "-"))],
             ["Authority adjustments",
              _html_escape(str(basis.get("authority_adjustments") or "-"))],
+            ["Factor source",
+             _html_escape(str(factor_basis.get("mode") or "-"))],
+            ["Factor provision",
+             _html_escape(str(factor_basis.get("reference") or "-"))],
+            ["Factor override approval/source",
+             _html_escape(str(
+                 factor_basis.get("approval_reference") or "-"
+             ))],
+            ["gamma<sub>0</sub>", _fmt(factor_basis.get("gamma0"), 3)],
+            ["gamma<sub>3</sub>", _fmt(factor_basis.get("gamma3"), 3)],
             ["gamma<sub>Ff</sub>", _fmt(factors.get("gamma_ff"), 3)],
         ]
         if checks.get("reinforcement"):
-            basis_rows.append([
-                "gamma<sub>s</sub>", _fmt(factors.get("gamma_s"), 3)
+            basis_rows.extend([
+                ["gamma<sub>s</sub>", _fmt(factors.get("gamma_s"), 3)],
+                [
+                    "gamma<sub>s</sub> derivation",
+                    _html_escape(str(
+                        factor_basis.get("gamma_s_derivation") or "-"
+                    )),
+                ],
             ])
         if checks.get("concrete"):
             basis_rows.extend([
                 ["gamma<sub>c,fat</sub>", _fmt(factors.get("gamma_c"), 3)],
+                [
+                    "gamma<sub>c,fat</sub> derivation",
+                    _html_escape(str(
+                        factor_basis.get("gamma_c_derivation") or "-"
+                    )),
+                ],
                 ["t<sub>0</sub> (days)", _fmt(payload.get("t0_days"), 2)],
                 ["beta<sub>cc</sub>(t<sub>0</sub>)",
                  _fmt(concrete_parameters.get("beta_cc_t0"), 4)],
@@ -5134,10 +5247,74 @@ class ReportBuilder:
                 "preflight was invalid. No fatigue methodology or resistance "
                 "verdict was applied."
             )
+        factor_provenance = []
+        if torsion_results:
+            torsion_basis = (
+                torsion_results[0].get("material_factor_basis") or {}
+            )
+            torsion_mode = str(torsion_basis.get("mode") or "").strip()
+            if torsion_mode:
+                torsion_override = bool(
+                    torsion_basis.get("tension_override")
+                    or torsion_mode == "Approved final override"
+                )
+                torsion_reference = str(
+                    (
+                        torsion_basis.get("approval_reference")
+                        if torsion_override
+                        else torsion_basis.get("reference")
+                    )
+                    or "not stated"
+                ).strip()
+                torsion_reference_label = (
+                    "approval/source" if torsion_override else "provision"
+                )
+                factor_provenance.append(
+                    "torsion gamma<sub>ct</sub> - "
+                    f"{_html_escape(torsion_mode)}; "
+                    f"{torsion_reference_label}: "
+                    f"{_html_escape(torsion_reference)}"
+                )
+        if fatigue is not None and not fatigue_errors:
+            fatigue_factor_basis = fatigue.get("factor_basis") or {}
+            fatigue_mode = str(
+                fatigue_factor_basis.get("mode") or ""
+            ).strip()
+            if fatigue_mode:
+                fatigue_override = bool(
+                    fatigue_factor_basis.get("override")
+                    or fatigue_mode == "Approved final override"
+                )
+                fatigue_reference = str(
+                    (
+                        fatigue_factor_basis.get("approval_reference")
+                        if fatigue_override
+                        else fatigue_factor_basis.get("reference")
+                    )
+                    or "not stated"
+                ).strip()
+                fatigue_reference_label = (
+                    "approval/source" if fatigue_override else "provision"
+                )
+                factor_provenance.append(
+                    "fatigue factors - "
+                    f"{_html_escape(fatigue_mode)}; "
+                    f"{fatigue_reference_label}: "
+                    f"{_html_escape(fatigue_reference)}"
+                )
+        if factor_provenance:
+            lines.append(
+                "Partial-factor provenance - "
+                + "; ".join(factor_provenance)
+                + "."
+            )
         lines.append(
-            "The printed gamma<sub>c</sub>, gamma<sub>s</sub> and reinforcement "
-            "factors are the final user-entered partial factors. Sector applies no "
-            "hidden construction-, control- or consequence-category multiplier."
+            "The printed partial factors are the final factors used in each "
+            "calculation. For torsion and fatigue, the provenance above and the "
+            "factor-basis tables distinguish edition-derived presets from approved "
+            "final overrides and state the governing provision or approval/source. "
+            "Sector applies no hidden construction-, control- or consequence-"
+            "category multiplier."
         )
         lines.append(
             "All results follow from the documented inputs and cited formulas; "

@@ -5,9 +5,10 @@ complete application input, resolves per-element material and fatigue-detail
 assignments, converts the UI's tension-positive normal force exactly once, and
 calls :mod:`sector.fatigue`.
 
-Authority selections are retained as provenance and QA warnings only.  No
-traffic, dynamic, concurrence, control-class, construction-category or
-consequence-class factor is applied here.
+Authority selections are retained as provenance and QA warnings only. No
+traffic, dynamic or concurrence factor is inferred. Material-factor presets are
+resolved only from the selected edition and explicit gamma0/gamma3 inputs; a
+user-approved final override is passed through unchanged and reported.
 """
 
 from __future__ import annotations
@@ -36,6 +37,10 @@ from sector.section import Section
 
 
 STEEL_REFERENCE_MODULUS_MPA = 200_000.0
+_LEGACY_FACTOR_REVIEW_ERROR = (
+    "Legacy saved fatigue factors require review: select the "
+    "edition-derived preset or an approved final override"
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,7 @@ class PreparedFatigueAnalysis:
     prestress_stress: np.ndarray | None
     t0_days: float | None
     basis: Mapping
+    factor_basis: Mapping
     warnings: tuple[str, ...]
     concrete_method: str | None
 
@@ -71,7 +77,7 @@ def _positive(value, label: str, errors: list[str]) -> float | None:
     except (TypeError, ValueError):
         errors.append(f"{label} must be a finite number greater than zero")
         return None
-    if not math.isfinite(number) or number <= 0.0:
+    if not math.isfinite(number) or number <= 0:
         errors.append(f"{label} must be a finite number greater than zero")
         return None
     return number
@@ -106,6 +112,65 @@ def _edition(value) -> str:
     )
 
 
+def _factor_mode(inp: Mapping) -> tuple[str, bool]:
+    """Return ``(mode, explicit)`` with a compatibility path for API callers."""
+    raw = inp.get("fatigue_factor_mode")
+    if raw in (None, ""):
+        # Before project v15 the numeric controls were already complete user
+        # inputs, but they carried no factor-specific approval. Treat them as
+        # legacy/review-required unless a headless integration now supplies the
+        # dedicated approval source. Project migration applies the same rule to
+        # saved values.
+        if (
+            inp.get("fatigue_gamma_s") is not None
+            or inp.get("fatigue_gamma_c") is not None
+        ):
+            return (
+                fatigue_inputs.FACTOR_MODE_OVERRIDE
+                if str(inp.get("fatigue_factor_approval") or "").strip()
+                else fatigue_inputs.FACTOR_MODE_LEGACY
+            ), False
+        return fatigue_inputs.FACTOR_MODE_PRESET, False
+    return str(raw), True
+
+
+def _resolved_factor_basis(inp: Mapping, edition: str) -> tuple[float, float, dict]:
+    mode, explicit = _factor_mode(inp)
+    gamma0 = inp.get("fatigue_gamma0", 1.0)
+    gamma3 = inp.get("fatigue_gamma3", 1.0)
+    gamma_s = inp.get("fatigue_gamma_s")
+    gamma_c = inp.get("fatigue_gamma_c")
+    if mode == fatigue_inputs.FACTOR_MODE_OVERRIDE:
+        # Single-check integrations only need the factor that is used. Supply
+        # the inactive side from the edition preset so that compatibility path
+        # remains valid after project serialization makes the mode explicit.
+        # Enabling that check later still requires its own supplied factor.
+        preset = fatigue_inputs.fatigue_factor_preset(
+            edition,
+            gamma0=gamma0,
+            gamma3=gamma3,
+        )
+        if gamma_s is None and not bool(inp.get("fatigue_check_steel")):
+            gamma_s = preset["gamma_s"]
+        if gamma_c is None and not bool(inp.get("fatigue_check_concrete")):
+            gamma_c = preset["gamma_c"]
+    gamma_s, gamma_c, basis = fatigue_inputs.resolve_fatigue_factors(
+        edition,
+        mode=mode,
+        gamma_s=gamma_s,
+        gamma_c=gamma_c,
+        gamma0=gamma0,
+        gamma3=gamma3,
+    )
+    basis["mode_explicit"] = explicit
+    basis["approval_reference"] = (
+        str(inp.get("fatigue_factor_approval") or "").strip()
+        if mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        else ""
+    )
+    return gamma_s, gamma_c, basis
+
+
 def calculation_references(
     edition: str,
     concrete_method: str = CONCRETE_MINER,
@@ -126,7 +191,7 @@ def calculation_references(
             ),
         }
     national = (
-        " with DK NA:2024 explicit input factors"
+        " with DK NA:2024 resolved final factors"
         if selected == fatigue_inputs.EC2_2005_DKNA
         else ""
     )
@@ -355,6 +420,25 @@ def validation_errors(inp: Mapping) -> list[str]:
     if not bool(inp.get("fatigue_on")):
         return []
     errors: list[str] = []
+    factor_keys = {
+        "fatigue_gamma0",
+        "fatigue_gamma3",
+        "fatigue_gamma_s",
+        "fatigue_gamma_c",
+    }
+    rejected_factor_keys = sorted(
+        {
+            key
+            for key in (inp.get("invalid_factor_input_keys") or ())
+            if key in factor_keys
+        }
+    )
+    if rejected_factor_keys:
+        errors.append(
+            "Boolean/non-numeric values are not accepted for fatigue material "
+            f"factors ({', '.join(rejected_factor_keys)}); enter explicit "
+            "positive numeric values"
+        )
     section = inp.get("section")
     if not isinstance(section, Section):
         errors.append("A valid section is required for fatigue analysis")
@@ -374,6 +458,18 @@ def validation_errors(inp: Mapping) -> list[str]:
     except ValueError as exc:
         errors.append(str(exc))
         edition = ""
+    resolved_gamma_s = resolved_gamma_c = None
+    factor_basis = None
+    if edition:
+        try:
+            resolved_gamma_s, resolved_gamma_c, factor_basis = (
+                _resolved_factor_basis(inp, edition)
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(str(exc))
+    factor_mode, _ = _factor_mode(inp)
+    if factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
+        errors.append(_LEGACY_FACTOR_REVIEW_ERROR)
 
     check_reinforcement = bool(inp.get("fatigue_check_steel"))
     check_concrete = bool(inp.get("fatigue_check_concrete"))
@@ -392,15 +488,16 @@ def validation_errors(inp: Mapping) -> list[str]:
     _positive(inp.get("nl"), "Long-term modular ratio", errors)
     _positive(inp.get("ns"), "Short-term modular ratio", errors)
     _positive(inp.get("fatigue_gamma_ff"), "gamma_Ff", errors)
-    if check_reinforcement:
-        _positive(inp.get("fatigue_gamma_s"), "gamma_s", errors)
+    if check_reinforcement and resolved_gamma_s is not None:
+        _positive(resolved_gamma_s, "gamma_s", errors)
     if check_concrete:
         concrete_method = str(
             inp.get("fatigue_concrete_method") or CONCRETE_MINER
         )
         if concrete_method not in CONCRETE_METHODS:
             errors.append("Select a valid concrete fatigue method")
-        _positive(inp.get("fatigue_gamma_c"), "gamma_c,fat", errors)
+        if resolved_gamma_c is not None:
+            _positive(resolved_gamma_c, "gamma_c,fat", errors)
         _positive(inp.get("fatigue_beta_cc_t0"), "beta_cc(t0)", errors)
         _positive(inp.get("fatigue_t0_days"), "Concrete age t0", errors)
         if concrete_method == CONCRETE_MINER:
@@ -454,6 +551,14 @@ def validation_errors(inp: Mapping) -> list[str]:
     except (TypeError, ValueError) as exc:
         errors.append(str(exc))
         basis = fatigue_inputs.default_basis()
+    if (
+        factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        and not str(inp.get("fatigue_factor_approval") or "").strip()
+    ):
+        errors.append(
+            "Approved final fatigue-factor override requires a dedicated "
+            "approval/source"
+        )
     if fatigue_inputs.method_requires_single_bin(basis["method"]):
         for name, rows in groups.items():
             if len(rows) != 1:
@@ -667,6 +772,29 @@ def invalid_result(
     except ValueError:
         edition = raw_edition or "-"
     method = str(basis.get("method") or "")
+    try:
+        resolved_gamma_s, resolved_gamma_c, factor_basis = (
+            _resolved_factor_basis(inp, edition)
+        )
+    except (TypeError, ValueError):
+        resolved_gamma_s = inp.get("fatigue_gamma_s")
+        resolved_gamma_c = inp.get("fatigue_gamma_c")
+        factor_mode, explicit = _factor_mode(inp)
+        factor_basis = {
+            "edition": edition,
+            "mode": factor_mode,
+            "mode_explicit": explicit,
+            "gamma0": inp.get("fatigue_gamma0", 1.0),
+            "gamma3": inp.get("fatigue_gamma3", 1.0),
+            "gamma_s": resolved_gamma_s,
+            "gamma_c": resolved_gamma_c,
+            "reference": "-",
+            "approval_reference": (
+                str(inp.get("fatigue_factor_approval") or "").strip()
+                if factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+                else ""
+            ),
+        }
     return {
         "valid": False,
         "converged": False,
@@ -684,10 +812,11 @@ def invalid_result(
         ),
         "calculation_references": {},
         "partial_factors": {
-            "gamma_c": inp.get("fatigue_gamma_c"),
-            "gamma_s": inp.get("fatigue_gamma_s"),
+            "gamma_c": resolved_gamma_c,
+            "gamma_s": resolved_gamma_s,
             "gamma_ff": inp.get("fatigue_gamma_ff"),
         },
+        "factor_basis": factor_basis,
         "concrete_parameters": None,
         "fatigue_detail_basis": (),
         "t0_days": inp.get("fatigue_t0_days"),
@@ -772,6 +901,10 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
 
     if not bool(inp.get("fatigue_on")):
         raise ValueError("fatigue analysis is not enabled")
+    if _factor_mode(inp)[0] == fatigue_inputs.FACTOR_MODE_LEGACY:
+        # Keep the public preparation boundary fail-closed even if a custom
+        # integration bypasses presentation-layer validation.
+        raise ValueError(_LEGACY_FACTOR_REVIEW_ERROR)
     errors = validation_errors(inp)
     if errors:
         raise ValueError("; ".join(errors))
@@ -818,11 +951,15 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         # ``validation_errors`` has already checked these values. Keep this
         # defensive guard at the preparation boundary for custom integrations.
         raise ValueError("; ".join(proof_errors))
+    edition = _edition(inp.get("fatigue_edition"))
+    resolved_gamma_s, resolved_gamma_c, factor_basis = (
+        _resolved_factor_basis(inp, edition)
+    )
     gamma_c = (
-        float(inp["fatigue_gamma_c"]) if check_concrete else None
+        resolved_gamma_c if check_concrete else None
     )
     gamma_s = (
-        float(inp["fatigue_gamma_s"]) if check_reinforcement else None
+        resolved_gamma_s if check_reinforcement else None
     )
     reinforcement = (
         _reinforcement_properties(
@@ -843,7 +980,6 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         else []
     )
 
-    edition = _edition(inp.get("fatigue_edition"))
     is_2023 = "2023" in edition
     concrete = (
         ConcreteFatigueProperties(
@@ -914,6 +1050,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             float(inp["fatigue_t0_days"]) if check_concrete else None
         ),
         basis=basis,
+        factor_basis=factor_basis,
         warnings=tuple(validation_warnings(inp)),
         concrete_method=concrete_method,
     )
@@ -1020,6 +1157,23 @@ def analysis_signature(inp: Mapping) -> tuple:
         ),
         prepared.t0_days,
         fatigue_inputs.basis_signature(prepared.basis),
+        tuple(
+            (key, prepared.factor_basis.get(key))
+            for key in (
+                "edition",
+                "mode",
+                "mode_explicit",
+                "gamma0",
+                "gamma3",
+                "gamma_s_base",
+                "gamma_c_base",
+                "fatigue_multiplier",
+                "gamma_s",
+                "gamma_c",
+                "reference",
+                "approval_reference",
+            )
+        ),
         prepared.warnings,
         prepared.concrete_method,
     )
@@ -1090,6 +1244,7 @@ def run_analysis(
             "gamma_s": prepared.gamma_s,
             "gamma_ff": prepared.gamma_ff,
         },
+        "factor_basis": dict(prepared.factor_basis),
         "concrete_parameters": (
             {
                 "fck_mpa": prepared.concrete.fck_mpa,

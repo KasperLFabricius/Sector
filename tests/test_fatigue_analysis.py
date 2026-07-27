@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 import pathlib
 from types import SimpleNamespace
 import sys
@@ -104,6 +105,8 @@ def _base(**overrides):
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "TEST-FACTOR-APPROVAL",
         "fatigue_gamma_c": 1.595,
         "fatigue_gamma_s": 1.32,
         "fatigue_gamma_ff": 1.10,
@@ -184,6 +187,26 @@ def _base(**overrides):
     return value
 
 
+def _use_2005_fatigue_details(inp):
+    catalogue = inp[fatigue_inputs.DETAIL_CATALOG_KEY]
+    converted = []
+    for item in catalogue["items"]:
+        updated = fatigue_inputs.apply_preset(
+            item,
+            (
+                fatigue_inputs.PRESET_2005_BARS
+                if item["kind"] == fatigue_inputs.MILD
+                else fatigue_inputs.PRESET_2005_PRETENSION
+            ),
+        )
+        for key in ("bond_ratio_xi", "bond_equivalent_diameter_mm"):
+            if item.get(key):
+                updated[key] = item[key]
+        converted.append(updated)
+    catalogue["items"] = converted
+    return inp
+
+
 def test_prepare_maps_signs_materials_details_and_full_factors_once():
     prepared = fatigue_analysis.prepare(_base())
 
@@ -210,6 +233,221 @@ def test_prepare_maps_signs_materials_details_and_full_factors_once():
     assert prepared.concrete.k1 == 1.0
     assert prepared.gamma_s == 1.32
     assert prepared.gamma_ff == 1.10
+
+
+def test_prepare_preserves_float_coercible_non_factor_inputs():
+    prepared = fatigue_analysis.prepare(
+        _base(
+            nl="18.0",
+            ns=Decimal("6.5"),
+            fatigue_gamma_ff="1.10",
+            fatigue_beta_cc_t0=Decimal("0.92"),
+            fatigue_t0_days="28",
+            fatigue_concrete_c=Decimal("14"),
+        )
+    )
+
+    assert prepared.nl == pytest.approx(18.0)
+    assert prepared.ns == pytest.approx(6.5)
+    assert prepared.gamma_ff == pytest.approx(1.10)
+    assert prepared.t0_days == pytest.approx(28.0)
+    assert prepared.concrete is not None
+    assert prepared.concrete.beta_cc_t0 == pytest.approx(0.92)
+    assert prepared.concrete.c == pytest.approx(14.0)
+
+
+def test_prepare_resolves_dk_fatigue_preset_from_edition_and_categories():
+    inp = _use_2005_fatigue_details(_base(
+        fatigue_edition=fatigue_inputs.EC2_2005_DKNA,
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_PRESET,
+        fatigue_gamma0=0.95,
+        fatigue_gamma3=1.10,
+        # Stale widget values must not override an explicit preset selection.
+        fatigue_gamma_s=1.15,
+        fatigue_gamma_c=1.50,
+    ))
+
+    prepared = fatigue_analysis.prepare(inp)
+
+    assert prepared.gamma_s == pytest.approx(1.20 * 1.10 * 0.95 * 1.10)
+    assert prepared.concrete.gamma_c == pytest.approx(
+        1.45 * 1.10 * 0.95 * 1.10
+    )
+    assert prepared.factor_basis["mode"] == (
+        fatigue_inputs.FACTOR_MODE_PRESET
+    )
+    assert prepared.factor_basis["gamma_s_derivation"].startswith(
+        "1.20 x 1.10 x 0.950 x 1.100"
+    )
+
+
+def test_prepare_retains_explicit_approved_fatigue_override():
+    inp = _base(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_gamma_s=1.27,
+        fatigue_gamma_c=1.61,
+        fatigue_gamma0=0.95,
+        fatigue_gamma3=1.10,
+        fatigue_factor_approval="DB-FACT-09 / checker A",
+    )
+    inp[fatigue_inputs.BASIS_KEY] = _basis(
+        approval_reference="TRAFFIC-09 / authority B"
+    )
+
+    prepared = fatigue_analysis.prepare(inp)
+
+    assert prepared.gamma_s == pytest.approx(1.27)
+    assert prepared.concrete.gamma_c == pytest.approx(1.61)
+    assert prepared.factor_basis["approval_reference"] == (
+        "DB-FACT-09 / checker A"
+    )
+    assert prepared.basis["approval_reference"] == "TRAFFIC-09 / authority B"
+    assert prepared.factor_basis["gamma_c_derivation"] == (
+        "approved final override = 1.610"
+    )
+
+
+def test_explicit_override_requires_approval_and_legacy_values_require_review():
+    override = _base(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_factor_approval="",
+    )
+    override[fatigue_inputs.BASIS_KEY] = _basis(
+        approval_reference="VD-FLM5-APPROVAL"
+    )
+    legacy = _base(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_LEGACY
+    )
+
+    assert (
+        "Approved final fatigue-factor override requires a dedicated "
+        "approval/source"
+        in fatigue_analysis.validation_errors(override)
+    )
+    override["fatigue_factor_approval"] = "DB-FACT-10 / checker C"
+    assert not any(
+        "fatigue-factor override requires" in error
+        for error in fatigue_analysis.validation_errors(override)
+    )
+    assert any(
+        "Legacy saved fatigue factors require review" in error
+        for error in fatigue_analysis.validation_errors(legacy)
+    )
+
+
+def test_approved_api_can_omit_inactive_factor_before_and_after_save():
+    steel_only = _base(fatigue_check_concrete=False)
+    steel_only.pop("fatigue_factor_mode")
+    steel_only["fatigue_factor_approval"] = "DB-FACT-20 / checker E"
+    steel_only.pop("fatigue_gamma_c")
+    concrete_only = _base(fatigue_check_steel=False)
+    concrete_only.pop("fatigue_factor_mode")
+    concrete_only["fatigue_factor_approval"] = "DB-FACT-20 / checker E"
+    concrete_only.pop("fatigue_gamma_s")
+
+    prepared_steel = fatigue_analysis.prepare(steel_only)
+    prepared_concrete = fatigue_analysis.prepare(concrete_only)
+    saved_steel = fatigue_analysis.prepare({
+        **steel_only,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+    })
+    saved_concrete = fatigue_analysis.prepare({
+        **concrete_only,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+    })
+
+    assert prepared_steel.gamma_s == pytest.approx(1.32)
+    assert prepared_steel.concrete is None
+    assert prepared_concrete.gamma_s is None
+    assert prepared_concrete.concrete.gamma_c == pytest.approx(1.595)
+    assert saved_steel.gamma_s == pytest.approx(1.32)
+    assert saved_steel.concrete is None
+    assert saved_concrete.gamma_s is None
+    assert saved_concrete.concrete.gamma_c == pytest.approx(1.595)
+
+    missing_active_factor = {
+        **steel_only,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+    }
+    missing_active_factor.pop("fatigue_gamma_s")
+    with pytest.raises(
+        ValueError,
+        match="final fatigue material factors are required",
+    ):
+        fatigue_analysis.prepare(missing_active_factor)
+
+
+def test_implicit_headless_factors_without_dedicated_approval_are_legacy():
+    inp = _base()
+    inp.pop("fatigue_factor_mode")
+    inp.pop("fatigue_factor_approval")
+    inp[fatigue_inputs.BASIS_KEY] = _basis(
+        approval_reference="VD-FLM5-AGREEMENT"
+    )
+
+    errors = fatigue_analysis.validation_errors(inp)
+    invalid = fatigue_analysis.invalid_result(inp, errors)
+
+    assert any(
+        "Legacy saved fatigue factors require review" in error
+        for error in errors
+    )
+    assert invalid["valid"] is False
+    assert invalid["factor_basis"]["mode"] == (
+        fatigue_inputs.FACTOR_MODE_LEGACY
+    )
+    assert invalid["factor_basis"]["approval_reference"] == ""
+
+
+def test_run_rejects_implicit_legacy_factors_before_invoking_solver():
+    inp = _base()
+    inp.pop("fatigue_factor_mode")
+    inp.pop("fatigue_factor_approval")
+    inp[fatigue_inputs.BASIS_KEY] = _basis(
+        approval_reference="VD-FLM5-AGREEMENT"
+    )
+    solver_called = False
+
+    def forbidden_engine(*_args, **_kwargs):
+        nonlocal solver_called
+        solver_called = True
+        raise AssertionError("legacy factors reached the fatigue solver")
+
+    with pytest.raises(
+        ValueError,
+        match="Legacy saved fatigue factors require review",
+    ):
+        fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
+
+    assert solver_called is False
+
+
+@pytest.mark.parametrize(
+    ("field", "boolean_value"),
+    [
+        ("fatigue_gamma_s", True),
+        ("fatigue_gamma_c", np.bool_(True)),
+        ("fatigue_gamma0", True),
+        ("fatigue_gamma3", np.bool_(True)),
+    ],
+)
+def test_run_rejects_boolean_factors_before_invoking_solver(
+    field,
+    boolean_value,
+):
+    inp = _base()
+    inp[field] = boolean_value
+    solver_called = False
+
+    def forbidden_engine(*_args, **_kwargs):
+        nonlocal solver_called
+        solver_called = True
+        raise AssertionError("Boolean material factor reached fatigue solver")
+
+    with pytest.raises(ValueError, match="positive real number"):
+        fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
+
+    assert solver_called is False
 
 
 def test_bent_bar_reduction_is_resolved_per_element_diameter():
@@ -267,7 +505,7 @@ def test_concrete_parameters_follow_the_selected_edition():
         fatigue_inputs.EC2_2005_DKNA
     )
     assert "DS/EN 1992-2:2005" in references["concrete"]
-    assert "DK NA:2024 explicit input factors" in references["reinforcement"]
+    assert "DK NA:2024 resolved final factors" in references["reinforcement"]
 
 
 def test_standard_detail_presets_must_match_the_selected_fatigue_edition():
