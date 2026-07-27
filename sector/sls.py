@@ -1194,6 +1194,32 @@ def crack_assessment(
             criterion_results.append(base)
             continue
 
+        rejected_candidates = [
+            name
+            for name in candidates
+            if cases.get(name) is not None and name in rejected_widths
+        ]
+        if rejected_candidates:
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(rejected_candidates),
+                reason=(
+                    "Calculated crack-width result rejected for "
+                    f"{', '.join(rejected_candidates)}: w_k is Boolean-bearing, "
+                    "missing, non-scalar, non-finite or negative. No acceptance "
+                    "verdict was issued."
+                ),
+                solver_provenance=[
+                    {
+                        "response": name,
+                        "solver": contexts[name]["solver_provenance"],
+                    }
+                    for name in rejected_candidates
+                ],
+            )
+            criterion_results.append(base)
+            continue
+
         if label == CRITERION_DECOMPRESSION:
             decompression = [
                 (name, (cases.get(name) or {}).get("decompression"))
@@ -1264,31 +1290,6 @@ def crack_assessment(
                     if reasons
                     else f"No {required} crack-width response is applicable."
                 ),
-            )
-            criterion_results.append(base)
-            continue
-
-        rejected_candidates = [
-            name for name, _response in available
-            if name in rejected_widths
-        ]
-        if rejected_candidates:
-            base.update(
-                status="NOT ASSESSED",
-                case=", ".join(rejected_candidates),
-                reason=(
-                    "Calculated crack-width result rejected for "
-                    f"{', '.join(rejected_candidates)}: w_k is Boolean-bearing, "
-                    "missing, non-scalar, non-finite or negative. No acceptance "
-                    "verdict was issued."
-                ),
-                solver_provenance=[
-                    {
-                        "response": name,
-                        "solver": contexts[name]["solver_provenance"],
-                    }
-                    for name in rejected_candidates
-                ],
             )
             criterion_results.append(base)
             continue

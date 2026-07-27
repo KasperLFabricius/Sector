@@ -778,6 +778,45 @@ def test_boolean_informational_crack_width_blocks_overall_pass(wk):
     assert routed["value"] == pytest.approx(0.22)
 
 
+def test_non_mapping_response_fails_closed_before_decompression_routing():
+    result = sls.crack_assessment(
+        {"QP": 1.0},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+                "solver_provenance": {"state": "long"},
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["value"] is None
+    assert result["case"] == "QP"
+    assert "result rejected" in result["reason"]
+    decompression = next(
+        item
+        for item in result["criteria"]
+        if item["kind"] == sls.CRITERION_DECOMPRESSION
+    )
+    assert decompression["status"] == "NOT ASSESSED"
+    assert decompression["solver_provenance"] == [{
+        "response": "QP",
+        "solver": {"state": "long"},
+    }]
+
+
 def test_missing_required_combination_is_review_with_response_provenance():
     result = sls.crack_assessment(
         {"Long-term": {"wk": 0.18, "element_id": "bar 2"}},
