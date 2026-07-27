@@ -6048,16 +6048,18 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
         # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
         if inp["sls_cw"] and cracked:
-            # Crack width uses the load-induced steel stress, so strip the locked-in
-            # tendon prestress back out of both reported states (mild bars
-            # unaffected). The remaining tendon stress is Delta sigma_p.
+            # Crack width uses the load-induced steel stress. The combined result
+            # reports physical tendon stress, so strip its locked-in prestress to
+            # recover Delta sigma_p. ``analyse_cracking`` already returns the
+            # passive long-term increment because prestress enters that solve only
+            # as a constant equilibrium resultant; subtracting it again would
+            # understate the long-term tendon stress.
             cw_stress = np.asarray(r.bar_stress_total, dtype=float)
             long_cw_stress = np.asarray(
                 cr_l.cracked_state.bar_stress, dtype=float
             )
             if prestress_stress is not None:
                 cw_stress = cw_stress - prestress_stress
-                long_cw_stress = long_cw_stress - prestress_stress
             short_state = dataclasses.replace(r.short_term, bar_stress=cw_stress)
             long_state = dataclasses.replace(
                 cr_l.cracked_state, bar_stress=long_cw_stress

@@ -1312,6 +1312,14 @@ def test_report_carries_2023_mixed_reinforcement_and_scope_provenance():
     assert "Eq (9.12)" in flat
     assert "0.000200" in flat
 
+    inp["sls_phi"] = 18.0
+    override_txt = _pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    )
+    override_flat = " ".join(override_txt.split())
+    assert "18.000 mm global crack-width override" in override_flat
+    assert "per-tendon reinforcement-table values" not in override_flat
+
 
 def test_report_renders_greek_glyphs():
     # The ASCII engineering tokens are rendered as Greek glyphs in the PDF.

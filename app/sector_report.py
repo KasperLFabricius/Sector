@@ -1699,7 +1699,11 @@ class ReportBuilder:
                     ])
                     rows.append([
                         "Prestressing diameter phi<sub>p</sub> source",
-                        "per-tendon reinforcement-table values",
+                        (
+                            "per-tendon reinforcement-table values"
+                            if not dia
+                            else f"{_fmt(dia, 3)} mm global crack-width override"
+                        ),
                     ])
         fatigue_rows = None
         fatigue = self._base_out.get("fatigue")

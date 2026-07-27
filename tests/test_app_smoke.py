@@ -4746,6 +4746,7 @@ def test_ec2_2023_mixed_reinforcement_fails_closed_without_xi_then_calculates():
     _set_and_click(
         at,
         "calculate",
+        ("number_input", "pre_IS", 5.0),
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
         ("selectbox", "sls_code", "EN 1992-1-1:2023"),
@@ -4787,7 +4788,11 @@ def test_ec2_2023_mixed_reinforcement_fails_closed_without_xi_then_calculates():
         tendon_index = candidate["element_no"] - 1
         material = latest["tendon_materials"][tendon_index]
         locked_in_mpa = material.Es * material.IS
+        assert locked_in_mpa > 0.0
         global_index = n_bars + tendon_index
+        # The long-term crack candidate is the passive increment Delta sigma_p:
+        # the combined solver's displayed Long column includes Ep*IS once, while
+        # analyse_cracking already returns the passive value.
         assert candidate["sigma_s"] == pytest.approx(
             calculated["long"][global_index] - locked_in_mpa,
             rel=0.02,

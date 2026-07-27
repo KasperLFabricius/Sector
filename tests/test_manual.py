@@ -135,6 +135,8 @@ def test_manual_documents_2023_xi1_direct_tension_and_scope_gate():
     )
     assert "Formula (9.12)" in text
     assert "\\xi_1=\\sqrt{\\xi\\,\\phi_s/\\phi_p}" in text
+    assert "positive global diameter override" in text
+    assert "both $\\phi_s$ and every $\\phi_p$" in text
     assert "solid rectangular-section branch" in text
     assert "one-directional dominant strain-gradient assessment" in text
     assert "blocking **NOT ASSESSED**" in text
