@@ -5204,6 +5204,54 @@ def test_boolean_calculated_crack_width_cannot_create_pass_record():
     assert '"PASS"' not in json.dumps(record)
 
 
+def test_non_mapping_crack_response_is_retained_as_rejected_record():
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "qp",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": 1.0},
+        valid=True,
+        criteria=[{
+            "id": "qa-durability",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {"QP": 1.0},
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+        },
+    })
+
+    recorded = record["cases"][0]
+    assert recorded["assessment"]["status"] == "NOT ASSESSED"
+    assert recorded["assessment"]["verdict"] == "REVIEW"
+    assert recorded["assessment"]["solver_provenance"] == [{
+        "response": "QP",
+        "solver": {"state": "long"},
+    }]
+    response = recorded["responses"][0]
+    assert response["wk_mm"] is None
+    assert "response rejected" in response["result_validation"].lower()
+    assert '"PASS"' not in json.dumps(record)
+
+
 def test_2023_protection_route_change_invalidates_elastic_cache():
     at = _fresh()
     at.run()

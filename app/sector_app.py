@@ -16,6 +16,7 @@ import pathlib
 import re
 import sys
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 # Make both the repo root (for ``sector``) and this app folder (for ``viz``)
@@ -6926,15 +6927,22 @@ def crack_control_calculation_record(results):
             assessment.get("informational_responses") or []
         )
         responses = []
-        for name, response in (
+        for name, raw_response in (
             elastic.get("crack_responses") or {}
         ).items():
-            response = response or {}
+            response_is_mapping = isinstance(raw_response, Mapping)
+            response = raw_response if response_is_mapping else {}
             disposition = dispositions.get(name) or {}
             raw_wk = response.get("wk")
+            response_rejected = (
+                raw_response is not None and not response_is_mapping
+            )
             wk_rejected = (
-                raw_wk is not None
-                and sls_core.crack_width_numeric_value(raw_wk) is None
+                response_rejected
+                or (
+                    raw_wk is not None
+                    and sls_core.crack_width_numeric_value(raw_wk) is None
+                )
             )
             response_record = {
                 "name": name,
@@ -6950,7 +6958,7 @@ def crack_control_calculation_record(results):
             }
             if wk_rejected:
                 response_record["result_validation"] = (
-                    "Calculated crack-width value rejected; no numeric "
+                    "Calculated crack-width response rejected; no numeric "
                     "acceptance evidence retained."
                 )
             responses.append(response_record)
