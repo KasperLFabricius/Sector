@@ -5358,7 +5358,7 @@ def test_changed_governing_crack_response_invalidates_stale_pass_record():
     assert recorded["assessment"]["status"] == "NOT ASSESSED"
     assert recorded["assessment"]["verdict"] == "REVIEW"
     assert recorded["assessment"]["value"] is None
-    assert "does not match current governing response" in (
+    assert "does not match current crack-width evidence" in (
         recorded["assessment"]["publication_validation"]["reason"]
     )
     assert '"PASS"' not in json.dumps(record)

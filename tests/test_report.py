@@ -195,6 +195,7 @@ def _out():
                             "DS/EN 1992-1-1:2004 section 7.3.1(5), "
                             "Table 7.1N"
                         ),
+                        "applicability": {},
                         "criteria": [{
                             "criterion_id": "standard-durability",
                             "kind": sls.CRITERION_DURABILITY,
@@ -209,6 +210,7 @@ def _out():
                                 sls.COMBINATION_QUASI_PERMANENT
                             ),
                             "matched_responses": ["Long-term"],
+                            "applicability": {},
                             "limit": 0.30,
                             "value": 0.213,
                             "status": "OK",
@@ -1693,7 +1695,7 @@ def test_report_invalidates_stale_pass_when_governing_width_changes():
 
     assert "NOT ASSESSED - Crack width" in compact
     assert "PASS - Crack width" not in compact
-    assert "does not match current governing response" in compact
+    assert "does not match current crack-width evidence" in compact
 
 
 def test_report_carries_2023_mixed_reinforcement_and_scope_provenance():

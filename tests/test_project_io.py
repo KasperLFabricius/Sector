@@ -1235,11 +1235,16 @@ def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
                 "status": "OK",
                 "verdict": "PASS",
                 "case": "QP",
+                "criterion": sls.CRITERION_DURABILITY,
+                "criterion_source": "QA controlled durability criterion",
+                "applicability": {},
                 "required_combination": (
                     sls.COMBINATION_QUASI_PERMANENT
                 ),
                 "value": 0.22,
                 "limit": 0.30,
+                "util": 0.22 / 0.30,
+                "margin": 0.30 - 0.22,
             },
             "responses": [
                 {
@@ -1249,12 +1254,22 @@ def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
                     "context": {
                         "combination": sls.COMBINATION_QUASI_PERMANENT,
                         "response_id": "qp",
+                        "duration": None,
+                        "provenance": None,
+                        "solver_provenance": None,
                     },
                 },
                 {
                     "name": "Total",
                     "wk_mm": 0.31,
                     "acceptance_role": "informational",
+                    "context": {
+                        "combination": sls.COMBINATION_CHARACTERISTIC,
+                        "response_id": "total",
+                        "duration": None,
+                        "provenance": None,
+                        "solver_provenance": None,
+                    },
                 },
             ],
         }],
@@ -1805,7 +1820,7 @@ def test_project_downgrades_stale_pass_when_another_matched_crack_grows():
     assert assessment["status"] == "NOT ASSESSED"
     assert assessment["verdict"] == "REVIEW"
     assert assessment["value"] is None
-    assert "no longer the current maximum" in (
+    assert "does not match current crack-width evidence" in (
         assessment["publication_validation"]["reason"]
     )
 
