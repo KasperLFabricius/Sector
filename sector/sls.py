@@ -434,6 +434,30 @@ _CRACK_CRITERION_STATUSES = {
 }
 
 
+def _validated_matched_response_names(
+    raw_names,
+) -> tuple[list[str], tuple[str, ...]]:
+    """Normalize an explicit list of response labels without scalar coercion."""
+    if raw_names is None:
+        return [], ()
+    if not isinstance(raw_names, (list, tuple)):
+        return [], ("matched responses are not a structured list",)
+
+    names = []
+    issues = []
+    for index, raw_name in enumerate(raw_names):
+        name = _optional_text(raw_name)
+        if name is None:
+            issues.append(
+                f"matched response {index + 1} is not typed non-empty text"
+            )
+        elif name in names:
+            issues.append(f"matched response {name!r} is duplicated")
+        else:
+            names.append(name)
+    return names, tuple(issues)
+
+
 def _crack_criteria_outcome(
     criteria: Sequence[Mapping],
 ) -> tuple[str, Mapping]:
@@ -498,9 +522,9 @@ def _crack_aggregate_fields(criteria: Sequence[Mapping]) -> dict:
         "response_duration": governing.get("response_duration"),
         "response_provenance": governing.get("response_provenance"),
         "solver_provenance": governing.get("solver_provenance"),
-        "matched_responses": list(
-            governing.get("matched_responses") or []
-        ),
+        "matched_responses": _validated_matched_response_names(
+            governing.get("matched_responses")
+        )[0],
         "reason": governing.get("reason"),
     }
 
@@ -770,7 +794,20 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                             f"{criterion_index + 1} has no valid status."
                         )
                         break
+                    matched_names, matched_issues = (
+                        _validated_matched_response_names(
+                            criterion.get("matched_responses")
+                        )
+                    )
+                    if matched_issues:
+                        criteria_issue = (
+                            "Stored crack criterion "
+                            f"{criterion_index + 1} has invalid response "
+                            f"identity evidence: {'; '.join(matched_issues)}."
+                        )
+                        break
                     criterion["status"] = status
+                    criterion["matched_responses"] = matched_names
                     normalized_criteria.append(criterion)
         if criteria_issue:
             assessment["criteria"] = []
@@ -838,12 +875,12 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
             case_name = _optional_text(item.get("case"))
             if case_name:
                 names.append(case_name)
-            matched = item.get("matched_responses")
-            if isinstance(matched, (list, tuple)):
-                for raw_name in matched:
-                    name = _optional_text(raw_name)
-                    if name and name not in names:
-                        names.append(name)
+            matched, _matched_issues = _validated_matched_response_names(
+                item.get("matched_responses")
+            )
+            for name in matched:
+                if name not in names:
+                    names.append(name)
             return names
 
         def response_solver_provenance(names):
@@ -873,6 +910,17 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
             return None
 
         def acceptance_evidence_issue(label, item):
+            _matched_names, matched_issues = (
+                _validated_matched_response_names(
+                    item.get("matched_responses")
+                )
+            )
+            if matched_issues:
+                return (
+                    f"Stored {label} has invalid matched-response evidence: "
+                    f"{'; '.join(matched_issues)}.",
+                    [],
+                )
             names = item_response_names(item)
             if not names:
                 return (

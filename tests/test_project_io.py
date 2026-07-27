@@ -1472,6 +1472,71 @@ def test_project_roundtrip_rejects_nested_nonfinite_decompression_evidence():
         )
 
 
+def test_project_roundtrip_rejects_scalar_matched_response_evidence():
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "qp",
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=[{
+            "id": "qa-width",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled durability criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    assessment["criteria"][0]["matched_responses"] = True
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "6" * 40,
+            "input_sha256": digest,
+            "crack_control": {
+                "cases": [{
+                    "case": "SLS-QP",
+                    "assessment": assessment,
+                    "responses": [{
+                        "name": "QP",
+                        "wk_mm": 0.22,
+                        "element_id": "R1",
+                        "acceptance_role": "criterion input",
+                        "context": contexts["QP"],
+                    }],
+                }],
+            },
+        },
+    )
+    saved = json.loads(text)["calculation"]["crack_control"]
+    loaded = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
+
+    for record in (saved, loaded):
+        published = record["cases"][0]["assessment"]
+        assert published["status"] == "NOT ASSESSED"
+        assert published["verdict"] == "REVIEW"
+        assert "matched responses are not a structured list" in (
+            published["publication_validation"]["reason"]
+        )
+
+
 def test_project_downgrades_stale_pass_with_rejected_crack_response():
     scalars = {
         "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,

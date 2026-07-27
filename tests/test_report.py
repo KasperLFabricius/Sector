@@ -1638,6 +1638,47 @@ def test_report_reapplies_failure_precedence_over_incomplete_criterion():
     assert "0.310 mm" in compact
 
 
+def test_report_rejects_scalar_matched_response_evidence():
+    out = _out()
+    elastic = out["elastic"]
+    assessment = sls.crack_assessment(
+        {
+            "Long-term": {
+                "wk": elastic["crack"]["wk"],
+                "element_id": elastic["crack"]["element_id"],
+            },
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-width",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled durability criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {},
+        }],
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "long",
+                "duration": "Sustained / long-term response",
+            },
+        },
+    )
+    assessment["criteria"][0]["matched_responses"] = True
+    elastic["crack_assessment"] = assessment
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "PASS - Crack width" not in compact
+    assert "matched responses are not a structured list" in compact
+
+
 def test_report_invalidates_stale_pass_when_governing_width_changes():
     out = _out()
     elastic = out["elastic"]

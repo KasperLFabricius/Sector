@@ -788,6 +788,55 @@ def test_publication_rejects_acceptance_without_criterion_source():
     )
 
 
+@pytest.mark.parametrize(
+    "matched_responses",
+    [
+        pytest.param(True, id="boolean-scalar"),
+        pytest.param("QP", id="text-scalar"),
+        pytest.param({"QP": True}, id="mapping"),
+    ],
+)
+def test_publication_rejects_malformed_matched_response_container(
+    matched_responses,
+):
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+    assessment["criteria"][0]["matched_responses"] = matched_responses
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": assessment,
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.22,
+                "element_id": "R1",
+                "acceptance_role": "criterion input",
+                "context": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
+                },
+            }],
+        }],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert "matched responses are not a structured list" in (
+        published["publication_validation"]["reason"]
+    )
+
+
 def test_unrelated_not_assessed_response_cannot_block_qp_criterion():
     result = sls.crack_assessment(
         {
