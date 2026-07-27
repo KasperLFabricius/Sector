@@ -52,7 +52,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-040 | PR-10 | Planned | Remove literal caret markup and normalize scientific notation, subscripts, powers, degrees, and units through one notation layer. | Text extraction and raster notation checks to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-041 | PR-11 | Planned | Add section-based Figure/Table numbering, captions, references, repeated units, and grayscale-safe plots. | Caption/reference and grayscale visual checks to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-042 | PR-11 | Planned | Add a shared publication style system plus structural and raster PDF preflight. | Complete manual and representative report preflight/crop regression to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
-| F-043 | PR-03 core; PR-04/PR-05 inherit or override | Implemented on PR-03 branch; exact-head review and closure pending | Response duration and SLS-combination class are independent structured fields. Standard appearance, durability and decompression criteria route only to the edition/member-specific required combination; project criteria require explicit per-combination limits and source. Missing, legacy or duplicate-independent mappings within or across checked Elastic cases return `NOT ASSESSED / REVIEW`; unrelated calculated responses remain informational. Crack-history selection remains independent. | Frozen ordinary-member reproducer: QP `w_k = 0.22 mm` versus characteristic total `0.31 mm` at `w_lim = 0.30 mm` gives QP PASS. Separate bonded-prestress frequent/QP-decompression, 2023 Table 9.1/Table 9.2, missing/ambiguous mapping, cross-case duplicate and project-criterion cases. Controlled local evidence only: 2004 §7.3.1(5)/Table 7.1N; DK NA:2024 §7.3.1(5)/Table 7.1 NA; 2023 §9.2.1(6)/Tables 9.1–9.2. | `tests/test_sls.py`, `tests/test_load_cases.py`, `tests/test_case_analysis.py`, `tests/test_project_io.py`, selected `tests/test_app_smoke.py`, report/manual text and rendered-artifact tests. F-043 affected gate: 279 passed with 32 expected Kaleido warnings; the subsequent cross-case P1 remediation passed a 30-test focused unit/AppTest matrix. Fresh 41-page report pages 30–31 show QP `0.213 mm` PASS and total/characteristic `0.310 mm` informational; fresh 33-page manual pages 22–23 document routing and fail-closed migration. | Prior clean review of `ab488e80906166e8edf02abc4d4fa800121fe8fc` predates F-043 and is not a closure gate. Review of `2a095acc932b242c2465fac0c1b0d1ddfc59c102` identified a P1 cross-case duplicate-mapping gap; the table-wide scope and cache-safe remediation is implemented. New exact-head Codex Review pending. | Pending original reviewer on the new exact head. | Pending | PR-04 must add EN 1992-2 bridge-base routing and PR-05 the Danish bridge matrix, including the DK non-prestressed frequent-column route; neither may fall back to a generic maximum. The current solver leaves required bonded-prestress decompression `NOT ASSESSED` unless its concrete-stress evidence is available. |
+| F-043 | PR-03 core; PR-04/PR-05 inherit or override | Independent QA remediation implemented on PR-03 branch; new exact-head gates pending | Response duration and SLS-combination class are independent. The 2004 route remains isolated. The 2023 Table 9.2 route now records a controlled exposure group and, for bonded tendons, Protection Level 1/pretensioned versus Protection Levels 2/3. It routes width and decompression only to the table-required QP/frequent response. Boolean crack numerics are rejected before coercion across core, project, session, autosave and report boundaries. Missing, migrated, malformed or duplicate mapping remains `NOT ASSESSED / REVIEW`; unrelated responses are informational and crack history remains separate. | Frozen ordinary 2004 reproducer: QP `w_k = 0.22 mm` versus characteristic total `0.31 mm` at `w_lim = 0.30 mm` gives QP PASS. Frozen 2023 bonded PL2/3 reproducer: QP `0.31 mm` versus unrelated Frequent `0.22 mm` at `0.30 mm` gives QP FAIL. Separate PL1 X0/XC1, XC2-XC4, XD/XS and XF routes; Table 9.1 appearance; QP/frequent decompression; missing groups; cross-case duplicate; v17 migration; Python/NumPy Boolean limits and `xi`; project/session/autosave/report/headless paths. Controlled local evidence: 2004 §7.3.1(5)/Table 7.1N; DK NA:2024 §7.3.1(5)/Table 7.1 NA; 2023 §9.2.1(6)/Tables 9.1-9.2. | Latest lean remediation gate: 322 unique affected checks green (181 core/project/manual checks, 118 report checks, 13 selected Streamlit paths, nine case-routing/cache tests and one rendered-manual test), with nine expected Kaleido warnings. The manual's first dense render was tightened and its rerender passed. Earlier complete CI remains historical only; new exact-head CI is required. | Codex Review was clean on `bae40bf3f671c4eac994ded66481354ec86137b1`, but that head is not closable because original independent QA then found the two P1 gaps above. New exact-head Codex Review is pending after push. | Original reviewer rejected `bae40bf3f671c4eac994ded66481354ec86137b1`; exact-head resubmission pending. | Pending | PR-04 must add EN 1992-2 bridge-base routing and PR-05 the Danish bridge matrix, including the DK non-prestressed frequent-column route; neither may fall back to a generic maximum. Required decompression remains `NOT ASSESSED` unless concrete-stress evidence exists. |
 
 ## PR-01 evidence log
 
@@ -181,16 +181,27 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
   DS/EN 1992-1-1 DK NA:2024 section 7.3.1(5), Table 7.1 NA; and
   DS/EN 1992-1-1:2023 section 9.2.1(6), Tables 9.1 and 9.2. Response duration
   remains solver provenance, while Characteristic, Frequent and
-  Quasi-permanent are explicit load-table fields. Ordinary reinforced/unbonded
-  durability routes to Quasi-permanent; bonded durability routes to Frequent;
-  2023 appearance routes separately to Quasi-permanent; and any applicable
-  bonded decompression route remains a separate Quasi-permanent criterion.
+  Quasi-permanent are explicit load-table fields. The 2004 ordinary/unbonded
+  route is Quasi-permanent, while 2004 bonded width is Frequent and applicable
+  decompression is separately Quasi-permanent. The 2023 route additionally
+  records a controlled Table 9.2 exposure group and, for bonded tendons, the
+  Protection Level 1/pretensioned versus Protection Levels 2/3 group. PL2/3
+  shares the reinforced/unbonded Quasi-permanent width branch. PL1/pretensioned
+  uses Frequent width for X0/XC1 and XC2-XC4, Quasi-permanent decompression for
+  XC2-XC4, and Frequent decompression for XD/XS and XF. Appearance remains a
+  separate Quasi-permanent Table 9.1 criterion.
 - Project-defined crack criteria require an approved source and a separate
-  positive limit for every applicable combination. Pre-v17 files, malformed
-  current routing tokens, absent required combinations, or duplicate independent
+  positive limit for every applicable combination. Pre-v17 duration-only files,
+  v17 2023 files without the new structured route, malformed current
+  routing tokens, absent required combinations, or duplicate independent
   mappings cannot infer PASS or a standard failure. Structured inputs and a
   compact hash-bound audit snapshot round-trip through save/load, session state
   and autosave; loaded snapshots are never restored as live solver results.
+- Python and NumPy Boolean values are rejected before conversion for `xi` and
+  every crack/SLS numeric criterion at core, project parse/dump/provenance,
+  live/durable session, autosave/download and report boundaries. Reconstructed
+  session defaults cannot clear the rejection marker; a real edit or explicit
+  confirmation is required, and the result remains `NOT ASSESSED / REVIEW`.
 - Independent oracle: `tools/pr03_crack_oracle.py` imports no Sector
   calculation code. It reproduces Formula (9.6), Formula (9.12), the
   rectangular direct-tension perimeter area, and the 2023 scalar crack-width
@@ -224,6 +235,16 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
   crack-limit label and the Elastic table without its two explicit combination
   columns. Those assertions now describe the intentional interface, and their
   exact two-test rerun passed; the new exact-head CI rerun remains a closure gate.
+- Original independent QA rejected
+  `bae40bf3f671c4eac994ded66481354ec86137b1`: its 2023 bonded route collapsed
+  both Table 9.2 protection groups into Frequent width/QP decompression, and
+  Python/NumPy Booleans could become favourable numeric `1.0` values. Schema
+  v18 now records the exposure/protection matrix and fails closed on ambiguous
+  v17 migration. Boolean `xi` and crack/SLS limits are rejected before coercion
+  through every persistence, calculation and publication boundary. The latest
+  lean remediation gate has 322 unique affected checks green, including cache,
+  AppTest, report and rendered-manual evidence; exact-head external gates remain
+  pending.
 - Fresh generated evidence passed structural and raster preflight:
   `sector-report-reference.pdf` (41 pages; conclusion limitation on page 1,
   routed acceptance/provenance on page 30, and QP `0.213 mm` versus

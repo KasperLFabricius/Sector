@@ -366,6 +366,7 @@ def test_persisted_settings_use_the_seeded_number_helper():
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
                 "sls_tendon_bond", "sls_tendon_xi",
                 "sls_criterion_mode", "sls_prestress_class",
+                "sls_protection_class", "sls_exposure_class",
                 "sls_exposure_context", "sls_check_appearance",
                 "sls_appearance_limit", "sls_check_durability",
                 "sls_decompression_applicability",
@@ -534,6 +535,39 @@ def test_loading_partial_current_project_clears_crack_routing_and_bond_inputs():
     assert durable["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
 
 
+def test_loading_v17_boolean_crack_json_is_rejected_before_session_apply():
+    import project_io
+
+    at = _fresh()
+    at.run()
+    before_limit = at.session_state["sls_wk_limit"]
+    at.session_state["_pending_project"] = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 17,
+        "tables": {},
+        "scalars": {
+            "sls_code": "EN 1992-1-1:2023",
+            "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+            "sls_prestress_class": sls.PRESTRESS_BONDED,
+            "sls_wk_limit": True,
+            "sls_tendon_xi": True,
+        },
+    })
+
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["sls_wk_limit"] == before_limit
+    assert not isinstance(at.session_state["sls_wk_limit"], bool)
+    assert not isinstance(
+        at.session_state["_durable_input_scalars"]["sls_wk_limit"],
+        bool,
+    )
+    level, message = at.session_state["_project_msg"]
+    assert level == "error"
+    assert "sls_tendon_xi" in message or "sls_wk_limit" in message
+
+
 def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results():
     import load_cases
     import project_io
@@ -550,8 +584,11 @@ def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results
     }
     scalars = {
         "mode": "Elastic",
+        "sls_code": "EN 1992-1-1:2023",
         "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
-        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_protection_class": sls.PROTECTION_LEVEL_2_OR_3,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
         "sls_exposure_context": "XC3 / durability",
         "sls_check_durability": True,
         "sls_wk_limit": 0.30,
@@ -595,6 +632,10 @@ def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results
         sls.CRITERION_MODE_STANDARD
     )
     assert at.session_state["sls_exposure_context"] == "XC3 / durability"
+    assert at.session_state["sls_protection_class"] == (
+        sls.PROTECTION_LEVEL_2_OR_3
+    )
+    assert at.session_state["sls_exposure_class"] == sls.EXPOSURE_XC2_XC4
     elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY]
     assert elastic.loc[0, "long_combination"] == (
         sls.COMBINATION_QUASI_PERMANENT
@@ -2144,6 +2185,79 @@ def test_boolean_factor_session_state_fails_closed_in_both_mirrors(
     assert set(repaired) == set(expected_keys) - {"fatigue_gamma_s"}
 
 
+def test_boolean_crack_state_is_blocked_in_live_durable_result_and_autosave(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+    rejected_state = {
+        "sls_wk_limit": True,
+        "sls_tendon_xi": np.bool_(True),
+    }
+    durable = dict(at.session_state["_durable_input_scalars"])
+    for key, value in rejected_state.items():
+        at.session_state[key] = value
+        durable[key] = value
+    at.session_state["_durable_input_scalars"] = durable
+
+    at.run()
+
+    expected = tuple(sorted(rejected_state))
+    assert not at.exception
+    assert at.session_state["_invalid_crack_input_keys"] == expected
+    for key in rejected_state:
+        assert not isinstance(at.session_state[key], (bool, np.bool_))
+        assert not isinstance(
+            at.session_state["_durable_input_scalars"][key],
+            (bool, np.bool_),
+        )
+    inp = at.session_state["_latest_inputs"]
+    assert inp["sls_invalid_numeric_inputs"] == expected
+    assert any(
+        "Rejected Boolean/non-numeric crack-control state" in item.value
+        for item in at.error
+    )
+
+    _calculate(at)
+    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert "unrepaired" in assessment["reason"]
+    assert "sls_wk_limit" in assessment["reason"]
+
+    _goto_page(at, "Inputs")
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+    assert not (tmp_path / "autosave.json").exists()
+
+    # A real widget edit clears only that key; reconstructed numeric defaults do
+    # not clear the other rejection marker.
+    at.number_input(key="sls_wk_limit").set_value(0.30).run()
+    assert at.session_state["_invalid_crack_input_keys"] == (
+        "sls_tendon_xi",
+    )
+
+
 def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
     tmp_path,
     monkeypatch,
@@ -3009,7 +3123,16 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     at.run()
     _set(
         at,
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
         ("checkbox", "sls_cw", True),
+    )
+    _set(
+        at,
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
         (
             "selectbox",
             "sls_long_combination",
@@ -3029,6 +3152,7 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
         sls.COMBINATION_QUASI_PERMANENT
     )
     assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_STANDARD
+    assert scalars["sls_exposure_class"] == sls.EXPOSURE_XC2_XC4
     assert scalars["sls_exposure_context"] == "XC3 / durability"
     assert at.session_state["_autosave_last"]      # the panel records the time
 
@@ -4945,6 +5069,70 @@ def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
     assert provenance["calculation"]["matches_saved_inputs"] is True
 
 
+def test_2023_protection_route_change_invalidates_elastic_cache():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 100.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+    )
+    _set(
+        at,
+        ("selectbox", "sls_prestress_class", sls.PRESTRESS_BONDED),
+        ("selectbox", "sls_exposure_class", sls.EXPOSURE_XC2_XC4),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        (
+            "selectbox",
+            "sls_total_combination",
+            sls.COMBINATION_FREQUENT,
+        ),
+    )
+    _set(
+        at,
+        (
+            "selectbox",
+            "sls_protection_class",
+            sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
+        ),
+    )
+    _calculate(at)
+    first = at.session_state["results"]["elastic"]
+    assert [
+        (item["kind"], item["required_combination"])
+        for item in first["crack_criteria"]
+    ] == [
+        (sls.CRITERION_DURABILITY, sls.COMBINATION_FREQUENT),
+        (sls.CRITERION_DECOMPRESSION, sls.COMBINATION_QUASI_PERMANENT),
+    ]
+
+    _set_and_click(
+        at,
+        "calculate",
+        (
+            "selectbox",
+            "sls_protection_class",
+            sls.PROTECTION_LEVEL_2_OR_3,
+        ),
+    )
+    second = at.session_state["results"]["elastic"]
+
+    assert second is not first
+    assert [
+        (item["kind"], item["required_combination"])
+        for item in second["crack_criteria"]
+    ] == [
+        (sls.CRITERION_DURABILITY, sls.COMBINATION_QUASI_PERMANENT),
+    ]
+
+
 def test_missing_response_combination_is_review_with_mapping_provenance():
     at = _fresh()
     at.run()
@@ -5111,6 +5299,16 @@ def test_ec2_2023_mixed_reinforcement_fails_closed_without_xi_then_calculates():
         ("selectbox", "sls_code", "EN 1992-1-1:2023"),
         (
             "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
             "sls_long_combination",
             sls.COMBINATION_QUASI_PERMANENT,
         ),
@@ -5188,6 +5386,11 @@ def test_ec2_2023_uniform_direct_tension_is_explicitly_scoped():
         ("number_input", "el_short_My", 0.0),
         ("checkbox", "sls_cw", True),
         ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
         (
             "selectbox",
             "sls_long_combination",

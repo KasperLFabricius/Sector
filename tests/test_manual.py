@@ -156,8 +156,11 @@ def test_manual_separates_crack_history_duration_and_acceptance_combination():
     assert "quasi-permanent" in text
     assert "Bonded prestress uses the **frequent** combination" in text
     assert "Table 9.1 appearance and Table 9.2 durability" in text
+    assert "Protection Levels 2/3" in text
+    assert "XD/XS and XF require **frequent" in text
     assert "separate positive crack-width limit for every applicable combination" in text
-    assert "pre-v17 project" in text
+    assert "project schema" in text
+    assert "Boolean values are never accepted" in text
     assert "NOT ASSESSED / REVIEW" in text
 
 

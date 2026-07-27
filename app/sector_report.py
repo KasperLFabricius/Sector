@@ -1676,8 +1676,31 @@ class ReportBuilder:
                              str(inp.get("sls_criterion_mode") or "legacy / review")])
                 rows.append(["Prestress/member class",
                              str(inp.get("sls_prestress_class") or "not stated")])
+                rows.append([
+                    "2023 bonded-tendon protection / member group",
+                    str(
+                        inp.get("sls_protection_class")
+                        or sls_core.PROTECTION_NOT_ESTABLISHED
+                    ),
+                ])
+                rows.append([
+                    "2023 Table 9.2 exposure group",
+                    str(
+                        inp.get("sls_exposure_class")
+                        or sls_core.EXPOSURE_NOT_ESTABLISHED
+                    ),
+                ])
                 rows.append(["Exposure/application",
                              str(inp.get("sls_exposure_context") or "not stated")])
+                rejected_crack_inputs = tuple(
+                    inp.get("sls_invalid_numeric_inputs") or ()
+                )
+                if rejected_crack_inputs:
+                    rows.append([
+                        "Rejected crack-control numeric state",
+                        ", ".join(str(key) for key in rejected_crack_inputs)
+                        + " - NOT ASSESSED / REVIEW",
+                    ])
                 criterion_mode = inp.get("sls_criterion_mode")
                 if criterion_mode == sls_core.CRITERION_MODE_STANDARD:
                     if inp.get("sls_check_durability"):
@@ -1696,9 +1719,14 @@ class ReportBuilder:
                     ):
                         rows.append([
                             "Bonded-prestress decompression applicability",
-                            str(
-                                inp.get("sls_decompression_applicability")
-                                or "not established"
+                            (
+                                "Derived from the structured Table 9.2 "
+                                "protection/exposure route"
+                                if str(inp.get("sls_edition") or "") == "2023"
+                                else str(
+                                    inp.get("sls_decompression_applicability")
+                                    or "not established"
+                                )
                             ),
                         ])
                 elif criterion_mode == sls_core.CRITERION_MODE_PROJECT:
@@ -5624,6 +5652,38 @@ def build_report(
     is assembled, so the UI can show a progress bar. ``qa_appendix`` adds the
     consolidated references-and-notes chapter.
     """
+    invalid_crack_numerics = sls_core.crack_numeric_input_issues(inp)
+    if invalid_crack_numerics:
+        raise ValueError(
+            "report generation rejected Boolean crack-control numerics: "
+            + ", ".join(invalid_crack_numerics)
+        )
+    rejected_crack_state = tuple(inp.get("sls_invalid_numeric_inputs") or ())
+    if rejected_crack_state:
+        elastic_payloads = []
+        if isinstance(out.get("elastic"), dict):
+            elastic_payloads.append(out["elastic"])
+        for case in out.get("elastic_cases", ()) or ():
+            if not isinstance(case, dict):
+                continue
+            results = case.get("results")
+            if isinstance(results, dict) and isinstance(
+                results.get("elastic"), dict
+            ):
+                elastic_payloads.append(results["elastic"])
+        unsafe = [
+            payload.get("crack_assessment", {}).get("status")
+            for payload in elastic_payloads
+            if isinstance(payload.get("crack_assessment"), dict)
+            and str(
+                payload["crack_assessment"].get("status") or ""
+            ).upper() not in {"NOT ASSESSED", "INVALID"}
+        ]
+        if unsafe:
+            raise ValueError(
+                "report generation rejected a crack-control result that does "
+                "not fail closed against the retained invalid numeric state"
+            )
     buffer = io.BytesIO()
     ReportBuilder(
         buffer,

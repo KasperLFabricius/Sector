@@ -190,6 +190,27 @@ def test_2023_invalid_bond_ratio_fails_closed(xi):
     assert "bond ratio xi" in evaluation.reason
 
 
+@pytest.mark.parametrize(
+    "xi",
+    [
+        True,
+        np.bool_(True),
+        [1.0, True],
+        np.asarray([True, False]),
+    ],
+)
+def test_2023_boolean_bond_ratio_is_rejected_before_numeric_coercion(xi):
+    with pytest.raises(ValueError, match="not Boolean"):
+        effective_reinforcement_ratio_2023(
+            [0.001, 0.001],
+            [True, True],
+            [16.0, 16.0],
+            ac_eff_m2=0.05,
+            reinforcement_types=["mild", "prestress"],
+            bond_ratio_xi=xi,
+        )
+
+
 def test_2023_zero_effective_diameter_is_rejected_by_ratio_kernel():
     with pytest.raises(ValueError, match="diameters"):
         effective_reinforcement_ratio_2023(

@@ -2205,6 +2205,7 @@ _INPUT_BUILD_KEY = "_inputs_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
 _INVALID_FACTOR_INPUT_KEYS_KEY = "_invalid_factor_input_keys"
+_INVALID_CRACK_INPUT_KEYS_KEY = "_invalid_crack_input_keys"
 _INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
 _FATIGUE_NUMERIC_FACTOR_KEYS = frozenset(
     key
@@ -2249,6 +2250,27 @@ def _invalid_factor_input_keys() -> tuple[str, ...]:
         return ()
     allowed = set(project_io.FACTOR_NUMERIC_SCALAR_KEYS)
     return tuple(sorted({str(key) for key in raw if key in allowed}))
+
+
+def _invalid_crack_input_keys() -> tuple[str, ...]:
+    """Return rejected crack/SLS numeric keys retained across app reruns."""
+
+    raw = st.session_state.get(_INVALID_CRACK_INPUT_KEYS_KEY, ())
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return ()
+    allowed = set(sls_core.CRACK_NUMERIC_INPUT_KEYS)
+    return tuple(sorted({str(key) for key in raw if key in allowed}))
+
+
+def _valid_crack_numeric(value) -> bool:
+    """Require a finite real scalar and reject Boolean values before coercion."""
+
+    if sls_core.is_boolean_value(value) or isinstance(value, str):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _invalid_factor_input_error(domain: str, keys) -> str | None:
@@ -2319,6 +2341,53 @@ def _sanitise_factor_input_state() -> None:
         )
     else:
         st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
+
+
+def _sanitise_crack_input_state() -> None:
+    """Fail closed on malformed crack numerics in live, durable or event state."""
+
+    allowed = set(sls_core.CRACK_NUMERIC_INPUT_KEYS)
+    invalid_keys = set(_invalid_crack_input_keys())
+    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {})
+    explicit_repairs = {
+        key
+        for key in allowed
+        if (
+            isinstance(pending, dict)
+            and key in pending
+            and _valid_crack_numeric(pending[key])
+            and key in st.session_state
+            and _valid_crack_numeric(st.session_state[key])
+        )
+    }
+    invalid_keys.difference_update(explicit_repairs)
+
+    def sanitise(mapping) -> bool:
+        changed = False
+        for key in allowed:
+            if key not in mapping:
+                continue
+            if _valid_crack_numeric(mapping[key]):
+                continue
+            mapping[key] = 0.0
+            if key not in explicit_repairs:
+                invalid_keys.add(key)
+            changed = True
+        return changed
+
+    sanitise(st.session_state)
+    for state_key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
+        state = st.session_state.get(state_key)
+        if isinstance(state, dict):
+            state = dict(state)
+            if sanitise(state):
+                st.session_state[state_key] = state
+    if invalid_keys:
+        st.session_state[_INVALID_CRACK_INPUT_KEYS_KEY] = tuple(
+            sorted(invalid_keys)
+        )
+    else:
+        st.session_state.pop(_INVALID_CRACK_INPUT_KEYS_KEY, None)
 
 
 def _capture_factor_override_state(domain: str) -> None:
@@ -2435,6 +2504,37 @@ def _render_factor_repair_control(box, domain: str, keys) -> None:
         help=(
             "This is an explicit engineering confirmation. It does not approve "
             "or change any final-factor override."
+        ),
+    )
+
+
+def _confirm_crack_repairs(keys) -> None:
+    """Journal currently displayed finite values as an explicit repair."""
+
+    for key in keys:
+        if _valid_crack_numeric(st.session_state.get(key)):
+            _record_input_event(key)
+
+
+def _render_crack_repair_control(box) -> None:
+    """Expose a same-value confirmation path for rejected crack numeric state."""
+
+    rejected = _invalid_crack_input_keys()
+    if not rejected:
+        return
+    box.error(
+        "Rejected Boolean/non-numeric crack-control state remains blocked. "
+        "Edit every listed field, or confirm the displayed finite values after "
+        f"checking them ({', '.join(rejected)})."
+    )
+    box.button(
+        "Confirm repaired crack-control values",
+        key="confirm_crack_numeric_repairs",
+        on_click=_confirm_crack_repairs,
+        args=(rejected,),
+        help=(
+            "This is an explicit engineering confirmation; Sector never treats "
+            "a Boolean value as 0 or 1 mm."
         ),
     )
 
@@ -2628,12 +2728,19 @@ def _project_state():
 def _project_input_hash() -> str:
     tables, scalars = _project_state()
     digest = project_io.input_sha256(tables, scalars)
-    rejected = _invalid_factor_input_keys()
-    if not rejected:
+    rejected_factors = _invalid_factor_input_keys()
+    rejected_crack = _invalid_crack_input_keys()
+    if not rejected_factors and not rejected_crack:
         return digest
     # A calculation made while a rejected widget value is held fail-closed must
     # never appear to match the same reconstructed numeric defaults after repair.
-    invalid_state = "\0".join((digest, "rejected-factor-inputs", *rejected))
+    invalid_state = "\0".join((
+        digest,
+        "rejected-factor-inputs",
+        *rejected_factors,
+        "rejected-crack-inputs",
+        *rejected_crack,
+    ))
     return hashlib.sha256(invalid_state.encode("utf-8")).hexdigest()
 
 
@@ -2644,6 +2751,12 @@ def _gather_project() -> str:
         raise ValueError(
             "Boolean/non-numeric project material-factor input was rejected "
             f"({', '.join(rejected)}); repair every listed value before saving"
+        )
+    rejected_crack = _invalid_crack_input_keys()
+    if rejected_crack:
+        raise ValueError(
+            "Boolean/non-numeric project crack-control input was rejected "
+            f"({', '.join(rejected_crack)}); repair every listed value before saving"
         )
     tables, scalars = _project_state()
     return project_io.dump_project(
@@ -2828,6 +2941,7 @@ def _apply_pending_project() -> None:
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
     st.session_state.pop("_latest_inputs", None)
     st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
+    st.session_state.pop(_INVALID_CRACK_INPUT_KEYS_KEY, None)
     for key in _FACTOR_MODE_RUNTIME_KEYS:
         st.session_state.pop(key, None)
     # Parsing retains historical scalar loads for compatibility with non-UI callers,
@@ -3672,7 +3786,8 @@ _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_tendon_bond", "sls_tendon_xi",
-    "sls_criterion_mode", "sls_prestress_class", "sls_exposure_context",
+    "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
+    "sls_exposure_class", "sls_exposure_context",
     "sls_check_appearance", "sls_appearance_limit",
     "sls_check_durability", "sls_decompression_applicability",
     "sls_project_characteristic_limit", "sls_project_frequent_limit",
@@ -4300,7 +4415,8 @@ def build_inputs(host=st):
         disabled=not (elastic_on and sls_cw),
         help=(
             "Standard-derived routes appearance/durability criteria to the "
-            "combination required by the selected edition and prestress class. "
+            "combination required by the selected edition, member/protection "
+            "group and structured exposure group. "
             "Project-defined requires a separate positive limit for every "
             "applicable combination. Legacy ambiguity always returns REVIEW."
         ),
@@ -4319,10 +4435,46 @@ def build_inputs(host=st):
         "sls_prestress_class",
         disabled=not (elastic_on and sls_cw and standard_criteria),
         help=(
-            "Reinforced members and unbonded prestress route standard crack "
-            "criteria to quasi-permanent. Bonded prestress routes crack width "
-            "to frequent and may additionally require quasi-permanent "
-            "decompression."
+            "The 2004 route distinguishes reinforced/unbonded from bonded "
+            "prestress. The 2023 Table 9.2 route also uses the structured "
+            "protection and exposure groups below."
+        ),
+    )
+    sls_protection_class = _seeded_selectbox(
+        scw,
+        "2023 bonded-tendon protection / member group",
+        list(sls_core.PROTECTION_CLASSES),
+        project_io.DEFAULT_SLS_PROTECTION_CLASS,
+        "sls_protection_class",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == "2023"
+            and sls_prestress_class == sls_core.PRESTRESS_BONDED
+        ),
+        help=(
+            "Table 9.2 separates bonded tendons with Protection Level 1 "
+            "(together with pretensioned members) from bonded tendons with "
+            "Protection Levels 2/3. Not established blocks the verdict."
+        ),
+    )
+    sls_exposure_class = _seeded_selectbox(
+        scw,
+        "2023 Table 9.2 governing exposure group",
+        list(sls_core.EXPOSURE_CLASSES_2023),
+        project_io.DEFAULT_SLS_EXPOSURE_CLASS,
+        "sls_exposure_class",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == "2023"
+        ),
+        help=(
+            "Select the governing Table 9.2 row group explicitly. Combined "
+            "exposures require an engineering choice of the governing group; "
+            "Sector does not parse or infer it from free text."
         ),
     )
     sls_exposure_context = _seeded_text(
@@ -4332,8 +4484,9 @@ def build_inputs(host=st):
         "sls_exposure_context",
         disabled=not (elastic_on and sls_cw and standard_criteria),
         help=(
-            "Exposure class and project application used to select the table "
-            "criterion. Blank applicability blocks a standard-derived verdict."
+            "Project-specific exposure/application provenance. For the 2023 "
+            "edition this supplements, but never replaces, the structured "
+            "Table 9.2 group."
         ),
     )
     sls_check_appearance = _seeded_checkbox(
@@ -4405,7 +4558,7 @@ def build_inputs(host=st):
     )
     sls_decompression_applicability = _seeded_selectbox(
         scw,
-        "Quasi-permanent decompression applicability",
+        "2004 quasi-permanent decompression applicability",
         list(sls_core.DECOMPRESSION_OPTIONS),
         sls_core.DECOMPRESSION_NOT_ESTABLISHED,
         "sls_decompression_applicability",
@@ -4413,12 +4566,13 @@ def build_inputs(host=st):
             elastic_on
             and sls_cw
             and standard_criteria
+            and sls_edition == "2004"
             and sls_prestress_class == sls_core.PRESTRESS_BONDED
         ),
         help=(
-            "For bonded prestress, explicitly state whether exposure/application "
-            "requires a quasi-permanent decompression criterion. Not established "
-            "blocks the overall verdict."
+            "The 2004 bonded-prestress route retains the explicit project "
+            "applicability decision. For 2023, Table 9.2 derives decompression "
+            "and its QP/frequent combination from the structured fields above."
         ),
     )
     sls_project_characteristic_limit = _seeded_number(
@@ -4489,6 +4643,7 @@ def build_inputs(host=st):
             "fails closed when a tendon contributes."
         ),
     )
+    _render_crack_repair_control(scw)
     sls_member = scw.selectbox(
         "Member type",
         ["Beam", "Slab"],
@@ -5688,7 +5843,12 @@ def build_inputs(host=st):
     )
     shared_sig = geom_sig + material_sig + _get(_SHARED_SIG_KEYS)
     plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
-    elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
+    invalid_crack_input_keys = _invalid_crack_input_keys()
+    elastic_case_context_sig = (
+        shared_sig
+        + _get(_ELASTIC_CONTEXT_SIG_KEYS)
+        + (("invalid_crack_input_keys", invalid_crack_input_keys),)
+    )
     invalid_factor_input_keys = _invalid_factor_input_keys()
     capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS) + (
         ("invalid_factor_input_keys", invalid_factor_input_keys),
@@ -5832,7 +5992,10 @@ def build_inputs(host=st):
                 sls_tendon_xi=sls_tendon_xi,
                 sls_criterion_mode=sls_criterion_mode,
                 sls_prestress_class=sls_prestress_class,
+                sls_protection_class=sls_protection_class,
+                sls_exposure_class=sls_exposure_class,
                 sls_exposure_context=sls_exposure_context,
+                sls_invalid_numeric_inputs=_invalid_crack_input_keys(),
                 sls_check_appearance=sls_check_appearance,
                 sls_appearance_limit=sls_appearance_limit,
                 sls_check_durability=sls_check_durability,
@@ -11528,6 +11691,7 @@ _restore_input_state(
     replace=bool(st.session_state.get(_INPUT_BUILD_KEY, False))
 )
 _sanitise_factor_input_state()
+_sanitise_crack_input_state()
 
 main_page = st.segmented_control(
     "Workspace",

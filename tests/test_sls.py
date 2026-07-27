@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from sector import sls
@@ -155,6 +156,8 @@ def _standard_inputs(**overrides):
         "sls_member": "Beam",
         "sls_dk_na": False,
         "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_protection_class": sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
         "sls_exposure_context": "XC3 / durability",
         "sls_check_appearance": False,
         "sls_check_durability": True,
@@ -360,6 +363,155 @@ def test_2023_bonded_appearance_qp_is_separate_from_frequent_durability():
             sls.COMBINATION_QUASI_PERMANENT,
         ),
     ]
+
+
+def test_2023_bonded_protection_levels_2_3_use_qp_not_frequent_width():
+    criteria = sls.crack_criteria_from_inputs(_standard_inputs(
+        sls_edition="2023",
+        sls_code="EN 1992-1-1:2023",
+        sls_prestress_class=sls.PRESTRESS_BONDED,
+        sls_protection_class=sls.PROTECTION_LEVEL_2_OR_3,
+        sls_exposure_class=sls.EXPOSURE_XC2_XC4,
+    ))
+    result = sls.crack_assessment(
+        {
+            "QP": {"wk": 0.31, "element_id": "tendon 1"},
+            "Frequent": {"wk": 0.22, "element_id": "tendon 1"},
+        },
+        valid=True,
+        criteria=criteria,
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+            "Frequent": {
+                "combination": sls.COMBINATION_FREQUENT,
+                "response_id": "frequent",
+            },
+        },
+    )
+
+    assert result["status"] == "EXCEEDED"
+    assert result["verdict"] == "FAIL"
+    assert result["case"] == "QP"
+    assert result["value"] == pytest.approx(0.31)
+    assert result["required_combination"] == sls.COMBINATION_QUASI_PERMANENT
+    assert result["informational_responses"] == ["Frequent"]
+
+
+@pytest.mark.parametrize(
+    ("exposure_class", "expected"),
+    [
+        (
+            sls.EXPOSURE_X0_XC1,
+            [(sls.CRITERION_DURABILITY, sls.COMBINATION_FREQUENT)],
+        ),
+        (
+            sls.EXPOSURE_XC2_XC4,
+            [
+                (sls.CRITERION_DURABILITY, sls.COMBINATION_FREQUENT),
+                (
+                    sls.CRITERION_DECOMPRESSION,
+                    sls.COMBINATION_QUASI_PERMANENT,
+                ),
+            ],
+        ),
+        (
+            sls.EXPOSURE_XD_XS,
+            [(sls.CRITERION_DECOMPRESSION, sls.COMBINATION_FREQUENT)],
+        ),
+        (
+            sls.EXPOSURE_XF,
+            [(sls.CRITERION_DECOMPRESSION, sls.COMBINATION_FREQUENT)],
+        ),
+    ],
+)
+def test_2023_protection_level_1_exposure_matrix_routes_explicitly(
+    exposure_class,
+    expected,
+):
+    criteria = sls.crack_criteria_from_inputs(_standard_inputs(
+        sls_edition="2023",
+        sls_code="EN 1992-1-1:2023",
+        sls_prestress_class=sls.PRESTRESS_BONDED,
+        sls_protection_class=sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
+        sls_exposure_class=exposure_class,
+    ))
+
+    assert [
+        (item["kind"], item["required_combination"])
+        for item in criteria
+    ] == expected
+
+
+@pytest.mark.parametrize(
+    ("missing_key", "missing_value"),
+    [
+        ("sls_exposure_class", sls.EXPOSURE_NOT_ESTABLISHED),
+        ("sls_protection_class", sls.PROTECTION_NOT_ESTABLISHED),
+    ],
+)
+def test_2023_bonded_missing_structured_route_is_not_assessed(
+    missing_key,
+    missing_value,
+):
+    inputs = _standard_inputs(
+        sls_edition="2023",
+        sls_code="EN 1992-1-1:2023",
+        sls_prestress_class=sls.PRESTRESS_BONDED,
+    )
+    inputs[missing_key] = missing_value
+    result = sls.crack_assessment(
+        {"Frequent": {"wk": 0.20, "element_id": "tendon 1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(inputs),
+        response_contexts={
+            "Frequent": {
+                "combination": sls.COMBINATION_FREQUENT,
+                "response_id": "frequent",
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert "Select the" in result["reason"]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_wk_limit",
+        "sls_appearance_limit",
+        "sls_project_characteristic_limit",
+        "sls_project_frequent_limit",
+        "sls_project_quasi_permanent_limit",
+        "sls_tendon_xi",
+    ],
+)
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+def test_boolean_crack_numeric_is_rejected_before_favourable_coercion(
+    key,
+    value,
+):
+    inputs = _standard_inputs()
+    inputs[key] = value
+    result = sls.crack_assessment(
+        {"QP": {"wk": 0.31, "element_id": "bar 1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(inputs),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert key in result["reason"]
 
 
 def test_missing_required_combination_is_review_with_response_provenance():

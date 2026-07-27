@@ -387,6 +387,25 @@ def effective_reinforcement_ratio_2023(
                 "bond ratio xi is required for prestressing steel in the 2023 "
                 "effective reinforcement area"
             )
+        boolean_xi = isinstance(bond_ratio_xi, (bool, np.bool_))
+        if (
+            not boolean_xi
+            and isinstance(bond_ratio_xi, np.ndarray)
+            and bond_ratio_xi.dtype.kind == "b"
+        ):
+            boolean_xi = True
+        if not boolean_xi and not np.isscalar(bond_ratio_xi):
+            try:
+                boolean_xi = any(
+                    isinstance(value, (bool, np.bool_))
+                    for value in bond_ratio_xi
+                )
+            except TypeError:
+                boolean_xi = False
+        if boolean_xi:
+            raise ValueError(
+                "prestressing bond ratio xi must be a real number, not Boolean"
+            )
         xi = np.broadcast_to(
             np.asarray(bond_ratio_xi, dtype=float),
             (count,),

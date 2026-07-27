@@ -38,6 +38,30 @@ PRESTRESS_CLASSES = (
     PRESTRESS_BONDED,
 )
 
+PROTECTION_NOT_ESTABLISHED = "Not established"
+PROTECTION_LEVEL_1_OR_PRETENSIONED = (
+    "Protection Level 1 / pretensioned member"
+)
+PROTECTION_LEVEL_2_OR_3 = "Protection Level 2 or 3"
+PROTECTION_CLASSES = (
+    PROTECTION_NOT_ESTABLISHED,
+    PROTECTION_LEVEL_1_OR_PRETENSIONED,
+    PROTECTION_LEVEL_2_OR_3,
+)
+
+EXPOSURE_NOT_ESTABLISHED = "Not established"
+EXPOSURE_X0_XC1 = "X0 / XC1"
+EXPOSURE_XC2_XC4 = "XC2 / XC3 / XC4"
+EXPOSURE_XD_XS = "XD1-3 / XS1-3"
+EXPOSURE_XF = "XF1-4"
+EXPOSURE_CLASSES_2023 = (
+    EXPOSURE_NOT_ESTABLISHED,
+    EXPOSURE_X0_XC1,
+    EXPOSURE_XC2_XC4,
+    EXPOSURE_XD_XS,
+    EXPOSURE_XF,
+)
+
 DECOMPRESSION_NOT_ESTABLISHED = "Not established"
 DECOMPRESSION_REQUIRED = "Required"
 DECOMPRESSION_NOT_REQUIRED = "Not required"
@@ -50,6 +74,20 @@ DECOMPRESSION_OPTIONS = (
 CRITERION_APPEARANCE = "Appearance crack width"
 CRITERION_DURABILITY = "Durability crack width"
 CRITERION_DECOMPRESSION = "Decompression"
+
+CRACK_NUMERIC_INPUT_KEYS = (
+    "sls_fctm",
+    "sls_phi",
+    "sls_tendon_xi",
+    "sls_appearance_limit",
+    "sls_project_characteristic_limit",
+    "sls_project_frequent_limit",
+    "sls_project_quasi_permanent_limit",
+    "sls_wk_limit",
+    "sls_conc_limit_pct",
+    "sls_steel_limit_pct",
+    "sls_pre_limit_pct",
+)
 
 
 def canonical_combination(value) -> str:
@@ -70,7 +108,30 @@ def canonical_combination(value) -> str:
     return aliases.get(text.casefold(), text)
 
 
+def is_boolean_value(value) -> bool:
+    """Return whether ``value`` is a Python or NumPy Boolean scalar."""
+    value_type = type(value)
+    return (
+        isinstance(value, bool)
+        or (
+            value_type.__name__ in {"bool", "bool_"}
+            and value_type.__module__.split(".", 1)[0] == "numpy"
+        )
+    )
+
+
+def crack_numeric_input_issues(inp: Mapping) -> tuple[str, ...]:
+    """Identify Boolean crack/SLS numerics before any numeric coercion."""
+    return tuple(
+        key
+        for key in CRACK_NUMERIC_INPUT_KEYS
+        if key in inp and is_boolean_value(inp.get(key))
+    )
+
+
 def _finite_positive(value) -> float | None:
+    if is_boolean_value(value):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -110,7 +171,11 @@ def _criterion_record(
     limit_mm: float | None,
     applicability: Mapping,
     configuration_reason: str | None = None,
+    configuration_status: str | None = None,
 ) -> dict:
+    status = str(configuration_status or "").strip().upper()
+    if not status:
+        status = "NOT ASSESSED" if configuration_reason else "READY"
     return {
         "id": criterion_id,
         "kind": kind,
@@ -123,9 +188,7 @@ def _criterion_record(
         ),
         "limit_mm": limit_mm,
         "applicability": dict(applicability),
-        "configuration_status": (
-            "NOT ASSESSED" if configuration_reason else "READY"
-        ),
+        "configuration_status": status,
         "configuration_reason": configuration_reason,
     }
 
@@ -146,7 +209,13 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
     code = str(inp.get("sls_code") or "").strip()
     member = str(inp.get("sls_member") or "").strip()
     exposure = str(inp.get("sls_exposure_context") or "").strip()
+    exposure_class = str(
+        inp.get("sls_exposure_class") or EXPOSURE_NOT_ESTABLISHED
+    ).strip()
     prestress_class = str(inp.get("sls_prestress_class") or "").strip()
+    protection_class = str(
+        inp.get("sls_protection_class") or PROTECTION_NOT_ESTABLISHED
+    ).strip()
     dk_na = bool(inp.get("sls_dk_na"))
     applicability = {
         "edition": edition or None,
@@ -154,8 +223,54 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         "member": member or None,
         "prestress_class": prestress_class or None,
         "exposure": exposure or None,
+        "exposure_class": exposure_class,
+        "protection_class": protection_class,
         "method": code or None,
     }
+
+    invalid_numeric_keys = crack_numeric_input_issues(inp)
+    if invalid_numeric_keys:
+        return [_criterion_record(
+            "invalid-crack-numerics",
+            CRITERION_DURABILITY,
+            source_type=mode or "Unknown",
+            source=source,
+            required_combination=None,
+            limit_mm=None,
+            applicability={
+                **applicability,
+                "rejected_numeric_inputs": list(invalid_numeric_keys),
+            },
+            configuration_reason=(
+                "Boolean values are not numeric crack-control inputs "
+                f"({', '.join(invalid_numeric_keys)}). Enter and explicitly "
+                "confirm real numeric values before assessment."
+            ),
+        )]
+
+    carried_invalid_keys = tuple(
+        str(key)
+        for key in (inp.get("sls_invalid_numeric_inputs") or ())
+        if str(key) in CRACK_NUMERIC_INPUT_KEYS
+    )
+    if carried_invalid_keys:
+        return [_criterion_record(
+            "rejected-crack-numeric-state",
+            CRITERION_DURABILITY,
+            source_type=mode or "Unknown",
+            source=source,
+            required_combination=None,
+            limit_mm=None,
+            applicability={
+                **applicability,
+                "rejected_numeric_inputs": list(carried_invalid_keys),
+            },
+            configuration_reason=(
+                "Rejected Boolean/non-numeric crack-control state remains "
+                f"unrepaired ({', '.join(carried_invalid_keys)}). Edit or "
+                "explicitly confirm every listed numeric value."
+            ),
+        )]
 
     if mode == CRITERION_MODE_LEGACY:
         return [_criterion_record(
@@ -250,16 +365,11 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         base_reasons.append(
             "Select whether the member is reinforced/unbonded or bonded prestress."
         )
-    if not exposure:
+    if edition == "2004" and not exposure:
         base_reasons.append(
             "State the exposure/application context used to establish applicability."
         )
     base_reason = " ".join(base_reasons) or None
-    durability_combination = (
-        COMBINATION_FREQUENT
-        if prestress_class == PRESTRESS_BONDED
-        else COMBINATION_QUASI_PERMANENT
-    )
     criteria = []
 
     if bool(inp.get("sls_check_appearance")):
@@ -288,7 +398,113 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
             configuration_reason=reason,
         ))
 
-    if bool(inp.get("sls_check_durability")):
+    durability_selected = bool(inp.get("sls_check_durability"))
+    if durability_selected and edition == "2023":
+        route_reason = base_reason
+        if exposure_class not in EXPOSURE_CLASSES_2023[1:]:
+            route_reason = " ".join(filter(None, (
+                route_reason,
+                "Select the governing 2023 Table 9.2 exposure-class group.",
+            )))
+        if (
+            prestress_class == PRESTRESS_BONDED
+            and protection_class not in PROTECTION_CLASSES[1:]
+        ):
+            route_reason = " ".join(filter(None, (
+                route_reason,
+                "Select the bonded-tendon protection-level / pretensioning group.",
+            )))
+        if route_reason:
+            criteria.append(_criterion_record(
+                "standard-durability-routing",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=_criterion_source(
+                    _standard_reference(
+                        edition, CRITERION_DURABILITY, dk_na
+                    ),
+                    source,
+                ),
+                required_combination=None,
+                limit_mm=_finite_positive(inp.get("sls_wk_limit")),
+                applicability=applicability,
+                configuration_reason=route_reason,
+            ))
+        else:
+            group_pl1 = (
+                prestress_class == PRESTRESS_BONDED
+                and protection_class == PROTECTION_LEVEL_1_OR_PRETENSIONED
+            )
+            reference = _criterion_source(
+                _standard_reference(
+                    edition, CRITERION_DURABILITY, dk_na
+                ),
+                source,
+            )
+            crack_combination = None
+            decompression_combination = None
+            if group_pl1:
+                if exposure_class in {EXPOSURE_X0_XC1, EXPOSURE_XC2_XC4}:
+                    crack_combination = COMBINATION_FREQUENT
+                if exposure_class == EXPOSURE_XC2_XC4:
+                    decompression_combination = COMBINATION_QUASI_PERMANENT
+                elif exposure_class in {EXPOSURE_XD_XS, EXPOSURE_XF}:
+                    decompression_combination = COMBINATION_FREQUENT
+            elif exposure_class in {EXPOSURE_XC2_XC4, EXPOSURE_XD_XS}:
+                # Reinforced/unbonded members and bonded tendons with Protection
+                # Levels 2/3 occupy the same Table 9.2 branch.
+                crack_combination = COMBINATION_QUASI_PERMANENT
+
+            if crack_combination is not None:
+                criteria.append(_criterion_record(
+                    "standard-durability",
+                    CRITERION_DURABILITY,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=crack_combination,
+                    limit_mm=_finite_positive(inp.get("sls_wk_limit")),
+                    applicability=applicability,
+                ))
+            if decompression_combination is not None:
+                criteria.append(_criterion_record(
+                    "standard-decompression",
+                    CRITERION_DECOMPRESSION,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=decompression_combination,
+                    limit_mm=None,
+                    applicability={
+                        **applicability,
+                        "decompression_applicability": "Table 9.2 required",
+                    },
+                ))
+            if (
+                crack_combination is None
+                and decompression_combination is None
+            ):
+                criteria.append(_criterion_record(
+                    "standard-table-9.2-no-crack-route",
+                    CRITERION_DURABILITY,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=None,
+                    limit_mm=None,
+                    applicability=applicability,
+                    configuration_status="NOT APPLICABLE",
+                    configuration_reason=(
+                        "Table 9.2 defines no crack-width or decompression "
+                        "criterion for the selected member/protection and "
+                        "exposure group. Any separate concrete-compression "
+                        "criterion is outside this crack-control verdict."
+                    ),
+                ))
+
+    if durability_selected and edition == "2004":
+        durability_combination = (
+            COMBINATION_FREQUENT
+            if prestress_class == PRESTRESS_BONDED
+            else COMBINATION_QUASI_PERMANENT
+        )
         criteria.append(_criterion_record(
             "standard-durability",
             CRITERION_DURABILITY,
@@ -305,7 +521,7 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
             configuration_reason=base_reason,
         ))
 
-    if prestress_class == PRESTRESS_BONDED:
+    if edition == "2004" and prestress_class == PRESTRESS_BONDED:
         decompression = str(
             inp.get("sls_decompression_applicability")
             or DECOMPRESSION_NOT_ESTABLISHED
@@ -636,9 +852,21 @@ def crack_assessment(
             "matched_responses": [],
         }
         configuration_reason = item.get("configuration_reason")
+        configuration_status = str(
+            item.get("configuration_status") or ""
+        ).upper()
+        if configuration_status == "NOT APPLICABLE":
+            base.update(
+                status="NOT APPLICABLE",
+                reason=str(
+                    configuration_reason
+                    or "The criterion is not applicable to the selected scope."
+                ),
+            )
+            criterion_results.append(base)
+            continue
         if (
-            str(item.get("configuration_status") or "").upper()
-            == "NOT ASSESSED"
+            configuration_status == "NOT ASSESSED"
             or configuration_reason
         ):
             base.update(

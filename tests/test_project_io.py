@@ -25,6 +25,8 @@ def _v17_crack_defaults():
     return {
         "sls_criterion_mode": project_io.DEFAULT_SLS_CRITERION_MODE,
         "sls_prestress_class": project_io.DEFAULT_SLS_PRESTRESS_CLASS,
+        "sls_protection_class": project_io.DEFAULT_SLS_PROTECTION_CLASS,
+        "sls_exposure_class": project_io.DEFAULT_SLS_EXPOSURE_CLASS,
         "sls_exposure_context": "",
         "sls_check_appearance": False,
         "sls_appearance_limit": 0.0,
@@ -982,7 +984,7 @@ def test_unknown_scalar_keys_are_dropped():
     }
 
 
-def test_v17_roundtrips_combination_and_criterion_applicability():
+def test_v18_roundtrips_combination_and_criterion_applicability():
     tables = {
         load_cases.ELASTIC_TABLE_KEY: load_cases.normalise_table([{
             "name": "SLS-1",
@@ -996,6 +998,8 @@ def test_v17_roundtrips_combination_and_criterion_applicability():
     scalars = {
         "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
         "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_protection_class": sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
         "sls_exposure_context": "XD1 / bonded tendon",
         "sls_check_appearance": True,
         "sls_appearance_limit": 0.20,
@@ -1014,6 +1018,97 @@ def test_v17_roundtrips_combination_and_criterion_applicability():
     assert row["total_combination"] == sls.COMBINATION_FREQUENT
     for key, value in scalars.items():
         assert restored_scalars[key] == value
+
+
+def test_v17_bonded_2023_route_is_invalidated_until_structured_repair():
+    payload = json.loads(project_io.dump_project({}, {
+        "sls_code": "EN 1992-1-1:2023",
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_exposure_context": "XC3 / bonded tendon",
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+    }))
+    payload["version"] = 17
+    payload["scalars"].pop("sls_protection_class")
+    payload["scalars"].pop("sls_exposure_class")
+
+    _, scalars = project_io.parse_project(json.dumps(payload))
+
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+    assert (
+        scalars["sls_protection_class"]
+        == sls.PROTECTION_NOT_ESTABLISHED
+    )
+    assert scalars["sls_exposure_class"] == sls.EXPOSURE_NOT_ESTABLISHED
+    assert scalars["sls_wk_limit"] == pytest.approx(0.30)
+
+
+def test_v17_bonded_2004_structured_route_remains_valid():
+    payload = json.loads(project_io.dump_project({}, {
+        "sls_code": "EN 1992-1-1:2005",
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_exposure_context": "XC3 / bonded tendon",
+        "sls_check_durability": True,
+        "sls_decompression_applicability": sls.DECOMPRESSION_REQUIRED,
+        "sls_wk_limit": 0.30,
+    }))
+    payload["version"] = 17
+    payload["scalars"].pop("sls_protection_class")
+    payload["scalars"].pop("sls_exposure_class")
+
+    _, scalars = project_io.parse_project(json.dumps(payload))
+
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_STANDARD
+    assert scalars["sls_prestress_class"] == sls.PRESTRESS_BONDED
+    assert (
+        scalars["sls_decompression_applicability"]
+        == sls.DECOMPRESSION_REQUIRED
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_tendon_xi",
+        "sls_wk_limit",
+        "sls_appearance_limit",
+        "sls_project_characteristic_limit",
+        "sls_project_frequent_limit",
+        "sls_project_quasi_permanent_limit",
+    ],
+)
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+def test_project_dump_rejects_boolean_crack_numerics(key, value):
+    with pytest.raises(ValueError, match=key):
+        project_io.dump_project({}, {key: value})
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_tendon_xi",
+        "sls_wk_limit",
+        "sls_appearance_limit",
+        "sls_project_characteristic_limit",
+        "sls_project_frequent_limit",
+        "sls_project_quasi_permanent_limit",
+    ],
+)
+def test_project_parse_and_provenance_reject_boolean_crack_numerics(key):
+    payload = {
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": {key: True},
+    }
+    text = json.dumps(payload)
+
+    with pytest.raises(ValueError, match=key):
+        project_io.parse_project(text)
+    with pytest.raises(ValueError, match=key):
+        project_io.project_provenance(text)
 
 
 def test_pre_v17_crack_limit_is_retained_but_combination_route_is_invalidated():

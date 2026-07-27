@@ -8,6 +8,7 @@ import pathlib
 import sys
 from types import SimpleNamespace as NS
 
+import numpy as np
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -62,6 +63,8 @@ def _inp():
         "conc_Ec": 33.0,
         "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
         "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_protection_class": sls.PROTECTION_NOT_ESTABLISHED,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
         "sls_exposure_context": "XC3 / durability",
         "sls_check_appearance": False,
         "sls_appearance_limit": 0.0,
@@ -100,6 +103,26 @@ def _crack():
         xi1_max=None,
         candidates=[candidate],
     )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_tendon_xi",
+        "sls_wk_limit",
+        "sls_appearance_limit",
+        "sls_project_characteristic_limit",
+        "sls_project_frequent_limit",
+        "sls_project_quasi_permanent_limit",
+    ],
+)
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+def test_report_boundary_rejects_boolean_crack_numerics(key, value):
+    inp = _inp()
+    inp[key] = value
+
+    with pytest.raises(ValueError, match=key):
+        sector_report.build_report({}, inp, _out(), figures=False)
 
 
 def _out():
@@ -1461,6 +1484,41 @@ def test_report_project_crack_basis_lists_only_explicit_project_limits():
     assert "Frequent: 0.240 mm" in txt
     assert "Quasi-permanent: 0.210 mm" in txt
     assert "Durability crack-width criterion" not in txt
+
+
+def test_report_roundtrips_2023_structured_route_and_rejected_state():
+    inp = _inp()
+    inp.update({
+        "sls_edition": "2023",
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_protection_class": sls.PROTECTION_LEVEL_2_OR_3,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
+        "sls_invalid_numeric_inputs": ("sls_wk_limit",),
+    })
+    out = _out()
+    out["elastic"]["crack_assessment"] = {
+        "status": "NOT ASSESSED",
+        "verdict": "REVIEW",
+        "reason": "Rejected numeric state remains unrepaired.",
+        "criteria": [],
+        "informational_responses": [],
+    }
+
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+
+    compact = " ".join(txt.split())
+    assert sls.PROTECTION_LEVEL_2_OR_3 in compact
+    assert sls.EXPOSURE_XC2_XC4 in compact
+    assert "sls_wk_limit" in compact
+    assert "NOT ASSESSED / REVIEW" in compact
+
+
+def test_report_rejects_stale_pass_with_retained_invalid_crack_state():
+    inp = _inp()
+    inp["sls_invalid_numeric_inputs"] = ("sls_wk_limit",)
+
+    with pytest.raises(ValueError, match="does not fail closed"):
+        sector_report.build_report({}, inp, _out(), figures=False)
 
 
 def test_report_wide_spacing_shows_geometric_formula():
