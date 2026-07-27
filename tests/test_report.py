@@ -1384,7 +1384,7 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
                 "element_id": "bar 1",
             },
             "Total (long + short)": {
-                "wk": np.asarray(False, dtype=object),
+                "wk": 0.25,
                 "element_id": "bar 1",
             },
         },
@@ -1400,6 +1400,8 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
         }],
         response_contexts=contexts,
     )
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
     elastic["crack"]["wk"] = 0.22
     elastic["crack_short"]["wk"] = np.bool_(False)
     elastic["crack_assessment"] = assessment
@@ -1411,7 +1413,10 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
 
     assert "NOT ASSESSED - Crack width" in text
     assert "PASS - Crack width" not in text
-    assert "Boolean-bearing" in text
+    assert (
+        "prior acceptance assessment was invalidated"
+        in " ".join(text.split())
+    )
 
 
 def test_report_carries_2023_mixed_reinforcement_and_scope_provenance():

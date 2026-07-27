@@ -7,6 +7,7 @@ without depending on Streamlit or the PDF renderer.
 
 from __future__ import annotations
 
+import copy
 import math
 from collections.abc import Iterable as IterableCollection
 from typing import Iterable, Mapping, Sequence
@@ -169,6 +170,217 @@ def crack_width_numeric_value(value) -> float | None:
     if not math.isfinite(number) or number < 0.0:
         return None
     return number
+
+
+def publication_safe_crack_assessment(
+    assessment: Mapping | None,
+    rejected_responses: Sequence[Mapping] = (),
+) -> dict:
+    """Downgrade an assessment that conflicts with current response evidence."""
+    safe = (
+        copy.deepcopy(dict(assessment))
+        if isinstance(assessment, Mapping)
+        else {}
+    )
+    rejected = []
+    for index, raw in enumerate(rejected_responses):
+        item = dict(raw) if isinstance(raw, Mapping) else {}
+        rejected.append({
+            "response": str(
+                item.get("response") or f"response {index + 1}"
+            ),
+            "reason": str(
+                item.get("reason")
+                or item.get("result_validation")
+                or "Calculated crack response was rejected."
+            ),
+            "solver_provenance": item.get("solver_provenance"),
+        })
+    if not rejected:
+        return safe
+
+    names = [item["response"] for item in rejected]
+    reason = (
+        "Publication rejected current crack-response evidence for "
+        f"{', '.join(names)}. Any prior acceptance assessment was invalidated; "
+        "repair or recalculate the rejected response before issuing a verdict."
+    )
+    safe.update(
+        status="NOT ASSESSED",
+        verdict="REVIEW",
+        value=None,
+        util=None,
+        margin=None,
+        case=", ".join(names),
+        governing=None,
+        response_duration=None,
+        reason=reason,
+        solver_provenance=[
+            {
+                "response": item["response"],
+                "solver": item["solver_provenance"],
+            }
+            for item in rejected
+        ],
+        publication_validation={
+            "status": "REJECTED",
+            "reason": reason,
+            "rejected_responses": rejected,
+        },
+    )
+    criteria = []
+    for raw in safe.get("criteria") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        item = copy.deepcopy(dict(raw))
+        if str(item.get("status") or "").upper() != "NOT APPLICABLE":
+            item.update(
+                status="NOT ASSESSED",
+                value=None,
+                util=None,
+                margin=None,
+                case=None,
+                governing=None,
+                response_duration=None,
+                reason=reason,
+            )
+        criteria.append(item)
+    safe["criteria"] = criteria
+    return safe
+
+
+def publication_safe_crack_control_record(record: Mapping | None) -> dict | None:
+    """Cross-check a stored crack snapshot before save, load or display."""
+    if record is None:
+        return None
+    if not isinstance(record, Mapping):
+        return None
+    safe = copy.deepcopy(dict(record))
+    raw_cases = safe.get("cases")
+    if not isinstance(raw_cases, list):
+        safe["cases"] = []
+        return safe
+
+    cases = []
+    for case_index, raw_case in enumerate(raw_cases):
+        if not isinstance(raw_case, Mapping):
+            cases.append({
+                "case": f"Elastic {case_index + 1}",
+                "assessment": publication_safe_crack_assessment(
+                    None,
+                    [{
+                        "response": f"case {case_index + 1}",
+                        "reason": "Stored crack-control case is not a mapping.",
+                    }],
+                ),
+                "responses": [],
+            })
+            continue
+
+        case = copy.deepcopy(dict(raw_case))
+        raw_responses = case.get("responses")
+        if not isinstance(raw_responses, list):
+            raw_responses = []
+        responses = []
+        rejected = []
+        valid_criterion_response = False
+        for response_index, raw_response in enumerate(raw_responses):
+            if not isinstance(raw_response, Mapping):
+                name = f"response {response_index + 1}"
+                response = {
+                    "name": name,
+                    "wk_mm": None,
+                    "acceptance_role": "criterion input",
+                    "result_validation": (
+                        "Stored crack-response record rejected: response is "
+                        "not a mapping."
+                    ),
+                }
+            else:
+                response = copy.deepcopy(dict(raw_response))
+                name = str(
+                    response.get("name") or f"response {response_index + 1}"
+                )
+                width = response.get("wk_mm")
+                if (
+                    width is not None
+                    and crack_width_numeric_value(width) is None
+                ):
+                    response["wk_mm"] = None
+                    response["result_validation"] = (
+                        "Stored crack-width value rejected; no numeric "
+                        "acceptance evidence retained."
+                    )
+                elif (
+                    width is None
+                    and str(response.get("solver_status") or "").upper()
+                    != "NOT APPLICABLE"
+                    and not str(
+                        response.get("result_validation") or ""
+                    ).strip()
+                ):
+                    response["result_validation"] = (
+                        "Stored crack response has no validated numeric width."
+                    )
+
+            validation = str(
+                response.get("result_validation") or ""
+            ).strip()
+            width = crack_width_numeric_value(response.get("wk_mm"))
+            context = response.get("context")
+            solver = (
+                context.get("solver_provenance")
+                if isinstance(context, Mapping)
+                else None
+            )
+            if validation:
+                rejected.append({
+                    "response": name,
+                    "reason": validation,
+                    "solver_provenance": solver,
+                })
+            elif (
+                width is not None
+                and str(response.get("acceptance_role") or "").lower()
+                != "informational"
+            ):
+                valid_criterion_response = True
+            responses.append(response)
+
+        assessment = (
+            dict(case.get("assessment"))
+            if isinstance(case.get("assessment"), Mapping)
+            else {}
+        )
+        publishes_acceptance = (
+            str(assessment.get("verdict") or "").upper()
+            in {"PASS", "FAIL"}
+            or str(assessment.get("status") or "").upper()
+            in {"OK", "EXCEEDED"}
+        )
+        if (
+            publishes_acceptance
+            and not valid_criterion_response
+            and not rejected
+        ):
+            rejected.append({
+                "response": str(
+                    assessment.get("case") or "published assessment"
+                ),
+                "reason": (
+                    "No valid criterion-input response supports the stored "
+                    "acceptance assessment."
+                ),
+                "solver_provenance": assessment.get("solver_provenance"),
+            })
+        case["assessment"] = publication_safe_crack_assessment(
+            assessment,
+            rejected,
+        )
+        case["responses"] = responses
+        cases.append(case)
+    safe["cases"] = cases
+    return safe
 
 
 def crack_numeric_input_issues(inp: Mapping) -> tuple[str, ...]:

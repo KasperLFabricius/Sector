@@ -24,6 +24,7 @@ import math
 import os
 import re
 import threading
+from collections.abc import Mapping
 from html import escape as _stdlib_html_escape
 
 from reportlab.lib import colors
@@ -4300,8 +4301,10 @@ class ReportBuilder:
             self._small("Crack width was not requested for this run.")
             return
         def reportable_crack(response):
-            if not response:
+            if response is None:
                 return response
+            if not isinstance(response, Mapping):
+                return None
             return (
                 response
                 if sls_core.crack_width_numeric_value(response.get("wk"))
@@ -4314,7 +4317,88 @@ class ReportBuilder:
         clc = reportable_crack(el.get("crack_coarse"))
         csc = reportable_crack(el.get("crack_short_coarse"))
         no_results = cl is None and cs is None and clc is None and csc is None
-        assessment = el.get("crack_assessment") or {}
+        raw_assessment = el.get("crack_assessment")
+        raw_assessment = (
+            raw_assessment if isinstance(raw_assessment, Mapping) else {}
+        )
+        raw_response_contexts = (
+            raw_assessment.get("response_contexts")
+            or el.get("crack_response_contexts")
+            or {}
+        )
+        response_contexts = (
+            raw_response_contexts
+            if isinstance(raw_response_contexts, Mapping)
+            else {}
+        )
+        informational = set(
+            raw_assessment.get("informational_responses") or []
+        )
+        current_responses = {}
+        canonical_responses = el.get("crack_responses")
+        if isinstance(canonical_responses, Mapping):
+            current_responses.update(canonical_responses)
+        elif canonical_responses is not None:
+            current_responses["crack responses"] = canonical_responses
+        visible_responses = (
+            ("Long-term", el.get("crack")),
+            ("Total (long + short)", el.get("crack_short")),
+            ("Long-term coarse", el.get("crack_coarse")),
+            ("Total (long + short) coarse", el.get("crack_short_coarse")),
+        )
+        for name, response in visible_responses:
+            if response is not None:
+                current_responses[name] = response
+
+        response_records = []
+        for name, raw_response in current_responses.items():
+            response_is_mapping = isinstance(raw_response, Mapping)
+            response = raw_response if response_is_mapping else {}
+            raw_wk = response.get("wk")
+            width = sls_core.crack_width_numeric_value(raw_wk)
+            rejected = (
+                not response_is_mapping
+                or width is None
+            )
+            context = response_contexts.get(name) or {}
+            record = {
+                "name": name,
+                "wk_mm": None if rejected else raw_wk,
+                "context": dict(context) if isinstance(context, Mapping) else {},
+                "acceptance_role": (
+                    "informational"
+                    if name in informational or "coarse" in name.lower()
+                    else "criterion input"
+                ),
+            }
+            if rejected:
+                record["result_validation"] = (
+                    "Current report crack response rejected; no numeric "
+                    "acceptance evidence retained."
+                )
+            response_records.append(record)
+        elastic_case = el.get("elastic_case")
+        elastic_case = (
+            elastic_case if isinstance(elastic_case, Mapping) else {}
+        )
+        publication_record = (
+            sls_core.publication_safe_crack_control_record({
+                "cases": [{
+                    "case": str(
+                        elastic_case.get("id")
+                        or "Elastic"
+                    ),
+                    "assessment": raw_assessment,
+                    "responses": response_records,
+                }],
+            })
+            or {"cases": []}
+        )
+        publication_cases = publication_record.get("cases") or []
+        assessment = (
+            publication_cases[0].get("assessment") or {}
+            if publication_cases else {}
+        )
         status = assessment.get("status", "NOT ASSESSED")
         display_status = presentation.assessment_status_label(status)
         value = assessment.get("value")

@@ -1233,17 +1233,25 @@ def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
             "assessment": {
                 "status": "OK",
                 "verdict": "PASS",
+                "case": "QP",
                 "required_combination": (
                     sls.COMBINATION_QUASI_PERMANENT
                 ),
                 "value": 0.22,
                 "limit": 0.30,
             },
-            "responses": [{
-                "name": "Total",
-                "wk_mm": 0.31,
-                "acceptance_role": "informational",
-            }],
+            "responses": [
+                {
+                    "name": "QP",
+                    "wk_mm": 0.22,
+                    "acceptance_role": "criterion input",
+                },
+                {
+                    "name": "Total",
+                    "wk_mm": 0.31,
+                    "acceptance_role": "informational",
+                },
+            ],
         }],
     }
     text = project_io.dump_project(
@@ -1264,6 +1272,96 @@ def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
     assert payload["calculation"]["crack_control"] == crack_control
     assert provenance["calculation"]["crack_control"] == crack_control
     assert provenance["calculation"]["matches_saved_inputs"] is True
+
+
+def test_project_downgrades_stale_pass_with_rejected_crack_response():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    stale_record = {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "case": "QP",
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+                "value": 0.22,
+                "limit": 0.30,
+                "util": 0.22 / 0.30,
+                "margin": 0.08,
+                "criteria": [{
+                    "kind": sls.CRITERION_DURABILITY,
+                    "status": "OK",
+                    "value": 0.22,
+                    "util": 0.22 / 0.30,
+                    "margin": 0.08,
+                }],
+            },
+            "responses": [{
+                "name": "QP",
+                "wk_mm": None,
+                "acceptance_role": "criterion input",
+                "result_validation": (
+                    "Injected rejected response for persistence QA."
+                ),
+                "context": {
+                    "solver_provenance": {"state": "long"},
+                },
+            }],
+        }],
+    }
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "f" * 40,
+            "input_sha256": digest,
+            "crack_control": stale_record,
+        },
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+
+    for record in (
+        payload["calculation"]["crack_control"],
+        provenance["calculation"]["crack_control"],
+    ):
+        assessment = record["cases"][0]["assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["value"] is None
+        assert assessment["util"] is None
+        assert assessment["margin"] is None
+        assert assessment["criteria"][0]["status"] == "NOT ASSESSED"
+        assert assessment["criteria"][0]["value"] is None
+        assert assessment["publication_validation"]["status"] == "REJECTED"
+        assert assessment["solver_provenance"] == [{
+            "response": "QP",
+            "solver": {"state": "long"},
+        }]
+    assert payload["provenance"]["results_included"] is True
+    assert provenance["results_included"] is True
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+
+    raw_payload = json.loads(text)
+    raw_payload["calculation"]["crack_control"] = stale_record
+    raw_payload["provenance"]["results_included"] = True
+    loaded = project_io.project_provenance(json.dumps(raw_payload))
+    loaded_assessment = loaded["calculation"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+    assert loaded_assessment["status"] == "NOT ASSESSED"
+    assert loaded_assessment["verdict"] == "REVIEW"
+    assert loaded_assessment["value"] is None
+    assert loaded_assessment["publication_validation"]["status"] == "REJECTED"
+    assert loaded["calculation"]["matches_saved_inputs"] is True
 
 
 def test_legacy_mpa_moduli_are_rescaled_to_gpa():

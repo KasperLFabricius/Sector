@@ -2838,7 +2838,27 @@ def _perform_autosave() -> bool:
         digest = _project_input_hash()
     except Exception:
         return False
-    if digest == st.session_state.get("_autosave_hash"):
+    record_changed_by_validation = False
+    calculation = st.session_state.get("calculation_record")
+    if isinstance(calculation, Mapping) and "crack_control" in calculation:
+        current_crack_control = calculation.get("crack_control")
+        safe_crack_control = (
+            sls_core.publication_safe_crack_control_record(
+                current_crack_control
+            )
+        )
+        if safe_crack_control != current_crack_control:
+            safe_calculation = copy.deepcopy(dict(calculation))
+            if safe_crack_control is None:
+                safe_calculation.pop("crack_control", None)
+            else:
+                safe_calculation["crack_control"] = safe_crack_control
+            st.session_state["calculation_record"] = safe_calculation
+            record_changed_by_validation = True
+    if (
+        digest == st.session_state.get("_autosave_hash")
+        and not record_changed_by_validation
+    ):
         return False                                 # unchanged since the last save
     try:
         data = _gather_project()
@@ -6918,18 +6938,41 @@ def crack_control_calculation_record(results):
         elastic = (entry.get("results") or {}).get("elastic") or {}
         if not elastic.get("show_cw"):
             continue
-        assessment = elastic.get("crack_assessment")
-        if not assessment:
+        raw_assessment = elastic.get("crack_assessment")
+        if not raw_assessment:
             continue
+        assessment = (
+            raw_assessment
+            if isinstance(raw_assessment, Mapping)
+            else sls_core.publication_safe_crack_assessment(
+                None,
+                [{
+                    "response": "assessment",
+                    "reason": (
+                        "Calculated crack assessment rejected: assessment "
+                        "is not a mapping."
+                    ),
+                }],
+            )
+        )
         dispositions = elastic.get("crack_dispositions") or {}
+        dispositions = (
+            dispositions if isinstance(dispositions, Mapping) else {}
+        )
         contexts = elastic.get("crack_response_contexts") or {}
+        contexts = contexts if isinstance(contexts, Mapping) else {}
         informational = set(
             assessment.get("informational_responses") or []
         )
         responses = []
-        for name, raw_response in (
-            elastic.get("crack_responses") or {}
-        ).items():
+        response_container = elastic.get("crack_responses")
+        if response_container is None:
+            response_items = ()
+        elif isinstance(response_container, Mapping):
+            response_items = response_container.items()
+        else:
+            response_items = (("crack responses", response_container),)
+        for name, raw_response in response_items:
             response_is_mapping = isinstance(raw_response, Mapping)
             response = raw_response if response_is_mapping else {}
             disposition = dispositions.get(name) or {}
@@ -6940,7 +6983,8 @@ def crack_control_calculation_record(results):
             wk_rejected = (
                 response_rejected
                 or (
-                    raw_wk is not None
+                    raw_response is not None
+                    and response_is_mapping
                     and sls_core.crack_width_numeric_value(raw_wk) is None
                 )
             )
@@ -6967,7 +7011,9 @@ def crack_control_calculation_record(results):
             "assessment": copy.deepcopy(assessment),
             "responses": responses,
         })
-    return {"cases": cases} if cases else None
+    return sls_core.publication_safe_crack_control_record(
+        {"cases": cases} if cases else None
+    )
 
 
 def _run_uniaxial_capacity_checks(inp, out):

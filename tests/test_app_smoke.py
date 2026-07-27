@@ -6,6 +6,7 @@ for each analysis mode, and assert it produces results without error.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import pathlib
@@ -602,11 +603,19 @@ def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results
             "assessment": {
                 "status": "OK",
                 "verdict": "PASS",
+                "case": "QP",
                 "required_combination": sls.COMBINATION_QUASI_PERMANENT,
                 "value": 0.22,
                 "limit": 0.30,
             },
-            "responses": [],
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.22,
+                "acceptance_role": "criterion input",
+                "context": {
+                    "solver_provenance": {"state": "long"},
+                },
+            }],
         }],
     }
     text = project_io.dump_project(
@@ -620,6 +629,16 @@ def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results
             "crack_control": crack_control,
         },
     )
+    payload = json.loads(text)
+    stale_case = payload["calculation"]["crack_control"]["cases"][0]
+    stale_case["responses"][0]["wk_mm"] = None
+    stale_case["responses"][0]["result_validation"] = (
+        "Injected rejected response in loaded audit snapshot."
+    )
+    text = json.dumps(payload)
+    expected_record = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
 
     at = _fresh()
     at.run()
@@ -641,9 +660,13 @@ def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results
     assert elastic.loc[0, "long_combination"] == (
         sls.COMBINATION_QUASI_PERMANENT
     )
-    assert at.session_state["calculation_record"]["crack_control"] == (
-        crack_control
-    )
+    loaded_record = at.session_state["calculation_record"]["crack_control"]
+    assert loaded_record == expected_record
+    loaded_assessment = loaded_record["cases"][0]["assessment"]
+    assert loaded_assessment["status"] == "NOT ASSESSED"
+    assert loaded_assessment["verdict"] == "REVIEW"
+    assert loaded_assessment["value"] is None
+    assert loaded_assessment["publication_validation"]["status"] == "REJECTED"
     assert at.session_state["calculation_record"]["matches_saved_inputs"] is True
 
 
@@ -5121,6 +5144,38 @@ def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
     assert saved_case["assessment"]["verdict"] == "PASS"
     assert provenance["calculation"]["matches_saved_inputs"] is True
 
+    stale_record = copy.deepcopy(
+        at.session_state["calculation_record"]
+    )
+    stale_case = stale_record["crack_control"]["cases"][0]
+    criterion_response = next(
+        response
+        for response in stale_case["responses"]
+        if response["acceptance_role"] == "criterion input"
+    )
+    criterion_response["wk_mm"] = None
+    criterion_response["result_validation"] = (
+        "Injected rejected response before autosave."
+    )
+    assert stale_case["assessment"]["verdict"] == "PASS"
+    at.session_state["calculation_record"] = stale_record
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+
+    provenance = project_io.project_provenance(
+        (tmp_path / "autosave.json").read_text(encoding="utf-8")
+    )
+    saved_case = provenance["calculation"]["crack_control"]["cases"][0]
+    assert saved_case["assessment"]["status"] == "NOT ASSESSED"
+    assert saved_case["assessment"]["verdict"] == "REVIEW"
+    assert saved_case["assessment"]["value"] is None
+    assert saved_case["assessment"]["util"] is None
+    assert saved_case["assessment"]["margin"] is None
+    assert saved_case["assessment"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+
 
 def test_boolean_calculated_crack_width_cannot_create_pass_record():
     import sector_app
@@ -5215,7 +5270,7 @@ def test_non_mapping_crack_response_is_retained_as_rejected_record():
         },
     }
     assessment = sls.crack_assessment(
-        {"QP": 1.0},
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
         valid=True,
         criteria=[{
             "id": "qa-durability",
@@ -5228,6 +5283,8 @@ def test_non_mapping_crack_response_is_retained_as_rejected_record():
         }],
         response_contexts=contexts,
     )
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
 
     record = sector_app.crack_control_calculation_record({
         "elastic": {
@@ -5242,6 +5299,12 @@ def test_non_mapping_crack_response_is_retained_as_rejected_record():
     recorded = record["cases"][0]
     assert recorded["assessment"]["status"] == "NOT ASSESSED"
     assert recorded["assessment"]["verdict"] == "REVIEW"
+    assert recorded["assessment"]["value"] is None
+    assert recorded["assessment"]["util"] is None
+    assert recorded["assessment"]["margin"] is None
+    assert recorded["assessment"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
     assert recorded["assessment"]["solver_provenance"] == [{
         "response": "QP",
         "solver": {"state": "long"},

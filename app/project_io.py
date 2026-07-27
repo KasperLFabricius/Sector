@@ -593,10 +593,18 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
             )
             if calculation.get(key) not in (None, "")
         }
+        if "crack_control" in record:
+            record["crack_control"] = (
+                sls.publication_safe_crack_control_record(
+                    record.get("crack_control")
+                )
+            )
+            if record["crack_control"] is None:
+                record.pop("crack_control")
         record["matches_saved_inputs"] = record.get("input_sha256") == digest
         payload["calculation"] = record
         payload["provenance"]["results_included"] = bool(
-            record.get("crack_control")
+            (record.get("crack_control") or {}).get("cases")
         )
     return json.dumps(payload, indent=2)
 
@@ -652,6 +660,14 @@ def project_provenance(text: str) -> dict:
         if isinstance(data.get("calculation"), dict) else None
     )
     if calculation is not None:
+        if "crack_control" in calculation:
+            calculation["crack_control"] = (
+                sls.publication_safe_crack_control_record(
+                    calculation.get("crack_control")
+                )
+            )
+            if calculation["crack_control"] is None:
+                calculation.pop("crack_control")
         calculation["matches_saved_inputs"] = (
             bool(calculation.get("input_sha256"))
             and calculation.get("input_sha256") == actual
@@ -662,7 +678,12 @@ def project_provenance(text: str) -> dict:
         "saved_at_utc": provenance.get("saved_at_utc"),
         "input_sha256": recorded,
         "input_hash_valid": bool(recorded) and recorded == actual,
-        "results_included": bool(provenance.get("results_included", False)),
+        "results_included": bool(
+            (
+                (calculation or {}).get("crack_control")
+                or {}
+            ).get("cases")
+        ),
         "calculation": calculation,
     }
 
