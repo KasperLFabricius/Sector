@@ -4228,6 +4228,54 @@ def test_interrupted_inputs_recovery_preserves_the_new_tab_selection():
     assert not at.exception
 
 
+def test_project_load_invalidates_prior_inputs_before_analysis_can_render():
+    """A superseded load cannot expose the previous project's solver payload."""
+    import project_io
+
+    at = _fresh()
+    at.run()
+    prior_inputs = at.session_state["_latest_inputs"]
+    prior_fck = prior_inputs["concrete"].fck
+
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in at.session_state
+    }
+    loaded_fck = 55.0 if prior_fck != 55.0 else 45.0
+    scalars["conc_fck"] = loaded_fck
+
+    # Reproduce a project-load rerun superseded by a rapid Analysis click before
+    # build_inputs() can commit the newly loaded project's immutable payload.
+    at.session_state["_pending_project"] = project_io.dump_project(tables, scalars)
+    at.session_state["_inputs_build_in_progress"] = True
+    at.session_state["_main_page"] = "Analysis"
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["conc_fck"] == loaded_fck
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == loaded_fck
+    assert "_latest_inputs" not in at.session_state
+    assert not any(button.key == "calculate" for button in at.button)
+    assert any(
+        "Open Inputs once to initialise" in info.value
+        for info in at.info
+    )
+
+    # A completed Inputs build creates the only solver payload that Analysis may
+    # consume, and it belongs to the newly loaded project.
+    _goto_page(at, "Inputs")
+    rebuilt_inputs = at.session_state["_latest_inputs"]
+    assert rebuilt_inputs["concrete"].fck == loaded_fck
+    _goto_page(at, "Analysis")
+    assert any(button.key == "calculate" for button in at.button)
+
+
 def test_tracked_input_tabs_survive_page_and_auxiliary_view_lifecycle():
     # Both tracked selections are session preferences, not project inputs. Keep
     # them through runs where the tab widgets are absent and Streamlit cleans up

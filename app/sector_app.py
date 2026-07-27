@@ -2691,8 +2691,12 @@ def _apply_pending_project() -> None:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
         return
     # A valid project load is an explicit whole-input replacement. Do not replay
-    # uncommitted browser events from the project that was open previously.
+    # uncommitted browser events or expose the immutable solver payload from the
+    # project that was open previously. A rapid navigation event can supersede the
+    # Inputs rebuild, so Analysis must stay unavailable until build_inputs() reaches
+    # its normal commit point and _snapshot_input_state() installs a new payload.
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    st.session_state.pop("_latest_inputs", None)
     st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
     for key in _FACTOR_MODE_RUNTIME_KEYS:
         st.session_state.pop(key, None)
