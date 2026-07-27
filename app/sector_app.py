@@ -6748,6 +6748,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             response_mapping_scope=inp.get("sls_response_mapping_scope"),
             criteria=eout.get("crack_criteria"),
         )
+        eout["crack_response_mapping_scope"] = copy.deepcopy(
+            eout["crack_assessment"].get("response_mapping_scope") or []
+        )
     if inp.get("minimum_reinforcement_on"):
         if inp.get("detailing_edition") == detailing.EC2_2023:
             _warm_solver()
@@ -7019,6 +7022,9 @@ def crack_control_calculation_record(results):
         cases.append({
             "case": str(entry.get("name") or "Elastic"),
             "assessment": copy.deepcopy(assessment),
+            "response_mapping_scope": copy.deepcopy(
+                elastic.get("crack_response_mapping_scope")
+            ),
             "responses": responses,
         })
     return sls_core.publication_safe_crack_control_record(

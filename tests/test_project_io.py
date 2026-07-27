@@ -1222,58 +1222,73 @@ def test_project_records_whether_calculation_matches_saved_inputs():
     assert changed["calculation"]["matches_saved_inputs"] is False
 
 
+def _project_width_crack_control():
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "map-v1",
+            "solver_provenance": {"solve": "v1", "converged": True},
+        }
+        for name in ("Fine", "Coarse")
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "map-v1",
+        "solver_provenance": {"solve": "v1", "converged": True},
+    }]
+    responses = {
+        "Fine": {"wk": 0.22, "element_id": "R1"},
+        "Coarse": {"wk": 0.18, "element_id": "R2"},
+    }
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-width",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled durability criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["verdict"] == "PASS"
+    return {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": assessment,
+            "response_mapping_scope": copy.deepcopy(mapping_scope),
+            "responses": [
+                {
+                    "name": name,
+                    "wk_mm": response["wk"],
+                    "element_id": response["element_id"],
+                    "acceptance_role": "criterion input",
+                    "context": copy.deepcopy(contexts[name]),
+                }
+                for name, response in responses.items()
+            ],
+        }],
+    }
+
+
 def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
     scalars = {
         "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
         "sls_exposure_context": "XC3 / durability",
     }
     digest = project_io.input_sha256({}, scalars)
-    crack_control = {
-        "cases": [{
-            "case": "SLS-01",
-            "assessment": {
-                "status": "OK",
-                "verdict": "PASS",
-                "case": "QP",
-                "criterion": sls.CRITERION_DURABILITY,
-                "criterion_source": "QA controlled durability criterion",
-                "applicability": {},
-                "required_combination": (
-                    sls.COMBINATION_QUASI_PERMANENT
-                ),
-                "value": 0.22,
-                "limit": 0.30,
-                "util": 0.22 / 0.30,
-                "margin": 0.30 - 0.22,
-            },
-            "responses": [
-                {
-                    "name": "QP",
-                    "wk_mm": 0.22,
-                    "acceptance_role": "criterion input",
-                    "context": {
-                        "combination": sls.COMBINATION_QUASI_PERMANENT,
-                        "response_id": "qp",
-                        "duration": None,
-                        "provenance": None,
-                        "solver_provenance": None,
-                    },
-                },
-                {
-                    "name": "Total",
-                    "wk_mm": 0.31,
-                    "acceptance_role": "informational",
-                    "context": {
-                        "combination": sls.COMBINATION_CHARACTERISTIC,
-                        "response_id": "total",
-                        "duration": None,
-                        "provenance": None,
-                        "solver_provenance": None,
-                    },
-                },
-            ],
-        }],
-    }
+    crack_control = _project_width_crack_control()
     text = project_io.dump_project(
         {},
         scalars,
@@ -1294,75 +1309,151 @@ def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
     assert provenance["calculation"]["matches_saved_inputs"] is True
 
 
+@pytest.mark.parametrize(
+    ("mutation", "changed_value"),
+    [
+        ("criterion_id", "qa-width-v2"),
+        ("criterion_source", "Changed durability criterion"),
+        ("applicability", {"member": "changed"}),
+        ("required_combination", sls.COMBINATION_FREQUENT),
+        ("limit", 0.25),
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2", "converged": True}),
+        ("width", 0.21),
+        ("governing_element", "R9"),
+        ("scope_duration", "short"),
+        ("scope_provenance", "map-v2"),
+    ],
+)
+def test_project_save_load_rejects_each_width_binding_mutation(
+    mutation,
+    changed_value,
+):
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    crack_control = _project_width_crack_control()
+    case = crack_control["cases"][0]
+    criterion = case["assessment"]["criteria"][0]
+
+    if mutation in {
+        "criterion_id",
+        "criterion_source",
+        "applicability",
+        "required_combination",
+        "limit",
+    }:
+        criterion[mutation] = copy.deepcopy(changed_value)
+    elif mutation in {
+        "response_id",
+        "duration",
+        "provenance",
+        "solver_provenance",
+    }:
+        for response in case["responses"]:
+            response["context"][mutation] = copy.deepcopy(changed_value)
+    elif mutation == "width":
+        case["responses"][0]["wk_mm"] = changed_value
+    elif mutation == "governing_element":
+        case["responses"][0]["element_id"] = changed_value
+    else:
+        case["response_mapping_scope"][0][
+            mutation.removeprefix("scope_")
+        ] = copy.deepcopy(changed_value)
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "8" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+    saved = json.loads(text)["calculation"]["crack_control"]
+    loaded = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
+
+    for record in (saved, loaded):
+        assessment = record["cases"][0]["assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["acceptance_evidence"] is None
+        assert assessment["publication_validation"]["reason"]
+
+
 def test_project_reapplies_failure_precedence_over_incomplete_criterion():
     scalars = {
         "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
         "sls_exposure_context": "XC3 / durability",
     }
     digest = project_io.input_sha256({}, scalars)
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "response_id": "qp",
+    }
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.31, "element_id": "R1"}},
+        valid=True,
+        criteria=[
+            {
+                "id": "qa-width",
+                "kind": sls.CRITERION_DURABILITY,
+                "source_type": sls.CRITERION_MODE_STANDARD,
+                "source": "QA controlled durability criterion",
+                "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+                "limit_mm": 0.30,
+                "applicability": {
+                    "prestress_class": (
+                        sls.PRESTRESS_REINFORCED_UNBONDED
+                    ),
+                },
+            },
+            {
+                "id": "qa-decompression",
+                "kind": sls.CRITERION_DECOMPRESSION,
+                "source_type": sls.CRITERION_MODE_STANDARD,
+                "source": "QA controlled decompression criterion",
+                "required_combination": sls.COMBINATION_FREQUENT,
+                "limit_mm": None,
+                "applicability": {
+                    "prestress_class": (
+                        sls.PRESTRESS_REINFORCED_UNBONDED
+                    ),
+                },
+            },
+        ],
+        response_contexts={"QP": context},
+    )
+    assert assessment["status"] == "EXCEEDED"
+    # Simulate a stale aggregate while retaining canonical per-criterion
+    # evidence. Persistence must rebuild known-failure precedence.
+    assessment.update(
+        status="NOT ASSESSED",
+        verdict="REVIEW",
+        value=None,
+        util=None,
+        margin=None,
+        acceptance_evidence=None,
+    )
     crack_control = {
         "cases": [{
             "case": "SLS-QP",
-            # Simulate a stale aggregate while retaining the full criterion
-            # evidence. Save and load must use the same canonical precedence as
-            # the raw assessment: known EXCEEDED beats a separate incomplete
-            # criterion.
-            "assessment": {
-                "status": "NOT ASSESSED",
-                "verdict": "REVIEW",
-                "criteria": [
-                    {
-                        "kind": sls.CRITERION_DURABILITY,
-                        "status": "EXCEEDED",
-                        "criterion_source": (
-                            "QA controlled durability criterion"
-                        ),
-                        "applicability": {
-                            "prestress_class": (
-                                sls.PRESTRESS_REINFORCED_UNBONDED
-                            ),
-                        },
-                        "case": "QP",
-                        "matched_responses": ["QP"],
-                        "value": 0.31,
-                        "limit": 0.30,
-                        "util": 0.31 / 0.30,
-                        "margin": -0.01,
-                        "governing": "R1",
-                        "required_combination": (
-                            sls.COMBINATION_QUASI_PERMANENT
-                        ),
-                    },
-                    {
-                        "kind": sls.CRITERION_DECOMPRESSION,
-                        "status": "NOT ASSESSED",
-                        "criterion_source": (
-                            "QA controlled decompression criterion"
-                        ),
-                        "applicability": {
-                            "prestress_class": (
-                                sls.PRESTRESS_REINFORCED_UNBONDED
-                            ),
-                        },
-                        "case": "Frequent",
-                        "matched_responses": [],
-                        "value": None,
-                        "required_combination": (
-                            sls.COMBINATION_FREQUENT
-                        ),
-                        "reason": "Concrete-stress evidence is unavailable.",
-                    },
-                ],
-            },
+            "assessment": assessment,
+            "response_mapping_scope": [],
             "responses": [{
                 "name": "QP",
                 "wk_mm": 0.31,
                 "element_id": "R1",
                 "acceptance_role": "criterion input",
-                "context": {
-                    "combination": sls.COMBINATION_QUASI_PERMANENT,
-                    "response_id": "qp",
-                },
+                "context": context,
             }],
         }],
     }
@@ -1394,7 +1485,20 @@ def test_project_reapplies_failure_precedence_over_incomplete_criterion():
         ]
 
 
-def test_project_roundtrip_rejects_nested_nonfinite_decompression_evidence():
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("status", "EXCEEDED"),
+        ("value", -0.10),
+        ("governing", "concrete point 2"),
+        ("solver_provenance", {"state": "changed"}),
+        ("solver_residual", float("nan")),
+    ],
+)
+def test_project_roundtrip_rejects_decompression_binding_mutation(
+    field,
+    changed_value,
+):
     contexts = {
         "QP": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
@@ -1468,9 +1572,14 @@ def test_project_roundtrip_rejects_nested_nonfinite_decompression_evidence():
     assert valid_assessment["verdict"] == "PASS"
 
     invalid_response = copy.deepcopy(response)
-    invalid_response["decompression"]["solver_provenance"][
-        "residual"
-    ] = float("nan")
+    if field == "solver_residual":
+        invalid_response["decompression"]["solver_provenance"][
+            "residual"
+        ] = changed_value
+    else:
+        invalid_response["decompression"][field] = copy.deepcopy(
+            changed_value
+        )
     invalid_text = dump(invalid_response)
     assert "NaN" not in invalid_text
     saved = json.loads(invalid_text)["calculation"]["crack_control"]
@@ -1482,7 +1591,7 @@ def test_project_roundtrip_rejects_nested_nonfinite_decompression_evidence():
         assert published["status"] == "NOT ASSESSED"
         assert published["verdict"] == "REVIEW"
         assert published["value"] is None
-        assert "evidence is incomplete" in (
+        assert "prior acceptance assessment was invalidated" in (
             published["publication_validation"]["reason"]
         )
 
@@ -1691,7 +1800,7 @@ def test_project_downgrades_stale_pass_with_different_governing_response():
     assert assessment["value"] is None
     assert assessment["util"] is None
     assert assessment["margin"] is None
-    assert "no current criterion-input response" in (
+    assert "invalid immutable acceptance evidence" in (
         assessment["publication_validation"]["reason"]
     )
 
@@ -1742,7 +1851,7 @@ def test_project_downgrades_acceptance_without_required_crack_combination():
     assert assessment["status"] == "NOT ASSESSED"
     assert assessment["verdict"] == "REVIEW"
     assert assessment["value"] is None
-    assert "no valid required SLS combination" in (
+    assert "invalid immutable acceptance evidence" in (
         assessment["publication_validation"]["reason"]
     )
 
@@ -1753,54 +1862,8 @@ def test_project_downgrades_stale_pass_when_another_matched_crack_grows():
         "sls_exposure_context": "XC3 / durability",
     }
     digest = project_io.input_sha256({}, scalars)
-    response_context = {
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "response_id": "long",
-    }
-    stale_record = {
-        "cases": [{
-            "case": "SLS-01",
-            "assessment": {
-                "status": "OK",
-                "verdict": "PASS",
-                "case": "Fine",
-                "value": 0.22,
-                "limit": 0.30,
-                "governing": "R1",
-                "required_combination": (
-                    sls.COMBINATION_QUASI_PERMANENT
-                ),
-                "criteria": [{
-                    "kind": sls.CRITERION_DURABILITY,
-                    "status": "OK",
-                    "case": "Fine",
-                    "matched_responses": ["Fine", "Coarse"],
-                    "value": 0.22,
-                    "limit": 0.30,
-                    "governing": "R1",
-                    "required_combination": (
-                        sls.COMBINATION_QUASI_PERMANENT
-                    ),
-                }],
-            },
-            "responses": [
-                {
-                    "name": "Fine",
-                    "wk_mm": 0.22,
-                    "element_id": "R1",
-                    "acceptance_role": "criterion input",
-                    "context": response_context,
-                },
-                {
-                    "name": "Coarse",
-                    "wk_mm": 0.45,
-                    "element_id": "R2",
-                    "acceptance_role": "criterion input",
-                    "context": response_context,
-                },
-            ],
-        }],
-    }
+    stale_record = _project_width_crack_control()
+    stale_record["cases"][0]["responses"][1]["wk_mm"] = 0.45
 
     text = project_io.dump_project(
         {},
@@ -1820,7 +1883,7 @@ def test_project_downgrades_stale_pass_when_another_matched_crack_grows():
     assert assessment["status"] == "NOT ASSESSED"
     assert assessment["verdict"] == "REVIEW"
     assert assessment["value"] is None
-    assert "does not match current crack-width evidence" in (
+    assert "immutable acceptance evidence does not match" in (
         assessment["publication_validation"]["reason"]
     )
 

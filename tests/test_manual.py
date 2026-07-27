@@ -161,6 +161,9 @@ def test_manual_separates_crack_history_duration_and_acceptance_combination():
     assert "separate positive crack-width limit for every applicable combination" in text
     assert "project schema" in text
     assert "Boolean values are never accepted" in text
+    assert "fingerprinted evidence binding" in text
+    assert "full matched response label/ID set" in text
+    assert "independently reconstruct that binding" in text
     assert "NOT ASSESSED / REVIEW" in text
 
 

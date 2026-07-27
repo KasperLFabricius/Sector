@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -338,6 +340,565 @@ def _standard_inputs(**overrides):
     return values
 
 
+def _canonical_width_binding_fixture():
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "map-v1",
+            "solver_provenance": {"solve": "v1", "converged": True},
+        }
+        for name in ("Fine", "Coarse")
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "map-v1",
+        "solver_provenance": {"solve": "v1", "converged": True},
+    }]
+    raw_responses = {
+        "Fine": {"wk": 0.22, "element_id": "R1"},
+        "Coarse": {"wk": 0.18, "element_id": "R2"},
+    }
+    assessment = sls.crack_assessment(
+        raw_responses,
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    publication_case = {
+        "case": "SLS-QP",
+        "assessment": copy.deepcopy(assessment),
+        "response_mapping_scope": copy.deepcopy(mapping_scope),
+        "responses": [
+            {
+                "name": name,
+                "wk_mm": response["wk"],
+                "element_id": response["element_id"],
+                "acceptance_role": "criterion input",
+                "context": copy.deepcopy(contexts[name]),
+            }
+            for name, response in raw_responses.items()
+        ],
+    }
+    return assessment, publication_case
+
+
+def _canonical_decompression_binding_fixture():
+    solver_provenance = {"solve": "v1", "converged": True}
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "map-v1",
+            "solver_provenance": copy.deepcopy(solver_provenance),
+        }
+        for name in ("Fine", "Coarse")
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "map-v1",
+        "solver_provenance": copy.deepcopy(solver_provenance),
+    }]
+    decompression = {
+        "status": "OK",
+        "value": -0.25,
+        "governing": "concrete point 1",
+        "solver_provenance": copy.deepcopy(solver_provenance),
+    }
+    raw_responses = {
+        name: {
+            "wk": width,
+            "element_id": "T1",
+            "decompression": copy.deepcopy(decompression),
+        }
+        for name, width in (("Fine", 0.18), ("Coarse", 0.12))
+    }
+    assessment = sls.crack_assessment(
+        raw_responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    publication_case = {
+        "case": "SLS-QP",
+        "assessment": copy.deepcopy(assessment),
+        "response_mapping_scope": copy.deepcopy(mapping_scope),
+        "responses": [
+            {
+                "name": name,
+                "wk_mm": response["wk"],
+                "element_id": response["element_id"],
+                "decompression": copy.deepcopy(response["decompression"]),
+                "acceptance_role": "criterion input",
+                "context": copy.deepcopy(contexts[name]),
+            }
+            for name, response in raw_responses.items()
+        ],
+    }
+    return assessment, publication_case
+
+
+def test_raw_and_publication_share_canonical_width_acceptance_binding():
+    assessment, publication_case = _canonical_width_binding_fixture()
+
+    assert assessment["verdict"] == "PASS"
+    criterion = assessment["criteria"][0]
+    binding = criterion["acceptance_evidence"]
+    assert binding["schema"] == sls.CRACK_ACCEPTANCE_EVIDENCE_SCHEMA
+    assert len(binding["fingerprint"]) == 64
+    assert binding["criterion"]["id"] == criterion["criterion_id"]
+    assert {
+        item["label"] for item in binding["matched_responses"]
+    } == {"Fine", "Coarse"}
+    assert assessment["acceptance_evidence"] == binding
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "OK"
+    assert published["verdict"] == "PASS"
+    assert "publication_validation" not in published
+    assert published["acceptance_evidence"] == binding
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2"}),
+    ],
+)
+def test_raw_acceptance_rejects_scope_context_provenance_conflict(
+    field,
+    changed_value,
+):
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "map-v1",
+        "solver_provenance": {"solve": "v1"},
+    }
+    scope = {
+        **copy.deepcopy(context),
+        "response": "QP",
+        "elastic_case": "elastic-1",
+        "state": "long",
+    }
+    scope[field] = copy.deepcopy(changed_value)
+
+    result = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={"QP": context},
+        response_mapping_scope=[scope],
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["acceptance_evidence"] is None
+    assert "mapping scope conflicts" in result["reason"]
+
+
+def test_raw_acceptance_rejects_unordered_fingerprint_evidence():
+    result = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+                "solver_provenance": {"states": {"long", "cracked"}},
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["acceptance_evidence"] is None
+    assert "unordered rather than typed JSON evidence" in result["reason"]
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2"}),
+    ],
+)
+def test_publication_rejects_exact_single_response_context_mutation(
+    field,
+    changed_value,
+):
+    stored_context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "map-v1",
+        "solver_provenance": {"solve": "v1"},
+    }
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={"QP": stored_context},
+    )
+    assert assessment["verdict"] == "PASS"
+    current_context = copy.deepcopy(stored_context)
+    current_context[field] = copy.deepcopy(changed_value)
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": assessment,
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.22,
+                "element_id": "R1",
+                "acceptance_role": "criterion input",
+                "context": current_context,
+            }],
+        }],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert published["acceptance_evidence"] is None
+    assert "immutable acceptance evidence" in (
+        published["publication_validation"]["reason"]
+    )
+    assert assessment["response_contexts"]["QP"] == stored_context
+
+
+@pytest.mark.parametrize(
+    ("mutation", "changed_value"),
+    [
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2", "converged": True}),
+        ("combination", sls.COMBINATION_FREQUENT),
+        ("width", 0.21),
+        ("governing_element", "R9"),
+        ("scope_response_id", "other"),
+        ("scope_duration", "short"),
+        ("scope_provenance", "map-v2"),
+        (
+            "scope_solver_provenance",
+            {"solve": "v2", "converged": True},
+        ),
+        ("scope_response", "QP changed"),
+        ("scope_elastic_case", "elastic-2"),
+        ("scope_state", "changed"),
+        ("added_alias", None),
+        ("informational_alias", None),
+    ],
+)
+def test_publication_rejects_each_width_acceptance_binding_mutation(
+    mutation,
+    changed_value,
+):
+    _assessment, publication_case = _canonical_width_binding_fixture()
+    responses = publication_case["responses"]
+    scope = publication_case["response_mapping_scope"][0]
+
+    if mutation in {
+        "response_id",
+        "duration",
+        "provenance",
+        "solver_provenance",
+        "combination",
+    }:
+        for response in responses:
+            response["context"][mutation] = copy.deepcopy(changed_value)
+    elif mutation == "width":
+        responses[0]["wk_mm"] = changed_value
+    elif mutation == "governing_element":
+        responses[0]["element_id"] = changed_value
+    elif mutation.startswith("scope_"):
+        scope[mutation.removeprefix("scope_")] = copy.deepcopy(changed_value)
+    elif mutation == "added_alias":
+        alias = copy.deepcopy(responses[1])
+        alias["name"] = "Other alias"
+        responses.append(alias)
+    elif mutation == "informational_alias":
+        responses[1]["acceptance_role"] = "informational"
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert published["acceptance_evidence"] is None
+    assert published["publication_validation"]["reason"]
+
+
+@pytest.mark.parametrize("mutation", ["missing", "body", "fingerprint"])
+def test_publication_rejects_missing_or_tampered_acceptance_binding(mutation):
+    _assessment, publication_case = _canonical_width_binding_fixture()
+    binding = publication_case["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    if mutation == "missing":
+        publication_case["assessment"]["criteria"][0].pop(
+            "acceptance_evidence"
+        )
+    elif mutation == "body":
+        binding["matched_responses"][0]["response_id"] = "tampered"
+    else:
+        binding["fingerprint"] = "0" * 64
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert "immutable acceptance evidence" in (
+        published["publication_validation"]["reason"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("status", "EXCEEDED"),
+        ("case", "Coarse"),
+        ("value", 0.21),
+        ("governing", "R9"),
+        ("limit", 0.25),
+        ("response_duration", "short"),
+        ("response_provenance", "map-v2"),
+        (
+            "solver_provenance",
+            {"solve": "v2", "converged": True},
+        ),
+    ],
+)
+def test_publication_rejects_visible_result_divergence_from_binding(
+    field,
+    changed_value,
+):
+    _assessment, publication_case = _canonical_width_binding_fixture()
+    publication_case["assessment"]["criteria"][0][field] = copy.deepcopy(
+        changed_value
+    )
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert published["acceptance_evidence"] is None
+    assert "visible acceptance result" in (
+        published["publication_validation"]["reason"]
+    )
+
+
+def test_duplicate_criterion_identity_cannot_emit_or_publish_acceptance():
+    criteria = sls.crack_criteria_from_inputs(_standard_inputs())
+    result = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=[copy.deepcopy(criteria[0]), copy.deepcopy(criteria[0])],
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert all(
+        criterion["acceptance_evidence"] is None
+        for criterion in result["criteria"]
+    )
+    assert "duplicated" in result["reason"]
+
+    assessment, publication_case = _canonical_width_binding_fixture()
+    publication_case["assessment"]["criteria"].append(
+        copy.deepcopy(assessment["criteria"][0])
+    )
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert "duplicate criterion identity" in (
+        published["publication_validation"]["reason"]
+    )
+
+
+def test_raw_and_publication_share_canonical_decompression_binding():
+    assessment, publication_case = _canonical_decompression_binding_fixture()
+
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+    binding = assessment["criteria"][0]["acceptance_evidence"]
+    assert binding["schema"] == sls.CRACK_ACCEPTANCE_EVIDENCE_SCHEMA
+    assert all(
+        item["acceptance"]["type"] == "decompression"
+        for item in binding["matched_responses"]
+    )
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "OK"
+    assert published["verdict"] == "PASS"
+    assert "publication_validation" not in published
+
+
+@pytest.mark.parametrize(
+    ("field", "mode"),
+    [
+        ("status", "missing"),
+        ("status", "boolean"),
+        ("status", "nonfinite"),
+        ("status", "changed"),
+        ("status", "conflicting"),
+        ("value", "missing"),
+        ("value", "boolean"),
+        ("value", "nonfinite"),
+        ("value", "changed"),
+        ("value", "conflicting"),
+        ("governing", "missing"),
+        ("governing", "boolean"),
+        ("governing", "nonfinite"),
+        ("governing", "changed"),
+        ("governing", "conflicting"),
+        ("solver_provenance", "missing"),
+        ("solver_provenance", "boolean"),
+        ("solver_provenance", "nonfinite"),
+        ("solver_provenance", "changed"),
+        ("solver_provenance", "conflicting"),
+    ],
+)
+def test_publication_rejects_decompression_evidence_mutation_matrix(
+    field,
+    mode,
+):
+    _assessment, publication_case = (
+        _canonical_decompression_binding_fixture()
+    )
+    responses = publication_case["responses"]
+    changed_values = {
+        "status": "EXCEEDED",
+        "value": -0.10,
+        "governing": "concrete point 2",
+        "solver_provenance": {"solve": "v2", "converged": True},
+    }
+    if mode == "missing":
+        for response in responses:
+            response["decompression"].pop(field)
+        if field == "solver_provenance":
+            for response in responses:
+                response["context"]["solver_provenance"] = None
+    elif mode == "boolean":
+        for response in responses:
+            response["decompression"][field] = True
+    elif mode == "nonfinite":
+        for response in responses:
+            response["decompression"][field] = float("nan")
+    elif mode == "changed":
+        for response in responses:
+            response["decompression"][field] = copy.deepcopy(
+                changed_values[field]
+            )
+        if field == "solver_provenance":
+            for response in responses:
+                response["context"]["solver_provenance"] = copy.deepcopy(
+                    changed_values[field]
+                )
+    else:
+        responses[1]["decompression"][field] = copy.deepcopy(
+            changed_values[field]
+        )
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert published["acceptance_evidence"] is None
+    assert published["publication_validation"]["reason"]
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2", "converged": True}),
+    ],
+)
+def test_publication_rejects_decompression_response_context_mutations(
+    field,
+    changed_value,
+):
+    _assessment, publication_case = (
+        _canonical_decompression_binding_fixture()
+    )
+    for response in publication_case["responses"]:
+        response["context"][field] = copy.deepcopy(changed_value)
+        if field == "solver_provenance":
+            response["decompression"][field] = copy.deepcopy(changed_value)
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert published["acceptance_evidence"] is None
+    assert published["publication_validation"]["reason"]
+
+
 def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
     criteria = sls.crack_criteria_from_inputs(_standard_inputs())
     result = sls.crack_assessment(
@@ -529,7 +1090,7 @@ def test_crack_response_identity_state_matrix(
                     },
                 },
             ],
-            "does not account for current response",
+            "unbound required response labels Coarse",
             id="new-fine-coarse-alias",
         ),
         pytest.param(
@@ -555,7 +1116,7 @@ def test_crack_response_identity_state_matrix(
                     },
                 },
             ],
-            "does not account for current response",
+            "unbound required response labels Coarse",
             id="required-alias-misclassified-informational",
         ),
         pytest.param(
@@ -607,7 +1168,7 @@ def test_crack_response_identity_state_matrix(
                     },
                 },
             ],
-            "conflicting current structured context",
+            "full response-label alias set",
             id="alias-combination-conflict",
         ),
         pytest.param(
@@ -633,7 +1194,7 @@ def test_crack_response_identity_state_matrix(
                     },
                 },
             ],
-            "does not account for current response",
+            "unbound required response labels Other QP",
             id="new-independent-response",
         ),
     ],
@@ -674,20 +1235,24 @@ def test_publication_response_identity_state_matrix(
 
 
 def test_publication_rejects_status_not_supported_by_current_width():
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.31, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+    assert assessment["verdict"] == "FAIL"
+    assessment["criteria"][0]["status"] = "OK"
+
     record = sls.publication_safe_crack_control_record({
         "cases": [{
             "case": "SLS-QP",
-            "assessment": {
-                "status": "OK",
-                "verdict": "PASS",
-                "case": "QP",
-                "value": 0.31,
-                "limit": 0.30,
-                "governing": "R1",
-                "required_combination": (
-                    sls.COMBINATION_QUASI_PERMANENT
-                ),
-            },
+            "assessment": assessment,
             "responses": [{
                 "name": "QP",
                 "wk_mm": 0.31,
@@ -704,7 +1269,9 @@ def test_publication_rejects_status_not_supported_by_current_width():
 
     assert published["status"] == "NOT ASSESSED"
     assert published["verdict"] == "REVIEW"
-    assert "gives EXCEEDED" in published["publication_validation"]["reason"]
+    assert "immutable outcome EXCEEDED" in (
+        published["publication_validation"]["reason"]
+    )
 
 
 def test_publication_rebuilds_width_metrics_from_current_evidence():
@@ -783,7 +1350,7 @@ def test_publication_rejects_acceptance_without_criterion_source():
 
     assert published["status"] == "NOT ASSESSED"
     assert published["verdict"] == "REVIEW"
-    assert "no explicit criterion source" in (
+    assert "criterion source is missing" in (
         published["publication_validation"]["reason"]
     )
 

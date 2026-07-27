@@ -1306,6 +1306,12 @@ def manual_blocks() -> list:
          "session restore and autosave retain the structured fields and a compact "
          "input-hash-bound crack-control result snapshot. The snapshot is audit "
          "provenance, not a restored live result; Sector recalculates after load. "
+         "Each accepted criterion carries a fingerprinted evidence binding for "
+         "its source/applicability, required combination, full matched response "
+         "label/ID set, duration/mapping/solver provenance, value and governing "
+         "evidence. Calculation records, project/download/autosave and reports "
+         "independently reconstruct that binding from current solver evidence; "
+         "any mismatch gives **NOT ASSESSED / REVIEW**. "
          "Legacy duration-only projects must be reviewed and reclassified "
          "explicitly.")
     call("limit", "Python and NumPy Boolean values are never accepted as numeric "

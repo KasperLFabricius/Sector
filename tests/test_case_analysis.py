@@ -311,11 +311,16 @@ def test_duplicate_crack_mapping_scope_is_global_and_invalidates_row_cache():
             valid=True,
             criteria=criteria,
             response_contexts={
-                "Long-term": {
-                    "combination": case_inp["sls_long_combination"],
-                    "response_id": f"{case_name}:long",
-                }
-            },
+                    "Long-term": {
+                        "combination": case_inp["sls_long_combination"],
+                        "duration": "Sustained / long-term response",
+                        "response_id": f"{case_name}:long",
+                        "provenance": (
+                            f"Elastic case {case_name!r}, "
+                            "long_combination table field"
+                        ),
+                    }
+                },
             response_mapping_scope=case_inp["sls_response_mapping_scope"],
         )
         return {"elastic": {"crack_assessment": assessment}}

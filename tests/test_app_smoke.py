@@ -5126,9 +5126,19 @@ def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
     assert assessment["informational_responses"] == [
         "Total (long + short)"
     ]
+    raw_binding = assessment["criteria"][0]["acceptance_evidence"]
+    assert raw_binding["schema"] == sls.CRACK_ACCEPTANCE_EVIDENCE_SCHEMA
+    assert len(raw_binding["fingerprint"]) == 64
     recorded = at.session_state["calculation_record"]["crack_control"]
     recorded_case = recorded["cases"][0]
     assert recorded_case["assessment"]["verdict"] == "PASS"
+    recorded_binding = recorded_case["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    assert recorded_binding["fingerprint"] == raw_binding["fingerprint"]
+    assert recorded_case["response_mapping_scope"] == (
+        first["crack_response_mapping_scope"]
+    )
     assert any(
         response["wk_mm"] == pytest.approx(total_width)
         and response["acceptance_role"] == "informational"
@@ -5144,6 +5154,9 @@ def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
     assert provenance["results_included"] is True
     saved_case = provenance["calculation"]["crack_control"]["cases"][0]
     assert saved_case["assessment"]["verdict"] == "PASS"
+    assert saved_case["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]["fingerprint"] == raw_binding["fingerprint"]
     assert provenance["calculation"]["matches_saved_inputs"] is True
 
     stale_record = copy.deepcopy(
@@ -5314,6 +5327,114 @@ def test_non_mapping_crack_response_is_retained_as_rejected_record():
     assert '"PASS"' not in json.dumps(record)
 
 
+def _canonical_app_width_results():
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "map-v1",
+            "solver_provenance": {"solve": "v1", "converged": True},
+        }
+        for name in ("Fine", "Coarse")
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "map-v1",
+        "solver_provenance": {"solve": "v1", "converged": True},
+    }]
+    responses = {
+        "Fine": {"wk": 0.22, "element_id": "R1"},
+        "Coarse": {"wk": 0.18, "element_id": "R2"},
+    }
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-width",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled durability criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["verdict"] == "PASS"
+    return {
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": responses,
+            "crack_dispositions": {
+                name: {"status": "OK"} for name in responses
+            },
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "changed_value"),
+    [
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2", "converged": True}),
+        ("width", 0.21),
+        ("governing_element", "R9"),
+        ("scope_duration", "short"),
+        ("scope_provenance", "map-v2"),
+        ("criterion_source", "Changed durability criterion"),
+        ("applicability", {"member": "changed"}),
+    ],
+)
+def test_calculation_record_rejects_each_acceptance_binding_mutation(
+    mutation,
+    changed_value,
+):
+    import sector_app
+
+    results = _canonical_app_width_results()
+    elastic = results["elastic"]
+    if mutation in {
+        "response_id",
+        "duration",
+        "provenance",
+        "solver_provenance",
+    }:
+        for context in elastic["crack_response_contexts"].values():
+            context[mutation] = copy.deepcopy(changed_value)
+    elif mutation == "width":
+        elastic["crack_responses"]["Fine"]["wk"] = changed_value
+    elif mutation == "governing_element":
+        elastic["crack_responses"]["Fine"]["element_id"] = changed_value
+    elif mutation.startswith("scope_"):
+        elastic["crack_response_mapping_scope"][0][
+            mutation.removeprefix("scope_")
+        ] = copy.deepcopy(changed_value)
+    else:
+        elastic["crack_assessment"]["criteria"][0][
+            mutation
+        ] = copy.deepcopy(changed_value)
+
+    record = sector_app.crack_control_calculation_record(results)
+    assessment = record["cases"][0]["assessment"]
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert assessment["acceptance_evidence"] is None
+    assert assessment["publication_validation"]["reason"]
+
+
 def test_changed_governing_crack_response_invalidates_stale_pass_record():
     import sector_app
 
@@ -5358,7 +5479,7 @@ def test_changed_governing_crack_response_invalidates_stale_pass_record():
     assert recorded["assessment"]["status"] == "NOT ASSESSED"
     assert recorded["assessment"]["verdict"] == "REVIEW"
     assert recorded["assessment"]["value"] is None
-    assert "does not match current crack-width evidence" in (
+    assert "immutable acceptance evidence does not match" in (
         recorded["assessment"]["publication_validation"]["reason"]
     )
     assert '"PASS"' not in json.dumps(record)
@@ -5376,7 +5497,7 @@ def test_changed_governing_crack_response_invalidates_stale_pass_record():
     })
     element_assessment = changed_element["cases"][0]["assessment"]
     assert element_assessment["status"] == "NOT ASSESSED"
-    assert "governing element does not match" in (
+    assert "immutable acceptance evidence does not match" in (
         element_assessment["publication_validation"]["reason"]
     )
 
@@ -5441,7 +5562,7 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
 @pytest.mark.parametrize(
     ("field", "changed_value", "reason_text"),
     [
-        ("value", -0.10, "decompression value does not match"),
+        ("value", -0.10, "calculated acceptance evidence"),
         ("value", True, "decompression evidence is incomplete"),
         (
             "solver_provenance",
@@ -5451,7 +5572,7 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
         (
             "governing",
             "concrete point 2",
-            "governing decompression location does not match",
+            "calculated acceptance evidence",
         ),
     ],
 )
@@ -5580,9 +5701,203 @@ def test_changed_non_governing_decompression_evidence_invalidates_pass():
     assert recorded["status"] == "NOT ASSESSED"
     assert recorded["verdict"] == "REVIEW"
     assert recorded["value"] is None
-    assert "current Coarse evidence" in (
+    assert "conflicting decompression acceptance evidence" in (
         recorded["publication_validation"]["reason"]
     )
+
+
+def _download_and_autosave_publications(
+    sector_app,
+    crack_control,
+    tmp_path,
+    monkeypatch,
+):
+    calculation = {
+        "input_sha256": "stale",
+        "crack_control": copy.deepcopy(crack_control),
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(sector_app, "_project_state", lambda: ({}, {}))
+
+    download_text = sector_app._gather_project()
+    download = json.loads(download_text)["calculation"][
+        "crack_control"
+    ]["cases"][0]["assessment"]
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: "current-input-hash",
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        captured["path"] = path
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+    saved = json.loads(captured["data"])["calculation"][
+        "crack_control"
+    ]["cases"][0]["assessment"]
+    return (download, durable, saved), (download_text, captured["data"])
+
+
+@pytest.mark.parametrize(
+    ("mutation", "changed_value"),
+    [
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2", "converged": True}),
+        ("scope_duration", "short"),
+    ],
+)
+def test_download_session_and_autosave_reject_width_binding_mutations(
+    mutation,
+    changed_value,
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    record = sector_app.crack_control_calculation_record(
+        _canonical_app_width_results()
+    )
+    assert record["cases"][0]["assessment"]["verdict"] == "PASS"
+    case = record["cases"][0]
+    if mutation.startswith("scope_"):
+        case["response_mapping_scope"][0][
+            mutation.removeprefix("scope_")
+        ] = copy.deepcopy(changed_value)
+    else:
+        for response in case["responses"]:
+            response["context"][mutation] = copy.deepcopy(changed_value)
+
+    assessments, texts = _download_and_autosave_publications(
+        sector_app,
+        record,
+        tmp_path,
+        monkeypatch,
+    )
+
+    for assessment in assessments:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["acceptance_evidence"] is None
+    assert all('"verdict": "PASS"' not in text for text in texts)
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("status", "EXCEEDED"),
+        ("value", -0.10),
+        ("governing", "concrete point 2"),
+        ("solver_provenance", {"state": "changed"}),
+    ],
+)
+def test_download_session_and_autosave_reject_decompression_mutations(
+    field,
+    changed_value,
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "qp",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {"QP": response},
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+        },
+    })
+    assert record["cases"][0]["assessment"]["verdict"] == "PASS"
+    record["cases"][0]["responses"][0]["decompression"][
+        field
+    ] = copy.deepcopy(changed_value)
+
+    assessments, texts = _download_and_autosave_publications(
+        sector_app,
+        record,
+        tmp_path,
+        monkeypatch,
+    )
+
+    for published in assessments:
+        assert published["status"] == "NOT ASSESSED"
+        assert published["verdict"] == "REVIEW"
+        assert published["acceptance_evidence"] is None
+    assert all('"verdict": "PASS"' not in text for text in texts)
 
 
 def test_download_and_autosave_share_decompression_publication_guard(

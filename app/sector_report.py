@@ -4325,11 +4325,10 @@ class ReportBuilder:
         raw_assessment = (
             raw_assessment if isinstance(raw_assessment, Mapping) else {}
         )
-        raw_response_contexts = (
-            raw_assessment.get("response_contexts")
-            or el.get("crack_response_contexts")
-            or {}
-        )
+        # Current solver output is authoritative. Stored assessment contexts
+        # are immutable evidence to compare, never a fallback that can mask a
+        # changed or missing current response mapping.
+        raw_response_contexts = el.get("crack_response_contexts")
         response_contexts = (
             raw_response_contexts
             if isinstance(raw_response_contexts, Mapping)
@@ -4448,6 +4447,9 @@ class ReportBuilder:
                         or "Elastic"
                     ),
                     "assessment": raw_assessment,
+                    "response_mapping_scope": copy.deepcopy(
+                        el.get("crack_response_mapping_scope")
+                    ),
                     "responses": response_records,
                 }],
             })
