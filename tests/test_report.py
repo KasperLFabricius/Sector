@@ -218,6 +218,7 @@ def _out():
                                 "combination": (
                                     sls.COMBINATION_QUASI_PERMANENT
                                 ),
+                                "response_id": "long",
                                 "duration": "Sustained / long-term response",
                                 "provenance": (
                                     "Elastic case 'EL-TEST', "
@@ -228,6 +229,7 @@ def _out():
                                 "combination": (
                                     sls.COMBINATION_CHARACTERISTIC
                                 ),
+                                "response_id": "total",
                                 "duration": (
                                     "Instantaneous total (long + short) response"
                                 ),

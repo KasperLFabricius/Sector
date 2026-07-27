@@ -613,6 +613,8 @@ def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results
                 "wk_mm": 0.22,
                 "acceptance_role": "criterion input",
                 "context": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
                     "solver_provenance": {"state": "long"},
                 },
             }],
@@ -5361,6 +5363,23 @@ def test_changed_governing_crack_response_invalidates_stale_pass_record():
     )
     assert '"PASS"' not in json.dumps(record)
 
+    changed_element = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": stale_assessment,
+            "crack_responses": {
+                "QP": {"wk": 0.22, "element_id": "R2"},
+            },
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+        },
+    })
+    element_assessment = changed_element["cases"][0]["assessment"]
+    assert element_assessment["status"] == "NOT ASSESSED"
+    assert "governing element does not match" in (
+        element_assessment["publication_validation"]["reason"]
+    )
+
 
 def test_current_decompression_evidence_preserves_matching_pass_record():
     import sector_app
@@ -5377,6 +5396,8 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
         "element_id": "T1",
         "decompression": {
             "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
             "reason": "Concrete remains in compression at tendon level.",
             "solver_provenance": {"state": "long"},
         },
@@ -5411,8 +5432,80 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
     recorded = record["cases"][0]
     assert recorded["assessment"]["status"] == "OK"
     assert recorded["assessment"]["verdict"] == "PASS"
+    assert recorded["assessment"]["value"] == pytest.approx(-0.25)
+    assert recorded["assessment"]["governing"] == "concrete point 1"
     assert recorded["responses"][0]["decompression"]["status"] == "OK"
     assert "publication_validation" not in recorded["assessment"]
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value", "reason_text"),
+    [
+        ("value", -0.10, "decompression value does not match"),
+        (
+            "governing",
+            "concrete point 2",
+            "governing decompression location does not match",
+        ),
+    ],
+)
+def test_changed_decompression_evidence_invalidates_stale_pass_record(
+    field,
+    changed_value,
+    reason_text,
+):
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "qp",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    original_response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "reason": "Concrete remains in compression at tendon level.",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": original_response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    changed_response = copy.deepcopy(original_response)
+    changed_response["decompression"][field] = changed_value
+
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {"QP": changed_response},
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+        },
+    })
+
+    recorded = record["cases"][0]["assessment"]
+    assert recorded["status"] == "NOT ASSESSED"
+    assert recorded["verdict"] == "REVIEW"
+    assert recorded["value"] is None
+    assert reason_text in recorded["publication_validation"]["reason"]
 
 
 def test_2023_protection_route_change_invalidates_elastic_cache():
@@ -5586,6 +5679,12 @@ def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
         ("number_input", "el_short_Mx", 150.0),
         ("checkbox", "sls_cw", True),
         ("selectbox", "sls_code", "DS/EN 1992-1-1 + DK NA"),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
@@ -5594,6 +5693,24 @@ def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
     assert e["crack"]["coarse"] is False and e["crack_coarse"]["coarse"] is True
     assert e["crack_coarse"]["wk"] < e["crack"]["wk"]             # coarse < fine, long-term
     assert e["crack_short_coarse"]["wk"] < e["crack_short"]["wk"]  # coarse < fine, short-term
+    acceptance_status = e["crack_assessment"]["status"]
+    assert acceptance_status in {"OK", "EXCEEDED"}
+    criterion = next(
+        item
+        for item in e["crack_assessment"]["criteria"]
+        if item["status"] == acceptance_status
+    )
+    assert criterion["matched_responses"] == [
+        "Long-term (fine)",
+        "Long-term (coarse)",
+    ]
+    recorded = at.session_state["calculation_record"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+    assert recorded["status"] == acceptance_status
+    assert recorded["verdict"] == (
+        "PASS" if acceptance_status == "OK" else "FAIL"
+    )
 
 
 def test_non_dk_na_reports_no_coarse_columns():

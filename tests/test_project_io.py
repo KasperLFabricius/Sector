@@ -1245,6 +1245,10 @@ def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
                     "name": "QP",
                     "wk_mm": 0.22,
                     "acceptance_role": "criterion input",
+                    "context": {
+                        "combination": sls.COMBINATION_QUASI_PERMANENT,
+                        "response_id": "qp",
+                    },
                 },
                 {
                     "name": "Total",
@@ -1414,6 +1418,84 @@ def test_project_downgrades_stale_pass_with_different_governing_response():
     assert assessment["util"] is None
     assert assessment["margin"] is None
     assert "no current criterion-input response" in (
+        assessment["publication_validation"]["reason"]
+    )
+
+
+def test_project_downgrades_stale_pass_when_another_matched_crack_grows():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    response_context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "response_id": "long",
+    }
+    stale_record = {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "case": "Fine",
+                "value": 0.22,
+                "limit": 0.30,
+                "governing": "R1",
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+                "criteria": [{
+                    "kind": sls.CRITERION_DURABILITY,
+                    "status": "OK",
+                    "case": "Fine",
+                    "matched_responses": ["Fine", "Coarse"],
+                    "value": 0.22,
+                    "limit": 0.30,
+                    "governing": "R1",
+                    "required_combination": (
+                        sls.COMBINATION_QUASI_PERMANENT
+                    ),
+                }],
+            },
+            "responses": [
+                {
+                    "name": "Fine",
+                    "wk_mm": 0.22,
+                    "element_id": "R1",
+                    "acceptance_role": "criterion input",
+                    "context": response_context,
+                },
+                {
+                    "name": "Coarse",
+                    "wk_mm": 0.45,
+                    "element_id": "R2",
+                    "acceptance_role": "criterion input",
+                    "context": response_context,
+                },
+            ],
+        }],
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "2" * 40,
+            "input_sha256": digest,
+            "crack_control": stale_record,
+        },
+    )
+    assessment = json.loads(text)["calculation"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert assessment["value"] is None
+    assert "no longer the current maximum" in (
         assessment["publication_validation"]["reason"]
     )
 

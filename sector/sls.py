@@ -378,17 +378,17 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                 )
 
         def item_response_names(item):
+            names = []
             case_name = str(item.get("case") or "").strip()
             if case_name:
-                return [case_name]
+                names.append(case_name)
             matched = item.get("matched_responses")
-            if not isinstance(matched, (list, tuple)):
-                return []
-            return [
-                str(name).strip()
-                for name in matched
-                if str(name).strip()
-            ]
+            if isinstance(matched, (list, tuple)):
+                for raw_name in matched:
+                    name = str(raw_name).strip()
+                    if name and name not in names:
+                        names.append(name)
+            return names
 
         def response_solver_provenance(names):
             for name in names:
@@ -399,6 +399,21 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                 if isinstance(context, Mapping):
                     return context.get("solver_provenance")
             return assessment.get("solver_provenance")
+
+        def finite_numeric_value(value):
+            if value is None or contains_boolean_value(value):
+                return None
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if math.isfinite(number) else None
+
+        def evidence_values_equal(left, right):
+            try:
+                return bool(left == right)
+            except (TypeError, ValueError):
+                return False
 
         def acceptance_evidence_issue(label, item):
             names = item_response_names(item)
@@ -418,6 +433,40 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     "response with that identity is available.",
                     names,
                 )
+
+            required = str(
+                item.get("required_combination") or ""
+            ).strip()
+            contexts = {}
+            for name in names:
+                context = criterion_responses[name].get("context")
+                contexts[name] = (
+                    context if isinstance(context, Mapping) else {}
+                )
+            if required:
+                bad_combinations = [
+                    name for name in names
+                    if canonical_combination(
+                        contexts[name].get("combination")
+                    ) != canonical_combination(required)
+                ]
+                if bad_combinations:
+                    return (
+                        f"Stored {label} requires the {required} "
+                        "combination, but current mapping evidence does not "
+                        f"support it for {', '.join(bad_combinations)}.",
+                        names,
+                    )
+                response_ids = {
+                    str(contexts[name].get("response_id") or "").strip()
+                    for name in names
+                }
+                if "" in response_ids or len(response_ids) != 1:
+                    return (
+                        f"Stored {label} does not have one explicit current "
+                        "response identity across all matched responses.",
+                        names,
+                    )
 
             kind = str(
                 item.get("kind") or item.get("criterion") or ""
@@ -444,15 +493,67 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                             f"status {evidence_status or '-'}.",
                             names,
                         )
+                governing_name = str(item.get("case") or "").strip()
+                if not governing_name:
+                    governing_name = names[0]
+                evidence = criterion_responses[governing_name][
+                    "decompression"
+                ]
+                stored_value = item.get("value")
+                current_value = evidence.get("value")
+                if stored_value is None and current_value is None:
+                    pass
+                else:
+                    stored_number = finite_numeric_value(stored_value)
+                    current_number = finite_numeric_value(current_value)
+                    if (
+                        stored_number is None
+                        or current_number is None
+                        or not math.isclose(
+                            stored_number,
+                            current_number,
+                            rel_tol=1e-9,
+                            abs_tol=1e-12,
+                        )
+                    ):
+                        return (
+                            f"Stored {label} decompression value does not "
+                            f"match current {governing_name} evidence.",
+                            names,
+                        )
+                if not evidence_values_equal(
+                    item.get("governing"),
+                    evidence.get("governing"),
+                ):
+                    return (
+                        f"Stored {label} governing decompression location "
+                        f"does not match current {governing_name} evidence.",
+                        names,
+                    )
+                current_solver = evidence.get("solver_provenance")
+                if current_solver is None:
+                    current_solver = response_solver_provenance(
+                        [governing_name]
+                    )
+                if not evidence_values_equal(
+                    item.get("solver_provenance"),
+                    current_solver,
+                ):
+                    return (
+                        f"Stored {label} decompression solver provenance "
+                        f"does not match current {governing_name} evidence.",
+                        names,
+                    )
                 return None
 
             expected_value = crack_width_numeric_value(item.get("value"))
-            widths = [
-                crack_width_numeric_value(
+            named_widths = {
+                name: crack_width_numeric_value(
                     criterion_responses[name].get("wk_mm")
                 )
                 for name in names
-            ]
+            }
+            widths = list(named_widths.values())
             if expected_value is None or any(
                 width is None for width in widths
             ):
@@ -462,6 +563,22 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     names,
                 )
             current_value = max(widths)
+            governing_name = str(item.get("case") or "").strip()
+            if (
+                governing_name
+                and not math.isclose(
+                    named_widths[governing_name],
+                    current_value,
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                )
+            ):
+                return (
+                    f"Stored {label} governing response {governing_name} "
+                    "is no longer the current maximum across all matched "
+                    "responses.",
+                    names,
+                )
             if not math.isclose(
                 expected_value,
                 current_value,
@@ -472,6 +589,15 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     f"Stored {label} crack width {expected_value:.12g} mm "
                     f"does not match current governing response "
                     f"{current_value:.12g} mm.",
+                    names,
+                )
+            if governing_name and not evidence_values_equal(
+                item.get("governing"),
+                criterion_responses[governing_name].get("element_id"),
+            ):
+                return (
+                    f"Stored {label} governing element does not match "
+                    f"current {governing_name} evidence.",
                     names,
                 )
             return None
