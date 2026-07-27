@@ -4299,8 +4299,20 @@ class ReportBuilder:
         if not el.get("show_cw"):
             self._small("Crack width was not requested for this run.")
             return
-        cl, cs = el.get("crack"), el.get("crack_short")
-        clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
+        def reportable_crack(response):
+            if not response:
+                return response
+            return (
+                response
+                if sls_core.crack_width_numeric_value(response.get("wk"))
+                is not None
+                else None
+            )
+
+        cl = reportable_crack(el.get("crack"))
+        cs = reportable_crack(el.get("crack_short"))
+        clc = reportable_crack(el.get("crack_coarse"))
+        csc = reportable_crack(el.get("crack_short_coarse"))
         no_results = cl is None and cs is None and clc is None and csc is None
         assessment = el.get("crack_assessment") or {}
         status = assessment.get("status", "NOT ASSESSED")

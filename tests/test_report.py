@@ -1362,6 +1362,48 @@ def test_report_keeps_crack_criterion_when_no_width_is_calculated():
     assert "DB-SLS-01 section 4" in txt
 
 
+def test_report_never_publishes_pass_for_boolean_crack_result():
+    out = _out()
+    elastic = out["elastic"]
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "long",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {
+            "Long-term": {
+                "wk": np.asarray(False, dtype=object),
+                "element_id": "bar 1",
+            },
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-durability",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    elastic["crack"]["wk"] = False
+    elastic["crack_short"]["wk"] = np.bool_(False)
+    elastic["crack_assessment"] = assessment
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+
+    assert "NOT ASSESSED - Crack width" in text
+    assert "PASS - Crack width" not in text
+    assert "Boolean-bearing" in text
+
+
 def test_report_carries_2023_mixed_reinforcement_and_scope_provenance():
     inp = _inp()
     inp["tendons"] = [(0.0, -0.10, 400.0)]

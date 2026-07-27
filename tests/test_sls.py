@@ -9,6 +9,16 @@ import pytest
 from sector import sls
 
 
+class _OneShotIterable:
+    """Finite iterable whose iterator is retained but is not itself an Iterator."""
+
+    def __init__(self, values):
+        self._iterator = iter(values)
+
+    def __iter__(self):
+        return self._iterator
+
+
 def test_upper_limit_assessment_has_explicit_non_pass_states():
     assert sls.upper_limit_assessment(12.0, 18.0)["status"] == "OK"
     assert sls.upper_limit_assessment(20.0, 18.0)["status"] == "EXCEEDED"
@@ -126,6 +136,56 @@ def test_stress_assessments_accept_numeric_array_like_contents(total_stress):
 
     assert checks["reinforcement"]["value"] == pytest.approx(350.0)
     assert checks["prestress"]["value"] == pytest.approx(420.0)
+
+
+def test_stress_assessments_reject_mapping_keys_before_coercion():
+    with pytest.raises(ValueError, match="mappings are not accepted"):
+        sls.stress_assessments(
+            {True: 350.0, 420.0: 420.0},
+            n_bars=1,
+            max_concrete_compression=12.0,
+            fck=30.0,
+            fyk=500.0,
+            fpk=1800.0,
+            concrete_limit_pct=60.0,
+            reinforcement_limit_pct=80.0,
+            prestress_limit_pct=75.0,
+            valid=True,
+        )
+
+
+def test_stress_assessments_materialize_non_iterator_one_shot_once():
+    checks = sls.stress_assessments(
+        _OneShotIterable([350.0, 420.0]),
+        n_bars=1,
+        max_concrete_compression=12.0,
+        fck=30.0,
+        fyk=500.0,
+        fpk=1800.0,
+        concrete_limit_pct=60.0,
+        reinforcement_limit_pct=80.0,
+        prestress_limit_pct=75.0,
+        valid=True,
+    )
+
+    assert checks["reinforcement"]["value"] == pytest.approx(350.0)
+    assert checks["prestress"]["value"] == pytest.approx(420.0)
+
+
+def test_stress_assessments_reject_boolean_non_iterator_one_shot():
+    with pytest.raises(ValueError, match="total_stress"):
+        sls.stress_assessments(
+            _OneShotIterable([True, 420.0]),
+            n_bars=1,
+            max_concrete_compression=12.0,
+            fck=30.0,
+            fyk=500.0,
+            fpk=1800.0,
+            concrete_limit_pct=60.0,
+            reinforcement_limit_pct=80.0,
+            prestress_limit_pct=75.0,
+            valid=True,
+        )
 
 
 def test_stress_assessments_separate_bars_and_tendons():
@@ -622,6 +682,47 @@ def test_boolean_crack_numeric_is_rejected_before_favourable_coercion(
     assert result["status"] == "NOT ASSESSED"
     assert result["verdict"] == "REVIEW"
     assert key in result["reason"]
+
+
+@pytest.mark.parametrize(
+    "wk",
+    [
+        pytest.param(False, id="python-bool"),
+        pytest.param(np.bool_(False), id="numpy-bool-scalar"),
+        pytest.param(np.asarray(False), id="numpy-bool-zero-dimensional"),
+        pytest.param(
+            np.asarray(False, dtype=object),
+            id="numpy-object-zero-dimensional",
+        ),
+        pytest.param(
+            np.asarray([False], dtype=object),
+            id="numpy-object-array",
+        ),
+    ],
+)
+def test_boolean_calculated_crack_width_is_review_not_pass(wk):
+    result = sls.crack_assessment(
+        {"QP": {"wk": wk, "element_id": "bar 1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+                "solver_provenance": {"state": "long"},
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["value"] is None
+    assert result["util"] is None
+    assert "Boolean-bearing" in result["reason"]
+    assert result["solver_provenance"] == [{
+        "response": "QP",
+        "solver": {"state": "long"},
+    }]
 
 
 def test_missing_required_combination_is_review_with_response_provenance():

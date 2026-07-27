@@ -6931,9 +6931,14 @@ def crack_control_calculation_record(results):
         ).items():
             response = response or {}
             disposition = dispositions.get(name) or {}
-            responses.append({
+            raw_wk = response.get("wk")
+            wk_rejected = (
+                raw_wk is not None
+                and sls_core.crack_width_numeric_value(raw_wk) is None
+            )
+            response_record = {
                 "name": name,
-                "wk_mm": response.get("wk"),
+                "wk_mm": None if wk_rejected else raw_wk,
                 "element_id": response.get("element_id"),
                 "solver_status": disposition.get("status"),
                 "solver_reason": disposition.get("reason"),
@@ -6942,7 +6947,13 @@ def crack_control_calculation_record(results):
                     "informational"
                     if name in informational else "criterion input"
                 ),
-            })
+            }
+            if wk_rejected:
+                response_record["result_validation"] = (
+                    "Calculated crack-width value rejected; no numeric "
+                    "acceptance evidence retained."
+                )
+            responses.append(response_record)
         cases.append({
             "case": str(entry.get("name") or "Elastic"),
             "assessment": copy.deepcopy(assessment),

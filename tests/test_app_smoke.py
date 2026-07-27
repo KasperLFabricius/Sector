@@ -5122,6 +5122,68 @@ def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
     assert provenance["calculation"]["matches_saved_inputs"] is True
 
 
+def test_boolean_calculated_crack_width_cannot_create_pass_record():
+    import sector_app
+
+    criteria = sls.crack_criteria_from_inputs({
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_edition": "2004",
+        "sls_code": "EN 1992-1-1:2005",
+        "sls_member": "Beam",
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_exposure_context": "XC3 / durability",
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": (
+            sls.DECOMPRESSION_NOT_REQUIRED
+        ),
+    })
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "long",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    rejected_wk = np.asarray(False, dtype=object)
+    assessment = sls.crack_assessment(
+        {
+            "Long-term": {
+                "wk": rejected_wk,
+                "element_id": "R1",
+            },
+        },
+        valid=True,
+        criteria=criteria,
+        response_contexts=contexts,
+    )
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {
+                "Long-term": {
+                    "wk": rejected_wk,
+                    "element_id": "R1",
+                },
+            },
+            "crack_dispositions": {
+                "Long-term": {"status": "OK"},
+            },
+            "crack_response_contexts": contexts,
+        },
+    })
+
+    recorded = record["cases"][0]
+    assert recorded["assessment"]["status"] == "NOT ASSESSED"
+    assert recorded["assessment"]["verdict"] == "REVIEW"
+    assert recorded["responses"][0]["wk_mm"] is None
+    assert "rejected" in recorded["responses"][0][
+        "result_validation"
+    ].lower()
+    assert '"PASS"' not in json.dumps(record)
+
+
 def test_2023_protection_route_change_invalidates_elastic_cache():
     at = _fresh()
     at.run()

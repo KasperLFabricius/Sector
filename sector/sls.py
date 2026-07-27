@@ -8,10 +8,7 @@ without depending on Streamlit or the PDF renderer.
 from __future__ import annotations
 
 import math
-from collections.abc import (
-    Iterable as IterableCollection,
-    Iterator as IteratorCollection,
-)
+from collections.abc import Iterable as IterableCollection
 from typing import Iterable, Mapping, Sequence
 
 
@@ -144,7 +141,10 @@ def contains_boolean_value(value) -> bool:
             return contains_boolean_value(to_numpy())
 
     if isinstance(value, Mapping):
-        return any(contains_boolean_value(item) for item in value.values())
+        return (
+            any(contains_boolean_value(item) for item in value.keys())
+            or any(contains_boolean_value(item) for item in value.values())
+        )
 
     if isinstance(value, IterableCollection):
         try:
@@ -156,6 +156,19 @@ def contains_boolean_value(value) -> bool:
             return False
         return any(contains_boolean_value(item) for item in iterator)
     return False
+
+
+def crack_width_numeric_value(value) -> float | None:
+    """Return a finite non-negative crack width without Boolean coercion."""
+    if contains_boolean_value(value):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0.0:
+        return None
+    return number
 
 
 def crack_numeric_input_issues(inp: Mapping) -> tuple[str, ...]:
@@ -178,7 +191,7 @@ def require_non_boolean_crack_numeric_inputs(inp: Mapping) -> None:
 
 
 def _finite_positive(value) -> float | None:
-    if is_boolean_value(value):
+    if contains_boolean_value(value):
         return None
     try:
         number = float(value)
@@ -666,7 +679,7 @@ def upper_limit_assessment(
     results remain visible, but the public status is then ``NOT ASSESSED`` rather
     than an implied pass.
     """
-    if is_boolean_value(value) or is_boolean_value(limit):
+    if contains_boolean_value(value) or contains_boolean_value(limit):
         raise ValueError(
             "Boolean values are not accepted as an SLS value or limit"
         )
@@ -716,10 +729,23 @@ def stress_assessments(
     tendon_ids: Sequence[str] | None = None,
 ) -> dict:
     """Build separate concrete, mild-steel and tendon stress assessments."""
-    if isinstance(total_stress, IteratorCollection):
-        total_stress = tuple(total_stress)
+    if isinstance(total_stress, Mapping):
+        raise ValueError(
+            "total_stress must be an ordered finite numeric sequence; "
+            "mappings are not accepted"
+        )
+    if isinstance(total_stress, (str, bytes, bytearray)):
+        raise ValueError(
+            "total_stress must be an ordered finite numeric sequence"
+        )
+    try:
+        total_values = tuple(total_stress)
+    except TypeError as exc:
+        raise ValueError(
+            "total_stress must be an ordered finite numeric sequence"
+        ) from exc
     boolean_inputs = {
-        "total_stress": total_stress,
+        "total_stress": total_values,
         "max_concrete_compression": max_concrete_compression,
         "fck": fck,
         "fyk": fyk,
@@ -738,7 +764,7 @@ def stress_assessments(
             "Boolean values are not accepted for SLS stress inputs: "
             + ", ".join(rejected)
         )
-    total = [float(v) for v in total_stress]
+    total = [float(v) for v in total_values]
     mild = total[:n_bars]
     prestress = total[n_bars:]
 
@@ -1183,12 +1209,41 @@ def crack_assessment(
             criterion_results.append(base)
             continue
 
-        name, governing = max(
-            available,
-            key=lambda pair: float(pair[1].get("wk", 0.0)),
+        checked_available = []
+        rejected_widths = []
+        for name, response in available:
+            width = crack_width_numeric_value(response.get("wk"))
+            if width is None:
+                rejected_widths.append(name)
+            else:
+                checked_available.append((name, response, width))
+        if rejected_widths:
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(rejected_widths),
+                reason=(
+                    "Calculated crack-width result rejected for "
+                    f"{', '.join(rejected_widths)}: w_k is Boolean-bearing, "
+                    "missing, non-scalar, non-finite or negative. No acceptance "
+                    "verdict was issued."
+                ),
+                solver_provenance=[
+                    {
+                        "response": name,
+                        "solver": contexts[name]["solver_provenance"],
+                    }
+                    for name in rejected_widths
+                ],
+            )
+            criterion_results.append(base)
+            continue
+
+        name, governing, governing_width = max(
+            checked_available,
+            key=lambda item: item[2],
         )
         assessed = upper_limit_assessment(
-            float(governing.get("wk", 0.0)),
+            governing_width,
             limit,
             valid=True,
         )
