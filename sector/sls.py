@@ -8,6 +8,10 @@ without depending on Streamlit or the PDF renderer.
 from __future__ import annotations
 
 import math
+from collections.abc import (
+    Iterable as IterableCollection,
+    Iterator as IteratorCollection,
+)
 from typing import Iterable, Mapping, Sequence
 
 
@@ -126,11 +130,31 @@ def is_boolean_value(value) -> bool:
 
 
 def contains_boolean_value(value) -> bool:
-    """Return whether a scalar or finite input sequence contains a Boolean."""
+    """Return whether a scalar or finite input container contains a Boolean."""
     if is_boolean_value(value):
         return True
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return any(contains_boolean_value(item) for item in value)
+    if isinstance(value, (str, bytes, bytearray)):
+        return False
+
+    value_type = type(value)
+    module_root = value_type.__module__.split(".", 1)[0]
+    if module_root == "pandas":
+        to_numpy = getattr(value, "to_numpy", None)
+        if callable(to_numpy):
+            return contains_boolean_value(to_numpy())
+
+    if isinstance(value, Mapping):
+        return any(contains_boolean_value(item) for item in value.values())
+
+    if isinstance(value, IterableCollection):
+        try:
+            iterator = iter(value)
+        except TypeError:
+            item = getattr(value, "item", None)
+            if module_root == "numpy" and callable(item):
+                return contains_boolean_value(item())
+            return False
+        return any(contains_boolean_value(item) for item in iterator)
     return False
 
 
@@ -692,6 +716,8 @@ def stress_assessments(
     tendon_ids: Sequence[str] | None = None,
 ) -> dict:
     """Build separate concrete, mild-steel and tendon stress assessments."""
+    if isinstance(total_stress, IteratorCollection):
+        total_stress = tuple(total_stress)
     boolean_inputs = {
         "total_stress": total_stress,
         "max_concrete_compression": max_concrete_compression,

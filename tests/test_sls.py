@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from sector import sls
@@ -53,6 +54,78 @@ def test_stress_assessments_reject_boolean_limits_before_coercion(key, value):
 
     with pytest.raises(ValueError, match=key):
         sls.stress_assessments([350.0, 420.0], **kwargs)
+
+
+@pytest.mark.parametrize(
+    "total_stress",
+    [
+        pytest.param(
+            np.asarray([True, 420.0], dtype=object),
+            id="numpy-object-array",
+        ),
+        pytest.param(
+            pd.Series([True, 420.0], dtype=object),
+            id="pandas-object-series",
+        ),
+        pytest.param(
+            np.asarray(True, dtype=object),
+            id="numpy-zero-dimensional-object-array",
+        ),
+        pytest.param(
+            iter([True, 420.0]),
+            id="one-shot-iterator",
+        ),
+    ],
+)
+def test_stress_assessments_reject_boolean_array_like_contents(total_stress):
+    with pytest.raises(ValueError, match="total_stress"):
+        sls.stress_assessments(
+            total_stress,
+            n_bars=1,
+            max_concrete_compression=12.0,
+            fck=30.0,
+            fyk=500.0,
+            fpk=1800.0,
+            concrete_limit_pct=60.0,
+            reinforcement_limit_pct=80.0,
+            prestress_limit_pct=75.0,
+            valid=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "total_stress",
+    [
+        pytest.param(
+            np.asarray([350.0, 420.0], dtype=object),
+            id="numpy-object-array",
+        ),
+        pytest.param(
+            pd.Series([350.0, 420.0], dtype=object),
+            id="pandas-object-series",
+        ),
+        pytest.param(
+            iter([350.0, 420.0]),
+            id="one-shot-iterator",
+        ),
+    ],
+)
+def test_stress_assessments_accept_numeric_array_like_contents(total_stress):
+    checks = sls.stress_assessments(
+        total_stress,
+        n_bars=1,
+        max_concrete_compression=12.0,
+        fck=30.0,
+        fyk=500.0,
+        fpk=1800.0,
+        concrete_limit_pct=60.0,
+        reinforcement_limit_pct=80.0,
+        prestress_limit_pct=75.0,
+        valid=True,
+    )
+
+    assert checks["reinforcement"]["value"] == pytest.approx(350.0)
+    assert checks["prestress"]["value"] == pytest.approx(420.0)
 
 
 def test_stress_assessments_separate_bars_and_tendons():
