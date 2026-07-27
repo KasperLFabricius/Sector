@@ -3874,7 +3874,8 @@ def test_inputs_carry_help_tooltips():
         r"Start angle $\varphi_{NA,\min}$ ($^\circ$)"
     )
     assert at.number_input(key="sls_wk_limit").label == (
-        r"Crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)"
+        r"Durability crack-width limit "
+        r"$w_{\mathrm{lim}}$ (mm, 0 = not assessed)"
     )
     assert at.number_input(key="detailing_d_upper").label == (
         r"Maximum aggregate size $D_{\mathrm{upper}}$ (mm)"
@@ -4044,6 +4045,7 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     ]
     assert list(elastic.columns) == [
         "name", "description",
+        "long_combination", "total_combination",
         "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
         "check_stress", "check_crack_width",

@@ -217,6 +217,13 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
   Elastic-row cache token so an applicability change cannot preserve a stale
   PASS. Core, orchestration/cache, and real multi-case AppTest regressions all
   fail closed with mapping provenance; the focused 30-test matrix passed.
+- GitHub Sector QA run `30263675408` then completed the full calculation and
+  artifact work: 1,512 tests passed, one skipped, 32 expected Kaleido warnings,
+  and both the 41-page report and 33-page manual rendered. Its only two failures
+  were stale UI-contract assertions that still expected the pre-F-043 generic
+  crack-limit label and the Elastic table without its two explicit combination
+  columns. Those assertions now describe the intentional interface, and their
+  exact two-test rerun passed; the new exact-head CI rerun remains a closure gate.
 - Fresh generated evidence passed structural and raster preflight:
   `sector-report-reference.pdf` (41 pages; conclusion limitation on page 1,
   routed acceptance/provenance on page 30, and QP `0.213 mm` versus
