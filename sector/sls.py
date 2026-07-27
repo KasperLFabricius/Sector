@@ -1676,30 +1676,149 @@ def crack_assessment(
             continue
 
         if label == CRITERION_DECOMPRESSION:
-            decompression = [
-                (name, (cases.get(name) or {}).get("decompression"))
-                for name in candidates
-                if (cases.get(name) or {}).get("decompression") is not None
-            ]
-            if not decompression:
+            decompression = {}
+            missing_evidence = []
+            invalid_status = []
+            for name in candidates:
+                response = cases.get(name)
+                raw_evidence = (
+                    response.get("decompression")
+                    if isinstance(response, Mapping)
+                    else None
+                )
+                if not isinstance(raw_evidence, Mapping):
+                    missing_evidence.append(name)
+                    continue
+                evidence = dict(raw_evidence)
+                status = str(
+                    evidence.get("status") or "NOT ASSESSED"
+                ).upper()
+                if status not in {"OK", "EXCEEDED", "NOT APPLICABLE"}:
+                    invalid_status.append(name)
+                    continue
+                evidence["status"] = status
+                if evidence.get("solver_provenance") is None:
+                    evidence["solver_provenance"] = contexts[name][
+                        "solver_provenance"
+                    ]
+                decompression[name] = evidence
+
+            if missing_evidence or invalid_status:
+                issues = []
+                if missing_evidence:
+                    issues.append(
+                        "missing for " + ", ".join(missing_evidence)
+                    )
+                if invalid_status:
+                    issues.append(
+                        "has no acceptance status for "
+                        + ", ".join(invalid_status)
+                    )
                 base.update(
                     status="NOT ASSESSED",
                     case=", ".join(candidates),
+                    solver_provenance=[
+                        {
+                            "response": name,
+                            "solver": (
+                                decompression.get(name, {}).get(
+                                    "solver_provenance"
+                                )
+                                or contexts[name]["solver_provenance"]
+                            ),
+                        }
+                        for name in candidates
+                    ],
                     reason=(
-                        f"The {required} response is present, but the current "
-                        "section solver does not produce the concrete-stress "
-                        "evidence required for a decompression verdict."
+                        f"Decompression evidence is {'; '.join(issues)}. "
+                        "Every response label matched to the required "
+                        f"{required} combination must provide explicit "
+                        "concrete-stress evidence before a verdict is issued."
                     ),
                 )
                 criterion_results.append(base)
                 continue
-            name, evidence = decompression[0]
-            evidence = dict(evidence)
-            status = str(evidence.get("status") or "NOT ASSESSED").upper()
-            if status not in {"OK", "EXCEEDED", "NOT APPLICABLE"}:
-                status = "NOT ASSESSED"
+
+            def _decompression_values_equal(left, right):
+                if left is None or right is None:
+                    return left is None and right is None
+                if contains_boolean_value(left) or contains_boolean_value(right):
+                    return False
+                try:
+                    left_number = float(left)
+                    right_number = float(right)
+                except (TypeError, ValueError):
+                    return False
+                return (
+                    math.isfinite(left_number)
+                    and math.isfinite(right_number)
+                    and math.isclose(
+                        left_number,
+                        right_number,
+                        rel_tol=1e-9,
+                        abs_tol=1e-12,
+                    )
+                )
+
+            def _decompression_fields_equal(left, right):
+                try:
+                    return bool(left == right)
+                except (TypeError, ValueError):
+                    return False
+
+            name = candidates[0]
+            evidence = decompression[name]
+            conflicts = []
+            for other_name in candidates[1:]:
+                other = decompression[other_name]
+                fields = []
+                if evidence["status"] != other["status"]:
+                    fields.append("status")
+                if not _decompression_values_equal(
+                    evidence.get("value"),
+                    other.get("value"),
+                ):
+                    fields.append("value")
+                if not _decompression_fields_equal(
+                    evidence.get("governing"),
+                    other.get("governing"),
+                ):
+                    fields.append("governing location")
+                if not _decompression_fields_equal(
+                    evidence.get("solver_provenance"),
+                    other.get("solver_provenance"),
+                ):
+                    fields.append("solver provenance")
+                if fields:
+                    conflicts.append(
+                        f"{other_name} ({', '.join(fields)})"
+                    )
+            if conflicts:
+                base.update(
+                    status="NOT ASSESSED",
+                    case=", ".join(candidates),
+                    solver_provenance=[
+                        {
+                            "response": candidate,
+                            "solver": decompression[candidate].get(
+                                "solver_provenance"
+                            ),
+                        }
+                        for candidate in candidates
+                    ],
+                    reason=(
+                        "Response labels sharing the required "
+                        f"{required} state provide inconsistent "
+                        "decompression evidence: "
+                        f"{'; '.join(conflicts)}. No acceptance verdict was "
+                        "issued."
+                    ),
+                )
+                criterion_results.append(base)
+                continue
+
             base.update(
-                status=status,
+                status=evidence["status"],
                 case=name,
                 value=evidence.get("value"),
                 governing=evidence.get("governing"),

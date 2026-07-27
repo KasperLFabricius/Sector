@@ -4348,14 +4348,44 @@ class ReportBuilder:
         elif canonical_responses is not None:
             current_responses["crack responses"] = canonical_responses
         visible_responses = (
-            ("Long-term", el.get("crack")),
-            ("Total (long + short)", el.get("crack_short")),
-            ("Long-term coarse", el.get("crack_coarse")),
-            ("Total (long + short) coarse", el.get("crack_short_coarse")),
+            ("crack", ("Long-term (fine)", "Long-term")),
+            (
+                "crack_short",
+                ("Total (fine)", "Total (long + short)"),
+            ),
+            (
+                "crack_coarse",
+                ("Long-term (coarse)", "Long-term coarse"),
+            ),
+            (
+                "crack_short_coarse",
+                (
+                    "Total (coarse)",
+                    "Total (long + short) coarse",
+                ),
+            ),
         )
-        for name, response in visible_responses:
-            if response is not None:
-                current_responses[name] = response
+        known_response_names = (
+            set(current_responses)
+            | set(response_contexts)
+            | set(dispositions)
+        )
+        for field, aliases in visible_responses:
+            if field not in el:
+                continue
+            name = next(
+                (
+                    alias
+                    for alias in aliases
+                    if alias in known_response_names
+                ),
+                aliases[-1],
+            )
+            # The visible response is the current solver state. Overlay it on
+            # its canonical identity so stale saved/report aliases cannot hide
+            # invalid current evidence, while DK fine/coarse responses retain
+            # the same names used by the routed criterion.
+            current_responses[name] = el.get(field)
 
         response_records = []
         for name, raw_response in current_responses.items():
@@ -4383,12 +4413,13 @@ class ReportBuilder:
             record = {
                 "name": name,
                 "wk_mm": None if rejected else raw_wk,
+                "element_id": response.get("element_id"),
                 "context": dict(context) if isinstance(context, Mapping) else {},
                 "solver_status": disposition.get("status"),
                 "solver_reason": disposition.get("reason"),
                 "acceptance_role": (
                     "informational"
-                    if name in informational or "coarse" in name.lower()
+                    if name in informational
                     else "criterion input"
                 ),
             }

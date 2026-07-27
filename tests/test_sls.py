@@ -449,6 +449,94 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
     assert result["criteria"][1]["status"] == "OK"
 
 
+@pytest.mark.parametrize(
+    ("coarse_evidence", "expected_status"),
+    [
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            "OK",
+            id="consistent",
+        ),
+        pytest.param(None, "NOT ASSESSED", id="missing"),
+        pytest.param(
+            {
+                "status": "EXCEEDED",
+                "value": 0.10,
+                "governing": "concrete point 2",
+                "solver_provenance": {"state": "long"},
+            },
+            "NOT ASSESSED",
+            id="conflicting",
+        ),
+    ],
+)
+def test_decompression_requires_consistent_evidence_for_all_matched_aliases(
+    coarse_evidence,
+    expected_status,
+):
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "long",
+            "solver_provenance": {"state": "long"},
+        }
+        for name in ("Fine", "Coarse")
+    }
+    fine_evidence = {
+        "status": "OK",
+        "value": -0.25,
+        "governing": "concrete point 1",
+        "solver_provenance": {"state": "long"},
+    }
+    cases = {
+        "Fine": {
+            "wk": 0.18,
+            "element_id": "T1",
+            "decompression": fine_evidence,
+        },
+        "Coarse": {
+            "wk": 0.12,
+            "element_id": "T1",
+        },
+    }
+    if coarse_evidence is not None:
+        cases["Coarse"]["decompression"] = coarse_evidence
+
+    result = sls.crack_assessment(
+        cases,
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+
+    assert result["status"] == expected_status
+    assert result["verdict"] == (
+        "PASS" if expected_status == "OK" else "REVIEW"
+    )
+    assert result["criteria"][0]["matched_responses"] == [
+        "Fine",
+        "Coarse",
+    ]
+    if expected_status == "NOT ASSESSED":
+        assert result["value"] is None
+        assert "No acceptance verdict" in result["reason"] or (
+            "before a verdict is issued" in result["reason"]
+        )
+
+
 def test_2023_appearance_and_durability_are_separate_qp_criteria():
     criteria = sls.crack_criteria_from_inputs(_standard_inputs(
         sls_edition="2023",

@@ -1435,6 +1435,74 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
     )
 
 
+def test_report_preserves_dk_coarse_matched_response_as_criterion_input():
+    out = _out()
+    elastic = out["elastic"]
+    responses = {
+        "Long-term (fine)": dict(_crack(), coarse=False, wk=0.20),
+        "Total (fine)": dict(_crack(), coarse=False, wk=0.25),
+        "Long-term (coarse)": dict(_crack(), coarse=True, wk=0.10),
+        "Total (coarse)": dict(_crack(), coarse=True, wk=0.12),
+    }
+    contexts = {
+        name: {
+            "combination": (
+                sls.COMBINATION_QUASI_PERMANENT
+                if name.startswith("Long-term")
+                else sls.COMBINATION_CHARACTERISTIC
+            ),
+            "response_id": (
+                "long" if name.startswith("Long-term") else "total"
+            ),
+            "solver_provenance": {
+                "state": (
+                    "long" if name.startswith("Long-term") else "total"
+                ),
+            },
+        }
+        for name in responses
+    }
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-durability",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled DK criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    assert assessment["status"] == "OK"
+    assert assessment["criteria"][0]["matched_responses"] == [
+        "Long-term (fine)",
+        "Long-term (coarse)",
+    ]
+    elastic.update(
+        crack=responses["Long-term (fine)"],
+        crack_short=responses["Total (fine)"],
+        crack_coarse=responses["Long-term (coarse)"],
+        crack_short_coarse=responses["Total (coarse)"],
+        crack_responses=responses,
+        crack_response_contexts=contexts,
+        crack_dispositions={
+            name: {"status": "CALCULATED"} for name in responses
+        },
+        crack_assessment=assessment,
+        crack_code="DS/EN 1992-1-1 + DK NA",
+    )
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+
+    assert "PASS - Crack width" in text
+    assert "NOT ASSESSED - Crack width" not in text
+
+
 def test_report_invalidates_stale_pass_when_governing_width_changes():
     out = _out()
     elastic = out["elastic"]
