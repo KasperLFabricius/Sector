@@ -674,10 +674,17 @@ def result_summary_rows(inp, results, *, stale=False):
                 if limit is None or limit <= 0.0
                 else f"<= {limit:.3f} mm"
             )
+            note_parts = []
+            if assessment.get("reason"):
+                note_parts.append(str(assessment["reason"]))
+            elif assessment.get("governing"):
+                note_parts.append(str(assessment["governing"]))
+            if elastic.get("crack_scope_note"):
+                note_parts.append(str(elastic["crack_scope_note"]))
             rows.append(_summary_row(
                 "Crack width", "elastic", status, result, criterion,
                 assessment.get("util"), "Elastic Results",
-                assessment.get("governing") or "", inp,
+                " ".join(note_parts), inp,
             ))
 
     minimum = results.get("minimum_reinforcement")

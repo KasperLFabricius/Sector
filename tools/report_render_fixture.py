@@ -303,6 +303,11 @@ def _inputs() -> dict:
         "conc_Ec": 33.0,
         "sls_fctm": 2.9,
         "sls_cw": True,
+        "sls_phi": 0.0,
+        "sls_k1": 0.8,
+        "sls_tendon_bond": "Plain round (k1 = 1.6)",
+        "sls_tendon_k1": 1.6,
+        "sls_tendon_xi": 0.0,
         "sls_wk_limit": 0.30,
         "sls_conc_limit_pct": 60.0,
         "sls_steel_limit_pct": 80.0,
@@ -338,8 +343,23 @@ def _crack() -> dict:
         "k1_r": 1.0,
         "kfl": 1.0,
         "sr_max_geometric": False,
+        "as_eff": 0.0005,
+        "ap_eff": 0.0,
+        "ap_eff_weighted": 0.0,
+        "xi1": None,
+        "reinforcement_type": "mild",
+        "bc_ef": 0.0,
+        "direct_tension": False,
+        "scope": "dominant-direction",
+        "direction_deg": 90.0,
     }
-    return dict(candidate, gov_bar=1, candidates=[candidate])
+    return dict(
+        candidate,
+        gov_bar=1,
+        xi1_min=None,
+        xi1_max=None,
+        candidates=[candidate],
+    )
 
 
 def _results(inp: dict | None = None) -> dict:
@@ -554,7 +574,13 @@ def _results(inp: dict | None = None) -> dict:
             "criterion": "0.3 mm",
         },
         "crack_code": "EN 1992-1-1:2005",
+        "crack_edition": "2004",
         "crack_member": None,
+        "crack_scope_note": (
+            "One-directional dominant strain-gradient assessment only. "
+            "Orthogonal or inclined crack systems are not assessed; an explicit "
+            "multidirectional method is required for those systems."
+        ),
     }
     shear_payload = {
         "res": shear_res,
@@ -1144,6 +1170,15 @@ def validate_pdf_content(pdf: bytes) -> str:
         if symbol not in text:
             raise AssertionError(
                 f"the report is missing rendered mathematics symbol U+{ord(symbol):04X}"
+            )
+    for expected in (
+        "Crack-control conclusion limitation",
+        "One-directional dominant strain-gradient assessment only",
+        "Assessment scope",
+    ):
+        if expected not in text:
+            raise AssertionError(
+                f"expected crack-control report evidence is missing: {expected}"
             )
 
     images = 0

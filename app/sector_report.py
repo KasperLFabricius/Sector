@@ -46,6 +46,7 @@ from sector import codes as ec2_codes
 from sector import detailing
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
+from sector.serviceability import CRACK_DIRECTIONAL_LIMITATION
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
@@ -645,6 +646,11 @@ class ReportBuilder:
         governing = presentation.summary_governing_case_flags(rows)
         overall = presentation.overall_summary_status(rows)
         self._h2(f"Results overview - {overall}")
+        if any(row["check"] == "Crack width" for row in rows):
+            self._p(
+                "<b>Crack-control conclusion limitation.</b> "
+                f"{CRACK_DIRECTIONAL_LIMITATION}"
+            )
         data = [[
             "Check", "Action set", "Status", "Result", "Criterion", "Gov."
         ]]
@@ -1669,6 +1675,32 @@ class ReportBuilder:
                               else f"{_fmt(dia, 3)} mm global override")])
                 rows.append(["Mild-steel bond coefficient k<sub>1</sub>",
                              _fmt(inp.get("sls_k1"), 3)])
+                if inp.get("tendons") and crack_el.get("crack_edition") == "2023":
+                    tendon_k1 = inp.get("sls_tendon_k1")
+                    tendon_kb = (
+                        0.9
+                        if tendon_k1 is not None and float(tendon_k1) <= 1.0
+                        else 1.2
+                    )
+                    rows.append([
+                        "Prestressing-steel bond condition / k<sub>b</sub>",
+                        f"{inp.get('sls_tendon_bond') or 'not stated'} / "
+                        f"{_fmt(tendon_kb, 1)}",
+                    ])
+                    tendon_xi = inp.get("sls_tendon_xi")
+                    rows.append([
+                        "Prestressing bond-strength ratio xi",
+                        (
+                            _fmt(tendon_xi, 4)
+                            if tendon_xi is not None and float(tendon_xi) > 0.0
+                            else "not supplied - crack width is NOT ASSESSED "
+                                 "when a tendon contributes"
+                        ),
+                    ])
+                    rows.append([
+                        "Prestressing diameter phi<sub>p</sub> source",
+                        "per-tendon reinforcement-table values",
+                    ])
         fatigue_rows = None
         fatigue = self._base_out.get("fatigue")
         if fatigue is not None:
@@ -4188,9 +4220,18 @@ class ReportBuilder:
             text += f" | margin {_fmt(margin, 3)} mm"
         self._status_block(text, status)
         self._small(f"Criteria: {el.get('sls_limit_source', '-')}.")
+        self._p(
+            "<b>Crack-control scope.</b> "
+            f"{el.get('crack_scope_note') or CRACK_DIRECTIONAL_LIMITATION}"
+        )
         if no_results:
-            self._small("No crack width: section uncracked or no reinforcement "
-                        "in tension.")
+            self._small(
+                "No crack width: "
+                + (
+                    assessment.get("reason")
+                    or "section uncracked or no reinforcement in tension."
+                )
+            )
             return
         self._crack_table(cl, cs, clc, csc)
         # Work the case that actually governs (the larger crack width) over every
@@ -4213,12 +4254,19 @@ class ReportBuilder:
         specs = [("Crack width w<sub>k</sub> (mm)", "wk", 3, 1.0),
                  ("Crack spacing s<sub>r,max</sub> (mm)", "sr_max", 1, 1.0),
                  ("Mean strain eps<sub>sm</sub>-eps<sub>cm</sub> (permille)", "esm_ecm", 4, 1000.0),
-                 ("Steel stress sigma<sub>s</sub> (MPa)", "sigma_s", 1, 1.0),
+                 ("Steel stress sigma<sub>s</sub> / &#916;sigma<sub>p</sub> (MPa)", "sigma_s", 1, 1.0),
                  ("Effective ratio rho<sub>p,eff</sub>", "rho_p_eff", 4, 1.0),
+                 ("Mild area A<sub>s,eff</sub> (m<super>2</super>)", "as_eff", 6, 1.0),
+                 ("Prestressing area A<sub>p,eff</sub> (m<super>2</super>)", "ap_eff", 6, 1.0),
+                 ("Weighted prestressing area xi<sub>1</sub>A<sub>p,eff</sub> (m<super>2</super>)", "ap_eff_weighted", 6, 1.0),
+                 ("xi<sub>1</sub> range", "_xi1_range", None, 1.0),
                  ("Effective height h<sub>c,ef</sub> (mm)", "hc_ef", 1, _MM),
+                 ("Direct-tension width b<sub>c,eff</sub> (mm)", "bc_ef", 1, _MM),
                  ("Effective area A<sub>c,eff</sub> (m<super>2</super>)", "ac_eff", 5, 1.0),
                  ("Clear cover c (mm)", "cover", 1, 1.0),
                  ("Element diameter phi (mm)", "phi", 1, 1.0),
+                 ("Assessment scope", "scope", None, 1.0),
+                 ("Dominant direction (deg)", "direction_deg", 1, 1.0),
                  ("Governing element", "element_id", None, 1.0)]
 
         def col(c):
@@ -4226,9 +4274,22 @@ class ReportBuilder:
                 return ["-"] * len(specs)
             out = []
             for _label, key, nd, scale in specs:
-                value = c.get(key, "-")
-                out.append(str(value) if nd is None else
-                           _fmt(float(value) * scale, nd))
+                if key == "_xi1_range":
+                    low, high = c.get("xi1_min"), c.get("xi1_max")
+                    value = (
+                        "-"
+                        if low is None or high is None
+                        else f"{_fmt(low, 4)} - {_fmt(high, 4)}"
+                    )
+                else:
+                    value = c.get(key)
+                    if value is None:
+                        value = "-"
+                    elif nd is not None:
+                        value = _fmt(float(value) * scale, nd)
+                    else:
+                        value = str(value)
+                out.append(value)
             return out
 
         if clc is not None or csc is not None:
@@ -4354,12 +4415,63 @@ class ReportBuilder:
 
     def _crack_worked_2023(self, cw, code):
         """The EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
+        xi_low, xi_high = cw.get("xi1_min"), cw.get("xi1_max")
+        xi_text = (
+            "not applicable"
+            if xi_low is None or xi_high is None
+            else f"{_fmt(xi_low, 4)} to {_fmt(xi_high, 4)}"
+        )
         self._formula(
-            "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
-            "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
-            ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
-            subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
-                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
+            "rho<sub>p,eff</sub> = "
+            "(A<sub>s,eff</sub> + xi<sub>1</sub>A<sub>p,eff</sub>)"
+            " / A<sub>c,eff</sub>",
+            ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.12); "
+                "xi<sub>1</sub> from Eq (9.6)",
+            subst=(
+                f"A<sub>s,eff</sub> = {_fmt(cw.get('as_eff'), 6)} m"
+                "<super>2</super>; "
+                f"A<sub>p,eff</sub> = {_fmt(cw.get('ap_eff'), 6)} m"
+                "<super>2</super>; "
+                f"sum(xi<sub>1</sub>A<sub>p</sub>) = "
+                f"{_fmt(cw.get('ap_eff_weighted'), 6)} m<super>2</super>; "
+                f"xi<sub>1</sub> range = {xi_text}; "
+                f"A<sub>c,eff</sub> = {_fmt(cw.get('ac_eff'), 6)} m"
+                "<super>2</super>"
+            ),
+            result=(
+                f"rho<sub>p,eff</sub> = "
+                f"{_fmt(cw.get('rho_p_eff'), 6)}"
+            ),
+        )
+        if cw.get("direct_tension"):
+            self._formula(
+                "s<sub>r,m,cal</sub> = 1.5&#183;c + "
+                "(k<sub>b</sub>/7.2)&#183;phi/rho<sub>p,eff</sub>",
+                ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15) and "
+                    "Eq (9.20), uniform direct tension",
+                subst=(
+                    "k<sub>fl</sub> = 1.00; k<sub>1/r</sub> = 1.00; "
+                    "no bending (h-x) cap; "
+                    f"h<sub>c,eff</sub> = {_fmt(cw.get('hc_ef', 0) * _MM, 3)} "
+                    f"mm; b<sub>c,eff</sub> = "
+                    f"{_fmt(cw.get('bc_ef', 0) * _MM, 3)} mm"
+                ),
+                result=(
+                    f"s<sub>r,m,cal</sub> = "
+                    f"{_fmt(cw.get('sr_max', 0), 3)} mm"
+                ),
+            )
+        else:
+            self._formula(
+                "s<sub>r,m,cal</sub> = 1.5&#183;c + "
+                "(k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
+                "&#183;phi/rho<sub>p,eff</sub> &lt;= "
+                "(1.3/k<sub>w</sub>)&#183;(h-x)",
+                ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
+                subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
+                      f"s<sub>r,m,cal</sub> = "
+                      f"{_fmt(cw.get('sr_max',0), 3)} mm",
+            )
         self._formula(
             "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
             "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
@@ -4375,12 +4487,20 @@ class ReportBuilder:
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
         if code:
-            self._small(f"Crack-width code: {code}. Refined control of cracking "
-                        "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
-                        "width to the calculated value, k<sub>1/r</sub> = (h-x)/"
-                        "(h-a<sub>y</sub>-x) accounts for curvature, and the mean "
-                        "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
-                        "/E<sub>s</sub>.")
+            scope_text = (
+                "Validated solid-rectangle uniform direct-tension branch; "
+                "k<sub>fl</sub> = k<sub>1/r</sub> = 1.00."
+                if cw.get("direct_tension")
+                else "Dominant strain-gradient bending branch; k<sub>1/r</sub> "
+                     "= (h-x)/(h-a<sub>y</sub>-x)."
+            )
+            self._small(
+                f"Crack-width code: {code}. Refined control of cracking "
+                "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
+                "width to the calculated value, and the mean-strain lower bound "
+                "is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>/E<sub>s</sub>. "
+                f"{scope_text}"
+            )
 
     def _fatigue(self):
         payload = self._base_out["fatigue"]

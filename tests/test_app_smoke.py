@@ -363,6 +363,7 @@ def test_persisted_settings_use_the_seeded_number_helper():
     # value=. (wall_mm keeps key= -- it has a dimension-dependent max, so it seeds and
     # clamps by hand -- but still passes no value=, so it does not warn.)
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
+                "sls_tendon_bond", "sls_tendon_xi",
                 "label_scale", "label_min_gap",                # seeded number inputs
                 "pl_check_util", "pl_interaction",              # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
@@ -3473,7 +3474,9 @@ def test_design_basis_summary_identifies_alignment_and_limitations():
         torsion_method="DS/EN 1992-1-1:2005 + DK NA:2024",
     )
     assert crack_only_2023["mixed"] is True
-    assert crack_only_2023["limitations"] == []
+    assert crack_only_2023["limitations"] == [
+        sector_app.CRACK_DIRECTIONAL_LIMITATION
+    ]
 
 
 def test_es_field_present_and_editable():
@@ -3728,6 +3731,12 @@ def test_inputs_carry_help_tooltips():
         r"Maximum aggregate size $D_{\mathrm{upper}}$ (mm)"
     )
     assert at.selectbox(key="sls_bond").label == r"Mild-steel bond ($k_1$)"
+    assert at.selectbox(key="sls_tendon_bond").label == (
+        r"Prestressing-steel bond condition ($k_b$)"
+    )
+    assert at.number_input(key="sls_tendon_xi").label == (
+        r"Prestressing bond-strength ratio $\xi$ (0 = not assessed)"
+    )
     at.toggle(key="fatigue_on").set_value(True).run()
     _goto_material_tab(at, "Fatigue details")
     fatigue_detail_keys = (
@@ -3913,6 +3922,27 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "el_long_P", "el_long_Mx", "el_long_My",
         "el_short_P", "el_short_Mx", "el_short_My", "sls_cw",
     })
+
+
+def test_native_data_editor_state_is_not_replayed_through_session_state():
+    at = _fresh()
+    at.run()
+
+    # A real browser edit puts this Streamlit-owned delta in the callback state.
+    # Reassigning it before data_editor is reconstructed raises
+    # StreamlitValueAssignmentNotAllowedError.
+    at.session_state["_pending_input_events"] = {
+        "elastic_cases_editor": {
+            "edited_rows": {0: {"check_crack_width": True}},
+            "added_rows": [],
+            "deleted_rows": [],
+        },
+    }
+    at.run()
+
+    assert not at.exception
+    assert "_pending_input_events" not in at.session_state
+    assert _widget(at.dataframe, "elastic_cases_editor").value is not None
 
 
 def test_detailing_controls_run_selected_case_and_section_wide_spacing():
@@ -4708,6 +4738,107 @@ def test_ec2_2023_crack_edition_calculates():
     assert e["crack_code"] == "EN 1992-1-1:2023"
     assert e["crack"]["edition"] == "2023" and e["crack"]["kw"] == 1.7
     assert e["crack"]["wk"] > 0.0 and e["crack"]["k1_r"] >= 1.0
+
+
+def test_ec2_2023_mixed_reinforcement_fails_closed_without_xi_then_calculates():
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+    )
+    assert not at.exception
+    missing = at.session_state["results"]["elastic"]
+    assert missing["crack_assessment"]["status"] == "NOT ASSESSED"
+    assert "bond ratio xi" in missing["crack_assessment"]["reason"]
+    assert missing["crack_assessment"]["value"] is None
+    _select_view(at, "Results Overview")
+    assert any(
+        item.value.startswith("NOT ASSESSED -")
+        for item in at.warning
+    )
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "sls_tendon_xi", 0.50),
+    )
+    assert not at.exception
+    calculated = at.session_state["results"]["elastic"]
+    assert calculated["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
+    assert calculated["crack"] is not None
+    assert calculated["crack"]["ap_eff"] > 0.0
+    assert 0.0 < calculated["crack"]["ap_eff_weighted"] < \
+        calculated["crack"]["ap_eff"]
+    assert calculated["crack"]["xi1_min"] > 0.0
+    assert calculated["crack"]["xi1_max"] <= 1.0
+    tendon_candidates = [
+        candidate
+        for candidate in calculated["crack"]["candidates"]
+        if candidate["element_type"] == "Tendon"
+    ]
+    assert tendon_candidates
+    latest = at.session_state["_latest_inputs"]
+    n_bars = len(latest["bars"])
+    for candidate in tendon_candidates:
+        tendon_index = candidate["element_no"] - 1
+        material = latest["tendon_materials"][tendon_index]
+        locked_in_mpa = material.Es * material.IS
+        global_index = n_bars + tendon_index
+        assert candidate["sigma_s"] == pytest.approx(
+            calculated["long"][global_index] - locked_in_mpa,
+            rel=0.02,
+        )
+
+
+def test_ec2_2023_uniform_direct_tension_is_explicitly_scoped():
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bot_n", 4),
+        ("number_input", "top_n", 4),
+        ("number_input", "bot_d", 16.0),
+        ("number_input", "top_d", 16.0),
+        ("number_input", "bot_c_mm", 40.0),
+        ("number_input", "top_c_mm", 40.0),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_P", 1000.0),
+        ("number_input", "el_long_Mx", 0.0),
+        ("number_input", "el_long_My", 0.0),
+        ("number_input", "el_short_P", 0.0),
+        ("number_input", "el_short_Mx", 0.0),
+        ("number_input", "el_short_My", 0.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+    )
+    assert not at.exception
+    elastic = at.session_state["results"]["elastic"]
+    assert elastic["crack_assessment"]["status"] in {
+        "OK", "EXCEEDED"
+    }, elastic["crack_assessment"].get("reason")
+    assert elastic["crack"]["direct_tension"] is True
+    assert elastic["crack"]["scope"] == "uniform-direct-tension"
+    assert elastic["crack"]["kfl"] == pytest.approx(1.0)
+    assert elastic["crack"]["k1_r"] == pytest.approx(1.0)
+    _select_view(at, "Results Overview")
+    assert any(
+        "Crack-control conclusion limitation" in item.value
+        for item in at.warning
+    )
+    _select_view(at, "Elastic Results")
+    assert not at.exception
+    assert any(
+        "Crack-control scope" in item.value
+        for item in at.warning
+    )
 
 
 def test_old_crack_code_alias_targets_a_current_option():

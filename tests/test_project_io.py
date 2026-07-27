@@ -102,6 +102,8 @@ def test_round_trip_tables_and_scalars():
                "torsion_sub_b0": 300.0, "torsion_sub_h0": 600.0,
                "sls_wk_limit": 0.25, "sls_conc_limit_pct": 55.0,
                "sls_steel_limit_pct": 75.0, "sls_pre_limit_pct": 70.0,
+               "sls_tendon_bond": "Plain round (k1 = 1.6)",
+               "sls_tendon_xi": 0.55,
                "sls_limit_source": "DB section SLS-2",
                "pl_case_id": "PL-17", "pl_case_type": "ALS",
                "pl_case_source": "Load model LM-4",
@@ -128,6 +130,22 @@ def test_round_trip_tables_and_scalars():
         pd.testing.assert_frame_equal(
             rt[key].reset_index(drop=True),
             expected.reset_index(drop=True), check_dtype=False)
+
+
+def test_v15_project_defaults_new_crack_tendon_inputs_fail_closed():
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 15,
+        "tables": {},
+        "scalars": {
+            "sls_cw": True,
+            "sls_code": "EN 1992-1-1:2023",
+        },
+    })
+
+    _tables_out, scalars = project_io.parse_project(text)
+    assert scalars["sls_tendon_bond"] == "Plain round (k1 = 1.6)"
+    assert scalars["sls_tendon_xi"] == pytest.approx(0.0)
 
 
 def test_v4_reinforcement_rows_migrate_to_stable_area_based_elements():

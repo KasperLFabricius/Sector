@@ -28,7 +28,7 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 15  # v15: explicit tensile/fatigue factor bases and provenance
+VERSION = 16  # v16: explicit 2023 prestressing bond inputs for crack control
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
     "shear_cot_min",
@@ -230,6 +230,7 @@ SCALAR_KEYS = [
     "mode", "v_min", "v_max", "v_inc", "pl_check_util",
     "pl_interaction",
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_tendon_bond", "sls_tendon_xi",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
     # Fatigue factor provenance. Presets expose every applied multiplier;
@@ -820,6 +821,13 @@ def parse_project(text: str):
                 else fatigue_inputs.FACTOR_MODE_PRESET
             ),
         )
+    # v16 makes the prestressing bond condition and xi input explicit for the
+    # 2023 effective reinforcement ratio. Old projects retain the conservative
+    # poor-bond choice and a blocking zero xi, so no reused session value can
+    # silently turn an incomplete mixed-reinforcement check into a pass.
+    if data.get("version", 1) < 16:
+        scalars.setdefault("sls_tendon_bond", "Plain round (k1 = 1.6)")
+        scalars.setdefault("sls_tendon_xi", 0.0)
     if (
         bool(scalars.get("fatigue_on"))
         or "fatigue_factor_mode" in scalars

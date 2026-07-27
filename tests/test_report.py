@@ -56,6 +56,9 @@ def _inp():
         "P_el_l": 0.0, "Mx_el_l": 80.0, "My_el_l": 0.0,
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
         "nl": 15.0, "ns": 6.0, "sls_fctm": 2.9, "sls_cw": True,
+        "sls_phi": 0.0, "sls_k1": 0.8,
+        "sls_tendon_bond": "Plain round (k1 = 1.6)",
+        "sls_tendon_k1": 1.6, "sls_tendon_xi": 0.50,
         "conc_Ec": 33.0,
         "sls_wk_limit": 0.30, "sls_conc_limit_pct": 60.0,
         "sls_steel_limit_pct": 80.0, "sls_pre_limit_pct": 75.0,
@@ -75,8 +78,18 @@ def _crack():
         "hc_ef": 0.125, "phi": 16.0, "cover": 40.0,
         "coarse": False, "edition": "2004", "kw": 1.0,
         "k1_r": 1.0, "kfl": 1.0, "sr_max_geometric": False,
+        "as_eff": 0.0005, "ap_eff": 0.0, "ap_eff_weighted": 0.0,
+        "xi1": None, "reinforcement_type": "mild", "bc_ef": 0.0,
+        "direct_tension": False, "scope": "dominant-direction",
+        "direction_deg": 90.0,
     }
-    return dict(candidate, gov_bar=1, candidates=[candidate])
+    return dict(
+        candidate,
+        gov_bar=1,
+        xi1_min=None,
+        xi1_max=None,
+        candidates=[candidate],
+    )
 
 
 def _out():
@@ -1248,13 +1261,56 @@ def test_report_keeps_crack_criterion_when_no_width_is_calculated():
             "case": None,
             "governing": None,
             "criterion": "0.3 mm",
+            "reason": "The section remained uncracked.",
         },
     )
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "NOT APPLICABLE" in txt
     assert "limit 0.300 mm" in txt
     assert "No crack width:" in txt
+    assert "The section remained uncracked." in txt
     assert "DB-SLS-01 section 4" in txt
+
+
+def test_report_carries_2023_mixed_reinforcement_and_scope_provenance():
+    inp = _inp()
+    inp["tendons"] = [(0.0, -0.10, 400.0)]
+    out = _out()
+    elastic = out["elastic"]
+    for key in ("crack", "crack_short"):
+        crack = elastic[key]
+        crack.update(
+            edition="2023",
+            kw=1.7,
+            k1_r=1.15,
+            kfl=0.82,
+            as_eff=0.0005,
+            ap_eff=0.0004,
+            ap_eff_weighted=0.0002,
+            xi1_min=0.5,
+            xi1_max=0.5,
+            scope="dominant-direction",
+            direction_deg=90.0,
+        )
+    elastic.update(
+        crack_code="EN 1992-1-1:2023",
+        crack_edition="2023",
+        crack_scope_note=(
+            "One-directional dominant strain-gradient assessment only. "
+            "Orthogonal or inclined crack systems are not assessed."
+        ),
+    )
+
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    flat = " ".join(txt.split())
+    assert "Crack-control conclusion limitation" in flat
+    assert "One-directional dominant strain-gradient" in flat
+    assert "Prestressing-steel bond condition" in flat
+    assert "Prestressing bond-strength ratio" in flat
+    assert "per-tendon reinforcement-table values" in flat
+    assert "Weighted prestressing area" in flat
+    assert "Eq (9.12)" in flat
+    assert "0.000200" in flat
 
 
 def test_report_renders_greek_glyphs():

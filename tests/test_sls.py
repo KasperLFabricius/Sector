@@ -160,3 +160,50 @@ def test_crack_assessment_selects_largest_case():
     assert result["case"] == "Short-term"
     assert result["governing"] == "tendon 1"
     assert result["margin"] == pytest.approx(-0.01)
+
+
+def test_crack_assessment_blocks_when_any_requested_case_is_not_assessed():
+    result = sls.crack_assessment(
+        {
+            "Long-term": {"wk": 0.18, "element_id": "bar 2"},
+            "Short-term": None,
+        },
+        limit_mm=0.30,
+        valid=True,
+        dispositions={
+            "Long-term": {
+                "status": "CALCULATED",
+                "reason": "Crack width calculated.",
+            },
+            "Short-term": {
+                "status": "NOT ASSESSED",
+                "reason": "The validated scope does not cover this strain state.",
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["value"] is None
+    assert result["case"] == "Short-term"
+    assert "validated scope" in result["reason"]
+
+
+def test_crack_assessment_retains_not_applicable_reason():
+    result = sls.crack_assessment(
+        {"Long-term": None, "Short-term": None},
+        limit_mm=0.30,
+        valid=True,
+        dispositions={
+            "Long-term": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section is uncracked.",
+            },
+            "Short-term": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section is uncracked.",
+            },
+        },
+    )
+
+    assert result["status"] == "NOT APPLICABLE"
+    assert result["reason"] == "The section is uncracked."

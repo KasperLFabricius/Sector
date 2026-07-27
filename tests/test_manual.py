@@ -126,6 +126,21 @@ def test_manual_covers_both_examples_and_all_crack_editions():
     assert "mild steel" in text.lower() and "prestress" in text.lower()
 
 
+def test_manual_documents_2023_xi1_direct_tension_and_scope_gate():
+    text = "\n".join(
+        value
+        for block in manual.manual_blocks()
+        for value in block[1:]
+        if isinstance(value, str)
+    )
+    assert "Formula (9.12)" in text
+    assert "\\xi_1=\\sqrt{\\xi\\,\\phi_s/\\phi_p}" in text
+    assert "solid rectangular-section branch" in text
+    assert "one-directional dominant strain-gradient assessment" in text
+    assert "blocking **NOT ASSESSED**" in text
+    assert "does not establish that edition as the currently applicable Danish" in text
+
+
 def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     blocks = manual.manual_blocks()
     text = "\n".join(str(block) for block in blocks)

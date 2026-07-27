@@ -1303,6 +1303,28 @@ def manual_blocks() -> list:
        "9.3 (built from the near-face layer and extended over the tension layers). "
        "The mean strain (9.11) keeps the same numerator but its lower bound is "
        "$(1-k_t)\\sigma_s/E_s$. **Worked:** $s_{r,m,cal}=134$ mm, $w_k=0.186$ mm.")
+    md("For mixed mild reinforcement and bonded prestressing steel, Sector uses "
+       "Formula (9.12) explicitly:\n\n"
+       "$$\\rho_{p,eff}=\\frac{A_{s,eff}+\\sum\\xi_1 A_p}{A_{c,eff}},\\qquad "
+       "\\xi_1=\\sqrt{\\xi\\,\\phi_s/\\phi_p}\\quad (9.6).$$\n\n"
+       "$\\phi_s$ is the largest effective mild-bar diameter, each tendon keeps "
+       "its own table diameter $\\phi_p$, and $\\xi$ is the entered bond-strength "
+       "ratio. If only prestressing steel controls cracking, $\\xi_1=\\xi$. A "
+       "missing, zero, non-finite or out-of-range $\\xi$ is a blocking **NOT "
+       "ASSESSED** result whenever a tendon contributes; Sector does not replace "
+       "it with an assumed value.")
+    md("Uniform direct tension is calculated only for the validated solid "
+       "rectangular-section branch with reinforcement assigned to opposed faces. "
+       "The effective perimeter bands follow figure 9.3, $k_{fl}=1.00$ (9.20), "
+       "$k_1/r=1.00$, and the bending $(h-x)$ spacing cap is not applied. Other "
+       "uniform-tension geometries and combined all-tension states return a "
+       "blocking **NOT ASSESSED** disposition rather than an apparent pass.")
+    call("limit", "Crack-control scope: the bending calculation is a "
+         "**one-directional dominant strain-gradient assessment**. Orthogonal or "
+         "inclined crack systems are not assessed; those systems require an "
+         "explicit multidirectional method (including the relevant Annex G.5 "
+         "route where applicable). This limitation is repeated beside the result "
+         "and in the report conclusion.")
     md("The four editions on the same beam and service moment ($M_x=150$ kNm):")
     table(["Crack-width edition", "$s_{r,max}$ (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"],
           [["EN 1992-1-1:2005", "236", "0.125", "0.188"],
@@ -1313,7 +1335,10 @@ def manual_blocks() -> list:
          "2005, DS/EN 1992-1-1 + DK NA and EN 1992-1-1:2023. The DK NA option "
          "reports the fine and the coarse system together (all four columns above), "
          "each for the long-term and short-term load; the report writes out the "
-         "governing worked crack width.")
+         "governing worked crack width. The 2023 choice is an explicitly selectable "
+         "published-edition method. Its presence does not establish that edition as "
+         "the currently applicable Danish project basis; edition and National "
+         "Annex applicability must be confirmed in the project design basis.")
 
     h1("Grouped fatigue")
     h2("Elastic stress ranges")

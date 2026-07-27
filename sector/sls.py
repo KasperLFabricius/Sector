@@ -164,12 +164,66 @@ def crack_assessment(
     *,
     limit_mm: float,
     valid: bool,
+    dispositions: Mapping[str, Mapping | None] | None = None,
 ) -> dict:
-    """Assess the largest reported crack width across all enabled cases."""
+    """Assess the largest reported crack width across all enabled cases.
+
+    ``dispositions`` carries the applicability result for each requested case.
+    Any blocking ``NOT ASSESSED`` case takes precedence over a numerical result:
+    a partially calculated set must never be presented as an overall pass.
+    """
+    if not valid:
+        out = upper_limit_assessment(None, limit_mm, valid=False)
+        out.update(
+            case=None,
+            governing=None,
+            criterion=f"{float(limit_mm):g} mm",
+            reason="The elastic analysis did not converge.",
+        )
+        return out
+
+    disposition_items = [
+        (name, item)
+        for name, item in (dispositions or {}).items()
+        if item is not None
+    ]
+    blocking = [
+        (name, item)
+        for name, item in disposition_items
+        if str(item.get("status", "")).upper() == "NOT ASSESSED"
+    ]
+    if blocking:
+        reasons = []
+        for name, item in blocking:
+            reason = str(item.get("reason") or "Applicability was not established.")
+            reasons.append(f"{name}: {reason}")
+        return {
+            "value": None,
+            "limit": limit_mm,
+            "util": None,
+            "margin": None,
+            "status": "NOT ASSESSED",
+            "case": ", ".join(name for name, _item in blocking),
+            "governing": None,
+            "criterion": f"{float(limit_mm):g} mm",
+            "reason": " ".join(reasons),
+        }
+
     available = [(name, case) for name, case in cases.items() if case is not None]
     if not available:
         out = upper_limit_assessment(None, limit_mm, valid=valid, applicable=False)
-        out.update(case=None, governing=None, criterion=f"{float(limit_mm):g} mm")
+        reasons = [
+            str(item.get("reason"))
+            for _name, item in disposition_items
+            if item.get("reason")
+        ]
+        out.update(
+            case=None,
+            governing=None,
+            criterion=f"{float(limit_mm):g} mm",
+            reason=(" ".join(dict.fromkeys(reasons))
+                    if reasons else "No crack-width result is applicable."),
+        )
         return out
     name, governing = max(available, key=lambda item: float(item[1].get("wk", 0.0)))
     out = upper_limit_assessment(
@@ -179,6 +233,7 @@ def crack_assessment(
         case=name,
         governing=governing.get("element_id", f"element {governing.get('gov_bar', '-')}"),
         criterion=f"{float(limit_mm):g} mm",
+        reason="Crack width calculated for every requested applicable case.",
     )
     return out
 
