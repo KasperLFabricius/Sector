@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 import pathlib
 from types import SimpleNamespace
 import sys
@@ -232,6 +233,27 @@ def test_prepare_maps_signs_materials_details_and_full_factors_once():
     assert prepared.concrete.k1 == 1.0
     assert prepared.gamma_s == 1.32
     assert prepared.gamma_ff == 1.10
+
+
+def test_prepare_preserves_float_coercible_non_factor_inputs():
+    prepared = fatigue_analysis.prepare(
+        _base(
+            nl="18.0",
+            ns=Decimal("6.5"),
+            fatigue_gamma_ff="1.10",
+            fatigue_beta_cc_t0=Decimal("0.92"),
+            fatigue_t0_days="28",
+            fatigue_concrete_c=Decimal("14"),
+        )
+    )
+
+    assert prepared.nl == pytest.approx(18.0)
+    assert prepared.ns == pytest.approx(6.5)
+    assert prepared.gamma_ff == pytest.approx(1.10)
+    assert prepared.t0_days == pytest.approx(28.0)
+    assert prepared.concrete is not None
+    assert prepared.concrete.beta_cc_t0 == pytest.approx(0.92)
+    assert prepared.concrete.c == pytest.approx(14.0)
 
 
 def test_prepare_resolves_dk_fatigue_preset_from_edition_and_categories():

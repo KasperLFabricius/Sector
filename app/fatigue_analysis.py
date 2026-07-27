@@ -22,7 +22,6 @@ import numpy as np
 import fatigue_inputs
 import load_cases
 import material_catalog as mat_catalog
-from sector import codes
 from sector.fatigue import (
     CONCRETE_EQUIVALENT,
     CONCRETE_METHODS,
@@ -74,15 +73,14 @@ class PreparedFatigueAnalysis:
 
 def _positive(value, label: str, errors: list[str]) -> float | None:
     try:
-        return codes.strict_positive_real(value, label)
-    except ValueError as exc:
-        message = str(exc)
-        errors.append(
-            message
-            if "Boolean values are not accepted" in message
-            else f"{label} must be a finite number greater than zero"
-        )
+        number = float(value)
+    except (TypeError, ValueError):
+        errors.append(f"{label} must be a finite number greater than zero")
         return None
+    if not math.isfinite(number) or number <= 0:
+        errors.append(f"{label} must be a finite number greater than zero")
+        return None
+    return number
 
 
 def _finite_attribute(value, label: str, errors: list[str], *, positive=False):
