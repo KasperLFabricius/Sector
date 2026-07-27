@@ -7000,6 +7000,10 @@ def crack_control_calculation_record(results):
                     if name in informational else "criterion input"
                 ),
             }
+            if response.get("decompression") is not None:
+                response_record["decompression"] = copy.deepcopy(
+                    response.get("decompression")
+                )
             if wk_rejected:
                 response_record["result_validation"] = (
                     "Calculated crack-width response rejected; no numeric "

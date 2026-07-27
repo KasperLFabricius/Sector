@@ -5153,10 +5153,7 @@ def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
         for response in stale_case["responses"]
         if response["acceptance_role"] == "criterion input"
     )
-    criterion_response["wk_mm"] = None
-    criterion_response["result_validation"] = (
-        "Injected rejected response before autosave."
-    )
+    criterion_response["wk_mm"] = total_width
     assert stale_case["assessment"]["verdict"] == "PASS"
     at.session_state["calculation_record"] = stale_record
     at.session_state["_autosave_t"] = 0.0
@@ -5313,6 +5310,109 @@ def test_non_mapping_crack_response_is_retained_as_rejected_record():
     assert response["wk_mm"] is None
     assert "response rejected" in response["result_validation"].lower()
     assert '"PASS"' not in json.dumps(record)
+
+
+def test_changed_governing_crack_response_invalidates_stale_pass_record():
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "qp",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    criteria = [{
+        "id": "qa-durability",
+        "kind": sls.CRITERION_DURABILITY,
+        "source_type": sls.CRITERION_MODE_STANDARD,
+        "source": "QA controlled criterion",
+        "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+        "limit_mm": 0.30,
+        "applicability": {},
+    }]
+    stale_assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=criteria,
+        response_contexts=contexts,
+    )
+    assert stale_assessment["verdict"] == "PASS"
+
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": stale_assessment,
+            "crack_responses": {
+                "QP": {"wk": 0.45, "element_id": "R1"},
+            },
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+        },
+    })
+
+    recorded = record["cases"][0]
+    assert recorded["responses"][0]["wk_mm"] == pytest.approx(0.45)
+    assert recorded["assessment"]["status"] == "NOT ASSESSED"
+    assert recorded["assessment"]["verdict"] == "REVIEW"
+    assert recorded["assessment"]["value"] is None
+    assert "does not match current governing response" in (
+        recorded["assessment"]["publication_validation"]["reason"]
+    )
+    assert '"PASS"' not in json.dumps(record)
+
+
+def test_current_decompression_evidence_preserves_matching_pass_record():
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "qp",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "reason": "Concrete remains in compression at tendon level.",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {"QP": response},
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+        },
+    })
+
+    recorded = record["cases"][0]
+    assert recorded["assessment"]["status"] == "OK"
+    assert recorded["assessment"]["verdict"] == "PASS"
+    assert recorded["responses"][0]["decompression"]["status"] == "OK"
+    assert "publication_validation" not in recorded["assessment"]
 
 
 def test_2023_protection_route_change_invalidates_elastic_cache():

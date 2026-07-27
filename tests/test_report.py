@@ -1342,6 +1342,20 @@ def test_report_keeps_crack_criterion_when_no_width_is_calculated():
         cracked=False,
         crack=None,
         crack_short=None,
+        crack_responses={
+            "Long-term": None,
+            "Total (long + short)": None,
+        },
+        crack_dispositions={
+            "Long-term": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+            },
+            "Total (long + short)": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+            },
+        },
         crack_assessment={
             "value": None,
             "limit": 0.30,
@@ -1417,6 +1431,23 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
         "prior acceptance assessment was invalidated"
         in " ".join(text.split())
     )
+
+
+def test_report_invalidates_stale_pass_when_governing_width_changes():
+    out = _out()
+    elastic = out["elastic"]
+    assert elastic["crack_assessment"]["status"] == "OK"
+    assert elastic["crack_assessment"]["value"] == pytest.approx(0.213)
+    elastic["crack"]["wk"] = 0.45
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "PASS - Crack width" not in compact
+    assert "does not match current governing response" in compact
 
 
 def test_report_carries_2023_mixed_reinforcement_and_scope_provenance():

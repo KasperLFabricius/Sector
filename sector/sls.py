@@ -200,10 +200,14 @@ def publication_safe_crack_assessment(
         return safe
 
     names = [item["response"] for item in rejected]
+    details = " ".join(dict.fromkeys(
+        item["reason"] for item in rejected
+    ))
     reason = (
         "Publication rejected current crack-response evidence for "
         f"{', '.join(names)}. Any prior acceptance assessment was invalidated; "
-        "repair or recalculate the rejected response before issuing a verdict."
+        "repair or recalculate the rejected response before issuing a verdict. "
+        f"Details: {details}"
     )
     safe.update(
         status="NOT ASSESSED",
@@ -283,7 +287,7 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
             raw_responses = []
         responses = []
         rejected = []
-        valid_criterion_response = False
+        criterion_responses = {}
         for response_index, raw_response in enumerate(raw_responses):
             if not isinstance(raw_response, Mapping):
                 name = f"response {response_index + 1}"
@@ -340,11 +344,10 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     "solver_provenance": solver,
                 })
             elif (
-                width is not None
-                and str(response.get("acceptance_role") or "").lower()
+                str(response.get("acceptance_role") or "").lower()
                 != "informational"
             ):
-                valid_criterion_response = True
+                criterion_responses[name] = response
             responses.append(response)
 
         assessment = (
@@ -352,27 +355,142 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
             if isinstance(case.get("assessment"), Mapping)
             else {}
         )
-        publishes_acceptance = (
+        acceptance_items = []
+        if (
             str(assessment.get("verdict") or "").upper()
             in {"PASS", "FAIL"}
             or str(assessment.get("status") or "").upper()
             in {"OK", "EXCEEDED"}
-        )
-        if (
-            publishes_acceptance
-            and not valid_criterion_response
-            and not rejected
         ):
-            rejected.append({
-                "response": str(
-                    assessment.get("case") or "published assessment"
-                ),
-                "reason": (
-                    "No valid criterion-input response supports the stored "
-                    "acceptance assessment."
-                ),
-                "solver_provenance": assessment.get("solver_provenance"),
-            })
+            acceptance_items.append(("assessment", assessment))
+        for criterion_index, raw_criterion in enumerate(
+            assessment.get("criteria") or []
+        ):
+            if not isinstance(raw_criterion, Mapping):
+                continue
+            criterion = dict(raw_criterion)
+            if str(criterion.get("status") or "").upper() in {
+                "OK",
+                "EXCEEDED",
+            }:
+                acceptance_items.append(
+                    (f"criterion {criterion_index + 1}", criterion)
+                )
+
+        def item_response_names(item):
+            case_name = str(item.get("case") or "").strip()
+            if case_name:
+                return [case_name]
+            matched = item.get("matched_responses")
+            if not isinstance(matched, (list, tuple)):
+                return []
+            return [
+                str(name).strip()
+                for name in matched
+                if str(name).strip()
+            ]
+
+        def response_solver_provenance(names):
+            for name in names:
+                response = criterion_responses.get(name)
+                if not isinstance(response, Mapping):
+                    continue
+                context = response.get("context")
+                if isinstance(context, Mapping):
+                    return context.get("solver_provenance")
+            return assessment.get("solver_provenance")
+
+        def acceptance_evidence_issue(label, item):
+            names = item_response_names(item)
+            if not names:
+                return (
+                    f"Stored {label} has no governing response identity.",
+                    names,
+                )
+            missing = [
+                name for name in names
+                if name not in criterion_responses
+            ]
+            if missing:
+                return (
+                    f"Stored {label} is governed by "
+                    f"{', '.join(missing)}, but no current criterion-input "
+                    "response with that identity is available.",
+                    names,
+                )
+
+            kind = str(
+                item.get("kind") or item.get("criterion") or ""
+            )
+            expected_status = str(item.get("status") or "").upper()
+            if kind == CRITERION_DECOMPRESSION:
+                for name in names:
+                    evidence = criterion_responses[name].get(
+                        "decompression"
+                    )
+                    if not isinstance(evidence, Mapping):
+                        return (
+                            f"Stored {label} is governed by {name}, but its "
+                            "current decompression evidence is absent.",
+                            names,
+                        )
+                    evidence_status = str(
+                        evidence.get("status") or ""
+                    ).upper()
+                    if evidence_status != expected_status:
+                        return (
+                            f"Stored {label} status {expected_status or '-'} "
+                            f"does not match current {name} decompression "
+                            f"status {evidence_status or '-'}.",
+                            names,
+                        )
+                return None
+
+            expected_value = crack_width_numeric_value(item.get("value"))
+            widths = [
+                crack_width_numeric_value(
+                    criterion_responses[name].get("wk_mm")
+                )
+                for name in names
+            ]
+            if expected_value is None or any(
+                width is None for width in widths
+            ):
+                return (
+                    f"Stored {label} has no validated crack-width value "
+                    "matching its current governing response.",
+                    names,
+                )
+            current_value = max(widths)
+            if not math.isclose(
+                expected_value,
+                current_value,
+                rel_tol=1e-9,
+                abs_tol=1e-12,
+            ):
+                return (
+                    f"Stored {label} crack width {expected_value:.12g} mm "
+                    f"does not match current governing response "
+                    f"{current_value:.12g} mm.",
+                    names,
+                )
+            return None
+
+        if not rejected:
+            for label, item in acceptance_items:
+                issue = acceptance_evidence_issue(label, item)
+                if issue is None:
+                    continue
+                reason, names = issue
+                rejected.append({
+                    "response": (
+                        ", ".join(names)
+                        or str(item.get("case") or label)
+                    ),
+                    "reason": reason,
+                    "solver_provenance": response_solver_provenance(names),
+                })
+                break
         case["assessment"] = publication_safe_crack_assessment(
             assessment,
             rejected,

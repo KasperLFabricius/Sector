@@ -18,6 +18,7 @@ not depend on a Greek-capable font.
 from __future__ import annotations
 
 import atexit
+import copy
 import datetime
 import io
 import math
@@ -4334,6 +4335,12 @@ class ReportBuilder:
         informational = set(
             raw_assessment.get("informational_responses") or []
         )
+        raw_dispositions = el.get("crack_dispositions") or {}
+        dispositions = (
+            raw_dispositions
+            if isinstance(raw_dispositions, Mapping)
+            else {}
+        )
         current_responses = {}
         canonical_responses = el.get("crack_responses")
         if isinstance(canonical_responses, Mapping):
@@ -4356,21 +4363,39 @@ class ReportBuilder:
             response = raw_response if response_is_mapping else {}
             raw_wk = response.get("wk")
             width = sls_core.crack_width_numeric_value(raw_wk)
+            disposition = dispositions.get(name) or {}
+            disposition = (
+                disposition if isinstance(disposition, Mapping) else {}
+            )
+            not_applicable_null = (
+                raw_response is None
+                and str(disposition.get("status") or "").upper()
+                == "NOT APPLICABLE"
+            )
             rejected = (
-                not response_is_mapping
-                or width is None
+                not not_applicable_null
+                and (
+                    not response_is_mapping
+                    or width is None
+                )
             )
             context = response_contexts.get(name) or {}
             record = {
                 "name": name,
                 "wk_mm": None if rejected else raw_wk,
                 "context": dict(context) if isinstance(context, Mapping) else {},
+                "solver_status": disposition.get("status"),
+                "solver_reason": disposition.get("reason"),
                 "acceptance_role": (
                     "informational"
                     if name in informational or "coarse" in name.lower()
                     else "criterion input"
                 ),
             }
+            if response.get("decompression") is not None:
+                record["decompression"] = copy.deepcopy(
+                    response.get("decompression")
+                )
             if rejected:
                 record["result_validation"] = (
                     "Current report crack response rejected; no numeric "
