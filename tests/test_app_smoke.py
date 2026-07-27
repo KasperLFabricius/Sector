@@ -4272,6 +4272,48 @@ def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
     assert not at.exception
 
 
+def test_duplicate_crack_combination_mappings_across_cases_fail_closed():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Elastic"))
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, [
+        {
+            "name": "EL-QP-A",
+            "description": "First independent QP response",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "mx_long_ed_knm": 400.0,
+            "check_crack_width": True,
+        },
+        {
+            "name": "EL-QP-B",
+            "description": "Second independent QP response",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "mx_long_ed_knm": 350.0,
+            "check_crack_width": True,
+        },
+    ])
+    _set(
+        at,
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+    _calculate(at)
+
+    assert not at.exception
+    entries = at.session_state["results"]["elastic_cases"]
+    assert [entry["name"] for entry in entries] == ["EL-QP-A", "EL-QP-B"]
+    for entry in entries:
+        assessment = entry["results"]["elastic"]["crack_assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert "across checked Elastic cases" in assessment["reason"]
+        assert {
+            item["response_id"]
+            for item in assessment["response_provenance"]
+        } == {"EL-QP-A:long", "EL-QP-B:long"}
+
+
 def test_results_overview_shows_action_provenance_and_explicit_states():
     at = _fresh()
     at.run()

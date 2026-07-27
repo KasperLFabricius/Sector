@@ -523,6 +523,7 @@ def crack_assessment(
     valid: bool,
     dispositions: Mapping[str, Mapping | None] | None = None,
     response_contexts: Mapping[str, Mapping | None] | None = None,
+    response_mapping_scope: Sequence[Mapping] | None = None,
     criteria: Sequence[Mapping] | None = None,
 ) -> dict:
     """Route crack-control criteria to explicitly designated SLS responses.
@@ -561,6 +562,30 @@ def crack_assessment(
             "solver_provenance": raw.get("solver_provenance"),
         }
 
+    mapping_scope = []
+    for index, raw in enumerate(response_mapping_scope or ()):
+        if not isinstance(raw, Mapping):
+            continue
+        response_id = str(raw.get("response_id") or "").strip()
+        mapping_scope.append({
+            "combination": canonical_combination(raw.get("combination")),
+            "duration": str(raw.get("duration") or "").strip() or None,
+            "response": str(
+                raw.get("response")
+                or raw.get("response_id")
+                or f"response {index + 1}"
+            ).strip(),
+            "response_id": response_id or f"scope-response-{index + 1}",
+            "elastic_case": (
+                str(raw.get("elastic_case") or "").strip() or None
+            ),
+            "state": str(raw.get("state") or "").strip() or None,
+            "provenance": (
+                str(raw.get("provenance") or "").strip() or None
+            ),
+            "solver_provenance": raw.get("solver_provenance"),
+        })
+
     if not valid:
         out = upper_limit_assessment(None, limit_mm, valid=False)
         out.update(
@@ -575,6 +600,7 @@ def crack_assessment(
             verdict="REVIEW",
             criteria=[],
             response_contexts=contexts,
+            response_mapping_scope=mapping_scope,
             informational_responses=list(cases),
         )
         return out
@@ -628,6 +654,50 @@ def crack_assessment(
             base.update(
                 status="NOT ASSESSED",
                 reason="The criterion has no valid required SLS combination.",
+            )
+            criterion_results.append(base)
+            continue
+
+        scoped_candidates = [
+            context
+            for context in mapping_scope
+            if context["combination"] == required
+        ]
+        scoped_response_ids = {
+            context["response_id"] for context in scoped_candidates
+        }
+        if len(scoped_response_ids) > 1:
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(
+                    context["response"] for context in scoped_candidates
+                ),
+                matched_responses=[
+                    context["response"] for context in scoped_candidates
+                ],
+                response_provenance=[
+                    {
+                        "response": context["response"],
+                        "response_id": context["response_id"],
+                        "elastic_case": context["elastic_case"],
+                        "combination": context["combination"],
+                        "duration": context["duration"],
+                        "mapping": context["provenance"],
+                    }
+                    for context in scoped_candidates
+                ],
+                solver_provenance=[
+                    {
+                        "response": context["response"],
+                        "solver": context["solver_provenance"],
+                    }
+                    for context in scoped_candidates
+                ],
+                reason=(
+                    f"More than one independent response state is designated as "
+                    f"the {required} combination across checked Elastic cases; "
+                    "applicability is ambiguous."
+                ),
             )
             criterion_results.append(base)
             continue
@@ -901,6 +971,7 @@ def crack_assessment(
         "reason": governing_criterion.get("reason"),
         "criteria": criterion_results,
         "response_contexts": contexts,
+        "response_mapping_scope": mapping_scope,
         "informational_responses": informational,
     }
 

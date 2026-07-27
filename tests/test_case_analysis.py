@@ -289,6 +289,90 @@ def test_reuses_unchanged_rows_and_recalculates_only_changed_row():
     assert second["plastic_cases"][1]["results"]["plastic"]["mx"] == 81.0
 
 
+def test_duplicate_crack_mapping_scope_is_global_and_invalidates_row_cache():
+    calls = []
+    criteria = sls.crack_criteria_from_inputs({
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_edition": "2004",
+        "sls_code": "EN 1992-1-1:2005",
+        "sls_member": "Beam",
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_exposure_context": "XC3 / durability",
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
+    })
+
+    def runner(case_inp, **_kwargs):
+        case_name = case_inp["elastic_case"]["id"]
+        calls.append(case_name)
+        assessment = sls.crack_assessment(
+            {"Long-term": {"wk": 0.20, "element_id": "bar 1"}},
+            valid=True,
+            criteria=criteria,
+            response_contexts={
+                "Long-term": {
+                    "combination": case_inp["sls_long_combination"],
+                    "response_id": "long",
+                }
+            },
+            response_mapping_scope=case_inp["sls_response_mapping_scope"],
+        )
+        return {"elastic": {"crack_assessment": assessment}}
+
+    duplicate = _base(
+        mode="Elastic",
+        shear_on=False,
+        torsion_on=False,
+        combined_on=False,
+        elastic_cases=_elastic([
+            {
+                "name": "EL-QP-A",
+                "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+                "check_crack_width": True,
+            },
+            {
+                "name": "EL-QP-B",
+                "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+                "check_crack_width": True,
+            },
+        ]),
+    )
+    first = case_analysis.run_case_tables(duplicate, runner)
+
+    assert calls == ["EL-QP-A", "EL-QP-B"]
+    for entry in first["elastic_cases"]:
+        assessment = entry["results"]["elastic"]["crack_assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert "across checked Elastic cases" in assessment["reason"]
+        assert len(assessment["response_mapping_scope"]) == 4
+
+    unique = dict(duplicate)
+    unique["elastic_cases"] = _elastic([
+        duplicate["elastic_cases"].iloc[0].to_dict(),
+        {
+            **duplicate["elastic_cases"].iloc[1].to_dict(),
+            "long_combination": sls.COMBINATION_FREQUENT,
+        },
+    ])
+    calls.clear()
+    second = case_analysis.run_case_tables(
+        unique,
+        runner,
+        reuse_elastic=first["elastic_cases"],
+    )
+
+    # Changing another row's designation changes the shared applicability scope,
+    # so an unchanged cached PASS/REVIEW cannot survive.
+    assert calls == ["EL-QP-A", "EL-QP-B"]
+    assert all(
+        entry["reused"] is False for entry in second["elastic_cases"]
+    )
+    assert second["elastic_cases"][0]["results"]["elastic"][
+        "crack_assessment"
+    ]["status"] == "OK"
+
+
 def test_capacity_change_reuses_matching_plastic_bending_subresult():
     seen_reuse = []
 

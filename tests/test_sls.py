@@ -443,6 +443,53 @@ def test_duplicate_independent_mapping_for_required_combination_is_review():
     ]
 
 
+def test_duplicate_required_combination_across_elastic_cases_is_review():
+    result = sls.crack_assessment(
+        {"Long-term": {"wk": 0.18, "element_id": "bar 1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "long",
+                "provenance": "EL-QP-A long response",
+            },
+        },
+        response_mapping_scope=[
+            {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response": "EL-QP-A / long",
+                "response_id": "EL-QP-A:long",
+                "elastic_case": "EL-QP-A",
+                "state": "long",
+                "provenance": "EL-QP-A long_combination table field",
+            },
+            {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response": "EL-QP-B / long",
+                "response_id": "EL-QP-B:long",
+                "elastic_case": "EL-QP-B",
+                "state": "long",
+                "provenance": "EL-QP-B long_combination table field",
+            },
+        ],
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert "across checked Elastic cases" in result["reason"]
+    assert result["criteria"][0]["matched_responses"] == [
+        "EL-QP-A / long",
+        "EL-QP-B / long",
+    ]
+    assert [
+        item["response_id"] for item in result["response_provenance"]
+    ] == ["EL-QP-A:long", "EL-QP-B:long"]
+    assert result["response_mapping_scope"][1]["provenance"].endswith(
+        "long_combination table field"
+    )
+
+
 def test_project_criteria_require_explicit_per_combination_limits_and_source():
     criteria = sls.crack_criteria_from_inputs({
         "sls_criterion_mode": sls.CRITERION_MODE_PROJECT,

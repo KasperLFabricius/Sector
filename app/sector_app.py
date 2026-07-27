@@ -6532,6 +6532,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             valid=eout["converged"],
             dispositions=eout.get("crack_dispositions"),
             response_contexts=response_contexts,
+            response_mapping_scope=inp.get("sls_response_mapping_scope"),
             criteria=eout.get("crack_criteria"),
         )
     if inp.get("minimum_reinforcement_on"):

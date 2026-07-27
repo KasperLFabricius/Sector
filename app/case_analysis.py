@@ -217,6 +217,59 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
     return out
 
 
+def crack_response_mapping_scope(records: Sequence[Mapping]) -> list[dict]:
+    """Return the table-wide crack-response designations for checked cases.
+
+    A duration state is independent for each named Elastic case.  The case name
+    therefore forms part of ``response_id`` so duplicate combination mappings in
+    different rows cannot be mistaken for one response merely because both rows
+    use the local ``long`` or ``total`` state token.
+    """
+    scope = []
+    states = (
+        (
+            "long",
+            "long_combination",
+            "Sustained / long-term response",
+        ),
+        (
+            "total",
+            "total_combination",
+            "Instantaneous total (long + short) response",
+        ),
+    )
+    for record in records:
+        if not bool(record.get("check_crack_width")):
+            continue
+        case_name = str(record.get(load_cases.NAME) or "").strip()
+        for state, column, duration in states:
+            scope.append({
+                "combination": sls_core.canonical_combination(
+                    record.get(column, sls_core.COMBINATION_UNSPECIFIED)
+                ),
+                "duration": duration,
+                "response": f"{case_name} / {state}",
+                "response_id": f"{case_name}:{state}",
+                "elastic_case": case_name,
+                "state": state,
+                "provenance": (
+                    f"Elastic case {case_name!r}, {column} table field"
+                ),
+            })
+    return scope
+
+
+def _crack_mapping_scope_signature(scope: Sequence[Mapping]) -> tuple:
+    """Stable cache token for table-wide crack-combination applicability."""
+    return tuple(sorted(
+        (
+            str(item.get("response_id") or ""),
+            str(item.get("combination") or ""),
+        )
+        for item in scope
+    ))
+
+
 def _reuse_by_name(entries: Sequence[Mapping] | None) -> dict[str, Mapping]:
     return {
         str(entry.get("name") or ""): entry
@@ -302,6 +355,10 @@ def run_case_tables(
 
     plastic_rows = _rows(plastic_table, load_cases.PLASTIC_TABLE_KEY)
     elastic_rows = _rows(elastic_table, load_cases.ELASTIC_TABLE_KEY)
+    crack_mapping_scope = crack_response_mapping_scope(elastic_rows)
+    crack_mapping_scope_signature = _crack_mapping_scope_signature(
+        crack_mapping_scope
+    )
     cached_plastic = _reuse_by_name(reuse_plastic)
     cached_plastic_bending = _reuse_by_name(reuse_plastic_bending)
     cached_elastic = _reuse_by_name(reuse_elastic)
@@ -363,28 +420,45 @@ def run_case_tables(
     if elastic_required:
         for record in elastic_rows:
             signature = case_signature(record, load_cases.ELASTIC_TABLE_KEY)
+            record_scope_signature = (
+                crack_mapping_scope_signature
+                if bool(record.get("check_crack_width"))
+                else ()
+            )
             cached = cached_elastic.get(record[load_cases.NAME])
-            if cached is not None and tuple(cached.get("signature") or ()) == signature:
-                elastic_entries.append(
-                    _entry(
-                        record,
-                        load_cases.ELASTIC_TABLE_KEY,
-                        cached.get("results") or {},
-                        evaluated=True,
-                        reused=True,
-                    )
-                )
-                continue
-            result = runner(elastic_case_input(inp, record))
-            elastic_entries.append(
-                _entry(
+            if (
+                cached is not None
+                and tuple(cached.get("signature") or ()) == signature
+                and tuple(
+                    cached.get("crack_mapping_scope_signature") or ()
+                ) == record_scope_signature
+            ):
+                entry = _entry(
                     record,
                     load_cases.ELASTIC_TABLE_KEY,
-                    result,
+                    cached.get("results") or {},
                     evaluated=True,
-                    reused=False,
+                    reused=True,
                 )
+                entry["crack_mapping_scope_signature"] = (
+                    record_scope_signature
+                )
+                elastic_entries.append(entry)
+                continue
+            case_inp = elastic_case_input(inp, record)
+            case_inp["sls_response_mapping_scope"] = crack_mapping_scope
+            result = runner(case_inp)
+            entry = _entry(
+                record,
+                load_cases.ELASTIC_TABLE_KEY,
+                result,
+                evaluated=True,
+                reused=False,
             )
+            entry["crack_mapping_scope_signature"] = (
+                record_scope_signature
+            )
+            elastic_entries.append(entry)
         out["elastic_cases"] = elastic_entries
         out.update(_first_results(elastic_entries, _ELASTIC_RESULT_KEYS))
 
