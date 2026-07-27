@@ -441,11 +441,26 @@ def test_app_torsion_factor_preset_switch_and_override_persistence():
     at.selectbox(key="torsion_factor_mode").set_value(
         codes.FACTOR_MODE_OVERRIDE
     ).run()
+    assert at.number_input(key="torsion_gamma_ct").value is None
+    assert at.text_input(key="torsion_factor_approval").value == ""
     at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
     at.text_input(key="torsion_factor_approval").set_value(
         "DB-TOR-04 / checker C"
     ).run()
     at.selectbox(key="torsion_method").set_value(codes.EC2_2005.label).run()
+
+    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.62)
+    assert at.session_state["torsion_factor_approval"] == (
+        "DB-TOR-04 / checker C"
+    )
+
+    at.selectbox(key="torsion_factor_mode").set_value(
+        codes.FACTOR_MODE_PRESET
+    ).run()
+    assert at.number_input(key="torsion_gamma_ct").value != pytest.approx(1.62)
+    at.selectbox(key="torsion_factor_mode").set_value(
+        codes.FACTOR_MODE_OVERRIDE
+    ).run()
 
     assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.62)
     assert at.session_state["torsion_factor_approval"] == (

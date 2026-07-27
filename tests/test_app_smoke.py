@@ -1771,6 +1771,9 @@ def test_app_fatigue_factor_switches_and_approved_override_persist():
     at.selectbox(key="fatigue_factor_mode").set_value(
         fatigue_inputs.FACTOR_MODE_OVERRIDE
     ).run()
+    assert at.number_input(key="fatigue_gamma_s").value is None
+    assert at.number_input(key="fatigue_gamma_c").value is None
+    assert at.text_input(key="fatigue_factor_approval").value == ""
     at.number_input(key="fatigue_gamma_s").set_value(1.27).run()
     at.number_input(key="fatigue_gamma_c").set_value(1.61).run()
     at.text_input(key="fatigue_factor_approval").set_value(
@@ -1793,6 +1796,21 @@ def test_app_fatigue_factor_switches_and_approved_override_persist():
     assert at.session_state[fatigue_inputs.BASIS_KEY][
         "approval_reference"
     ] == "TRAFFIC-09 / authority B"
+
+    at.selectbox(key="fatigue_factor_mode").set_value(
+        fatigue_inputs.FACTOR_MODE_PRESET
+    ).run()
+    assert at.number_input(key="fatigue_gamma_s").value != pytest.approx(1.27)
+    assert at.number_input(key="fatigue_gamma_c").value != pytest.approx(1.61)
+    at.selectbox(key="fatigue_factor_mode").set_value(
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    ).run()
+
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.27)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.61)
+    assert at.session_state["fatigue_factor_approval"] == (
+        "DB-FACT-09 / checker A"
+    )
 
 
 def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
@@ -1989,6 +2007,198 @@ def test_boolean_factor_session_state_fails_closed_in_both_mirrors(
     repaired = at.session_state["_invalid_factor_input_keys"]
     assert "fatigue_gamma_s" not in repaired
     assert set(repaired) == set(expected_keys) - {"fatigue_gamma_s"}
+
+
+def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
+    tmp_path,
+    monkeypatch,
+):
+    import fatigue_analysis
+    import fatigue_inputs
+    import project_io
+    import reinforcement_table as rt
+    from sector import capacity, codes
+
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    bars = at.session_state["bars_base"].copy(deep=True)
+    bars[rt.FATIGUE_DETAIL_ID] = "F1"
+    spectrum = fatigue_inputs.normalise_spectrum_table([{
+        "spectrum": "Traffic",
+        "name": "FAT-REPAIR",
+        "description": "Approved-factor repair regression",
+        "cycles": 2.0e6,
+        "n_long_ed_kn": -100.0,
+        "mx_long_ed_knm": 0.0,
+        "my_long_ed_knm": 0.0,
+        "n_short_ed_kn": 0.0,
+        "mx_short_ed_knm": 20.0,
+        "my_short_ed_knm": 0.0,
+    }])
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    tables["bars_base"] = bars
+    tables[fatigue_inputs.SPECTRUM_TABLE_KEY] = spectrum
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in at.session_state
+    }
+    scalars.update({
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_check_steel": True,
+        "fatigue_check_concrete": True,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-FACT-23 / checker H",
+        "fatigue_gamma0": 1.0,
+        "fatigue_gamma3": 1.0,
+        "fatigue_gamma_s": 1.33,
+        "fatigue_gamma_c": 1.60,
+        "fatigue_gamma_ff": 1.0,
+        fatigue_inputs.DETAIL_CATALOG_KEY: fatigue_inputs.default_catalog(),
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
+        "torsion_on": True,
+        "torsion_method": codes.EC2_2005_DKNA.label,
+        "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
+        "torsion_factor_approval": "DB-TOR-09 / checker H",
+        "torsion_gamma0": 1.0,
+        "torsion_gamma3": 1.0,
+        "torsion_gamma_ct": 1.71,
+    })
+    at.session_state["_pending_project"] = project_io.dump_project(
+        tables, scalars
+    )
+    at.run()
+    assert not at.exception
+
+    stale_categories = {
+        "fatigue_gamma0": True,
+        "fatigue_gamma3": np.bool_(True),
+        "torsion_gamma0": True,
+        "torsion_gamma3": np.bool_(True),
+    }
+    durable = dict(at.session_state["_durable_input_scalars"])
+    for key, value in stale_categories.items():
+        at.session_state[key] = value
+        durable[key] = value
+    at.session_state["_durable_input_scalars"] = durable
+    at.run()
+
+    expected_rejected = tuple(sorted(stale_categories))
+    assert not at.exception
+    assert at.session_state["_invalid_factor_input_keys"] == expected_rejected
+    for key in stale_categories:
+        assert at.number_input(key=key).disabled is False
+    assert at.button(key="confirm_fatigue_factor_repairs").disabled is False
+    assert at.button(key="confirm_torsion_factor_repairs").disabled is False
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.33)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.60)
+    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.71)
+
+    # Browser reconstruction can place apparently valid values back into the live
+    # widget namespace without a real edit. The marker must survive that rerun
+    # until the engineer uses the enabled explicit-confirmation control.
+    repaired_categories = {
+        "fatigue_gamma0": 0.97,
+        "fatigue_gamma3": 1.04,
+        "torsion_gamma0": 0.98,
+        "torsion_gamma3": 1.03,
+    }
+    for key in ("fatigue_gamma0", "fatigue_gamma3"):
+        at.session_state[key] = repaired_categories[key]
+    at.run()
+    assert at.session_state["_invalid_factor_input_keys"] == expected_rejected
+    at.button(key="confirm_fatigue_factor_repairs").click().run()
+    assert set(at.session_state["_invalid_factor_input_keys"]) == {
+        "torsion_gamma0",
+        "torsion_gamma3",
+    }
+
+    # Reproduce the former overwrite path for torsion: switch to the preset, repair
+    # its categories through enabled controls, then return to override. The
+    # separately retained approved final value must survive that whole sequence.
+    at.selectbox(key="torsion_factor_mode").set_value(
+        codes.FACTOR_MODE_PRESET
+    ).run()
+    assert at.number_input(key="torsion_gamma_ct").value != pytest.approx(1.71)
+    for key in ("torsion_gamma0", "torsion_gamma3"):
+        value = repaired_categories[key]
+        widget = at.number_input(key=key)
+        assert widget.disabled is False
+        widget.set_value(value).run()
+    at.selectbox(key="torsion_factor_mode").set_value(
+        codes.FACTOR_MODE_OVERRIDE
+    ).run()
+
+    assert "_invalid_factor_input_keys" not in at.session_state
+    assert at.session_state["fatigue_gamma_s"] == pytest.approx(1.33)
+    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.60)
+    assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.71)
+    assert at.session_state["fatigue_factor_approval"] == (
+        "DB-FACT-23 / checker H"
+    )
+    assert at.session_state["torsion_factor_approval"] == (
+        "DB-TOR-09 / checker H"
+    )
+
+    # Preset values may be displayed temporarily, but returning to override must
+    # restore the separately retained approved values and their approvals.
+    at.selectbox(key="fatigue_factor_mode").set_value(
+        fatigue_inputs.FACTOR_MODE_PRESET
+    ).run()
+    assert at.number_input(key="fatigue_gamma_s").value != pytest.approx(1.33)
+    at.selectbox(key="fatigue_factor_mode").set_value(
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    ).run()
+
+    inp = at.session_state["_latest_inputs"]
+    assert not any(
+        "Boolean/non-numeric values are not accepted" in error
+        for error in fatigue_analysis.validation_errors(inp)
+    )
+    assert capacity.torsion_factor_validation_error(inp) is None
+    assert inp["fatigue_gamma_s"] == pytest.approx(1.33)
+    assert inp["fatigue_gamma_c"] == pytest.approx(1.60)
+    assert inp["torsion_gamma_ct"] == pytest.approx(1.71)
+
+    _calculate(at)
+    assert not at.exception
+    fatigue = at.session_state["results"]["fatigue"]
+    assert fatigue["partial_factors"]["gamma_s"] == pytest.approx(1.33)
+    assert fatigue["partial_factors"]["gamma_c"] == pytest.approx(1.60)
+
+    _goto_input_tab(at, "Project & report")
+    download = next(
+        widget
+        for widget in at.download_button
+        if widget.label == "Download project"
+    )
+    assert download.proto.disabled is False
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+    saved = tmp_path / "autosave.json"
+    assert saved.exists()
+    _, saved_scalars = project_io.parse_project(
+        saved.read_text(encoding="utf-8")
+    )
+    assert saved_scalars["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    assert saved_scalars["fatigue_gamma_s"] == pytest.approx(1.33)
+    assert saved_scalars["fatigue_gamma_c"] == pytest.approx(1.60)
+    assert saved_scalars["fatigue_factor_approval"] == (
+        "DB-FACT-23 / checker H"
+    )
+    assert saved_scalars["torsion_factor_mode"] == codes.FACTOR_MODE_OVERRIDE
+    assert saved_scalars["torsion_gamma_ct"] == pytest.approx(1.71)
+    assert saved_scalars["torsion_factor_approval"] == (
+        "DB-TOR-09 / checker H"
+    )
 
 
 def test_app_fatigue_override_does_not_reuse_spectrum_method_approval():
