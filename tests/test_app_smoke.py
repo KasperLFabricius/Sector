@@ -3993,6 +3993,62 @@ def test_native_data_editor_state_is_not_replayed_through_session_state():
     assert _widget(at.dataframe, "elastic_cases_editor").value is not None
 
 
+def test_native_editor_callback_commits_delta_before_interrupted_recovery(
+    monkeypatch,
+):
+    import fatigue_inputs
+    import load_cases
+    import sector_app
+
+    plastic_key = load_cases.PLASTIC_TABLE_KEY
+    plastic_seed = load_cases.normalise_table([
+        {"name": "P1", "mx_ed_knm": 10.0},
+        {"name": "P2", "mx_ed_knm": 20.0},
+    ], plastic_key)
+    state = {
+        "_main_page": "Inputs",
+        plastic_key: plastic_seed.copy(deep=True),
+        f"_{plastic_key}_editor_seed": plastic_seed.copy(deep=True),
+        "plastic_cases_editor": {
+            "edited_rows": {"0": {"mx_ed_knm": 125.0}},
+            "deleted_rows": [1],
+            "added_rows": [{"name": "P3", "mx_ed_knm": 75.0}],
+        },
+    }
+    monkeypatch.setattr(sector_app.st, "session_state", state)
+
+    sector_app._record_input_event(
+        "plastic_cases_editor",
+        sector_app._commit_case_editor_delta,
+        (plastic_key,),
+    )
+
+    committed = state[plastic_key]
+    assert committed["name"].tolist() == ["P1", "P3"]
+    assert committed["mx_ed_knm"].tolist() == pytest.approx([125.0, 75.0])
+    assert "_pending_input_events" not in state
+
+    fatigue_key = fatigue_inputs.SPECTRUM_TABLE_KEY
+    fatigue_seed = fatigue_inputs.normalise_spectrum_table([
+        {"spectrum": "S1", "name": "F1", "cycles": 1000.0},
+    ])
+    state.update({
+        fatigue_key: fatigue_seed.copy(deep=True),
+        f"_{fatigue_key}_editor_seed": fatigue_seed.copy(deep=True),
+        "fatigue_spectrum_editor": {
+            "edited_rows": {0: {"cycles": 2500.0}},
+            "deleted_rows": [],
+            "added_rows": [],
+        },
+    })
+    sector_app._record_input_event(
+        "fatigue_spectrum_editor",
+        sector_app._commit_fatigue_editor_delta,
+    )
+    assert state[fatigue_key].loc[0, "cycles"] == pytest.approx(2500.0)
+    assert "_pending_input_events" not in state
+
+
 def test_detailing_controls_run_selected_case_and_section_wide_spacing():
     import load_cases
 
@@ -5065,6 +5121,29 @@ def test_short_term_load_triggers_cracking():
     # code limit and the short-term one under the peak.
     assert e["crack"] is not None and e["crack"]["wk"] > 0.0
     assert e["crack_short"] is not None and e["crack_short"]["wk"] > 0.0
+
+
+def test_short_term_only_crack_verdict_ignores_no_tension_long_term():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 0.0),
+        ("number_input", "el_short_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+    )
+
+    assert not at.exception
+    elastic = at.session_state["results"]["elastic"]
+    assert elastic["crack"] is None
+    assert elastic["crack_short"] is not None
+    assert elastic["crack_dispositions"]["Long-term"]["status"] == (
+        "NOT APPLICABLE"
+    )
+    assert elastic["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
+    assert elastic["crack_assessment"]["case"] == "Short-term"
 
 
 def test_cracked_properties_use_the_governing_load_when_long_term_is_zero():

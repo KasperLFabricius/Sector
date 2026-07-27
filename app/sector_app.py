@@ -1746,6 +1746,8 @@ def _case_table_editor(box, key):
                 "height": "auto",
                 "column_config": _case_column_config(key),
                 "column_order": load_cases.TABLE_COLUMNS[key],
+                "on_change": _commit_case_editor_delta,
+                "args": (key,),
             },
         ),
     )
@@ -1791,6 +1793,90 @@ _NON_REPLAYABLE_WIDGET_KEYS = frozenset({
     *_CASE_EDITOR_KEYS.values(),
     _FATIGUE_EDITOR_KEY,
 })
+
+
+def _apply_native_editor_delta(seed, delta):
+    """Apply one cumulative Streamlit data-editor delta to its frozen seed.
+
+    Streamlit owns the widget-state dictionary, so it must never be assigned
+    back through ``session_state``.  Its delta is nevertheless available inside
+    the widget callback.  Applying that cumulative delta to the same immutable
+    seed used by the editor lets the callback commit the authoritative table
+    before a second browser event can supersede the rerun.
+    """
+
+    frame = (
+        seed.copy(deep=True)
+        if isinstance(seed, pd.DataFrame)
+        else pd.DataFrame(seed)
+    ).reset_index(drop=True)
+    if not isinstance(delta, dict):
+        return frame
+
+    edited_rows = delta.get("edited_rows")
+    if isinstance(edited_rows, dict):
+        for row_id, changes in edited_rows.items():
+            try:
+                row_pos = int(row_id)
+            except (TypeError, ValueError):
+                continue
+            if (
+                row_pos < 0
+                or row_pos >= len(frame)
+                or not isinstance(changes, dict)
+            ):
+                continue
+            for column, value in changes.items():
+                if column in frame.columns:
+                    frame.iat[row_pos, frame.columns.get_loc(column)] = value
+
+    deleted_rows = delta.get("deleted_rows")
+    if isinstance(deleted_rows, (list, tuple)):
+        positions = []
+        for row_id in deleted_rows:
+            try:
+                row_pos = int(row_id)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= row_pos < len(frame):
+                positions.append(row_pos)
+        if positions:
+            frame = frame.drop(frame.index[sorted(set(positions))])
+
+    added_rows = delta.get("added_rows")
+    if isinstance(added_rows, (list, tuple)):
+        rows = [row for row in added_rows if isinstance(row, dict)]
+        if rows:
+            frame = pd.concat(
+                [frame, pd.DataFrame(rows)],
+                ignore_index=True,
+                sort=False,
+            )
+    return frame.reset_index(drop=True)
+
+
+def _commit_case_editor_delta(key):
+    """Commit a native load-editor event before its rerun can be interrupted."""
+
+    editor_key = _CASE_EDITOR_KEYS[key]
+    seed_key = f"_{key}_editor_seed"
+    seed = st.session_state.get(seed_key, st.session_state.get(key))
+    current = _apply_native_editor_delta(
+        seed, st.session_state.get(editor_key)
+    )
+    st.session_state[key] = load_cases.normalise_table(current, key)
+
+
+def _commit_fatigue_editor_delta():
+    """Commit a native fatigue-editor event before rerun recovery."""
+
+    key = fatigue_inputs.SPECTRUM_TABLE_KEY
+    seed_key = f"_{key}_editor_seed"
+    seed = st.session_state.get(seed_key, st.session_state.get(key))
+    current = _apply_native_editor_delta(
+        seed, st.session_state.get(_FATIGUE_EDITOR_KEY)
+    )
+    st.session_state[key] = fatigue_inputs.normalise_spectrum_table(current)
 
 
 def _fatigue_spectrum_column_config():
@@ -1890,6 +1976,7 @@ def _fatigue_spectrum_editor(box):
                 "height": "auto",
                 "column_config": _fatigue_spectrum_column_config(),
                 "column_order": fatigue_inputs.SPECTRUM_COLUMNS,
+                "on_change": _commit_fatigue_editor_delta,
             },
         ),
     )
@@ -2417,9 +2504,9 @@ def _restore_input_state(*, replace: bool = False) -> None:
     # discard an earlier edit from the same burst.
     for key, value in st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}).items():
         # Native data-editor keys contain Streamlit-owned edit deltas. Streamlit
-        # forbids assigning those widget values through session_state; the live
-        # widget state survives reruns and the returned frame is committed to its
-        # canonical base table by the editor render.
+        # forbids assigning those widget values through session_state. Their
+        # callbacks already apply the cumulative delta to the canonical base
+        # table before this recovery path can run.
         if key in _NON_REPLAYABLE_WIDGET_KEYS:
             continue
         st.session_state[key] = copy.deepcopy(value)

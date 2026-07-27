@@ -386,6 +386,28 @@ def test_zero_reinforcement_is_blocking_not_assessed():
     assert "no reinforcement" in evaluation.reason
 
 
+def test_cracked_load_state_without_tension_is_not_applicable():
+    section = _mixed_bending_section()
+    state = solve_elastic(section, 0.0, 150.0, 0.0, 6.0)
+    no_tension = dataclasses.replace(
+        state,
+        bar_stress=-np.abs(np.asarray(state.bar_stress, dtype=float)),
+    )
+
+    evaluation = evaluate_crack_width(
+        section,
+        no_tension,
+        6.0,
+        fctm=fctm(30.0),
+        bar_diameter=16.0,
+        edition="2023",
+    )
+
+    assert evaluation.status == "NOT APPLICABLE"
+    assert evaluation.result is None
+    assert "no reinforcement in tension" in evaluation.reason
+
+
 def test_rotated_asymmetric_section_retains_value_and_reports_direction():
     corners = [
         (0.0, 0.0), (0.40, 0.0), (0.40, 0.15),

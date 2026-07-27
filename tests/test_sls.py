@@ -188,6 +188,31 @@ def test_crack_assessment_blocks_when_any_requested_case_is_not_assessed():
     assert "validated scope" in result["reason"]
 
 
+def test_crack_assessment_ignores_not_applicable_case_when_another_calculates():
+    result = sls.crack_assessment(
+        {
+            "Long-term": None,
+            "Short-term": {"wk": 0.22, "element_id": "bar 2"},
+        },
+        limit_mm=0.30,
+        valid=True,
+        dispositions={
+            "Long-term": {
+                "status": "NOT APPLICABLE",
+                "reason": "No reinforcement is in tension.",
+            },
+            "Short-term": {
+                "status": "CALCULATED",
+                "reason": "Crack width calculated.",
+            },
+        },
+    )
+
+    assert result["status"] == "OK"
+    assert result["case"] == "Short-term"
+    assert result["value"] == pytest.approx(0.22)
+
+
 def test_crack_assessment_retains_not_applicable_reason():
     result = sls.crack_assessment(
         {"Long-term": None, "Short-term": None},

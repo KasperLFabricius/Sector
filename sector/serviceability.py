@@ -643,8 +643,9 @@ def _crack_width(
             "The cracked-state reinforcement stress array is invalid."
         )
     if float(sigma.max()) <= 0.0:
-        return _not_assessed(
-            "The section is cracked but has no reinforcement in tension."
+        return _not_applicable(
+            "The load state has no reinforcement in tension, so no crack "
+            "opening is applicable."
         )
 
     derived_phi = np.sqrt(4.0 * ba * 1.0e6 / math.pi)
