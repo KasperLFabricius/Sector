@@ -29,6 +29,8 @@ from sector.build_info import source_revision
 
 FORMAT = "sector-project"
 VERSION = 16  # v16: explicit 2023 prestressing bond inputs for crack control
+DEFAULT_SLS_TENDON_BOND = "Plain round (k1 = 1.6)"
+DEFAULT_SLS_TENDON_XI = 0.0
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
     "shear_cot_min",
@@ -375,6 +377,13 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
         )
     }
+    # Version 16 makes both tendon bond inputs part of the canonical project
+    # schema.  Write them even for deliberately partial saves so reloading that
+    # file in a reused UI session cannot inherit values from another project.
+    scalar_payload.setdefault(
+        "sls_tendon_bond", DEFAULT_SLS_TENDON_BOND
+    )
+    scalar_payload.setdefault("sls_tendon_xi", DEFAULT_SLS_TENDON_XI)
     # Empty override widgets use ``None`` in Streamlit state. Persist them exactly
     # like absent optional values so a no-edit load/save keeps the canonical input
     # hash stable and never synthesises an approved numeric factor.
@@ -822,12 +831,13 @@ def parse_project(text: str):
             ),
         )
     # v16 makes the prestressing bond condition and xi input explicit for the
-    # 2023 effective reinforcement ratio. Old projects retain the conservative
-    # poor-bond choice and a blocking zero xi, so no reused session value can
-    # silently turn an incomplete mixed-reinforcement check into a pass.
-    if data.get("version", 1) < 16:
-        scalars.setdefault("sls_tendon_bond", "Plain round (k1 = 1.6)")
-        scalars.setdefault("sls_tendon_xi", 0.0)
+    # 2023 effective reinforcement ratio.  Default absent keys for every input
+    # version, including partial v16 files produced by external callers.  The
+    # conservative poor-bond choice and blocking zero xi prevent a reused UI
+    # session from silently turning an incomplete mixed-reinforcement check into
+    # a calculated result.
+    scalars.setdefault("sls_tendon_bond", DEFAULT_SLS_TENDON_BOND)
+    scalars.setdefault("sls_tendon_xi", DEFAULT_SLS_TENDON_XI)
     if (
         bool(scalars.get("fatigue_on"))
         or "fatigue_factor_mode" in scalars

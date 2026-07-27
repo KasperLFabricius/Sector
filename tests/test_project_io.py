@@ -132,10 +132,11 @@ def test_round_trip_tables_and_scalars():
             expected.reset_index(drop=True), check_dtype=False)
 
 
-def test_v15_project_defaults_new_crack_tendon_inputs_fail_closed():
+@pytest.mark.parametrize("version", [15, project_io.VERSION])
+def test_project_defaults_missing_crack_tendon_inputs_fail_closed(version):
     text = json.dumps({
         "format": project_io.FORMAT,
-        "version": 15,
+        "version": version,
         "tables": {},
         "scalars": {
             "sls_cw": True,
@@ -144,8 +145,26 @@ def test_v15_project_defaults_new_crack_tendon_inputs_fail_closed():
     })
 
     _tables_out, scalars = project_io.parse_project(text)
-    assert scalars["sls_tendon_bond"] == "Plain round (k1 = 1.6)"
-    assert scalars["sls_tendon_xi"] == pytest.approx(0.0)
+    assert scalars["sls_tendon_bond"] == project_io.DEFAULT_SLS_TENDON_BOND
+    assert scalars["sls_tendon_xi"] == pytest.approx(
+        project_io.DEFAULT_SLS_TENDON_XI
+    )
+
+
+def test_current_partial_save_writes_crack_tendon_defaults_canonically():
+    text = project_io.dump_project({}, {"sls_cw": True})
+    payload = json.loads(text)
+    tables, scalars = project_io.parse_project(text)
+
+    assert payload["scalars"]["sls_tendon_bond"] == (
+        project_io.DEFAULT_SLS_TENDON_BOND
+    )
+    assert payload["scalars"]["sls_tendon_xi"] == pytest.approx(
+        project_io.DEFAULT_SLS_TENDON_XI
+    )
+    assert project_io.input_sha256(tables, scalars) == (
+        payload["provenance"]["input_sha256"]
+    )
 
 
 def test_v4_reinforcement_rows_migrate_to_stable_area_based_elements():
@@ -930,7 +949,11 @@ def test_blank_separator_row_survives_round_trip():
 def test_unknown_scalar_keys_are_dropped():
     text = project_io.dump_project({}, {"conc_fck": 30.0, "secret": 1, "results": "x"})
     _, scalars = project_io.parse_project(text)
-    assert scalars == {"conc_fck": 30.0}
+    assert scalars == {
+        "conc_fck": 30.0,
+        "sls_tendon_bond": project_io.DEFAULT_SLS_TENDON_BOND,
+        "sls_tendon_xi": project_io.DEFAULT_SLS_TENDON_XI,
+    }
 
 
 def test_project_provenance_records_and_verifies_exact_inputs():

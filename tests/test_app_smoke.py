@@ -474,6 +474,54 @@ def test_loading_a_project_applies_a_seeded_setting(tmp_path):
     assert "_clear_section_undo" not in at.session_state
 
 
+def test_loading_partial_v16_project_clears_previous_tendon_bond_inputs():
+    import json
+    import project_io
+
+    at = _fresh()
+    at.run()
+    at.session_state["_pending_project"] = project_io.dump_project(
+        {},
+        {
+            "sls_tendon_bond": "Ribbed / high bond (k1 = 0.8)",
+            "sls_tendon_xi": 0.65,
+        },
+    )
+    at.run()
+    assert not at.exception
+    assert at.session_state["sls_tendon_bond"] == (
+        "Ribbed / high bond (k1 = 0.8)"
+    )
+    assert at.session_state["sls_tendon_xi"] == pytest.approx(0.65)
+
+    # External callers may still provide a valid current-version partial file.
+    # Loading it is a whole-input replacement and must not retain the prior
+    # project's favourable tendon properties in either live or durable state.
+    at.session_state["_pending_project"] = json.dumps({
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": {
+            "sls_cw": True,
+            "sls_code": "EN 1992-1-1:2023",
+        },
+    })
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["sls_tendon_bond"] == (
+        project_io.DEFAULT_SLS_TENDON_BOND
+    )
+    assert at.session_state["sls_tendon_xi"] == pytest.approx(
+        project_io.DEFAULT_SLS_TENDON_XI
+    )
+    durable = at.session_state["_durable_input_scalars"]
+    assert durable["sls_tendon_bond"] == project_io.DEFAULT_SLS_TENDON_BOND
+    assert durable["sls_tendon_xi"] == pytest.approx(
+        project_io.DEFAULT_SLS_TENDON_XI
+    )
+
+
 def test_about_panel_shows_version_author_and_licensee():
     # The About panel carries the single-source release and ownership metadata.
     at = _fresh()

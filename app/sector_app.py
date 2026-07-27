@@ -4163,7 +4163,7 @@ def build_inputs(host=st):
         scw,
         r"Prestressing-steel bond condition ($k_b$)",
         list(_BOND_K1),
-        "Plain round (k1 = 1.6)",
+        project_io.DEFAULT_SLS_TENDON_BOND,
         "sls_tendon_bond",
         disabled=not (
             elastic_on and sls_cw and sls_edition == "2023"
@@ -4181,7 +4181,7 @@ def build_inputs(host=st):
         r"Prestressing bond-strength ratio $\xi$ (0 = not assessed)",
         0.0,
         1.0,
-        0.0,
+        project_io.DEFAULT_SLS_TENDON_XI,
         0.05,
         "sls_tendon_xi",
         disabled=not (elastic_on and sls_cw and sls_edition == "2023"),
