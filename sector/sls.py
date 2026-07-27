@@ -921,7 +921,66 @@ def crack_assessment(
         )
         return out
 
+    validated_widths: dict[str, float] = {}
+    rejected_widths = []
+    for name, response in cases.items():
+        if response is None:
+            continue
+        if not isinstance(response, Mapping):
+            rejected_widths.append(name)
+            continue
+        width = crack_width_numeric_value(response.get("wk"))
+        if width is None:
+            rejected_widths.append(name)
+        else:
+            validated_widths[name] = width
+
     criterion_results = []
+    if rejected_widths:
+        criterion_results.append({
+            "criterion_id": "calculated-crack-response-integrity",
+            "kind": "Calculated crack-width response integrity",
+            "criterion_source_type": "Solver result validation",
+            "criterion_source": "Calculated response integrity gate",
+            "applicability": {
+                "rejected_responses": list(rejected_widths),
+            },
+            "required_combination": None,
+            "limit": None,
+            "util": None,
+            "margin": None,
+            "value": None,
+            "case": ", ".join(rejected_widths),
+            "governing": None,
+            "response_duration": None,
+            "response_provenance": [
+                {
+                    "response": name,
+                    "response_id": contexts[name]["response_id"],
+                    "combination": contexts[name]["combination"],
+                    "duration": contexts[name]["duration"],
+                    "mapping": contexts[name]["provenance"],
+                }
+                for name in rejected_widths
+            ],
+            "solver_provenance": [
+                {
+                    "response": name,
+                    "solver": contexts[name]["solver_provenance"],
+                }
+                for name in rejected_widths
+            ],
+            "matched_responses": list(rejected_widths),
+            "status": "NOT ASSESSED",
+            "reason": (
+                "Calculated crack-width result rejected for "
+                f"{', '.join(rejected_widths)}: w_k is Boolean-bearing, "
+                "missing, non-scalar, non-finite or negative. Every non-null "
+                "calculated response, including informational responses, is "
+                "validated before combination routing. No overall acceptance "
+                "verdict was issued."
+            ),
+        })
     matched_names: set[str] = set()
     disposition_map = dispositions or {}
 
@@ -1209,21 +1268,17 @@ def crack_assessment(
             criterion_results.append(base)
             continue
 
-        checked_available = []
-        rejected_widths = []
-        for name, response in available:
-            width = crack_width_numeric_value(response.get("wk"))
-            if width is None:
-                rejected_widths.append(name)
-            else:
-                checked_available.append((name, response, width))
-        if rejected_widths:
+        rejected_candidates = [
+            name for name, _response in available
+            if name in rejected_widths
+        ]
+        if rejected_candidates:
             base.update(
                 status="NOT ASSESSED",
-                case=", ".join(rejected_widths),
+                case=", ".join(rejected_candidates),
                 reason=(
                     "Calculated crack-width result rejected for "
-                    f"{', '.join(rejected_widths)}: w_k is Boolean-bearing, "
+                    f"{', '.join(rejected_candidates)}: w_k is Boolean-bearing, "
                     "missing, non-scalar, non-finite or negative. No acceptance "
                     "verdict was issued."
                 ),
@@ -1232,12 +1287,16 @@ def crack_assessment(
                         "response": name,
                         "solver": contexts[name]["solver_provenance"],
                     }
-                    for name in rejected_widths
+                    for name in rejected_candidates
                 ],
             )
             criterion_results.append(base)
             continue
 
+        checked_available = [
+            (name, response, validated_widths[name])
+            for name, response in available
+        ]
         name, governing, governing_width = max(
             checked_available,
             key=lambda item: item[2],

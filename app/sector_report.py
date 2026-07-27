@@ -4336,6 +4336,14 @@ class ReportBuilder:
             "source: "
             f"{assessment.get('criterion_source') or el.get('sls_limit_source', '-')}."
         )
+        if (
+            not no_results
+            and status in {"INVALID", "NOT ASSESSED"}
+            and assessment.get("reason")
+        ):
+            self._small(
+                "Assessment note: " + str(assessment.get("reason"))
+            )
         criteria = assessment.get("criteria") or []
         if criteria:
             rows = [[

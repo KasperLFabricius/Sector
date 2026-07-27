@@ -1371,10 +1371,19 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
             "response_id": "long",
             "solver_provenance": {"state": "long"},
         },
+        "Total (long + short)": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "response_id": "total",
+            "solver_provenance": {"state": "long-plus-short"},
+        },
     }
     assessment = sls.crack_assessment(
         {
             "Long-term": {
+                "wk": 0.22,
+                "element_id": "bar 1",
+            },
+            "Total (long + short)": {
                 "wk": np.asarray(False, dtype=object),
                 "element_id": "bar 1",
             },
@@ -1391,9 +1400,10 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
         }],
         response_contexts=contexts,
     )
-    elastic["crack"]["wk"] = False
+    elastic["crack"]["wk"] = 0.22
     elastic["crack_short"]["wk"] = np.bool_(False)
     elastic["crack_assessment"] = assessment
+    elastic["crack_response_contexts"] = contexts
 
     text = _pdf_text(sector_report.build_report(
         {}, _inp(), out, figures=False

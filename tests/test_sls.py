@@ -725,6 +725,59 @@ def test_boolean_calculated_crack_width_is_review_not_pass(wk):
     }]
 
 
+@pytest.mark.parametrize(
+    "wk",
+    [
+        pytest.param(False, id="python-bool"),
+        pytest.param(np.bool_(False), id="numpy-bool-scalar"),
+        pytest.param(
+            np.asarray(False, dtype=object),
+            id="numpy-object-zero-dimensional",
+        ),
+    ],
+)
+def test_boolean_informational_crack_width_blocks_overall_pass(wk):
+    result = sls.crack_assessment(
+        {
+            "QP": {"wk": 0.22, "element_id": "bar 1"},
+            "Total": {"wk": wk, "element_id": "bar 1"},
+        },
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+                "solver_provenance": {"state": "long"},
+            },
+            "Total": {
+                "combination": sls.COMBINATION_CHARACTERISTIC,
+                "response_id": "total",
+                "solver_provenance": {"state": "long-plus-short"},
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["value"] is None
+    assert result["util"] is None
+    assert result["informational_responses"] == ["Total"]
+    assert "including informational responses" in result["reason"]
+    assert result["solver_provenance"] == [{
+        "response": "Total",
+        "solver": {"state": "long-plus-short"},
+    }]
+    routed = next(
+        item
+        for item in result["criteria"]
+        if item["kind"] == sls.CRITERION_DURABILITY
+    )
+    assert routed["status"] == "OK"
+    assert routed["case"] == "QP"
+    assert routed["value"] == pytest.approx(0.22)
+
+
 def test_missing_required_combination_is_review_with_response_provenance():
     result = sls.crack_assessment(
         {"Long-term": {"wk": 0.18, "element_id": "bar 2"}},

@@ -5144,11 +5144,20 @@ def test_boolean_calculated_crack_width_cannot_create_pass_record():
             "response_id": "long",
             "solver_provenance": {"state": "long"},
         },
+        "Total (long + short)": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "response_id": "total",
+            "solver_provenance": {"state": "long-plus-short"},
+        },
     }
     rejected_wk = np.asarray(False, dtype=object)
     assessment = sls.crack_assessment(
         {
             "Long-term": {
+                "wk": 0.22,
+                "element_id": "R1",
+            },
+            "Total (long + short)": {
                 "wk": rejected_wk,
                 "element_id": "R1",
             },
@@ -5163,12 +5172,17 @@ def test_boolean_calculated_crack_width_cannot_create_pass_record():
             "crack_assessment": assessment,
             "crack_responses": {
                 "Long-term": {
+                    "wk": 0.22,
+                    "element_id": "R1",
+                },
+                "Total (long + short)": {
                     "wk": rejected_wk,
                     "element_id": "R1",
                 },
             },
             "crack_dispositions": {
                 "Long-term": {"status": "OK"},
+                "Total (long + short)": {"status": "OK"},
             },
             "crack_response_contexts": contexts,
         },
@@ -5177,8 +5191,14 @@ def test_boolean_calculated_crack_width_cannot_create_pass_record():
     recorded = record["cases"][0]
     assert recorded["assessment"]["status"] == "NOT ASSESSED"
     assert recorded["assessment"]["verdict"] == "REVIEW"
-    assert recorded["responses"][0]["wk_mm"] is None
-    assert "rejected" in recorded["responses"][0][
+    responses = {
+        response["name"]: response for response in recorded["responses"]
+    }
+    assert responses["Long-term"]["wk_mm"] == pytest.approx(0.22)
+    rejected = responses["Total (long + short)"]
+    assert rejected["wk_mm"] is None
+    assert rejected["acceptance_role"] == "informational"
+    assert "rejected" in rejected[
         "result_validation"
     ].lower()
     assert '"PASS"' not in json.dumps(record)
