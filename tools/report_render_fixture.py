@@ -33,7 +33,7 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
-from sector import capacity, codes, combined, detailing, shear, torsion  # noqa: E402
+from sector import capacity, codes, combined, detailing, shear, sls, torsion  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -108,6 +108,8 @@ def _inputs() -> dict:
         {
             "name": "EL-QA-1",
             "description": "Characteristic stresses | Source: QA register",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "total_combination": sls.COMBINATION_CHARACTERISTIC,
             "n_long_ed_kn": 0.0,
             "mx_long_ed_knm": 80.0,
             "my_long_ed_knm": 0.0,
@@ -120,6 +122,8 @@ def _inputs() -> dict:
         {
             "name": "EL-QA-2",
             "description": "Frequent response | Source: QA register",
+            "long_combination": sls.COMBINATION_UNSPECIFIED,
+            "total_combination": sls.COMBINATION_UNSPECIFIED,
             "n_long_ed_kn": 0.0,
             "mx_long_ed_knm": 45.0,
             "my_long_ed_knm": 0.0,
@@ -308,6 +312,20 @@ def _inputs() -> dict:
         "sls_tendon_bond": "Plain round (k1 = 1.6)",
         "sls_tendon_k1": 1.6,
         "sls_tendon_xi": 0.0,
+        "sls_code": "EN 1992-1-1:2005",
+        "sls_edition": "2004",
+        "sls_dk_na": False,
+        "sls_member": "Beam",
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_exposure_context": "XC3 / QA durability criterion",
+        "sls_check_appearance": False,
+        "sls_appearance_limit": 0.0,
+        "sls_check_durability": True,
+        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
+        "sls_project_characteristic_limit": 0.0,
+        "sls_project_frequent_limit": 0.0,
+        "sls_project_quasi_permanent_limit": 0.0,
         "sls_wk_limit": 0.30,
         "sls_conc_limit_pct": 60.0,
         "sls_steel_limit_pct": 80.0,
@@ -484,6 +502,55 @@ def _results(inp: dict | None = None) -> dict:
             "dy": 0.2,
         }],
     }
+    crack_long = _crack()
+    crack_total = copy.deepcopy(crack_long)
+    crack_total["wk"] = 0.31
+    crack_total["candidates"][0]["wk"] = 0.31
+    crack_contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "Sustained / long-term response",
+            "response_id": "long",
+            "provenance": (
+                "Elastic case 'EL-QA-1', long_combination table field"
+            ),
+            "solver_provenance": {
+                "state": "long",
+                "elastic_case": {"id": "EL-QA-1"},
+            },
+        },
+        "Total (long + short)": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "Instantaneous total (long + short) response",
+            "response_id": "total",
+            "provenance": (
+                "Elastic case 'EL-QA-1', total_combination table field"
+            ),
+            "solver_provenance": {
+                "state": "total",
+                "elastic_case": {"id": "EL-QA-1"},
+            },
+        },
+    }
+    crack_dispositions = {
+        name: {
+            "status": "CALCULATED",
+            "reason": "Fixture crack-width result calculated.",
+            "scope": "dominant-direction",
+        }
+        for name in crack_contexts
+    }
+    crack_criteria = sls.crack_criteria_from_inputs(inp)
+    crack_assessment = sls.crack_assessment(
+        {
+            "Long-term": crack_long,
+            "Total (long + short)": crack_total,
+        },
+        valid=True,
+        dispositions=crack_dispositions,
+        response_contexts=crack_contexts,
+        criteria=crack_criteria,
+    )
     elastic = {
         "total": [150.0],
         "long": [120.0],
@@ -561,18 +628,16 @@ def _results(inp: dict | None = None) -> dict:
             "Iy": 1.0e-4,
             "Ixy": 0.0,
         },
-        "crack": _crack(),
-        "crack_short": _crack(),
-        "crack_assessment": {
-            "value": 0.213,
-            "limit": 0.30,
-            "util": 0.71,
-            "margin": 0.087,
-            "status": "OK",
-            "case": "Long-term",
-            "governing": "bar 1",
-            "criterion": "0.3 mm",
+        "crack": crack_long,
+        "crack_short": crack_total,
+        "crack_criteria": crack_criteria,
+        "crack_dispositions": crack_dispositions,
+        "crack_response_contexts": crack_contexts,
+        "crack_responses": {
+            "Long-term": crack_long,
+            "Total (long + short)": crack_total,
         },
+        "crack_assessment": crack_assessment,
         "crack_code": "EN 1992-1-1:2005",
         "crack_edition": "2004",
         "crack_member": None,
@@ -1156,6 +1221,7 @@ def validate_pdf_content(pdf: bytes) -> str:
     """Reject a report that lost figures or core engineering content."""
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    normalized_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the report contains an unavailable-figure placeholder")
     for token in (
@@ -1175,8 +1241,12 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Crack-control conclusion limitation",
         "One-directional dominant strain-gradient assessment only",
         "Assessment scope",
+        "Acceptance route",
+        "Quasi-permanent",
+        "Informational",
+        "long_combination table field",
     ):
-        if expected not in text:
+        if expected not in normalized_text:
             raise AssertionError(
                 f"expected crack-control report evidence is missing: {expected}"
             )

@@ -127,6 +127,9 @@ def validate_pdf_content(pdf: bytes) -> str:
         "solid rectangular-section branch",
         "Crack-control scope",
         "Orthogonal or inclined crack systems",
+        "Acceptance combination is not load duration",
+        "Table 9.1 appearance",
+        "NOT ASSESSED / REVIEW",
         "currently applicable Danish",
         "Part D - Reference",
     ):

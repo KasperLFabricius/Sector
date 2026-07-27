@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import detailing  # noqa: E402
+from sector import detailing, sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -60,6 +60,16 @@ def _inp():
         "sls_tendon_bond": "Plain round (k1 = 1.6)",
         "sls_tendon_k1": 1.6, "sls_tendon_xi": 0.50,
         "conc_Ec": 33.0,
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_exposure_context": "XC3 / durability",
+        "sls_check_appearance": False,
+        "sls_appearance_limit": 0.0,
+        "sls_check_durability": True,
+        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
+        "sls_project_characteristic_limit": 0.0,
+        "sls_project_frequent_limit": 0.0,
+        "sls_project_quasi_permanent_limit": 0.0,
         "sls_wk_limit": 0.30, "sls_conc_limit_pct": 60.0,
         "sls_steel_limit_pct": 80.0, "sls_pre_limit_pct": 75.0,
         "sls_limit_source": "DB-SLS-01 section 4",
@@ -154,7 +164,59 @@ def _out():
                         "value": 0.213, "limit": 0.30, "util": 0.71,
                         "margin": 0.087, "status": "OK",
                         "case": "Long-term", "governing": "bar 1",
-                        "criterion": "0.3 mm",
+                        "criterion": sls.CRITERION_DURABILITY,
+                        "required_combination": (
+                            sls.COMBINATION_QUASI_PERMANENT
+                        ),
+                        "criterion_source": (
+                            "DS/EN 1992-1-1:2004 section 7.3.1(5), "
+                            "Table 7.1N"
+                        ),
+                        "criteria": [{
+                            "criterion_id": "standard-durability",
+                            "kind": sls.CRITERION_DURABILITY,
+                            "criterion_source_type": (
+                                sls.CRITERION_MODE_STANDARD
+                            ),
+                            "criterion_source": (
+                                "DS/EN 1992-1-1:2004 section 7.3.1(5), "
+                                "Table 7.1N"
+                            ),
+                            "required_combination": (
+                                sls.COMBINATION_QUASI_PERMANENT
+                            ),
+                            "matched_responses": ["Long-term"],
+                            "limit": 0.30,
+                            "value": 0.213,
+                            "status": "OK",
+                        }],
+                        "response_contexts": {
+                            "Long-term": {
+                                "combination": (
+                                    sls.COMBINATION_QUASI_PERMANENT
+                                ),
+                                "duration": "Sustained / long-term response",
+                                "provenance": (
+                                    "Elastic case 'EL-TEST', "
+                                    "long_combination table field"
+                                ),
+                            },
+                            "Total (long + short)": {
+                                "combination": (
+                                    sls.COMBINATION_CHARACTERISTIC
+                                ),
+                                "duration": (
+                                    "Instantaneous total (long + short) response"
+                                ),
+                                "provenance": (
+                                    "Elastic case 'EL-TEST', "
+                                    "total_combination table field"
+                                ),
+                            },
+                        },
+                        "informational_responses": [
+                            "Total (long + short)"
+                        ],
                     },
                     "crack_code": "EN 1992-1-1:2005", "crack_member": None}}
 
@@ -1181,7 +1243,7 @@ def test_report_mirrors_the_views():
     assert "Governing concrete corner response" in txt
     assert "Governing reinforcement and tendon response" in txt
     assert "Cracked" in txt                        # cracked transformed-props column
-    assert "both load cases" in txt                # full crack-width table
+    assert "both response states" in txt           # full crack-width table
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
     assert "Utilisation check" in txt              # analysis settings documented
     assert "Max / Min" in txt                      # both extremes for Mx and My
@@ -1215,6 +1277,11 @@ def test_report_includes_sls_criteria_strain_and_candidate_evidence():
     assert "Bar diameter" not in txt
     assert "bar 1" in txt
     assert "0.300 mm" in txt and "0.213 mm" in txt
+    assert "Quasi-permanent" in txt
+    assert "Characteristic" in txt
+    assert "Informational" in txt
+    assert "Table 7.1N" in txt
+    assert "long_combination table" in txt
     assert chr(0x394) + chr(0x3B5) in txt
     assert "delta eps" not in txt
 
@@ -1366,14 +1433,34 @@ def test_oversized_reinforcement_table_repeats_its_header():
     assert all("x (mm)" in page and "y (mm)" in page for page in bar_pages)
 
 
-def test_report_crack_worked_uses_the_governing_case():
-    # When the short-term load gives the larger wk, the worked example uses it.
+def test_report_crack_worked_uses_the_routed_response_not_the_largest_response():
+    # The explicit QP criterion routes to the sustained response even when the
+    # unrelated total/characteristic response has a larger crack width.
     out = _out()
     out["elastic"]["crack"] = dict(_crack(), wk=0.15)
     out["elastic"]["crack_short"] = dict(_crack(), wk=0.30)
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "short-term" in txt
-    assert "governing case (long-term)" not in txt
+    assert "routed response (Long-term)" in txt
+    assert "informational example" not in txt
+
+
+def test_report_project_crack_basis_lists_only_explicit_project_limits():
+    inp = _inp()
+    inp.update({
+        "sls_criterion_mode": sls.CRITERION_MODE_PROJECT,
+        "sls_project_frequent_limit": 0.24,
+        "sls_project_quasi_permanent_limit": 0.21,
+        # This disabled standard-mode value is retained in session state but is
+        # not applicable and therefore must not be presented as an active input.
+        "sls_wk_limit": 0.30,
+    })
+
+    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+
+    assert "Project criterion applicability / limits" in txt
+    assert "Frequent: 0.240 mm" in txt
+    assert "Quasi-permanent: 0.210 mm" in txt
+    assert "Durability crack-width criterion" not in txt
 
 
 def test_report_wide_spacing_shows_geometric_formula():

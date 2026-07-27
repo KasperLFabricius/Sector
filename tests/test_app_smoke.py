@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from streamlit.testing.v1 import AppTest
+from sector import sls
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
@@ -364,6 +365,13 @@ def test_persisted_settings_use_the_seeded_number_helper():
     # clamps by hand -- but still passes no value=, so it does not warn.)
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
                 "sls_tendon_bond", "sls_tendon_xi",
+                "sls_criterion_mode", "sls_prestress_class",
+                "sls_exposure_context", "sls_check_appearance",
+                "sls_appearance_limit", "sls_check_durability",
+                "sls_decompression_applicability",
+                "sls_project_characteristic_limit",
+                "sls_project_frequent_limit",
+                "sls_project_quasi_permanent_limit",
                 "label_scale", "label_min_gap",                # seeded number inputs
                 "pl_check_util", "pl_interaction",              # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
@@ -474,7 +482,7 @@ def test_loading_a_project_applies_a_seeded_setting(tmp_path):
     assert "_clear_section_undo" not in at.session_state
 
 
-def test_loading_partial_v16_project_clears_previous_tendon_bond_inputs():
+def test_loading_partial_current_project_clears_crack_routing_and_bond_inputs():
     import json
     import project_io
 
@@ -515,11 +523,86 @@ def test_loading_partial_v16_project_clears_previous_tendon_bond_inputs():
     assert at.session_state["sls_tendon_xi"] == pytest.approx(
         project_io.DEFAULT_SLS_TENDON_XI
     )
+    assert at.session_state["sls_criterion_mode"] == (
+        sls.CRITERION_MODE_LEGACY
+    )
     durable = at.session_state["_durable_input_scalars"]
     assert durable["sls_tendon_bond"] == project_io.DEFAULT_SLS_TENDON_BOND
     assert durable["sls_tendon_xi"] == pytest.approx(
         project_io.DEFAULT_SLS_TENDON_XI
     )
+    assert durable["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+
+
+def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results():
+    import load_cases
+    import project_io
+
+    tables = {
+        load_cases.ELASTIC_TABLE_KEY: load_cases.normalise_table([{
+            "name": "SLS-QP",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "total_combination": sls.COMBINATION_CHARACTERISTIC,
+            "mx_long_ed_knm": 80.0,
+            "mx_short_ed_knm": 20.0,
+            "check_crack_width": True,
+        }], load_cases.ELASTIC_TABLE_KEY),
+    }
+    scalars = {
+        "mode": "Elastic",
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_exposure_context": "XC3 / durability",
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
+    }
+    digest = project_io.input_sha256(tables, scalars)
+    crack_control = {
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+                "value": 0.22,
+                "limit": 0.30,
+            },
+            "responses": [],
+        }],
+    }
+    text = project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "e" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+
+    at = _fresh()
+    at.run()
+    at.session_state["results"] = {"stale": True}
+    at.session_state["_pending_project"] = text
+    at.run()
+
+    assert not at.exception
+    assert "results" not in at.session_state
+    assert at.session_state["sls_criterion_mode"] == (
+        sls.CRITERION_MODE_STANDARD
+    )
+    assert at.session_state["sls_exposure_context"] == "XC3 / durability"
+    elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY]
+    assert elastic.loc[0, "long_combination"] == (
+        sls.COMBINATION_QUASI_PERMANENT
+    )
+    assert at.session_state["calculation_record"]["crack_control"] == (
+        crack_control
+    )
+    assert at.session_state["calculation_record"]["matches_saved_inputs"] is True
 
 
 def test_about_panel_shows_version_author_and_licensee():
@@ -572,6 +655,9 @@ def test_calculate_elastic_produces_bar_stresses():
     res = at.session_state["results"]
     assert "elastic" in res
     assert len(res["elastic"]["total"]) > 0
+    # Result provenance is added only for an enabled crack-control calculation;
+    # an ordinary elastic run must not persist an irrelevant REVIEW snapshot.
+    assert "crack_control" not in at.session_state["calculation_record"]
 
 
 def test_combined_elastic_reports_four_columns():
@@ -2921,6 +3007,16 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     import sys as _sys
     at = _fresh()
     at.run()
+    _set(
+        at,
+        ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
     at.session_state["_autosave_t"] = 0.0          # make a save due, then rerun
     at.run()
     saved = tmp_path / "autosave.json"
@@ -2929,6 +3025,11 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     import project_io  # noqa: E402
     tables, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
     assert len(tables["corners_base"]) >= 3        # the live section, not blank
+    assert tables["elastic_cases_base"].loc[0, "long_combination"] == (
+        sls.COMBINATION_QUASI_PERMANENT
+    )
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_STANDARD
+    assert scalars["sls_exposure_context"] == "XC3 / durability"
     assert at.session_state["_autosave_last"]      # the panel records the time
 
 
@@ -4144,6 +4245,8 @@ def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
         {
             "name": "EL-CRACK",
             "description": "Frequent",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "total_combination": sls.COMBINATION_FREQUENT,
             "mx_long_ed_knm": 120.0,
             "mx_short_ed_knm": 30.0,
             "check_crack_width": True,
@@ -4159,7 +4262,11 @@ def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
         frame.value for frame in at.dataframe
         if "Action part" in frame.value.columns
     )
-    assert actions["Action part"].tolist() == ["Long-term", "Short-term"]
+    assert actions["Action part"].tolist() == ["Long-term", "Short increment"]
+    assert actions["Response SLS combination"].tolist() == [
+        sls.COMBINATION_QUASI_PERMANENT,
+        sls.COMBINATION_FREQUENT,
+    ]
     assert actions["Mx_Ed [kNm]"].tolist() == pytest.approx([120.0, 30.0])
     assert any("Acceptance: crack width" in caption.value for caption in at.caption)
     assert not at.exception
@@ -4726,6 +4833,98 @@ def test_crack_width_reports_both_load_cases():
     assert e["crack"]["cover"] > 0.0       # auto cover from the geometry
 
 
+def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        (
+            "selectbox",
+            "sls_total_combination",
+            sls.COMBINATION_CHARACTERISTIC,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+    first = at.session_state["results"]["elastic"]
+    qp_width = first["crack"]["wk"]
+    total_width = first["crack_short"]["wk"]
+    assert total_width > qp_width
+    separating_limit = (qp_width + total_width) / 2.0
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "sls_wk_limit", separating_limit),
+    )
+
+    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
+    assert qp_width < separating_limit < total_width
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+    assert assessment["case"] == "Long-term"
+    assert assessment["value"] == pytest.approx(qp_width)
+    assert assessment["informational_responses"] == [
+        "Total (long + short)"
+    ]
+    recorded = at.session_state["calculation_record"]["crack_control"]
+    recorded_case = recorded["cases"][0]
+    assert recorded_case["assessment"]["verdict"] == "PASS"
+    assert any(
+        response["wk_mm"] == pytest.approx(total_width)
+        and response["acceptance_role"] == "informational"
+        for response in recorded_case["responses"]
+    )
+
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+    import project_io
+    provenance = project_io.project_provenance(
+        (tmp_path / "autosave.json").read_text(encoding="utf-8")
+    )
+    assert provenance["results_included"] is True
+    saved_case = provenance["calculation"]["crack_control"]["cases"][0]
+    assert saved_case["assessment"]["verdict"] == "PASS"
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+
+
+def test_missing_response_combination_is_review_with_mapping_provenance():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+
+    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert "No calculated response" in assessment["reason"]
+    assert assessment["response_contexts"]["Long-term"]["combination"] == (
+        sls.COMBINATION_UNSPECIFIED
+    )
+    assert "long_combination table field" in (
+        assessment["response_contexts"]["Long-term"]["provenance"]
+    )
+
+
 def test_crack_limit_verdict_and_candidate_table_are_retained():
     at = _fresh()
     at.run()
@@ -4734,14 +4933,20 @@ def test_crack_limit_verdict_and_candidate_table_are_retained():
         ("radio", "mode", "Elastic"),
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
         ("number_input", "sls_wk_limit", 0.01),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
         ("text_input", "sls_limit_source", "Project crack criterion"),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["crack_assessment"]["status"] == "EXCEEDED"
     assert e["crack_assessment"]["limit"] == pytest.approx(0.01)
-    assert e["crack_assessment"]["case"] in {"Long-term", "Short-term"}
+    assert e["crack_assessment"]["case"] == "Long-term"
     assert e["crack_assessment"]["governing"].startswith(("R", "P"))
     assert e["crack"]["candidates"]
     assert e["crack"]["candidates"][0]["wk"] == pytest.approx(e["crack"]["wk"])
@@ -4767,7 +4972,13 @@ def test_crack_limit_and_source_are_retained_when_no_width_is_calculated():
         ("number_input", "el_long_Mx", 0.0),
         ("number_input", "el_short_Mx", 0.0),
         ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
         ("number_input", "sls_wk_limit", 0.25),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
         ("text_input", "sls_limit_source", "Project no-crack criterion"),
     )
     assert not at.exception
@@ -4854,6 +5065,12 @@ def test_ec2_2023_mixed_reinforcement_fails_closed_without_xi_then_calculates():
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
         ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
     )
     assert not at.exception
     missing = at.session_state["results"]["elastic"]
@@ -4927,6 +5144,12 @@ def test_ec2_2023_uniform_direct_tension_is_explicitly_scoped():
         ("number_input", "el_short_My", 0.0),
         ("checkbox", "sls_cw", True),
         ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / appearance"),
     )
     assert not at.exception
     elastic = at.session_state["results"]["elastic"]
@@ -5117,8 +5340,8 @@ def test_short_term_load_triggers_cracking():
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True                    # cracked by the short-term peak
     assert e["lambda_cr"] < 1.0
-    # Both crack widths are reported: the quasi-permanent (long-term) one for the
-    # code limit and the short-term one under the peak.
+    # Both duration-state crack widths remain reported. Acceptance combination is
+    # a separate explicit input and is not inferred in this calculation-only test.
     assert e["crack"] is not None and e["crack"]["wk"] > 0.0
     assert e["crack_short"] is not None and e["crack_short"]["wk"] > 0.0
 
@@ -5133,6 +5356,12 @@ def test_short_term_only_crack_verdict_ignores_no_tension_long_term():
         ("number_input", "el_long_Mx", 0.0),
         ("number_input", "el_short_Mx", 400.0),
         ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_total_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
     )
 
     assert not at.exception
@@ -5143,7 +5372,7 @@ def test_short_term_only_crack_verdict_ignores_no_tension_long_term():
         "NOT APPLICABLE"
     )
     assert elastic["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
-    assert elastic["crack_assessment"]["case"] == "Short-term"
+    assert elastic["crack_assessment"]["case"] == "Total (long + short)"
 
 
 def test_cracked_properties_use_the_governing_load_when_long_term_is_zero():

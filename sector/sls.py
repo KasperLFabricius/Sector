@@ -11,6 +11,363 @@ import math
 from typing import Iterable, Mapping, Sequence
 
 
+COMBINATION_UNSPECIFIED = "Not designated"
+COMBINATION_CHARACTERISTIC = "Characteristic"
+COMBINATION_FREQUENT = "Frequent"
+COMBINATION_QUASI_PERMANENT = "Quasi-permanent"
+SLS_COMBINATIONS = (
+    COMBINATION_UNSPECIFIED,
+    COMBINATION_CHARACTERISTIC,
+    COMBINATION_FREQUENT,
+    COMBINATION_QUASI_PERMANENT,
+)
+
+CRITERION_MODE_STANDARD = "Standard-derived"
+CRITERION_MODE_PROJECT = "Project-defined"
+CRITERION_MODE_LEGACY = "Legacy ambiguity - review required"
+CRITERION_MODES = (
+    CRITERION_MODE_STANDARD,
+    CRITERION_MODE_PROJECT,
+    CRITERION_MODE_LEGACY,
+)
+
+PRESTRESS_REINFORCED_UNBONDED = "Reinforced / unbonded prestress"
+PRESTRESS_BONDED = "Bonded prestress"
+PRESTRESS_CLASSES = (
+    PRESTRESS_REINFORCED_UNBONDED,
+    PRESTRESS_BONDED,
+)
+
+DECOMPRESSION_NOT_ESTABLISHED = "Not established"
+DECOMPRESSION_REQUIRED = "Required"
+DECOMPRESSION_NOT_REQUIRED = "Not required"
+DECOMPRESSION_OPTIONS = (
+    DECOMPRESSION_NOT_ESTABLISHED,
+    DECOMPRESSION_REQUIRED,
+    DECOMPRESSION_NOT_REQUIRED,
+)
+
+CRITERION_APPEARANCE = "Appearance crack width"
+CRITERION_DURABILITY = "Durability crack width"
+CRITERION_DECOMPRESSION = "Decompression"
+
+
+def canonical_combination(value) -> str:
+    """Return a stable SLS-combination token without inferring from duration."""
+    text = str(value or "").strip()
+    aliases = {
+        "": COMBINATION_UNSPECIFIED,
+        "none": COMBINATION_UNSPECIFIED,
+        "unspecified": COMBINATION_UNSPECIFIED,
+        "not designated": COMBINATION_UNSPECIFIED,
+        "characteristic": COMBINATION_CHARACTERISTIC,
+        "rare": COMBINATION_CHARACTERISTIC,
+        "frequent": COMBINATION_FREQUENT,
+        "quasi-permanent": COMBINATION_QUASI_PERMANENT,
+        "quasi permanent": COMBINATION_QUASI_PERMANENT,
+        "qp": COMBINATION_QUASI_PERMANENT,
+    }
+    return aliases.get(text.casefold(), text)
+
+
+def _finite_positive(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0.0 else None
+
+
+def _standard_reference(edition: str, kind: str, dk_na: bool) -> str:
+    if edition == "2023":
+        table = "Table 9.1" if kind == CRITERION_APPEARANCE else "Table 9.2"
+        return f"DS/EN 1992-1-1:2023 section 9.2.1(6), {table}"
+    base = "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
+    if dk_na:
+        return (
+            base
+            + "; DS/EN 1992-1-1 DK NA:2024 section 7.3.1(5), Table 7.1 NA"
+        )
+    return base
+
+
+def _criterion_source(reference: str, project_source: str) -> str:
+    project_source = str(project_source or "").strip()
+    return (
+        f"{reference}; project applicability source: {project_source}"
+        if project_source
+        else reference
+    )
+
+
+def _criterion_record(
+    criterion_id: str,
+    kind: str,
+    *,
+    source_type: str,
+    source: str,
+    required_combination: str | None,
+    limit_mm: float | None,
+    applicability: Mapping,
+    configuration_reason: str | None = None,
+) -> dict:
+    return {
+        "id": criterion_id,
+        "kind": kind,
+        "source_type": source_type,
+        "source": str(source or "").strip(),
+        "required_combination": (
+            canonical_combination(required_combination)
+            if required_combination is not None
+            else None
+        ),
+        "limit_mm": limit_mm,
+        "applicability": dict(applicability),
+        "configuration_status": (
+            "NOT ASSESSED" if configuration_reason else "READY"
+        ),
+        "configuration_reason": configuration_reason,
+    }
+
+
+def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
+    """Build explicit crack-control criteria from auditable user inputs.
+
+    Duration is intentionally absent from this function. Standard criteria route
+    to an SLS combination from edition and prestress class; project criteria are
+    created only for combinations carrying their own positive limit. Legacy
+    projects never inherit the former one-limit-for-all-responses behaviour.
+    """
+    mode = str(
+        inp.get("sls_criterion_mode") or CRITERION_MODE_LEGACY
+    ).strip()
+    source = str(inp.get("sls_limit_source") or "").strip()
+    edition = str(inp.get("sls_edition") or "").strip()
+    code = str(inp.get("sls_code") or "").strip()
+    member = str(inp.get("sls_member") or "").strip()
+    exposure = str(inp.get("sls_exposure_context") or "").strip()
+    prestress_class = str(inp.get("sls_prestress_class") or "").strip()
+    dk_na = bool(inp.get("sls_dk_na"))
+    applicability = {
+        "edition": edition or None,
+        "code": code or None,
+        "member": member or None,
+        "prestress_class": prestress_class or None,
+        "exposure": exposure or None,
+        "method": code or None,
+    }
+
+    if mode == CRITERION_MODE_LEGACY:
+        return [_criterion_record(
+            "legacy-ambiguous",
+            CRITERION_DURABILITY,
+            source_type=CRITERION_MODE_LEGACY,
+            source=source,
+            required_combination=None,
+            limit_mm=_finite_positive(inp.get("sls_wk_limit")),
+            applicability=applicability,
+            configuration_reason=(
+                "The saved criterion predates structured SLS-combination "
+                "applicability. Select a standard-derived or project-defined "
+                "criterion and explicitly designate the calculated responses."
+            ),
+        )]
+
+    if mode == CRITERION_MODE_PROJECT:
+        criteria = []
+        limit_keys = (
+            (
+                COMBINATION_CHARACTERISTIC,
+                "sls_project_characteristic_limit",
+                "project-characteristic",
+            ),
+            (
+                COMBINATION_FREQUENT,
+                "sls_project_frequent_limit",
+                "project-frequent",
+            ),
+            (
+                COMBINATION_QUASI_PERMANENT,
+                "sls_project_quasi_permanent_limit",
+                "project-quasi-permanent",
+            ),
+        )
+        for combination, key, criterion_id in limit_keys:
+            limit = _finite_positive(inp.get(key))
+            if limit is None:
+                continue
+            reason = None
+            if not source:
+                reason = (
+                    "A project-defined criterion requires a document, clause or "
+                    "approved project-requirement source."
+                )
+            criteria.append(_criterion_record(
+                criterion_id,
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_PROJECT,
+                source=source,
+                required_combination=combination,
+                limit_mm=limit,
+                applicability={
+                    **applicability,
+                    "project_selected_combination": combination,
+                },
+                configuration_reason=reason,
+            ))
+        if criteria:
+            return criteria
+        return [_criterion_record(
+            "project-missing-applicability",
+            CRITERION_DURABILITY,
+            source_type=CRITERION_MODE_PROJECT,
+            source=source,
+            required_combination=None,
+            limit_mm=None,
+            applicability=applicability,
+            configuration_reason=(
+                "No project-defined combination has a positive crack-width "
+                "limit. Enter a separate limit for every applicable combination."
+            ),
+        )]
+
+    if mode != CRITERION_MODE_STANDARD:
+        return [_criterion_record(
+            "unknown-criterion-mode",
+            CRITERION_DURABILITY,
+            source_type=mode or "Unknown",
+            source=source,
+            required_combination=None,
+            limit_mm=None,
+            applicability=applicability,
+            configuration_reason=f"Unknown crack-criterion source mode: {mode!r}.",
+        )]
+
+    base_reasons = []
+    if edition not in {"2004", "2023"}:
+        base_reasons.append("The selected code edition is not supported.")
+    if prestress_class not in PRESTRESS_CLASSES:
+        base_reasons.append(
+            "Select whether the member is reinforced/unbonded or bonded prestress."
+        )
+    if not exposure:
+        base_reasons.append(
+            "State the exposure/application context used to establish applicability."
+        )
+    base_reason = " ".join(base_reasons) or None
+    durability_combination = (
+        COMBINATION_FREQUENT
+        if prestress_class == PRESTRESS_BONDED
+        else COMBINATION_QUASI_PERMANENT
+    )
+    criteria = []
+
+    if bool(inp.get("sls_check_appearance")):
+        reason = base_reason
+        if edition != "2023":
+            reason = " ".join(filter(None, (
+                reason,
+                "The standard-derived appearance criterion is implemented only "
+                "for DS/EN 1992-1-1:2023 Table 9.1.",
+            )))
+        criteria.append(_criterion_record(
+            "standard-appearance",
+            CRITERION_APPEARANCE,
+            source_type=CRITERION_MODE_STANDARD,
+            source=_criterion_source(
+                _standard_reference(
+                    edition, CRITERION_APPEARANCE, dk_na
+                ),
+                source,
+            ),
+            # Table 9.1 routes the calculated appearance crack width to
+            # quasi-permanent actions independently of the tendon class.
+            required_combination=COMBINATION_QUASI_PERMANENT,
+            limit_mm=_finite_positive(inp.get("sls_appearance_limit")),
+            applicability=applicability,
+            configuration_reason=reason,
+        ))
+
+    if bool(inp.get("sls_check_durability")):
+        criteria.append(_criterion_record(
+            "standard-durability",
+            CRITERION_DURABILITY,
+            source_type=CRITERION_MODE_STANDARD,
+            source=_criterion_source(
+                _standard_reference(
+                    edition, CRITERION_DURABILITY, dk_na
+                ),
+                source,
+            ),
+            required_combination=durability_combination,
+            limit_mm=_finite_positive(inp.get("sls_wk_limit")),
+            applicability=applicability,
+            configuration_reason=base_reason,
+        ))
+
+    if prestress_class == PRESTRESS_BONDED:
+        decompression = str(
+            inp.get("sls_decompression_applicability")
+            or DECOMPRESSION_NOT_ESTABLISHED
+        ).strip()
+        if decompression == DECOMPRESSION_REQUIRED:
+            criteria.append(_criterion_record(
+                "standard-decompression",
+                CRITERION_DECOMPRESSION,
+                source_type=CRITERION_MODE_STANDARD,
+                source=_criterion_source(
+                    _standard_reference(
+                        edition, CRITERION_DURABILITY, dk_na
+                    ),
+                    source,
+                ),
+                required_combination=COMBINATION_QUASI_PERMANENT,
+                limit_mm=None,
+                applicability={
+                    **applicability,
+                    "decompression_applicability": decompression,
+                },
+                configuration_reason=base_reason,
+            ))
+        elif decompression != DECOMPRESSION_NOT_REQUIRED:
+            criteria.append(_criterion_record(
+                "standard-decompression-applicability",
+                CRITERION_DECOMPRESSION,
+                source_type=CRITERION_MODE_STANDARD,
+                source=_criterion_source(
+                    _standard_reference(
+                        edition, CRITERION_DURABILITY, dk_na
+                    ),
+                    source,
+                ),
+                required_combination=COMBINATION_QUASI_PERMANENT,
+                limit_mm=None,
+                applicability={
+                    **applicability,
+                    "decompression_applicability": decompression,
+                },
+                configuration_reason=(
+                    "Establish whether quasi-permanent decompression is required "
+                    "for this bonded-prestress exposure/application."
+                ),
+            ))
+
+    if criteria:
+        return criteria
+    return [_criterion_record(
+        "standard-no-criterion",
+        CRITERION_DURABILITY,
+        source_type=CRITERION_MODE_STANDARD,
+        source=source or code,
+        required_combination=None,
+        limit_mm=None,
+        applicability=applicability,
+        configuration_reason=(
+            "No standard appearance or durability criterion is selected."
+        ),
+    )]
+
+
 def _element_id(ids: Sequence[str] | None, index: int, fallback: str) -> str:
     """Return a non-blank stable ID when supplied, otherwise ``fallback``."""
     if ids is not None and index < len(ids):
@@ -162,80 +519,390 @@ def stress_assessments(
 def crack_assessment(
     cases: Mapping[str, Mapping | None],
     *,
-    limit_mm: float,
+    limit_mm: float | None = None,
     valid: bool,
     dispositions: Mapping[str, Mapping | None] | None = None,
+    response_contexts: Mapping[str, Mapping | None] | None = None,
+    criteria: Sequence[Mapping] | None = None,
 ) -> dict:
-    """Assess the largest reported crack width across all enabled cases.
+    """Route crack-control criteria to explicitly designated SLS responses.
 
-    ``dispositions`` carries the applicability result for each requested case.
-    Any blocking ``NOT ASSESSED`` case takes precedence over a numerical result:
-    a partially calculated set must never be presented as an overall pass.
+    A response duration never implies a combination. Only responses whose
+    structured context matches a criterion's required combination may govern it;
+    every other calculated response stays informational. Missing or duplicate
+    response-state mappings fail closed as ``NOT ASSESSED``.
     """
+    supplied_criteria = [dict(item) for item in (criteria or [])]
+    if not supplied_criteria:
+        supplied_criteria = [_criterion_record(
+            "legacy-call-ambiguous",
+            CRITERION_DURABILITY,
+            source_type=CRITERION_MODE_LEGACY,
+            source="",
+            required_combination=None,
+            limit_mm=_finite_positive(limit_mm),
+            applicability={},
+            configuration_reason=(
+                "No structured criterion applicability was supplied; duration "
+                "labels cannot be used as SLS-combination designations."
+            ),
+        )]
+
+    contexts = {}
+    for name in cases:
+        raw = (response_contexts or {}).get(name) or {}
+        contexts[name] = {
+            "combination": canonical_combination(raw.get("combination")),
+            "duration": str(raw.get("duration") or "").strip() or None,
+            "response_id": str(
+                raw.get("response_id") or name
+            ).strip(),
+            "provenance": str(raw.get("provenance") or "").strip() or None,
+            "solver_provenance": raw.get("solver_provenance"),
+        }
+
     if not valid:
         out = upper_limit_assessment(None, limit_mm, valid=False)
         out.update(
             case=None,
             governing=None,
-            criterion=f"{float(limit_mm):g} mm",
+            criterion=(
+                f"{float(limit_mm):g} mm"
+                if _finite_positive(limit_mm) is not None
+                else "structured crack-control criteria"
+            ),
             reason="The elastic analysis did not converge.",
+            verdict="REVIEW",
+            criteria=[],
+            response_contexts=contexts,
+            informational_responses=list(cases),
         )
         return out
 
-    disposition_items = [
-        (name, item)
-        for name, item in (dispositions or {}).items()
-        if item is not None
-    ]
-    blocking = [
-        (name, item)
-        for name, item in disposition_items
-        if str(item.get("status", "")).upper() == "NOT ASSESSED"
-    ]
-    if blocking:
-        reasons = []
-        for name, item in blocking:
-            reason = str(item.get("reason") or "Applicability was not established.")
-            reasons.append(f"{name}: {reason}")
-        return {
-            "value": None,
-            "limit": limit_mm,
+    criterion_results = []
+    matched_names: set[str] = set()
+    disposition_map = dispositions or {}
+
+    for criterion in supplied_criteria:
+        item = dict(criterion)
+        required = item.get("required_combination")
+        required = (
+            canonical_combination(required) if required is not None else None
+        )
+        limit = _finite_positive(item.get("limit_mm"))
+        label = str(item.get("kind") or "Crack width")
+        base = {
+            "criterion_id": item.get("id"),
+            "kind": label,
+            "criterion_source_type": item.get("source_type"),
+            "criterion_source": item.get("source"),
+            "applicability": dict(item.get("applicability") or {}),
+            "required_combination": required,
+            "limit": limit,
             "util": None,
             "margin": None,
-            "status": "NOT ASSESSED",
-            "case": ", ".join(name for name, _item in blocking),
+            "value": None,
+            "case": None,
             "governing": None,
-            "criterion": f"{float(limit_mm):g} mm",
-            "reason": " ".join(reasons),
+            "response_duration": None,
+            "response_provenance": None,
+            "solver_provenance": None,
+            "matched_responses": [],
         }
+        configuration_reason = item.get("configuration_reason")
+        if (
+            str(item.get("configuration_status") or "").upper()
+            == "NOT ASSESSED"
+            or configuration_reason
+        ):
+            base.update(
+                status="NOT ASSESSED",
+                reason=str(
+                    configuration_reason
+                    or "Criterion applicability is not established."
+                ),
+            )
+            criterion_results.append(base)
+            continue
+        if required not in SLS_COMBINATIONS[1:]:
+            base.update(
+                status="NOT ASSESSED",
+                reason="The criterion has no valid required SLS combination.",
+            )
+            criterion_results.append(base)
+            continue
 
-    available = [(name, case) for name, case in cases.items() if case is not None]
-    if not available:
-        out = upper_limit_assessment(None, limit_mm, valid=valid, applicable=False)
-        reasons = [
-            str(item.get("reason"))
-            for _name, item in disposition_items
-            if item.get("reason")
+        candidates = [
+            name
+            for name, context in contexts.items()
+            if context["combination"] == required
         ]
-        out.update(
-            case=None,
-            governing=None,
-            criterion=f"{float(limit_mm):g} mm",
-            reason=(" ".join(dict.fromkeys(reasons))
-                    if reasons else "No crack-width result is applicable."),
+        response_ids = {
+            contexts[name]["response_id"] for name in candidates
+        }
+        if not candidates:
+            base.update(
+                status="NOT ASSESSED",
+                case=required,
+                response_provenance=[
+                    {
+                        "response": name,
+                        "combination": context["combination"],
+                        "duration": context["duration"],
+                        "mapping": context["provenance"],
+                    }
+                    for name, context in contexts.items()
+                ],
+                solver_provenance=[
+                    {
+                        "response": name,
+                        "solver": context["solver_provenance"],
+                    }
+                    for name, context in contexts.items()
+                ],
+                reason=(
+                    f"No calculated response is explicitly designated as the "
+                    f"{required} combination. No duration-to-combination "
+                    "assumption was made."
+                ),
+            )
+            criterion_results.append(base)
+            continue
+        if len(response_ids) != 1:
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(candidates),
+                matched_responses=candidates,
+                response_provenance=[
+                    {
+                        "response": name,
+                        "combination": contexts[name]["combination"],
+                        "duration": contexts[name]["duration"],
+                        "mapping": contexts[name]["provenance"],
+                    }
+                    for name in candidates
+                ],
+                solver_provenance=[
+                    {
+                        "response": name,
+                        "solver": contexts[name]["solver_provenance"],
+                    }
+                    for name in candidates
+                ],
+                reason=(
+                    f"More than one independent response state is designated as "
+                    f"the {required} combination; applicability is ambiguous."
+                ),
+            )
+            criterion_results.append(base)
+            continue
+
+        matched_names.update(candidates)
+        base["matched_responses"] = candidates
+        base["response_duration"] = contexts[candidates[0]]["duration"]
+        base["response_provenance"] = contexts[candidates[0]]["provenance"]
+        base["solver_provenance"] = contexts[candidates[0]][
+            "solver_provenance"
+        ]
+        candidate_dispositions = [
+            (name, disposition_map.get(name))
+            for name in candidates
+            if disposition_map.get(name) is not None
+        ]
+        blocking = [
+            (name, disposition)
+            for name, disposition in candidate_dispositions
+            if str(disposition.get("status") or "").upper()
+            in {"NOT ASSESSED", "INVALID"}
+        ]
+        if blocking:
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(name for name, _disposition in blocking),
+                solver_provenance=[
+                    {
+                        "response": name,
+                        "status": disposition.get("status"),
+                        "reason": disposition.get("reason"),
+                        "scope": disposition.get("scope"),
+                    }
+                    for name, disposition in blocking
+                ],
+                reason=" ".join(
+                    f"{name}: "
+                    f"{disposition.get('reason') or 'Solver applicability was not established.'}"
+                    for name, disposition in blocking
+                ),
+            )
+            criterion_results.append(base)
+            continue
+
+        if label == CRITERION_DECOMPRESSION:
+            decompression = [
+                (name, (cases.get(name) or {}).get("decompression"))
+                for name in candidates
+                if (cases.get(name) or {}).get("decompression") is not None
+            ]
+            if not decompression:
+                base.update(
+                    status="NOT ASSESSED",
+                    case=", ".join(candidates),
+                    reason=(
+                        f"The {required} response is present, but the current "
+                        "section solver does not produce the concrete-stress "
+                        "evidence required for a decompression verdict."
+                    ),
+                )
+                criterion_results.append(base)
+                continue
+            name, evidence = decompression[0]
+            evidence = dict(evidence)
+            status = str(evidence.get("status") or "NOT ASSESSED").upper()
+            if status not in {"OK", "EXCEEDED", "NOT APPLICABLE"}:
+                status = "NOT ASSESSED"
+            base.update(
+                status=status,
+                case=name,
+                value=evidence.get("value"),
+                governing=evidence.get("governing"),
+                reason=str(
+                    evidence.get("reason")
+                    or f"Decompression checked for the {required} response."
+                ),
+                solver_provenance=evidence.get(
+                    "solver_provenance", base["solver_provenance"]
+                ),
+            )
+            criterion_results.append(base)
+            continue
+
+        if limit is None:
+            base.update(
+                status="NOT ASSESSED",
+                case=", ".join(candidates),
+                reason=(
+                    f"The {label.lower()} criterion has no positive limit for "
+                    f"the {required} combination."
+                ),
+            )
+            criterion_results.append(base)
+            continue
+
+        available = [
+            (name, cases.get(name))
+            for name in candidates
+            if cases.get(name) is not None
+        ]
+        if not available:
+            reasons = [
+                str(disposition.get("reason"))
+                for _name, disposition in candidate_dispositions
+                if disposition.get("reason")
+            ]
+            base.update(
+                status="NOT APPLICABLE",
+                case=", ".join(candidates),
+                reason=(
+                    " ".join(dict.fromkeys(reasons))
+                    if reasons
+                    else f"No {required} crack-width response is applicable."
+                ),
+            )
+            criterion_results.append(base)
+            continue
+
+        name, governing = max(
+            available,
+            key=lambda pair: float(pair[1].get("wk", 0.0)),
         )
-        return out
-    name, governing = max(available, key=lambda item: float(item[1].get("wk", 0.0)))
-    out = upper_limit_assessment(
-        float(governing.get("wk", 0.0)), float(limit_mm), valid=valid,
-    )
-    out.update(
-        case=name,
-        governing=governing.get("element_id", f"element {governing.get('gov_bar', '-')}"),
-        criterion=f"{float(limit_mm):g} mm",
-        reason="Crack width calculated for every requested applicable case.",
-    )
-    return out
+        assessed = upper_limit_assessment(
+            float(governing.get("wk", 0.0)),
+            limit,
+            valid=True,
+        )
+        base.update(assessed)
+        base.update(
+            case=name,
+            governing=governing.get(
+                "element_id", f"element {governing.get('gov_bar', '-')}"
+            ),
+            reason=(
+                f"Assessed only against the explicitly designated {required} "
+                "response; other duration states are informational."
+            ),
+        )
+        criterion_results.append(base)
+
+    statuses = [item["status"] for item in criterion_results]
+    if any(status == "INVALID" for status in statuses):
+        overall_status = "INVALID"
+    elif any(status == "NOT ASSESSED" for status in statuses):
+        overall_status = "NOT ASSESSED"
+    elif any(status == "EXCEEDED" for status in statuses):
+        overall_status = "EXCEEDED"
+    elif any(status == "OK" for status in statuses):
+        overall_status = "OK"
+    else:
+        overall_status = "NOT APPLICABLE"
+
+    if overall_status in {"INVALID", "NOT ASSESSED"}:
+        governing_criterion = next(
+            item
+            for item in criterion_results
+            if item["status"] == overall_status
+            or (
+                overall_status == "NOT ASSESSED"
+                and item["status"] == "NOT ASSESSED"
+            )
+        )
+    elif overall_status == "EXCEEDED":
+        governing_criterion = max(
+            (
+                item
+                for item in criterion_results
+                if item["status"] == "EXCEEDED"
+            ),
+            key=lambda item: float(item.get("util") or 0.0),
+        )
+    elif overall_status == "OK":
+        governing_criterion = max(
+            (item for item in criterion_results if item["status"] == "OK"),
+            key=lambda item: float(item.get("util") or 0.0),
+        )
+    else:
+        governing_criterion = criterion_results[0]
+
+    informational = [name for name in cases if name not in matched_names]
+    verdict = {
+        "OK": "PASS",
+        "EXCEEDED": "FAIL",
+        "NOT APPLICABLE": "NOT APPLICABLE",
+    }.get(overall_status, "REVIEW")
+    return {
+        "value": governing_criterion.get("value"),
+        "limit": governing_criterion.get("limit"),
+        "util": governing_criterion.get("util"),
+        "margin": governing_criterion.get("margin"),
+        "status": overall_status,
+        "verdict": verdict,
+        "case": governing_criterion.get("case"),
+        "governing": governing_criterion.get("governing"),
+        "criterion": governing_criterion.get("kind"),
+        "required_combination": governing_criterion.get(
+            "required_combination"
+        ),
+        "criterion_source": governing_criterion.get("criterion_source"),
+        "applicability": governing_criterion.get("applicability"),
+        "response_duration": governing_criterion.get("response_duration"),
+        "response_provenance": governing_criterion.get(
+            "response_provenance"
+        ),
+        "solver_provenance": governing_criterion.get("solver_provenance"),
+        "reason": governing_criterion.get("reason"),
+        "criteria": criterion_results,
+        "response_contexts": contexts,
+        "informational_responses": informational,
+    }
 
 
 def element_rows(

@@ -143,6 +143,24 @@ def test_manual_documents_2023_xi1_direct_tension_and_scope_gate():
     assert "does not establish that edition as the currently applicable Danish" in text
 
 
+def test_manual_separates_crack_history_duration_and_acceptance_combination():
+    text = "\n".join(
+        value
+        for block in manual.manual_blocks()
+        for value in block[1:]
+        if isinstance(value, str)
+    )
+
+    assert "Acceptance combination is not load duration" in text
+    assert "never assumes that a long response is" in text
+    assert "quasi-permanent" in text
+    assert "Bonded prestress uses the **frequent** combination" in text
+    assert "Table 9.1 appearance and Table 9.2 durability" in text
+    assert "separate positive crack-width limit for every applicable combination" in text
+    assert "pre-v17 project" in text
+    assert "NOT ASSESSED / REVIEW" in text
+
+
 def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     blocks = manual.manual_blocks()
     text = "\n".join(str(block) for block in blocks)

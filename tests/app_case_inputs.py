@@ -23,6 +23,12 @@ _FIELDS = {
     "el_short_P": (load_cases.ELASTIC_TABLE_KEY, "n_short_ed_kn"),
     "el_short_Mx": (load_cases.ELASTIC_TABLE_KEY, "mx_short_ed_knm"),
     "el_short_My": (load_cases.ELASTIC_TABLE_KEY, "my_short_ed_knm"),
+    "sls_long_combination": (
+        load_cases.ELASTIC_TABLE_KEY, "long_combination"
+    ),
+    "sls_total_combination": (
+        load_cases.ELASTIC_TABLE_KEY, "total_combination"
+    ),
     "sls_cw": (load_cases.ELASTIC_TABLE_KEY, "check_crack_width"),
 }
 _DESCRIPTION_KEYS = {

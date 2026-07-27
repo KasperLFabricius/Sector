@@ -18,7 +18,24 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from sector import codes, detailing  # noqa: E402
+from sector import codes, detailing, sls  # noqa: E402
+
+
+def _v17_crack_defaults():
+    return {
+        "sls_criterion_mode": project_io.DEFAULT_SLS_CRITERION_MODE,
+        "sls_prestress_class": project_io.DEFAULT_SLS_PRESTRESS_CLASS,
+        "sls_exposure_context": "",
+        "sls_check_appearance": False,
+        "sls_appearance_limit": 0.0,
+        "sls_check_durability": False,
+        "sls_decompression_applicability": (
+            project_io.DEFAULT_SLS_DECOMPRESSION
+        ),
+        "sls_project_characteristic_limit": 0.0,
+        "sls_project_frequent_limit": 0.0,
+        "sls_project_quasi_permanent_limit": 0.0,
+    }
 
 
 def test_migrate_legacy_torsion_only_stirrup():
@@ -115,6 +132,7 @@ def test_round_trip_tables_and_scalars():
         key: value for key, value in scalars.items()
         if key not in load_cases.LEGACY_SCALAR_KEYS
     }
+    expected_scalars.update(_v17_crack_defaults())
     assert rs == expected_scalars
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == "PL-17"
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "description"] == (
@@ -149,6 +167,10 @@ def test_project_defaults_missing_crack_tendon_inputs_fail_closed(version):
     assert scalars["sls_tendon_xi"] == pytest.approx(
         project_io.DEFAULT_SLS_TENDON_XI
     )
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+    assert scalars["sls_decompression_applicability"] == (
+        sls.DECOMPRESSION_NOT_ESTABLISHED
+    )
 
 
 def test_current_partial_save_writes_crack_tendon_defaults_canonically():
@@ -161,6 +183,9 @@ def test_current_partial_save_writes_crack_tendon_defaults_canonically():
     )
     assert payload["scalars"]["sls_tendon_xi"] == pytest.approx(
         project_io.DEFAULT_SLS_TENDON_XI
+    )
+    assert payload["scalars"]["sls_criterion_mode"] == (
+        sls.CRITERION_MODE_LEGACY
     )
     assert project_io.input_sha256(tables, scalars) == (
         payload["provenance"]["input_sha256"]
@@ -953,7 +978,96 @@ def test_unknown_scalar_keys_are_dropped():
         "conc_fck": 30.0,
         "sls_tendon_bond": project_io.DEFAULT_SLS_TENDON_BOND,
         "sls_tendon_xi": project_io.DEFAULT_SLS_TENDON_XI,
+        **_v17_crack_defaults(),
     }
+
+
+def test_v17_roundtrips_combination_and_criterion_applicability():
+    tables = {
+        load_cases.ELASTIC_TABLE_KEY: load_cases.normalise_table([{
+            "name": "SLS-1",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "total_combination": sls.COMBINATION_FREQUENT,
+            "mx_long_ed_knm": 80.0,
+            "mx_short_ed_knm": 25.0,
+            "check_crack_width": True,
+        }], load_cases.ELASTIC_TABLE_KEY),
+    }
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_exposure_context": "XD1 / bonded tendon",
+        "sls_check_appearance": True,
+        "sls_appearance_limit": 0.20,
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": sls.DECOMPRESSION_REQUIRED,
+        "sls_limit_source": "Project DB SLS-2",
+    }
+
+    restored_tables, restored_scalars = project_io.parse_project(
+        project_io.dump_project(tables, scalars)
+    )
+
+    row = restored_tables[load_cases.ELASTIC_TABLE_KEY].iloc[0]
+    assert row["long_combination"] == sls.COMBINATION_QUASI_PERMANENT
+    assert row["total_combination"] == sls.COMBINATION_FREQUENT
+    for key, value in scalars.items():
+        assert restored_scalars[key] == value
+
+
+def test_pre_v17_crack_limit_is_retained_but_combination_route_is_invalidated():
+    payload = {
+        "format": project_io.FORMAT,
+        "version": 16,
+        "tables": {},
+        "load_cases": {
+            "plastic": [],
+            "elastic": [{
+                "name": "OLD-SLS",
+                "description": "Duration labels only",
+                "n_long_ed_kn": 0.0,
+                "mx_long_ed_knm": 80.0,
+                "my_long_ed_knm": 0.0,
+                "n_short_ed_kn": 0.0,
+                "mx_short_ed_knm": 25.0,
+                "my_short_ed_knm": 0.0,
+                "check_stress": False,
+                "check_crack_width": True,
+            }],
+        },
+        "scalars": {"sls_wk_limit": 0.30},
+    }
+
+    tables, scalars = project_io.parse_project(json.dumps(payload))
+    row = tables[load_cases.ELASTIC_TABLE_KEY].iloc[0]
+
+    assert scalars["sls_wk_limit"] == pytest.approx(0.30)
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+    assert row["long_combination"] == sls.COMBINATION_UNSPECIFIED
+    assert row["total_combination"] == sls.COMBINATION_UNSPECIFIED
+
+
+def test_malformed_current_crack_routing_is_invalidated_not_defaulted_to_standard():
+    payload = json.loads(project_io.dump_project({}, {
+        "sls_criterion_mode": "mystery routing",
+        "sls_prestress_class": "unknown tendon class",
+        "sls_decompression_applicability": "maybe",
+        "sls_wk_limit": 0.30,
+    }))
+
+    _, scalars = project_io.parse_project(json.dumps(payload))
+
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+    assert (
+        scalars["sls_prestress_class"]
+        == project_io.DEFAULT_SLS_PRESTRESS_CLASS
+    )
+    assert (
+        scalars["sls_decompression_applicability"]
+        == sls.DECOMPRESSION_NOT_ESTABLISHED
+    )
+    assert scalars["sls_wk_limit"] == pytest.approx(0.30)
 
 
 def test_project_provenance_records_and_verifies_exact_inputs():
@@ -1010,6 +1124,51 @@ def test_project_records_whether_calculation_matches_saved_inputs():
 
     assert matching["calculation"]["matches_saved_inputs"] is True
     assert changed["calculation"]["matches_saved_inputs"] is False
+
+
+def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    crack_control = {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+                "value": 0.22,
+                "limit": 0.30,
+            },
+            "responses": [{
+                "name": "Total",
+                "wk_mm": 0.31,
+                "acceptance_role": "informational",
+            }],
+        }],
+    }
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "d" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+
+    assert payload["provenance"]["results_included"] is True
+    assert payload["calculation"]["crack_control"] == crack_control
+    assert provenance["calculation"]["crack_control"] == crack_control
+    assert provenance["calculation"]["matches_saved_inputs"] is True
 
 
 def test_legacy_mpa_moduli_are_rescaled_to_gpa():

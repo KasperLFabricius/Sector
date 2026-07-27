@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import case_analysis  # noqa: E402
 import load_cases  # noqa: E402
+from sector import sls  # noqa: E402
 
 
 def _plastic(rows):
@@ -70,6 +71,8 @@ def _base(**overrides):
             {
                 "name": "EL-CRACK",
                 "description": "Frequent crack width",
+                "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+                "total_combination": sls.COMBINATION_FREQUENT,
                 "mx_long_ed_knm": 35.0,
                 "mx_short_ed_knm": 8.0,
                 "check_stress": False,
@@ -127,6 +130,13 @@ def test_maps_signed_cases_flags_and_zero_capacity_actions():
     assert el_crack["sls_cw"] is True
     assert el_crack["sls_conc_limit_pct"] == 0.0
     assert el_crack["sls_steel_limit_pct"] == 0.0
+    assert el_crack["sls_response_combinations"] == {
+        "long": sls.COMBINATION_QUASI_PERMANENT,
+        "total": sls.COMBINATION_FREQUENT,
+    }
+    assert "long_combination table field" in (
+        el_crack["sls_response_provenance"]["long"]
+    )
     assert result["plastic"]["id"] == "PL-A"
     assert result["elastic"]["id"] == "EL-STRESS"
 

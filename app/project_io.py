@@ -3,8 +3,9 @@
 A project file is JSON: the four point tables (concrete corners, voids, bars and
 tendons, all in millimetres), Plastic and Elastic load-case tables, an optional
 grouped fatigue spectrum, and the remaining material and analysis-setting inputs.
-The geometry and action tables are the source of truth. Only the *inputs* are
-stored -- results are recomputed on load.
+The geometry and action tables are the source of truth. Live numerical results
+are recomputed on load; an optional compact crack-control result summary is kept
+only inside the input-hash-bound calculation-provenance record.
 
 The functions here are pure (no Streamlit), so the round trip is unit-tested
 directly; the app wires the download / upload widgets to them.
@@ -23,14 +24,17 @@ import fatigue_inputs
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
-from sector import codes, detailing, geometry
+from sector import codes, detailing, geometry, sls
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 16  # v16: explicit 2023 prestressing bond inputs for crack control
+VERSION = 17  # v17: explicit SLS-combination and crack-criterion applicability
 DEFAULT_SLS_TENDON_BOND = "Plain round (k1 = 1.6)"
 DEFAULT_SLS_TENDON_XI = 0.0
+DEFAULT_SLS_CRITERION_MODE = sls.CRITERION_MODE_LEGACY
+DEFAULT_SLS_PRESTRESS_CLASS = sls.PRESTRESS_REINFORCED_UNBONDED
+DEFAULT_SLS_DECOMPRESSION = sls.DECOMPRESSION_NOT_ESTABLISHED
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
     "shear_cot_min",
@@ -233,6 +237,11 @@ SCALAR_KEYS = [
     "pl_interaction",
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_tendon_bond", "sls_tendon_xi",
+    "sls_criterion_mode", "sls_prestress_class", "sls_exposure_context",
+    "sls_check_appearance", "sls_appearance_limit",
+    "sls_check_durability", "sls_decompression_applicability",
+    "sls_project_characteristic_limit", "sls_project_frequent_limit",
+    "sls_project_quasi_permanent_limit",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
     # Fatigue factor provenance. Presets expose every applied multiplier;
@@ -377,13 +386,29 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
         )
     }
-    # Version 16 makes both tendon bond inputs part of the canonical project
-    # schema.  Write them even for deliberately partial saves so reloading that
-    # file in a reused UI session cannot inherit values from another project.
+    # Crack-control applicability fields are written even for deliberately
+    # partial saves so a reused UI session cannot inherit a previous project's
+    # combination route or silently revive the pre-v17 max-of-duration check.
     scalar_payload.setdefault(
         "sls_tendon_bond", DEFAULT_SLS_TENDON_BOND
     )
     scalar_payload.setdefault("sls_tendon_xi", DEFAULT_SLS_TENDON_XI)
+    scalar_payload.setdefault(
+        "sls_criterion_mode", DEFAULT_SLS_CRITERION_MODE
+    )
+    scalar_payload.setdefault(
+        "sls_prestress_class", DEFAULT_SLS_PRESTRESS_CLASS
+    )
+    scalar_payload.setdefault("sls_exposure_context", "")
+    scalar_payload.setdefault("sls_check_appearance", False)
+    scalar_payload.setdefault("sls_appearance_limit", 0.0)
+    scalar_payload.setdefault("sls_check_durability", False)
+    scalar_payload.setdefault(
+        "sls_decompression_applicability", DEFAULT_SLS_DECOMPRESSION
+    )
+    scalar_payload.setdefault("sls_project_characteristic_limit", 0.0)
+    scalar_payload.setdefault("sls_project_frequent_limit", 0.0)
+    scalar_payload.setdefault("sls_project_quasi_permanent_limit", 0.0)
     # Empty override widgets use ``None`` in Streamlit state. Persist them exactly
     # like absent optional values so a no-edit load/save keeps the canonical input
     # hash stable and never synthesises an approved numeric factor.
@@ -531,12 +556,15 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
             key: calculation.get(key)
             for key in (
                 "performed_at_utc", "sector_version", "source_revision",
-                "input_sha256",
+                "input_sha256", "crack_control",
             )
             if calculation.get(key) not in (None, "")
         }
         record["matches_saved_inputs"] = record.get("input_sha256") == digest
         payload["calculation"] = record
+        payload["provenance"]["results_included"] = bool(
+            record.get("crack_control")
+        )
     return json.dumps(payload, indent=2)
 
 
@@ -838,6 +866,46 @@ def parse_project(text: str):
     # a calculated result.
     scalars.setdefault("sls_tendon_bond", DEFAULT_SLS_TENDON_BOND)
     scalars.setdefault("sls_tendon_xi", DEFAULT_SLS_TENDON_XI)
+    # v17 separates response duration from SLS-combination class and records
+    # criterion source/applicability. Older or partial files retain their former
+    # numerical limit only as evidence and require an explicit engineer decision.
+    if (
+        data.get("version", 1) < 17
+        or "sls_criterion_mode" not in raw_scalars
+    ):
+        scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+    scalars.setdefault(
+        "sls_prestress_class", DEFAULT_SLS_PRESTRESS_CLASS
+    )
+    scalars.setdefault("sls_exposure_context", "")
+    scalars.setdefault("sls_check_appearance", False)
+    scalars.setdefault("sls_appearance_limit", 0.0)
+    scalars.setdefault("sls_check_durability", False)
+    scalars.setdefault(
+        "sls_decompression_applicability", DEFAULT_SLS_DECOMPRESSION
+    )
+    scalars.setdefault("sls_project_characteristic_limit", 0.0)
+    scalars.setdefault("sls_project_frequent_limit", 0.0)
+    scalars.setdefault("sls_project_quasi_permanent_limit", 0.0)
+    # A current-version file may still be partial or hand-edited. Never let an
+    # unknown routing token fall through the Streamlit selectbox to its fresh-
+    # project default, because that could silently turn ambiguous legacy evidence
+    # into a standard-derived ordinary-reinforced assessment.
+    criterion_mode = scalars.get("sls_criterion_mode")
+    prestress_class = scalars.get("sls_prestress_class")
+    if criterion_mode not in sls.CRITERION_MODES:
+        scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+    if prestress_class not in sls.PRESTRESS_CLASSES:
+        scalars["sls_prestress_class"] = DEFAULT_SLS_PRESTRESS_CLASS
+        if criterion_mode == sls.CRITERION_MODE_STANDARD:
+            scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+    if (
+        scalars.get("sls_decompression_applicability")
+        not in sls.DECOMPRESSION_OPTIONS
+    ):
+        # "Not established" remains blocking for bonded prestress, while the
+        # field is immaterial for reinforced/unbonded and project criteria.
+        scalars["sls_decompression_applicability"] = DEFAULT_SLS_DECOMPRESSION
     if (
         bool(scalars.get("fatigue_on"))
         or "fatigue_factor_mode" in scalars

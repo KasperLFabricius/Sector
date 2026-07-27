@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 
 import load_cases
+from sector import sls as sls_core
 
 
 _PLASTIC_RESULT_KEYS = (
@@ -157,10 +158,23 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
 
 
 def elastic_case_input(base: Mapping, record: Mapping) -> dict:
-    """Map one Elastic row and its per-case acceptance selections."""
+    """Map one Elastic row and its independent duration/combination metadata."""
     out = dict(base)
     check_stress = bool(record["check_stress"])
     check_crack_width = bool(record["check_crack_width"])
+    long_combination = str(
+        record.get(
+            "long_combination",
+            sls_core.COMBINATION_UNSPECIFIED,
+        )
+    )
+    total_combination = str(
+        record.get(
+            "total_combination",
+            sls_core.COMBINATION_UNSPECIFIED,
+        )
+    )
+    case_name = str(record[load_cases.NAME])
     out.update(
         mode="Elastic",
         elastic_case=_metadata(record),
@@ -173,6 +187,20 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
         Mx_el_s=float(record["mx_short_ed_knm"]),
         My_el_s=float(record["my_short_ed_knm"]),
         sls_cw=check_crack_width,
+        sls_long_combination=long_combination,
+        sls_total_combination=total_combination,
+        sls_response_combinations={
+            "long": long_combination,
+            "total": total_combination,
+        },
+        sls_response_provenance={
+            "long": (
+                f"Elastic case {case_name!r}, long_combination table field"
+            ),
+            "total": (
+                f"Elastic case {case_name!r}, total_combination table field"
+            ),
+        },
         sls_conc_limit_pct=(
             float(base.get("sls_conc_limit_pct", 0.0)) if check_stress else 0.0
         ),

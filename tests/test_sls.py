@@ -147,83 +147,372 @@ def test_concrete_corner_rows_use_public_one_based_points():
     assert rows[2]["strain_permille"] > 0.0
 
 
-def test_crack_assessment_selects_largest_case():
+def _standard_inputs(**overrides):
+    values = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_edition": "2004",
+        "sls_code": "EN 1992-1-1:2005",
+        "sls_member": "Beam",
+        "sls_dk_na": False,
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_exposure_context": "XC3 / durability",
+        "sls_check_appearance": False,
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
+    criteria = sls.crack_criteria_from_inputs(_standard_inputs())
     result = sls.crack_assessment(
         {
             "Long-term": {"wk": 0.22, "element_id": "bar 2"},
-            "Short-term": {"wk": 0.31, "element_id": "tendon 1"},
+            "Total": {"wk": 0.31, "element_id": "tendon 1"},
         },
-        limit_mm=0.30,
         valid=True,
+        criteria=criteria,
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "duration": "sustained",
+                "response_id": "long",
+                "provenance": "explicit long_combination field",
+            },
+            "Total": {
+                "combination": sls.COMBINATION_CHARACTERISTIC,
+                "duration": "instantaneous total",
+                "response_id": "total",
+                "provenance": "explicit total_combination field",
+            },
+        },
     )
-    assert result["status"] == "EXCEEDED"
-    assert result["case"] == "Short-term"
-    assert result["governing"] == "tendon 1"
-    assert result["margin"] == pytest.approx(-0.01)
+    assert result["status"] == "OK"
+    assert result["verdict"] == "PASS"
+    assert result["case"] == "Long-term"
+    assert result["value"] == pytest.approx(0.22)
+    assert result["required_combination"] == sls.COMBINATION_QUASI_PERMANENT
+    assert result["informational_responses"] == ["Total"]
 
 
-def test_crack_assessment_blocks_when_any_requested_case_is_not_assessed():
+def test_unrelated_not_assessed_response_cannot_block_qp_criterion():
     result = sls.crack_assessment(
         {
             "Long-term": {"wk": 0.18, "element_id": "bar 2"},
-            "Short-term": None,
+            "Total": None,
         },
-        limit_mm=0.30,
         valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "long",
+            },
+            "Total": {
+                "combination": sls.COMBINATION_FREQUENT,
+                "response_id": "total",
+            },
+        },
         dispositions={
             "Long-term": {
                 "status": "CALCULATED",
                 "reason": "Crack width calculated.",
             },
-            "Short-term": {
+            "Total": {
                 "status": "NOT ASSESSED",
                 "reason": "The validated scope does not cover this strain state.",
             },
         },
     )
 
-    assert result["status"] == "NOT ASSESSED"
-    assert result["value"] is None
-    assert result["case"] == "Short-term"
-    assert "validated scope" in result["reason"]
+    assert result["status"] == "OK"
+    assert result["value"] == pytest.approx(0.18)
+    assert result["informational_responses"] == ["Total"]
 
 
-def test_crack_assessment_ignores_not_applicable_case_when_another_calculates():
+def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
+    criteria = sls.crack_criteria_from_inputs(_standard_inputs(
+        sls_prestress_class=sls.PRESTRESS_BONDED,
+        sls_decompression_applicability=sls.DECOMPRESSION_REQUIRED,
+    ))
     result = sls.crack_assessment(
         {
-            "Long-term": None,
-            "Short-term": {"wk": 0.22, "element_id": "bar 2"},
-        },
-        limit_mm=0.30,
-        valid=True,
-        dispositions={
-            "Long-term": {
-                "status": "NOT APPLICABLE",
-                "reason": "No reinforcement is in tension.",
+            "QP": {
+                "wk": 0.18,
+                "element_id": "bar 2",
+                "decompression": {
+                    "status": "OK",
+                    "reason": "Concrete remains in compression at tendon level.",
+                    "solver_provenance": "synthetic independent regression",
+                },
             },
-            "Short-term": {
-                "status": "CALCULATED",
-                "reason": "Crack width calculated.",
+            "Frequent": {"wk": 0.22, "element_id": "tendon 1"},
+        },
+        valid=True,
+        criteria=criteria,
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+            "Frequent": {
+                "combination": sls.COMBINATION_FREQUENT,
+                "response_id": "frequent",
             },
         },
     )
 
     assert result["status"] == "OK"
-    assert result["case"] == "Short-term"
     assert result["value"] == pytest.approx(0.22)
+    assert [
+        item["required_combination"] for item in result["criteria"]
+    ] == [
+        sls.COMBINATION_FREQUENT,
+        sls.COMBINATION_QUASI_PERMANENT,
+    ]
+    assert result["criteria"][1]["kind"] == sls.CRITERION_DECOMPRESSION
+    assert result["criteria"][1]["status"] == "OK"
 
 
-def test_crack_assessment_retains_not_applicable_reason():
+def test_2023_appearance_and_durability_are_separate_qp_criteria():
+    criteria = sls.crack_criteria_from_inputs(_standard_inputs(
+        sls_edition="2023",
+        sls_code="EN 1992-1-1:2023",
+        sls_check_appearance=True,
+        sls_appearance_limit=0.25,
+        sls_wk_limit=0.30,
+    ))
     result = sls.crack_assessment(
-        {"Long-term": None, "Short-term": None},
+        {"QP": {"wk": 0.26, "element_id": "bar 2"}},
+        valid=True,
+        criteria=criteria,
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            }
+        },
+    )
+
+    assert result["status"] == "EXCEEDED"
+    assert [item["kind"] for item in result["criteria"]] == [
+        sls.CRITERION_APPEARANCE,
+        sls.CRITERION_DURABILITY,
+    ]
+    assert [item["status"] for item in result["criteria"]] == [
+        "EXCEEDED",
+        "OK",
+    ]
+    assert all(
+        item["required_combination"] == sls.COMBINATION_QUASI_PERMANENT
+        for item in result["criteria"]
+    )
+    assert "Table 9.1" in result["criteria"][0]["criterion_source"]
+    assert "Table 9.2" in result["criteria"][1]["criterion_source"]
+
+
+def test_2023_bonded_appearance_qp_is_separate_from_frequent_durability():
+    criteria = sls.crack_criteria_from_inputs(_standard_inputs(
+        sls_edition="2023",
+        sls_code="EN 1992-1-1:2023",
+        sls_prestress_class=sls.PRESTRESS_BONDED,
+        sls_check_appearance=True,
+        sls_appearance_limit=0.25,
+        sls_decompression_applicability=sls.DECOMPRESSION_REQUIRED,
+    ))
+    result = sls.crack_assessment(
+        {
+            "QP": {
+                "wk": 0.20,
+                "element_id": "tendon 1",
+                "decompression": {"status": "OK"},
+            },
+            "Frequent": {"wk": 0.22, "element_id": "tendon 1"},
+        },
+        valid=True,
+        criteria=criteria,
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+            "Frequent": {
+                "combination": sls.COMBINATION_FREQUENT,
+                "response_id": "frequent",
+            },
+        },
+    )
+
+    assert result["status"] == "OK"
+    assert [
+        (item["kind"], item["required_combination"])
+        for item in result["criteria"]
+    ] == [
+        (
+            sls.CRITERION_APPEARANCE,
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        (sls.CRITERION_DURABILITY, sls.COMBINATION_FREQUENT),
+        (
+            sls.CRITERION_DECOMPRESSION,
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+    ]
+
+
+def test_missing_required_combination_is_review_with_response_provenance():
+    result = sls.crack_assessment(
+        {"Long-term": {"wk": 0.18, "element_id": "bar 2"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_UNSPECIFIED,
+                "duration": "sustained",
+                "response_id": "long",
+                "provenance": "legacy project: no combination field",
+                "solver_provenance": {"solver": "cracked-section"},
+            }
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert "No calculated response" in result["reason"]
+    assert result["response_contexts"]["Long-term"]["provenance"].startswith(
+        "legacy project"
+    )
+    assert result["response_contexts"]["Long-term"]["solver_provenance"] == {
+        "solver": "cracked-section"
+    }
+    assert result["solver_provenance"] == [{
+        "response": "Long-term",
+        "solver": {"solver": "cracked-section"},
+    }]
+
+
+def test_duplicate_independent_mapping_for_required_combination_is_review():
+    result = sls.crack_assessment(
+        {
+            "Long-term": {"wk": 0.18, "element_id": "bar 1"},
+            "Total": {"wk": 0.22, "element_id": "bar 1"},
+        },
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "long",
+                "provenance": "long response field",
+                "solver_provenance": {"state": "long"},
+            },
+            "Total": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "total",
+                "provenance": "total response field",
+                "solver_provenance": {"state": "total"},
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert "ambiguous" in result["reason"]
+    assert result["criteria"][0]["matched_responses"] == [
+        "Long-term",
+        "Total",
+    ]
+    assert result["response_provenance"] == [
+        {
+            "response": "Long-term",
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": None,
+            "mapping": "long response field",
+        },
+        {
+            "response": "Total",
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": None,
+            "mapping": "total response field",
+        },
+    ]
+    assert result["solver_provenance"] == [
+        {"response": "Long-term", "solver": {"state": "long"}},
+        {"response": "Total", "solver": {"state": "total"}},
+    ]
+
+
+def test_project_criteria_require_explicit_per_combination_limits_and_source():
+    criteria = sls.crack_criteria_from_inputs({
+        "sls_criterion_mode": sls.CRITERION_MODE_PROJECT,
+        "sls_limit_source": "Project DB clause SLS-4",
+        "sls_project_frequent_limit": 0.24,
+        "sls_project_quasi_permanent_limit": 0.21,
+    })
+    result = sls.crack_assessment(
+        {
+            "Frequent": {"wk": 0.25, "element_id": "bar 1"},
+            "QP": {"wk": 0.20, "element_id": "bar 2"},
+        },
+        valid=True,
+        criteria=criteria,
+        response_contexts={
+            "Frequent": {
+                "combination": sls.COMBINATION_FREQUENT,
+                "response_id": "frequent",
+            },
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+
+    assert result["status"] == "EXCEEDED"
+    assert [item["limit"] for item in result["criteria"]] == [0.24, 0.21]
+    assert [item["status"] for item in result["criteria"]] == [
+        "EXCEEDED",
+        "OK",
+    ]
+
+
+def test_legacy_unstructured_call_fails_closed_instead_of_maxing_durations():
+    result = sls.crack_assessment(
+        {
+            "Long-term": {"wk": 0.22, "element_id": "bar 2"},
+            "Total": {"wk": 0.31, "element_id": "tendon 1"},
+        },
         limit_mm=0.30,
         valid=True,
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["value"] is None
+    assert "structured criterion" in result["reason"]
+
+
+def test_not_applicable_reason_is_retained_for_required_combination():
+    result = sls.crack_assessment(
+        {"QP": None, "Total": None},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+            "Total": {
+                "combination": sls.COMBINATION_CHARACTERISTIC,
+                "response_id": "total",
+            },
+        },
         dispositions={
-            "Long-term": {
+            "QP": {
                 "status": "NOT APPLICABLE",
                 "reason": "The section is uncracked.",
             },
-            "Short-term": {
+            "Total": {
                 "status": "NOT APPLICABLE",
                 "reason": "The section is uncracked.",
             },

@@ -83,7 +83,7 @@ _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 # effective-height term only for slabs/prestressed; the DK NA option reports BOTH
 # the fine and the coarse crack system (7.3.4(1)) -- the coarse effective area is
 # the band whose centroid matches the tension reinforcement (figure 7.100 NA) and
-# its wk is halved -- for both the long-term and the short-term load.
+# its wk is halved -- for both the sustained and total-response duration states.
 _CRACK_CODES = {
     "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
     "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
@@ -1702,6 +1702,29 @@ def _case_column_config(key):
         }
     return {
         **text,
+        "long_combination": st.column_config.SelectboxColumn(
+            "Long response SLS combination",
+            help=(
+                "Explicit combination represented by the sustained/long-term "
+                "response. Duration alone never establishes this designation."
+            ),
+            options=list(sls_core.SLS_COMBINATIONS),
+            default=sls_core.COMBINATION_UNSPECIFIED,
+            required=True,
+            width="medium",
+        ),
+        "total_combination": st.column_config.SelectboxColumn(
+            "Total response SLS combination",
+            help=(
+                "Explicit combination represented by the calculated total "
+                "(long + short) response. It is not inferred as characteristic "
+                "or frequent."
+            ),
+            options=list(sls_core.SLS_COMBINATIONS),
+            default=sls_core.COMBINATION_UNSPECIFIED,
+            required=True,
+            width="medium",
+        ),
         "n_long_ed_kn": force("N_Ed,long [kN]", "Sustained axial force; tension is positive."),
         "mx_long_ed_knm": force("Mx_Ed,long [kNm]", "Sustained moment about x."),
         "my_long_ed_knm": force("My_Ed,long [kNm]", "Sustained moment about y."),
@@ -1779,7 +1802,9 @@ def _load_case_editors(box):
     box.markdown("**Elastic cases**")
     box.caption(
         "Long and short action parts share the global creep coefficient below. "
-        "Select stress and crack-width acceptance independently for each row."
+        "Designate the SLS combination represented by each calculated response "
+        "separately from duration; Not designated makes a required criterion "
+        "NOT ASSESSED. Select stress and crack-width acceptance per row."
     )
     elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
     return {
@@ -2900,9 +2925,11 @@ def _apply_pending_project() -> None:
     else:
         st.session_state.pop("calculation_record", None)
     st.session_state["_loaded_project_provenance"] = provenance
-    # Project files intentionally contain inputs, not result payloads. Remove any
-    # result/report from the previously open project so it cannot be mistaken for
-    # evidence belonging to the newly loaded section.
+    # A project may retain a compact crack-control snapshot in calculation
+    # provenance, but it is never restored as a live solver result. Remove any
+    # live result/report from the previously open project so it cannot be mistaken
+    # for evidence belonging to the newly loaded section; the snapshot remains
+    # accessible through ``calculation_record`` and its input-hash match flag.
     for key in (
         "results", "result_sig", "result_plastic_sig", "result_elastic_sig",
         "result_fatigue_sig",
@@ -2959,8 +2986,11 @@ def _save_load_panel() -> None:
                              "JSON file.")
     if project_error:
         box.error(f"Project download blocked: {project_error}.")
-    box.caption(f"Saved with Sector {APP_VERSION}, source "
-                f"{short_revision()}; results are recalculated on load.")
+    box.caption(
+        f"Saved with Sector {APP_VERSION}, source {short_revision()}; "
+        "structured crack-control result summaries are retained as hash-bound "
+        "provenance, while live results are recalculated on load."
+    )
     loaded = st.session_state.get("_loaded_project_provenance")
     if loaded:
         if loaded.get("sector_version"):
@@ -2985,6 +3015,20 @@ def _save_load_panel() -> None:
                     f"{calculation.get('performed_at_utc') or 'time unavailable'}"
                     f" | {match}"
                 )
+                crack_cases = (
+                    (calculation.get("crack_control") or {}).get("cases")
+                    or []
+                )
+                if crack_cases:
+                    summary = "; ".join(
+                        f"{item.get('case') or 'Elastic'}: "
+                        f"{(item.get('assessment') or {}).get('verdict') or (item.get('assessment') or {}).get('status') or 'REVIEW'}"
+                        for item in crack_cases
+                    )
+                    box.caption(
+                        "Recorded crack-control snapshot (audit only): "
+                        + summary
+                    )
         else:
             box.caption("Loaded: legacy project | provenance unavailable")
     _autosave_panel(box)
@@ -3628,6 +3672,11 @@ _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_tendon_bond", "sls_tendon_xi",
+    "sls_criterion_mode", "sls_prestress_class", "sls_exposure_context",
+    "sls_check_appearance", "sls_appearance_limit",
+    "sls_check_durability", "sls_decompression_applicability",
+    "sls_project_characteristic_limit", "sls_project_frequent_limit",
+    "sls_project_quasi_permanent_limit",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
 )
@@ -4165,7 +4214,10 @@ def build_inputs(host=st):
              "(N-Mx and N-My), from pure tension to the squash load. Shown in the "
              "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
-    scw.caption("User-defined criteria for Elastic results; 0 = not assessed.")
+    scw.caption(
+        "Stress limits are user-defined. Crack criteria below carry their own "
+        "source and explicit SLS-combination applicability."
+    )
     sls_conc_limit_pct = _seeded_number(
         scw, r"Concrete compression limit (% $f_{ck}$, 0 = not assessed)",
         0.0, 100.0, 60.0, 1.0, "sls_conc_limit_pct", disabled=not elastic_on,
@@ -4190,13 +4242,6 @@ def build_inputs(host=st):
         "Stress and crack-width checks are selected per Elastic case in the "
         "Loads table."
     )
-    sls_wk_limit = _seeded_number(
-        scw, r"Crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)",
-        0.0, 5.0, 0.30, 0.05, "sls_wk_limit",
-        disabled=not (elastic_on and sls_cw),
-        help="User-supplied allowable calculated crack width in millimetres. "
-             "Sector checks the largest reported long-/short-term and fine/coarse "
-             "value against this limit.")
     sls_phi = _seeded_number(
         scw, r"Crack-width element diameter $\phi$ (mm, 0 = auto)",
         0.0, 60.0, 0.0, 1.0, "sls_phi",
@@ -4246,6 +4291,169 @@ def build_inputs(host=st):
     )
     sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
     sls_edition = _CRACK_CODES[sls_code]["edition"]
+    sls_criterion_mode = _seeded_selectbox(
+        scw,
+        "Crack-criterion source and routing",
+        list(sls_core.CRITERION_MODES),
+        sls_core.CRITERION_MODE_STANDARD,
+        "sls_criterion_mode",
+        disabled=not (elastic_on and sls_cw),
+        help=(
+            "Standard-derived routes appearance/durability criteria to the "
+            "combination required by the selected edition and prestress class. "
+            "Project-defined requires a separate positive limit for every "
+            "applicable combination. Legacy ambiguity always returns REVIEW."
+        ),
+    )
+    standard_criteria = (
+        sls_criterion_mode == sls_core.CRITERION_MODE_STANDARD
+    )
+    project_criteria = (
+        sls_criterion_mode == sls_core.CRITERION_MODE_PROJECT
+    )
+    sls_prestress_class = _seeded_selectbox(
+        scw,
+        "Crack-control member / prestress class",
+        list(sls_core.PRESTRESS_CLASSES),
+        sls_core.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_prestress_class",
+        disabled=not (elastic_on and sls_cw and standard_criteria),
+        help=(
+            "Reinforced members and unbonded prestress route standard crack "
+            "criteria to quasi-permanent. Bonded prestress routes crack width "
+            "to frequent and may additionally require quasi-permanent "
+            "decompression."
+        ),
+    )
+    sls_exposure_context = _seeded_text(
+        scw,
+        "Exposure / application context",
+        "",
+        "sls_exposure_context",
+        disabled=not (elastic_on and sls_cw and standard_criteria),
+        help=(
+            "Exposure class and project application used to select the table "
+            "criterion. Blank applicability blocks a standard-derived verdict."
+        ),
+    )
+    sls_check_appearance = _seeded_checkbox(
+        scw,
+        "Assess 2023 appearance criterion (Table 9.1)",
+        False,
+        "sls_check_appearance",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+        ),
+        help=(
+            "Adds a separate appearance criterion. This standard-derived route "
+            "is implemented for the 2023 edition; selecting it with another "
+            "edition blocks the verdict until it is cleared or the edition is "
+            "changed. Sector does not reuse a duration label."
+        ),
+    )
+    sls_appearance_limit = _seeded_number(
+        scw,
+        "Appearance crack-width limit (mm, 0 = not assessed)",
+        0.0,
+        5.0,
+        0.30,
+        0.05,
+        "sls_appearance_limit",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == "2023"
+            and sls_check_appearance
+        ),
+        help="Limit selected from Table 9.1 for the stated application context.",
+    )
+    sls_check_durability = _seeded_checkbox(
+        scw,
+        (
+            "Assess durability criterion "
+            + ("(Table 9.2)" if sls_edition == "2023" else "(Table 7.1N)")
+        ),
+        True,
+        "sls_check_durability",
+        disabled=not (elastic_on and sls_cw and standard_criteria),
+        help=(
+            "Adds the standard durability crack-width criterion for the stated "
+            "exposure/application."
+        ),
+    )
+    sls_wk_limit = _seeded_number(
+        scw,
+        r"Durability crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)",
+        0.0,
+        5.0,
+        0.30,
+        0.05,
+        "sls_wk_limit",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_check_durability
+        ),
+        help=(
+            "Limit selected from the applicable standard table. Only a response "
+            "explicitly tagged with the required SLS combination can govern."
+        ),
+    )
+    sls_decompression_applicability = _seeded_selectbox(
+        scw,
+        "Quasi-permanent decompression applicability",
+        list(sls_core.DECOMPRESSION_OPTIONS),
+        sls_core.DECOMPRESSION_NOT_ESTABLISHED,
+        "sls_decompression_applicability",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_prestress_class == sls_core.PRESTRESS_BONDED
+        ),
+        help=(
+            "For bonded prestress, explicitly state whether exposure/application "
+            "requires a quasi-permanent decompression criterion. Not established "
+            "blocks the overall verdict."
+        ),
+    )
+    sls_project_characteristic_limit = _seeded_number(
+        scw,
+        "Project characteristic-combination limit (mm, 0 = not applicable)",
+        0.0,
+        5.0,
+        0.0,
+        0.05,
+        "sls_project_characteristic_limit",
+        disabled=not (elastic_on and sls_cw and project_criteria),
+        help="Positive value explicitly applies the project criterion here.",
+    )
+    sls_project_frequent_limit = _seeded_number(
+        scw,
+        "Project frequent-combination limit (mm, 0 = not applicable)",
+        0.0,
+        5.0,
+        0.0,
+        0.05,
+        "sls_project_frequent_limit",
+        disabled=not (elastic_on and sls_cw and project_criteria),
+        help="Positive value explicitly applies the project criterion here.",
+    )
+    sls_project_quasi_permanent_limit = _seeded_number(
+        scw,
+        "Project quasi-permanent-combination limit (mm, 0 = not applicable)",
+        0.0,
+        5.0,
+        0.0,
+        0.05,
+        "sls_project_quasi_permanent_limit",
+        disabled=not (elastic_on and sls_cw and project_criteria),
+        help="Positive value explicitly applies the project criterion here.",
+    )
     sls_tendon_bond = _seeded_selectbox(
         scw,
         r"Prestressing-steel bond condition ($k_b$)",
@@ -5622,6 +5830,22 @@ def build_inputs(host=st):
                 sls_tendon_bond=sls_tendon_bond,
                 sls_tendon_k1=sls_tendon_k1,
                 sls_tendon_xi=sls_tendon_xi,
+                sls_criterion_mode=sls_criterion_mode,
+                sls_prestress_class=sls_prestress_class,
+                sls_exposure_context=sls_exposure_context,
+                sls_check_appearance=sls_check_appearance,
+                sls_appearance_limit=sls_appearance_limit,
+                sls_check_durability=sls_check_durability,
+                sls_decompression_applicability=(
+                    sls_decompression_applicability
+                ),
+                sls_project_characteristic_limit=(
+                    sls_project_characteristic_limit
+                ),
+                sls_project_frequent_limit=sls_project_frequent_limit,
+                sls_project_quasi_permanent_limit=(
+                    sls_project_quasi_permanent_limit
+                ),
                 sls_wk_limit=sls_wk_limit,
                 sls_conc_limit_pct=sls_conc_limit_pct,
                 sls_steel_limit_pct=sls_steel_limit_pct,
@@ -6026,11 +6250,12 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         )
 
         # Extended serviceability checks. Each bar's clear cover is taken from the
-        # geometry, so no cover input is needed. The long-term (quasi-permanent)
-        # state at nl (beta/kt = 0.5/0.4) drives the cracking threshold, the
-        # section properties and tension stiffening; the short-term (instantaneous)
-        # state -- the total long+short load at ns (beta/kt = 1.0/0.6) -- gives the
-        # short-term crack width. Crack width is reported for both loads.
+        # geometry, so no cover input is needed. The long-duration state at nl
+        # (beta/kt = 0.5/0.4) contributes to the cracking threshold, the
+        # section properties and tension stiffening; the instantaneous total state
+        # -- the total long+short load at ns (beta/kt = 1.0/0.6) -- gives the
+        # total-response crack width. Crack width is reported for both duration
+        # states; criterion routing uses separate structured combination metadata.
         if inp["sls_phi"] > 0.0:
             phi = inp["sls_phi"]
         else:
@@ -6120,6 +6345,11 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
             crack_dispositions={},
+            crack_criteria=(
+                sls_core.crack_criteria_from_inputs(inp)
+                if inp["sls_cw"] else []
+            ),
+            crack_response_contexts={},
             crack_scope_note=CRACK_DIRECTIONAL_LIMITATION,
             crack_code=(inp["sls_code"] if inp["sls_cw"] else None),
             crack_edition=(inp["sls_edition"] if inp["sls_cw"] else None),
@@ -6129,11 +6359,12 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 else None
             ),
         )
-        # Crack width is its own opt-in, reported for both load cases once the
-        # section has cracked. The short-term state reuses the combined creep solve
-        # `r`: its instantaneous neutral axis with the displayed total steel stress
-        # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
-        # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
+        # Crack width is its own opt-in, reported for both duration states once the
+        # section has cracked. The instantaneous total state reuses the combined
+        # creep solve `r`: its instantaneous neutral axis with the displayed total
+        # steel stress (s2 + RST1), so the crack-width sigma_s matches the Total
+        # column rather than a raw (long+short)-at-ns solve. Each bar's cover comes
+        # from geometry.
         if inp["sls_cw"] and cracked:
             # Crack width uses the load-induced steel stress. The combined result
             # reports physical tendon stress, so strip its locked-in prestress to
@@ -6179,10 +6410,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     "scope": result.scope if result is not None else None,
                 }
 
-            # Long-term crack width is on the cracked section under the quasi-permanent
-            # load (kt = 0.4), computed directly from the long-term cracked state so it
-            # is reported even when the long-term load alone would not cross the
-            # cracking threshold. The short-term is the instantaneous total (kt = 0.6).
+            # Long-term and total are response-duration states only. Their SLS
+            # combination classes come from explicit load-table fields below;
+            # neither duration is treated as quasi-permanent/frequent by inference.
             crack_long = _cw(long_state, inp["nl"], 0.4, False)
             crack_short = _cw(short_state, inp["ns"], 0.6, False)
             out["elastic"].update(
@@ -6194,7 +6424,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     bar_ids, tendon_ids),
                 crack_dispositions={
                     "Long-term": _disposition(crack_long),
-                    "Short-term": _disposition(crack_short),
+                    "Total (long + short)": _disposition(crack_short),
                 },
                 crack_code=inp["sls_code"],
                 crack_edition=inp["sls_edition"],
@@ -6215,9 +6445,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 )
                 out["elastic"]["crack_dispositions"] = {
                     "Long-term (fine)": _disposition(crack_long),
-                    "Short-term (fine)": _disposition(crack_short),
+                    "Total (fine)": _disposition(crack_short),
                     "Long-term (coarse)": _disposition(crack_long_coarse),
-                    "Short-term (coarse)": _disposition(crack_short_coarse),
+                    "Total (coarse)": _disposition(crack_short_coarse),
                 }
         elif inp["sls_cw"]:
             out["elastic"]["crack_dispositions"] = {
@@ -6226,7 +6456,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     "reason": "The section remained uncracked.",
                     "scope": None,
                 },
-                "Short-term": {
+                "Total (long + short)": {
                     "status": "NOT APPLICABLE",
                     "reason": "The section remained uncracked.",
                     "scope": None,
@@ -6234,25 +6464,75 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             }
         eout = out["elastic"]
         if (
-            eout.get("crack_coarse") is not None
-            or eout.get("crack_short_coarse") is not None
+            "crack_coarse" in eout
+            or "crack_short_coarse" in eout
         ):
             crack_cases = {
                 "Long-term (fine)": eout.get("crack"),
-                "Short-term (fine)": eout.get("crack_short"),
+                "Total (fine)": eout.get("crack_short"),
                 "Long-term (coarse)": eout.get("crack_coarse"),
-                "Short-term (coarse)": eout.get("crack_short_coarse"),
+                "Total (coarse)": eout.get("crack_short_coarse"),
+            }
+            response_states = {
+                "Long-term (fine)": "long",
+                "Total (fine)": "total",
+                "Long-term (coarse)": "long",
+                "Total (coarse)": "total",
             }
         else:
             crack_cases = {
                 "Long-term": eout.get("crack"),
-                "Short-term": eout.get("crack_short"),
+                "Total (long + short)": eout.get("crack_short"),
             }
+            response_states = {
+                "Long-term": "long",
+                "Total (long + short)": "total",
+            }
+        combination_map = dict(inp.get("sls_response_combinations") or {})
+        provenance_map = dict(inp.get("sls_response_provenance") or {})
+        combination_map.setdefault(
+            "long",
+            inp.get(
+                "sls_long_combination",
+                sls_core.COMBINATION_UNSPECIFIED,
+            ),
+        )
+        combination_map.setdefault(
+            "total",
+            inp.get(
+                "sls_total_combination",
+                sls_core.COMBINATION_UNSPECIFIED,
+            ),
+        )
+        response_contexts = {
+            name: {
+                "combination": combination_map[state],
+                "duration": (
+                    "Sustained / long-term response"
+                    if state == "long"
+                    else "Instantaneous total (long + short) response"
+                ),
+                "response_id": state,
+                "provenance": provenance_map.get(state),
+                "solver_provenance": {
+                    "state": state,
+                    "elastic_case": dict(inp.get("elastic_case") or {}),
+                    "creep_modular_ratio": (
+                        "nl" if state == "long" else "combined nl/ns"
+                    ),
+                },
+            }
+            for name, state in response_states.items()
+        }
+        eout["crack_response_contexts"] = response_contexts
+        eout["crack_responses"] = crack_cases
         eout["crack_assessment"] = sls_core.crack_assessment(
             crack_cases,
             limit_mm=inp["sls_wk_limit"],
             valid=eout["converged"],
             dispositions=eout.get("crack_dispositions"),
+            response_contexts=response_contexts,
+            criteria=eout.get("crack_criteria"),
         )
     if inp.get("minimum_reinforcement_on"):
         if inp.get("detailing_edition") == detailing.EC2_2023:
@@ -6424,6 +6704,63 @@ def run_analysis(
             else _run_fatigue_or_invalid(inp)
         )
     return result
+
+
+def crack_control_calculation_record(results):
+    """Return a compact, input-hash-bound crack-control result snapshot.
+
+    Project files do not restore numerical snapshots as live solver results. This
+    record instead preserves each routed verdict and every response summary as
+    immutable provenance, while ``matches_saved_inputs`` states whether it belongs
+    to the saved inputs.
+    """
+    results = results or {}
+    entries = results.get("elastic_cases")
+    if entries is None:
+        entries = [{
+            "name": (
+                (results.get("elastic") or {}).get("elastic_case", {})
+                or {}
+            ).get("id", "Elastic"),
+            "results": {"elastic": results.get("elastic")},
+        }]
+    cases = []
+    for entry in entries:
+        elastic = (entry.get("results") or {}).get("elastic") or {}
+        if not elastic.get("show_cw"):
+            continue
+        assessment = elastic.get("crack_assessment")
+        if not assessment:
+            continue
+        dispositions = elastic.get("crack_dispositions") or {}
+        contexts = elastic.get("crack_response_contexts") or {}
+        informational = set(
+            assessment.get("informational_responses") or []
+        )
+        responses = []
+        for name, response in (
+            elastic.get("crack_responses") or {}
+        ).items():
+            response = response or {}
+            disposition = dispositions.get(name) or {}
+            responses.append({
+                "name": name,
+                "wk_mm": response.get("wk"),
+                "element_id": response.get("element_id"),
+                "solver_status": disposition.get("status"),
+                "solver_reason": disposition.get("reason"),
+                "context": copy.deepcopy(contexts.get(name) or {}),
+                "acceptance_role": (
+                    "informational"
+                    if name in informational else "criterion input"
+                ),
+            })
+        cases.append({
+            "case": str(entry.get("name") or "Elastic"),
+            "assessment": copy.deepcopy(assessment),
+            "responses": responses,
+        })
+    return {"cases": cases} if cases else None
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -8631,9 +8968,9 @@ def _elastic_sls_section(inp, e):
     """Serviceability sub-report inside the elastic view: the cracking threshold
     and transformed section properties (always); crack width is an independent
     opt-in. The cracking decision is on the *total* (long + short) load -- cracking
-    is triggered by the peak load the section ever sees and is irreversible -- while
-    the crack width is reported for both the long-term (quasi-permanent, the
-    code-limit case) and the short-term (instantaneous) load."""
+    is triggered by the peak load the section ever sees and is irreversible. Crack
+    widths are reported for both response-duration states, while acceptance is
+    routed independently by their explicit SLS-combination designations."""
     if "cracked" not in e:
         return
     show_cw = e.get("show_cw", False)
@@ -8679,10 +9016,12 @@ def _elastic_sls_section(inp, e):
 
 
 def _crack_width_panel(e):
-    """Crack width (EC2 7.3.4) for the long-term and short-term load cases, side
-    by side. The DK NA reports the fine and the coarse crack system (four columns);
-    each bar's clear cover is taken from the geometry and the bar with the largest
-    wk governs, reported per load case."""
+    """Crack width for the sustained and total-response duration states.
+
+    The response's explicit SLS-combination designation, rather than its duration
+    label or magnitude relative to another response, controls criterion routing.
+    The DK NA reports the fine and coarse crack systems for both duration states.
+    """
     cl, cs = e.get("crack"), e.get("crack_short")
     clc, csc = e.get("crack_coarse"), e.get("crack_short_coarse")
     st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
@@ -8711,7 +9050,53 @@ def _crack_width_panel(e):
         st.warning(message)
     else:
         st.info(message)
-    st.caption(f"Criteria: {e.get('sls_limit_source', '-')}.")
+    st.caption(
+        "Acceptance route: "
+        f"{assessment.get('required_combination') or 'not established'}; "
+        f"source: {assessment.get('criterion_source') or e.get('sls_limit_source', '-')}."
+    )
+    criterion_rows = [
+        {
+            "Criterion": item.get("kind"),
+            "Source type": item.get("criterion_source_type"),
+            "Required combination": item.get("required_combination") or "-",
+            "Matched response": ", ".join(item.get("matched_responses") or [])
+            or "-",
+            "Limit (mm)": item.get("limit"),
+            "Result (mm)": item.get("value"),
+            "Status": presentation.assessment_status_label(
+                item.get("status")
+            ),
+            "Source": item.get("criterion_source") or "-",
+        }
+        for item in assessment.get("criteria", [])
+    ]
+    if criterion_rows:
+        st.dataframe(
+            criterion_rows,
+            hide_index=True,
+            width="stretch",
+        )
+    response_rows = []
+    informational = set(assessment.get("informational_responses") or [])
+    for name, context in (
+        assessment.get("response_contexts") or {}
+    ).items():
+        response_rows.append({
+            "Response": name,
+            "Duration state": context.get("duration") or "-",
+            "SLS combination": context.get("combination") or "-",
+            "Acceptance role": (
+                "Informational" if name in informational else "Criterion input"
+            ),
+            "Mapping provenance": context.get("provenance") or "-",
+        })
+    if response_rows:
+        st.dataframe(
+            response_rows,
+            hide_index=True,
+            width="stretch",
+        )
     st.warning(
         "Crack-control scope: "
         f"{e.get('crack_scope_note') or CRACK_DIRECTIONAL_LIMITATION}"
@@ -8767,24 +9152,24 @@ def _crack_width_panel(e):
     if has_coarse:
         # DK NA: fine and coarse crack systems, each for both load cases.
         data = {"Quantity": quants, "Long-term (fine)": column(cl),
-                "Short-term (fine)": column(cs), "Long-term (coarse)": column(clc),
-                "Short-term (coarse)": column(csc)}
+                "Total (fine)": column(cs), "Long-term (coarse)": column(clc),
+                "Total (coarse)": column(csc)}
     else:
         data = {"Quantity": quants, "Long-term": column(cl),
-                "Short-term": column(cs)}
+                "Total (long + short)": column(cs)}
     st.dataframe(data, hide_index=True, width="stretch")
-    st.caption("Governing (largest-$w_k$) element per load case; each element's "
+    st.caption("Governing (largest-$w_k$) element per response state; each element's "
                "clear cover is the distance to the nearest concrete face minus "
                "its radius.")
 
     cases = ([
         ("Long-term (fine)", cl),
-        ("Short-term (fine)", cs),
+        ("Total (fine)", cs),
         ("Long-term (coarse)", clc),
-        ("Short-term (coarse)", csc),
+        ("Total (coarse)", csc),
     ] if has_coarse else [
         ("Long-term", cl),
-        ("Short-term", cs),
+        ("Total (long + short)", cs),
     ])
     candidate_rows = []
     for case_name, case_result in cases:
@@ -10817,12 +11202,20 @@ def _render_selected_case_actions(family, actions):
         [
             {
                 "Action part": "Long-term",
+                "Response SLS combination": actions.get(
+                    "long_combination",
+                    sls_core.COMBINATION_UNSPECIFIED,
+                ),
                 "N_Ed [kN]": actions.get("n_long_ed_kn", 0.0),
                 "Mx_Ed [kNm]": actions.get("mx_long_ed_knm", 0.0),
                 "My_Ed [kNm]": actions.get("my_long_ed_knm", 0.0),
             },
             {
-                "Action part": "Short-term",
+                "Action part": "Short increment",
+                "Response SLS combination": actions.get(
+                    "total_combination",
+                    sls_core.COMBINATION_UNSPECIFIED,
+                ),
                 "N_Ed [kN]": actions.get("n_short_ed_kn", 0.0),
                 "Mx_Ed [kNm]": actions.get("mx_short_ed_knm", 0.0),
                 "My_Ed [kNm]": actions.get("my_short_ed_knm", 0.0),
@@ -10983,7 +11376,7 @@ def _analysis_workspace(inp):
             # live edited geometry or spectra in a stale result view would combine
             # evidence from two different calculations.
             st.session_state["result_input_snapshot"] = copy.deepcopy(inp)
-            st.session_state["calculation_record"] = {
+            calculation_record = {
                 "performed_at_utc": datetime.now(timezone.utc).isoformat(
                     timespec="seconds"
                 ),
@@ -10991,6 +11384,12 @@ def _analysis_workspace(inp):
                 "source_revision": source_revision(),
                 "input_sha256": _project_input_hash(),
             }
+            crack_control_record = crack_control_calculation_record(
+                st.session_state["results"]
+            )
+            if crack_control_record is not None:
+                calculation_record["crack_control"] = crack_control_record
+            st.session_state["calculation_record"] = calculation_record
         else:
             st.session_state.pop("result_input_snapshot", None)
         # Re-default the Plastic view's neutral-axis state to this result's governing
