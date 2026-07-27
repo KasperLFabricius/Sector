@@ -18,6 +18,43 @@ def test_upper_limit_assessment_has_explicit_non_pass_states():
     assert sls.upper_limit_assessment(float("nan"), 18.0)["status"] == "INVALID"
 
 
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+@pytest.mark.parametrize("position", ["value", "limit"])
+def test_upper_limit_assessment_rejects_boolean_numerics(value, position):
+    args = [12.0, 18.0]
+    args[0 if position == "value" else 1] = value
+
+    with pytest.raises(ValueError, match="Boolean"):
+        sls.upper_limit_assessment(*args)
+
+
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "concrete_limit_pct",
+        "reinforcement_limit_pct",
+        "prestress_limit_pct",
+    ],
+)
+def test_stress_assessments_reject_boolean_limits_before_coercion(key, value):
+    kwargs = {
+        "n_bars": 1,
+        "max_concrete_compression": 12.0,
+        "fck": 30.0,
+        "fyk": 500.0,
+        "fpk": 1800.0,
+        "concrete_limit_pct": 60.0,
+        "reinforcement_limit_pct": 80.0,
+        "prestress_limit_pct": 75.0,
+        "valid": True,
+    }
+    kwargs[key] = value
+
+    with pytest.raises(ValueError, match=key):
+        sls.stress_assessments([350.0, 420.0], **kwargs)
+
+
 def test_stress_assessments_separate_bars_and_tendons():
     checks = sls.stress_assessments(
         [350.0, 420.0],

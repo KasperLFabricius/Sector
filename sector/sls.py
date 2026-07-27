@@ -109,15 +109,29 @@ def canonical_combination(value) -> str:
 
 
 def is_boolean_value(value) -> bool:
-    """Return whether ``value`` is a Python or NumPy Boolean scalar."""
+    """Return whether ``value`` is a Python/NumPy Boolean scalar or array."""
     value_type = type(value)
+    numpy_value = value_type.__module__.split(".", 1)[0] == "numpy"
     return (
         isinstance(value, bool)
         or (
             value_type.__name__ in {"bool", "bool_"}
-            and value_type.__module__.split(".", 1)[0] == "numpy"
+            and numpy_value
+        )
+        or (
+            numpy_value
+            and getattr(getattr(value, "dtype", None), "kind", None) == "b"
         )
     )
+
+
+def contains_boolean_value(value) -> bool:
+    """Return whether a scalar or finite input sequence contains a Boolean."""
+    if is_boolean_value(value):
+        return True
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(contains_boolean_value(item) for item in value)
+    return False
 
 
 def crack_numeric_input_issues(inp: Mapping) -> tuple[str, ...]:
@@ -125,8 +139,18 @@ def crack_numeric_input_issues(inp: Mapping) -> tuple[str, ...]:
     return tuple(
         key
         for key in CRACK_NUMERIC_INPUT_KEYS
-        if key in inp and is_boolean_value(inp.get(key))
+        if key in inp and contains_boolean_value(inp.get(key))
     )
+
+
+def require_non_boolean_crack_numeric_inputs(inp: Mapping) -> None:
+    """Reject Boolean SLS numerics before a solver/result boundary."""
+    issues = crack_numeric_input_issues(inp)
+    if issues:
+        raise ValueError(
+            "Boolean values are not accepted for SLS numeric inputs: "
+            + ", ".join(issues)
+        )
 
 
 def _finite_positive(value) -> float | None:
@@ -618,6 +642,10 @@ def upper_limit_assessment(
     results remain visible, but the public status is then ``NOT ASSESSED`` rather
     than an implied pass.
     """
+    if is_boolean_value(value) or is_boolean_value(limit):
+        raise ValueError(
+            "Boolean values are not accepted as an SLS value or limit"
+        )
     if not valid:
         return {
             "value": value, "limit": limit, "util": None, "margin": None,
@@ -664,6 +692,26 @@ def stress_assessments(
     tendon_ids: Sequence[str] | None = None,
 ) -> dict:
     """Build separate concrete, mild-steel and tendon stress assessments."""
+    boolean_inputs = {
+        "total_stress": total_stress,
+        "max_concrete_compression": max_concrete_compression,
+        "fck": fck,
+        "fyk": fyk,
+        "fpk": fpk,
+        "concrete_limit_pct": concrete_limit_pct,
+        "reinforcement_limit_pct": reinforcement_limit_pct,
+        "prestress_limit_pct": prestress_limit_pct,
+    }
+    rejected = [
+        name
+        for name, value in boolean_inputs.items()
+        if value is not None and contains_boolean_value(value)
+    ]
+    if rejected:
+        raise ValueError(
+            "Boolean values are not accepted for SLS stress inputs: "
+            + ", ".join(rejected)
+        )
     total = [float(v) for v in total_stress]
     mild = total[:n_bars]
     prestress = total[n_bars:]

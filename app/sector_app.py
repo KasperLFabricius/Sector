@@ -2348,40 +2348,62 @@ def _sanitise_crack_input_state() -> None:
 
     allowed = set(sls_core.CRACK_NUMERIC_INPUT_KEYS)
     invalid_keys = set(_invalid_crack_input_keys())
-    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {})
-    explicit_repairs = {
-        key
-        for key in allowed
-        if (
-            isinstance(pending, dict)
-            and key in pending
-            and _valid_crack_numeric(pending[key])
-            and key in st.session_state
-            and _valid_crack_numeric(st.session_state[key])
-        )
-    }
-    invalid_keys.difference_update(explicit_repairs)
+    newly_invalid = set()
 
-    def sanitise(mapping) -> bool:
+    def sanitise(mapping, *, drop_invalid=False) -> bool:
         changed = False
         for key in allowed:
             if key not in mapping:
                 continue
             if _valid_crack_numeric(mapping[key]):
                 continue
-            mapping[key] = 0.0
-            if key not in explicit_repairs:
-                invalid_keys.add(key)
+            if drop_invalid:
+                mapping.pop(key)
+            else:
+                mapping[key] = 0.0
+            newly_invalid.add(key)
             changed = True
         return changed
 
     sanitise(st.session_state)
-    for state_key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
-        state = st.session_state.get(state_key)
-        if isinstance(state, dict):
-            state = dict(state)
-            if sanitise(state):
-                st.session_state[state_key] = state
+    durable = st.session_state.get(_INPUT_STATE_KEY)
+    if isinstance(durable, dict):
+        durable = dict(durable)
+        if sanitise(durable):
+            st.session_state[_INPUT_STATE_KEY] = durable
+    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY)
+    if isinstance(pending, dict):
+        pending = dict(pending)
+        pending_changed = sanitise(pending, drop_invalid=True)
+        # Any invalid copy of a key wins over an earlier journal value for that
+        # key. Keeping even a valid-looking stale event could let the sanitized
+        # live placeholder match it on the next interrupted rerun.
+        for key in newly_invalid:
+            if key in pending:
+                pending.pop(key)
+                pending_changed = True
+        if pending_changed:
+            st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
+
+    # A real widget edit/confirmation is journalled with the current value.
+    # Newly rejected values always win this run, and an invalid pending entry is
+    # removed rather than converted to a plausible 0.0 event. Thus an interrupted
+    # rerun cannot later promote a synthesized placeholder to an explicit repair.
+    explicit_repairs = {
+        key
+        for key in allowed
+        if (
+            key not in newly_invalid
+            and isinstance(pending, dict)
+            and key in pending
+            and _valid_crack_numeric(pending[key])
+            and key in st.session_state
+            and _valid_crack_numeric(st.session_state[key])
+            and float(pending[key]) == float(st.session_state[key])
+        )
+    }
+    invalid_keys.update(newly_invalid)
+    invalid_keys.difference_update(explicit_repairs)
     if invalid_keys:
         st.session_state[_INVALID_CRACK_INPUT_KEYS_KEY] = tuple(
             sorted(invalid_keys)
@@ -6212,6 +6234,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     run that only touched the elastic (or only the plastic) inputs recomputes just
     the affected half.
     """
+    sls_core.require_non_boolean_crack_numeric_inputs(inp)
     out = {}
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
@@ -6817,6 +6840,7 @@ def run_analysis(
     gating remains the caller's responsibility; matching rows are then reused by
     name and exact action signature.
     """
+    sls_core.require_non_boolean_crack_numeric_inputs(inp)
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):

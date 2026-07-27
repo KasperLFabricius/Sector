@@ -52,7 +52,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-040 | PR-10 | Planned | Remove literal caret markup and normalize scientific notation, subscripts, powers, degrees, and units through one notation layer. | Text extraction and raster notation checks to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-041 | PR-11 | Planned | Add section-based Figure/Table numbering, captions, references, repeated units, and grayscale-safe plots. | Caption/reference and grayscale visual checks to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-042 | PR-11 | Planned | Add a shared publication style system plus structural and raster PDF preflight. | Complete manual and representative report preflight/crop regression to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
-| F-043 | PR-03 core; PR-04/PR-05 inherit or override | Independent QA remediation implemented on PR-03 branch; new exact-head gates pending | Response duration and SLS-combination class are independent. The 2004 route remains isolated. The 2023 Table 9.2 route now records a controlled exposure group and, for bonded tendons, Protection Level 1/pretensioned versus Protection Levels 2/3. It routes width and decompression only to the table-required QP/frequent response. Boolean crack numerics are rejected before coercion across core, project, session, autosave and report boundaries. Missing, migrated, malformed or duplicate mapping remains `NOT ASSESSED / REVIEW`; unrelated responses are informational and crack history remains separate. | Frozen ordinary 2004 reproducer: QP `w_k = 0.22 mm` versus characteristic total `0.31 mm` at `w_lim = 0.30 mm` gives QP PASS. Frozen 2023 bonded PL2/3 reproducer: QP `0.31 mm` versus unrelated Frequent `0.22 mm` at `0.30 mm` gives QP FAIL. Separate PL1 X0/XC1, XC2-XC4, XD/XS and XF routes; Table 9.1 appearance; QP/frequent decompression; missing groups; cross-case duplicate; v17 migration; Python/NumPy Boolean limits and `xi`; project/session/autosave/report/headless paths. Controlled local evidence: 2004 §7.3.1(5)/Table 7.1N; DK NA:2024 §7.3.1(5)/Table 7.1 NA; 2023 §9.2.1(6)/Tables 9.1-9.2. | Latest lean remediation gate: 322 unique affected checks green (181 core/project/manual checks, 118 report checks, 13 selected Streamlit paths, nine case-routing/cache tests and one rendered-manual test), with nine expected Kaleido warnings. The manual's first dense render was tightened and its rerender passed. Earlier complete CI remains historical only; new exact-head CI is required. | Codex Review was clean on `bae40bf3f671c4eac994ded66481354ec86137b1`, but that head is not closable because original independent QA then found the two P1 gaps above. New exact-head Codex Review is pending after push. | Original reviewer rejected `bae40bf3f671c4eac994ded66481354ec86137b1`; exact-head resubmission pending. | Pending | PR-04 must add EN 1992-2 bridge-base routing and PR-05 the Danish bridge matrix, including the DK non-prestressed frequent-column route; neither may fall back to a generic maximum. Required decompression remains `NOT ASSESSED` unless concrete-stress evidence exists. |
+| F-043 | PR-03 core; PR-04/PR-05 inherit or override | Independent QA and latest exact-review remediation implemented on PR-03 branch; new exact-head gates pending | Response duration and SLS-combination class are independent. The 2004 route remains isolated. The 2023 Table 9.2 route records a controlled exposure group and, for bonded tendons, Protection Level 1/pretensioned versus Protection Levels 2/3. It routes width and decompression only to the table-required QP/frequent response. Boolean crack numerics are rejected before coercion across core solver/result, project, session, autosave and report boundaries. Invalid pending events are discarded and cannot become repairs after an interrupted rerun. Missing, migrated, malformed or duplicate mapping remains `NOT ASSESSED / REVIEW`; unrelated responses are informational and crack history remains separate. | Frozen ordinary 2004 reproducer: QP `w_k = 0.22 mm` versus characteristic total `0.31 mm` at `w_lim = 0.30 mm` gives QP PASS. Frozen 2023 bonded PL2/3 reproducer: QP `0.31 mm` versus unrelated Frequent `0.22 mm` at `0.30 mm` gives QP FAIL. Separate PL1 X0/XC1, XC2-XC4, XD/XS and XF routes; Table 9.1 appearance; QP/frequent decompression; missing groups; cross-case duplicate; v17 migration; Python/NumPy Boolean limits and `xi`; interrupted event-journal reconstruction; project/session/autosave/report/headless paths. Controlled local evidence: 2004 §7.3.1(5)/Table 7.1N; DK NA:2024 §7.3.1(5)/Table 7.1 NA; 2023 §9.2.1(6)/Tables 9.1-9.2. | Latest lean remediation evidence: 342 unique affected checks green across the prior complete affected suites and focused delta checks; the most recent exact-review matrix passed 32/32, the strengthened interrupted-state variant passed 2/2, and the bounded complete SLS/interrupted-input/source-policy gate passed 154/154. The manual's dense rerender remains green. Earlier complete CI is historical only; new exact-head CI is required. | Codex Review was clean on `bae40bf3f671c4eac994ded66481354ec86137b1`, but original independent QA rejected it. Review of `65d730011691a6a05f99df91090746f469224be8` found two P1 gaps: sanitized pending repair provenance and pre-solver Boolean validation. Both are remediated; a new exact-head review is pending after push. | Original reviewer rejected `bae40bf3f671c4eac994ded66481354ec86137b1`; exact-head resubmission pending. | Pending | PR-04 must add EN 1992-2 bridge-base routing and PR-05 the Danish bridge matrix, including the DK non-prestressed frequent-column route; neither may fall back to a generic maximum. Required decompression remains `NOT ASSESSED` unless concrete-stress evidence exists. |
 
 ## PR-01 evidence log
 
@@ -242,9 +242,22 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
   v18 now records the exposure/protection matrix and fails closed on ambiguous
   v17 migration. Boolean `xi` and crack/SLS limits are rejected before coercion
   through every persistence, calculation and publication boundary. The latest
-  lean remediation gate has 322 unique affected checks green, including cache,
+  lean remediation gate had 322 unique affected checks green, including cache,
   AppTest, report and rendered-manual evidence; exact-head external gates remain
   pending.
+- Codex Review of
+  `65d730011691a6a05f99df91090746f469224be8` then found two further P1
+  fail-closed gaps. An invalid pending event could be sanitized to `0.0` and,
+  after an interrupted rerun, be mistaken for a repair; and direct
+  `run_analysis`/stress-assessment callers could still consume Boolean `fctm`
+  or stress limits when crack-width routing was disabled. Invalid or stale
+  pending entries are now removed whenever any copy of that key is rejected,
+  while only a matching genuine event/confirmation can clear the marker.
+  Public analysis, single-case analysis, upper-limit and stress-assessment
+  boundaries reject Python and NumPy Booleans before any solver or result
+  conversion. The cumulative lean evidence is now 342 unique affected checks;
+  the newest exact-review and bounded affected gates passed 32, 2 and 154
+  checks respectively.
 - Fresh generated evidence passed structural and raster preflight:
   `sector-report-reference.pdf` (41 pages; conclusion limitation on page 1,
   routed acceptance/provenance on page 30, and QP `0.213 mm` versus
@@ -266,6 +279,8 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
   `ab488e80906166e8edf02abc4d4fa800121fe8fc`, but the later independent F-043
   finding invalidated that closure gate. Review of the first F-043 head
   `2a095acc932b242c2465fac0c1b0d1ddfc59c102` then found the cross-case
-  duplicate-mapping P1 described above. New exact-head Codex Review, GitHub CI,
-  original independent QA closure and merge remain pending; this implementation
-  log does not self-certify closure.
+  duplicate-mapping P1 described above. Review of
+  `65d730011691a6a05f99df91090746f469224be8` found the interrupted-repair and
+  pre-solver Boolean P1s described above; both are locally remediated. New
+  exact-head Codex Review, GitHub CI, original independent QA closure and merge
+  remain pending; this implementation log does not self-certify closure.

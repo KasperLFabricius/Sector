@@ -12,6 +12,7 @@ import pathlib
 import re
 import sys
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -2256,6 +2257,58 @@ def test_boolean_crack_state_is_blocked_in_live_durable_result_and_autosave(
     assert at.session_state["_invalid_crack_input_keys"] == (
         "sls_tendon_xi",
     )
+
+
+@pytest.mark.parametrize("pending_value", [np.bool_(True), 0.0])
+def test_invalid_pending_crack_event_cannot_become_an_explicit_repair(
+    monkeypatch,
+    pending_value,
+):
+    import sector_app
+
+    key = "sls_wk_limit"
+    state = {
+        key: np.bool_(True),
+        sector_app._INPUT_STATE_KEY: {key: True},
+        sector_app._PENDING_INPUT_EVENTS_KEY: {key: pending_value},
+    }
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+
+    sector_app._sanitise_crack_input_state()
+    assert state[sector_app._INVALID_CRACK_INPUT_KEYS_KEY] == (key,)
+    assert key not in state[sector_app._PENDING_INPUT_EVENTS_KEY]
+
+    # Simulate an interrupted rerun: the pending journal survives exactly as the
+    # sanitizer left it. A second reconstruction must retain the rejection.
+    sector_app._sanitise_crack_input_state()
+    assert state[sector_app._INVALID_CRACK_INPUT_KEYS_KEY] == (key,)
+
+    # A genuine widget event carries the current checked value and may repair it.
+    state[key] = 0.30
+    state[sector_app._PENDING_INPUT_EVENTS_KEY][key] = 0.30
+    sector_app._sanitise_crack_input_state()
+    assert sector_app._INVALID_CRACK_INPUT_KEYS_KEY not in state
+
+
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_fctm",
+        "sls_conc_limit_pct",
+        "sls_steel_limit_pct",
+        "sls_pre_limit_pct",
+    ],
+)
+def test_headless_analysis_rejects_boolean_sls_before_solver_use(key, value):
+    import sector_app
+
+    with pytest.raises(ValueError, match=key):
+        sector_app.run_analysis({"sls_cw": False, key: value})
 
 
 def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
