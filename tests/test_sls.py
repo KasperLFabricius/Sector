@@ -417,6 +417,8 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
                 "element_id": "bar 2",
                 "decompression": {
                     "status": "OK",
+                    "value": -0.25,
+                    "governing": "concrete point 1",
                     "reason": "Concrete remains in compression at tendon level.",
                     "solver_provenance": "synthetic independent regression",
                 },
@@ -447,6 +449,71 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
     ]
     assert result["criteria"][1]["kind"] == sls.CRITERION_DECOMPRESSION
     assert result["criteria"][1]["status"] == "OK"
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        pytest.param({"status": "OK"}, id="status-only"),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": True,
+                "governing": "concrete point 1",
+                "solver_provenance": {"state": "long"},
+            },
+            id="boolean-value",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": None,
+                "solver_provenance": {"state": "long"},
+            },
+            id="missing-location",
+        ),
+        pytest.param(
+            {
+                "status": "OK",
+                "value": -0.25,
+                "governing": "concrete point 1",
+            },
+            id="missing-provenance",
+        ),
+    ],
+)
+def test_decompression_rejects_incomplete_acceptance_evidence(evidence):
+    result = sls.crack_assessment(
+        {
+            "QP": {
+                "wk": 0.18,
+                "element_id": "T1",
+                "decompression": evidence,
+            },
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+        },
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["value"] is None
+    assert "Decompression evidence is incomplete" in result["reason"]
 
 
 @pytest.mark.parametrize(
@@ -588,7 +655,12 @@ def test_2023_bonded_appearance_qp_is_separate_from_frequent_durability():
             "QP": {
                 "wk": 0.20,
                 "element_id": "tendon 1",
-                "decompression": {"status": "OK"},
+                "decompression": {
+                    "status": "OK",
+                    "value": -0.25,
+                    "governing": "concrete point 1",
+                    "solver_provenance": {"state": "qp"},
+                },
             },
             "Frequent": {"wk": 0.22, "element_id": "tendon 1"},
         },
@@ -621,6 +693,46 @@ def test_2023_bonded_appearance_qp_is_separate_from_frequent_durability():
             sls.COMBINATION_QUASI_PERMANENT,
         ),
     ]
+
+
+def test_known_width_failure_governs_over_incomplete_decompression():
+    criteria = sls.crack_criteria_from_inputs(_standard_inputs(
+        sls_edition="2023",
+        sls_code="EN 1992-1-1:2023",
+        sls_prestress_class=sls.PRESTRESS_BONDED,
+        sls_protection_class=sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
+        sls_exposure_class=sls.EXPOSURE_XC2_XC4,
+    ))
+    result = sls.crack_assessment(
+        {
+            "QP": {"wk": 0.18, "element_id": "tendon 1"},
+            "Frequent": {"wk": 0.31, "element_id": "tendon 1"},
+        },
+        valid=True,
+        criteria=criteria,
+        response_contexts={
+            "QP": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "qp",
+            },
+            "Frequent": {
+                "combination": sls.COMBINATION_FREQUENT,
+                "response_id": "frequent",
+            },
+        },
+    )
+
+    assert result["status"] == "EXCEEDED"
+    assert result["verdict"] == "FAIL"
+    assert result["case"] == "Frequent"
+    assert result["value"] == pytest.approx(0.31)
+    decompression = next(
+        item
+        for item in result["criteria"]
+        if item["kind"] == sls.CRITERION_DECOMPRESSION
+    )
+    assert decompression["status"] == "NOT ASSESSED"
+    assert "evidence is incomplete" in decompression["reason"]
 
 
 def test_2023_bonded_protection_levels_2_3_use_qp_not_frequent_width():

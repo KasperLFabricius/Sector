@@ -172,6 +172,65 @@ def crack_width_numeric_value(value) -> float | None:
     return number
 
 
+def _finite_signed_numeric_value(value) -> float | None:
+    """Return finite scalar evidence without accepting text or Booleans."""
+    if (
+        value is None
+        or isinstance(value, (str, bytes))
+        or contains_boolean_value(value)
+    ):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _explicit_evidence_field(value) -> bool:
+    """Return whether an audit-evidence field is explicit and non-empty."""
+    if value is None or contains_boolean_value(value):
+        return False
+    if isinstance(value, (str, bytes)):
+        return bool(value.strip())
+    try:
+        return len(value) > 0
+    except TypeError:
+        return True
+
+
+def _validated_decompression_evidence(
+    raw_evidence,
+    *,
+    fallback_solver_provenance=None,
+) -> tuple[dict | None, tuple[str, ...]]:
+    """Normalize complete typed decompression evidence or explain rejection."""
+    if not isinstance(raw_evidence, Mapping):
+        return None, ("evidence is absent or not a mapping",)
+
+    evidence = dict(raw_evidence)
+    status = str(evidence.get("status") or "").strip().upper()
+    if status not in {"OK", "EXCEEDED", "NOT APPLICABLE"}:
+        return None, ("acceptance status is missing or invalid",)
+    evidence["status"] = status
+
+    if evidence.get("solver_provenance") is None:
+        evidence["solver_provenance"] = fallback_solver_provenance
+
+    issues = []
+    if status in {"OK", "EXCEEDED"}:
+        value = _finite_signed_numeric_value(evidence.get("value"))
+        if value is None:
+            issues.append("concrete-stress value is not a finite numeric scalar")
+        else:
+            evidence["value"] = value
+        if not _explicit_evidence_field(evidence.get("governing")):
+            issues.append("governing concrete location is missing")
+    if not _explicit_evidence_field(evidence.get("solver_provenance")):
+        issues.append("solver provenance is missing")
+    return (None if issues else evidence), tuple(issues)
+
+
 def publication_safe_crack_assessment(
     assessment: Mapping | None,
     rejected_responses: Sequence[Mapping] = (),
@@ -478,19 +537,41 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
             )
             expected_status = str(item.get("status") or "").upper()
             if kind == CRITERION_DECOMPRESSION:
-                for name in names:
-                    evidence = criterion_responses[name].get(
-                        "decompression"
+                stored_evidence, stored_issues = (
+                    _validated_decompression_evidence({
+                        "status": expected_status,
+                        "value": item.get("value"),
+                        "governing": item.get("governing"),
+                        "solver_provenance": item.get(
+                            "solver_provenance"
+                        ),
+                    })
+                )
+                if stored_issues:
+                    return (
+                        f"Stored {label} has incomplete decompression "
+                        f"evidence: {'; '.join(stored_issues)}.",
+                        names,
                     )
-                    if not isinstance(evidence, Mapping):
+                for name in names:
+                    evidence, evidence_issues = (
+                        _validated_decompression_evidence(
+                            criterion_responses[name].get(
+                                "decompression"
+                            ),
+                            fallback_solver_provenance=(
+                                response_solver_provenance([name])
+                            ),
+                        )
+                    )
+                    if evidence_issues:
                         return (
                             f"Stored {label} is governed by {name}, but its "
-                            "current decompression evidence is absent.",
+                            "current decompression evidence is incomplete: "
+                            f"{'; '.join(evidence_issues)}.",
                             names,
                         )
-                    evidence_status = str(
-                        evidence.get("status") or ""
-                    ).upper()
+                    evidence_status = evidence["status"]
                     if evidence_status != expected_status:
                         return (
                             f"Stored {label} status {expected_status or '-'} "
@@ -498,7 +579,7 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                             f"status {evidence_status or '-'}.",
                             names,
                         )
-                    stored_value = item.get("value")
+                    stored_value = stored_evidence.get("value")
                     current_value = evidence.get("value")
                     if stored_value is None and current_value is None:
                         pass
@@ -521,7 +602,7 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                                 names,
                             )
                     if not evidence_values_equal(
-                        item.get("governing"),
+                        stored_evidence.get("governing"),
                         evidence.get("governing"),
                     ):
                         return (
@@ -530,12 +611,9 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                             "evidence.",
                             names,
                         )
-                    current_solver = evidence.get("solver_provenance")
-                    if current_solver is None:
-                        current_solver = response_solver_provenance([name])
                     if not evidence_values_equal(
-                        item.get("solver_provenance"),
-                        current_solver,
+                        stored_evidence.get("solver_provenance"),
+                        evidence.get("solver_provenance"),
                     ):
                         return (
                             f"Stored {label} decompression solver "
@@ -1677,43 +1755,31 @@ def crack_assessment(
 
         if label == CRITERION_DECOMPRESSION:
             decompression = {}
-            missing_evidence = []
-            invalid_status = []
+            invalid_evidence = {}
             for name in candidates:
                 response = cases.get(name)
-                raw_evidence = (
-                    response.get("decompression")
-                    if isinstance(response, Mapping)
-                    else None
+                evidence, evidence_issues = (
+                    _validated_decompression_evidence(
+                        (
+                            response.get("decompression")
+                            if isinstance(response, Mapping)
+                            else None
+                        ),
+                        fallback_solver_provenance=contexts[name][
+                            "solver_provenance"
+                        ],
+                    )
                 )
-                if not isinstance(raw_evidence, Mapping):
-                    missing_evidence.append(name)
+                if evidence_issues:
+                    invalid_evidence[name] = evidence_issues
                     continue
-                evidence = dict(raw_evidence)
-                status = str(
-                    evidence.get("status") or "NOT ASSESSED"
-                ).upper()
-                if status not in {"OK", "EXCEEDED", "NOT APPLICABLE"}:
-                    invalid_status.append(name)
-                    continue
-                evidence["status"] = status
-                if evidence.get("solver_provenance") is None:
-                    evidence["solver_provenance"] = contexts[name][
-                        "solver_provenance"
-                    ]
                 decompression[name] = evidence
 
-            if missing_evidence or invalid_status:
-                issues = []
-                if missing_evidence:
-                    issues.append(
-                        "missing for " + ", ".join(missing_evidence)
-                    )
-                if invalid_status:
-                    issues.append(
-                        "has no acceptance status for "
-                        + ", ".join(invalid_status)
-                    )
+            if invalid_evidence:
+                issues = [
+                    f"{name} ({'; '.join(evidence_issues)})"
+                    for name, evidence_issues in invalid_evidence.items()
+                ]
                 base.update(
                     status="NOT ASSESSED",
                     case=", ".join(candidates),
@@ -1730,7 +1796,8 @@ def crack_assessment(
                         for name in candidates
                     ],
                     reason=(
-                        f"Decompression evidence is {'; '.join(issues)}. "
+                        "Decompression evidence is incomplete for "
+                        f"{'; '.join(issues)}. "
                         "Every response label matched to the required "
                         f"{required} combination must provide explicit "
                         "concrete-stress evidence before a verdict is issued."
@@ -1897,10 +1964,10 @@ def crack_assessment(
     statuses = [item["status"] for item in criterion_results]
     if any(status == "INVALID" for status in statuses):
         overall_status = "INVALID"
-    elif any(status == "NOT ASSESSED" for status in statuses):
-        overall_status = "NOT ASSESSED"
     elif any(status == "EXCEEDED" for status in statuses):
         overall_status = "EXCEEDED"
+    elif any(status == "NOT ASSESSED" for status in statuses):
+        overall_status = "NOT ASSESSED"
     elif any(status == "OK" for status in statuses):
         overall_status = "OK"
     else:

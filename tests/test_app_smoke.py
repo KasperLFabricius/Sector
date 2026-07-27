@@ -5442,6 +5442,7 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
     ("field", "changed_value", "reason_text"),
     [
         ("value", -0.10, "decompression value does not match"),
+        ("value", True, "decompression evidence is incomplete"),
         (
             "governing",
             "concrete point 2",
