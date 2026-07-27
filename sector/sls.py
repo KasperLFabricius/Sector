@@ -434,39 +434,44 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     names,
                 )
 
-            required = str(
-                item.get("required_combination") or ""
-            ).strip()
+            required = canonical_combination(
+                item.get("required_combination")
+            )
+            if required not in SLS_COMBINATIONS[1:]:
+                return (
+                    f"Stored {label} has no valid required SLS "
+                    "combination.",
+                    names,
+                )
             contexts = {}
             for name in names:
                 context = criterion_responses[name].get("context")
                 contexts[name] = (
                     context if isinstance(context, Mapping) else {}
                 )
-            if required:
-                bad_combinations = [
-                    name for name in names
-                    if canonical_combination(
-                        contexts[name].get("combination")
-                    ) != canonical_combination(required)
-                ]
-                if bad_combinations:
-                    return (
-                        f"Stored {label} requires the {required} "
-                        "combination, but current mapping evidence does not "
-                        f"support it for {', '.join(bad_combinations)}.",
-                        names,
-                    )
-                response_ids = {
-                    str(contexts[name].get("response_id") or "").strip()
-                    for name in names
-                }
-                if "" in response_ids or len(response_ids) != 1:
-                    return (
-                        f"Stored {label} does not have one explicit current "
-                        "response identity across all matched responses.",
-                        names,
-                    )
+            bad_combinations = [
+                name for name in names
+                if canonical_combination(
+                    contexts[name].get("combination")
+                ) != required
+            ]
+            if bad_combinations:
+                return (
+                    f"Stored {label} requires the {required} "
+                    "combination, but current mapping evidence does not "
+                    f"support it for {', '.join(bad_combinations)}.",
+                    names,
+                )
+            response_ids = {
+                str(contexts[name].get("response_id") or "").strip()
+                for name in names
+            }
+            if "" in response_ids or len(response_ids) != 1:
+                return (
+                    f"Stored {label} does not have one explicit current "
+                    "response identity across all matched responses.",
+                    names,
+                )
 
             kind = str(
                 item.get("kind") or item.get("criterion") or ""
@@ -493,57 +498,51 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                             f"status {evidence_status or '-'}.",
                             names,
                         )
-                governing_name = str(item.get("case") or "").strip()
-                if not governing_name:
-                    governing_name = names[0]
-                evidence = criterion_responses[governing_name][
-                    "decompression"
-                ]
-                stored_value = item.get("value")
-                current_value = evidence.get("value")
-                if stored_value is None and current_value is None:
-                    pass
-                else:
-                    stored_number = finite_numeric_value(stored_value)
-                    current_number = finite_numeric_value(current_value)
-                    if (
-                        stored_number is None
-                        or current_number is None
-                        or not math.isclose(
-                            stored_number,
-                            current_number,
-                            rel_tol=1e-9,
-                            abs_tol=1e-12,
-                        )
+                    stored_value = item.get("value")
+                    current_value = evidence.get("value")
+                    if stored_value is None and current_value is None:
+                        pass
+                    else:
+                        stored_number = finite_numeric_value(stored_value)
+                        current_number = finite_numeric_value(current_value)
+                        if (
+                            stored_number is None
+                            or current_number is None
+                            or not math.isclose(
+                                stored_number,
+                                current_number,
+                                rel_tol=1e-9,
+                                abs_tol=1e-12,
+                            )
+                        ):
+                            return (
+                                f"Stored {label} decompression value does "
+                                f"not match current {name} evidence.",
+                                names,
+                            )
+                    if not evidence_values_equal(
+                        item.get("governing"),
+                        evidence.get("governing"),
                     ):
                         return (
-                            f"Stored {label} decompression value does not "
-                            f"match current {governing_name} evidence.",
+                            f"Stored {label} governing decompression "
+                            f"location does not match current {name} "
+                            "evidence.",
                             names,
                         )
-                if not evidence_values_equal(
-                    item.get("governing"),
-                    evidence.get("governing"),
-                ):
-                    return (
-                        f"Stored {label} governing decompression location "
-                        f"does not match current {governing_name} evidence.",
-                        names,
-                    )
-                current_solver = evidence.get("solver_provenance")
-                if current_solver is None:
-                    current_solver = response_solver_provenance(
-                        [governing_name]
-                    )
-                if not evidence_values_equal(
-                    item.get("solver_provenance"),
-                    current_solver,
-                ):
-                    return (
-                        f"Stored {label} decompression solver provenance "
-                        f"does not match current {governing_name} evidence.",
-                        names,
-                    )
+                    current_solver = evidence.get("solver_provenance")
+                    if current_solver is None:
+                        current_solver = response_solver_provenance([name])
+                    if not evidence_values_equal(
+                        item.get("solver_provenance"),
+                        current_solver,
+                    ):
+                        return (
+                            f"Stored {label} decompression solver "
+                            f"provenance does not match current {name} "
+                            "evidence.",
+                            names,
+                        )
                 return None
 
             expected_value = crack_width_numeric_value(item.get("value"))

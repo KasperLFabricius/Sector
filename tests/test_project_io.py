@@ -1422,6 +1422,57 @@ def test_project_downgrades_stale_pass_with_different_governing_response():
     )
 
 
+def test_project_downgrades_acceptance_without_required_crack_combination():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    stale_record = {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "case": "QP",
+                "value": 0.22,
+                "limit": 0.30,
+            },
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.22,
+                "acceptance_role": "criterion input",
+                "context": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
+                },
+            }],
+        }],
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "3" * 40,
+            "input_sha256": digest,
+            "crack_control": stale_record,
+        },
+    )
+    assessment = json.loads(text)["calculation"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert assessment["value"] is None
+    assert "no valid required SLS combination" in (
+        assessment["publication_validation"]["reason"]
+    )
+
+
 def test_project_downgrades_stale_pass_when_another_matched_crack_grows():
     scalars = {
         "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,

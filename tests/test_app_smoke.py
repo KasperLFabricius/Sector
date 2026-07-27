@@ -5508,6 +5508,77 @@ def test_changed_decompression_evidence_invalidates_stale_pass_record(
     assert reason_text in recorded["publication_validation"]["reason"]
 
 
+def test_changed_non_governing_decompression_evidence_invalidates_pass():
+    import sector_app
+
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "long",
+            "solver_provenance": {"state": "long"},
+        }
+        for name in ("Fine", "Coarse")
+    }
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "reason": "Concrete remains in compression at tendon level.",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    original_responses = {
+        "Fine": copy.deepcopy(response),
+        "Coarse": copy.deepcopy(response),
+    }
+    assessment = sls.crack_assessment(
+        original_responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+    assert assessment["criteria"][0]["matched_responses"] == [
+        "Fine",
+        "Coarse",
+    ]
+
+    current_responses = copy.deepcopy(original_responses)
+    current_responses["Coarse"]["decompression"]["value"] = -0.10
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": current_responses,
+            "crack_dispositions": {
+                "Fine": {"status": "OK"},
+                "Coarse": {"status": "OK"},
+            },
+            "crack_response_contexts": contexts,
+        },
+    })
+
+    recorded = record["cases"][0]["assessment"]
+    assert recorded["status"] == "NOT ASSESSED"
+    assert recorded["verdict"] == "REVIEW"
+    assert recorded["value"] is None
+    assert "current Coarse evidence" in (
+        recorded["publication_validation"]["reason"]
+    )
+
+
 def test_2023_protection_route_change_invalidates_elastic_cache():
     at = _fresh()
     at.run()
