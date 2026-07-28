@@ -975,3 +975,13 @@ mandatory; this matrix does not self-certify PR closure.
   final QA appendix; no clipping or overlap was found. This remediation changes
   no manual content or pagination, so the already inspected 29-page manual
   artifact remains the applicable PR-05 documentation evidence.
+- Codex Review of exact head
+  `26dd4c269144a6606a285cfaf61562148a6e2d0d` identified one P2 presentation
+  mismatch: a custom Danish `alpha_ct` changed torsional cracking resistance and
+  was printed correctly in the report, but the live torsion caption still
+  displayed the inherited `fctd = fctk,0.05 / gamma_ct` trace. A focused red
+  regression reproduced the omission. The live caption now prints `alpha_ct`,
+  `fctk,0.05`, `gamma_ct`, their evaluated `fctd`, and the selected factor-basis
+  source; the focused Danish torsion, live-caption and report slice passes all
+  16 checks. The provisional full-suite run was canceled before completion so
+  it is not counted as the single exact-head CI gate.

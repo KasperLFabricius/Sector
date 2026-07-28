@@ -12138,6 +12138,22 @@ def _render_chord_off(och, *, assessment_complete=True):
                "authoritative combined verification.")
 
 
+def _torsion_material_factor_caption(t):
+    factor_basis = t.get("material_factor_basis") or {}
+    alpha_ct = t.get("alpha_ct", 1.0)
+    return (
+        "Concrete material factors: compression "
+        f"gamma_c = {t['gamma_c']:.3f} (final concrete material input); "
+        f"tension gamma_ct = {t['gamma_ct']:.3f} "
+        f"({factor_basis.get('mode') or 'factor basis unavailable'}). "
+        f"alpha_ct = {alpha_ct:.3f}. "
+        "fctd = alpha_ct x fctk,0.05 / gamma_ct = "
+        f"{alpha_ct:.3f} x {t['fctk_005']:.3f} / {t['gamma_ct']:.3f} "
+        f"= {t['fctd']:.3f} MPa. "
+        f"Source: {factor_basis.get('reference') or '-'}."
+    )
+
+
 def torsion_view(inp, results):
     """Torsion resistance from the thin-walled tube (TRd,s / TRd,max / TRd,c), the
     required longitudinal steel, and the combined shear+torsion crushing check."""
@@ -12285,15 +12301,7 @@ def torsion_view(inp, results):
         _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok,
                         code_applicable=t.get("code_applicable", True))
 
-    factor_basis = t.get("material_factor_basis") or {}
-    st.caption(
-        "Concrete material factors: compression "
-        f"gamma_c = {t['gamma_c']:.3f} (final concrete material input); "
-        f"tension gamma_ct = {t['gamma_ct']:.3f} "
-        f"({factor_basis.get('mode') or 'factor basis unavailable'}). "
-        f"fctd = fctk,0.05/gamma_ct = {t['fctd']:.3f} MPa. "
-        f"Source: {factor_basis.get('reference') or '-'}."
-    )
+    st.caption(_torsion_material_factor_caption(t))
 
     if t.get("subdivided"):
         subs = t["subtubes"]
