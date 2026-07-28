@@ -569,3 +569,12 @@ mandatory; this matrix does not self-certify PR closure.
   version/package/build controls; the independent bridge oracle; compilation;
   and whitespace validation. The next commit is a new exact head, so CI, Codex
   Review, and original independent QA must all be repeated before merge.
+- Exact-head CI run `30327436712` on
+  `ad7d191910e2b4ed9128eb6018a47cc53c370543` passed 1,926 tests with one skip
+  but exposed two stale UI-contract assertions: the workflow-order fixture
+  omitted the new bridge-methodology expander, and the legacy scalar adapter
+  still expected no inactive bridge publication record. Both expectations now
+  assert the intentional UI and `NOT APPLICABLE` publication contract. The two
+  exact regressions plus adjacent bridge UI and autosave/download publication
+  controls pass (4 checks); all exact-head external gates restart after this
+  test-only correction.

@@ -4667,6 +4667,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Bridge methodology (DS/EN 1992-2 base)",
         "Bulk assignments",
     ]
     _goto_input_tab(at, "Project & report")
@@ -4676,6 +4677,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Bridge methodology (DS/EN 1992-2 base)",
         "Bulk assignments",
         "About",
         "Report",
@@ -5481,7 +5483,13 @@ def test_legacy_scalar_analysis_constructs_complete_explicit_mapping_scope(
         "sls_total_combination": sls.COMBINATION_CHARACTERISTIC,
     }
 
-    assert sector_app.run_analysis(inp) == {}
+    result = sector_app.run_analysis(inp)
+    assert set(result) == {"bridge_methodology"}
+    assert result["bridge_methodology"]["active"] is False
+    assert result["bridge_methodology"]["status"] == (
+        bridge.STATUS_NOT_APPLICABLE
+    )
+    assert result["bridge_methodology"]["checks"] == []
     scope = captured["sls_response_mapping_scope"]
 
     assert "sls_response_mapping_scope" not in inp
