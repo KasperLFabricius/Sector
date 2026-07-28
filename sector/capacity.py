@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 
-from . import codes, combined, geometry, shear, templates, torsion
+from . import bridge, codes, combined, geometry, shear, templates, torsion
 from .plastic import FACE_ANGLE, conditional_capacity, plastic_capacity_at_angle
 
 
@@ -535,6 +535,11 @@ def torsion_factor_validation_error(inp):
             gamma0=inp.get("torsion_gamma0", 1.0),
             gamma3=inp.get("torsion_gamma3", 1.0),
         )
+        if inp.get("design_methodology") == bridge.EN1992_2_DK_NA:
+            codes.strict_positive_real(
+                inp.get("bridge_alpha_ct"),
+                "Danish bridge alpha_ct",
+            )
     except (TypeError, ValueError) as exc:
         return str(exc)
     return None
@@ -610,7 +615,15 @@ def build_torsion_context(inp, n_ed_comp):
     material_factor_basis["approval_required"] = factor_approval_required
     material_factor_basis["approval_valid"] = factor_approval_valid
     fctk_005 = 0.7 * codes.fctm(fck)
-    fctd = fctk_005 / gamma_ct
+    alpha_ct = (
+        codes.strict_positive_real(
+            inp.get("bridge_alpha_ct"),
+            "Danish bridge alpha_ct",
+        )
+        if inp.get("design_methodology") == bridge.EN1992_2_DK_NA
+        else 1.0
+    )
+    fctd = alpha_ct * fctk_005 / gamma_ct
     t_ed = inp["torsion_T"]
     tube_kwargs = {
         "tcode": tcode,
@@ -623,6 +636,7 @@ def build_torsion_context(inp, n_ed_comp):
         "cot_max": cot_max,
         "nu_detail": nu_detail,
         "fctd": fctd,
+        "alpha_ct": alpha_ct,
         "fyd_long": fyd_long,
     }
 
@@ -693,6 +707,7 @@ def build_torsion_context(inp, n_ed_comp):
         "nu_detail_applied": nu_detail_applied,
         "fctk_005": fctk_005,
         "fctd": fctd,
+        "alpha_ct": alpha_ct,
         "sigma_cp": sigma_cp,
         "gamma_c": gamma_c,
         "gamma_ct": gamma_ct,

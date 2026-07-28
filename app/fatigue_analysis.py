@@ -181,7 +181,7 @@ def concrete_miner_parameter_errors(
     if concrete_method not in CONCRETE_MINER_METHODS:
         return []
     errors: list[str] = []
-    if isinstance(coefficient_c, bool) or type(coefficient_c).__name__ == "bool_":
+    if conformance.is_boolean(coefficient_c):
         errors.append("Concrete fatigue C must be a finite number greater than zero")
     else:
         _positive(coefficient_c, "Concrete fatigue C", errors)
@@ -227,7 +227,7 @@ def concrete_miner_conformance(
     bridge_standard = bool(
         concrete_method == CONCRETE_MINER
         and edition == fatigue_inputs.EC2_2_2005_AC
-        and design_methodology == bridge.EN1992_2_BASE
+        and bridge.is_bridge_methodology(design_methodology)
         and basis == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     )
     standard_2023 = bool(
@@ -328,7 +328,7 @@ def _resolved_concrete_miner_basis(
         return fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
     if (
         edition == fatigue_inputs.EC2_2_2005_AC
-        and design_methodology == bridge.EN1992_2_BASE
+        and bridge.is_bridge_methodology(design_methodology)
     ):
         return fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     if edition == fatigue_inputs.EC2_2023:
@@ -579,7 +579,11 @@ def bridge_result_context_errors(
         return ("bridge fatigue adapter check is missing or unknown",)
     current, context_errors = bridge.validate_fatigue_publication_context(
         context,
-        design_methodology=bridge.EN1992_2_BASE,
+        design_methodology=(
+            context.get("design_methodology")
+            if isinstance(context, Mapping)
+            else None
+        ),
     )
     errors = list(context_errors)
     if not isinstance(payload, Mapping):
@@ -1423,7 +1427,7 @@ def validation_warnings(inp: Mapping) -> list[str]:
             and edition != fatigue_inputs.EC2_2023
             and not (
                 edition == fatigue_inputs.EC2_2_2005_AC
-                and design_methodology == bridge.EN1992_2_BASE
+                and bridge.is_bridge_methodology(design_methodology)
             )
             and inp.get("fatigue_concrete_miner_basis")
             == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION

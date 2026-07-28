@@ -17,10 +17,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report  # noqa: E402
+import bridge_inputs  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import bridge, conformance, detailing, sls  # noqa: E402
+from sector import bridge, conformance, danish_bridge, detailing, sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -2927,7 +2928,8 @@ def _torsion_out(interaction=False):
            "cot": 1.751, "theta_deg": 29.7, "util": 40.0 / 76.4, "asl_req": 1176.0,
            "t_ed": 40.0, "fcd": 24.14, "fywd": 416.67, "fyd_long": 416.67,
            "nu": 0.3675, "alpha_cw": 1.0, "fctk_005": 2.248,
-           "fctd": 1.322, "gamma_c": 1.45, "gamma_ct": 1.70,
+           "fctd": 1.322, "alpha_ct": 1.0,
+           "gamma_c": 1.45, "gamma_ct": 1.70,
            "material_factor_basis": {
                "mode": "Edition-derived preset",
                "reference": (
@@ -2967,6 +2969,7 @@ def test_report_includes_torsion_section():
     assert "Table 2.1Na NA" in txt
     assert "1.70 x 1.000 x 1.000 = 1.700" in txt
     assert "26.44" in txt
+    assert "Concrete tension coefficient" in txt
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1176" in txt                            # required Asl
     assert chr(0x2211) in txt                       # summation operator
@@ -2975,6 +2978,25 @@ def test_report_includes_torsion_section():
     assert not any(
         token in txt for token in ("sqrt", "Cfrac", "Big", "sincos", "sum A", "kN.m")
     )
+
+
+def test_report_prints_actual_danish_alpha_ct_in_torsional_cracking_formula():
+    out = _out()
+    torsion = _torsion_out()
+    torsion["alpha_ct"] = 0.8
+    torsion["fctd"] = 0.8 * torsion["fctk_005"] / torsion["gamma_ct"]
+    torsion["trd_c"] *= 0.8
+    out["torsion"] = torsion
+    inp = _inp()
+    inp["design_methodology"] = bridge.EN1992_2_DK_NA
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Concrete tension coefficient" in text
+    assert "0.800" in text
+    assert "1.058" in text
 
 
 def test_qa_appendix_distinguishes_factor_provenance_modes():
@@ -3848,6 +3870,103 @@ def test_report_publishes_bridge_coverage_and_check_gate():
     assert "added" in text
     assert "not assessed" in text
     assert "DB-BRIDGE-01" in text
+
+
+def test_report_publishes_bound_danish_manager_basis_and_mapped_deicing():
+    inp = _bridge_report_input(bridge.EN1992_2_DK_NA)
+    inp.update({
+        "bridge_asset_class": danish_bridge.ASSET_ROAD,
+        "bridge_infrastructure_manager": (
+            danish_bridge.MANAGER_ROAD_DIRECTORATE
+        ),
+        "bridge_manager_source": "VD bridge basis 2023+corr.2026",
+        "bridge_project_basis_source": "DB-05 section 2.3",
+        "bridge_authority_approval_reference": "",
+        "bridge_traffic_fatigue_applicability": (
+            danish_bridge.FATIGUE_NOT_APPLICABLE
+        ),
+        "bridge_traffic_fatigue_model": "",
+        "bridge_traffic_fatigue_source": "",
+        "bridge_environment_class": danish_bridge.ENVIRONMENT_AGGRESSIVE,
+        "bridge_environment_source": "DB-05 section 4.2",
+        "bridge_special_rules": "No mapped special relaxation",
+        "bridge_deviations": "None recorded",
+        "bridge_control_class": danish_bridge.CONTROL_NORMAL,
+        "bridge_control_source": "DB-05 section 2.4",
+        "bridge_consequence_class": danish_bridge.CONSEQUENCE_CC2,
+        "bridge_consequence_source": "DB-05 section 2.5",
+        "bridge_high_strength_approval": (
+            danish_bridge.APPROVAL_NOT_APPLICABLE
+        ),
+        "bridge_high_strength_approval_reference": "",
+        "bridge_execution_conditions_source": "",
+        "bridge_surface_condition": danish_bridge.SURFACE_WATERPROOFED,
+        "bridge_deicing_applicability": (
+            danish_bridge.APPLICABILITY_REQUIRED
+        ),
+        "bridge_deicing_source": "DB-05 drawing G-02",
+        "bridge_cover_category": danish_bridge.COVER_NONPRESTRESSED,
+        "bridge_nominal_cover_mm": 45.0,
+        "bridge_cover_source": "Drawing B-105 section A",
+        "bridge_collision_risk_applicability": (
+            danish_bridge.APPLICABILITY_NOT_APPLICABLE
+        ),
+        "bridge_alpha_cc_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_cc_custom_methodology": "",
+        "bridge_alpha_cc_approval_reference": "",
+        "bridge_alpha_ct": 1.0,
+        "bridge_alpha_ct_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_ct_custom_methodology": "",
+        "bridge_alpha_ct_approval_reference": "",
+    })
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id,
+            (
+                bridge.REQUIRED
+                if check_id == "section_analysis"
+                else bridge.NOT_APPLICABLE
+            ),
+            f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    record = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_DK_NA,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=inp["concrete"].fck,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+        danish_basis=bridge_inputs.danish_basis_from_inputs(inp),
+    ))
+    out = _out()
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert bridge.EN1992_2_DK_NA in text
+    assert "Danish infrastructure-manager and project basis" in text
+    assert danish_bridge.MANAGER_ROAD_DIRECTORATE in text
+    assert "DB-05 section 4.2" in text
+    assert "DB-05 drawing G-02" in text
+    assert "mapped_deicing_x_m" in text
+    assert "mapped_deicing_y_m" in text
+    appendix = text[text.index("QA appendix - references and notes"):]
+    assert "Danish bridge QA basis" in appendix
+    assert danish_bridge.MANAGER_ROAD_DIRECTORATE in appendix
+    assert "VD bridge basis 2023+corr.2026" in appendix
+    assert "DB-05 section 2.3" in appendix
+    assert "Danish bridge applicability provenance" in appendix
+    assert "Danish bridge coefficient provenance" in appendix
 
 
 @pytest.mark.parametrize(

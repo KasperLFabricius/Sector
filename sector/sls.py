@@ -15,6 +15,8 @@ from collections.abc import Iterable as IterableCollection
 from collections.abc import Set as SetCollection
 from typing import Iterable, Mapping, Sequence
 
+from . import danish_bridge
+
 
 COMBINATION_UNSPECIFIED = "Not designated"
 COMBINATION_CHARACTERISTIC = "Characteristic"
@@ -68,6 +70,7 @@ EXPOSURE_CLASSES_2023 = (
 )
 
 EDITION_BRIDGE_2005_AC = "bridge-2005-ac2008"
+EDITION_BRIDGE_DK_2015 = "bridge-2005-dkna2015"
 BRIDGE_EXPOSURE_NOT_ESTABLISHED = "Not established"
 BRIDGE_EXPOSURE_X0_XC1 = "X0 / XC1"
 BRIDGE_EXPOSURE_XC2_XC4 = "XC2 / XC3 / XC4"
@@ -2551,6 +2554,12 @@ def _standard_reference(edition: str, kind: str, dk_na: bool) -> str:
             "DS/EN 1992-2:2005 section 7.3.1(105), Table 7.101N; "
             "EN 1992-2:2005/AC:2008"
         )
+    if edition == EDITION_BRIDGE_DK_2015:
+        return (
+            "DS/EN 1992-2:2005 section 7.3.1(105), Table 7.101N; "
+            "EN 1992-2:2005/AC:2008; DS/EN 1992-2 DK NA:2015, "
+            "Table 7.101N DK NA, PDF page 4"
+        )
     base = "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
     if dk_na:
         return (
@@ -2624,6 +2633,18 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         inp.get("sls_bridge_exposure_class")
         or BRIDGE_EXPOSURE_NOT_ESTABLISHED
     ).strip()
+    dk_bridge_class = str(
+        inp.get("bridge_asset_class")
+        or danish_bridge.NOT_ESTABLISHED
+    ).strip()
+    dk_environment_class = str(
+        inp.get("bridge_environment_class")
+        or danish_bridge.NOT_ESTABLISHED
+    ).strip()
+    dk_member_class = str(
+        inp.get("sls_dk_member_class")
+        or danish_bridge.NOT_ESTABLISHED
+    ).strip()
     prestress_class = str(inp.get("sls_prestress_class") or "").strip()
     protection_class = str(
         inp.get("sls_protection_class") or PROTECTION_NOT_ESTABLISHED
@@ -2637,6 +2658,9 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         "exposure": exposure or None,
         "exposure_class": exposure_class,
         "bridge_exposure_class": bridge_exposure_class,
+        "dk_bridge_class": dk_bridge_class,
+        "dk_environment_class": dk_environment_class,
+        "dk_member_class": dk_member_class,
         "protection_class": protection_class,
         "method": code or None,
     }
@@ -2772,7 +2796,12 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         )]
 
     base_reasons = []
-    if edition not in {"2004", "2023", EDITION_BRIDGE_2005_AC}:
+    if edition not in {
+        "2004",
+        "2023",
+        EDITION_BRIDGE_2005_AC,
+        EDITION_BRIDGE_DK_2015,
+    }:
         base_reasons.append("The selected code edition is not supported.")
     if prestress_class not in PRESTRESS_CLASSES:
         base_reasons.append(
@@ -2789,6 +2818,52 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         base_reasons.append(
             "Select the governing DS/EN 1992-2 Table 7.101N exposure group."
         )
+    if edition == EDITION_BRIDGE_DK_2015:
+        if dk_bridge_class not in {
+            danish_bridge.ASSET_ROAD,
+            danish_bridge.ASSET_FOOT,
+            danish_bridge.ASSET_RAIL,
+        }:
+            base_reasons.append(
+                "Select road bridge, footbridge, or railway bridge explicitly "
+                "for Table 7.101N DK NA."
+            )
+        if dk_environment_class not in {
+            danish_bridge.ENVIRONMENT_AGGRESSIVE,
+            danish_bridge.ENVIRONMENT_EXTRA_AGGRESSIVE,
+        }:
+            base_reasons.append(
+                "Select Aggressive or Extra aggressive Danish bridge "
+                "environment; Moderate is not used for bridges."
+            )
+        if dk_member_class not in danish_bridge.MEMBER_CLASSES[1:]:
+            base_reasons.append(
+                "Select non-prestressed or pre/post-tensioned Danish member "
+                "class explicitly."
+            )
+        has_tendons = inp.get("sls_has_tendons")
+        if not is_boolean_value(has_tendons):
+            base_reasons.append(
+                "Danish member routing requires explicit Boolean tendon-"
+                "presence evidence from the calculation snapshot."
+            )
+        else:
+            if (
+                dk_member_class == danish_bridge.MEMBER_NONPRESTRESSED
+                and bool(has_tendons)
+            ):
+                base_reasons.append(
+                    "The non-prestressed route conflicts with tendons in the "
+                    "calculation snapshot."
+                )
+            if (
+                dk_member_class == danish_bridge.MEMBER_PRESTRESSED
+                and not bool(has_tendons)
+            ):
+                base_reasons.append(
+                    "The prestressed route conflicts with a calculation "
+                    "snapshot containing no tendons."
+                )
     base_reason = " ".join(base_reasons) or None
     criteria = []
 
@@ -2888,6 +2963,60 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
                         **applicability,
                         "decompression_applicability": (
                             "Table 7.101N required"
+                        ),
+                    },
+                ))
+
+    if durability_selected and edition == EDITION_BRIDGE_DK_2015:
+        reference = _criterion_source(
+            _standard_reference(
+                edition, CRITERION_DURABILITY, True
+            ),
+            source,
+        )
+        if base_reason:
+            criteria.append(_criterion_record(
+                "bridge-dk-standard-durability-routing",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=reference,
+                required_combination=None,
+                limit_mm=None,
+                applicability=applicability,
+                configuration_reason=base_reason,
+            ))
+        else:
+            extra_aggressive = (
+                dk_environment_class
+                == danish_bridge.ENVIRONMENT_EXTRA_AGGRESSIVE
+            )
+            if dk_member_class == danish_bridge.MEMBER_NONPRESTRESSED:
+                crack_limit = 0.20 if extra_aggressive else 0.30
+            elif dk_bridge_class == danish_bridge.ASSET_RAIL:
+                crack_limit = 0.10
+            else:
+                crack_limit = 0.10 if extra_aggressive else 0.20
+            criteria.append(_criterion_record(
+                "bridge-dk-standard-durability",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=reference,
+                required_combination=COMBINATION_FREQUENT,
+                limit_mm=crack_limit,
+                applicability=applicability,
+            ))
+            if dk_member_class == danish_bridge.MEMBER_PRESTRESSED:
+                criteria.append(_criterion_record(
+                    "bridge-dk-standard-decompression",
+                    CRITERION_DECOMPRESSION,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=COMBINATION_QUASI_PERMANENT,
+                    limit_mm=None,
+                    applicability={
+                        **applicability,
+                        "decompression_applicability": (
+                            "Table 7.101N DK NA required"
                         ),
                     },
                 ))

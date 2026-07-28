@@ -41,6 +41,7 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import case_analysis
+import bridge_inputs
 import fatigue_analysis
 import fatigue_inputs
 import fatigue_presentation
@@ -826,7 +827,11 @@ class ReportBuilder:
             fatigue_context=fatigue_analysis.bridge_publication_context(
                 self._base_inp
             ),
+            danish_basis_context=bridge_inputs.danish_basis_context(
+                self._base_inp
+            ),
         )
+        self._bridge_record = bridge_record
         if bridge_record is not None:
             self._tick(0.28, "Bridge methodology...")
             self.flow.append(PageBreak())
@@ -1062,6 +1067,62 @@ class ReportBuilder:
             "claim. Unsupported or unresolved mandatory provisions block the "
             "methodology conclusion."
         )
+        danish_basis = record.get("danish_basis")
+        if isinstance(danish_basis, Mapping):
+            self._h2("Danish infrastructure-manager and project basis")
+            basis_labels = (
+                ("Bridge / infrastructure class", "asset_class"),
+                ("Infrastructure manager", "infrastructure_manager"),
+                ("Manager requirement source", "manager_source"),
+                ("Project design-basis source", "project_basis_source"),
+                ("Authority approval / dispensation", "authority_approval_reference"),
+                ("Danish environmental class", "environment_class"),
+                ("Environmental-class source", "environment_source"),
+                ("Surface condition", "surface_condition"),
+                ("De-icing applicability", "deicing_applicability"),
+                ("De-icing source", "deicing_source"),
+                ("Construction / control class", "control_class"),
+                ("Control-class source", "control_source"),
+                ("Consequence class", "consequence_class"),
+                ("Consequence-class source", "consequence_source"),
+                ("Traffic / fatigue applicability", "traffic_fatigue_applicability"),
+                ("Traffic / fatigue model", "traffic_fatigue_model"),
+                ("Traffic / fatigue source", "traffic_fatigue_source"),
+                ("High-strength approval", "high_strength_approval"),
+                ("High-strength approval source", "high_strength_approval_reference"),
+                ("Execution-conditions source", "execution_conditions_source"),
+                ("Cover category", "cover_category"),
+                ("Actual nominal cover", "nominal_cover_mm"),
+                ("Cover model / drawing source", "cover_source"),
+                ("Rail collision-risk route", "collision_risk_applicability"),
+                ("alpha_cc", "alpha_cc"),
+                ("alpha_cc basis", "alpha_cc_basis"),
+                ("alpha_cc custom method", "alpha_cc_custom_methodology"),
+                ("alpha_cc approval", "alpha_cc_approval_reference"),
+                ("alpha_ct", "alpha_ct"),
+                ("alpha_ct basis", "alpha_ct_basis"),
+                ("alpha_ct custom method", "alpha_ct_custom_methodology"),
+                ("alpha_ct approval", "alpha_ct_approval_reference"),
+                ("Project special rules", "special_rules"),
+                ("Recorded deviations", "deviations"),
+            )
+            basis_rows = [["Field", "Bound value"]]
+            for label, key in basis_labels:
+                value = danish_basis.get(key)
+                if value is None or value == "":
+                    value = "-"
+                elif key == "nominal_cover_mm":
+                    value = f"{value:g} mm"
+                basis_rows.append([
+                    _html_escape(label),
+                    _html_escape(str(value)),
+                ])
+            self._table(
+                basis_rows,
+                [60 * mm, 110 * mm],
+                font=6.6,
+                keep=False,
+            )
         for error in record.get("configuration_errors") or ():
             self._small(
                 "<b>Publication validation:</b> "
@@ -4131,6 +4192,8 @@ class ReportBuilder:
                  _fmt(t.get("gamma_c"), 3)],
                 ["Concrete tension factor", "gamma<sub>ct</sub>",
                  _fmt(t.get("gamma_ct"), 3)],
+                ["Concrete tension coefficient", "alpha<sub>ct</sub>",
+                 _fmt(t.get("alpha_ct", 1.0), 3)],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
@@ -4194,10 +4257,13 @@ class ReportBuilder:
             result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
                    f"(governed by {t['governs']})")
         self._formula(
-            "f<sub>ctd</sub> = f<sub>ctk,0.05</sub> / "
-            "gamma<sub>ct</sub> = 0.7 f<sub>ctm</sub> / gamma<sub>ct</sub>",
+            "f<sub>ctd</sub> = alpha<sub>ct</sub> "
+            "f<sub>ctk,0.05</sub> / gamma<sub>ct</sub> = "
+            "alpha<sub>ct</sub> 0.7 f<sub>ctm</sub> / "
+            "gamma<sub>ct</sub>",
             ref=_html_escape(str(factor_basis.get("reference") or "-")),
-            subst=f"{_fmt(t.get('fctk_005'), 3)} / "
+            subst=f"{_fmt(t.get('alpha_ct', 1.0), 3)} &#183; "
+                  f"{_fmt(t.get('fctk_005'), 3)} / "
                   f"{_fmt(t.get('gamma_ct'), 3)}",
             result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")
         self._formula(
@@ -6015,6 +6081,50 @@ class ReportBuilder:
                 "Fatigue was requested but not assessed because the input "
                 "preflight was invalid. No fatigue methodology or resistance "
                 "verdict was applied."
+            )
+        bridge_record = getattr(self, "_bridge_record", None)
+        danish_basis = (
+            bridge_record.get("danish_basis")
+            if isinstance(bridge_record, Mapping)
+            else None
+        )
+        if isinstance(danish_basis, Mapping):
+            def basis_value(key):
+                value = danish_basis.get(key)
+                return _html_escape(
+                    str(value).strip()
+                    if value is not None and str(value).strip()
+                    else "not stated"
+                )
+
+            lines.append(
+                "Danish bridge QA basis - infrastructure manager: "
+                f"{basis_value('infrastructure_manager')}; bridge class: "
+                f"{basis_value('asset_class')}; manager requirement: "
+                f"{basis_value('manager_source')}; project design basis: "
+                f"{basis_value('project_basis_source')}; authority approval/"
+                f"dispensation: {basis_value('authority_approval_reference')}."
+            )
+            lines.append(
+                "Danish bridge applicability provenance - environment: "
+                f"{basis_value('environment_class')} "
+                f"({basis_value('environment_source')}); surface/de-icing: "
+                f"{basis_value('surface_condition')} / "
+                f"{basis_value('deicing_applicability')} "
+                f"({basis_value('deicing_source')}); control class: "
+                f"{basis_value('control_class')} "
+                f"({basis_value('control_source')}); consequence class: "
+                f"{basis_value('consequence_class')} "
+                f"({basis_value('consequence_source')})."
+            )
+            lines.append(
+                "Danish bridge coefficient provenance - "
+                f"alpha<sub>cc</sub> = {basis_value('alpha_cc')} "
+                f"({basis_value('alpha_cc_basis')}; approval: "
+                f"{basis_value('alpha_cc_approval_reference')}); "
+                f"alpha<sub>ct</sub> = {basis_value('alpha_ct')} "
+                f"({basis_value('alpha_ct_basis')}; approval: "
+                f"{basis_value('alpha_ct_approval_reference')})."
             )
         factor_provenance = []
         if torsion_results:

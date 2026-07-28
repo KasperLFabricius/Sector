@@ -28,12 +28,12 @@ import fatigue_inputs
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
-from sector import bridge, codes, detailing, geometry, sls
+from sector import bridge, codes, conformance, danish_bridge, detailing, geometry, sls
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 20  # v20: custom-input conformance and calculation provenance
+VERSION = 21  # v21: Danish bridge methodology and authority provenance
 DEFAULT_SLS_TENDON_BOND = "Plain round (k1 = 1.6)"
 DEFAULT_SLS_TENDON_XI = 0.0
 DEFAULT_SLS_CRITERION_MODE = sls.CRITERION_MODE_LEGACY
@@ -41,6 +41,7 @@ DEFAULT_SLS_PRESTRESS_CLASS = sls.PRESTRESS_REINFORCED_UNBONDED
 DEFAULT_SLS_PROTECTION_CLASS = sls.PROTECTION_NOT_ESTABLISHED
 DEFAULT_SLS_EXPOSURE_CLASS = sls.EXPOSURE_NOT_ESTABLISHED
 DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS = sls.BRIDGE_EXPOSURE_NOT_ESTABLISHED
+DEFAULT_SLS_DK_MEMBER_CLASS = danish_bridge.NOT_ESTABLISHED
 DEFAULT_SLS_DECOMPRESSION = sls.DECOMPRESSION_NOT_ESTABLISHED
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
@@ -192,6 +193,39 @@ BRIDGE_SCALAR_KEYS = (
     "bridge_minimum_scope",
     "bridge_shear_scope",
     "bridge_exposure",
+    "bridge_asset_class",
+    "bridge_infrastructure_manager",
+    "bridge_manager_source",
+    "bridge_project_basis_source",
+    "bridge_authority_approval_reference",
+    "bridge_traffic_fatigue_applicability",
+    "bridge_traffic_fatigue_model",
+    "bridge_traffic_fatigue_source",
+    "bridge_environment_class",
+    "bridge_environment_source",
+    "bridge_special_rules",
+    "bridge_deviations",
+    "bridge_control_class",
+    "bridge_control_source",
+    "bridge_consequence_class",
+    "bridge_consequence_source",
+    "bridge_high_strength_approval",
+    "bridge_high_strength_approval_reference",
+    "bridge_execution_conditions_source",
+    "bridge_surface_condition",
+    "bridge_deicing_applicability",
+    "bridge_deicing_source",
+    "bridge_cover_category",
+    "bridge_nominal_cover_mm",
+    "bridge_cover_source",
+    "bridge_collision_risk_applicability",
+    "bridge_alpha_cc_basis",
+    "bridge_alpha_cc_custom_methodology",
+    "bridge_alpha_cc_approval_reference",
+    "bridge_alpha_ct",
+    "bridge_alpha_ct_basis",
+    "bridge_alpha_ct_custom_methodology",
+    "bridge_alpha_ct_approval_reference",
 )
 
 TORSION_FACTOR_SCALAR_KEYS = (
@@ -260,6 +294,7 @@ SCALAR_KEYS = [
     "sls_tendon_bond", "sls_tendon_xi",
     "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
     "sls_exposure_class", "sls_bridge_exposure_class",
+    "sls_dk_member_class",
     "sls_exposure_context",
     "sls_check_appearance", "sls_appearance_limit",
     "sls_check_durability", "sls_decompression_applicability",
@@ -375,13 +410,35 @@ def _validate_bridge_scalars(scalars: dict) -> None:
         "bridge_shear_scope": bridge.SHEAR_SCOPES,
         "bridge_exposure": bridge.BRIDGE_EXPOSURES,
         "sls_bridge_exposure_class": sls.BRIDGE_EXPOSURE_CLASSES,
+        "sls_dk_member_class": danish_bridge.MEMBER_CLASSES,
+        "bridge_asset_class": danish_bridge.ASSET_CLASSES,
+        "bridge_infrastructure_manager": (
+            danish_bridge.INFRASTRUCTURE_MANAGERS
+        ),
+        "bridge_traffic_fatigue_applicability": (
+            danish_bridge.FATIGUE_APPLICABILITY
+        ),
+        "bridge_environment_class": danish_bridge.ENVIRONMENT_CLASSES,
+        "bridge_control_class": danish_bridge.CONTROL_CLASSES,
+        "bridge_consequence_class": danish_bridge.CONSEQUENCE_CLASSES,
+        "bridge_high_strength_approval": danish_bridge.APPROVAL_STATES,
+        "bridge_surface_condition": danish_bridge.SURFACE_CONDITIONS,
+        "bridge_deicing_applicability": (
+            danish_bridge.APPLICABILITY_OPTIONS
+        ),
+        "bridge_cover_category": danish_bridge.COVER_CATEGORIES,
+        "bridge_collision_risk_applicability": (
+            danish_bridge.APPLICABILITY_OPTIONS
+        ),
+        "bridge_alpha_cc_basis": conformance.BASIS_OPTIONS,
+        "bridge_alpha_ct_basis": conformance.BASIS_OPTIONS,
     }
     for key, options in option_fields.items():
         if key in scalars and scalars[key] not in options:
             raise ValueError(f"unknown bridge methodology option: {key}")
     if "bridge_expected_box_walls" in scalars:
         raw = scalars["bridge_expected_box_walls"]
-        if isinstance(raw, bool) or type(raw).__name__ == "bool_":
+        if conformance.is_boolean(raw) or isinstance(raw, str):
             raise ValueError(
                 "bridge_expected_box_walls must be a non-negative integer"
             )
@@ -399,6 +456,106 @@ def _validate_bridge_scalars(scalars: dict) -> None:
             raise ValueError(
                 "bridge_expected_box_walls must be a non-negative integer"
             )
+    if "bridge_nominal_cover_mm" in scalars:
+        raw = scalars["bridge_nominal_cover_mm"]
+        if raw is not None:
+            if conformance.is_boolean(raw) or isinstance(raw, str):
+                raise ValueError(
+                    "bridge_nominal_cover_mm must be a finite non-negative number"
+                )
+            try:
+                number = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "bridge_nominal_cover_mm must be a finite non-negative number"
+                ) from exc
+            if not math.isfinite(number) or number < 0.0:
+                raise ValueError(
+                    "bridge_nominal_cover_mm must be a finite non-negative number"
+                )
+    if "bridge_alpha_ct" in scalars:
+        try:
+            codes.strict_positive_real(
+                scalars["bridge_alpha_ct"],
+                "bridge_alpha_ct",
+            )
+        except ValueError as exc:
+            raise ValueError(f"invalid Danish bridge coefficient: {exc}") from exc
+    typed_text_fields = (
+        "bridge_manager_source",
+        "bridge_project_basis_source",
+        "bridge_authority_approval_reference",
+        "bridge_traffic_fatigue_model",
+        "bridge_traffic_fatigue_source",
+        "bridge_environment_source",
+        "bridge_special_rules",
+        "bridge_deviations",
+        "bridge_control_source",
+        "bridge_consequence_source",
+        "bridge_high_strength_approval_reference",
+        "bridge_execution_conditions_source",
+        "bridge_deicing_source",
+        "bridge_cover_source",
+        "bridge_alpha_cc_custom_methodology",
+        "bridge_alpha_cc_approval_reference",
+        "bridge_alpha_ct_custom_methodology",
+        "bridge_alpha_ct_approval_reference",
+    )
+    for key in typed_text_fields:
+        if key in scalars:
+            try:
+                conformance.typed_text(scalars[key], key)
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid Danish bridge provenance: {exc}"
+                ) from exc
+
+
+def _setdefault_danish_bridge_scalars(scalars: dict) -> None:
+    """Install blocking, non-inferred defaults for every PR-05 field."""
+
+    defaults = {
+        "bridge_asset_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_infrastructure_manager": danish_bridge.NOT_ESTABLISHED,
+        "bridge_manager_source": "",
+        "bridge_project_basis_source": "",
+        "bridge_authority_approval_reference": "",
+        "bridge_traffic_fatigue_applicability": (
+            danish_bridge.NOT_ESTABLISHED
+        ),
+        "bridge_traffic_fatigue_model": "",
+        "bridge_traffic_fatigue_source": "",
+        "bridge_environment_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_environment_source": "",
+        "bridge_special_rules": "",
+        "bridge_deviations": "",
+        "bridge_control_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_control_source": "",
+        "bridge_consequence_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_consequence_source": "",
+        "bridge_high_strength_approval": danish_bridge.NOT_ESTABLISHED,
+        "bridge_high_strength_approval_reference": "",
+        "bridge_execution_conditions_source": "",
+        "bridge_surface_condition": danish_bridge.NOT_ESTABLISHED,
+        "bridge_deicing_applicability": danish_bridge.NOT_ESTABLISHED,
+        "bridge_deicing_source": "",
+        "bridge_cover_category": danish_bridge.NOT_ESTABLISHED,
+        "bridge_nominal_cover_mm": None,
+        "bridge_cover_source": "",
+        "bridge_collision_risk_applicability": (
+            danish_bridge.NOT_ESTABLISHED
+        ),
+        "bridge_alpha_cc_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_cc_custom_methodology": "",
+        "bridge_alpha_cc_approval_reference": "",
+        "bridge_alpha_ct": 1.0,
+        "bridge_alpha_ct_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_ct_custom_methodology": "",
+        "bridge_alpha_ct_approval_reference": "",
+        "sls_dk_member_class": DEFAULT_SLS_DK_MEMBER_CLASS,
+    }
+    for key, value in defaults.items():
+        scalars.setdefault(key, value)
 
 
 def _default_fatigue_miner_basis(scalars: dict) -> str:
@@ -415,7 +572,8 @@ def _default_fatigue_miner_basis(scalars: dict) -> str:
     edition = scalars.get("fatigue_edition")
     if (
         edition == fatigue_inputs.EC2_2_2005_AC
-        and scalars.get("design_methodology") == bridge.EN1992_2_BASE
+        and scalars.get("design_methodology")
+        in bridge.BRIDGE_METHODOLOGIES
     ):
         return fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     if edition == fatigue_inputs.EC2_2023:
@@ -761,6 +919,7 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         "bridge_exposure",
         bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
     )
+    _setdefault_danish_bridge_scalars(scalar_payload)
     _validate_bridge_scalars(scalar_payload)
     _validate_fatigue_miner_scalars(scalar_payload)
     content = {
@@ -881,6 +1040,9 @@ def publication_safe_calculation_record(
             calculation.get("bridge_methodology"),
             design_methodology=design_methodology,
             fatigue_context=fatigue_context,
+            danish_basis_context=bridge_inputs.danish_basis_context(
+                current_inputs
+            ),
         )
         if record["bridge_methodology"] is None:
             record.pop("bridge_methodology")
@@ -1311,6 +1473,7 @@ def parse_project(text: str):
         "bridge_exposure",
         bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
     )
+    _setdefault_danish_bridge_scalars(scalars)
     _validate_bridge_scalars(scalars)
     # A current-version file may still be partial or hand-edited. Never let an
     # unknown routing token fall through the Streamlit selectbox to its fresh-

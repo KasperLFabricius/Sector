@@ -37,7 +37,11 @@ _TOL = 1.0e-12
 def is_boolean(value: Any) -> bool:
     """Return ``True`` for Python and NumPy Boolean scalars."""
 
-    return isinstance(value, bool) or type(value).__name__ == "bool_"
+    value_type = type(value)
+    return isinstance(value, bool) or (
+        value_type.__name__ in {"bool", "bool_"}
+        and value_type.__module__.split(".", 1)[0] in {"numpy", "pandas"}
+    )
 
 
 def positive_real(value: Any, label: str) -> float:

@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 
 import pandas as pd
 
-from sector import bridge, conformance
+from sector import bridge, conformance, danish_bridge
 
 
 VERSION = 2
@@ -124,7 +124,7 @@ def _text(value) -> str:
 def _number(value):
     if value is None or (isinstance(value, str) and not value.strip()):
         return math.nan
-    if isinstance(value, bool) or type(value).__name__ == "bool_":
+    if conformance.is_boolean(value):
         return math.nan
     try:
         number = float(value)
@@ -134,9 +134,7 @@ def _number(value):
 
 
 def _flag(value):
-    if isinstance(value, bool):
-        return value
-    if type(value).__name__ == "bool_":
+    if conformance.is_boolean(value):
         return bool(value)
     if value is None:
         return None
@@ -538,3 +536,107 @@ def minimum_components(value) -> tuple[bridge.MinimumCrackComponent, ...]:
         for row in frame.to_dict("records")
         if _text(row["component"]) or not _blank_numeric_row(row, MINIMUM_TABLE_KEY)
     )
+
+
+def danish_basis_from_inputs(value: Mapping) -> danish_bridge.DanishBridgeBasis:
+    """Construct typed Danish basis evidence without coercing malformed input."""
+
+    concrete = value.get("concrete")
+    alpha_cc = getattr(concrete, "alpha_cc", value.get("conc_alpha_cc"))
+    return danish_bridge.DanishBridgeBasis(
+        asset_class=value.get(
+            "bridge_asset_class", danish_bridge.NOT_ESTABLISHED
+        ),
+        infrastructure_manager=value.get(
+            "bridge_infrastructure_manager",
+            danish_bridge.NOT_ESTABLISHED,
+        ),
+        manager_source=value.get("bridge_manager_source", ""),
+        project_basis_source=value.get("bridge_project_basis_source", ""),
+        authority_approval_reference=value.get(
+            "bridge_authority_approval_reference", ""
+        ),
+        traffic_fatigue_applicability=value.get(
+            "bridge_traffic_fatigue_applicability",
+            danish_bridge.NOT_ESTABLISHED,
+        ),
+        traffic_fatigue_model=value.get("bridge_traffic_fatigue_model", ""),
+        traffic_fatigue_source=value.get("bridge_traffic_fatigue_source", ""),
+        environment_class=value.get(
+            "bridge_environment_class", danish_bridge.NOT_ESTABLISHED
+        ),
+        environment_source=value.get("bridge_environment_source", ""),
+        special_rules=value.get("bridge_special_rules", ""),
+        deviations=value.get("bridge_deviations", ""),
+        control_class=value.get(
+            "bridge_control_class", danish_bridge.NOT_ESTABLISHED
+        ),
+        control_source=value.get("bridge_control_source", ""),
+        consequence_class=value.get(
+            "bridge_consequence_class", danish_bridge.NOT_ESTABLISHED
+        ),
+        consequence_source=value.get("bridge_consequence_source", ""),
+        high_strength_approval=value.get(
+            "bridge_high_strength_approval",
+            danish_bridge.NOT_ESTABLISHED,
+        ),
+        high_strength_approval_reference=value.get(
+            "bridge_high_strength_approval_reference", ""
+        ),
+        execution_conditions_source=value.get(
+            "bridge_execution_conditions_source", ""
+        ),
+        surface_condition=value.get(
+            "bridge_surface_condition", danish_bridge.NOT_ESTABLISHED
+        ),
+        deicing_applicability=value.get(
+            "bridge_deicing_applicability", danish_bridge.NOT_ESTABLISHED
+        ),
+        deicing_source=value.get("bridge_deicing_source", ""),
+        cover_category=value.get(
+            "bridge_cover_category", danish_bridge.NOT_ESTABLISHED
+        ),
+        nominal_cover_mm=value.get("bridge_nominal_cover_mm"),
+        cover_source=value.get("bridge_cover_source", ""),
+        collision_risk_applicability=value.get(
+            "bridge_collision_risk_applicability",
+            danish_bridge.NOT_ESTABLISHED,
+        ),
+        alpha_cc=alpha_cc,
+        alpha_cc_basis=value.get(
+            "bridge_alpha_cc_basis", conformance.STANDARD_BASIS
+        ),
+        alpha_cc_custom_methodology=value.get(
+            "bridge_alpha_cc_custom_methodology", ""
+        ),
+        alpha_cc_approval_reference=value.get(
+            "bridge_alpha_cc_approval_reference", ""
+        ),
+        alpha_ct=value.get("bridge_alpha_ct", 1.0),
+        alpha_ct_basis=value.get(
+            "bridge_alpha_ct_basis", conformance.STANDARD_BASIS
+        ),
+        alpha_ct_custom_methodology=value.get(
+            "bridge_alpha_ct_custom_methodology", ""
+        ),
+        alpha_ct_approval_reference=value.get(
+            "bridge_alpha_ct_approval_reference", ""
+        ),
+        fatigue_on=value.get("fatigue_on", False),
+        fatigue_gamma3=value.get("fatigue_gamma3"),
+        torsion_on=value.get("torsion_on", False),
+        torsion_gamma3=value.get("torsion_gamma3"),
+    )
+
+
+def danish_basis_context(value: Mapping) -> dict | None:
+    """Return the canonical current-input context required for publication."""
+
+    if not isinstance(value, Mapping):
+        return None
+    if value.get("design_methodology") != bridge.EN1992_2_DK_NA:
+        return None
+    try:
+        return danish_bridge.basis_context(danish_basis_from_inputs(value))
+    except ValueError as exc:
+        return {"validation_error": str(exc)}

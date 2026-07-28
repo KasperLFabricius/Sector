@@ -2048,6 +2048,49 @@ def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
     )
 
 
+def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
+    from sector import danish_bridge
+
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+
+    assert not at.exception
+    assert at.selectbox(key="sls_code").value == bridge.EN1992_2_DK_NA
+    for key in (
+        "bridge_asset_class",
+        "bridge_infrastructure_manager",
+        "bridge_environment_class",
+        "bridge_control_class",
+        "bridge_consequence_class",
+        "bridge_deicing_applicability",
+    ):
+        assert at.selectbox(key=key).value == danish_bridge.NOT_ESTABLISHED
+    for key in (
+        "bridge_manager_source",
+        "bridge_project_basis_source",
+        "bridge_environment_source",
+        "bridge_deicing_source",
+    ):
+        assert at.text_input(key=key).value == ""
+    assert at.number_input(key="bridge_alpha_ct").value == 1.0
+
+    _calculate(at)
+    payload = at.session_state["results"]["bridge_methodology"]
+    project_basis = next(
+        row for row in payload["checks"]
+        if row["check_id"] == "dk_project_basis"
+    )
+    assert payload["methodology"] == bridge.EN1992_2_DK_NA
+    assert payload["evidence_schema"] == bridge.DANISH_BRIDGE_EVIDENCE_SCHEMA
+    assert payload["danish_basis"]["asset_class"] == (
+        danish_bridge.NOT_ESTABLISHED
+    )
+    assert project_basis["status"] == bridge.STATUS_NOT_ASSESSED
+    assert "Select the bridge class" in project_basis["reason"]
+
+
 def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
     import sector_app
 

@@ -11,6 +11,7 @@ import math
 
 import fatigue_analysis
 import fatigue_presentation
+import bridge_inputs
 
 import case_analysis
 import viz
@@ -595,16 +596,17 @@ def bridge_summary_rows(inp, results, *, stale=False):
         results.get("bridge_methodology"),
         design_methodology=raw_selected,
         fatigue_context=fatigue_analysis.bridge_publication_context(inp),
+        danish_basis_context=bridge_inputs.danish_basis_context(inp),
     )
-    if selected != bridge.EN1992_2_BASE and payload is None:
+    if not bridge.is_bridge_methodology(selected) and payload is None:
         return []
     if payload is None:
         return [{
             "check": "Bridge methodology",
             "family": "bridge",
             "case": selected,
-            "case_type": "DS/EN 1992-2 base",
-            "source": "DS/EN 1992-2:2005 + AC:2008",
+            "case_type": selected,
+            "source": bridge.methodology_source(selected),
             "status": "NOT RUN",
             "result": "-",
             "criterion": "Complete explicit bridge applicability gate",

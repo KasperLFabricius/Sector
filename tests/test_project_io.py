@@ -22,7 +22,8 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from sector import bridge, codes, conformance, detailing, sls  # noqa: E402
+from sector import (bridge, codes, conformance, danish_bridge, detailing,  # noqa: E402
+                    sls)
 
 
 def _v17_crack_defaults():
@@ -55,6 +56,44 @@ def _v19_bridge_defaults():
         "bridge_minimum_scope": bridge.MINIMUM_SCOPE_NOT_ESTABLISHED,
         "bridge_shear_scope": bridge.SHEAR_SCOPE_NOT_ESTABLISHED,
         "bridge_exposure": bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
+        "bridge_asset_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_infrastructure_manager": danish_bridge.NOT_ESTABLISHED,
+        "bridge_manager_source": "",
+        "bridge_project_basis_source": "",
+        "bridge_authority_approval_reference": "",
+        "bridge_traffic_fatigue_applicability": (
+            danish_bridge.NOT_ESTABLISHED
+        ),
+        "bridge_traffic_fatigue_model": "",
+        "bridge_traffic_fatigue_source": "",
+        "bridge_environment_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_environment_source": "",
+        "bridge_special_rules": "",
+        "bridge_deviations": "",
+        "bridge_control_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_control_source": "",
+        "bridge_consequence_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_consequence_source": "",
+        "bridge_high_strength_approval": danish_bridge.NOT_ESTABLISHED,
+        "bridge_high_strength_approval_reference": "",
+        "bridge_execution_conditions_source": "",
+        "bridge_surface_condition": danish_bridge.NOT_ESTABLISHED,
+        "bridge_deicing_applicability": danish_bridge.NOT_ESTABLISHED,
+        "bridge_deicing_source": "",
+        "bridge_cover_category": danish_bridge.NOT_ESTABLISHED,
+        "bridge_nominal_cover_mm": None,
+        "bridge_cover_source": "",
+        "bridge_collision_risk_applicability": (
+            danish_bridge.NOT_ESTABLISHED
+        ),
+        "bridge_alpha_cc_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_cc_custom_methodology": "",
+        "bridge_alpha_cc_approval_reference": "",
+        "bridge_alpha_ct": 1.0,
+        "bridge_alpha_ct_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_ct_custom_methodology": "",
+        "bridge_alpha_ct_approval_reference": "",
+        "sls_dk_member_class": project_io.DEFAULT_SLS_DK_MEMBER_CLASS,
     }
 
 
@@ -484,7 +523,7 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     )
 
 
-def test_v20_round_trip_preserves_typed_bridge_tables_and_methodology():
+def test_v21_round_trip_preserves_typed_bridge_tables_and_methodology():
     tables = _tables()
     coverage = bridge_inputs.default_coverage_records()
     for row in coverage:
@@ -530,7 +569,7 @@ def test_v20_round_trip_preserves_typed_bridge_tables_and_methodology():
     payload = json.loads(text)
     restored, restored_scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 20
+    assert payload["version"] == 21
     assert payload["bridge"]["version"] == bridge_inputs.VERSION
     assert restored_scalars["design_methodology"] == bridge.EN1992_2_BASE
     assert restored_scalars["bridge_minimum_scope"] == bridge.MINIMUM_SCOPE_WEB

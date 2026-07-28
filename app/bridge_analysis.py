@@ -939,7 +939,9 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
                 or criterion.get("id")
                 or ""
             ).strip()
-            if not criterion_id.startswith("bridge-standard-"):
+            if not criterion_id.startswith(
+                ("bridge-standard-", "bridge-dk-standard-")
+            ):
                 continue
             record = dict(criterion)
             if _status(record.get("status")) in {
@@ -1143,11 +1145,18 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
     return _external(
         rows,
         empty_reason=(
-            "No calculated bridge Table 7.101N crack/decompression criterion "
-            "was found."
+            "No calculated bridge Table 7.101N or Table 7.101N DK NA "
+            "crack/decompression criterion was found."
         ),
-        source="DS/EN 1992-2:2005, Table 7.101N",
+        source=(
+            "DS/EN 1992-2:2005, Table 7.101N; DS/EN 1992-2 "
+            "DK NA:2015, Table 7.101N DK NA"
+        ),
     )
+
+
+danish_basis_from_inputs = bridge_inputs.danish_basis_from_inputs
+danish_basis_context = bridge_inputs.danish_basis_context
 
 
 def build_evidence(inp: Mapping, results: Mapping) -> bridge.BridgeBaseEvidence:
@@ -1172,6 +1181,11 @@ def build_evidence(inp: Mapping, results: Mapping) -> bridge.BridgeBaseEvidence:
         tables[key] = frame
     concrete = inp.get("concrete")
     fck = getattr(concrete, "fck", inp.get("conc_fck"))
+    danish_basis = (
+        danish_basis_from_inputs(inp)
+        if methodology == bridge.EN1992_2_DK_NA
+        else None
+    )
     return bridge.BridgeBaseEvidence(
         methodology=methodology,
         decisions=bridge_inputs.decisions(
@@ -1212,6 +1226,7 @@ def build_evidence(inp: Mapping, results: Mapping) -> bridge.BridgeBaseEvidence:
         reinforcement_fatigue=reinforcement_fatigue_evidence(results, inp),
         concrete_fatigue=concrete_fatigue_evidence(results, inp),
         sls_crack=crack_evidence(results),
+        danish_basis=danish_basis,
         configuration_errors=tuple(dict.fromkeys(
             (*table_errors, *adapter_errors)
         )),

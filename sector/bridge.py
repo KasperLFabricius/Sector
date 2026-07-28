@@ -14,13 +14,13 @@ from a disabled widget.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
 from typing import Any, Mapping, Sequence
 
-from . import codes, conformance
+from . import codes, conformance, danish_bridge
 from .fatigue import (
     CONCRETE_MINER,
     CONCRETE_PROJECT_MINER,
@@ -30,7 +30,17 @@ from .fatigue import (
 
 COMPONENT_METHODS = "Independent component methods"
 EN1992_2_BASE = "DS/EN 1992-2:2005 + AC:2008"
-METHODOLOGIES = (COMPONENT_METHODS, EN1992_2_BASE)
+EN1992_2_DK_NA = danish_bridge.METHODOLOGY
+BRIDGE_METHODOLOGIES = (EN1992_2_BASE, EN1992_2_DK_NA)
+METHODOLOGIES = (COMPONENT_METHODS, *BRIDGE_METHODOLOGIES)
+
+
+def is_bridge_methodology(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() in BRIDGE_METHODOLOGIES
+
+
+def is_danish_bridge_methodology(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() == EN1992_2_DK_NA
 
 NOT_ESTABLISHED = "Not established - review required"
 REQUIRED = "Required"
@@ -95,6 +105,7 @@ STATUS_NOT_RUN = "NOT RUN"
 STATUS_REVIEW = "REVIEW"
 
 BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v2"
+DANISH_BRIDGE_EVIDENCE_SCHEMA = "sector.dk-bridge-methodology-evidence/v1"
 FATIGUE_PUBLICATION_CONTEXT_SCHEMA = (
     "sector.bridge-fatigue-publication-context/v2"
 )
@@ -280,6 +291,127 @@ COVERAGE_RULES = (
     ),
 )
 
+
+_DK_RULE_OVERRIDES = {
+    "prestress_brittle": {
+        "disposition": DISPOSITION_OVERRIDDEN,
+        "bridge_reference": (
+            "DS/EN 1992-2 DK NA:2015, 6.1(109)-(110), PDF page 3"
+        ),
+        "implementation": (
+            "Method b is prohibited and Method a is mandatory. Sector records "
+            "Method a as blocking NOT ASSESSED because it is not implemented."
+        ),
+    },
+    "sls_crack": {
+        "disposition": DISPOSITION_OVERRIDDEN,
+        "bridge_reference": (
+            "DS/EN 1992-2 DK NA:2015, Table 7.101N DK NA, PDF page 4"
+        ),
+        "implementation": (
+            "Road, footbridge, and railway width/decompression criteria are "
+            "routed to their exact frequent and quasi-permanent responses."
+        ),
+    },
+    "bridge_shear_detailing": {
+        "disposition": DISPOSITION_OVERRIDDEN,
+        "bridge_reference": (
+            "DS/EN 1992-2 DK NA:2015, 6.2.3 and 6.2.5, PDF page 3"
+        ),
+        "implementation": (
+            "The inherited member calculation is retained. Danish added "
+            "prestress, bearing-region, and interface routes remain explicit "
+            "NOT ASSESSED unless their exact applicability is established."
+        ),
+    },
+}
+
+_DANISH_ADDITIONAL_RULES = (
+    CoverageRule(
+        "dk_project_basis",
+        "Danish infrastructure-manager and project basis",
+        DISPOSITION_ADDED,
+        "No infrastructure manager is inherent in EN 1992-2.",
+        "DS/EN 1992-2 DK NA:2015, definition, PDF page 1",
+        "The manager, bridge class, authority document, control/consequence "
+        "classes, traffic/fatigue basis, and project source are explicit.",
+    ),
+    CoverageRule(
+        "dk_concrete_coefficients",
+        "Danish concrete design coefficients",
+        DISPOSITION_OVERRIDDEN,
+        "DS/EN 1992-2:2005, 3.1.6 recommended values",
+        "DS/EN 1992-2 DK NA:2015, 3.1.6, PDF page 2",
+        "Actual positive alpha_cc and alpha_ct values are calculated; "
+        "deviations are conformance evidence and never silently replaced.",
+    ),
+    CoverageRule(
+        "dk_high_strength",
+        "Concrete strength above 50 MPa",
+        DISPOSITION_OVERRIDDEN,
+        "DS/EN 1992-2:2005, 3.1.2(102)",
+        "DS/EN 1992-2 DK NA:2015, 3.1.2(102), PDF page 2",
+        "Values above 50 MPa require manager approval and project-specific "
+        "execution conditions.",
+    ),
+    CoverageRule(
+        "dk_cover",
+        "Danish bridge nominal cover",
+        DISPOSITION_OVERRIDDEN,
+        "DS/EN 1992-2:2005, 4.4.1.2",
+        "DS/EN 1992-2 DK NA:2015, 4.4.1.2, PDF page 2",
+        "The explicit environment, reinforcement/duct type, control class, "
+        "collision applicability, and actual cover select one minimum.",
+    ),
+    CoverageRule(
+        "dk_direct_crack_method",
+        "Direct crack-width calculation",
+        DISPOSITION_OVERRIDDEN,
+        "DS/EN 1992-2:2005, 7.3.3 permits a simplified route by national choice.",
+        "DS/EN 1992-2 DK NA:2015, 7.3.3, PDF page 4",
+        "Only the calculated crack-width route can support a Danish verdict.",
+    ),
+    CoverageRule(
+        "dk_annex_routing",
+        "Danish annex applicability",
+        DISPOSITION_OVERRIDDEN,
+        "DS/EN 1992-2:2005 annex set",
+        "DS/EN 1992-2 DK NA:2015, PDF page 5",
+        "The national applicable, informative, replaced, and not-applicable "
+        "annex states are printed without simulating unsupported annex methods.",
+    ),
+)
+
+
+def coverage_rules(methodology: str = EN1992_2_BASE) -> tuple[CoverageRule, ...]:
+    """Return the exact inherited/overridden/added rule set for one method."""
+
+    if methodology != EN1992_2_DK_NA:
+        return COVERAGE_RULES
+    inherited = []
+    for rule in COVERAGE_RULES:
+        changes = _DK_RULE_OVERRIDES.get(rule.check_id)
+        inherited.append(replace(rule, **changes) if changes else rule)
+    return (*inherited, *_DANISH_ADDITIONAL_RULES)
+
+
+def methodology_source(methodology: str) -> str:
+    if methodology == EN1992_2_DK_NA:
+        return danish_bridge.SOURCE
+    return (
+        "DS/EN 1992-2:2005 with EN 1992-2:2005/AC:2008; "
+        "relevant DS/EN 1992-1-1:2004 clauses inherited explicitly"
+    )
+
+
+def evidence_schema(methodology: str) -> str:
+    return (
+        DANISH_BRIDGE_EVIDENCE_SCHEMA
+        if methodology == EN1992_2_DK_NA
+        else BRIDGE_EVIDENCE_SCHEMA
+    )
+
+
 APPLICABILITY_CHECK_IDS = tuple(
     rule.check_id for rule in COVERAGE_RULES if rule.applicability_required
 )
@@ -373,6 +505,7 @@ class BridgeBaseEvidence:
     reinforcement_fatigue: ExternalEvidence = ExternalEvidence()
     concrete_fatigue: ExternalEvidence = ExternalEvidence()
     sls_crack: ExternalEvidence = ExternalEvidence()
+    danish_basis: danish_bridge.DanishBridgeBasis | None = None
     configuration_errors: tuple[str, ...] = ()
 
 
@@ -397,14 +530,16 @@ class BridgeCheckResult:
         return result
 
 
-def coverage_matrix() -> list[dict[str, Any]]:
+def coverage_matrix(
+    methodology: str = EN1992_2_BASE,
+) -> list[dict[str, Any]]:
     """Return the immutable four-state standards comparison as dictionaries."""
 
-    return [asdict(rule) for rule in COVERAGE_RULES]
+    return [asdict(rule) for rule in coverage_rules(methodology)]
 
 
 def _is_bool(value: Any) -> bool:
-    return isinstance(value, bool) or type(value).__name__ == "bool_"
+    return conformance.is_boolean(value)
 
 
 def _real(value: Any, label: str, *, positive: bool = False) -> float:
@@ -504,9 +639,14 @@ def _binding_check(raw: Mapping, *, index: int) -> dict[str, Any]:
 def bridge_evidence_fingerprint(
     checks: Sequence[Mapping],
     configuration_errors: Sequence[str] = (),
+    *,
+    methodology: str = EN1992_2_BASE,
+    danish_basis_context: Mapping[str, Any] | None = None,
 ) -> str:
     """Return the immutable SHA-256 binding for a bridge assessment body."""
 
+    if methodology not in BRIDGE_METHODOLOGIES:
+        raise ValueError("bridge methodology is unknown")
     if not isinstance(checks, (list, tuple)):
         raise ValueError("bridge checks are not a structured list")
     if not isinstance(configuration_errors, (list, tuple)) or not all(
@@ -515,15 +655,25 @@ def bridge_evidence_fingerprint(
         raise ValueError(
             "bridge configuration errors are not a typed text list"
         )
+    canonical_basis = None
+    if methodology == EN1992_2_DK_NA:
+        if not isinstance(danish_basis_context, Mapping):
+            raise ValueError("Danish bridge basis context is missing or malformed")
+        canonical_basis = _canonical_binding_value(
+            danish_basis_context,
+            path="Danish bridge basis context",
+        )
     body = {
-        "schema": BRIDGE_EVIDENCE_SCHEMA,
-        "methodology": EN1992_2_BASE,
+        "schema": evidence_schema(methodology),
+        "methodology": methodology,
         "checks": [
             _binding_check(raw, index=index)
             for index, raw in enumerate(checks, start=1)
         ],
         "configuration_errors": list(configuration_errors),
     }
+    if canonical_basis is not None:
+        body["danish_basis"] = canonical_basis
     encoded = json.dumps(
         body,
         sort_keys=True,
@@ -535,16 +685,26 @@ def bridge_evidence_fingerprint(
 
 
 def _with_evidence_binding(record: dict[str, Any]) -> dict[str, Any]:
-    record["evidence_schema"] = BRIDGE_EVIDENCE_SCHEMA
+    methodology = record.get("methodology")
+    record["evidence_schema"] = evidence_schema(methodology)
     record["evidence_fingerprint"] = bridge_evidence_fingerprint(
         record.get("checks") or [],
         record.get("configuration_errors") or [],
+        methodology=methodology,
+        danish_basis_context=record.get("danish_basis"),
     )
     return record
 
 
-def _rule(check_id: str) -> CoverageRule:
-    return next(rule for rule in COVERAGE_RULES if rule.check_id == check_id)
+def _rule(
+    check_id: str,
+    methodology: str = EN1992_2_BASE,
+) -> CoverageRule:
+    return next(
+        rule
+        for rule in coverage_rules(methodology)
+        if rule.check_id == check_id
+    )
 
 
 def _result(
@@ -557,8 +717,9 @@ def _result(
     reason: str = "",
     utilisation: float | None = None,
     evidence: Sequence[Mapping[str, Any]] = (),
+    methodology: str = EN1992_2_BASE,
 ) -> BridgeCheckResult:
-    rule = _rule(check_id)
+    rule = _rule(check_id, methodology)
     return BridgeCheckResult(
         check_id=check_id,
         title=rule.title,
@@ -1416,6 +1577,293 @@ def _overall_status(checks: Sequence[BridgeCheckResult]) -> str:
     return STATUS_NOT_ASSESSED
 
 
+def _danish_check(
+    check_id: str,
+    payload: Mapping[str, Any],
+) -> BridgeCheckResult:
+    """Convert one Danish rule result into the canonical bridge check type."""
+
+    return _result(
+        check_id,
+        str(payload.get("status") or STATUS_NOT_ASSESSED),
+        result=str(payload.get("result") or "-"),
+        criterion=str(payload.get("criterion") or "-"),
+        source=str(payload.get("source") or ""),
+        reason=str(payload.get("reason") or ""),
+        utilisation=payload.get("utilisation"),
+        evidence=payload.get("evidence") or (),
+        methodology=EN1992_2_DK_NA,
+    )
+
+
+def _bind_check_relationship(
+    check: BridgeCheckResult,
+    methodology: str,
+) -> BridgeCheckResult:
+    """Bind a reused check result to the selected method's coverage relation."""
+
+    rule = _rule(check.check_id, methodology)
+    return replace(
+        check,
+        title=rule.title,
+        disposition=rule.disposition,
+    )
+
+
+def _assess_danish_brittle(
+    evidence: BridgeBaseEvidence,
+    decision: ApplicabilityDecision,
+) -> BridgeCheckResult:
+    gate = _decision_gate(
+        "prestress_brittle",
+        decision,
+        physically_required=bool(evidence.has_tendons),
+    )
+    if gate is not None:
+        return gate
+    if not evidence.has_tendons:
+        return _result(
+            "prestress_brittle",
+            STATUS_NOT_APPLICABLE,
+            source=decision.source,
+            reason="The section contains no prestressing tendons.",
+            methodology=EN1992_2_DK_NA,
+        )
+    if evidence.brittle_method == BRITTLE_METHOD_A:
+        reason = (
+            "Danish Method a is selected as required, but Sector does not "
+            "calculate the reduced-prestress-resistance verification. Supply "
+            "an independent verification before conformity can be assessed."
+        )
+    elif evidence.brittle_method in {BRITTLE_METHOD_B, BRITTLE_METHOD_C}:
+        reason = (
+            f"{evidence.brittle_method} is not an applicable Danish bridge "
+            "route. DS/EN 1992-2 DK NA:2015 requires Method a."
+        )
+    else:
+        reason = (
+            "Select Method a explicitly. No brittle-failure method is inferred "
+            "from the presence of tendons."
+        )
+    return _result(
+        "prestress_brittle",
+        STATUS_NOT_ASSESSED,
+        source=(
+            f"{decision.source}; DS/EN 1992-2 DK NA:2015, "
+            "6.1(109)-(110), PDF page 3"
+        ),
+        reason=reason,
+        methodology=EN1992_2_DK_NA,
+    )
+
+
+def _assess_danish_direct_crack(
+    crack: ExternalEvidence,
+    decision: ApplicabilityDecision,
+) -> BridgeCheckResult:
+    applicability = str(decision.applicability or "").strip()
+    decision_source = str(decision.source or "").strip()
+    if applicability not in APPLICABILITY_OPTIONS:
+        return _result(
+            "dk_direct_crack_method",
+            STATUS_NOT_ASSESSED,
+            reason="Crack-control applicability token is unknown.",
+            methodology=EN1992_2_DK_NA,
+        )
+    if applicability == NOT_ESTABLISHED:
+        return _result(
+            "dk_direct_crack_method",
+            STATUS_NOT_ASSESSED,
+            reason="Crack-control applicability is not established.",
+            methodology=EN1992_2_DK_NA,
+        )
+    if not decision_source:
+        return _result(
+            "dk_direct_crack_method",
+            STATUS_NOT_ASSESSED,
+            reason="Crack-control applicability requires a project-basis source.",
+            methodology=EN1992_2_DK_NA,
+        )
+    if applicability == NOT_APPLICABLE:
+        return _result(
+            "dk_direct_crack_method",
+            STATUS_NOT_APPLICABLE,
+            source=(
+                "DS/EN 1992-2 DK NA:2015, 7.3.3, PDF page 4; "
+                + decision_source
+            ),
+            reason="The project applicability decision makes crack control not applicable.",
+            methodology=EN1992_2_DK_NA,
+        )
+    direct_rows = tuple(
+        dict(row)
+        for row in crack.evidence
+        if (
+            isinstance(row, Mapping)
+            and str(row.get("criterion_id") or "").strip()
+            == "bridge-dk-standard-durability"
+            and str(row.get("kind") or "").strip() == "durability"
+            and str(row.get("status") or "").strip().upper()
+            in {STATUS_PASS, STATUS_FAIL, STATUS_REVIEW}
+            and str(row.get("result") or "").strip() not in {"", "-"}
+            and isinstance(
+                row.get("acceptance_evidence"),
+                Mapping,
+            )
+            and isinstance(
+                row.get("solver_provenance"),
+                (str, Mapping, list, tuple),
+            )
+            and bool(row.get("solver_provenance"))
+        )
+    )
+    if direct_rows:
+        return _result(
+            "dk_direct_crack_method",
+            STATUS_PASS,
+            result="Direct crack-width calculation evidenced",
+            criterion="Simplified no-direct-calculation method is prohibited",
+            source=(
+                "DS/EN 1992-2 DK NA:2015, 7.3.3, PDF page 4; "
+                + str(crack.source or "")
+            ),
+            reason=(
+                "The Danish acceptance row is supported by Sector's direct "
+                "calculation. This method check is separate from whether the "
+                "calculated crack width passes its limit."
+            ),
+            evidence=direct_rows,
+            methodology=EN1992_2_DK_NA,
+        )
+    return _result(
+        "dk_direct_crack_method",
+        STATUS_NOT_ASSESSED,
+        source="DS/EN 1992-2 DK NA:2015, 7.3.3, PDF page 4",
+        reason=(
+            "No complete direct crack-width calculation is correlated with "
+            "the required Danish criterion."
+        ),
+        evidence=crack.evidence,
+        methodology=EN1992_2_DK_NA,
+    )
+
+
+def _assess_danish_methodology(
+    evidence: BridgeBaseEvidence,
+) -> dict[str, Any]:
+    decisions, decision_errors = _decision_map(evidence.decisions)
+    configuration_errors = list(
+        (*evidence.configuration_errors, *decision_errors)
+    )
+    basis = evidence.danish_basis
+    if not isinstance(basis, danish_bridge.DanishBridgeBasis):
+        basis = danish_bridge.DanishBridgeBasis()
+        configuration_errors.append(
+            "Danish infrastructure-manager/project-basis evidence is missing"
+        )
+    try:
+        basis_snapshot = danish_bridge.basis_context(basis)
+    except ValueError as exc:
+        basis_snapshot = {"validation_error": str(exc)}
+        configuration_errors.append(str(exc))
+
+    checks = [
+        _external_result(
+            "section_analysis",
+            evidence.section_analysis,
+            decisions["section_analysis"],
+            physically_required=True,
+        ),
+        _assess_danish_brittle(
+            evidence,
+            decisions["prestress_brittle"],
+        ),
+        _assess_member_shear(evidence, decisions["member_shear"]),
+        _assess_shear(evidence, decisions["bridge_shear_detailing"]),
+        _assess_box_walls(evidence, decisions["box_wall_torsion"]),
+        _external_result(
+            "reinforcement_fatigue",
+            evidence.reinforcement_fatigue,
+            decisions["reinforcement_fatigue"],
+        ),
+        _external_result(
+            "concrete_fatigue",
+            evidence.concrete_fatigue,
+            decisions["concrete_fatigue"],
+        ),
+        _unsupported(
+            "shear_torsion_fatigue",
+            decisions["shear_torsion_fatigue"],
+        ),
+        _assess_stress(evidence, decisions["sls_stress"]),
+        _external_result(
+            "sls_crack",
+            evidence.sls_crack,
+            decisions["sls_crack"],
+        ),
+        _assess_minimum_components(
+            evidence,
+            decisions["web_flange_minimum"],
+        ),
+        _unsupported("deflection", decisions["deflection"]),
+        _unsupported("segmental_joints", decisions["segmental_joints"]),
+        _danish_check(
+            "dk_project_basis",
+            danish_bridge.assess_project_basis(basis),
+        ),
+        _danish_check(
+            "dk_concrete_coefficients",
+            danish_bridge.assess_coefficients(basis),
+        ),
+        _danish_check(
+            "dk_high_strength",
+            danish_bridge.assess_high_strength(evidence.fck_mpa, basis),
+        ),
+        _danish_check("dk_cover", danish_bridge.assess_cover(basis)),
+        _assess_danish_direct_crack(
+            evidence.sls_crack,
+            decisions["sls_crack"],
+        ),
+        _result(
+            "dk_annex_routing",
+            STATUS_PASS,
+            result="National annex applicability table recorded",
+            criterion="Apply only annexes available under DK NA:2015",
+            source=danish_bridge.ANNEX_SOURCE,
+            reason=(
+                "Static Danish annex routing is recorded. An applicable annex "
+                "still requires its own complete analysis evidence."
+            ),
+            evidence=danish_bridge.annex_routing(),
+            methodology=EN1992_2_DK_NA,
+        ),
+    ]
+    checks = [
+        _bind_check_relationship(check, EN1992_2_DK_NA)
+        for check in checks
+    ]
+    status = (
+        STATUS_INVALID
+        if configuration_errors
+        else _overall_status(checks)
+    )
+    return _with_evidence_binding({
+        "methodology": EN1992_2_DK_NA,
+        "active": True,
+        "status": status,
+        "source": methodology_source(EN1992_2_DK_NA),
+        "coverage_matrix": coverage_matrix(EN1992_2_DK_NA),
+        "checks": [check.to_dict() for check in checks],
+        "danish_basis": basis_snapshot,
+        "configuration_errors": list(dict.fromkeys(configuration_errors)),
+        "limitations": [
+            rule.implementation
+            for rule in coverage_rules(EN1992_2_DK_NA)
+            if rule.disposition == DISPOSITION_NOT_ASSESSED
+        ],
+    })
+
+
 def assess_base_methodology(evidence: BridgeBaseEvidence) -> dict[str, Any]:
     """Assess the complete bridge-base coverage gate.
 
@@ -1425,13 +1873,15 @@ def assess_base_methodology(evidence: BridgeBaseEvidence) -> dict[str, Any]:
     is not a claim that Sector performs a complete bridge design.
     """
 
+    if evidence.methodology == EN1992_2_DK_NA:
+        return _assess_danish_methodology(evidence)
     if evidence.methodology != EN1992_2_BASE:
         return {
             "methodology": evidence.methodology,
             "active": False,
             "status": STATUS_NOT_APPLICABLE,
             "source": "",
-            "coverage_matrix": coverage_matrix(),
+            "coverage_matrix": coverage_matrix(evidence.methodology),
             "checks": [],
             "configuration_errors": [],
         }
@@ -2046,6 +2496,7 @@ def publication_safe_record(
     *,
     design_methodology: Any,
     fatigue_context: Mapping | None,
+    danish_basis_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return a canonical fail-closed bridge calculation snapshot.
 
@@ -2059,7 +2510,8 @@ def publication_safe_record(
 
     if not isinstance(record, Mapping):
         return None
-    if record.get("methodology") != EN1992_2_BASE:
+    stored_methodology = record.get("methodology")
+    if stored_methodology not in BRIDGE_METHODOLOGIES:
         return None
     current_methodology = None
     correlation_errors: list[str] = []
@@ -2075,17 +2527,57 @@ def publication_safe_record(
                 "current bridge design methodology is invalid for publication "
                 "correlation"
             )
-        elif current_methodology != EN1992_2_BASE:
+        elif current_methodology != stored_methodology:
             correlation_errors.append(
                 "stored bridge methodology conflicts with the calculation "
                 "input snapshot"
             )
+    stored_danish_basis = record.get("danish_basis")
+    canonical_danish_basis = None
+    if stored_methodology == EN1992_2_DK_NA:
+        if not isinstance(danish_basis_context, Mapping):
+            correlation_errors.append(
+                "current Danish bridge basis context is missing or malformed"
+            )
+        else:
+            try:
+                canonical_danish_basis = _canonical_binding_value(
+                    danish_basis_context,
+                    path="current Danish bridge basis context",
+                )
+            except ValueError as exc:
+                correlation_errors.append(str(exc))
+        if not isinstance(stored_danish_basis, Mapping):
+            correlation_errors.append(
+                "stored Danish bridge basis context is missing or malformed"
+            )
+        else:
+            try:
+                stored_danish_basis = _canonical_binding_value(
+                    stored_danish_basis,
+                    path="stored Danish bridge basis context",
+                )
+            except ValueError as exc:
+                correlation_errors.append(str(exc))
+        if (
+            canonical_danish_basis is not None
+            and isinstance(stored_danish_basis, Mapping)
+            and stored_danish_basis != canonical_danish_basis
+        ):
+            correlation_errors.append(
+                "stored Danish bridge basis conflicts with the calculation "
+                "input snapshot"
+            )
+    elif stored_danish_basis is not None:
+        correlation_errors.append(
+            "base bridge evidence unexpectedly contains Danish basis state"
+        )
     (
         validated_fatigue_context,
         fatigue_context_errors,
     ) = validate_fatigue_publication_context(
         fatigue_context,
-        design_methodology=EN1992_2_BASE,
+        design_methodology=stored_methodology,
     )
     # The current input context is an independent publication authority.  It
     # must remain valid even when a stale body omits every fatigue row and would
@@ -2176,20 +2668,9 @@ def publication_safe_record(
     if not isinstance(raw_checks, (list, tuple)):
         errors.append("stored bridge checks are not a structured list")
         raw_checks = ()
-    expected = (
-        "section_analysis",
-        "prestress_brittle",
-        "member_shear",
-        "bridge_shear_detailing",
-        "box_wall_torsion",
-        "reinforcement_fatigue",
-        "concrete_fatigue",
-        "shear_torsion_fatigue",
-        "sls_stress",
-        "sls_crack",
-        "web_flange_minimum",
-        "deflection",
-        "segmental_joints",
+    expected = tuple(
+        rule.check_id
+        for rule in coverage_rules(stored_methodology)
     )
     by_id: dict[str, Mapping] = {}
     for index, raw in enumerate(raw_checks, start=1):
@@ -2227,6 +2708,7 @@ def publication_safe_record(
                 check_id,
                 STATUS_NOT_ASSESSED,
                 reason="Stored bridge evidence is missing.",
+                methodology=stored_methodology,
             ))
             continue
         raw_status = raw.get("status")
@@ -2368,7 +2850,14 @@ def publication_safe_record(
                     expected_assessment = conformance.aggregate(
                         parameter_records,
                         analytical_status=analytical_status,
-                        selected_standard=EN1992_2_BASE,
+                        selected_standard=(
+                            EN1992_2_BASE
+                            if check_id in {
+                                "box_wall_torsion",
+                                "web_flange_minimum",
+                            }
+                            else stored_methodology
+                        ),
                     )["assessment_status"]
                     if (
                         status in {STATUS_PASS, STATUS_FAIL}
@@ -2420,17 +2909,20 @@ def publication_safe_record(
             reason=reason,
             utilisation=utilisation,
             evidence=raw_evidence,
+            methodology=stored_methodology,
         ))
 
     canonical_checks = [check.to_dict() for check in checks]
     stored_schema = record.get("evidence_schema")
     stored_fingerprint = record.get("evidence_fingerprint")
-    if stored_schema != BRIDGE_EVIDENCE_SCHEMA:
+    if stored_schema != evidence_schema(stored_methodology):
         errors.append("stored bridge evidence schema is missing or unknown")
     try:
         calculated_fingerprint = bridge_evidence_fingerprint(
             canonical_checks,
             raw_configuration_errors,
+            methodology=stored_methodology,
+            danish_basis_context=stored_danish_basis,
         )
     except ValueError as exc:
         calculated_fingerprint = ""
@@ -2459,15 +2951,17 @@ def publication_safe_record(
         else _overall_status(checks)
     )
     return _with_evidence_binding({
-        "methodology": EN1992_2_BASE,
+        "methodology": stored_methodology,
         "active": True,
         "status": safe_status,
-        "source": (
-            "DS/EN 1992-2:2005 with EN 1992-2:2005/AC:2008; "
-            "relevant DS/EN 1992-1-1:2004 clauses inherited explicitly"
-        ),
-        "coverage_matrix": coverage_matrix(),
+        "source": methodology_source(stored_methodology),
+        "coverage_matrix": coverage_matrix(stored_methodology),
         "checks": canonical_checks,
+        **(
+            {"danish_basis": stored_danish_basis}
+            if stored_methodology == EN1992_2_DK_NA
+            else {}
+        ),
         "configuration_errors": configuration_errors,
         "publication_validation": {
             "status": (
@@ -2478,7 +2972,7 @@ def publication_safe_record(
         },
         "limitations": [
             rule.implementation
-            for rule in COVERAGE_RULES
+            for rule in coverage_rules(stored_methodology)
             if rule.disposition == DISPOSITION_NOT_ASSESSED
         ],
     })

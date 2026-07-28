@@ -1,0 +1,228 @@
+{
+  "schema": "sector.pr05-dk-bridge-oracle/v1",
+  "crack_cases": [
+    {
+      "id": "road-nonprestressed-aggressive",
+      "asset_class": "road",
+      "member_class": "nonprestressed",
+      "environment": "aggressive",
+      "expected": [["width", "Frequent", 0.30]]
+    },
+    {
+      "id": "road-nonprestressed-extra",
+      "asset_class": "road",
+      "member_class": "nonprestressed",
+      "environment": "extra_aggressive",
+      "expected": [["width", "Frequent", 0.20]]
+    },
+    {
+      "id": "footbridge-nonprestressed-aggressive",
+      "asset_class": "footbridge",
+      "member_class": "nonprestressed",
+      "environment": "aggressive",
+      "expected": [["width", "Frequent", 0.30]]
+    },
+    {
+      "id": "footbridge-nonprestressed-extra",
+      "asset_class": "footbridge",
+      "member_class": "nonprestressed",
+      "environment": "extra_aggressive",
+      "expected": [["width", "Frequent", 0.20]]
+    },
+    {
+      "id": "railway-nonprestressed-aggressive",
+      "asset_class": "railway",
+      "member_class": "nonprestressed",
+      "environment": "aggressive",
+      "expected": [["width", "Frequent", 0.30]]
+    },
+    {
+      "id": "railway-nonprestressed-extra",
+      "asset_class": "railway",
+      "member_class": "nonprestressed",
+      "environment": "extra_aggressive",
+      "expected": [["width", "Frequent", 0.20]]
+    },
+    {
+      "id": "road-prestressed-aggressive",
+      "asset_class": "road",
+      "member_class": "prestressed",
+      "environment": "aggressive",
+      "expected": [
+        ["width", "Frequent", 0.20],
+        ["decompression", "Quasi-permanent", null]
+      ]
+    },
+    {
+      "id": "road-prestressed-extra",
+      "asset_class": "road",
+      "member_class": "prestressed",
+      "environment": "extra_aggressive",
+      "expected": [
+        ["width", "Frequent", 0.10],
+        ["decompression", "Quasi-permanent", null]
+      ]
+    },
+    {
+      "id": "footbridge-prestressed-aggressive",
+      "asset_class": "footbridge",
+      "member_class": "prestressed",
+      "environment": "aggressive",
+      "expected": [
+        ["width", "Frequent", 0.20],
+        ["decompression", "Quasi-permanent", null]
+      ]
+    },
+    {
+      "id": "footbridge-prestressed-extra",
+      "asset_class": "footbridge",
+      "member_class": "prestressed",
+      "environment": "extra_aggressive",
+      "expected": [
+        ["width", "Frequent", 0.10],
+        ["decompression", "Quasi-permanent", null]
+      ]
+    },
+    {
+      "id": "railway-prestressed-aggressive",
+      "asset_class": "railway",
+      "member_class": "prestressed",
+      "environment": "aggressive",
+      "expected": [
+        ["width", "Frequent", 0.10],
+        ["decompression", "Quasi-permanent", null]
+      ]
+    },
+    {
+      "id": "railway-prestressed-extra",
+      "asset_class": "railway",
+      "member_class": "prestressed",
+      "environment": "extra_aggressive",
+      "expected": [
+        ["width", "Frequent", 0.10],
+        ["decompression", "Quasi-permanent", null]
+      ]
+    }
+  ],
+  "cover_cases": [
+    {
+      "id": "nonprestressed-aggressive",
+      "environment": "aggressive",
+      "cover_category": "nonprestressed",
+      "expected_mm": 45.0
+    },
+    {
+      "id": "nonprestressed-extra",
+      "environment": "extra_aggressive",
+      "cover_category": "nonprestressed",
+      "expected_mm": 55.0
+    },
+    {
+      "id": "pretensioned-aggressive",
+      "environment": "aggressive",
+      "cover_category": "pretensioned",
+      "expected_mm": 45.0
+    },
+    {
+      "id": "pretensioned-extra",
+      "environment": "extra_aggressive",
+      "cover_category": "pretensioned",
+      "expected_mm": 55.0
+    },
+    {
+      "id": "duct-aggressive",
+      "environment": "aggressive",
+      "cover_category": "posttension_duct",
+      "expected_mm": 55.0
+    },
+    {
+      "id": "duct-extra",
+      "environment": "extra_aggressive",
+      "cover_category": "posttension_duct",
+      "expected_mm": 65.0
+    },
+    {
+      "id": "rail-collision",
+      "environment": "aggressive",
+      "cover_category": "posttension_duct",
+      "railway_collision_risk": true,
+      "expected_mm": 75.0
+    }
+  ],
+  "torsion_cases": [
+    {
+      "id": "standard-alpha-ct",
+      "inputs": {
+        "fck_mpa": 40.0,
+        "gamma_ct": 1.70,
+        "alpha_ct": 1.0,
+        "ak_m2": 0.10,
+        "tef_mm": 100.0
+      },
+      "expected_knm": 28.89617529528008,
+      "conformance": "STANDARD"
+    },
+    {
+      "id": "custom-alpha-ct",
+      "inputs": {
+        "fck_mpa": 40.0,
+        "gamma_ct": 1.70,
+        "alpha_ct": 0.8,
+        "ak_m2": 0.10,
+        "tef_mm": 100.0
+      },
+      "expected_knm": 23.116940236224064,
+      "conformance": "REVIEW_ONLY"
+    }
+  ],
+  "authority_cases": [
+    {
+      "id": "road-directorate-road",
+      "manager": "road_directorate",
+      "asset_class": "road",
+      "expected": "MAPPED"
+    },
+    {
+      "id": "road-directorate-footbridge",
+      "manager": "road_directorate",
+      "asset_class": "footbridge",
+      "expected": "MAPPED"
+    },
+    {
+      "id": "local-road-road",
+      "manager": "local_road",
+      "asset_class": "road",
+      "expected": "MAPPED"
+    },
+    {
+      "id": "local-road-footbridge",
+      "manager": "local_road",
+      "asset_class": "footbridge",
+      "expected": "MAPPED"
+    },
+    {
+      "id": "banedanmark-railway",
+      "manager": "banedanmark",
+      "asset_class": "railway",
+      "expected": "MAPPED"
+    },
+    {
+      "id": "regional-railway",
+      "manager": "regional_rail",
+      "asset_class": "railway",
+      "expected": "MAPPED"
+    },
+    {
+      "id": "banedanmark-road-conflict",
+      "manager": "banedanmark",
+      "asset_class": "road",
+      "expected": "CONFLICT_REVIEW"
+    },
+    {
+      "id": "other-manager",
+      "manager": "other",
+      "asset_class": "road",
+      "expected": "REVIEW_ONLY"
+    }
+  ]
+}
