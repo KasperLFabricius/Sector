@@ -634,3 +634,30 @@ mandatory; this matrix does not self-certify PR closure.
   385-check affected core/project/report slice, three focused Streamlit checks
   and 149 manual/ASCII controls. Exact-head CI, Codex Review and original
   independent closure remain pending after commit.
+- Codex Review of exact head
+  `918f3a00698010af2566abb764fe080dc0202ee0` found two remaining P1 correlation
+  gaps. The Streamlit split-cache key omitted design methodology, so switching
+  from component methods to the bridge method could reuse the old fatigue payload
+  and remain INVALID instead of recalculating. The PDF boundary also replaced a
+  missing methodology in a legacy/direct input snapshot with component methods,
+  allowing a component-method result to remain publishable without its current
+  correlation evidence. The obsolete CI run was cancelled immediately.
+
+| Methodology-correlation boundary | Required invariant | Missing or changed evidence |
+|---|---|---|
+| Validated preparation and solver signature | One typed methodology is carried into the prepared calculation, solver-facing signature and result payload. | Invalid input produces an explicit invalid fatigue result; it cannot acquire bridge authority from a Miner-basis label. |
+| Streamlit split-result reuse | The fatigue reuse key includes the same methodology in addition to every fatigue numerical/provenance input. | A methodology change makes the key unequal and forces a new fatigue calculation before the result snapshot is replaced. |
+| Calculation input snapshot, session and autosave | The result payload and the exact input snapshot retain the methodology that produced the calculation. | Legacy results without a matching snapshot remain hidden or publication-invalid rather than being correlated against live inputs. |
+| Overview, result view and bridge adapter | Each boundary passes the raw snapshot methodology to the shared publication validator. | Missing, malformed or conflicting methodology forces `valid = converged = passed = False`. |
+| PDF report | The report passes the raw calculation-input methodology without a default. | A missing direct/legacy report snapshot is explicit unavailable evidence and publishes `INVALID - fatigue not assessed`. |
+| Stored Miner basis and method | Method, basis, coefficient/source and whole-calculation methodology are jointly validated. | Relabelling any one field cannot establish its own standard applicability or preserve PASS. |
+
+- Exact reproductions now recalculate the fatigue payload and snapshot after a
+  component-to-bridge methodology switch, and fail closed when report input
+  omits methodology. The consolidated source audit found one fatigue reuse key
+  and four publication callers; all now use the same typed methodology binding
+  without a publication fallback. Six direct/adjacent reproductions, all 386
+  affected fatigue/bridge-adapter/project/report checks, five focused Streamlit
+  controls and 149 manual/ASCII checks are green. Compilation, whitespace,
+  version `0.91` and changed-file controls are green; no executable was touched
+  or launched. The new exact head must restart CI and Codex Review.

@@ -6455,6 +6455,7 @@ def build_inputs(host=st):
         (
             "fatigue",
             True,
+            ("design_methodology", design_methodology),
             geom_sig,
             material_sig,
             fatigue_edition,

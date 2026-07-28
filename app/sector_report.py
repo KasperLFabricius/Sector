@@ -464,10 +464,10 @@ class ReportBuilder:
         if canonical_out.get("fatigue") is not None:
             canonical_out["fatigue"] = fatigue_analysis.publication_safe_result(
                 canonical_out.get("fatigue"),
-                design_methodology=inp.get(
-                    "design_methodology",
-                    bridge_core.COMPONENT_METHODS,
-                ),
+                # Publication correlation must use the exact calculation-input
+                # snapshot. A missing legacy/direct-caller field is unavailable
+                # evidence, not permission to invent component-method authority.
+                design_methodology=inp.get("design_methodology"),
             )
         self.out = canonical_out
         # Keep the complete table-level payload available while the existing

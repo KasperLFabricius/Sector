@@ -2059,6 +2059,48 @@ def test_standard_miner_c14_is_locked_and_project_sn_method_round_trips():
     assert at.number_input(key="fatigue_concrete_c").disabled is True
 
 
+def test_fatigue_reuse_signature_recalculates_after_methodology_switch():
+    import fatigue_analysis
+    import fatigue_inputs
+
+    at = _fresh().run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+    at.selectbox(key="fatigue_edition").set_value(
+        fatigue_inputs.EC2_2_2005_AC
+    ).run()
+    at.selectbox(key="fatigue_concrete_method").set_value(
+        fatigue_analysis.CONCRETE_EQUIVALENT
+    ).run()
+
+    _calculate(at)
+    component_signature = at.session_state["result_fatigue_sig"]
+    assert at.session_state["results"]["fatigue"]["design_methodology"] == (
+        bridge.COMPONENT_METHODS
+    )
+
+    _goto_page(at, "Inputs")
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_BASE
+    ).run()
+    bridge_signature = at.session_state["_latest_inputs"]["fatigue_sig"]
+    assert bridge_signature != component_signature
+
+    _calculate(at)
+    assert not at.exception
+    assert at.session_state["result_fatigue_sig"] == bridge_signature
+    assert at.session_state["results"]["fatigue"]["design_methodology"] == (
+        bridge.EN1992_2_BASE
+    )
+    assert at.session_state["result_input_snapshot"]["design_methodology"] == (
+        bridge.EN1992_2_BASE
+    )
+    assert not any(
+        "design methodology conflicts with the calculation input snapshot"
+        in error.value
+        for error in at.error
+    )
+
+
 def test_fatigue_view_fails_closed_on_relabelled_or_malformed_payload(
     monkeypatch,
 ):

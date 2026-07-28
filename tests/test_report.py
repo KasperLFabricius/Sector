@@ -756,6 +756,21 @@ def test_report_rejects_bridge_basis_relabel_under_component_methodology():
     assert bridge.COMPONENT_METHODS in text
 
 
+def test_report_rejects_missing_fatigue_methodology_snapshot():
+    inp, out = _fatigue_report_fixture()
+    del inp["design_methodology"]
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert (
+        "Current fatigue design methodology is unavailable for publication "
+        "correlation"
+    ) in text
+
+
 def test_report_fails_closed_on_malformed_fatigue_error_container():
     inp, out = _fatigue_report_fixture()
     out["fatigue"]["errors"] = 7
