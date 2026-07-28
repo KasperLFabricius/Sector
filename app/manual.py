@@ -759,6 +759,11 @@ def manual_blocks() -> list:
        "A required Method a/c, bridge interface model or other unsupported branch is "
        "reported as not assessed; Sector does not silently replace it with Method b "
        "or ordinary member shear.")
+    md("A stored bridge-methodology result is publishable only when its immutable "
+       "evidence fingerprint is valid **and** the calculation-input snapshot still "
+       "selects the bridge whole-calculation methodology. A missing or component-"
+       "method snapshot makes the project, overview, session/autosave and report "
+       "record **INVALID**; its input-hash match flag cannot remain true.")
     h2("Crack width")
     md("Tick **Crack width** on each Elastic table row that requires acceptance. "
        "If any row is ticked, the global crack settings apply to every ticked row. "
@@ -809,7 +814,9 @@ def manual_blocks() -> list:
        "Expression (6.106) or E.8. Calculated fatigue evidence also stores the "
        "whole-calculation design methodology; UI and report publication compare "
        "that binding with the calculation input snapshot and reject a relabelled "
-       "bridge applicability.")
+       "bridge applicability. An unbounded Miner damage remains the governing "
+       "failing row and is reported as infinite; it is not replaced by a finite "
+       "passing component for display.")
     table(["Input", "Use"],
           [["$\\gamma_{Ff}$", "Factors the cyclic action increment before the elastic solve"],
            ["$\\gamma_s$", "Reduces the reinforcement S-N resistance and yield/proof limit"],

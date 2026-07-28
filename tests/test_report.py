@@ -3543,6 +3543,7 @@ def _bridge_report_record():
     check_ids = (
         "section_analysis",
         "prestress_brittle",
+        "member_shear",
         "bridge_shear_detailing",
         "box_wall_torsion",
         "reinforcement_fatigue",
@@ -3580,12 +3581,18 @@ def _bridge_report_record():
     return record
 
 
+def _bridge_report_input(methodology=bridge.EN1992_2_BASE):
+    inp = _inp()
+    inp["design_methodology"] = methodology
+    return inp
+
+
 def test_report_publishes_bridge_coverage_and_check_gate():
     out = _out()
     out["bridge_methodology"] = _bridge_report_record()
 
     text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
+        {}, _bridge_report_input(), out, figures=False
     )).split())
 
     assert "Bridge methodology" in text
@@ -3625,7 +3632,7 @@ def test_report_publishes_bound_bridge_calculation_evidence():
     out["bridge_methodology"] = record
 
     text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
+        {}, _bridge_report_input(), out, figures=False
     )).split())
 
     assert "Bound calculation evidence" in text
@@ -3666,7 +3673,7 @@ def test_report_keeps_invalid_cot_theta_and_minimum_k_as_not_assessed():
     out["bridge_methodology"] = record
 
     text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
+        {}, _bridge_report_input(), out, figures=False
     )).split())
 
     assert "cot(theta) must be between 1.0 and 2.5" in text
@@ -3681,10 +3688,64 @@ def test_report_fails_closed_when_stored_bridge_check_is_missing():
     out["bridge_methodology"] = record
 
     text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
+        {}, _bridge_report_input(), out, figures=False
     )).split())
 
     assert "Bridge methodology" in text
     assert "INVALID" in text
     assert "Publication validation" in text
     assert "missing bridge check" in text
+
+
+def test_report_rejects_bridge_record_under_component_methodology():
+    out = _out()
+    out["bridge_methodology"] = _bridge_report_record()
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {},
+        _bridge_report_input(bridge.COMPONENT_METHODS),
+        out,
+        figures=False,
+    )).split())
+
+    assert "Bridge methodology" in text
+    assert "INVALID" in text
+    assert "Publication validation" in text
+    assert "conflicts with the calculation input snapshot" in text
+
+
+def test_report_preserves_unbounded_bridge_fatigue_governing_row():
+    out = _out()
+    record = _bridge_report_record()
+    concrete_fatigue = next(
+        check
+        for check in record["checks"]
+        if check["check_id"] == "concrete_fatigue"
+    )
+    concrete_fatigue.update(
+        status=bridge.STATUS_FAIL,
+        result="infinite Miner damage",
+        criterion="<= 100 %",
+        source="Unbounded concrete fibre",
+        reason="Spectrum A / fibre 4 governs.",
+        utilisation=None,
+        evidence=[{
+            "miner_coefficient_c": 14.0,
+            "methodology": bridge.EN1992_2_BASE,
+            "concrete_method": "Explicit Palmgren-Miner spectrum",
+            "unbounded_utilisation": True,
+        }],
+    )
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+    )
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _bridge_report_input(), out, figures=False
+    )).split())
+
+    assert "infinite Miner damage" in text
+    assert "Unbounded concrete fibre" in text
+    assert "unbounded_utilisation" in text

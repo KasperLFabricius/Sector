@@ -146,14 +146,15 @@ def _external(
         status = _status(row.get("status"))
         raw_utilisation = row.get("util")
         utilisation = _finite(raw_utilisation)
+        unbounded_failure = (
+            status == bridge.STATUS_FAIL
+            and _positive_infinity(raw_utilisation)
+        )
         requires_utilisation = bool(row.pop("_requires_utilisation", False))
         invalid_utilisation = (
             raw_utilisation is not None
             and utilisation is None
-            and not (
-                status == bridge.STATUS_FAIL
-                and _positive_infinity(raw_utilisation)
-            )
+            and not unbounded_failure
         )
         if utilisation is not None and utilisation < 0.0:
             invalid_utilisation = True
@@ -162,10 +163,7 @@ def _external(
             status in {bridge.STATUS_PASS, bridge.STATUS_FAIL}
             and requires_utilisation
             and utilisation is None
-            and not (
-                status == bridge.STATUS_FAIL
-                and _positive_infinity(raw_utilisation)
-            )
+            and not unbounded_failure
         ):
             invalid_utilisation = True
         if invalid_utilisation:
@@ -181,6 +179,7 @@ def _external(
             )
         row["status"] = status
         row["util"] = utilisation
+        row["unbounded_utilisation"] = unbounded_failure
         rows.append(row)
     if not rows:
         return bridge.ExternalEvidence(
@@ -190,14 +189,26 @@ def _external(
         )
     statuses = [_status(row.get("status")) for row in rows]
     status = min(statuses, key=lambda item: _STATUS_ORDER[item])
-    utilisations = [
-        number
-        for number in (_finite(row.get("util")) for row in rows)
-        if number is not None
-    ]
-    utilisation = max(utilisations, default=None)
-    governing = None
-    if utilisation is not None:
+    governing = next(
+        (
+            row
+            for row in rows
+            if (
+                _status(row.get("status")) == bridge.STATUS_FAIL
+                and row.get("unbounded_utilisation") is True
+            )
+        ),
+        None,
+    )
+    utilisation = None
+    if governing is None:
+        utilisations = [
+            number
+            for number in (_finite(row.get("util")) for row in rows)
+            if number is not None
+        ]
+        utilisation = max(utilisations, default=None)
+    if governing is None and utilisation is not None:
         governing = next(
             (
                 row

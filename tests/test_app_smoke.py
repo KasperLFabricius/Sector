@@ -1971,6 +1971,15 @@ def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
 
     assert payload["active"] is True
     assert payload["status"] != bridge.STATUS_PASS
+    calculation_bridge = at.session_state["calculation_record"][
+        "bridge_methodology"
+    ]
+    assert calculation_bridge["publication_validation"]["status"] == (
+        "ACCEPTED"
+    )
+    assert at.session_state["result_input_snapshot"][
+        "design_methodology"
+    ] == bridge.EN1992_2_BASE
     assert all(
         check["status"] == bridge.STATUS_NOT_ASSESSED
         for check in payload["checks"]
@@ -1990,6 +1999,37 @@ def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
     assert at.session_state["fatigue_concrete_miner_basis"] == (
         fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
     )
+
+
+def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
+    import sector_app
+
+    rendered = {"errors": [], "info": []}
+    fake_st = SimpleNamespace(
+        info=lambda message, **_kwargs: rendered["info"].append(message),
+        error=lambda message, **_kwargs: rendered["errors"].append(message),
+        success=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        caption=lambda *_args, **_kwargs: None,
+        markdown=lambda *_args, **_kwargs: None,
+        dataframe=lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(sector_app, "st", fake_st)
+
+    sector_app.bridge_methodology_view(
+        {"design_methodology": bridge.COMPONENT_METHODS},
+        {"bridge_methodology": _bridge_bound_snapshot()},
+    )
+
+    assert any(
+        message.startswith("INVALID -")
+        for message in rendered["errors"]
+    )
+    assert any(
+        "conflicts with the calculation input snapshot" in message
+        for message in rendered["errors"]
+    )
+    assert rendered["info"] == []
 
 
 def test_standard_miner_c14_is_locked_and_project_sn_method_round_trips():
@@ -6205,7 +6245,14 @@ def test_download_session_and_autosave_reject_bridge_binding_mutation(
         "_invalid_crack_input_keys",
         lambda: (),
     )
-    monkeypatch.setattr(sector_app, "_project_state", lambda: ({}, {}))
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: (
+            {},
+            {"design_methodology": bridge.EN1992_2_BASE},
+        ),
+    )
 
     download_text = sector_app._gather_project()
     download = json.loads(download_text)["calculation"][
@@ -6254,6 +6301,85 @@ def test_download_session_and_autosave_reject_bridge_binding_mutation(
     assert durable["status"] == bridge.STATUS_INVALID
     assert saved["status"] == bridge.STATUS_INVALID
     assert durable == saved
+
+
+def test_download_session_and_autosave_reject_bridge_methodology_mismatch(
+    tmp_path,
+    monkeypatch,
+):
+    import project_io
+    import sector_app
+
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    calculation = {
+        "input_sha256": project_io.input_sha256({}, scalars),
+        "bridge_methodology": _bridge_bound_snapshot(),
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: ({}, scalars),
+    )
+
+    download_payload = json.loads(sector_app._gather_project())
+    download = download_payload["calculation"]["bridge_methodology"]
+    assert download["status"] == bridge.STATUS_INVALID
+    assert download["publication_validation"]["status"] == "REJECTED"
+    assert download_payload["calculation"]["matches_saved_inputs"] is False
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: project_io.input_sha256({}, scalars),
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]["bridge_methodology"]
+    saved_payload = json.loads(captured["data"])
+    saved = saved_payload["calculation"]["bridge_methodology"]
+    assert durable == saved
+    assert durable["status"] == bridge.STATUS_INVALID
+    assert durable["publication_validation"]["status"] == "REJECTED"
+    assert saved_payload["calculation"]["matches_saved_inputs"] is False
 
 
 @pytest.mark.parametrize(

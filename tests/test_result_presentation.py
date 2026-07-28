@@ -1109,3 +1109,21 @@ def test_bridge_summary_uses_publication_safe_bound_evidence():
         for row in rows
     )
     assert presentation.overall_summary_status(rows) == "INVALID"
+
+
+def test_bridge_summary_rejects_snapshot_under_component_methodology():
+    rows = presentation.multi_case_summary_rows(
+        _inp(
+            design_methodology=bridge.COMPONENT_METHODS,
+            mode="",
+        ),
+        {"bridge_methodology": _bridge_snapshot()},
+    )
+
+    assert any(
+        row["check"] == "Bridge methodology configuration"
+        and row["status"] == "INVALID"
+        and "conflicts with the calculation input snapshot" in row["note"]
+        for row in rows
+    )
+    assert presentation.overall_summary_status(rows) == "INVALID"

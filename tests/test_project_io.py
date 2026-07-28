@@ -769,6 +769,37 @@ def test_project_roundtrips_bound_bridge_calculation_snapshot():
     assert saved == restored
     assert saved["status"] == bridge.STATUS_PASS
     assert saved["evidence_schema"] == bridge.BRIDGE_EVIDENCE_SCHEMA
+    assert saved["publication_validation"]["status"] == "ACCEPTED"
+    assert payload["calculation"]["matches_saved_inputs"] is True
+    assert payload["provenance"]["results_included"] is True
+
+
+def test_project_rejects_bridge_snapshot_under_component_methodology():
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    calculation = {
+        "input_sha256": project_io.input_sha256({}, scalars),
+        "bridge_methodology": _bridge_calculation_snapshot(),
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation=calculation,
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+    saved = payload["calculation"]["bridge_methodology"]
+    restored = provenance["calculation"]["bridge_methodology"]
+
+    for record in (saved, restored):
+        assert record["status"] == bridge.STATUS_INVALID
+        assert record["publication_validation"]["status"] == "REJECTED"
+        assert any(
+            "conflicts with the calculation input snapshot" in error
+            for error in record["publication_validation"]["errors"]
+        )
+    assert payload["calculation"]["matches_saved_inputs"] is False
+    assert provenance["calculation"]["matches_saved_inputs"] is False
     assert payload["provenance"]["results_included"] is True
 
 

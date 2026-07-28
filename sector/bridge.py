@@ -1467,19 +1467,44 @@ def _publication_parameter_evidence_errors(
     return errors
 
 
-def publication_safe_record(record: Mapping | None) -> dict[str, Any] | None:
+def publication_safe_record(
+    record: Mapping | None,
+    *,
+    design_methodology: Any,
+) -> dict[str, Any] | None:
     """Return a canonical fail-closed bridge calculation snapshot.
 
     Saved calculation records are provenance, not live solver results.  This
     boundary therefore discards stored coverage labels, recomputes aggregate
     status from the check bodies, and downgrades missing, duplicate or malformed
-    evidence before a project, autosave or report may publish it.
+    evidence before a project, autosave or report may publish it. The immutable
+    solver fingerprint and the current input correlation remain separate:
+    publication must prove both without rewriting one as the other.
     """
 
     if not isinstance(record, Mapping):
         return None
     if record.get("methodology") != EN1992_2_BASE:
         return None
+    current_methodology = None
+    correlation_errors: list[str] = []
+    if not isinstance(design_methodology, str):
+        correlation_errors.append(
+            "current bridge design methodology is unavailable for publication "
+            "correlation"
+        )
+    else:
+        current_methodology = design_methodology.strip()
+        if current_methodology not in METHODOLOGIES:
+            correlation_errors.append(
+                "current bridge design methodology is invalid for publication "
+                "correlation"
+            )
+        elif current_methodology != EN1992_2_BASE:
+            correlation_errors.append(
+                "stored bridge methodology conflicts with the calculation "
+                "input snapshot"
+            )
     errors: list[str] = []
     raw_configuration = record.get("configuration_errors", ())
     if not isinstance(raw_configuration, (list, tuple)):
@@ -1678,7 +1703,7 @@ def publication_safe_record(record: Mapping | None) -> dict[str, Any] | None:
     ))
     safe_status = (
         STATUS_INVALID
-        if configuration_errors
+        if configuration_errors or correlation_errors
         else _overall_status(checks)
     )
     return _with_evidence_binding({
@@ -1692,6 +1717,13 @@ def publication_safe_record(record: Mapping | None) -> dict[str, Any] | None:
         "coverage_matrix": coverage_matrix(),
         "checks": canonical_checks,
         "configuration_errors": configuration_errors,
+        "publication_validation": {
+            "status": (
+                "REJECTED" if correlation_errors else "ACCEPTED"
+            ),
+            "design_methodology": current_methodology,
+            "errors": list(correlation_errors),
+        },
         "limitations": [
             rule.implementation
             for rule in COVERAGE_RULES

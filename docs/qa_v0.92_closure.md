@@ -661,3 +661,32 @@ mandatory; this matrix does not self-certify PR closure.
   controls and 149 manual/ASCII checks are green. Compilation, whitespace,
   version `0.91` and changed-file controls are green; no executable was touched
   or launched. The new exact head must restart CI and Codex Review.
+- Codex Review of exact head
+  `53ff19ce6ac7bf3b6a99311538ad1e472cef17fb` found one further same-family P1:
+  the bridge record validated its stored methodology and fingerprint but did not
+  accept the current calculation-input methodology, so a bridge PASS could be
+  published or saved beside component-method inputs. The review also found a P2
+  governing-row defect: a supported positive-infinite fatigue failure was reduced
+  to a null utilisation before ordering and could yield its source/result position
+  to a finite passing row. The obsolete CI run was cancelled.
+
+| Bridge publication invariant | Canonical behavior |
+|---|---|
+| Immutable solver body | Check bodies, configuration errors and the evidence fingerprint are validated without importing mutable current-input context into that fingerprint. |
+| Current input correlation | Every bridge publication call must supply the raw whole-calculation methodology. Missing, malformed or non-bridge context emits a separate typed `REJECTED` publication-validation block and forces `INVALID`. |
+| Project hash meaning | A bridge snapshot with rejected methodology correlation cannot set `matches_saved_inputs = true`, even if its stored SHA-256 equals the current canonical input hash. |
+| Boundary consistency | Calculation record, overview, bridge view, project dump/load provenance, download, session/autosave and PDF use the same required-context validator; none may invent a default methodology. |
+| Unbounded fatigue evidence | Positive-infinite FAIL is represented by a finite-JSON-safe `unbounded_utilisation` marker, explicitly governs finite rows, and retains its result/source through the bridge check and report. |
+
+- The required-context signature makes an omitted bridge-publication argument a
+  programming error. Correlation errors are reconstructed for each boundary and
+  remain separate from the immutable solver fingerprint, so changing only the
+  current context cannot contaminate or permanently rewrite the stored evidence.
+  Direct, overview, report, project, calculation-record, download/session and
+  autosave controls cover accepted, component-method, missing, Boolean and unknown
+  contexts; an independent mixed infinite/finite fatigue pair covers governing
+  result/source preservation. Twenty direct cross-boundary cases, all 501 affected
+  bridge/fatigue/project/presentation/report checks, seven focused Streamlit
+  controls and 149 manual/ASCII checks are green. Compilation, whitespace,
+  version `0.91` and changed-file controls are green; no executable was touched
+  or launched. The next exact head must restart all external gates.

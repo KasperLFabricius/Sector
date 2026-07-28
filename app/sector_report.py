@@ -820,7 +820,8 @@ class ReportBuilder:
         self._tick(0.2, "Section and materials...")
         self._inputs()
         bridge_record = bridge_core.publication_safe_record(
-            self._base_out.get("bridge_methodology")
+            self._base_out.get("bridge_methodology"),
+            design_methodology=self._base_inp.get("design_methodology"),
         )
         if bridge_record is not None:
             self._tick(0.28, "Bridge methodology...")
@@ -1050,6 +1051,14 @@ class ReportBuilder:
             "methodology conclusion."
         )
         for error in record.get("configuration_errors") or ():
+            self._small(
+                "<b>Publication validation:</b> "
+                + _html_escape(str(error))
+            )
+        for error in (
+            (record.get("publication_validation") or {}).get("errors")
+            or ()
+        ):
             self._small(
                 "<b>Publication validation:</b> "
                 + _html_escape(str(error))

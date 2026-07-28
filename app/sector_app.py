@@ -3050,6 +3050,13 @@ def _perform_autosave() -> bool:
         digest = _project_input_hash()
     except Exception:
         return False
+    try:
+        _current_tables, current_scalars = _project_state()
+        current_design_methodology = current_scalars.get(
+            "design_methodology"
+        )
+    except Exception:
+        current_design_methodology = None
     record_changed_by_validation = False
     calculation = st.session_state.get("calculation_record")
     if isinstance(calculation, Mapping):
@@ -3067,7 +3074,10 @@ def _perform_autosave() -> bool:
                 safe_calculation["crack_control"] = safe_crack_control
         if "bridge_methodology" in calculation:
             current_bridge = calculation.get("bridge_methodology")
-            safe_bridge = bridge.publication_safe_record(current_bridge)
+            safe_bridge = bridge.publication_safe_record(
+                current_bridge,
+                design_methodology=current_design_methodology,
+            )
             if safe_bridge is None:
                 safe_calculation.pop("bridge_methodology", None)
             else:
@@ -9085,15 +9095,20 @@ def results_overview_view(inp, results, *, stale=False):
 def bridge_methodology_view(inp, results, *, stale=False):
     """Render the complete EN 1992-2 coverage matrix and typed check evidence."""
 
-    if inp.get("design_methodology") != bridge.EN1992_2_BASE:
+    selected_methodology = inp.get("design_methodology")
+    payload = bridge.publication_safe_record(
+        (results or {}).get("bridge_methodology"),
+        design_methodology=selected_methodology,
+    )
+    if (
+        selected_methodology != bridge.EN1992_2_BASE
+        and payload is None
+    ):
         st.info(
             "Select the DS/EN 1992-2 base whole-calculation methodology in "
             "Analysis settings to activate this gate."
         )
         return
-    payload = bridge.publication_safe_record(
-        (results or {}).get("bridge_methodology")
-    )
     if payload is None:
         st.info("Press Calculate to assess the bridge methodology.")
         return
@@ -9145,6 +9160,16 @@ def bridge_methodology_view(inp, results, *, stale=False):
         st.error(
             "Stored/calculated bridge evidence validation: "
             + "; ".join(payload["configuration_errors"])
+            + "."
+        )
+    publication_errors = (
+        (payload.get("publication_validation") or {}).get("errors")
+        or ()
+    )
+    if publication_errors:
+        st.error(
+            "Bridge input/result correlation: "
+            + "; ".join(publication_errors)
             + "."
         )
     for limitation in payload.get("limitations") or ():
@@ -12469,7 +12494,8 @@ def _analysis_workspace(inp):
             if crack_control_record is not None:
                 calculation_record["crack_control"] = crack_control_record
             bridge_record = bridge.publication_safe_record(
-                st.session_state["results"].get("bridge_methodology")
+                st.session_state["results"].get("bridge_methodology"),
+                design_methodology=inp.get("design_methodology"),
             )
             if bridge_record is not None:
                 calculation_record["bridge_methodology"] = bridge_record

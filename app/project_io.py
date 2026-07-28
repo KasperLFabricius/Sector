@@ -832,6 +832,18 @@ def input_sha256(tables: dict, scalars: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _bridge_publication_matches_inputs(record) -> bool:
+    """Return whether a safe bridge snapshot proved current-input correlation."""
+
+    if not isinstance(record, dict):
+        return False
+    validation = record.get("publication_validation")
+    return (
+        isinstance(validation, dict)
+        and validation.get("status") == "ACCEPTED"
+    )
+
+
 def dump_project(tables: dict, scalars: dict, *, calculation=None,
                  app_version=None, revision=None) -> str:
     """Serialise the point tables and scalar inputs to a JSON project string.
@@ -857,6 +869,7 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
         },
     }
     if calculation:
+        bridge_publication_matches = True
         record = {
             key: calculation.get(key)
             for key in (
@@ -875,11 +888,22 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
                 record.pop("crack_control")
         if "bridge_methodology" in record:
             record["bridge_methodology"] = bridge.publication_safe_record(
-                record.get("bridge_methodology")
+                record.get("bridge_methodology"),
+                design_methodology=scalars.get("design_methodology"),
             )
             if record["bridge_methodology"] is None:
                 record.pop("bridge_methodology")
-        record["matches_saved_inputs"] = record.get("input_sha256") == digest
+                bridge_publication_matches = False
+            else:
+                bridge_publication_matches = (
+                    _bridge_publication_matches_inputs(
+                        record["bridge_methodology"]
+                    )
+                )
+        record["matches_saved_inputs"] = (
+            record.get("input_sha256") == digest
+            and bridge_publication_matches
+        )
         payload["calculation"] = record
         payload["provenance"]["results_included"] = bool(
             (record.get("crack_control") or {}).get("cases")
@@ -947,6 +971,7 @@ def project_provenance(text: str) -> dict:
         if isinstance(data.get("calculation"), dict) else None
     )
     if calculation is not None:
+        bridge_publication_matches = True
         if "crack_control" in calculation:
             calculation["crack_control"] = (
                 sls.publication_safe_crack_control_record(
@@ -958,14 +983,25 @@ def project_provenance(text: str) -> dict:
         if "bridge_methodology" in calculation:
             calculation["bridge_methodology"] = (
                 bridge.publication_safe_record(
-                    calculation.get("bridge_methodology")
+                    calculation.get("bridge_methodology"),
+                    design_methodology=raw_scalars.get(
+                        "design_methodology"
+                    ),
                 )
             )
             if calculation["bridge_methodology"] is None:
                 calculation.pop("bridge_methodology")
+                bridge_publication_matches = False
+            else:
+                bridge_publication_matches = (
+                    _bridge_publication_matches_inputs(
+                        calculation["bridge_methodology"]
+                    )
+                )
         calculation["matches_saved_inputs"] = (
             bool(calculation.get("input_sha256"))
             and calculation.get("input_sha256") == actual
+            and bridge_publication_matches
         )
     return {
         "sector_version": provenance.get("sector_version"),

@@ -382,6 +382,54 @@ def test_malformed_fatigue_utilisation_cannot_pass(
     assert evidence.status == bridge.STATUS_INVALID
 
 
+def test_unbounded_fatigue_failure_governs_finite_passing_row():
+    evidence = bridge_analysis._external(
+        [
+            {
+                "status": bridge.STATUS_FAIL,
+                "result": "infinite Miner damage",
+                "criterion": "<= 100 %",
+                "util": float("inf"),
+                "_requires_utilisation": True,
+                "source": "Unbounded concrete fibre",
+                "note": "Spectrum A / fibre 4",
+            },
+            {
+                "status": bridge.STATUS_PASS,
+                "result": "75.0 %",
+                "criterion": "<= 100 %",
+                "util": 0.75,
+                "_requires_utilisation": True,
+                "source": "Finite reinforcement row",
+                "note": "Spectrum B / R1",
+            },
+        ],
+        empty_reason="No fatigue evidence.",
+        source="Controlled fatigue source",
+    )
+
+    assert evidence.status == bridge.STATUS_FAIL
+    assert evidence.result == "infinite Miner damage"
+    assert evidence.source == "Unbounded concrete fibre"
+    assert evidence.utilisation is None
+    assert evidence.evidence[0]["unbounded_utilisation"] is True
+    assert evidence.evidence[1]["unbounded_utilisation"] is False
+
+    check = bridge._external_result(
+        "concrete_fatigue",
+        evidence,
+        bridge.ApplicabilityDecision(
+            "concrete_fatigue",
+            bridge.REQUIRED,
+            "DB-FAT-UNBOUNDED",
+        ),
+    )
+    assert check.status == bridge.STATUS_FAIL
+    assert check.result == "infinite Miner damage"
+    assert check.source == "Unbounded concrete fibre"
+    assert check.utilisation is None
+
+
 @pytest.mark.parametrize(
     ("payload_change", "reason"),
     [

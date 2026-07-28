@@ -575,18 +575,70 @@ def test_inactive_component_method_does_not_emit_bridge_checks():
     assert result["checks"] == []
 
 
+@pytest.mark.parametrize(
+    ("current_methodology", "expected"),
+    [
+        (
+            bridge.COMPONENT_METHODS,
+            "conflicts with the calculation input snapshot",
+        ),
+        (None, "unavailable for publication correlation"),
+        (True, "unavailable for publication correlation"),
+        ("Unknown methodology", "invalid for publication correlation"),
+    ],
+)
+def test_publication_boundary_correlates_current_design_methodology(
+    current_methodology,
+    expected,
+):
+    raw = bridge.assess_base_methodology(_complete_evidence())
+
+    rejected = bridge.publication_safe_record(
+        raw,
+        design_methodology=current_methodology,
+    )
+
+    assert rejected["status"] == bridge.STATUS_INVALID
+    assert rejected["configuration_errors"] == []
+    assert rejected["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        expected in error
+        for error in rejected["publication_validation"]["errors"]
+    )
+
+    # Context validation is reconstructed, not folded into the immutable solver
+    # evidence fingerprint. The same untouched record can therefore be accepted
+    # again only when paired with its actual bridge-method calculation inputs.
+    accepted = bridge.publication_safe_record(
+        rejected,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
+    assert accepted["status"] == bridge.STATUS_PASS
+    assert accepted["publication_validation"] == {
+        "status": "ACCEPTED",
+        "design_methodology": bridge.EN1992_2_BASE,
+        "errors": [],
+    }
+
+
 def test_publication_boundary_recomputes_status_and_rejects_missing_check():
     raw = bridge.assess_base_methodology(_complete_evidence())
     raw["status"] = bridge.STATUS_FAIL
 
-    safe = bridge.publication_safe_record(raw)
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
 
     assert safe["status"] == bridge.STATUS_PASS
     assert safe["configuration_errors"] == []
 
     raw["checks"] = raw["checks"][:-1]
     raw["status"] = bridge.STATUS_PASS
-    safe = bridge.publication_safe_record(raw)
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
 
     assert safe["status"] == bridge.STATUS_INVALID
     assert any(
@@ -601,7 +653,10 @@ def test_publication_boundary_rejects_boolean_utilisation_and_duplicate_check():
     raw["checks"][0]["utilisation"] = True
     raw["checks"].append(dict(raw["checks"][1]))
 
-    safe = bridge.publication_safe_record(raw)
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
 
     assert safe["status"] == bridge.STATUS_INVALID
     assert any("duplicate bridge check" in error for error in safe[
@@ -628,7 +683,10 @@ def test_publication_boundary_rejects_mutated_bound_check_body(mutation):
     )
     mutation(stress)
 
-    safe = bridge.publication_safe_record(raw)
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
 
     assert safe["status"] == bridge.STATUS_INVALID
     assert any(
@@ -670,7 +728,10 @@ def test_publication_boundary_revalidates_stored_box_wall_cot_theta():
     check["evidence"][0]["cot_theta"] = 10.0
     _rebind_mutated_record(raw)
 
-    safe = bridge.publication_safe_record(raw)
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
     safe_check = _check(safe, "box_wall_torsion")
 
     assert safe["status"] == bridge.STATUS_INVALID
@@ -687,7 +748,10 @@ def test_publication_boundary_revalidates_stored_minimum_k():
     check["evidence"][0]["k"] = 0.01
     _rebind_mutated_record(raw)
 
-    safe = bridge.publication_safe_record(raw)
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
     safe_check = _check(safe, "web_flange_minimum")
 
     assert safe["status"] == bridge.STATUS_INVALID
@@ -704,7 +768,10 @@ def test_publication_boundary_revalidates_stored_bridge_miner_c():
     check["evidence"][0]["miner_coefficient_c"] = 100.0
     _rebind_mutated_record(raw)
 
-    safe = bridge.publication_safe_record(raw)
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
     safe_check = _check(safe, "concrete_fatigue")
 
     assert safe["status"] == bridge.STATUS_INVALID
@@ -720,8 +787,14 @@ def test_publication_boundary_is_idempotent_and_retains_configuration_errors():
         configuration_errors=("bridge table evidence is malformed",)
     ))
 
-    first = bridge.publication_safe_record(raw)
-    second = bridge.publication_safe_record(first)
+    first = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
+    second = bridge.publication_safe_record(
+        first,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
 
     assert first == second
     assert second["status"] == bridge.STATUS_INVALID

@@ -588,13 +588,13 @@ def bridge_summary_rows(inp, results, *, stale=False):
 
     inp = inp or {}
     results = results or {}
-    selected = str(
-        inp.get("design_methodology") or bridge.COMPONENT_METHODS
-    )
+    raw_selected = inp.get("design_methodology")
+    selected = str(raw_selected or bridge.COMPONENT_METHODS)
     payload = bridge.publication_safe_record(
-        results.get("bridge_methodology")
+        results.get("bridge_methodology"),
+        design_methodology=raw_selected,
     )
-    if selected != bridge.EN1992_2_BASE:
+    if selected != bridge.EN1992_2_BASE and payload is None:
         return []
     if payload is None:
         return [{
@@ -633,7 +633,14 @@ def bridge_summary_rows(inp, results, *, stale=False):
                 part for part in (disposition, reason) if part
             ),
         })
-    for error in payload.get("configuration_errors") or ():
+    publication_errors = (
+        (payload.get("publication_validation") or {}).get("errors")
+        or ()
+    )
+    for error in (
+        *(payload.get("configuration_errors") or ()),
+        *publication_errors,
+    ):
         rows.append({
             "check": "Bridge methodology configuration",
             "family": "bridge",
@@ -642,7 +649,10 @@ def bridge_summary_rows(inp, results, *, stale=False):
             "source": str(payload.get("source") or "-"),
             "status": "STALE" if stale else "INVALID",
             "result": "-",
-            "criterion": "One decision per required coverage row",
+            "criterion": (
+                "One decision per required coverage row and one matching "
+                "whole-calculation methodology"
+            ),
             "util": None,
             "view": "Bridge Methodology",
             "note": str(error),
