@@ -27,6 +27,7 @@ from collections.abc import Iterable, Mapping, Sequence
 import pandas as pd
 
 from sector import codes
+from sector.fatigue import STANDARD_CONCRETE_MINER_C
 
 
 VERSION = 2
@@ -58,10 +59,13 @@ MINER_BASIS_NOT_ESTABLISHED = "Not established - review required"
 MINER_BASIS_BRIDGE_STANDARD = "EN 1992-2 bridge methodology"
 MINER_BASIS_2023_STANDARD = "EN 1992-1-1:2023 standard"
 MINER_BASIS_PROJECT_ADOPTION = "Approved project-basis adoption"
+MINER_BASIS_PROJECT_SN_RELATION = "Approved project S-N relation"
 MINER_BASES = (
     MINER_BASIS_NOT_ESTABLISHED,
     MINER_BASIS_BRIDGE_STANDARD,
+    MINER_BASIS_2023_STANDARD,
     MINER_BASIS_PROJECT_ADOPTION,
+    MINER_BASIS_PROJECT_SN_RELATION,
 )
 
 FACTOR_MODE_PRESET = codes.FACTOR_MODE_PRESET

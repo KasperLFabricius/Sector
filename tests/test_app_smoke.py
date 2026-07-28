@@ -1992,6 +1992,73 @@ def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
     )
 
 
+def test_standard_miner_c14_is_locked_and_project_sn_method_round_trips():
+    import fatigue_analysis
+    import fatigue_inputs
+    import project_io
+
+    at = _fresh().run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_BASE
+    ).run()
+
+    standard_c = at.number_input(key="fatigue_concrete_c")
+    assert standard_c.value == pytest.approx(14.0)
+    assert standard_c.disabled is True
+    assert at.session_state["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+
+    at.session_state["fatigue_concrete_c"] = 100.0
+    at.run()
+    assert at.number_input(key="fatigue_concrete_c").value == pytest.approx(
+        14.0
+    )
+
+    at.selectbox(key="fatigue_concrete_method").set_value(
+        fatigue_analysis.CONCRETE_PROJECT_MINER
+    ).run()
+    assert at.number_input(key="fatigue_concrete_c").disabled is False
+    assert at.text_input(key="fatigue_concrete_miner_source").disabled is False
+    assert at.session_state["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+    )
+
+    at.number_input(key="fatigue_concrete_c").set_value(100.0).run()
+    at.text_input(key="fatigue_concrete_miner_source").set_value(
+        "AUTH-SN-7 / checker approval"
+    ).run()
+    saved = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    _tables, restored = project_io.parse_project(saved)
+    assert restored["fatigue_concrete_c"] == 100.0
+    assert restored["fatigue_concrete_method"] == (
+        fatigue_analysis.CONCRETE_PROJECT_MINER
+    )
+    assert restored["fatigue_concrete_miner_source"] == (
+        "AUTH-SN-7 / checker approval"
+    )
+
+    at.selectbox(key="fatigue_concrete_method").set_value(
+        fatigue_analysis.CONCRETE_MINER
+    ).run()
+    assert at.number_input(key="fatigue_concrete_c").value == pytest.approx(
+        14.0
+    )
+    assert at.number_input(key="fatigue_concrete_c").disabled is True
+
+
 def test_app_fatigue_factor_switches_and_approved_override_persist():
     import fatigue_inputs
 

@@ -41,6 +41,7 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import case_analysis
+import fatigue_analysis
 import fatigue_inputs
 import fatigue_presentation
 import viz
@@ -459,13 +460,18 @@ class ReportBuilder:
         self.buffer = buffer
         self.meta = meta or {}
         self.inp = inp
-        self.out = out or {}
+        canonical_out = dict(out or {})
+        if canonical_out.get("fatigue") is not None:
+            canonical_out["fatigue"] = fatigue_analysis.publication_safe_result(
+                canonical_out.get("fatigue")
+            )
+        self.out = canonical_out
         # Keep the complete table-level payload available while the existing
         # detail renderers are temporarily pointed at one canonical case.  This
         # preserves their well-tested single-case contract without allowing the
         # first-row compatibility projection to hide later cases in the PDF.
         self._base_inp = inp
-        self._base_out = out or {}
+        self._base_out = canonical_out
         self.version = version
         self.figures = figures
         self.qa_appendix = bool(qa_appendix)
@@ -1943,10 +1949,15 @@ class ReportBuilder:
         fatigue_rows = None
         fatigue = self._base_out.get("fatigue")
         if fatigue is not None:
+            fatigue_errors = tuple(fatigue.get("errors") or ())
             checks = fatigue.get("checks") or {}
             factors = fatigue.get("partial_factors") or {}
             factor_basis = fatigue.get("factor_basis") or {}
-            concrete = fatigue.get("concrete_parameters") or {}
+            concrete = (
+                {}
+                if fatigue_errors
+                else fatigue.get("concrete_parameters") or {}
+            )
             fatigue_basis = fatigue.get("basis") or {}
             fatigue_rows = [["Setting", "Value"]]
             fatigue_rows.extend([
@@ -5154,7 +5165,7 @@ class ReportBuilder:
                         )),
                     ],
                     [
-                        "Concrete Miner adoption source",
+                        "Concrete Miner authority source",
                         _html_escape(str(
                             payload.get("concrete_miner_source") or "-"
                         )),

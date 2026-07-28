@@ -612,6 +612,43 @@ def _bridge_fatigue_context_errors(
                 "calculated concrete Miner applicability is not bound to "
                 "the EN 1992-2 bridge methodology"
             )
+        input_c = inp.get("fatigue_concrete_c")
+        if (
+            isinstance(input_c, bool)
+            or type(input_c).__name__ == "bool_"
+            or not isinstance(input_c, (int, float))
+            or not math.isfinite(float(input_c))
+            or not math.isclose(
+                float(input_c),
+                fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            )
+        ):
+            errors.append(
+                "current bridge concrete Miner input is not bound to C = 14"
+            )
+        concrete_parameters = payload.get("concrete_parameters")
+        calculated_c = (
+            concrete_parameters.get("c")
+            if isinstance(concrete_parameters, Mapping)
+            else None
+        )
+        if (
+            isinstance(calculated_c, bool)
+            or type(calculated_c).__name__ == "bool_"
+            or not isinstance(calculated_c, (int, float))
+            or not math.isfinite(float(calculated_c))
+            or not math.isclose(
+                float(calculated_c),
+                fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            )
+        ):
+            errors.append(
+                "calculated bridge concrete Miner evidence is not bound to C = 14"
+            )
     return tuple(errors)
 
 
@@ -770,6 +807,11 @@ def concrete_fatigue_evidence(
                         Mapping,
                     )
                     else ""
+                ),
+                "methodology": bridge.EN1992_2_BASE,
+                "concrete_method": fatigue_analysis.CONCRETE_MINER,
+                "miner_coefficient_c": (
+                    fatigue_inputs.STANDARD_CONCRETE_MINER_C
                 ),
                 "note": (
                     f"spectrum {fatigue_presentation.value(spectrum, 'spectrum_name', '-')}; "

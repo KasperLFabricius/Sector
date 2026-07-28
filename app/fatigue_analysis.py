@@ -27,6 +27,8 @@ from sector.fatigue import (
     CONCRETE_EQUIVALENT,
     CONCRETE_METHODS,
     CONCRETE_MINER,
+    CONCRETE_MINER_METHODS,
+    CONCRETE_PROJECT_MINER,
     ConcreteFatigueProperties,
     FatigueSpectrumResult,
     ReinforcementFatigueProperties,
@@ -99,6 +101,103 @@ def _finite_attribute(value, label: str, errors: list[str], *, positive=False):
         errors.append(f"{label} must be greater than zero")
         return None
     return number
+
+
+def concrete_miner_parameter_errors(
+    *,
+    edition: str,
+    concrete_method: str,
+    miner_basis: str,
+    miner_source: str,
+    coefficient_c,
+    bridge_standard_active: bool,
+) -> list[str]:
+    """Validate the authority binding for a concrete Miner life relation.
+
+    The corrected EN 1992-2 Expression (6.106), and the supported standard
+    EN 1992-1-1:2023 E.8 route, use ``C = 14``. A different coefficient is not
+    an editable standard parameter: it belongs to the separately selected and
+    explicitly sourced project S-N method.
+    """
+
+    if concrete_method not in CONCRETE_MINER_METHODS:
+        return []
+    errors: list[str] = []
+    if isinstance(coefficient_c, bool) or type(coefficient_c).__name__ == "bool_":
+        c_value = None
+        errors.append("Concrete fatigue C must be a finite number greater than zero")
+    else:
+        c_value = _positive(coefficient_c, "Concrete fatigue C", errors)
+    basis = str(miner_basis or "").strip()
+    source = str(miner_source or "").strip()
+
+    if concrete_method == CONCRETE_PROJECT_MINER:
+        if basis != fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION:
+            errors.append(
+                "A non-standard concrete Miner relation requires the separate "
+                "approved project S-N method applicability"
+            )
+        if not source:
+            errors.append(
+                "The approved project concrete S-N relation requires a "
+                "document/clause/approval source"
+            )
+        return list(dict.fromkeys(errors))
+
+    if (
+        c_value is not None
+        and not math.isclose(
+            c_value,
+            fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        )
+    ):
+        errors.append(
+            "The standard concrete Miner relation fixes C = 14; select the "
+            "separate approved project S-N method for any other relation"
+        )
+
+    if not edition:
+        return list(dict.fromkeys(errors))
+
+    if bridge_standard_active:
+        if edition != fatigue_inputs.EC2_2_2005_AC:
+            errors.append(
+                "The EN 1992-2 bridge Miner applicability requires the "
+                "DS/EN 1992-2:2005 + AC:2008 edition"
+            )
+        if basis not in {
+            "",
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+        }:
+            errors.append(
+                "The EN 1992-2 edition uses its bridge-standard corrected "
+                "Expression (6.106) basis"
+            )
+    elif edition == fatigue_inputs.EC2_2023:
+        if basis not in {
+            "",
+            fatigue_inputs.MINER_BASIS_2023_STANDARD,
+        }:
+            errors.append(
+                "The 2023 standard Miner route requires its EN 1992-1-1:2023 "
+                "applicability; use the separate approved project S-N method "
+                "for another relation"
+            )
+    else:
+        if basis != fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION:
+            errors.append(
+                "Explicit 2005 concrete Miner fatigue is an EN 1992-2 method; "
+                "select an approved project-basis adoption or use the "
+                "EN 1992-1-1 Formula (6.72) equivalent method"
+            )
+        if not source:
+            errors.append(
+                "The project-basis adoption of bridge concrete Miner fatigue "
+                "requires a document/clause/approval source"
+            )
+    return list(dict.fromkeys(errors))
 
 
 def _edition(value) -> str:
@@ -186,7 +285,28 @@ def calculation_references(
     """Return the explicit steel and concrete fatigue-method references."""
 
     selected = _edition(edition)
+    project_relation = concrete_method == CONCRETE_PROJECT_MINER
     equivalent = concrete_method == CONCRETE_EQUIVALENT
+    national = (
+        " with DK NA:2024 resolved final factors"
+        if selected == fatigue_inputs.EC2_2005_DKNA
+        else ""
+    )
+    if project_relation:
+        return {
+            "reinforcement": (
+                "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2"
+                if "2023" in selected
+                else (
+                    "DS/EN 1992-1-1:2005+A1:2014, clause 6.8.4 and "
+                    f"Tables 6.3N/6.4N{national}"
+                )
+            ),
+            "concrete": (
+                "Approved project concrete fatigue S-N relation; source: "
+                + str(concrete_miner_source or "").strip()
+            ),
+        }
     if "2023" in selected:
         return {
             "reinforcement": (
@@ -202,11 +322,6 @@ def calculation_references(
         selected == fatigue_inputs.EC2_2_2005_AC
         and concrete_miner_basis
         == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-    )
-    national = (
-        " with DK NA:2024 resolved final factors"
-        if selected == fatigue_inputs.EC2_2005_DKNA
-        else ""
     )
     return {
         "reinforcement": (
@@ -521,12 +636,7 @@ def validation_errors(inp: Mapping) -> list[str]:
             _positive(resolved_gamma_c, "gamma_c,fat", errors)
         _positive(inp.get("fatigue_beta_cc_t0"), "beta_cc(t0)", errors)
         _positive(inp.get("fatigue_t0_days"), "Concrete age t0", errors)
-        if concrete_method == CONCRETE_MINER:
-            _positive(
-                inp.get("fatigue_concrete_c"),
-                "Concrete fatigue C",
-                errors,
-            )
+        if concrete_method in CONCRETE_MINER_METHODS:
             miner_basis = str(
                 inp.get("fatigue_concrete_miner_basis") or ""
             ).strip()
@@ -537,30 +647,14 @@ def validation_errors(inp: Mapping) -> list[str]:
                 edition == fatigue_inputs.EC2_2_2005_AC
                 and inp.get("design_methodology") == bridge.EN1992_2_BASE
             )
-            if bridge_standard_active:
-                if miner_basis not in {
-                    "",
-                    fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
-                }:
-                    errors.append(
-                        "The EN 1992-2 edition uses its bridge-standard "
-                        "corrected Expression (6.106) basis"
-                    )
-            elif "2023" not in edition:
-                if (
-                    miner_basis
-                    != fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
-                ):
-                    errors.append(
-                        "Explicit 2005 concrete Miner fatigue is an EN 1992-2 "
-                        "method; select an approved project-basis adoption or "
-                        "use the EN 1992-1-1 Formula (6.72) equivalent method"
-                    )
-                if not miner_source:
-                    errors.append(
-                        "The project-basis adoption of bridge concrete Miner "
-                        "fatigue requires a document/clause/approval source"
-                    )
+            errors.extend(concrete_miner_parameter_errors(
+                edition=edition,
+                concrete_method=concrete_method,
+                miner_basis=miner_basis,
+                miner_source=miner_source,
+                coefficient_c=inp.get("fatigue_concrete_c"),
+                bridge_standard_active=bridge_standard_active,
+            ))
         concrete = inp.get("concrete")
         if concrete is None:
             errors.append("Concrete material is required for concrete fatigue")
@@ -763,24 +857,30 @@ def validation_warnings(inp: Mapping) -> list[str]:
         edition = _edition(inp.get("fatigue_edition"))
     except ValueError:
         edition = ""
-    if (
-        bool(inp.get("fatigue_check_concrete"))
-        and str(
-            inp.get("fatigue_concrete_method") or CONCRETE_MINER
-        ) == CONCRETE_MINER
-        and edition
-        and edition != fatigue_inputs.EC2_2023
-        and not (
-            edition == fatigue_inputs.EC2_2_2005_AC
-            and inp.get("design_methodology") == bridge.EN1992_2_BASE
-        )
-        and inp.get("fatigue_concrete_miner_basis")
-        == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
-    ):
-        warnings.append(
-            "EN 1992-2 corrected Expression (6.106) is used by explicit "
-            "project-basis adoption outside the bridge methodology"
-        )
+    concrete_method = str(
+        inp.get("fatigue_concrete_method") or CONCRETE_MINER
+    )
+    if bool(inp.get("fatigue_check_concrete")):
+        if concrete_method == CONCRETE_PROJECT_MINER:
+            warnings.append(
+                "A separately approved project concrete fatigue S-N relation "
+                "is used instead of a standard-derived Miner life relation"
+            )
+        elif (
+            concrete_method == CONCRETE_MINER
+            and edition
+            and edition != fatigue_inputs.EC2_2023
+            and not (
+                edition == fatigue_inputs.EC2_2_2005_AC
+                and inp.get("design_methodology") == bridge.EN1992_2_BASE
+            )
+            and inp.get("fatigue_concrete_miner_basis")
+            == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+        ):
+            warnings.append(
+                "EN 1992-2 corrected Expression (6.106) is used by explicit "
+                "project-basis adoption outside the bridge methodology"
+            )
     try:
         warnings.extend(
             fatigue_inputs.basis_warnings(
@@ -914,6 +1014,85 @@ def invalid_result(
     }
 
 
+def publication_safe_result(payload: Mapping | None) -> dict | None:
+    """Return a fail-closed fatigue payload for UI/report publication."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    result = dict(payload)
+    raw_errors = payload.get("errors") or ()
+    errors = [
+        str(error).strip()
+        for error in raw_errors
+        if isinstance(error, str) and str(error).strip()
+    ]
+    checks = payload.get("checks")
+    if not isinstance(checks, Mapping):
+        errors.append("Published fatigue check selection is not structured")
+        concrete_checked = False
+    else:
+        raw_concrete_checked = checks.get("concrete")
+        if not isinstance(raw_concrete_checked, bool):
+            errors.append(
+                "Published concrete fatigue enablement is not typed Boolean"
+            )
+            concrete_checked = False
+        else:
+            concrete_checked = raw_concrete_checked
+    method = payload.get("concrete_method")
+    parameters = payload.get("concrete_parameters")
+    has_concrete_result = parameters is not None
+    if concrete_checked and method not in CONCRETE_METHODS:
+        errors.append("Published concrete fatigue method is unknown")
+    if not concrete_checked and has_concrete_result:
+        errors.append(
+            "Published concrete fatigue parameters conflict with a disabled check"
+        )
+    if (
+        method in CONCRETE_MINER_METHODS
+        and (concrete_checked or has_concrete_result)
+    ):
+        if not isinstance(parameters, Mapping):
+            errors.append(
+                "Published concrete Miner result is missing its typed parameters"
+            )
+        else:
+            if parameters.get("method") != method:
+                errors.append(
+                    "Published concrete Miner method conflicts with its "
+                    "calculation parameters"
+                )
+            basis = payload.get("concrete_miner_basis")
+            source = payload.get("concrete_miner_source")
+            edition = str(payload.get("edition") or "").strip()
+            errors.extend(concrete_miner_parameter_errors(
+                edition=edition,
+                concrete_method=str(method),
+                miner_basis=str(basis or ""),
+                miner_source=str(source or ""),
+                coefficient_c=parameters.get("c"),
+                bridge_standard_active=(
+                    basis == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+                ),
+            ))
+            if (
+                method == CONCRETE_MINER
+                and edition == fatigue_inputs.EC2_2023
+                and basis != fatigue_inputs.MINER_BASIS_2023_STANDARD
+            ):
+                errors.append(
+                    "Published 2023 concrete Miner evidence is missing its "
+                    "standard applicability binding"
+                )
+    unique_errors = tuple(dict.fromkeys(errors))
+    result["errors"] = unique_errors
+    if unique_errors:
+        result["valid"] = False
+        result["converged"] = False
+        result["passed"] = False
+    return result
+
+
 def _reinforcement_properties(
     records: Sequence[Mapping],
     materials: Sequence,
@@ -1040,8 +1219,12 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
     edition = _edition(inp.get("fatigue_edition"))
     concrete_miner_basis = None
     concrete_miner_source = ""
-    if check_concrete and concrete_method == CONCRETE_MINER:
-        if (
+    if check_concrete and concrete_method in CONCRETE_MINER_METHODS:
+        if concrete_method == CONCRETE_PROJECT_MINER:
+            concrete_miner_basis = (
+                fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+            )
+        elif (
             edition == fatigue_inputs.EC2_2_2005_AC
             and inp.get("design_methodology") == bridge.EN1992_2_BASE
         ):
@@ -1098,7 +1281,11 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             k1=(
                 1.0 if is_2023 else float(inp["fatigue_concrete_k1"])
             ),
-            c=float(inp.get("fatigue_concrete_c") or 14.0),
+            c=(
+                float(inp["fatigue_concrete_c"])
+                if concrete_method == CONCRETE_PROJECT_MINER
+                else fatigue_inputs.STANDARD_CONCRETE_MINER_C
+            ),
             method=concrete_method,
         )
         if check_concrete

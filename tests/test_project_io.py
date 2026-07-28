@@ -16,6 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_inputs  # noqa: E402
+import fatigue_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
@@ -554,6 +555,136 @@ def test_v19_round_trip_preserves_typed_bridge_tables_and_methodology():
     assert project_io.input_sha256(restored, restored_scalars) == (
         project_io.input_sha256(tables, scalars)
     )
+
+
+@pytest.mark.parametrize(
+    ("table_key", "record", "message"),
+    [
+        (
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+            {
+                "wall_id": "Wall",
+                "cot_theta": 10.0,
+                "v_ed_kn": 10.0,
+                "v_rd_max_kn": 100.0,
+                "t_ed_equivalent_kn": 10.0,
+                "t_rd_max_equivalent_kn": 100.0,
+            },
+            "cot_theta must be between",
+        ),
+        (
+            bridge_inputs.MINIMUM_TABLE_KEY,
+            {
+                "component": "Web",
+                "act_mm2": 100_000.0,
+                "k_c": 0.4,
+                "k": 0.01,
+                "fct_eff_mpa": 3.0,
+                "sigma_s_mpa": 300.0,
+                "as_provided_mm2": 5.0,
+                "restrained_shrinkage": False,
+            },
+            "k must be between",
+        ),
+    ],
+)
+def test_project_rejects_out_of_domain_bridge_parameter_on_save_and_load(
+    table_key,
+    record,
+    message,
+):
+    tables = _tables()
+    tables[table_key] = bridge_inputs.normalise_table([record], table_key)
+
+    with pytest.raises(ValueError, match=message):
+        project_io.dump_project(tables, {})
+
+    valid_record = dict(record)
+    valid_record[
+        "cot_theta" if table_key == bridge_inputs.BOX_WALL_TABLE_KEY else "k"
+    ] = (
+        bridge.BOX_WALL_COT_THETA_MIN
+        if table_key == bridge_inputs.BOX_WALL_TABLE_KEY
+        else bridge.MINIMUM_CRACK_K_MIN
+    )
+    tables[table_key] = bridge_inputs.normalise_table(
+        [valid_record],
+        table_key,
+    )
+    payload = json.loads(project_io.dump_project(tables, {}))
+    payload["bridge"]["tables"][table_key][0] = record
+
+    with pytest.raises(ValueError, match=message):
+        project_io.parse_project(json.dumps(payload))
+
+
+def _bridge_miner_scalars(*, coefficient=14.0):
+    return {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_check_concrete": True,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": coefficient,
+    }
+
+
+def test_project_round_trip_binds_bridge_standard_miner_c14():
+    text = project_io.dump_project({}, _bridge_miner_scalars())
+    _tables_out, scalars = project_io.parse_project(text)
+
+    assert scalars["fatigue_concrete_c"] == 14.0
+    assert scalars["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+
+
+def test_project_rejects_bridge_standard_miner_c100_on_all_read_write_boundaries():
+    with pytest.raises(ValueError, match="fixes C = 14"):
+        project_io.dump_project({}, _bridge_miner_scalars(coefficient=100.0))
+
+    payload = json.loads(
+        project_io.dump_project({}, _bridge_miner_scalars())
+    )
+    payload["scalars"]["fatigue_concrete_c"] = 100.0
+    mutated = json.dumps(payload)
+
+    with pytest.raises(ValueError, match="fixes C = 14"):
+        project_io.parse_project(mutated)
+    with pytest.raises(ValueError, match="fixes C = 14"):
+        project_io.project_provenance(mutated)
+
+
+def test_project_round_trip_keeps_nonstandard_c_only_under_sourced_project_method():
+    scalars = {
+        **_bridge_miner_scalars(coefficient=100.0),
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        "fatigue_concrete_miner_source": "AUTH-SN-7 / checker approval",
+    }
+
+    text = project_io.dump_project({}, scalars)
+    _tables_out, restored = project_io.parse_project(text)
+
+    assert restored["fatigue_concrete_c"] == 100.0
+    assert restored["fatigue_concrete_method"] == (
+        fatigue_analysis.CONCRETE_PROJECT_MINER
+    )
+    assert restored["fatigue_concrete_miner_source"] == (
+        "AUTH-SN-7 / checker approval"
+    )
+
+    scalars["fatigue_concrete_miner_source"] = ""
+    with pytest.raises(ValueError, match="document/clause/approval source"):
+        project_io.dump_project({}, scalars)
 
 
 def test_pre_v19_project_cannot_inherit_bridge_methodology_from_session():

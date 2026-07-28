@@ -330,6 +330,10 @@ def _fatigue_report_fixture():
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_2023_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
         "fatigue_gamma0": 1.0,
         "fatigue_gamma3": 1.0,
@@ -501,6 +505,8 @@ def _fatigue_report_fixture():
         "edition": fatigue_inputs.EC2_2023,
         "checks": {"reinforcement": True, "concrete": True},
         "concrete_method": "Explicit Palmgren-Miner spectrum",
+        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_2023_STANDARD,
+        "concrete_miner_source": "",
         "basis": inp[fatigue_inputs.BASIS_KEY],
         "authority_reference": "Project-defined grouped spectrum",
         "calculation_references": {
@@ -691,9 +697,61 @@ def test_report_exposes_ordinary_miner_adoption_and_source():
 
     assert "Concrete Miner applicability" in text
     assert fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION in text
-    assert "Concrete Miner adoption source" in text
+    assert "Concrete Miner authority source" in text
     assert "DB-FAT-21 / checker approval" in text
     assert "corrected Expression (6.106)" in text
+
+
+def test_report_fails_closed_if_standard_miner_c_is_mutated():
+    inp, out = _fatigue_report_fixture()
+    out["fatigue"]["concrete_parameters"]["c"] = 100.0
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "standard concrete Miner relation fixes C = 14" in text
+    assert "C 100.000" not in text
+
+
+def test_report_labels_nonstandard_c_as_sourced_project_sn_method():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    inp.update({
+        "fatigue_concrete_method": (
+            "Project-approved Miner S-N relation"
+        ),
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        "fatigue_concrete_miner_source": "AUTH-SN-7 / checker approval",
+        "fatigue_concrete_c": 100.0,
+    })
+    payload.update({
+        "concrete_method": "Project-approved Miner S-N relation",
+        "concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        "concrete_miner_source": "AUTH-SN-7 / checker approval",
+    })
+    payload["concrete_parameters"].update({
+        "c": 100.0,
+        "method": "Project-approved Miner S-N relation",
+    })
+    payload["calculation_references"]["concrete"] = (
+        "Approved project concrete fatigue S-N relation; source: "
+        "AUTH-SN-7 / checker approval"
+    )
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Approved project S-N relation" in text
+    assert "AUTH-SN-7 / checker approval" in text
+    assert "C 100.000" in text
+    assert "corrected Expression (6.106)" not in text
 
 
 def test_report_includes_damage_equivalent_concrete_method_evidence():
@@ -3507,6 +3565,45 @@ def test_report_publishes_bound_bridge_calculation_evidence():
     assert "compression_mpa" in text
     assert "limit_mpa" in text
     assert "elastic-v1" in text
+
+
+def test_report_keeps_invalid_cot_theta_and_minimum_k_as_not_assessed():
+    out = _out()
+    record = _bridge_report_record()
+    box = next(
+        check
+        for check in record["checks"]
+        if check["check_id"] == "box_wall_torsion"
+    )
+    box.update(
+        status=bridge.STATUS_NOT_ASSESSED,
+        reason="Wall: cot(theta) must be between 1.0 and 2.5.",
+    )
+    minimum = next(
+        check
+        for check in record["checks"]
+        if check["check_id"] == "web_flange_minimum"
+    )
+    minimum.update(
+        status=bridge.STATUS_NOT_ASSESSED,
+        reason=(
+            "k must be between 0.65 and 1.00; derive it from the relevant "
+            "web height or flange width."
+        ),
+    )
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+    )
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    )).split())
+
+    assert "cot(theta) must be between 1.0 and 2.5" in text
+    assert "k must be between 0.65 and 1.00" in text
+    assert "NOT ASSESSED" in text
 
 
 def test_report_fails_closed_when_stored_bridge_check_is_missing():

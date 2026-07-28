@@ -17,9 +17,10 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
-from sector import bridge  # noqa: E402
+from sector import bridge, fatigue as fatigue_core  # noqa: E402
 from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 from sector.section import Section  # noqa: E402
+from tools import pr04_bridge_oracle as bridge_oracle  # noqa: E402
 
 
 def _basis(**overrides):
@@ -770,6 +771,124 @@ def test_bridge_edition_owns_corrected_concrete_miner_expression():
     )
     assert "corrected Expression (6.106)" in references["concrete"]
     assert "project-basis adoption" not in references["concrete"]
+
+
+def test_bridge_standard_c100_false_pass_is_blocked_and_c14_governs():
+    inp = _base(
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+        fatigue_concrete_c=100.0,
+    )
+
+    errors = fatigue_analysis.validation_errors(inp)
+
+    assert any("fixes C = 14" in error for error in errors)
+    with pytest.raises(ValueError, match="fixes C = 14"):
+        fatigue_analysis.prepare(inp)
+
+    inp["fatigue_concrete_c"] = 14.0
+    prepared = fatigue_analysis.prepare(inp)
+    life = fatigue_core.concrete_fatigue_life(
+        8.0,
+        0.0,
+        fcd_fat_mpa=10.0,
+        c=prepared.concrete.c,
+    )
+    damage = 1_000.0 / life.cycles
+
+    assert prepared.concrete.c == 14.0
+    assert life.log10_cycles == pytest.approx(
+        bridge_oracle.corrected_concrete_log10_life(8.0, 0.0, 10.0)
+    )
+    assert damage == pytest.approx(1.584893192, rel=1.0e-8)
+    assert damage > 1.0
+
+
+def test_nonstandard_concrete_c_requires_separate_sourced_project_method():
+    inp = _base(
+        design_methodology=bridge.COMPONENT_METHODS,
+        fatigue_edition=fatigue_inputs.EC2_2023,
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        fatigue_concrete_miner_source="AUTH-SN-7 / checker approval",
+        fatigue_concrete_c=100.0,
+    )
+
+    prepared = fatigue_analysis.prepare(inp)
+    references = fatigue_analysis.calculation_references(
+        prepared.edition,
+        prepared.concrete_method,
+        prepared.concrete_miner_basis,
+        prepared.concrete_miner_source,
+    )
+
+    assert prepared.concrete.c == 100.0
+    assert prepared.concrete.method == fatigue_analysis.CONCRETE_PROJECT_MINER
+    assert prepared.concrete_miner_basis == (
+        fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+    )
+    assert "AUTH-SN-7" in references["concrete"]
+    assert "E.8" not in references["concrete"]
+    assert "Expression (6.106)" not in references["concrete"]
+
+    inp["fatigue_concrete_miner_source"] = ""
+    assert any(
+        "document/clause/approval source" in error
+        for error in fatigue_analysis.validation_errors(inp)
+    )
+
+
+@pytest.mark.parametrize(
+    ("edition", "basis", "coefficient", "expected"),
+    [
+        (
+            fatigue_inputs.EC2_2023,
+            fatigue_inputs.MINER_BASIS_2023_STANDARD,
+            100.0,
+            "fixes C = 14",
+        ),
+        (
+            fatigue_inputs.EC2_2023,
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+            14.0,
+            "requires the DS/EN 1992-2",
+        ),
+        (
+            fatigue_inputs.EC2_2023,
+            "",
+            14.0,
+            "missing its standard applicability binding",
+        ),
+    ],
+)
+def test_fatigue_publication_revalidates_standard_c_and_applicability(
+    edition,
+    basis,
+    coefficient,
+    expected,
+):
+    payload = {
+        "errors": (),
+        "edition": edition,
+        "checks": {"reinforcement": False, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "concrete_miner_basis": basis,
+        "concrete_miner_source": "",
+        "concrete_parameters": {
+            "c": coefficient,
+            "method": fatigue_analysis.CONCRETE_MINER,
+        },
+    }
+
+    safe = fatigue_analysis.publication_safe_result(payload)
+
+    assert safe["valid"] is False
+    assert any(expected in error for error in safe["errors"])
 
 
 def test_bridge_edition_outside_bridge_method_requires_sourced_adoption():

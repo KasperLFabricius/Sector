@@ -27,6 +27,11 @@ def _external(status=bridge.STATUS_PASS, utilisation=0.5):
         source="calculated exact response",
         reason="solver evidence retained",
         utilisation=utilisation,
+        evidence=({
+            "methodology": bridge.EN1992_2_BASE,
+            "concrete_method": bridge.CONCRETE_MINER,
+            "miner_coefficient_c": bridge.STANDARD_CONCRETE_MINER_C,
+        },),
     )
 
 
@@ -268,6 +273,64 @@ def test_box_wall_mismatched_angle_blocks_even_when_each_ratio_passes():
     assert "same compression-field" in check["reason"]
 
 
+@pytest.mark.parametrize("cot_theta", [1.0, 2.5])
+def test_box_wall_normative_strut_angle_bounds_are_inclusive(cot_theta):
+    assert oracle.box_wall_cot_theta_is_admissible(cot_theta)
+    evidence = _complete_evidence(
+        decisions=_decisions(box_wall_torsion=bridge.REQUIRED),
+        has_hollow_section=True,
+        expected_box_walls=1,
+        box_walls=(
+            bridge.BoxWallEvidence(
+                "Wall", cot_theta, 10.0, 100.0, 10.0, 100.0
+            ),
+        ),
+    )
+
+    check = _check(
+        bridge.assess_base_methodology(evidence),
+        "box_wall_torsion",
+    )
+
+    assert check["status"] == bridge.STATUS_PASS
+
+
+@pytest.mark.parametrize(
+    "cot_theta",
+    [
+        math.nextafter(1.0, 0.0),
+        math.nextafter(2.5, math.inf),
+        0.999,
+        2.501,
+        10.0,
+        True,
+        float("nan"),
+        float("inf"),
+    ],
+)
+def test_box_wall_out_of_domain_or_false_numeric_angle_cannot_pass(cot_theta):
+    evidence = _complete_evidence(
+        decisions=_decisions(box_wall_torsion=bridge.REQUIRED),
+        has_hollow_section=True,
+        expected_box_walls=1,
+        box_walls=(
+            bridge.BoxWallEvidence(
+                "Wall", cot_theta, 10.0, 100.0, 10.0, 100.0
+            ),
+        ),
+    )
+
+    check = _check(
+        bridge.assess_base_methodology(evidence),
+        "box_wall_torsion",
+    )
+
+    assert check["status"] == bridge.STATUS_NOT_ASSESSED
+    assert bridge.assess_base_methodology(evidence)["status"] != (
+        bridge.STATUS_PASS
+    )
+
+
 def test_box_wall_known_failure_governs_incomplete_sibling_wall():
     evidence = _complete_evidence(
         decisions=_decisions(
@@ -385,6 +448,81 @@ def test_web_and_flange_minimum_are_separate_and_apply_shrinkage_floor():
     )
 
 
+@pytest.mark.parametrize("factor", [0.65, 1.0])
+def test_bridge_minimum_k_normative_bounds_are_inclusive(factor):
+    required, _ = bridge.minimum_crack_reinforcement_area(
+        100_000.0,
+        0.4,
+        factor,
+        3.0,
+        300.0,
+    )
+
+    assert required == pytest.approx(400.0 * factor)
+    dimension = 800.0 if factor == 0.65 else 300.0
+    assert factor == pytest.approx(
+        oracle.minimum_crack_k_from_dimension_mm(dimension)
+    )
+
+
+@pytest.mark.parametrize(
+    "factor",
+    [
+        math.nextafter(0.65, 0.0),
+        math.nextafter(1.0, math.inf),
+        0.649,
+        1.001,
+        0.01,
+        True,
+        float("nan"),
+        float("inf"),
+    ],
+)
+def test_bridge_minimum_k_out_of_domain_or_false_numeric_is_rejected(factor):
+    with pytest.raises(ValueError, match="k|real|finite"):
+        bridge.minimum_crack_reinforcement_area(
+            100_000.0,
+            0.4,
+            factor,
+            3.0,
+            300.0,
+        )
+
+
+def test_bridge_minimum_k_false_pass_pair_fails_closed():
+    unsafe = _complete_evidence(
+        minimum_scope=bridge.MINIMUM_SCOPE_WEB,
+        minimum_components=(
+            bridge.MinimumCrackComponent(
+                "Web", 100_000.0, 0.4, 0.01, 3.0, 300.0, 5.0
+            ),
+        ),
+    )
+    normative = _complete_evidence(
+        minimum_scope=bridge.MINIMUM_SCOPE_WEB,
+        minimum_components=(
+            bridge.MinimumCrackComponent(
+                "Web", 100_000.0, 0.4, 0.65, 3.0, 300.0, 5.0
+            ),
+        ),
+    )
+
+    unsafe_check = _check(
+        bridge.assess_base_methodology(unsafe),
+        "web_flange_minimum",
+    )
+    normative_check = _check(
+        bridge.assess_base_methodology(normative),
+        "web_flange_minimum",
+    )
+
+    assert unsafe_check["status"] == bridge.STATUS_NOT_ASSESSED
+    assert normative_check["status"] == bridge.STATUS_FAIL
+    assert normative_check["result"].startswith(
+        "governing As,min / As,provided"
+    )
+
+
 def test_minimum_known_failure_governs_incomplete_sibling_component():
     evidence = _complete_evidence(minimum_components=(
         bridge.MinimumCrackComponent(
@@ -495,6 +633,84 @@ def test_publication_boundary_rejects_mutated_bound_check_body(mutation):
     assert safe["status"] == bridge.STATUS_INVALID
     assert any(
         "fingerprint does not match" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def _rebind_mutated_record(record):
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+    )
+    return record
+
+
+def test_publication_boundary_revalidates_stored_box_wall_cot_theta():
+    evidence = _complete_evidence(
+        decisions=_decisions(
+            section_analysis=bridge.REQUIRED,
+            member_shear=bridge.REQUIRED,
+            box_wall_torsion=bridge.REQUIRED,
+            reinforcement_fatigue=bridge.REQUIRED,
+            concrete_fatigue=bridge.REQUIRED,
+            sls_stress=bridge.REQUIRED,
+            sls_crack=bridge.REQUIRED,
+            web_flange_minimum=bridge.REQUIRED,
+        ),
+        has_hollow_section=True,
+        expected_box_walls=1,
+        box_walls=(
+            bridge.BoxWallEvidence(
+                "Wall", 1.5, 10.0, 100.0, 10.0, 100.0
+            ),
+        ),
+    )
+    raw = bridge.assess_base_methodology(evidence)
+    check = _check(raw, "box_wall_torsion")
+    check["evidence"][0]["cot_theta"] = 10.0
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(raw)
+    safe_check = _check(safe, "box_wall_torsion")
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe_check["status"] == bridge.STATUS_NOT_ASSESSED
+    assert any(
+        "cot(theta) is outside" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_boundary_revalidates_stored_minimum_k():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    check = _check(raw, "web_flange_minimum")
+    check["evidence"][0]["k"] = 0.01
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(raw)
+    safe_check = _check(safe, "web_flange_minimum")
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe_check["status"] == bridge.STATUS_NOT_ASSESSED
+    assert any(
+        "minimum-reinforcement row 1 k is outside" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_boundary_revalidates_stored_bridge_miner_c():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    check = _check(raw, "concrete_fatigue")
+    check["evidence"][0]["miner_coefficient_c"] = 100.0
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(raw)
+    safe_check = _check(safe, "concrete_fatigue")
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe_check["status"] == bridge.STATUS_NOT_ASSESSED
+    assert any(
+        "not bound to C = 14" in error
         for error in safe["configuration_errors"]
     )
 

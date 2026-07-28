@@ -2047,13 +2047,16 @@ def _bridge_column_config(key):
         required=required,
         width="medium",
     )
-    number = lambda label, help_text: st.column_config.NumberColumn(
-        label,
-        help=help_text,
-        format="%.3f",
-        required=True,
-        width="small",
-    )
+    def number(label, help_text, *, min_value=None, max_value=None):
+        return st.column_config.NumberColumn(
+            label,
+            help=help_text,
+            format="%.3f",
+            required=True,
+            width="small",
+            min_value=min_value,
+            max_value=max_value,
+        )
     if key == bridge_inputs.COVERAGE_TABLE_KEY:
         return {
             "check_id": text(
@@ -2092,7 +2095,13 @@ def _bridge_column_config(key):
     if key == bridge_inputs.BOX_WALL_TABLE_KEY:
         return {
             "wall_id": text("Wall *", "Unique box-wall ID.", True),
-            "cot_theta": number("cot(theta)", "Common strut angle for all walls."),
+            "cot_theta": number(
+                "cot(theta)",
+                "Common strut angle for all walls; DS/EN 1992-1-1 "
+                "6.2.3(2) limits apply through DS/EN 1992-2 6.3.2(102).",
+                min_value=bridge.BOX_WALL_COT_THETA_MIN,
+                max_value=bridge.BOX_WALL_COT_THETA_MAX,
+            ),
             "v_ed_kn": number("VEd [kN]", "Wall shear action."),
             "v_rd_max_kn": number("VRd,max [kN]", "Wall shear resistance."),
             "t_ed_equivalent_kn": number(
@@ -2113,7 +2122,13 @@ def _bridge_column_config(key):
         ),
         "act_mm2": number("Act [mm2]", "Effective concrete tension area."),
         "k_c": number("kc", "Stress-distribution coefficient."),
-        "k": number("k", "Self-equilibrating stress coefficient."),
+        "k": number(
+            "k",
+            "Coefficient derived from web height or flange width per "
+            "DS/EN 1992-2 7.3.2(102).",
+            min_value=bridge.MINIMUM_CRACK_K_MIN,
+            max_value=bridge.MINIMUM_CRACK_K_MAX,
+        ),
         "fct_eff_mpa": number("fct,eff [MPa]", "Effective tensile strength."),
         "sigma_s_mpa": number("sigma_s [MPa]", "Permitted steel stress."),
         "as_provided_mm2": number(
@@ -4432,7 +4447,17 @@ def build_inputs(host=st):
             "amplitude for 10^6 cycles, and its Cycles value is ignored for concrete."
         ),
     )
+    concrete_miner_enabled = (
+        fatigue_concrete_method
+        in fatigue_analysis.CONCRETE_MINER_METHODS
+    )
     if (
+        fatigue_concrete_method == fatigue_analysis.CONCRETE_PROJECT_MINER
+    ):
+        st.session_state["fatigue_concrete_miner_basis"] = (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        )
+    elif (
         fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
         and fatigue_edition == fatigue_inputs.EC2_2_2005_AC
         and bridge_method_active
@@ -4441,13 +4466,20 @@ def build_inputs(host=st):
             fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
         )
     elif (
-        st.session_state.get("fatigue_concrete_miner_basis")
-        == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
+        and fatigue_edition == fatigue_inputs.EC2_2023
     ):
         st.session_state["fatigue_concrete_miner_basis"] = (
-            fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+            fatigue_inputs.MINER_BASIS_2023_STANDARD
         )
-    elif "2023" in fatigue_edition:
+    elif (
+        st.session_state.get("fatigue_concrete_miner_basis")
+        in {
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+            fatigue_inputs.MINER_BASIS_2023_STANDARD,
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        }
+    ):
         st.session_state["fatigue_concrete_miner_basis"] = (
             fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
         )
@@ -4461,36 +4493,43 @@ def build_inputs(host=st):
             not (
                 fatigue_on
                 and fatigue_check_concrete
-                and fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
+                and concrete_miner_enabled
             )
             or (
                 fatigue_edition == fatigue_inputs.EC2_2_2005_AC
                 and bridge_method_active
             )
             or "2023" in fatigue_edition
+            or (
+                fatigue_concrete_method
+                == fatigue_analysis.CONCRETE_PROJECT_MINER
+            )
         ),
         help=(
             "The corrected 2005 Miner life equation belongs to EN 1992-2. "
             "Outside the bridge methodology it is available only through an "
-            "explicit approved project-basis adoption. The 2023 Miner method "
-            "uses its own E.5.3 expressions."
+            "explicit approved project-basis adoption and keeps C = 14. The "
+            "2023 standard route uses its own E.5.3 expressions. A different "
+            "S-N relation is selected as a separate approved project method."
         ),
     )
     fatigue_concrete_miner_source = _seeded_text(
         fat,
-        "Concrete Miner adoption source",
+        "Concrete Miner authority source",
         "",
         "fatigue_concrete_miner_source",
         disabled=not (
             fatigue_on
             and fatigue_check_concrete
-            and fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
-            and fatigue_concrete_miner_basis
-            == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+            and concrete_miner_enabled
+            and fatigue_concrete_miner_basis in {
+                fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION,
+                fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+            }
         ),
         help=(
-            "Project design-basis clause, checker approval, or other source "
-            "adopting the bridge expression outside an EN 1992-2 methodology."
+            "Project design-basis clause, checker approval, or authority source "
+            "for the selected adoption or project S-N relation."
         ),
     )
     if (
@@ -4512,6 +4551,19 @@ def build_inputs(host=st):
             "The 2005 explicit concrete Miner equation is bridge-specific. "
             "Choose the 1-1 equivalent method or record an approved project "
             "adoption and source."
+        )
+    if (
+        fatigue_on
+        and fatigue_check_concrete
+        and (
+            fatigue_concrete_method
+            == fatigue_analysis.CONCRETE_PROJECT_MINER
+        )
+        and not str(fatigue_concrete_miner_source).strip()
+    ):
+        fat.warning(
+            "The project concrete S-N relation needs a document/clause/approval "
+            "source before a fatigue verdict can be issued."
         )
     if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
         fat.error(
@@ -4698,20 +4750,30 @@ def build_inputs(host=st):
         help=r"Coefficient in the 2005 design strength $f_{cd,\mathrm{fat}}$; "
              "not used by the 2023 expression.",
     )
+    if fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER:
+        st.session_state["fatigue_concrete_c"] = (
+            fatigue_inputs.STANDARD_CONCRETE_MINER_C
+        )
     fatigue_concrete_c = _seeded_number(
         fc2,
         r"Concrete fatigue $C$",
         0.1,
         100.0,
-        14.0,
+        fatigue_inputs.STANDARD_CONCRETE_MINER_C,
         0.5,
         "fatigue_concrete_c",
         disabled=(
             not (fatigue_on and fatigue_check_concrete)
-            or fatigue_concrete_method == fatigue_analysis.CONCRETE_EQUIVALENT
+            or (
+                fatigue_concrete_method
+                != fatigue_analysis.CONCRETE_PROJECT_MINER
+            )
         ),
-        help=r"Coefficient in the implemented $\log_{10}N_R$ concrete fatigue-life "
-             "relation.",
+        help=(
+            r"The standard-derived relations fix $C = 14$. This field is "
+            "editable only for the separate, explicitly sourced project S-N "
+            "method."
+        ),
     )
     fat.markdown("**Spectrum basis**")
     fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
@@ -10754,6 +10816,16 @@ def _fatigue_result_basis_panel(payload):
         ("t0 [days]", payload.get("t0_days")),
         ("beta_cc(t0)", parameters.get("beta_cc_t0")),
         ("fck [MPa]", parameters.get("fck_mpa")),
+        ("Concrete fatigue method", payload.get("concrete_method") or "-"),
+        (
+            "Concrete Miner applicability",
+            payload.get("concrete_miner_basis") or "-",
+        ),
+        (
+            "Concrete Miner authority source",
+            payload.get("concrete_miner_source") or "-",
+        ),
+        ("Concrete fatigue C", parameters.get("c")),
         ("Notes", basis.get("notes") or "-"),
     ]
     _fatigue_result_table([
@@ -10798,7 +10870,9 @@ def fatigue_view(inp, results, *, stale=False):
     if not inp.get("fatigue_on"):
         st.info("Enable Fatigue in Analysis settings, then press Calculate.")
         return
-    payload = (results or {}).get("fatigue")
+    payload = fatigue_analysis.publication_safe_result(
+        (results or {}).get("fatigue")
+    )
     if payload is None:
         st.info("Press Calculate to assess the grouped spectra.")
         return

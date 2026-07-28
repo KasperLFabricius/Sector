@@ -103,6 +103,113 @@ def test_malformed_bridge_table_evidence_is_rejected_at_save_boundary(
         bridge_inputs.table_records([record], key)
 
 
+def _box_wall_record(cot_theta):
+    return {
+        "wall_id": "Wall",
+        "cot_theta": cot_theta,
+        "v_ed_kn": 10.0,
+        "v_rd_max_kn": 100.0,
+        "t_ed_equivalent_kn": 10.0,
+        "t_rd_max_equivalent_kn": 100.0,
+    }
+
+
+def _minimum_record(factor):
+    return {
+        "component": "Web",
+        "act_mm2": 100_000.0,
+        "k_c": 0.4,
+        "k": factor,
+        "fct_eff_mpa": 3.0,
+        "sigma_s_mpa": 300.0,
+        "as_provided_mm2": 500.0,
+        "restrained_shrinkage": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("key", "record"),
+    [
+        (
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+            _box_wall_record(bridge.BOX_WALL_COT_THETA_MIN),
+        ),
+        (
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+            _box_wall_record(bridge.BOX_WALL_COT_THETA_MAX),
+        ),
+        (
+            bridge_inputs.MINIMUM_TABLE_KEY,
+            _minimum_record(bridge.MINIMUM_CRACK_K_MIN),
+        ),
+        (
+            bridge_inputs.MINIMUM_TABLE_KEY,
+            _minimum_record(bridge.MINIMUM_CRACK_K_MAX),
+        ),
+    ],
+)
+def test_normative_bridge_parameter_bounds_round_trip(key, record):
+    assert bridge_inputs.table_errors([record], key) == []
+    assert bridge_inputs.table_records([record], key) == [record]
+
+
+@pytest.mark.parametrize(
+    ("key", "record", "expected"),
+    [
+        (
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+            _box_wall_record(0.999),
+            "cot_theta must be between",
+        ),
+        (
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+            _box_wall_record(2.501),
+            "cot_theta must be between",
+        ),
+        (
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+            _box_wall_record(True),
+            "cot_theta must be finite",
+        ),
+        (
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+            _box_wall_record(float("nan")),
+            "cot_theta must be finite",
+        ),
+        (
+            bridge_inputs.MINIMUM_TABLE_KEY,
+            _minimum_record(0.649),
+            "k must be between",
+        ),
+        (
+            bridge_inputs.MINIMUM_TABLE_KEY,
+            _minimum_record(1.001),
+            "k must be between",
+        ),
+        (
+            bridge_inputs.MINIMUM_TABLE_KEY,
+            _minimum_record(True),
+            "k must be finite",
+        ),
+        (
+            bridge_inputs.MINIMUM_TABLE_KEY,
+            _minimum_record(float("inf")),
+            "k must be finite",
+        ),
+    ],
+)
+def test_normative_bridge_parameter_domain_is_enforced_at_table_boundary(
+    key,
+    record,
+    expected,
+):
+    errors = bridge_inputs.table_errors([record], key)
+
+    assert any(expected in error for error in errors)
+    with pytest.raises(ValueError, match=expected):
+        bridge_inputs.table_records([record], key)
+
+
 def test_coverage_normalisation_restores_missing_rows_as_not_established():
     frame = bridge_inputs.normalise_table(
         [{

@@ -20,6 +20,8 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
+from .fatigue import CONCRETE_MINER, STANDARD_CONCRETE_MINER_C
+
 
 COMPONENT_METHODS = "Independent component methods"
 EN1992_2_BASE = "DS/EN 1992-2:2005 + AC:2008"
@@ -88,6 +90,18 @@ STATUS_NOT_RUN = "NOT RUN"
 STATUS_REVIEW = "REVIEW"
 
 BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v1"
+
+# DS/EN 1992-2:2005 6.3.2(102) makes the inherited 6.2.3(2)
+# compression-field angle limits fully applicable to box walls.
+BOX_WALL_COT_THETA_MIN = 1.0
+BOX_WALL_COT_THETA_MAX = 2.5
+
+# DS/EN 1992-2:2005 7.3.2(102) defines k from the relevant web height or
+# flange width: 1.0 at <= 300 mm, 0.65 at >= 800 mm, with interpolation.
+# Sector currently accepts the already-derived coefficient, so it must remain
+# within the complete normative image of that piecewise rule.
+MINIMUM_CRACK_K_MIN = 0.65
+MINIMUM_CRACK_K_MAX = 1.0
 
 _TOL = 1.0e-9
 
@@ -794,6 +808,17 @@ def _assess_box_walls(
                 f"{wall_id}: cot(theta)",
                 positive=True,
             )
+            if not (
+                BOX_WALL_COT_THETA_MIN
+                <= cot
+                <= BOX_WALL_COT_THETA_MAX
+            ):
+                raise ValueError(
+                    f"{wall_id}: cot(theta) must be between "
+                    f"{BOX_WALL_COT_THETA_MIN:.1f} and "
+                    f"{BOX_WALL_COT_THETA_MAX:.1f} for the inherited "
+                    "DS/EN 1992-1-1 6.2.3(2) strut-angle domain"
+                )
             utilisation = box_wall_interaction(
                 wall.v_ed_kn,
                 wall.v_rd_max_kn,
@@ -834,7 +859,10 @@ def _assess_box_walls(
             "box_wall_torsion",
             STATUS_FAIL,
             result=f"governing wall interaction = {governing:.3f}",
-            criterion="VEd/VRd,max + TEd,wall/TRd,max,wall <= 1.0",
+            criterion=(
+                "VEd/VRd,max + TEd,wall/TRd,max,wall <= 1.0; "
+                "1.0 <= cot(theta) <= 2.5"
+            ),
             source=decision.source,
             reason=reason,
             utilisation=governing,
@@ -852,9 +880,15 @@ def _assess_box_walls(
         "box_wall_torsion",
         STATUS_PASS,
         result=f"governing wall interaction = {governing:.3f}",
-        criterion="VEd/VRd,max + TEd,wall/TRd,max,wall <= 1.0",
+        criterion=(
+            "VEd/VRd,max + TEd,wall/TRd,max,wall <= 1.0; "
+            "1.0 <= cot(theta) <= 2.5"
+        ),
         source=decision.source,
-        reason="Every declared box wall uses one common strut angle.",
+        reason=(
+            "Every declared box wall uses one common strut angle within the "
+            "inherited 6.2.3(2) domain."
+        ),
         utilisation=governing,
         evidence=rows,
     )
@@ -874,6 +908,17 @@ def minimum_crack_reinforcement_area(
     act = _real(act_mm2, "Act", positive=True)
     kc = _real(k_c, "kc", positive=True)
     factor = _real(k, "k", positive=True)
+    if not (
+        MINIMUM_CRACK_K_MIN
+        <= factor
+        <= MINIMUM_CRACK_K_MAX
+    ):
+        raise ValueError(
+            "k must be between "
+            f"{MINIMUM_CRACK_K_MIN:.2f} and "
+            f"{MINIMUM_CRACK_K_MAX:.2f}; derive it from the relevant web "
+            "height or flange width per DS/EN 1992-2:2005 7.3.2(102)"
+        )
     fct = _real(fct_eff_mpa, "fct,eff", positive=True)
     sigma = _real(sigma_s_mpa, "sigma_s", positive=True)
     if not isinstance(restrained_shrinkage, bool):
@@ -979,7 +1024,10 @@ def _assess_minimum_components(
             "web_flange_minimum",
             STATUS_FAIL,
             result=f"governing As,min / As,provided = {governing:.3f}",
-            criterion="As,provided >= kc k fct,eff Act / sigma_s separately",
+            criterion=(
+                "As,provided >= kc k fct,eff Act / sigma_s separately; "
+                "0.65 <= k <= 1.00 per 7.3.2(102)"
+            ),
             source=decision.source,
             reason=reason,
             utilisation=governing,
@@ -997,7 +1045,10 @@ def _assess_minimum_components(
         "web_flange_minimum",
         STATUS_PASS,
         result=f"governing As,min / As,provided = {governing:.3f}",
-        criterion="As,provided >= kc k fct,eff Act / sigma_s separately",
+        criterion=(
+            "As,provided >= kc k fct,eff Act / sigma_s separately; "
+            "0.65 <= k <= 1.00 per 7.3.2(102)"
+        ),
         source=decision.source,
         reason="Every selected web/flange component is evaluated separately.",
         utilisation=governing,
@@ -1331,6 +1382,91 @@ def assess_base_methodology(evidence: BridgeBaseEvidence) -> dict[str, Any]:
     })
 
 
+def _publication_parameter_evidence_errors(
+    check_id: str,
+    evidence: Sequence[Mapping],
+) -> list[str]:
+    """Revalidate normative parameters in stored PASS/FAIL evidence rows."""
+
+    errors: list[str] = []
+    if check_id == "box_wall_torsion":
+        cots = []
+        for index, row in enumerate(evidence, start=1):
+            try:
+                cot = _real(
+                    row.get("cot_theta"),
+                    f"stored box-wall row {index} cot(theta)",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            if not (
+                BOX_WALL_COT_THETA_MIN
+                <= cot
+                <= BOX_WALL_COT_THETA_MAX
+            ):
+                errors.append(
+                    f"stored box-wall row {index} cot(theta) is outside "
+                    f"{BOX_WALL_COT_THETA_MIN:.1f} to "
+                    f"{BOX_WALL_COT_THETA_MAX:.1f}"
+                )
+            cots.append(cot)
+        if cots and not all(
+            math.isclose(cot, cots[0], rel_tol=0.0, abs_tol=1.0e-9)
+            for cot in cots[1:]
+        ):
+            errors.append("stored box-wall rows do not use one common cot(theta)")
+    elif check_id == "web_flange_minimum":
+        for index, row in enumerate(evidence, start=1):
+            try:
+                factor = _real(
+                    row.get("k"),
+                    f"stored minimum-reinforcement row {index} k",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            if not (
+                MINIMUM_CRACK_K_MIN
+                <= factor
+                <= MINIMUM_CRACK_K_MAX
+            ):
+                errors.append(
+                    f"stored minimum-reinforcement row {index} k is outside "
+                    f"{MINIMUM_CRACK_K_MIN:.2f} to "
+                    f"{MINIMUM_CRACK_K_MAX:.2f}"
+                )
+    elif check_id == "concrete_fatigue":
+        for index, row in enumerate(evidence, start=1):
+            try:
+                coefficient = _real(
+                    row.get("miner_coefficient_c"),
+                    f"stored concrete-fatigue row {index} C",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            if not math.isclose(
+                coefficient,
+                STANDARD_CONCRETE_MINER_C,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            ):
+                errors.append(
+                    f"stored concrete-fatigue row {index} is not bound to C = 14"
+                )
+            if row.get("methodology") != EN1992_2_BASE:
+                errors.append(
+                    f"stored concrete-fatigue row {index} methodology is unbound"
+                )
+            if row.get("concrete_method") != CONCRETE_MINER:
+                errors.append(
+                    f"stored concrete-fatigue row {index} method is not the "
+                    "bridge Miner method"
+                )
+    return errors
+
+
 def publication_safe_record(record: Mapping | None) -> dict[str, Any] | None:
     """Return a canonical fail-closed bridge calculation snapshot.
 
@@ -1464,6 +1600,7 @@ def publication_safe_record(record: Mapping | None) -> dict[str, Any] | None:
             and check_id in {
                 "prestress_brittle",
                 "box_wall_torsion",
+                "concrete_fatigue",
                 "sls_stress",
                 "web_flange_minimum",
             }
@@ -1473,6 +1610,14 @@ def publication_safe_record(record: Mapping | None) -> dict[str, Any] | None:
                 "stored PASS/FAIL lacks its calculated evidence rows"
             )
             status = STATUS_NOT_ASSESSED
+        if status in {STATUS_PASS, STATUS_FAIL}:
+            parameter_errors = _publication_parameter_evidence_errors(
+                check_id,
+                raw_evidence,
+            )
+            if parameter_errors:
+                local_errors.extend(parameter_errors)
+                status = STATUS_NOT_ASSESSED
 
         text_fields = {}
         for key in ("result", "criterion", "source", "reason"):

@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 import bridge_inputs
+import fatigue_analysis
 import fatigue_inputs
 import load_cases
 import material_catalog
@@ -398,6 +399,137 @@ def _validate_bridge_scalars(scalars: dict) -> None:
             )
 
 
+def _default_fatigue_miner_basis(scalars: dict) -> str:
+    """Return the only unambiguous default for the selected Miner method."""
+
+    method = scalars.get(
+        "fatigue_concrete_method",
+        fatigue_analysis.CONCRETE_MINER,
+    )
+    if method == fatigue_analysis.CONCRETE_PROJECT_MINER:
+        return fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+    if method != fatigue_analysis.CONCRETE_MINER:
+        return fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+    edition = scalars.get("fatigue_edition")
+    if (
+        edition == fatigue_inputs.EC2_2_2005_AC
+        and scalars.get("design_methodology") == bridge.EN1992_2_BASE
+    ):
+        return fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    if edition == fatigue_inputs.EC2_2023:
+        return fatigue_inputs.MINER_BASIS_2023_STANDARD
+    return fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+
+
+def _normalise_fatigue_miner_basis(scalars: dict) -> None:
+    """Resolve only method/edition combinations that have one safe basis."""
+
+    expected = _default_fatigue_miner_basis(scalars)
+    if (
+        expected != fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+        and scalars.get("fatigue_concrete_miner_basis") in {
+            None,
+            "",
+            fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED,
+        }
+    ):
+        scalars["fatigue_concrete_miner_basis"] = expected
+
+
+def _validate_fatigue_miner_scalars(
+    scalars: dict,
+    *,
+    allow_missing: bool = False,
+) -> None:
+    """Reject an unbound or falsely labelled concrete Miner coefficient."""
+
+    relevant = {
+        "fatigue_concrete_method",
+        "fatigue_concrete_c",
+        "fatigue_concrete_miner_basis",
+        "fatigue_concrete_miner_source",
+    }
+    if not relevant.intersection(scalars):
+        return
+    method = scalars.get(
+        "fatigue_concrete_method",
+        fatigue_analysis.CONCRETE_MINER,
+    )
+    if method not in fatigue_analysis.CONCRETE_METHODS:
+        raise ValueError("unknown concrete fatigue method")
+    if method not in fatigue_analysis.CONCRETE_MINER_METHODS:
+        return
+    if "fatigue_concrete_c" not in scalars and allow_missing:
+        return
+    coefficient = scalars.get(
+        "fatigue_concrete_c",
+        fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+    )
+    if method == fatigue_analysis.CONCRETE_MINER:
+        if (
+            isinstance(coefficient, bool)
+            or type(coefficient).__name__ == "bool_"
+        ):
+            raise ValueError(
+                "invalid concrete fatigue Miner input: Concrete fatigue C "
+                "must be a finite number greater than zero"
+            )
+        try:
+            coefficient_number = float(coefficient)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "invalid concrete fatigue Miner input: Concrete fatigue C "
+                "must be a finite number greater than zero"
+            ) from exc
+        if (
+            not math.isfinite(coefficient_number)
+            or coefficient_number <= 0.0
+        ):
+            raise ValueError(
+                "invalid concrete fatigue Miner input: Concrete fatigue C "
+                "must be a finite number greater than zero"
+            )
+        if not math.isclose(
+            coefficient_number,
+            fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(
+                "invalid concrete fatigue Miner input: The standard concrete "
+                "Miner relation fixes C = 14; select the separate approved "
+                "project S-N method for any other relation"
+            )
+        return
+    miner_basis = str(
+        scalars.get("fatigue_concrete_miner_basis") or ""
+    ).strip()
+    if (
+        allow_missing
+        and miner_basis
+        == fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+    ):
+        expected = _default_fatigue_miner_basis(scalars)
+        if expected != fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED:
+            miner_basis = expected
+    errors = fatigue_analysis.concrete_miner_parameter_errors(
+        edition=str(scalars.get("fatigue_edition") or "").strip(),
+        concrete_method=method,
+        miner_basis=miner_basis,
+        miner_source=str(
+            scalars.get("fatigue_concrete_miner_source") or ""
+        ).strip(),
+        coefficient_c=coefficient,
+        bridge_standard_active=(
+            scalars.get("fatigue_edition")
+            == fatigue_inputs.EC2_2_2005_AC
+            and scalars.get("design_methodology") == bridge.EN1992_2_BASE
+        ),
+    )
+    if errors:
+        raise ValueError("invalid concrete fatigue Miner input: " + "; ".join(errors))
+
+
 def _cell(v):
     """A cell as a finite float, or ``None`` for a blank / non-numeric value.
 
@@ -565,14 +697,22 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             default_fatigue_factor_mode,
         )
         scalar_payload.setdefault(
-            "fatigue_concrete_miner_basis",
-            (
-                fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-                if scalar_payload.get("fatigue_edition")
-                == fatigue_inputs.EC2_2_2005_AC
-                else fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
-            ),
+            "fatigue_concrete_method",
+            fatigue_analysis.CONCRETE_MINER,
         )
+        if (
+            scalar_payload["fatigue_concrete_method"]
+            in fatigue_analysis.CONCRETE_MINER_METHODS
+        ):
+            scalar_payload.setdefault(
+                "fatigue_concrete_c",
+                fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+            )
+        scalar_payload.setdefault(
+            "fatigue_concrete_miner_basis",
+            _default_fatigue_miner_basis(scalar_payload),
+        )
+        _normalise_fatigue_miner_basis(scalar_payload)
         scalar_payload.setdefault("fatigue_concrete_miner_source", "")
         if (
             scalar_payload["fatigue_concrete_miner_basis"]
@@ -654,6 +794,7 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
     )
     _validate_bridge_scalars(scalar_payload)
+    _validate_fatigue_miner_scalars(scalar_payload)
     content = {
         "tables": {k: _table_to_obj(tables.get(k), k) for k in TABLE_KEYS},
         "scalars": scalar_payload,
@@ -763,6 +904,7 @@ def project_provenance(text: str) -> dict:
     _validate_factor_scalars(raw_scalars)
     _validate_crack_numeric_scalars(raw_scalars)
     _validate_bridge_scalars(raw_scalars)
+    _validate_fatigue_miner_scalars(raw_scalars, allow_missing=True)
     provenance = data.get("provenance")
     if not isinstance(provenance, dict):
         return {
@@ -866,6 +1008,7 @@ def parse_project(text: str):
     _validate_factor_scalars(raw_scalars)
     _validate_crack_numeric_scalars(raw_scalars)
     _validate_bridge_scalars(raw_scalars)
+    _validate_fatigue_miner_scalars(raw_scalars, allow_missing=True)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
@@ -1197,14 +1340,22 @@ def parse_project(text: str):
         # field. Never promote the spectrum-method approval to this role.
         scalars.setdefault("fatigue_factor_approval", "")
         scalars.setdefault(
-            "fatigue_concrete_miner_basis",
-            (
-                fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-                if scalars.get("fatigue_edition")
-                == fatigue_inputs.EC2_2_2005_AC
-                else fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
-            ),
+            "fatigue_concrete_method",
+            fatigue_analysis.CONCRETE_MINER,
         )
+        if (
+            scalars["fatigue_concrete_method"]
+            in fatigue_analysis.CONCRETE_MINER_METHODS
+        ):
+            scalars.setdefault(
+                "fatigue_concrete_c",
+                fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+            )
+        scalars.setdefault(
+            "fatigue_concrete_miner_basis",
+            _default_fatigue_miner_basis(scalars),
+        )
+        _normalise_fatigue_miner_basis(scalars)
         scalars.setdefault("fatigue_concrete_miner_source", "")
         if (
             scalars["fatigue_concrete_miner_basis"]
@@ -1227,6 +1378,16 @@ def parse_project(text: str):
         not in fatigue_inputs.MINER_BASES
     ):
         raise ValueError("unknown concrete fatigue Miner applicability")
+    if (
+        raw_scalars.get("fatigue_check_concrete") is True
+        or {
+            "fatigue_concrete_method",
+            "fatigue_concrete_c",
+            "fatigue_concrete_miner_basis",
+            "fatigue_concrete_miner_source",
+        }.intersection(raw_scalars)
+    ):
+        _validate_fatigue_miner_scalars(scalars)
     # The axial force N is now tension-positive; files written before that (version
     # < 2) stored it compression-positive, so negate their axial values to preserve
     # the physical loads. Moments are unchanged.

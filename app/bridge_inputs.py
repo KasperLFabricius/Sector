@@ -319,6 +319,38 @@ def table_errors(value, key: str) -> list[str]:
                 errors.append(
                     f"{key} row {row_number}: {column} must be finite"
                 )
+        cot_theta = row.get("cot_theta")
+        if (
+            key == BOX_WALL_TABLE_KEY
+            and not pd.isna(cot_theta)
+            and math.isfinite(float(cot_theta))
+            and not (
+                bridge.BOX_WALL_COT_THETA_MIN
+                <= float(cot_theta)
+                <= bridge.BOX_WALL_COT_THETA_MAX
+            )
+        ):
+            errors.append(
+                f"{key} row {row_number}: cot_theta must be between "
+                f"{bridge.BOX_WALL_COT_THETA_MIN:.1f} and "
+                f"{bridge.BOX_WALL_COT_THETA_MAX:.1f}"
+            )
+        minimum_k = row.get("k")
+        if (
+            key == MINIMUM_TABLE_KEY
+            and not pd.isna(minimum_k)
+            and math.isfinite(float(minimum_k))
+            and not (
+                bridge.MINIMUM_CRACK_K_MIN
+                <= float(minimum_k)
+                <= bridge.MINIMUM_CRACK_K_MAX
+            )
+        ):
+            errors.append(
+                f"{key} row {row_number}: k must be between "
+                f"{bridge.MINIMUM_CRACK_K_MIN:.2f} and "
+                f"{bridge.MINIMUM_CRACK_K_MAX:.2f}"
+            )
         for column in BOOLEAN_COLUMNS[key]:
             if not isinstance(row.get(column), bool):
                 errors.append(

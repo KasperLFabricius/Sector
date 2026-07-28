@@ -748,7 +748,12 @@ def manual_blocks() -> list:
            ["Not assessed", "Shear/torsion fatigue, member deflection and segmental-joint provisions; if required they block the methodology conclusion"]])
     md("The bridge evidence tables record each Method-b tensile region "
        "($M_{rep}$, $z_s$, $f_{yk}$ and provided steel), every declared box wall "
-       "with one common $\\cot\\theta$, and web/flange crack-minimum data separately. "
+       "with one common $1.0\\leq\\cot\\theta\\leq2.5$, and web/flange crack-minimum "
+       "data separately. The box-wall range is the inherited 6.2.3(2) domain made "
+       "fully applicable by DS/EN 1992-2 6.3.2(102). For Expression (7.1), the "
+       "entered $k$ must be derived from the relevant web height or flange width "
+       "per 7.3.2(102): 1.0 at $\\leq300$ mm, 0.65 at $\\geq800$ mm and linear "
+       "interpolation between. "
        "The expected wall count, bridge shear scope, exposure and applicability "
        "sources are persisted with project, calculation record, autosave and report. "
        "A required Method a/c, bridge interface model or other unsupported branch is "
@@ -789,21 +794,26 @@ def manual_blocks() -> list:
        "Headless numeric factors without the dedicated source are treated as "
        "legacy values requiring review. "
        "$\\gamma_{Ff}$ remains the explicit action factor.")
-    md("For concrete, select **Explicit Palmgren-Miner spectrum** or "
-       "**Damage-equivalent stress amplitude**. The explicit method uses every "
+    md("For concrete, select **Explicit Palmgren-Miner spectrum**, **Project-approved "
+       "Miner S-N relation**, or **Damage-equivalent stress amplitude**. The "
+       "explicit Miner methods use every "
        "entered cycle count. For the equivalent method, each row's long/total "
        "action pair must already represent an equivalent amplitude for $10^6$ "
        "cycles; its Cycles value is ignored for concrete. The corrected explicit "
        "2005 Miner life equation belongs to the DS/EN 1992-2 bridge edition. Under "
        "ordinary DS/EN 1992-1-1:2005 it is available only as an explicitly approved "
        "project-basis adoption with its own source and warning; it is never labelled "
-       "as an ordinary 1-1 provision.")
+       "as an ordinary 1-1 provision. Every standard-derived Miner route fixes "
+       "$C=14$. Another coefficient is available only under the separate project "
+       "S-N method with its document/clause/approval source; it is not reported as "
+       "Expression (6.106) or E.8.")
     table(["Input", "Use"],
           [["$\\gamma_{Ff}$", "Factors the cyclic action increment before the elastic solve"],
            ["$\\gamma_s$", "Reduces the reinforcement S-N resistance and yield/proof limit"],
            ["$\\gamma_{c,fat}$", "Reduces the concrete fatigue strength"],
            ["$\\beta_{cc}(t_0)$, $t_0$", "Concrete strength at the start of cyclic loading"],
-           ["$k_1$, $C$", "2005 concrete-strength coefficient; C applies only to the explicit concrete-life method"]])
+           ["$k_1$", "2005 concrete-strength coefficient"],
+           ["$C$", "Fixed to 14 for standard-derived Miner routes; editable only for a separately sourced project S-N method"]])
     md("The **Fatigue details** material tab holds named resistance definitions. "
        "Assign one stable detail ID to every checked bar or tendon. Standard presets "
        "lock $N^*$, the two S-N slopes, the characteristic reference range and its "
@@ -1521,6 +1531,11 @@ def manual_blocks() -> list:
        "$E_{max}=\\sigma_{max}/f_{cd,fat}$ and "
        "$R=\\sigma_{min}/\\sigma_{max}$. The implemented life relation is\n\n"
        "$$\\log_{10}N_R=C\\frac{1-E_{max}}{\\sqrt{1-R}}.$$\n\n"
+       "For the standard-derived corrected bridge relation and the supported 2023 "
+       "E.8 route, Sector binds $C=14$. A different coefficient requires the "
+       "separate **Project-approved Miner S-N relation** selection and an explicit "
+       "authority source; the report then labels it as that project relation, not "
+       "as a standard equation. "
        "Miner damage is summed at that same fibre; maxima from different locations "
        "are never combined into a fictitious history. Direct stress utilisation "
        "$E_{max}\\leq1.0$ is checked in parallel.")

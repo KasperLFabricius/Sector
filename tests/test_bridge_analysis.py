@@ -409,18 +409,67 @@ def test_bridge_concrete_fatigue_rejects_mismatched_result_context(
         fatigue_check_concrete=True,
         fatigue_concrete_method="Explicit Palmgren-Miner spectrum",
         fatigue_concrete_miner_basis="EN 1992-2 bridge methodology",
+        fatigue_concrete_c=14.0,
     )
     payload = {
         "edition": "DS/EN 1992-2:2005 + AC:2008",
         "checks": {"concrete": True},
         "concrete_method": "Explicit Palmgren-Miner spectrum",
         "concrete_miner_basis": "EN 1992-2 bridge methodology",
+        "concrete_parameters": {
+            "c": 14.0,
+            "method": "Explicit Palmgren-Miner spectrum",
+        },
         "calculation_references": {
             "concrete": "EN 1992-2 corrected Expression (6.106)",
         },
         "spectra": [],
     }
     payload.update(payload_change)
+
+    evidence = bridge_analysis.concrete_fatigue_evidence(
+        {"fatigue": payload},
+        inp,
+    )
+
+    assert evidence.status == bridge.STATUS_INVALID
+    assert reason in evidence.reason
+
+
+@pytest.mark.parametrize(
+    ("input_c", "result_c", "reason"),
+    [
+        (100.0, 14.0, "current bridge concrete Miner input"),
+        (14.0, 100.0, "calculated bridge concrete Miner evidence"),
+    ],
+)
+def test_bridge_concrete_fatigue_requires_c14_in_input_and_result(
+    input_c,
+    result_c,
+    reason,
+):
+    inp = _base_input(
+        fatigue_on=True,
+        fatigue_edition="DS/EN 1992-2:2005 + AC:2008",
+        fatigue_check_concrete=True,
+        fatigue_concrete_method="Explicit Palmgren-Miner spectrum",
+        fatigue_concrete_miner_basis="EN 1992-2 bridge methodology",
+        fatigue_concrete_c=input_c,
+    )
+    payload = {
+        "edition": "DS/EN 1992-2:2005 + AC:2008",
+        "checks": {"concrete": True},
+        "concrete_method": "Explicit Palmgren-Miner spectrum",
+        "concrete_miner_basis": "EN 1992-2 bridge methodology",
+        "concrete_parameters": {
+            "c": result_c,
+            "method": "Explicit Palmgren-Miner spectrum",
+        },
+        "calculation_references": {
+            "concrete": "EN 1992-2 corrected Expression (6.106)",
+        },
+        "spectra": [],
+    }
 
     evidence = bridge_analysis.concrete_fatigue_evidence(
         {"fatigue": payload},
