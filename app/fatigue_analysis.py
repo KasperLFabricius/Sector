@@ -1020,12 +1020,22 @@ def publication_safe_result(payload: Mapping | None) -> dict | None:
     if not isinstance(payload, Mapping):
         return None
     result = dict(payload)
-    raw_errors = payload.get("errors") or ()
-    errors = [
-        str(error).strip()
-        for error in raw_errors
-        if isinstance(error, str) and str(error).strip()
-    ]
+    raw_errors = payload.get("errors")
+    errors: list[str] = []
+    malformed_errors = False
+    if raw_errors is not None:
+        if not isinstance(raw_errors, (list, tuple)):
+            malformed_errors = True
+        else:
+            for error in raw_errors:
+                if not isinstance(error, str) or not error.strip():
+                    malformed_errors = True
+                else:
+                    errors.append(error.strip())
+    if malformed_errors:
+        errors.append(
+            "Published fatigue errors are not a structured list of typed messages"
+        )
     checks = payload.get("checks")
     if not isinstance(checks, Mapping):
         errors.append("Published fatigue check selection is not structured")
@@ -1049,41 +1059,45 @@ def publication_safe_result(payload: Mapping | None) -> dict | None:
             "Published concrete fatigue parameters conflict with a disabled check"
         )
     if (
-        method in CONCRETE_MINER_METHODS
+        method in CONCRETE_METHODS
         and (concrete_checked or has_concrete_result)
     ):
         if not isinstance(parameters, Mapping):
             errors.append(
-                "Published concrete Miner result is missing its typed parameters"
+                "Published concrete fatigue result is missing its typed parameters"
             )
-        else:
-            if parameters.get("method") != method:
-                errors.append(
-                    "Published concrete Miner method conflicts with its "
-                    "calculation parameters"
-                )
-            basis = payload.get("concrete_miner_basis")
-            source = payload.get("concrete_miner_source")
-            edition = str(payload.get("edition") or "").strip()
-            errors.extend(concrete_miner_parameter_errors(
-                edition=edition,
-                concrete_method=str(method),
-                miner_basis=str(basis or ""),
-                miner_source=str(source or ""),
-                coefficient_c=parameters.get("c"),
-                bridge_standard_active=(
-                    basis == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-                ),
-            ))
-            if (
-                method == CONCRETE_MINER
-                and edition == fatigue_inputs.EC2_2023
-                and basis != fatigue_inputs.MINER_BASIS_2023_STANDARD
-            ):
-                errors.append(
-                    "Published 2023 concrete Miner evidence is missing its "
-                    "standard applicability binding"
-                )
+        elif parameters.get("method") != method:
+            errors.append(
+                "Published concrete fatigue method conflicts with its "
+                "calculation parameters"
+            )
+    if (
+        method in CONCRETE_MINER_METHODS
+        and (concrete_checked or has_concrete_result)
+        and isinstance(parameters, Mapping)
+    ):
+        basis = payload.get("concrete_miner_basis")
+        source = payload.get("concrete_miner_source")
+        edition = str(payload.get("edition") or "").strip()
+        errors.extend(concrete_miner_parameter_errors(
+            edition=edition,
+            concrete_method=str(method),
+            miner_basis=str(basis or ""),
+            miner_source=str(source or ""),
+            coefficient_c=parameters.get("c"),
+            bridge_standard_active=(
+                basis == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+            ),
+        ))
+        if (
+            method == CONCRETE_MINER
+            and edition == fatigue_inputs.EC2_2023
+            and basis != fatigue_inputs.MINER_BASIS_2023_STANDARD
+        ):
+            errors.append(
+                "Published 2023 concrete Miner evidence is missing its "
+                "standard applicability binding"
+            )
     unique_errors = tuple(dict.fromkeys(errors))
     result["errors"] = unique_errors
     if unique_errors:

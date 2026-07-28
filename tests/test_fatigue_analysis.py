@@ -891,6 +891,67 @@ def test_fatigue_publication_revalidates_standard_c_and_applicability(
     assert any(expected in error for error in safe["errors"])
 
 
+def test_fatigue_publication_rejects_top_level_method_relabel():
+    payload = {
+        "errors": (),
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "edition": fatigue_inputs.EC2_2_2005_AC,
+        "checks": {"reinforcement": False, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_EQUIVALENT,
+        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+        "concrete_miner_source": "",
+        "concrete_parameters": {
+            "c": 100.0,
+            "method": fatigue_analysis.CONCRETE_MINER,
+        },
+    }
+
+    safe = fatigue_analysis.publication_safe_result(payload)
+
+    assert safe["valid"] is False
+    assert safe["converged"] is False
+    assert safe["passed"] is False
+    assert any(
+        "method conflicts with its calculation parameters" in error
+        for error in safe["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "raw_errors",
+    [
+        7,
+        True,
+        "not a structured error list",
+        {"message": "not a list"},
+        ["typed message", 7],
+        (None,),
+    ],
+)
+def test_fatigue_publication_rejects_malformed_error_container(raw_errors):
+    payload = {
+        "errors": raw_errors,
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "checks": {"reinforcement": False, "concrete": False},
+        "concrete_method": None,
+        "concrete_parameters": None,
+    }
+
+    safe = fatigue_analysis.publication_safe_result(payload)
+
+    assert safe["valid"] is False
+    assert safe["converged"] is False
+    assert safe["passed"] is False
+    assert any(
+        "structured list of typed messages" in error
+        for error in safe["errors"]
+    )
+
+
 def test_bridge_edition_outside_bridge_method_requires_sourced_adoption():
     inp = _base(
         design_methodology=bridge.COMPONENT_METHODS,

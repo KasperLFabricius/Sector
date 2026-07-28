@@ -715,6 +715,34 @@ def test_report_fails_closed_if_standard_miner_c_is_mutated():
     assert "C 100.000" not in text
 
 
+def test_report_fails_closed_if_miner_payload_is_relabelled_equivalent():
+    inp, out = _fatigue_report_fixture()
+    out["fatigue"]["concrete_method"] = (
+        "Damage-equivalent stress amplitude"
+    )
+    out["fatigue"]["concrete_parameters"]["c"] = 100.0
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "method conflicts with its calculation parameters" in text
+    assert "C 100.000" not in text
+
+
+def test_report_fails_closed_on_malformed_fatigue_error_container():
+    inp, out = _fatigue_report_fixture()
+    out["fatigue"]["errors"] = 7
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "structured list of typed messages" in text
+
+
 def test_report_labels_nonstandard_c_as_sourced_project_sn_method():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]

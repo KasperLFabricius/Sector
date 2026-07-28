@@ -2059,6 +2059,54 @@ def test_standard_miner_c14_is_locked_and_project_sn_method_round_trips():
     assert at.number_input(key="fatigue_concrete_c").disabled is True
 
 
+def test_fatigue_view_fails_closed_on_relabelled_or_malformed_payload(
+    monkeypatch,
+):
+    import fatigue_analysis
+    import fatigue_inputs
+    import sector_app
+
+    rendered = {"errors": [], "markdown": []}
+    fake_st = SimpleNamespace(
+        error=lambda message, **_kwargs: rendered["errors"].append(message),
+        warning=lambda *_args, **_kwargs: None,
+        success=lambda *_args, **_kwargs: None,
+        info=lambda *_args, **_kwargs: None,
+        markdown=lambda message, **_kwargs: rendered["markdown"].append(message),
+    )
+    monkeypatch.setattr(sector_app, "st", fake_st)
+    base = {
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "errors": (),
+        "edition": fatigue_inputs.EC2_2_2005_AC,
+        "checks": {"reinforcement": False, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_EQUIVALENT,
+        "concrete_parameters": {
+            "c": 100.0,
+            "method": fatigue_analysis.CONCRETE_MINER,
+        },
+    }
+
+    for payload in (base, {**base, "errors": 7}):
+        rendered["errors"].clear()
+        rendered["markdown"].clear()
+        sector_app.fatigue_view(
+            {"fatigue_on": True},
+            {"fatigue": payload},
+        )
+        assert any(
+            message.startswith("INVALID -")
+            for message in rendered["errors"]
+        )
+        assert any(
+            "calculation parameters" in message
+            or "structured list of typed messages" in message
+            for message in rendered["markdown"]
+        )
+
+
 def test_app_fatigue_factor_switches_and_approved_override_persist():
     import fatigue_inputs
 

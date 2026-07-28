@@ -603,3 +603,17 @@ mandatory; this matrix does not self-certify PR closure.
   download/session/autosave publication. These overlapping slices are evidence,
   not an additive test-count claim. External CI, Codex Review and original
   independent closure remain pending for the next exact head.
+- Fresh Codex Review of exact head
+  `50d811c9d99a47b890f5a6172469cfcafdfc2d1a` identified two publication-boundary
+  defects before closure: a top-level method relabel could bypass the Miner
+  parameter check, and a malformed `errors` container could crash or discard
+  invalid evidence. The obsolete CI run was cancelled when those findings became
+  actionable.
+- The shared fatigue publication validator now binds
+  `concrete_parameters.method` to every enabled concrete method before
+  method-specific dispatch, and requires the error container to be a list or
+  tuple of non-blank typed messages. A mismatch or malformed container forces
+  `valid = converged = passed = False` before the Streamlit or PDF boundary.
+  Thirteen direct reproductions and boundary checks pass, followed by all 283
+  affected fatigue/report checks and two focused Streamlit controls. Exact-head
+  CI, Codex Review and original independent closure remain pending after commit.
