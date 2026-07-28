@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import pathlib
 import sys
@@ -18,7 +20,26 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from sector import codes, detailing  # noqa: E402
+from sector import codes, detailing, sls  # noqa: E402
+
+
+def _v17_crack_defaults():
+    return {
+        "sls_criterion_mode": project_io.DEFAULT_SLS_CRITERION_MODE,
+        "sls_prestress_class": project_io.DEFAULT_SLS_PRESTRESS_CLASS,
+        "sls_protection_class": project_io.DEFAULT_SLS_PROTECTION_CLASS,
+        "sls_exposure_class": project_io.DEFAULT_SLS_EXPOSURE_CLASS,
+        "sls_exposure_context": "",
+        "sls_check_appearance": False,
+        "sls_appearance_limit": 0.0,
+        "sls_check_durability": False,
+        "sls_decompression_applicability": (
+            project_io.DEFAULT_SLS_DECOMPRESSION
+        ),
+        "sls_project_characteristic_limit": 0.0,
+        "sls_project_frequent_limit": 0.0,
+        "sls_project_quasi_permanent_limit": 0.0,
+    }
 
 
 def test_migrate_legacy_torsion_only_stirrup():
@@ -102,6 +123,8 @@ def test_round_trip_tables_and_scalars():
                "torsion_sub_b0": 300.0, "torsion_sub_h0": 600.0,
                "sls_wk_limit": 0.25, "sls_conc_limit_pct": 55.0,
                "sls_steel_limit_pct": 75.0, "sls_pre_limit_pct": 70.0,
+               "sls_tendon_bond": "Plain round (k1 = 1.6)",
+               "sls_tendon_xi": 0.55,
                "sls_limit_source": "DB section SLS-2",
                "pl_case_id": "PL-17", "pl_case_type": "ALS",
                "pl_case_source": "Load model LM-4",
@@ -113,6 +136,7 @@ def test_round_trip_tables_and_scalars():
         key: value for key, value in scalars.items()
         if key not in load_cases.LEGACY_SCALAR_KEYS
     }
+    expected_scalars.update(_v17_crack_defaults())
     assert rs == expected_scalars
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == "PL-17"
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "description"] == (
@@ -128,6 +152,48 @@ def test_round_trip_tables_and_scalars():
         pd.testing.assert_frame_equal(
             rt[key].reset_index(drop=True),
             expected.reset_index(drop=True), check_dtype=False)
+
+
+@pytest.mark.parametrize("version", [15, project_io.VERSION])
+def test_project_defaults_missing_crack_tendon_inputs_fail_closed(version):
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": version,
+        "tables": {},
+        "scalars": {
+            "sls_cw": True,
+            "sls_code": "EN 1992-1-1:2023",
+        },
+    })
+
+    _tables_out, scalars = project_io.parse_project(text)
+    assert scalars["sls_tendon_bond"] == project_io.DEFAULT_SLS_TENDON_BOND
+    assert scalars["sls_tendon_xi"] == pytest.approx(
+        project_io.DEFAULT_SLS_TENDON_XI
+    )
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+    assert scalars["sls_decompression_applicability"] == (
+        sls.DECOMPRESSION_NOT_ESTABLISHED
+    )
+
+
+def test_current_partial_save_writes_crack_tendon_defaults_canonically():
+    text = project_io.dump_project({}, {"sls_cw": True})
+    payload = json.loads(text)
+    tables, scalars = project_io.parse_project(text)
+
+    assert payload["scalars"]["sls_tendon_bond"] == (
+        project_io.DEFAULT_SLS_TENDON_BOND
+    )
+    assert payload["scalars"]["sls_tendon_xi"] == pytest.approx(
+        project_io.DEFAULT_SLS_TENDON_XI
+    )
+    assert payload["scalars"]["sls_criterion_mode"] == (
+        sls.CRITERION_MODE_LEGACY
+    )
+    assert project_io.input_sha256(tables, scalars) == (
+        payload["provenance"]["input_sha256"]
+    )
 
 
 def test_v4_reinforcement_rows_migrate_to_stable_area_based_elements():
@@ -912,7 +978,193 @@ def test_blank_separator_row_survives_round_trip():
 def test_unknown_scalar_keys_are_dropped():
     text = project_io.dump_project({}, {"conc_fck": 30.0, "secret": 1, "results": "x"})
     _, scalars = project_io.parse_project(text)
-    assert scalars == {"conc_fck": 30.0}
+    assert scalars == {
+        "conc_fck": 30.0,
+        "sls_tendon_bond": project_io.DEFAULT_SLS_TENDON_BOND,
+        "sls_tendon_xi": project_io.DEFAULT_SLS_TENDON_XI,
+        **_v17_crack_defaults(),
+    }
+
+
+def test_v18_roundtrips_combination_and_criterion_applicability():
+    tables = {
+        load_cases.ELASTIC_TABLE_KEY: load_cases.normalise_table([{
+            "name": "SLS-1",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "total_combination": sls.COMBINATION_FREQUENT,
+            "mx_long_ed_knm": 80.0,
+            "mx_short_ed_knm": 25.0,
+            "check_crack_width": True,
+        }], load_cases.ELASTIC_TABLE_KEY),
+    }
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_protection_class": sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
+        "sls_exposure_context": "XD1 / bonded tendon",
+        "sls_check_appearance": True,
+        "sls_appearance_limit": 0.20,
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": sls.DECOMPRESSION_REQUIRED,
+        "sls_limit_source": "Project DB SLS-2",
+    }
+
+    restored_tables, restored_scalars = project_io.parse_project(
+        project_io.dump_project(tables, scalars)
+    )
+
+    row = restored_tables[load_cases.ELASTIC_TABLE_KEY].iloc[0]
+    assert row["long_combination"] == sls.COMBINATION_QUASI_PERMANENT
+    assert row["total_combination"] == sls.COMBINATION_FREQUENT
+    for key, value in scalars.items():
+        assert restored_scalars[key] == value
+
+
+def test_v17_bonded_2023_route_is_invalidated_until_structured_repair():
+    payload = json.loads(project_io.dump_project({}, {
+        "sls_code": "EN 1992-1-1:2023",
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_exposure_context": "XC3 / bonded tendon",
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+    }))
+    payload["version"] = 17
+    payload["scalars"].pop("sls_protection_class")
+    payload["scalars"].pop("sls_exposure_class")
+
+    _, scalars = project_io.parse_project(json.dumps(payload))
+
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+    assert (
+        scalars["sls_protection_class"]
+        == sls.PROTECTION_NOT_ESTABLISHED
+    )
+    assert scalars["sls_exposure_class"] == sls.EXPOSURE_NOT_ESTABLISHED
+    assert scalars["sls_wk_limit"] == pytest.approx(0.30)
+
+
+def test_v17_bonded_2004_structured_route_remains_valid():
+    payload = json.loads(project_io.dump_project({}, {
+        "sls_code": "EN 1992-1-1:2005",
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_exposure_context": "XC3 / bonded tendon",
+        "sls_check_durability": True,
+        "sls_decompression_applicability": sls.DECOMPRESSION_REQUIRED,
+        "sls_wk_limit": 0.30,
+    }))
+    payload["version"] = 17
+    payload["scalars"].pop("sls_protection_class")
+    payload["scalars"].pop("sls_exposure_class")
+
+    _, scalars = project_io.parse_project(json.dumps(payload))
+
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_STANDARD
+    assert scalars["sls_prestress_class"] == sls.PRESTRESS_BONDED
+    assert (
+        scalars["sls_decompression_applicability"]
+        == sls.DECOMPRESSION_REQUIRED
+    )
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_tendon_xi",
+        "sls_wk_limit",
+        "sls_appearance_limit",
+        "sls_project_characteristic_limit",
+        "sls_project_frequent_limit",
+        "sls_project_quasi_permanent_limit",
+    ],
+)
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+def test_project_dump_rejects_boolean_crack_numerics(key, value):
+    with pytest.raises(ValueError, match=key):
+        project_io.dump_project({}, {key: value})
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_tendon_xi",
+        "sls_wk_limit",
+        "sls_appearance_limit",
+        "sls_project_characteristic_limit",
+        "sls_project_frequent_limit",
+        "sls_project_quasi_permanent_limit",
+    ],
+)
+def test_project_parse_and_provenance_reject_boolean_crack_numerics(key):
+    payload = {
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": {key: True},
+    }
+    text = json.dumps(payload)
+
+    with pytest.raises(ValueError, match=key):
+        project_io.parse_project(text)
+    with pytest.raises(ValueError, match=key):
+        project_io.project_provenance(text)
+
+
+def test_pre_v17_crack_limit_is_retained_but_combination_route_is_invalidated():
+    payload = {
+        "format": project_io.FORMAT,
+        "version": 16,
+        "tables": {},
+        "load_cases": {
+            "plastic": [],
+            "elastic": [{
+                "name": "OLD-SLS",
+                "description": "Duration labels only",
+                "n_long_ed_kn": 0.0,
+                "mx_long_ed_knm": 80.0,
+                "my_long_ed_knm": 0.0,
+                "n_short_ed_kn": 0.0,
+                "mx_short_ed_knm": 25.0,
+                "my_short_ed_knm": 0.0,
+                "check_stress": False,
+                "check_crack_width": True,
+            }],
+        },
+        "scalars": {"sls_wk_limit": 0.30},
+    }
+
+    tables, scalars = project_io.parse_project(json.dumps(payload))
+    row = tables[load_cases.ELASTIC_TABLE_KEY].iloc[0]
+
+    assert scalars["sls_wk_limit"] == pytest.approx(0.30)
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+    assert row["long_combination"] == sls.COMBINATION_UNSPECIFIED
+    assert row["total_combination"] == sls.COMBINATION_UNSPECIFIED
+
+
+def test_malformed_current_crack_routing_is_invalidated_not_defaulted_to_standard():
+    payload = json.loads(project_io.dump_project({}, {
+        "sls_criterion_mode": "mystery routing",
+        "sls_prestress_class": "unknown tendon class",
+        "sls_decompression_applicability": "maybe",
+        "sls_wk_limit": 0.30,
+    }))
+
+    _, scalars = project_io.parse_project(json.dumps(payload))
+
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+    assert (
+        scalars["sls_prestress_class"]
+        == project_io.DEFAULT_SLS_PRESTRESS_CLASS
+    )
+    assert (
+        scalars["sls_decompression_applicability"]
+        == sls.DECOMPRESSION_NOT_ESTABLISHED
+    )
+    assert scalars["sls_wk_limit"] == pytest.approx(0.30)
 
 
 def test_project_provenance_records_and_verifies_exact_inputs():
@@ -969,6 +1221,765 @@ def test_project_records_whether_calculation_matches_saved_inputs():
 
     assert matching["calculation"]["matches_saved_inputs"] is True
     assert changed["calculation"]["matches_saved_inputs"] is False
+
+
+def _project_width_crack_control():
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "map-v1",
+            "solver_provenance": {"solve": "v1", "converged": True},
+        }
+        for name in ("Fine", "Coarse")
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "map-v1",
+        "solver_provenance": {"solve": "v1", "converged": True},
+    }]
+    responses = {
+        "Fine": {"wk": 0.22, "element_id": "R1"},
+        "Coarse": {"wk": 0.18, "element_id": "R2"},
+    }
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-width",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled durability criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["verdict"] == "PASS"
+    return {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": assessment,
+            "response_mapping_scope": copy.deepcopy(mapping_scope),
+            "responses": [
+                {
+                    "name": name,
+                    "wk_mm": response["wk"],
+                    "element_id": response["element_id"],
+                    "acceptance_role": "criterion input",
+                    "context": copy.deepcopy(contexts[name]),
+                }
+                for name, response in responses.items()
+            ],
+        }],
+    }
+
+
+def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    crack_control = _project_width_crack_control()
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "d" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+
+    assert payload["provenance"]["results_included"] is True
+    assert payload["calculation"]["crack_control"] == crack_control
+    assert provenance["calculation"]["crack_control"] == crack_control
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        pytest.param("response-container", id="response-container"),
+        pytest.param("text-width", id="text-crack-width"),
+    ],
+)
+def test_project_roundtrip_rejects_fingerprint_valid_malformed_binding(
+    malformation,
+):
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    crack_control = _project_width_crack_control()
+    binding = crack_control["cases"][0]["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    if malformation == "response-container":
+        binding["matched_responses"] = ["Fine"]
+    else:
+        for response in binding["matched_responses"]:
+            acceptance = response["acceptance"]
+            acceptance["value_mm"] = str(acceptance["value_mm"])
+        binding["outcome"]["value"] = str(binding["outcome"]["value"])
+    body = {
+        key: value
+        for key, value in binding.items()
+        if key != "fingerprint"
+    }
+    binding["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "7" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+    saved = json.loads(text)["calculation"]["crack_control"]
+    loaded = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
+
+    for record in (saved, loaded):
+        assessment = record["cases"][0]["assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["acceptance_evidence"] is None
+        assert "invalid immutable acceptance evidence" in (
+            assessment["publication_validation"]["reason"]
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "changed_value"),
+    [
+        ("criterion_id", "qa-width-v2"),
+        ("criterion_source", "Changed durability criterion"),
+        ("applicability", {"member": "changed"}),
+        ("required_combination", sls.COMBINATION_FREQUENT),
+        ("limit", 0.25),
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2", "converged": True}),
+        ("width", 0.21),
+        ("governing_element", "R9"),
+        ("scope_duration", "short"),
+        ("scope_provenance", "map-v2"),
+    ],
+)
+def test_project_save_load_rejects_each_width_binding_mutation(
+    mutation,
+    changed_value,
+):
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    crack_control = _project_width_crack_control()
+    case = crack_control["cases"][0]
+    criterion = case["assessment"]["criteria"][0]
+
+    if mutation in {
+        "criterion_id",
+        "criterion_source",
+        "applicability",
+        "required_combination",
+        "limit",
+    }:
+        criterion[mutation] = copy.deepcopy(changed_value)
+    elif mutation in {
+        "response_id",
+        "duration",
+        "provenance",
+        "solver_provenance",
+    }:
+        for response in case["responses"]:
+            response["context"][mutation] = copy.deepcopy(changed_value)
+    elif mutation == "width":
+        case["responses"][0]["wk_mm"] = changed_value
+    elif mutation == "governing_element":
+        case["responses"][0]["element_id"] = changed_value
+    else:
+        case["response_mapping_scope"][0][
+            mutation.removeprefix("scope_")
+        ] = copy.deepcopy(changed_value)
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "8" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+    saved = json.loads(text)["calculation"]["crack_control"]
+    loaded = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
+
+    for record in (saved, loaded):
+        assessment = record["cases"][0]["assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["acceptance_evidence"] is None
+        assert assessment["publication_validation"]["reason"]
+
+
+def test_project_reapplies_failure_precedence_over_incomplete_criterion():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.31, "element_id": "R1"}},
+        valid=True,
+        criteria=[
+            {
+                "id": "qa-width",
+                "kind": sls.CRITERION_DURABILITY,
+                "source_type": sls.CRITERION_MODE_STANDARD,
+                "source": "QA controlled durability criterion",
+                "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+                "limit_mm": 0.30,
+                "applicability": {
+                    "prestress_class": (
+                        sls.PRESTRESS_REINFORCED_UNBONDED
+                    ),
+                },
+            },
+            {
+                "id": "qa-decompression",
+                "kind": sls.CRITERION_DECOMPRESSION,
+                "source_type": sls.CRITERION_MODE_STANDARD,
+                "source": "QA controlled decompression criterion",
+                "required_combination": sls.COMBINATION_FREQUENT,
+                "limit_mm": None,
+                "applicability": {
+                    "prestress_class": (
+                        sls.PRESTRESS_REINFORCED_UNBONDED
+                    ),
+                },
+            },
+        ],
+        response_contexts={"QP": context},
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["status"] == "EXCEEDED"
+    # Simulate a stale aggregate while retaining canonical per-criterion
+    # evidence. Persistence must rebuild known-failure precedence.
+    assessment.update(
+        status="NOT ASSESSED",
+        verdict="REVIEW",
+        value=None,
+        util=None,
+        margin=None,
+        acceptance_evidence=None,
+    )
+    crack_control = {
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": assessment,
+            "response_mapping_scope": mapping_scope,
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.31,
+                "element_id": "R1",
+                "acceptance_role": "criterion input",
+                "context": context,
+            }],
+        }],
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "4" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+    saved = json.loads(text)["calculation"]["crack_control"]
+    loaded = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
+
+    for record in (saved, loaded):
+        assessment = record["cases"][0]["assessment"]
+        assert assessment["status"] == "EXCEEDED"
+        assert assessment["verdict"] == "FAIL"
+        assert assessment["value"] == pytest.approx(0.31)
+        assert [item["status"] for item in assessment["criteria"]] == [
+            "EXCEEDED",
+            "NOT ASSESSED",
+        ]
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("status", "EXCEEDED"),
+        ("value", -0.10),
+        ("governing", "concrete point 2"),
+        ("solver_provenance", {"state": "changed"}),
+        ("solver_residual", float("nan")),
+    ],
+)
+def test_project_roundtrip_rejects_decompression_binding_mutation(
+    field,
+    changed_value,
+):
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["verdict"] == "PASS"
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+
+    def dump(current_response):
+        return project_io.dump_project(
+            {},
+            scalars,
+            calculation={
+                "performed_at_utc": "2026-07-27T10:00:00+00:00",
+                "sector_version": "0.91",
+                "source_revision": "5" * 40,
+                "input_sha256": digest,
+                "crack_control": {
+                    "cases": [{
+                        "case": "SLS-QP",
+                        "assessment": assessment,
+                        "response_mapping_scope": mapping_scope,
+                        "responses": [{
+                            "name": "QP",
+                            "wk_mm": current_response["wk"],
+                            "element_id": current_response["element_id"],
+                            "decompression": current_response[
+                                "decompression"
+                            ],
+                            "acceptance_role": "criterion input",
+                            "context": contexts["QP"],
+                        }],
+                    }],
+                },
+            },
+        )
+
+    valid_text = dump(response)
+    valid_assessment = json.loads(valid_text)["calculation"][
+        "crack_control"
+    ]["cases"][0]["assessment"]
+    assert valid_assessment["verdict"] == "PASS"
+
+    invalid_response = copy.deepcopy(response)
+    if field == "solver_residual":
+        invalid_response["decompression"]["solver_provenance"][
+            "residual"
+        ] = changed_value
+    else:
+        invalid_response["decompression"][field] = copy.deepcopy(
+            changed_value
+        )
+    invalid_text = dump(invalid_response)
+    assert "NaN" not in invalid_text
+    saved = json.loads(invalid_text)["calculation"]["crack_control"]
+    loaded = project_io.project_provenance(invalid_text)[
+        "calculation"
+    ]["crack_control"]
+    for record in (saved, loaded):
+        published = record["cases"][0]["assessment"]
+        assert published["status"] == "NOT ASSESSED"
+        assert published["verdict"] == "REVIEW"
+        assert published["value"] is None
+        assert "prior acceptance assessment was invalidated" in (
+            published["publication_validation"]["reason"]
+        )
+
+
+def test_project_roundtrip_rejects_scalar_matched_response_evidence():
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "qp",
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=[{
+            "id": "qa-width",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled durability criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {},
+        }],
+        response_contexts=contexts,
+    )
+    assessment["criteria"][0]["matched_responses"] = True
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "6" * 40,
+            "input_sha256": digest,
+            "crack_control": {
+                "cases": [{
+                    "case": "SLS-QP",
+                    "assessment": assessment,
+                    "responses": [{
+                        "name": "QP",
+                        "wk_mm": 0.22,
+                        "element_id": "R1",
+                        "acceptance_role": "criterion input",
+                        "context": contexts["QP"],
+                    }],
+                }],
+            },
+        },
+    )
+    saved = json.loads(text)["calculation"]["crack_control"]
+    loaded = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
+
+    for record in (saved, loaded):
+        published = record["cases"][0]["assessment"]
+        assert published["status"] == "NOT ASSESSED"
+        assert published["verdict"] == "REVIEW"
+        assert "matched responses are not a structured list" in (
+            published["publication_validation"]["reason"]
+        )
+
+
+def test_project_downgrades_stale_pass_with_rejected_crack_response():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    stale_record = {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "case": "QP",
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+                "value": 0.22,
+                "limit": 0.30,
+                "util": 0.22 / 0.30,
+                "margin": 0.08,
+                "criteria": [{
+                    "kind": sls.CRITERION_DURABILITY,
+                    "status": "OK",
+                    "value": 0.22,
+                    "util": 0.22 / 0.30,
+                    "margin": 0.08,
+                }],
+            },
+            "responses": [{
+                "name": "QP",
+                "wk_mm": None,
+                "acceptance_role": "criterion input",
+                "result_validation": (
+                    "Injected rejected response for persistence QA."
+                ),
+                "context": {
+                    "solver_provenance": {"state": "long"},
+                },
+            }],
+        }],
+    }
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "f" * 40,
+            "input_sha256": digest,
+            "crack_control": stale_record,
+        },
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+
+    for record in (
+        payload["calculation"]["crack_control"],
+        provenance["calculation"]["crack_control"],
+    ):
+        assessment = record["cases"][0]["assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["value"] is None
+        assert assessment["util"] is None
+        assert assessment["margin"] is None
+        assert assessment["criteria"][0]["status"] == "NOT ASSESSED"
+        assert assessment["criteria"][0]["value"] is None
+        assert assessment["publication_validation"]["status"] == "REJECTED"
+        assert assessment["solver_provenance"] == [{
+            "response": "QP",
+            "solver": {"state": "long"},
+        }]
+    assert payload["provenance"]["results_included"] is True
+    assert provenance["results_included"] is True
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+
+    raw_payload = json.loads(text)
+    raw_payload["calculation"]["crack_control"] = stale_record
+    raw_payload["provenance"]["results_included"] = True
+    loaded = project_io.project_provenance(json.dumps(raw_payload))
+    loaded_assessment = loaded["calculation"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+    assert loaded_assessment["status"] == "NOT ASSESSED"
+    assert loaded_assessment["verdict"] == "REVIEW"
+    assert loaded_assessment["value"] is None
+    assert loaded_assessment["publication_validation"]["status"] == "REJECTED"
+    assert loaded["calculation"]["matches_saved_inputs"] is True
+
+
+def test_project_downgrades_stale_pass_with_different_governing_response():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    stale_record = {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "case": "QP",
+                "value": 0.22,
+                "limit": 0.30,
+                "util": 0.22 / 0.30,
+                "margin": 0.08,
+            },
+            "responses": [{
+                "name": "Frequent",
+                "wk_mm": 0.22,
+                "acceptance_role": "criterion input",
+                "context": {
+                    "solver_provenance": {"state": "total"},
+                },
+            }],
+        }],
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "1" * 40,
+            "input_sha256": digest,
+            "crack_control": stale_record,
+        },
+    )
+    assessment = json.loads(text)["calculation"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert assessment["value"] is None
+    assert assessment["util"] is None
+    assert assessment["margin"] is None
+    assert "invalid immutable acceptance evidence" in (
+        assessment["publication_validation"]["reason"]
+    )
+
+
+def test_project_downgrades_acceptance_without_required_crack_combination():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    stale_record = {
+        "cases": [{
+            "case": "SLS-01",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "case": "QP",
+                "value": 0.22,
+                "limit": 0.30,
+            },
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.22,
+                "acceptance_role": "criterion input",
+                "context": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
+                },
+            }],
+        }],
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "3" * 40,
+            "input_sha256": digest,
+            "crack_control": stale_record,
+        },
+    )
+    assessment = json.loads(text)["calculation"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert assessment["value"] is None
+    assert "invalid immutable acceptance evidence" in (
+        assessment["publication_validation"]["reason"]
+    )
+
+
+def test_project_downgrades_stale_pass_when_another_matched_crack_grows():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    stale_record = _project_width_crack_control()
+    stale_record["cases"][0]["responses"][1]["wk_mm"] = 0.45
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "2" * 40,
+            "input_sha256": digest,
+            "crack_control": stale_record,
+        },
+    )
+    assessment = json.loads(text)["calculation"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert assessment["value"] is None
+    assert "immutable acceptance evidence does not match" in (
+        assessment["publication_validation"]["reason"]
+    )
 
 
 def test_legacy_mpa_moduli_are_rescaled_to_gpa():

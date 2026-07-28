@@ -16,6 +16,7 @@ import pathlib
 import re
 import sys
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 # Make both the repo root (for ``sector``) and this app folder (for ``viz``)
@@ -50,8 +51,12 @@ from sector import sls as sls_core  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
-from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
-                                   crack_width)
+from sector.serviceability import (  # noqa: E402
+    CRACK_DIRECTIONAL_LIMITATION,
+    analyse_cracking,
+    combined_cracking,
+    evaluate_crack_width,
+)
 
 # The tool version comes from the sector package (the single source of truth); it
 # shows in the title, the browser tab, the About panel and the report footer.
@@ -65,6 +70,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # so widget labels use $...$ but table headers/cells use these). Written via chr()
 # so the source stays ASCII (BMP code points, no surrogate pairs).
 _EPS, _SIGMA, _RHO, _PHI = chr(0x3B5), chr(0x3C3), chr(0x3C1), chr(0x3C6)
+_XI = chr(0x3BE)
 _KAPPA = chr(0x3BA)
 _THETA, _NU, _ALPHA, _DELTA = chr(0x3B8), chr(0x3BD), chr(0x3B1), chr(0x394)
 _TAU = chr(0x3C4)
@@ -78,7 +84,7 @@ _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 # effective-height term only for slabs/prestressed; the DK NA option reports BOTH
 # the fine and the coarse crack system (7.3.4(1)) -- the coarse effective area is
 # the band whose centroid matches the tension reinforcement (figure 7.100 NA) and
-# its wk is halved -- for both the long-term and the short-term load.
+# its wk is halved -- for both the sustained and total-response duration states.
 _CRACK_CODES = {
     "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
     "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
@@ -220,6 +226,8 @@ def _design_basis_summary(*, concrete_preset, mild_preset=None,
         status = "Design basis not identified"
 
     limitations = []
+    if crack_code:
+        limitations.append(CRACK_DIRECTIONAL_LIMITATION)
     concrete_2023 = _edition_family(concrete_preset) == "EN 1992-1-1:2023"
     if concrete_2023 and (torsion_method or combined_method):
         limitations.append(
@@ -1695,6 +1703,29 @@ def _case_column_config(key):
         }
     return {
         **text,
+        "long_combination": st.column_config.SelectboxColumn(
+            "Long response SLS combination",
+            help=(
+                "Explicit combination represented by the sustained/long-term "
+                "response. Duration alone never establishes this designation."
+            ),
+            options=list(sls_core.SLS_COMBINATIONS),
+            default=sls_core.COMBINATION_UNSPECIFIED,
+            required=True,
+            width="medium",
+        ),
+        "total_combination": st.column_config.SelectboxColumn(
+            "Total response SLS combination",
+            help=(
+                "Explicit combination represented by the calculated total "
+                "(long + short) response. It is not inferred as characteristic "
+                "or frequent."
+            ),
+            options=list(sls_core.SLS_COMBINATIONS),
+            default=sls_core.COMBINATION_UNSPECIFIED,
+            required=True,
+            width="medium",
+        ),
         "n_long_ed_kn": force("N_Ed,long [kN]", "Sustained axial force; tension is positive."),
         "mx_long_ed_knm": force("Mx_Ed,long [kNm]", "Sustained moment about x."),
         "my_long_ed_knm": force("My_Ed,long [kNm]", "Sustained moment about y."),
@@ -1739,6 +1770,8 @@ def _case_table_editor(box, key):
                 "height": "auto",
                 "column_config": _case_column_config(key),
                 "column_order": load_cases.TABLE_COLUMNS[key],
+                "on_change": _commit_case_editor_delta,
+                "args": (key,),
             },
         ),
     )
@@ -1770,7 +1803,9 @@ def _load_case_editors(box):
     box.markdown("**Elastic cases**")
     box.caption(
         "Long and short action parts share the global creep coefficient below. "
-        "Select stress and crack-width acceptance independently for each row."
+        "Designate the SLS combination represented by each calculated response "
+        "separately from duration; Not designated makes a required criterion "
+        "NOT ASSESSED. Select stress and crack-width acceptance per row."
     )
     elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
     return {
@@ -1780,6 +1815,94 @@ def _load_case_editors(box):
 
 
 _FATIGUE_EDITOR_KEY = "fatigue_spectrum_editor"
+_NON_REPLAYABLE_WIDGET_KEYS = frozenset({
+    *_CASE_EDITOR_KEYS.values(),
+    _FATIGUE_EDITOR_KEY,
+})
+
+
+def _apply_native_editor_delta(seed, delta):
+    """Apply one cumulative Streamlit data-editor delta to its frozen seed.
+
+    Streamlit owns the widget-state dictionary, so it must never be assigned
+    back through ``session_state``.  Its delta is nevertheless available inside
+    the widget callback.  Applying that cumulative delta to the same immutable
+    seed used by the editor lets the callback commit the authoritative table
+    before a second browser event can supersede the rerun.
+    """
+
+    frame = (
+        seed.copy(deep=True)
+        if isinstance(seed, pd.DataFrame)
+        else pd.DataFrame(seed)
+    ).reset_index(drop=True)
+    if not isinstance(delta, dict):
+        return frame
+
+    edited_rows = delta.get("edited_rows")
+    if isinstance(edited_rows, dict):
+        for row_id, changes in edited_rows.items():
+            try:
+                row_pos = int(row_id)
+            except (TypeError, ValueError):
+                continue
+            if (
+                row_pos < 0
+                or row_pos >= len(frame)
+                or not isinstance(changes, dict)
+            ):
+                continue
+            for column, value in changes.items():
+                if column in frame.columns:
+                    frame.iat[row_pos, frame.columns.get_loc(column)] = value
+
+    deleted_rows = delta.get("deleted_rows")
+    if isinstance(deleted_rows, (list, tuple)):
+        positions = []
+        for row_id in deleted_rows:
+            try:
+                row_pos = int(row_id)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= row_pos < len(frame):
+                positions.append(row_pos)
+        if positions:
+            frame = frame.drop(frame.index[sorted(set(positions))])
+
+    added_rows = delta.get("added_rows")
+    if isinstance(added_rows, (list, tuple)):
+        rows = [row for row in added_rows if isinstance(row, dict)]
+        if rows:
+            frame = pd.concat(
+                [frame, pd.DataFrame(rows)],
+                ignore_index=True,
+                sort=False,
+            )
+    return frame.reset_index(drop=True)
+
+
+def _commit_case_editor_delta(key):
+    """Commit a native load-editor event before its rerun can be interrupted."""
+
+    editor_key = _CASE_EDITOR_KEYS[key]
+    seed_key = f"_{key}_editor_seed"
+    seed = st.session_state.get(seed_key, st.session_state.get(key))
+    current = _apply_native_editor_delta(
+        seed, st.session_state.get(editor_key)
+    )
+    st.session_state[key] = load_cases.normalise_table(current, key)
+
+
+def _commit_fatigue_editor_delta():
+    """Commit a native fatigue-editor event before rerun recovery."""
+
+    key = fatigue_inputs.SPECTRUM_TABLE_KEY
+    seed_key = f"_{key}_editor_seed"
+    seed = st.session_state.get(seed_key, st.session_state.get(key))
+    current = _apply_native_editor_delta(
+        seed, st.session_state.get(_FATIGUE_EDITOR_KEY)
+    )
+    st.session_state[key] = fatigue_inputs.normalise_spectrum_table(current)
 
 
 def _fatigue_spectrum_column_config():
@@ -1879,6 +2002,7 @@ def _fatigue_spectrum_editor(box):
                 "height": "auto",
                 "column_config": _fatigue_spectrum_column_config(),
                 "column_order": fatigue_inputs.SPECTRUM_COLUMNS,
+                "on_change": _commit_fatigue_editor_delta,
             },
         ),
     )
@@ -2082,6 +2206,7 @@ _INPUT_BUILD_KEY = "_inputs_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
 _INVALID_FACTOR_INPUT_KEYS_KEY = "_invalid_factor_input_keys"
+_INVALID_CRACK_INPUT_KEYS_KEY = "_invalid_crack_input_keys"
 _INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
 _FATIGUE_NUMERIC_FACTOR_KEYS = frozenset(
     key
@@ -2126,6 +2251,27 @@ def _invalid_factor_input_keys() -> tuple[str, ...]:
         return ()
     allowed = set(project_io.FACTOR_NUMERIC_SCALAR_KEYS)
     return tuple(sorted({str(key) for key in raw if key in allowed}))
+
+
+def _invalid_crack_input_keys() -> tuple[str, ...]:
+    """Return rejected crack/SLS numeric keys retained across app reruns."""
+
+    raw = st.session_state.get(_INVALID_CRACK_INPUT_KEYS_KEY, ())
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return ()
+    allowed = set(sls_core.CRACK_NUMERIC_INPUT_KEYS)
+    return tuple(sorted({str(key) for key in raw if key in allowed}))
+
+
+def _valid_crack_numeric(value) -> bool:
+    """Require a finite real scalar and reject Boolean values before coercion."""
+
+    if sls_core.is_boolean_value(value) or isinstance(value, str):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _invalid_factor_input_error(domain: str, keys) -> str | None:
@@ -2196,6 +2342,75 @@ def _sanitise_factor_input_state() -> None:
         )
     else:
         st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
+
+
+def _sanitise_crack_input_state() -> None:
+    """Fail closed on malformed crack numerics in live, durable or event state."""
+
+    allowed = set(sls_core.CRACK_NUMERIC_INPUT_KEYS)
+    invalid_keys = set(_invalid_crack_input_keys())
+    newly_invalid = set()
+
+    def sanitise(mapping, *, drop_invalid=False) -> bool:
+        changed = False
+        for key in allowed:
+            if key not in mapping:
+                continue
+            if _valid_crack_numeric(mapping[key]):
+                continue
+            if drop_invalid:
+                mapping.pop(key)
+            else:
+                mapping[key] = 0.0
+            newly_invalid.add(key)
+            changed = True
+        return changed
+
+    sanitise(st.session_state)
+    durable = st.session_state.get(_INPUT_STATE_KEY)
+    if isinstance(durable, dict):
+        durable = dict(durable)
+        if sanitise(durable):
+            st.session_state[_INPUT_STATE_KEY] = durable
+    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY)
+    if isinstance(pending, dict):
+        pending = dict(pending)
+        pending_changed = sanitise(pending, drop_invalid=True)
+        # Any invalid copy of a key wins over an earlier journal value for that
+        # key. Keeping even a valid-looking stale event could let the sanitized
+        # live placeholder match it on the next interrupted rerun.
+        for key in newly_invalid:
+            if key in pending:
+                pending.pop(key)
+                pending_changed = True
+        if pending_changed:
+            st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
+
+    # A real widget edit/confirmation is journalled with the current value.
+    # Newly rejected values always win this run, and an invalid pending entry is
+    # removed rather than converted to a plausible 0.0 event. Thus an interrupted
+    # rerun cannot later promote a synthesized placeholder to an explicit repair.
+    explicit_repairs = {
+        key
+        for key in allowed
+        if (
+            key not in newly_invalid
+            and isinstance(pending, dict)
+            and key in pending
+            and _valid_crack_numeric(pending[key])
+            and key in st.session_state
+            and _valid_crack_numeric(st.session_state[key])
+            and float(pending[key]) == float(st.session_state[key])
+        )
+    }
+    invalid_keys.update(newly_invalid)
+    invalid_keys.difference_update(explicit_repairs)
+    if invalid_keys:
+        st.session_state[_INVALID_CRACK_INPUT_KEYS_KEY] = tuple(
+            sorted(invalid_keys)
+        )
+    else:
+        st.session_state.pop(_INVALID_CRACK_INPUT_KEYS_KEY, None)
 
 
 def _capture_factor_override_state(domain: str) -> None:
@@ -2316,6 +2531,37 @@ def _render_factor_repair_control(box, domain: str, keys) -> None:
     )
 
 
+def _confirm_crack_repairs(keys) -> None:
+    """Journal currently displayed finite values as an explicit repair."""
+
+    for key in keys:
+        if _valid_crack_numeric(st.session_state.get(key)):
+            _record_input_event(key)
+
+
+def _render_crack_repair_control(box) -> None:
+    """Expose a same-value confirmation path for rejected crack numeric state."""
+
+    rejected = _invalid_crack_input_keys()
+    if not rejected:
+        return
+    box.error(
+        "Rejected Boolean/non-numeric crack-control state remains blocked. "
+        "Edit every listed field, or confirm the displayed finite values after "
+        f"checking them ({', '.join(rejected)})."
+    )
+    box.button(
+        "Confirm repaired crack-control values",
+        key="confirm_crack_numeric_repairs",
+        on_click=_confirm_crack_repairs,
+        args=(rejected,),
+        help=(
+            "This is an explicit engineering confirmation; Sector never treats "
+            "a Boolean value as 0 or 1 mm."
+        ),
+    )
+
+
 def _record_input_event(
     key,
     callback=None,
@@ -2334,6 +2580,7 @@ def _record_input_event(
     if (
         st.session_state.get("_main_page", "Inputs") == "Inputs"
         and key in st.session_state
+        and key not in _NON_REPLAYABLE_WIDGET_KEYS
     ):
         pending = dict(st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}))
         pending[key] = copy.deepcopy(st.session_state[key])
@@ -2404,6 +2651,12 @@ def _restore_input_state(*, replace: bool = False) -> None:
     # Multiple rapid events accumulate here, so a later interruption does not
     # discard an earlier edit from the same burst.
     for key, value in st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}).items():
+        # Native data-editor keys contain Streamlit-owned edit deltas. Streamlit
+        # forbids assigning those widget values through session_state. Their
+        # callbacks already apply the cumulative delta to the canonical base
+        # table before this recovery path can run.
+        if key in _NON_REPLAYABLE_WIDGET_KEYS:
+            continue
         st.session_state[key] = copy.deepcopy(value)
 
 
@@ -2498,12 +2751,19 @@ def _project_state():
 def _project_input_hash() -> str:
     tables, scalars = _project_state()
     digest = project_io.input_sha256(tables, scalars)
-    rejected = _invalid_factor_input_keys()
-    if not rejected:
+    rejected_factors = _invalid_factor_input_keys()
+    rejected_crack = _invalid_crack_input_keys()
+    if not rejected_factors and not rejected_crack:
         return digest
     # A calculation made while a rejected widget value is held fail-closed must
     # never appear to match the same reconstructed numeric defaults after repair.
-    invalid_state = "\0".join((digest, "rejected-factor-inputs", *rejected))
+    invalid_state = "\0".join((
+        digest,
+        "rejected-factor-inputs",
+        *rejected_factors,
+        "rejected-crack-inputs",
+        *rejected_crack,
+    ))
     return hashlib.sha256(invalid_state.encode("utf-8")).hexdigest()
 
 
@@ -2514,6 +2774,12 @@ def _gather_project() -> str:
         raise ValueError(
             "Boolean/non-numeric project material-factor input was rejected "
             f"({', '.join(rejected)}); repair every listed value before saving"
+        )
+    rejected_crack = _invalid_crack_input_keys()
+    if rejected_crack:
+        raise ValueError(
+            "Boolean/non-numeric project crack-control input was rejected "
+            f"({', '.join(rejected_crack)}); repair every listed value before saving"
         )
     tables, scalars = _project_state()
     return project_io.dump_project(
@@ -2572,7 +2838,27 @@ def _perform_autosave() -> bool:
         digest = _project_input_hash()
     except Exception:
         return False
-    if digest == st.session_state.get("_autosave_hash"):
+    record_changed_by_validation = False
+    calculation = st.session_state.get("calculation_record")
+    if isinstance(calculation, Mapping) and "crack_control" in calculation:
+        current_crack_control = calculation.get("crack_control")
+        safe_crack_control = (
+            sls_core.publication_safe_crack_control_record(
+                current_crack_control
+            )
+        )
+        if safe_crack_control != current_crack_control:
+            safe_calculation = copy.deepcopy(dict(calculation))
+            if safe_crack_control is None:
+                safe_calculation.pop("crack_control", None)
+            else:
+                safe_calculation["crack_control"] = safe_crack_control
+            st.session_state["calculation_record"] = safe_calculation
+            record_changed_by_validation = True
+    if (
+        digest == st.session_state.get("_autosave_hash")
+        and not record_changed_by_validation
+    ):
         return False                                 # unchanged since the last save
     try:
         data = _gather_project()
@@ -2698,6 +2984,7 @@ def _apply_pending_project() -> None:
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
     st.session_state.pop("_latest_inputs", None)
     st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
+    st.session_state.pop(_INVALID_CRACK_INPUT_KEYS_KEY, None)
     for key in _FACTOR_MODE_RUNTIME_KEYS:
         st.session_state.pop(key, None)
     # Parsing retains historical scalar loads for compatibility with non-UI callers,
@@ -2795,9 +3082,11 @@ def _apply_pending_project() -> None:
     else:
         st.session_state.pop("calculation_record", None)
     st.session_state["_loaded_project_provenance"] = provenance
-    # Project files intentionally contain inputs, not result payloads. Remove any
-    # result/report from the previously open project so it cannot be mistaken for
-    # evidence belonging to the newly loaded section.
+    # A project may retain a compact crack-control snapshot in calculation
+    # provenance, but it is never restored as a live solver result. Remove any
+    # live result/report from the previously open project so it cannot be mistaken
+    # for evidence belonging to the newly loaded section; the snapshot remains
+    # accessible through ``calculation_record`` and its input-hash match flag.
     for key in (
         "results", "result_sig", "result_plastic_sig", "result_elastic_sig",
         "result_fatigue_sig",
@@ -2854,8 +3143,11 @@ def _save_load_panel() -> None:
                              "JSON file.")
     if project_error:
         box.error(f"Project download blocked: {project_error}.")
-    box.caption(f"Saved with Sector {APP_VERSION}, source "
-                f"{short_revision()}; results are recalculated on load.")
+    box.caption(
+        f"Saved with Sector {APP_VERSION}, source {short_revision()}; "
+        "structured crack-control result summaries are retained as hash-bound "
+        "provenance, while live results are recalculated on load."
+    )
     loaded = st.session_state.get("_loaded_project_provenance")
     if loaded:
         if loaded.get("sector_version"):
@@ -2880,6 +3172,20 @@ def _save_load_panel() -> None:
                     f"{calculation.get('performed_at_utc') or 'time unavailable'}"
                     f" | {match}"
                 )
+                crack_cases = (
+                    (calculation.get("crack_control") or {}).get("cases")
+                    or []
+                )
+                if crack_cases:
+                    summary = "; ".join(
+                        f"{item.get('case') or 'Elastic'}: "
+                        f"{(item.get('assessment') or {}).get('verdict') or (item.get('assessment') or {}).get('status') or 'REVIEW'}"
+                        for item in crack_cases
+                    )
+                    box.caption(
+                        "Recorded crack-control snapshot (audit only): "
+                        + summary
+                    )
         else:
             box.caption("Loaded: legacy project | provenance unavailable")
     _autosave_panel(box)
@@ -3522,6 +3828,13 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_tendon_bond", "sls_tendon_xi",
+    "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
+    "sls_exposure_class", "sls_exposure_context",
+    "sls_check_appearance", "sls_appearance_limit",
+    "sls_check_durability", "sls_decompression_applicability",
+    "sls_project_characteristic_limit", "sls_project_frequent_limit",
+    "sls_project_quasi_permanent_limit",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
 )
@@ -4059,7 +4372,10 @@ def build_inputs(host=st):
              "(N-Mx and N-My), from pure tension to the squash load. Shown in the "
              "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
-    scw.caption("User-defined criteria for Elastic results; 0 = not assessed.")
+    scw.caption(
+        "Stress limits are user-defined. Crack criteria below carry their own "
+        "source and explicit SLS-combination applicability."
+    )
     sls_conc_limit_pct = _seeded_number(
         scw, r"Concrete compression limit (% $f_{ck}$, 0 = not assessed)",
         0.0, 100.0, 60.0, 1.0, "sls_conc_limit_pct", disabled=not elastic_on,
@@ -4084,13 +4400,6 @@ def build_inputs(host=st):
         "Stress and crack-width checks are selected per Elastic case in the "
         "Loads table."
     )
-    sls_wk_limit = _seeded_number(
-        scw, r"Crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)",
-        0.0, 5.0, 0.30, 0.05, "sls_wk_limit",
-        disabled=not (elastic_on and sls_cw),
-        help="User-supplied allowable calculated crack width in millimetres. "
-             "Sector checks the largest reported long-/short-term and fine/coarse "
-             "value against this limit.")
     sls_phi = _seeded_number(
         scw, r"Crack-width element diameter $\phi$ (mm, 0 = auto)",
         0.0, 60.0, 0.0, 1.0, "sls_phi",
@@ -4111,8 +4420,9 @@ def build_inputs(host=st):
                 "help": (
                     "EC2 7.11 bond coefficient k1 for the crack spacing, applied "
                     "to the mild reinforcement: 0.8 for ribbed / high-bond bars "
-                    "(e.g. Tentor), 1.6 for plain round bars. Prestressing "
-                    "tendons always use k1 = 1.6."
+                    "(e.g. Tentor), 1.6 for plain round bars. The separate "
+                    "prestressing-steel control applies to tendons in the 2023 "
+                    "method; the 2005 method retains k1 = 1.6 for tendons."
                 ),
             },
         ),
@@ -4139,6 +4449,244 @@ def build_inputs(host=st):
     )
     sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
     sls_edition = _CRACK_CODES[sls_code]["edition"]
+    sls_criterion_mode = _seeded_selectbox(
+        scw,
+        "Crack-criterion source and routing",
+        list(sls_core.CRITERION_MODES),
+        sls_core.CRITERION_MODE_STANDARD,
+        "sls_criterion_mode",
+        disabled=not (elastic_on and sls_cw),
+        help=(
+            "Standard-derived routes appearance/durability criteria to the "
+            "combination required by the selected edition, member/protection "
+            "group and structured exposure group. "
+            "Project-defined requires a separate positive limit for every "
+            "applicable combination. Legacy ambiguity always returns REVIEW."
+        ),
+    )
+    standard_criteria = (
+        sls_criterion_mode == sls_core.CRITERION_MODE_STANDARD
+    )
+    project_criteria = (
+        sls_criterion_mode == sls_core.CRITERION_MODE_PROJECT
+    )
+    sls_prestress_class = _seeded_selectbox(
+        scw,
+        "Crack-control member / prestress class",
+        list(sls_core.PRESTRESS_CLASSES),
+        sls_core.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_prestress_class",
+        disabled=not (elastic_on and sls_cw and standard_criteria),
+        help=(
+            "The 2004 route distinguishes reinforced/unbonded from bonded "
+            "prestress. The 2023 Table 9.2 route also uses the structured "
+            "protection and exposure groups below."
+        ),
+    )
+    sls_protection_class = _seeded_selectbox(
+        scw,
+        "2023 bonded-tendon protection / member group",
+        list(sls_core.PROTECTION_CLASSES),
+        project_io.DEFAULT_SLS_PROTECTION_CLASS,
+        "sls_protection_class",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == "2023"
+            and sls_prestress_class == sls_core.PRESTRESS_BONDED
+        ),
+        help=(
+            "Table 9.2 separates bonded tendons with Protection Level 1 "
+            "(together with pretensioned members) from bonded tendons with "
+            "Protection Levels 2/3. Not established blocks the verdict."
+        ),
+    )
+    sls_exposure_class = _seeded_selectbox(
+        scw,
+        "2023 Table 9.2 governing exposure group",
+        list(sls_core.EXPOSURE_CLASSES_2023),
+        project_io.DEFAULT_SLS_EXPOSURE_CLASS,
+        "sls_exposure_class",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == "2023"
+        ),
+        help=(
+            "Select the governing Table 9.2 row group explicitly. Combined "
+            "exposures require an engineering choice of the governing group; "
+            "Sector does not parse or infer it from free text."
+        ),
+    )
+    sls_exposure_context = _seeded_text(
+        scw,
+        "Exposure / application context",
+        "",
+        "sls_exposure_context",
+        disabled=not (elastic_on and sls_cw and standard_criteria),
+        help=(
+            "Project-specific exposure/application provenance. For the 2023 "
+            "edition this supplements, but never replaces, the structured "
+            "Table 9.2 group."
+        ),
+    )
+    sls_check_appearance = _seeded_checkbox(
+        scw,
+        "Assess 2023 appearance criterion (Table 9.1)",
+        False,
+        "sls_check_appearance",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+        ),
+        help=(
+            "Adds a separate appearance criterion. This standard-derived route "
+            "is implemented for the 2023 edition; selecting it with another "
+            "edition blocks the verdict until it is cleared or the edition is "
+            "changed. Sector does not reuse a duration label."
+        ),
+    )
+    sls_appearance_limit = _seeded_number(
+        scw,
+        "Appearance crack-width limit (mm, 0 = not assessed)",
+        0.0,
+        5.0,
+        0.30,
+        0.05,
+        "sls_appearance_limit",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == "2023"
+            and sls_check_appearance
+        ),
+        help="Limit selected from Table 9.1 for the stated application context.",
+    )
+    sls_check_durability = _seeded_checkbox(
+        scw,
+        (
+            "Assess durability criterion "
+            + ("(Table 9.2)" if sls_edition == "2023" else "(Table 7.1N)")
+        ),
+        True,
+        "sls_check_durability",
+        disabled=not (elastic_on and sls_cw and standard_criteria),
+        help=(
+            "Adds the standard durability crack-width criterion for the stated "
+            "exposure/application."
+        ),
+    )
+    sls_wk_limit = _seeded_number(
+        scw,
+        r"Durability crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)",
+        0.0,
+        5.0,
+        0.30,
+        0.05,
+        "sls_wk_limit",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_check_durability
+        ),
+        help=(
+            "Limit selected from the applicable standard table. Only a response "
+            "explicitly tagged with the required SLS combination can govern."
+        ),
+    )
+    sls_decompression_applicability = _seeded_selectbox(
+        scw,
+        "2004 quasi-permanent decompression applicability",
+        list(sls_core.DECOMPRESSION_OPTIONS),
+        sls_core.DECOMPRESSION_NOT_ESTABLISHED,
+        "sls_decompression_applicability",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == "2004"
+            and sls_prestress_class == sls_core.PRESTRESS_BONDED
+        ),
+        help=(
+            "The 2004 bonded-prestress route retains the explicit project "
+            "applicability decision. For 2023, Table 9.2 derives decompression "
+            "and its QP/frequent combination from the structured fields above."
+        ),
+    )
+    sls_project_characteristic_limit = _seeded_number(
+        scw,
+        "Project characteristic-combination limit (mm, 0 = not applicable)",
+        0.0,
+        5.0,
+        0.0,
+        0.05,
+        "sls_project_characteristic_limit",
+        disabled=not (elastic_on and sls_cw and project_criteria),
+        help="Positive value explicitly applies the project criterion here.",
+    )
+    sls_project_frequent_limit = _seeded_number(
+        scw,
+        "Project frequent-combination limit (mm, 0 = not applicable)",
+        0.0,
+        5.0,
+        0.0,
+        0.05,
+        "sls_project_frequent_limit",
+        disabled=not (elastic_on and sls_cw and project_criteria),
+        help="Positive value explicitly applies the project criterion here.",
+    )
+    sls_project_quasi_permanent_limit = _seeded_number(
+        scw,
+        "Project quasi-permanent-combination limit (mm, 0 = not applicable)",
+        0.0,
+        5.0,
+        0.0,
+        0.05,
+        "sls_project_quasi_permanent_limit",
+        disabled=not (elastic_on and sls_cw and project_criteria),
+        help="Positive value explicitly applies the project criterion here.",
+    )
+    sls_tendon_bond = _seeded_selectbox(
+        scw,
+        r"Prestressing-steel bond condition ($k_b$)",
+        list(_BOND_K1),
+        project_io.DEFAULT_SLS_TENDON_BOND,
+        "sls_tendon_bond",
+        disabled=not (
+            elastic_on and sls_cw and sls_edition == "2023"
+        ),
+        help=(
+            "Bond condition used in EN 1992-1-1:2023 Formula (9.18): "
+            "the high-bond choice maps to kb = 0.9 and the poor-bond "
+            "choice maps to kb = 1.2. It applies to prestressing "
+            "tendons only."
+        ),
+    )
+    sls_tendon_k1 = _BOND_K1[sls_tendon_bond]
+    sls_tendon_xi = _seeded_number(
+        scw,
+        r"Prestressing bond-strength ratio $\xi$ (0 = not assessed)",
+        0.0,
+        1.0,
+        project_io.DEFAULT_SLS_TENDON_XI,
+        0.05,
+        "sls_tendon_xi",
+        disabled=not (elastic_on and sls_cw and sls_edition == "2023"),
+        help=(
+            "Explicit tendon-to-ribbed-reinforcement bond-strength ratio from "
+            "the applicable product/project basis. Sector derives each "
+            r"$\xi_1 = \sqrt{\xi\phi_s/\phi_p}$ for mixed reinforcement, using the "
+            "largest effective mild-bar diameter and each tendon table "
+            r"diameter; for prestressing-only crack control $\xi_1 = \xi$. Zero "
+            "fails closed when a tendon contributes."
+        ),
+    )
+    _render_crack_repair_control(scw)
     sls_member = scw.selectbox(
         "Member type",
         ["Beam", "Slab"],
@@ -5338,7 +5886,12 @@ def build_inputs(host=st):
     )
     shared_sig = geom_sig + material_sig + _get(_SHARED_SIG_KEYS)
     plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
-    elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
+    invalid_crack_input_keys = _invalid_crack_input_keys()
+    elastic_case_context_sig = (
+        shared_sig
+        + _get(_ELASTIC_CONTEXT_SIG_KEYS)
+        + (("invalid_crack_input_keys", invalid_crack_input_keys),)
+    )
     invalid_factor_input_keys = _invalid_factor_input_keys()
     capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS) + (
         ("invalid_factor_input_keys", invalid_factor_input_keys),
@@ -5477,6 +6030,28 @@ def build_inputs(host=st):
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
+                sls_tendon_bond=sls_tendon_bond,
+                sls_tendon_k1=sls_tendon_k1,
+                sls_tendon_xi=sls_tendon_xi,
+                sls_criterion_mode=sls_criterion_mode,
+                sls_prestress_class=sls_prestress_class,
+                sls_protection_class=sls_protection_class,
+                sls_exposure_class=sls_exposure_class,
+                sls_exposure_context=sls_exposure_context,
+                sls_invalid_numeric_inputs=_invalid_crack_input_keys(),
+                sls_check_appearance=sls_check_appearance,
+                sls_appearance_limit=sls_appearance_limit,
+                sls_check_durability=sls_check_durability,
+                sls_decompression_applicability=(
+                    sls_decompression_applicability
+                ),
+                sls_project_characteristic_limit=(
+                    sls_project_characteristic_limit
+                ),
+                sls_project_frequent_limit=sls_project_frequent_limit,
+                sls_project_quasi_permanent_limit=(
+                    sls_project_quasi_permanent_limit
+                ),
                 sls_wk_limit=sls_wk_limit,
                 sls_conc_limit_pct=sls_conc_limit_pct,
                 sls_steel_limit_pct=sls_steel_limit_pct,
@@ -5618,6 +6193,11 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
             hc_ef=c.hc_ef, phi=c.phi, cover=c.cover, coarse=c.coarse,
             edition=c.edition, kw=c.kw, k1_r=c.k1_r, kfl=c.kfl,
             sr_max_geometric=c.sr_max_geometric,
+            as_eff=c.as_eff, ap_eff=c.ap_eff,
+            ap_eff_weighted=c.ap_eff_weighted, xi1=c.xi1,
+            reinforcement_type=c.reinforcement_type, bc_ef=c.bc_ef,
+            direct_tension=c.direct_tension, scope=c.scope,
+            direction_deg=c.direction_deg,
         )
 
     kind, number, element_id = element(cw.gov_bar)
@@ -5629,6 +6209,11 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
         element_id=element_id, coarse=cw.coarse,
         edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
         sr_max_geometric=cw.sr_max_geometric,
+        as_eff=cw.as_eff, ap_eff=cw.ap_eff,
+        ap_eff_weighted=cw.ap_eff_weighted,
+        xi1_min=cw.xi1_min, xi1_max=cw.xi1_max,
+        bc_ef=cw.bc_ef, direct_tension=cw.direct_tension,
+        scope=cw.scope, direction_deg=cw.direction_deg,
         candidates=[candidate(c) for c in cw.candidates],
     )
 
@@ -5670,6 +6255,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     run that only touched the elastic (or only the plastic) inputs recomputes just
     the affected half.
     """
+    sls_core.require_non_boolean_crack_numeric_inputs(inp)
     out = {}
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
@@ -5871,11 +6457,12 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         )
 
         # Extended serviceability checks. Each bar's clear cover is taken from the
-        # geometry, so no cover input is needed. The long-term (quasi-permanent)
-        # state at nl (beta/kt = 0.5/0.4) drives the cracking threshold, the
-        # section properties and tension stiffening; the short-term (instantaneous)
-        # state -- the total long+short load at ns (beta/kt = 1.0/0.6) -- gives the
-        # short-term crack width. Crack width is reported for both loads.
+        # geometry, so no cover input is needed. The long-duration state at nl
+        # (beta/kt = 0.5/0.4) contributes to the cracking threshold, the
+        # section properties and tension stiffening; the instantaneous total state
+        # -- the total long+short load at ns (beta/kt = 1.0/0.6) -- gives the
+        # total-response crack width. Crack width is reported for both duration
+        # states; criterion routing uses separate structured combination metadata.
         if inp["sls_phi"] > 0.0:
             phi = inp["sls_phi"]
         else:
@@ -5884,10 +6471,23 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 for item in (inp.get("bar_elements", [])
                              + inp.get("tendon_elements", []))
             ]
-        # k1 per bar: the mild reinforcement uses the selected bond value; any
-        # prestressing tendons (folded into the bar set after the bars) always
-        # use 1.6. Order matches sec.bar_arrays() (bars first, then tendons).
-        k1_bars = [inp["sls_k1"]] * len(inp["bars"]) + [1.6] * len(inp["tendons"])
+        # Bond inputs and reinforcement classification follow sec.bar_arrays()
+        # (mild bars first, then prestressing tendons). The 2005 method retains
+        # its established tendon k1 = 1.6 treatment; the 2023 method exposes the
+        # selected tendon bond condition and uses it to derive kb.
+        reinforcement_types = (
+            ["mild"] * len(inp["bars"])
+            + ["prestress"] * len(inp["tendons"])
+        )
+        tendon_k1 = (
+            inp["sls_tendon_k1"]
+            if inp["sls_edition"] == "2023"
+            else 1.6
+        )
+        k1_bars = (
+            [inp["sls_k1"]] * len(inp["bars"])
+            + [tendon_k1] * len(inp["tendons"])
+        )
         # DK NA crack-spacing rules: cover-dependent k3, and -- for an ordinary beam
         # (not a slab or a prestressed member) -- dropping the (h-x)/3 hc,ef term.
         dk_na = inp["sls_dk_na"]
@@ -5910,7 +6510,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             bar_diameter=phi, k1=k1_bars,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             edition=inp["sls_edition"],
-            n_mult=n_mult, prestress_stress=prestress_stress)
+            n_mult=n_mult, prestress_stress=prestress_stress,
+            reinforcement_types=reinforcement_types,
+            bond_ratio_xi=inp["sls_tendon_xi"])
         sls_converged = (
             r.converged
             and cr_l.uncracked.converged
@@ -5949,39 +6551,88 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
+            crack_dispositions={},
+            crack_criteria=(
+                sls_core.crack_criteria_from_inputs(inp)
+                if inp["sls_cw"] else []
+            ),
+            crack_response_contexts={},
+            crack_scope_note=CRACK_DIRECTIONAL_LIMITATION,
+            crack_code=(inp["sls_code"] if inp["sls_cw"] else None),
+            crack_edition=(inp["sls_edition"] if inp["sls_cw"] else None),
+            crack_member=(
+                inp["sls_member"]
+                if inp["sls_cw"] and dk_na
+                else None
+            ),
         )
-        # Crack width is its own opt-in, reported for both load cases once the
-        # section has cracked. The short-term state reuses the combined creep solve
-        # `r`: its instantaneous neutral axis with the displayed total steel stress
-        # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
-        # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
+        # Crack width is its own opt-in, reported for both duration states once the
+        # section has cracked. The instantaneous total state reuses the combined
+        # creep solve `r`: its instantaneous neutral axis with the displayed total
+        # steel stress (s2 + RST1), so the crack-width sigma_s matches the Total
+        # column rather than a raw (long+short)-at-ns solve. Each bar's cover comes
+        # from geometry.
         if inp["sls_cw"] and cracked:
-            # Crack width uses the load-induced steel stress, so strip the locked-in
-            # tendon prestress back out of the reported total (mild bars unaffected).
+            # Crack width uses the load-induced steel stress. The combined result
+            # reports physical tendon stress, so strip its locked-in prestress to
+            # recover Delta sigma_p. ``analyse_cracking`` already returns the
+            # passive long-term increment because prestress enters that solve only
+            # as a constant equilibrium resultant; subtracting it again would
+            # understate the long-term tendon stress.
             cw_stress = np.asarray(r.bar_stress_total, dtype=float)
+            long_cw_stress = np.asarray(
+                cr_l.cracked_state.bar_stress, dtype=float
+            )
             if prestress_stress is not None:
                 cw_stress = cw_stress - prestress_stress
             short_state = dataclasses.replace(r.short_term, bar_stress=cw_stress)
+            long_state = dataclasses.replace(
+                cr_l.cracked_state, bar_stress=long_cw_stress
+            )
 
             def _cw(state, n, kt, coarse):
-                return crack_width(sec, state, n, fctm=inp["sls_fctm"],
-                                   Es=[material.Es for material in all_laws],
-                                   kt=kt, bar_diameter=phi,
-                                   k1=k1_bars, k3_cover_dependent=dk_na,
-                                   include_hx_term=include_hx, coarse=coarse,
-                                   edition=inp["sls_edition"], n_mult=n_mult)
+                return evaluate_crack_width(
+                    sec,
+                    state,
+                    n,
+                    fctm=inp["sls_fctm"],
+                    Es=[material.Es for material in all_laws],
+                    kt=kt,
+                    bar_diameter=phi,
+                    k1=k1_bars,
+                    k3_cover_dependent=dk_na,
+                    include_hx_term=include_hx,
+                    coarse=coarse,
+                    edition=inp["sls_edition"],
+                    n_mult=n_mult,
+                    reinforcement_types=reinforcement_types,
+                    bond_ratio_xi=inp["sls_tendon_xi"],
+                )
 
-            # Long-term crack width is on the cracked section under the quasi-permanent
-            # load (kt = 0.4), computed directly from the long-term cracked state so it
-            # is reported even when the long-term load alone would not cross the
-            # cracking threshold. The short-term is the instantaneous total (kt = 0.6).
+            def _disposition(evaluation):
+                result = evaluation.result
+                return {
+                    "status": evaluation.status,
+                    "reason": evaluation.reason,
+                    "scope": result.scope if result is not None else None,
+                }
+
+            # Long-term and total are response-duration states only. Their SLS
+            # combination classes come from explicit load-table fields below;
+            # neither duration is treated as quasi-permanent/frequent by inference.
+            crack_long = _cw(long_state, inp["nl"], 0.4, False)
+            crack_short = _cw(short_state, inp["ns"], 0.6, False)
             out["elastic"].update(
                 crack=_crack_dict(
-                    _cw(cr_l.cracked_state, inp["nl"], 0.4, False),
+                    crack_long.result,
                     bar_ids, tendon_ids),
                 crack_short=_crack_dict(
-                    _cw(short_state, inp["ns"], 0.6, False),
+                    crack_short.result,
                     bar_ids, tendon_ids),
+                crack_dispositions={
+                    "Long-term": _disposition(crack_long),
+                    "Total (long + short)": _disposition(crack_short),
+                },
                 crack_code=inp["sls_code"],
                 crack_edition=inp["sls_edition"],
                 crack_member=(inp["sls_member"] if dk_na else None),
@@ -5989,34 +6640,116 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             # The DK NA reports the coarse crack system alongside the fine one, for
             # both load cases (four crack widths in total).
             if dk_na:
+                crack_long_coarse = _cw(long_state, inp["nl"], 0.4, True)
+                crack_short_coarse = _cw(short_state, inp["ns"], 0.6, True)
                 out["elastic"].update(
                     crack_coarse=_crack_dict(
-                        _cw(cr_l.cracked_state, inp["nl"], 0.4, True),
+                        crack_long_coarse.result,
                         bar_ids, tendon_ids),
                     crack_short_coarse=_crack_dict(
-                        _cw(short_state, inp["ns"], 0.6, True),
+                        crack_short_coarse.result,
                         bar_ids, tendon_ids),
                 )
+                out["elastic"]["crack_dispositions"] = {
+                    "Long-term (fine)": _disposition(crack_long),
+                    "Total (fine)": _disposition(crack_short),
+                    "Long-term (coarse)": _disposition(crack_long_coarse),
+                    "Total (coarse)": _disposition(crack_short_coarse),
+                }
+        elif inp["sls_cw"]:
+            out["elastic"]["crack_dispositions"] = {
+                "Long-term": {
+                    "status": "NOT APPLICABLE",
+                    "reason": "The section remained uncracked.",
+                    "scope": None,
+                },
+                "Total (long + short)": {
+                    "status": "NOT APPLICABLE",
+                    "reason": "The section remained uncracked.",
+                    "scope": None,
+                },
+            }
         eout = out["elastic"]
         if (
-            eout.get("crack_coarse") is not None
-            or eout.get("crack_short_coarse") is not None
+            "crack_coarse" in eout
+            or "crack_short_coarse" in eout
         ):
             crack_cases = {
                 "Long-term (fine)": eout.get("crack"),
-                "Short-term (fine)": eout.get("crack_short"),
+                "Total (fine)": eout.get("crack_short"),
                 "Long-term (coarse)": eout.get("crack_coarse"),
-                "Short-term (coarse)": eout.get("crack_short_coarse"),
+                "Total (coarse)": eout.get("crack_short_coarse"),
+            }
+            response_states = {
+                "Long-term (fine)": "long",
+                "Total (fine)": "total",
+                "Long-term (coarse)": "long",
+                "Total (coarse)": "total",
             }
         else:
             crack_cases = {
                 "Long-term": eout.get("crack"),
-                "Short-term": eout.get("crack_short"),
+                "Total (long + short)": eout.get("crack_short"),
             }
+            response_states = {
+                "Long-term": "long",
+                "Total (long + short)": "total",
+            }
+        combination_map = dict(inp.get("sls_response_combinations") or {})
+        provenance_map = dict(inp.get("sls_response_provenance") or {})
+        combination_map.setdefault(
+            "long",
+            inp.get(
+                "sls_long_combination",
+                sls_core.COMBINATION_UNSPECIFIED,
+            ),
+        )
+        combination_map.setdefault(
+            "total",
+            inp.get(
+                "sls_total_combination",
+                sls_core.COMBINATION_UNSPECIFIED,
+            ),
+        )
+        elastic_case_id = str(
+            (inp.get("elastic_case") or {}).get("id") or ""
+        ).strip()
+        response_contexts = {
+            name: {
+                "combination": combination_map[state],
+                "duration": (
+                    "Sustained / long-term response"
+                    if state == "long"
+                    else "Instantaneous total (long + short) response"
+                ),
+                "response_id": (
+                    f"{elastic_case_id}:{state}"
+                    if elastic_case_id else state
+                ),
+                "provenance": provenance_map.get(state),
+                "solver_provenance": {
+                    "state": state,
+                    "elastic_case": dict(inp.get("elastic_case") or {}),
+                    "creep_modular_ratio": (
+                        "nl" if state == "long" else "combined nl/ns"
+                    ),
+                },
+            }
+            for name, state in response_states.items()
+        }
+        eout["crack_response_contexts"] = response_contexts
+        eout["crack_responses"] = crack_cases
         eout["crack_assessment"] = sls_core.crack_assessment(
             crack_cases,
             limit_mm=inp["sls_wk_limit"],
             valid=eout["converged"],
+            dispositions=eout.get("crack_dispositions"),
+            response_contexts=response_contexts,
+            response_mapping_scope=inp.get("sls_response_mapping_scope"),
+            criteria=eout.get("crack_criteria"),
+        )
+        eout["crack_response_mapping_scope"] = copy.deepcopy(
+            eout["crack_assessment"].get("response_mapping_scope") or []
         )
     if inp.get("minimum_reinforcement_on"):
         if inp.get("detailing_edition") == detailing.EC2_2023:
@@ -6137,13 +6870,90 @@ def run_analysis(
     gating remains the caller's responsibility; matching rows are then reused by
     name and exact action signature.
     """
+    sls_core.require_non_boolean_crack_numeric_inputs(inp)
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
         return {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
+        legacy_inp = inp
+        if inp.get("sls_cw"):
+            legacy_inp = dict(inp)
+            combinations = dict(
+                inp.get("sls_response_combinations") or {}
+            )
+            combinations.setdefault(
+                "long",
+                inp.get(
+                    "sls_long_combination",
+                    sls_core.COMBINATION_UNSPECIFIED,
+                ),
+            )
+            combinations.setdefault(
+                "total",
+                inp.get(
+                    "sls_total_combination",
+                    sls_core.COMBINATION_UNSPECIFIED,
+                ),
+            )
+            provenance = dict(
+                inp.get("sls_response_provenance") or {}
+            )
+            provenance.setdefault(
+                "long",
+                "Legacy scalar sls_long_combination input field",
+            )
+            provenance.setdefault(
+                "total",
+                "Legacy scalar sls_total_combination input field",
+            )
+            legacy_inp["sls_response_combinations"] = combinations
+            legacy_inp["sls_response_provenance"] = provenance
+            if inp.get("sls_response_mapping_scope") is None:
+                elastic_case = inp.get("elastic_case")
+                elastic_case = (
+                    elastic_case
+                    if isinstance(elastic_case, Mapping)
+                    else {}
+                )
+                elastic_case_id = str(
+                    elastic_case.get("id") or ""
+                ).strip()
+                elastic_case_label = (
+                    elastic_case_id
+                    or str(elastic_case.get("name") or "").strip()
+                    or "Legacy scalar input"
+                )
+                states = (
+                    (
+                        "long",
+                        "Sustained / long-term response",
+                    ),
+                    (
+                        "total",
+                        "Instantaneous total (long + short) response",
+                    ),
+                )
+                legacy_inp["sls_response_mapping_scope"] = [
+                    {
+                        "combination": combinations[state],
+                        "duration": duration,
+                        "response": (
+                            f"{elastic_case_label} / {state}"
+                        ),
+                        "response_id": (
+                            f"{elastic_case_id}:{state}"
+                            if elastic_case_id
+                            else state
+                        ),
+                        "elastic_case": elastic_case_label,
+                        "state": state,
+                        "provenance": provenance[state],
+                    }
+                    for state, duration in states
+                ]
         result = _run_single_analysis(
-            inp,
+            legacy_inp,
             reuse_plastic=reuse_plastic,
             reuse_elastic=reuse_elastic,
         )
@@ -6188,6 +6998,114 @@ def run_analysis(
             else _run_fatigue_or_invalid(inp)
         )
     return result
+
+
+def crack_control_calculation_record(results):
+    """Return a compact, input-hash-bound crack-control result snapshot.
+
+    Project files do not restore numerical snapshots as live solver results. This
+    record instead preserves each routed verdict and every response summary as
+    immutable provenance, while ``matches_saved_inputs`` states whether it belongs
+    to the saved inputs.
+    """
+    results = results or {}
+    entries = results.get("elastic_cases")
+    if entries is None:
+        entries = [{
+            "name": (
+                (results.get("elastic") or {}).get("elastic_case", {})
+                or {}
+            ).get("id", "Elastic"),
+            "results": {"elastic": results.get("elastic")},
+        }]
+    cases = []
+    for entry in entries:
+        elastic = (entry.get("results") or {}).get("elastic") or {}
+        if not elastic.get("show_cw"):
+            continue
+        raw_assessment = elastic.get("crack_assessment")
+        if not raw_assessment:
+            continue
+        assessment = (
+            raw_assessment
+            if isinstance(raw_assessment, Mapping)
+            else sls_core.publication_safe_crack_assessment(
+                None,
+                [{
+                    "response": "assessment",
+                    "reason": (
+                        "Calculated crack assessment rejected: assessment "
+                        "is not a mapping."
+                    ),
+                }],
+            )
+        )
+        dispositions = elastic.get("crack_dispositions") or {}
+        dispositions = (
+            dispositions if isinstance(dispositions, Mapping) else {}
+        )
+        contexts = elastic.get("crack_response_contexts") or {}
+        contexts = contexts if isinstance(contexts, Mapping) else {}
+        informational = set(
+            assessment.get("informational_responses") or []
+        )
+        responses = []
+        response_container = elastic.get("crack_responses")
+        if response_container is None:
+            response_items = ()
+        elif isinstance(response_container, Mapping):
+            response_items = response_container.items()
+        else:
+            response_items = (("crack responses", response_container),)
+        for name, raw_response in response_items:
+            response_is_mapping = isinstance(raw_response, Mapping)
+            response = raw_response if response_is_mapping else {}
+            disposition = dispositions.get(name) or {}
+            raw_wk = response.get("wk")
+            response_rejected = (
+                raw_response is not None and not response_is_mapping
+            )
+            wk_rejected = (
+                response_rejected
+                or (
+                    raw_response is not None
+                    and response_is_mapping
+                    and sls_core.crack_width_numeric_value(raw_wk) is None
+                )
+            )
+            response_record = {
+                "name": name,
+                "wk_mm": None if wk_rejected else raw_wk,
+                "element_id": response.get("element_id"),
+                "solver_status": disposition.get("status"),
+                "solver_reason": disposition.get("reason"),
+                "context": copy.deepcopy(contexts.get(name) or {}),
+                "acceptance_role": (
+                    "informational"
+                    if name in informational else "criterion input"
+                ),
+            }
+            if response.get("decompression") is not None:
+                response_record["decompression"] = copy.deepcopy(
+                    response.get("decompression")
+                )
+            if wk_rejected:
+                response_record["result_validation"] = (
+                    "Calculated crack-width response rejected; no numeric "
+                    "acceptance evidence retained."
+                )
+            responses.append(response_record)
+        cases.append({
+            "case": str(entry.get("name") or "Elastic"),
+            "assessment": copy.deepcopy(assessment),
+            "response_mapping_scope": copy.deepcopy(
+                elastic.get("crack_response_mapping_scope")
+            ),
+            "responses": responses,
+        })
+    return sls_core.publication_safe_crack_control_record(
+        {"cases": cases} if cases else None
+    )
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -7503,6 +8421,14 @@ def results_overview_view(inp, results, *, stale=False):
         st.error(headline)
     else:
         st.warning(headline)
+    if any(
+        row["check"] in {"Crack width", "Decompression"}
+        for row in rows
+    ):
+        st.warning(
+            "Crack-control conclusion limitation: "
+            f"{CRACK_DIRECTIONAL_LIMITATION}"
+        )
 
     if case_register:
         st.dataframe(case_register, hide_index=True, width="stretch")
@@ -8390,9 +9316,9 @@ def _elastic_sls_section(inp, e):
     """Serviceability sub-report inside the elastic view: the cracking threshold
     and transformed section properties (always); crack width is an independent
     opt-in. The cracking decision is on the *total* (long + short) load -- cracking
-    is triggered by the peak load the section ever sees and is irreversible -- while
-    the crack width is reported for both the long-term (quasi-permanent, the
-    code-limit case) and the short-term (instantaneous) load."""
+    is triggered by the peak load the section ever sees and is irreversible. Crack
+    widths are reported for both response-duration states, while acceptance is
+    routed independently by their explicit SLS-combination designations."""
     if "cracked" not in e:
         return
     show_cw = e.get("show_cw", False)
@@ -8438,13 +9364,15 @@ def _elastic_sls_section(inp, e):
 
 
 def _crack_width_panel(e):
-    """Crack width (EC2 7.3.4) for the long-term and short-term load cases, side
-    by side. The DK NA reports the fine and the coarse crack system (four columns);
-    each bar's clear cover is taken from the geometry and the bar with the largest
-    wk governs, reported per load case."""
+    """Crack width for the sustained and total-response duration states.
+
+    The response's explicit SLS-combination designation, rather than its duration
+    label or magnitude relative to another response, controls criterion routing.
+    The DK NA reports the fine and coarse crack systems for both duration states.
+    """
     cl, cs = e.get("crack"), e.get("crack_short")
     clc, csc = e.get("crack_coarse"), e.get("crack_short_coarse")
-    st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
+    st.markdown(f"**Crack control** ({e.get('crack_code', 'EC2 7.3.4')})")
     no_results = cl is None and cs is None and clc is None and csc is None
     assessment = e.get("crack_assessment", {})
     status = assessment.get("status", "NOT ASSESSED")
@@ -8454,14 +9382,38 @@ def _crack_width_panel(e):
     case = assessment.get("case") or "-"
     governing = assessment.get("governing") or "-"
     margin = assessment.get("margin")
+    decompression_governs = (
+        assessment.get("criterion") == sls_core.CRITERION_DECOMPRESSION
+    )
+    result_label = (
+        "governing concrete stress"
+        if decompression_governs else "governing $w_k$"
+    )
+    result_value = (
+        "-"
+        if value is None
+        else f"{value:.3f} {'MPa' if decompression_governs else 'mm'}"
+    )
+    limit_text = (
+        "compression required"
+        if decompression_governs
+        else (
+            "not supplied"
+            if limit is None or limit <= 0.0
+            else f"{limit:.3f} mm"
+        )
+    )
+    status_label = (
+        "Decompression" if decompression_governs else "Crack width"
+    )
     message = (
-        f"**{display_status} - Crack width** | governing $w_k$ "
-        f"{'-' if value is None else f'{value:.3f} mm'} | limit "
-        f"{'not supplied' if limit is None or limit <= 0.0 else f'{limit:.3f} mm'} | "
+        f"**{display_status} - {status_label}** | {result_label} "
+        f"{result_value} | limit {limit_text} | "
         f"case {case} | element {governing}"
     )
     if margin is not None:
-        message += f" | margin {margin:+.3f} mm"
+        margin_unit = "MPa" if decompression_governs else "mm"
+        message += f" | margin {margin:+.3f} {margin_unit}"
     if status == "OK":
         st.success(message)
     elif status in {"EXCEEDED", "INVALID"}:
@@ -8470,45 +9422,147 @@ def _crack_width_panel(e):
         st.warning(message)
     else:
         st.info(message)
-    st.caption(f"Criteria: {e.get('sls_limit_source', '-')}.")
+    st.caption(
+        "Acceptance route: "
+        f"{assessment.get('required_combination') or 'not established'}; "
+        f"source: {assessment.get('criterion_source') or e.get('sls_limit_source', '-')}."
+    )
+    criterion_rows = []
+    for item in assessment.get("criteria", []):
+        is_decompression = (
+            item.get("kind") == sls_core.CRITERION_DECOMPRESSION
+        )
+        criterion_limit = item.get("limit")
+        criterion_value = item.get("value")
+        criterion_rows.append({
+            "Criterion": item.get("kind"),
+            "Source type": item.get("criterion_source_type"),
+            "Required combination": item.get("required_combination") or "-",
+            "Matched response": ", ".join(
+                item.get("matched_responses") or []
+            ) or "-",
+            "Limit / requirement": (
+                "compression required"
+                if is_decompression
+                else (
+                    "-"
+                    if criterion_limit is None
+                    else f"{criterion_limit:.3f} mm"
+                )
+            ),
+            "Result": (
+                "-"
+                if criterion_value is None
+                else (
+                    f"{criterion_value:.3f} MPa"
+                    if is_decompression
+                    else f"{criterion_value:.3f} mm"
+                )
+            ),
+            "Status": presentation.assessment_status_label(
+                item.get("status")
+            ),
+            "Source": item.get("criterion_source") or "-",
+        })
+    if criterion_rows:
+        st.dataframe(
+            criterion_rows,
+            hide_index=True,
+            width="stretch",
+        )
+    response_rows = []
+    informational = set(assessment.get("informational_responses") or [])
+    for name, context in (
+        assessment.get("response_contexts") or {}
+    ).items():
+        response_rows.append({
+            "Response": name,
+            "Duration state": context.get("duration") or "-",
+            "SLS combination": context.get("combination") or "-",
+            "Acceptance role": (
+                "Informational" if name in informational else "Criterion input"
+            ),
+            "Mapping provenance": context.get("provenance") or "-",
+        })
+    if response_rows:
+        st.dataframe(
+            response_rows,
+            hide_index=True,
+            width="stretch",
+        )
+    st.warning(
+        "Crack-control scope: "
+        f"{e.get('crack_scope_note') or CRACK_DIRECTIONAL_LIMITATION}"
+    )
     if no_results:
-        st.info("No crack width: section uncracked or no reinforcement in tension.")
+        st.info(
+            "No crack width: "
+            + (
+                assessment.get("reason")
+                or "section uncracked or no reinforcement in tension."
+            )
+        )
         return
-    quants = ["wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
-              f"{_SIGMA}s (MPa)", f"{_RHO}p,eff", "hc,ef (m)", "cover c (mm)",
-              f"element dia {_PHI} (mm)", "governing element"]
-    keys = ["wk", "sr_max", "esm_ecm", "sigma_s", "rho_p_eff", "hc_ef", "cover",
-            "phi", "element_id"]
-    fmts = ["{:.3f}", "{:.3f}", "{:.3e}", "{:.3f}", "{:.4f}", "{:.3f}", "{:.3f}",
-            "{:.3f}", "{}"]
+    quants = [
+        "wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
+        f"{_SIGMA}s / {_DELTA}{_SIGMA}p (MPa)", f"{_RHO}p,eff",
+        "As,eff (m2)", "Ap,eff (m2)", f"{_XI}1 Ap,eff (m2)",
+        f"{_XI}1 range", "Ac,eff (m2)", "hc,eff (m)", "bc,eff (m)",
+        "cover c (mm)", f"element dia {_PHI} (mm)", "scope",
+        f"direction ({_DEG})", "governing element",
+    ]
+    keys = [
+        "wk", "sr_max", "esm_ecm", "sigma_s", "rho_p_eff",
+        "as_eff", "ap_eff", "ap_eff_weighted", "_xi1_range",
+        "ac_eff", "hc_ef", "bc_ef", "cover", "phi", "scope",
+        "direction_deg", "element_id",
+    ]
+    fmts = [
+        "{:.3f}", "{:.3f}", "{:.3e}", "{:.3f}", "{:.4f}",
+        "{:.6f}", "{:.6f}", "{:.6f}", "{}", "{:.6f}", "{:.3f}",
+        "{:.3f}", "{:.3f}", "{:.3f}", "{}", "{:.1f}", "{}",
+    ]
 
     def column(c):
         if c is None:
             return ["-"] * len(keys)
-        return [f.format(c[k]) for k, f in zip(keys, fmts)]
+        values = []
+        for key, fmt in zip(keys, fmts):
+            if key == "_xi1_range":
+                low, high = c.get("xi1_min"), c.get("xi1_max")
+                value = (
+                    "-"
+                    if low is None or high is None
+                    else f"{float(low):.4f} - {float(high):.4f}"
+                )
+                values.append(value)
+                continue
+            value = c.get(key)
+            values.append("-" if value is None else fmt.format(value))
+        return values
 
     has_coarse = clc is not None or csc is not None
     if has_coarse:
         # DK NA: fine and coarse crack systems, each for both load cases.
         data = {"Quantity": quants, "Long-term (fine)": column(cl),
-                "Short-term (fine)": column(cs), "Long-term (coarse)": column(clc),
-                "Short-term (coarse)": column(csc)}
+                "Total (fine)": column(cs), "Long-term (coarse)": column(clc),
+                "Total (coarse)": column(csc)}
     else:
         data = {"Quantity": quants, "Long-term": column(cl),
-                "Short-term": column(cs)}
+                "Total (long + short)": column(cs)}
     st.dataframe(data, hide_index=True, width="stretch")
-    st.caption("Governing (largest-$w_k$) element per load case; each element's "
+    st.caption("Governing (largest-$w_k$) element per response state; each element's "
                "clear cover is the distance to the nearest concrete face minus "
                "its radius.")
 
     cases = ([
         ("Long-term (fine)", cl),
-        ("Short-term (fine)", cs),
+        ("Total (fine)", cs),
         ("Long-term (coarse)", clc),
-        ("Short-term (coarse)", csc),
+        ("Total (coarse)", csc),
     ] if has_coarse else [
         ("Long-term", cl),
-        ("Short-term", cs),
+        ("Total (long + short)", cs),
     ])
     candidate_rows = []
     for case_name, case_result in cases:
@@ -8527,10 +9581,20 @@ def _crack_width_panel(e):
                 "x (mm)": round(row["x_mm"], 2),
                 "y (mm)": round(row["y_mm"], 2),
                 "Area (mm2)": round(row["area_mm2"], 2),
+                "Type": row.get("reinforcement_type", "-"),
                 "Cover (mm)": round(row["cover"], 2),
                 f"{_PHI} (mm)": round(row["phi"], 2),
                 f"{_SIGMA}s (MPa)": round(row["sigma_s"], 3),
+                f"{_XI}1": (
+                    "-"
+                    if row.get("xi1") is None
+                    else round(row["xi1"], 5)
+                ),
+                f"{_XI}1 Ap,eff (m2)": round(
+                    row.get("ap_eff_weighted", 0.0), 7
+                ),
                 "Ac,eff (m2)": round(row["ac_eff"], 6),
+                "Scope": row.get("scope", "-"),
                 f"{_EPS}sm-{_EPS}cm": round(row["esm_ecm"], 7),
                 "sr,max (mm)": round(row["sr_max"], 2),
                 "wk (mm)": round(wk, 3),
@@ -10531,12 +11595,20 @@ def _render_selected_case_actions(family, actions):
         [
             {
                 "Action part": "Long-term",
+                "Response SLS combination": actions.get(
+                    "long_combination",
+                    sls_core.COMBINATION_UNSPECIFIED,
+                ),
                 "N_Ed [kN]": actions.get("n_long_ed_kn", 0.0),
                 "Mx_Ed [kNm]": actions.get("mx_long_ed_knm", 0.0),
                 "My_Ed [kNm]": actions.get("my_long_ed_knm", 0.0),
             },
             {
-                "Action part": "Short-term",
+                "Action part": "Short increment",
+                "Response SLS combination": actions.get(
+                    "total_combination",
+                    sls_core.COMBINATION_UNSPECIFIED,
+                ),
                 "N_Ed [kN]": actions.get("n_short_ed_kn", 0.0),
                 "Mx_Ed [kNm]": actions.get("mx_short_ed_knm", 0.0),
                 "My_Ed [kNm]": actions.get("my_short_ed_knm", 0.0),
@@ -10697,7 +11769,7 @@ def _analysis_workspace(inp):
             # live edited geometry or spectra in a stale result view would combine
             # evidence from two different calculations.
             st.session_state["result_input_snapshot"] = copy.deepcopy(inp)
-            st.session_state["calculation_record"] = {
+            calculation_record = {
                 "performed_at_utc": datetime.now(timezone.utc).isoformat(
                     timespec="seconds"
                 ),
@@ -10705,6 +11777,12 @@ def _analysis_workspace(inp):
                 "source_revision": source_revision(),
                 "input_sha256": _project_input_hash(),
             }
+            crack_control_record = crack_control_calculation_record(
+                st.session_state["results"]
+            )
+            if crack_control_record is not None:
+                calculation_record["crack_control"] = crack_control_record
+            st.session_state["calculation_record"] = calculation_record
         else:
             st.session_state.pop("result_input_snapshot", None)
         # Re-default the Plastic view's neutral-axis state to this result's governing
@@ -10842,6 +11920,7 @@ _restore_input_state(
     replace=bool(st.session_state.get(_INPUT_BUILD_KEY, False))
 )
 _sanitise_factor_input_state()
+_sanitise_crack_input_state()
 
 main_page = st.segmented_control(
     "Workspace",

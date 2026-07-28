@@ -1,17 +1,18 @@
 """Canonical load-case tables shared by the UI and project-file migration.
 
 The current application historically stores one Plastic and one Elastic action
-set as individual Streamlit scalar keys.  The multi-case workflow uses two
+set as individual Streamlit scalar keys. The multi-case workflow uses two
 typed tables instead.  This module owns that boundary so project I/O, the UI and
 the calculation orchestration do not each invent subtly different column names,
 defaults or validation rules.
 
-The table model deliberately describes solver methodologies, not imposed limit
-states.  A case name and description are project-defined.  Section forces use a
-consistent ``*_Ed`` vocabulary; the Elastic table retains the existing sustained
-and instantaneous decomposition needed by the combined creep solver.  Stress and
-crack-width acceptance are selected per Elastic case while their numerical limits
-remain global inputs.
+The table model keeps solver duration and acceptance combination distinct. A case
+name and description are project-defined. Section forces use a consistent
+``*_Ed`` vocabulary; the Elastic table retains the sustained and instantaneous
+decomposition needed by the combined creep solver, and separately records which
+SLS combination each resulting response represents. Stress and crack-width
+acceptance are selected per Elastic case; structured criteria route only to an
+explicitly matching combination.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ import math
 from collections.abc import Mapping
 
 import pandas as pd
+
+from sector import sls as sls_core
 
 
 PLASTIC_TABLE_KEY = "plastic_cases_base"
@@ -71,6 +74,8 @@ PLASTIC_NUMERIC = (
 ELASTIC_COLUMNS = (
     NAME,
     DESCRIPTION,
+    "long_combination",
+    "total_combination",
     "n_long_ed_kn",
     "mx_long_ed_knm",
     "my_long_ed_knm",
@@ -80,8 +85,9 @@ ELASTIC_COLUMNS = (
     "check_stress",
     "check_crack_width",
 )
-ELASTIC_NUMERIC = ELASTIC_COLUMNS[2:8]
-ELASTIC_FLAGS = ELASTIC_COLUMNS[8:]
+ELASTIC_COMBINATION_COLUMNS = ("long_combination", "total_combination")
+ELASTIC_NUMERIC = ELASTIC_COLUMNS[4:10]
+ELASTIC_FLAGS = ELASTIC_COLUMNS[10:]
 
 TABLE_COLUMNS = {
     PLASTIC_TABLE_KEY: PLASTIC_COLUMNS,
@@ -97,7 +103,7 @@ FLAG_COLUMNS = {
 }
 TEXT_COLUMNS = {
     PLASTIC_TABLE_KEY: (NAME, DESCRIPTION, *PLASTIC_FACE_COLUMNS),
-    ELASTIC_TABLE_KEY: (NAME, DESCRIPTION),
+    ELASTIC_TABLE_KEY: (NAME, DESCRIPTION, *ELASTIC_COMBINATION_COLUMNS),
 }
 
 
@@ -160,6 +166,11 @@ def _face(value) -> str:
     }:
         return FACE_POSITIVE
     return _text(value)
+
+
+def _combination(value) -> str:
+    """Canonicalise known SLS classes while retaining invalid text for review."""
+    return sls_core.canonical_combination(_text(value))
 
 
 def legacy_shear_component(axis) -> str:
@@ -247,13 +258,29 @@ def normalise_table(value, key: str) -> pd.DataFrame:
 
     result = pd.DataFrame(index=frame.index)
     for column in TEXT_COLUMNS[key]:
-        default = FACE_AUTO if column in PLASTIC_FACE_COLUMNS else ""
+        default = (
+            FACE_AUTO
+            if column in PLASTIC_FACE_COLUMNS
+            else (
+                sls_core.COMBINATION_UNSPECIFIED
+                if column in ELASTIC_COMBINATION_COLUMNS
+                else ""
+            )
+        )
         source = (
             frame[column]
             if column in frame
             else pd.Series(default, index=frame.index)
         )
-        mapper = _face if column in PLASTIC_FACE_COLUMNS else _text
+        mapper = (
+            _face
+            if column in PLASTIC_FACE_COLUMNS
+            else (
+                _combination
+                if column in ELASTIC_COMBINATION_COLUMNS
+                else _text
+            )
+        )
         result[column] = source.map(mapper).astype("string")
     for column in NUMERIC_COLUMNS[key]:
         source = frame[column] if column in frame else pd.Series(0.0, index=frame.index)
@@ -281,6 +308,12 @@ def _row_is_blank(row: Mapping, key: str) -> bool:
                 for column in NUMERIC_COLUMNS[key])
         and all(_face(row.get(column)) == FACE_AUTO
                 for column in PLASTIC_FACE_COLUMNS if column in TABLE_COLUMNS[key])
+        and all(
+            _combination(row.get(column))
+            == sls_core.COMBINATION_UNSPECIFIED
+            for column in ELASTIC_COMBINATION_COLUMNS
+            if column in TABLE_COLUMNS[key]
+        )
         and not any(_flag(row.get(column)) for column in FLAG_COLUMNS[key])
     )
 
@@ -305,7 +338,12 @@ def table_records(value, key: str) -> list[dict]:
         record = {
             column: (
                 _face(row[column])
-                if column in PLASTIC_FACE_COLUMNS else _text(row[column])
+                if column in PLASTIC_FACE_COLUMNS
+                else (
+                    _combination(row[column])
+                    if column in ELASTIC_COMBINATION_COLUMNS
+                    else _text(row[column])
+                )
             )
             for column in TEXT_COLUMNS[key]
         }
@@ -314,6 +352,12 @@ def table_records(value, key: str) -> list[dict]:
                 raise ValueError(
                     f"{key} row {row_number}: {column} must be auto, "
                     "negative or positive"
+                )
+        for column in ELASTIC_COMBINATION_COLUMNS:
+            if column in record and record[column] not in sls_core.SLS_COMBINATIONS:
+                raise ValueError(
+                    f"{key} row {row_number}: {column} must be one of "
+                    + ", ".join(sls_core.SLS_COMBINATIONS)
                 )
         for column in NUMERIC_COLUMNS[key]:
             try:
@@ -393,6 +437,18 @@ def tables_from_legacy_scalars(scalars: Mapping | None) -> dict[str, pd.DataFram
         DESCRIPTION: _description(
             scalars.get("el_case_type"), scalars.get("el_case_source")
         ),
+        "long_combination": _combination(
+            scalars.get(
+                "sls_long_combination",
+                sls_core.COMBINATION_UNSPECIFIED,
+            )
+        ),
+        "total_combination": _combination(
+            scalars.get(
+                "sls_total_combination",
+                sls_core.COMBINATION_UNSPECIFIED,
+            )
+        ),
         "n_long_ed_kn": _number(scalars.get("el_long_P", 0.0)),
         "mx_long_ed_knm": _number(scalars.get("el_long_Mx", 0.0)),
         "my_long_ed_knm": _number(scalars.get("el_long_My", 0.0)),
@@ -441,6 +497,8 @@ def legacy_scalars_from_tables(tables: Mapping | None) -> dict:
         "el_case_id": _text(e[NAME]),
         "el_case_type": _text(e[DESCRIPTION]),
         "el_case_source": "",
+        "sls_long_combination": _combination(e["long_combination"]),
+        "sls_total_combination": _combination(e["total_combination"]),
         "el_long_P": float(e["n_long_ed_kn"]),
         "el_long_Mx": float(e["mx_long_ed_knm"]),
         "el_long_My": float(e["my_long_ed_knm"]),
@@ -514,5 +572,12 @@ def validation_errors(plastic, elastic, *, require_plastic=False,
                         errors.append(
                             f"{label} row {number}: {column} must be auto, "
                             "negative or positive"
+                        )
+            else:
+                for column in ELASTIC_COMBINATION_COLUMNS:
+                    if _combination(row[column]) not in sls_core.SLS_COMBINATIONS:
+                        errors.append(
+                            f"{label} row {number}: {column} must be one of "
+                            + ", ".join(sls_core.SLS_COMBINATIONS)
                         )
     return errors

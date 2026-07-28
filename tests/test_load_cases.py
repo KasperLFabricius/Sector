@@ -13,6 +13,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import load_cases as lc  # noqa: E402
+from sector import sls  # noqa: E402
 
 
 def test_legacy_scalars_migrate_to_typed_solver_tables():
@@ -51,6 +52,8 @@ def test_legacy_scalars_migrate_to_typed_solver_tables():
     elastic = tables[lc.ELASTIC_TABLE_KEY]
     assert list(elastic.columns) == list(lc.ELASTIC_COLUMNS)
     assert elastic.loc[0, "name"] == "SLS-FREQ"
+    assert elastic.loc[0, "long_combination"] == sls.COMBINATION_UNSPECIFIED
+    assert elastic.loc[0, "total_combination"] == sls.COMBINATION_UNSPECIFIED
     assert elastic.loc[0, "n_long_ed_kn"] == 100.0
     assert elastic.loc[0, "my_short_ed_knm"] == -22.0
     assert bool(elastic.loc[0, "check_stress"]) is True
@@ -69,6 +72,8 @@ def test_case_records_roundtrip_signed_values_text_and_flags_without_nan():
         {
             "name": "EL-CHAR",
             "description": "Characteristic stress check",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "total_combination": sls.COMBINATION_CHARACTERISTIC,
             "n_long_ed_kn": -5.0,
             "mx_long_ed_knm": 10.0,
             "my_long_ed_knm": 0.0,
@@ -88,6 +93,27 @@ def test_case_records_roundtrip_signed_values_text_and_flags_without_nan():
         lc.normalise_table(source, lc.ELASTIC_TABLE_KEY),
         check_dtype=True,
     )
+    assert records[0]["long_combination"] == (
+        sls.COMBINATION_QUASI_PERMANENT
+    )
+
+
+def test_invalid_elastic_combination_is_rejected_not_inferred():
+    source = lc.normalise_table([{
+        "name": "EL-BAD",
+        "long_combination": "long-term therefore QP",
+        "check_crack_width": True,
+    }], lc.ELASTIC_TABLE_KEY)
+
+    errors = lc.validation_errors(
+        lc.empty_table(lc.PLASTIC_TABLE_KEY),
+        source,
+        require_elastic=True,
+    )
+
+    assert any("long_combination must be one of" in error for error in errors)
+    with pytest.raises(ValueError, match="long_combination must be one of"):
+        lc.table_records(source, lc.ELASTIC_TABLE_KEY)
 
 
 def test_directional_shear_faces_roundtrip_and_validate():

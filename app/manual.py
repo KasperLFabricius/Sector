@@ -737,7 +737,8 @@ def manual_blocks() -> list:
            ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
     call("standard", "The DK NA reports the fine and the coarse crack system side "
-         "by side, each for the long-term and short-term load (four crack widths). "
+         "by side, each for the sustained and total (long + short) response "
+         "(four crack widths). "
          "Part C derives every model in full with the worked crack width.")
     h2("Grouped fatigue")
     md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
@@ -961,8 +962,8 @@ def manual_blocks() -> list:
        "intercepts at each. The full per-angle table sits below.")
     h2("Elastic results")
     md("Select an Elastic case at the top of the view. The cracked-section "
-       "stresses are reported per bar for the long-term, "
-       "short-term and total states, with the peak concrete compression and the "
+       "stresses are reported per bar for the long-duration component, "
+       "short-duration increment and total response, with the peak concrete compression and the "
        "neutral-axis position. When cracking is checked the section properties "
        "(uncracked and cracked) and the crack width follow.")
     h2("Fatigue results")
@@ -1230,7 +1231,7 @@ def manual_blocks() -> list:
        "$(N,M_x,M_y)$, updating the compression zone until it settles.")
     md("Creep enters through the modular ratio: the long-term state uses "
        "$n_l = E_s/E_{c,eff}$ with $E_{c,eff}=E_c/(1+\\varphi)$, and the "
-       "short-term state uses $n_s = E_s/E_c$. The reported total combines the two, "
+       "short-duration increment uses $n_s = E_s/E_c$. The reported total combines the two, "
        "so both load duration and creep are captured. Prestressing tendons carry "
        "the corresponding material's modular ratio $n_p = E_p/E_c$ (creep-reduced "
        "the same way). None of these ratios is entered -- each is derived from the "
@@ -1251,14 +1252,72 @@ def manual_blocks() -> list:
          "**governing** of the sustained (long-term) and the peak (total = long + "
          "short) action -- not the sustained part alone. A section that only cracks "
          "under a large short-term load is therefore still treated as cracked "
-         "(with a quasi-permanent crack width to check); one only cracked by the "
+         "(with crack acceptance routed separately); one only cracked by the "
          "sustained load stays cracked even if a counteracting short-term action "
          "relieves the total. The peak check uses the same combined-creep "
          "superposition (long at $n_l$ + short at $n_s$) as the reported stresses.")
     call("standard", "EN 1992-1-1 7.4.3(3): a member is treated as uncracked only "
          "if it is not expected to be loaded above the cracking stress anywhere -- "
-         "i.e. at the peak load. The crack-width *limit*, in contrast, is a "
-         "quasi-permanent (long-term) check.")
+         "i.e. at the peak load. This crack-history rule does not select the SLS "
+         "combination used for an acceptance criterion.")
+    h2("Acceptance combination is not load duration")
+    md("Every Elastic case stores two independent pieces of information for each "
+       "calculated response: **response duration** (the sustained/long state or the "
+       "instantaneous total formed from long + short) and an explicit **SLS "
+       "combination class** (Characteristic, Frequent, Quasi-permanent, or Not "
+       "designated). Sector never assumes that a long response is "
+       "quasi-permanent, or that the total response is frequent/characteristic. "
+       "The load-combination source must establish that mapping. A calculated "
+       "response whose combination is not required by the active criterion remains "
+       "visible as informational evidence and cannot cause that criterion to pass "
+       "or fail.")
+    call("standard", "For DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N, "
+         "reinforced members and members with unbonded prestress use the "
+         "**quasi-permanent** combination for the crack-width criterion. Bonded "
+         "prestress uses the **frequent** combination for crack width and, where "
+         "the application requires it, a separate **quasi-permanent "
+         "decompression** criterion. DS/EN 1992-1-1 DK NA:2024 Table 7.1 NA "
+         "changes national width values but does not replace this combination "
+         "routing.")
+    call("standard", "For DS/EN 1992-1-1:2023 section 9.2.1(6), Sector records "
+         "Table 9.1 appearance and Table 9.2 durability as separate criteria. "
+         "Table 9.1 appearance is **quasi-permanent**. In Table 9.2, "
+         "reinforced/unbonded members and bonded tendons with Protection Levels "
+         "2/3 use **quasi-permanent** crack width for XC2-XC4 and XD/XS. Bonded "
+         "Protection Level 1 and pretensioned members use **frequent** crack width "
+         "for X0/XC1 and XC2-XC4; XC2-XC4 also requires **quasi-permanent "
+         "decompression**, while XD/XS and XF require **frequent decompression**. "
+         "Sector never derives the structured groups from free text. Each result "
+         "retains its source, applicability, required combination and matched "
+         "solver response; decompression is **NOT ASSESSED** without the required "
+         "concrete-stress evidence.")
+    md("Choose **Standard-derived** routing and explicitly select the 2023 Table 9.2 "
+       "exposure group plus, for bonded tendons, the protection/pretensioning group. "
+       "Record the project exposure/application context. "
+       "Choose **Project-defined** routing only when an "
+       "approved project source applies: enter a separate positive crack-width "
+       "limit for every applicable combination. One unqualified limit is never "
+       "copied across all responses.")
+    call("limit", "If a required combination is absent, is designated on more "
+         "than one independent response state, or comes from a project schema "
+         "without the required structured applicability, the verdict is "
+         "**NOT ASSESSED / "
+         "REVIEW**. Sector does not infer a pass or a standard failure. Save/load, "
+         "session restore and autosave retain the structured fields and a compact "
+         "input-hash-bound crack-control result snapshot. The snapshot is audit "
+         "provenance, not a restored live result; Sector recalculates after load. "
+         "Acceptance requires a complete, non-empty mapping scope and explicit "
+         "duration, mapping and solver provenance. A strict fingerprint binds "
+         "criterion source/applicability, response IDs, values and governing "
+         "evidence. Every publication boundary validates and reconstructs it; "
+         "missing, invalid or mismatched evidence gives **NOT ASSESSED / "
+         "REVIEW**. "
+         "Legacy duration-only projects must be reviewed and reclassified "
+         "explicitly.")
+    call("limit", "Python and NumPy Boolean values are never accepted as numeric "
+         "bond ratio or crack/SLS limits. Every boundary rejects them before "
+         "conversion; browser/session state remains **NOT ASSESSED / REVIEW** "
+         "until a finite value is edited or explicitly confirmed.")
     h2("Crack width - EN 1992-1-1:2005")
     md("$$w_k = s_{r,max}\\,(\\varepsilon_{sm}-\\varepsilon_{cm}),\\qquad "
        "\\varepsilon_{sm}-\\varepsilon_{cm} = \\max\\!\\left(\\frac{\\sigma_s - "
@@ -1288,8 +1347,9 @@ def manual_blocks() -> list:
        "band), and **halves** the crack width. **Worked:** the band is $0.100$ m "
        "high and $w_k=0.077$ mm.")
     call("tip", "The single *DS/EN 1992-1-1 + DK NA* option reports the fine and the "
-         "coarse system side by side, each for the long-term and the short-term "
-         "load -- four crack widths -- so you can read both without re-running.")
+         "coarse system side by side, each for the sustained and total "
+         "(long + short) response -- four crack widths -- so you can read both "
+         "without re-running.")
     h2("EN 1992-1-1:2023 refined model")
     md("The 2023 edition uses a refined model (9.2.3):\n\n"
        "$$w_k = k_w\\,\\frac{k_1}{r}\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-"
@@ -1303,6 +1363,31 @@ def manual_blocks() -> list:
        "9.3 (built from the near-face layer and extended over the tension layers). "
        "The mean strain (9.11) keeps the same numerator but its lower bound is "
        "$(1-k_t)\\sigma_s/E_s$. **Worked:** $s_{r,m,cal}=134$ mm, $w_k=0.186$ mm.")
+    md("For mixed mild reinforcement and bonded prestressing steel, Sector uses "
+       "Formula (9.12) explicitly:\n\n"
+       "$$\\rho_{p,eff}=\\frac{A_{s,eff}+\\sum\\xi_1 A_p}{A_{c,eff}},\\qquad "
+       "\\xi_1=\\sqrt{\\xi\\,\\phi_s/\\phi_p}\\quad (9.6).$$\n\n"
+       "With the global diameter override at zero, $\\phi_s$ is the largest "
+       "effective mild-bar table diameter and each tendon keeps its own table "
+       "diameter $\\phi_p$. A positive global diameter override is instead used "
+       "for both $\\phi_s$ and every $\\phi_p$; the report states which source was "
+       "active. $\\xi$ is the entered bond-strength ratio. If only prestressing "
+       "steel controls cracking, $\\xi_1=\\xi$. A "
+       "missing, zero, non-finite or out-of-range $\\xi$ is a blocking **NOT "
+       "ASSESSED** result whenever a tendon contributes; Sector does not replace "
+       "it with an assumed value.")
+    md("Uniform direct tension is calculated only for the validated solid "
+       "rectangular-section branch with reinforcement assigned to opposed faces. "
+       "The effective perimeter bands follow figure 9.3, $k_{fl}=1.00$ (9.20), "
+       "$k_1/r=1.00$, and the bending $(h-x)$ spacing cap is not applied. Other "
+       "uniform-tension geometries and combined all-tension states return a "
+       "blocking **NOT ASSESSED** disposition rather than an apparent pass.")
+    call("limit", "Crack-control scope: the bending calculation is a "
+         "**one-directional dominant strain-gradient assessment**. Orthogonal or "
+         "inclined crack systems are not assessed; those systems require an "
+         "explicit multidirectional method (including the relevant Annex G.5 "
+         "route where applicable). This limitation is repeated beside the result "
+         "and in the report conclusion.")
     md("The four editions on the same beam and service moment ($M_x=150$ kNm):")
     table(["Crack-width edition", "$s_{r,max}$ (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"],
           [["EN 1992-1-1:2005", "236", "0.125", "0.188"],
@@ -1312,8 +1397,12 @@ def manual_blocks() -> list:
     call("standard", "The *Crack-width code* offers three options -- EN 1992-1-1:"
          "2005, DS/EN 1992-1-1 + DK NA and EN 1992-1-1:2023. The DK NA option "
          "reports the fine and the coarse system together (all four columns above), "
-         "each for the long-term and short-term load; the report writes out the "
-         "governing worked crack width.")
+         "each for the sustained and total (long + short) response; the report "
+         "writes out the response routed to the applicable criterion (or labels "
+         "an unrouted worked example informational). The 2023 choice is an explicitly selectable "
+         "published-edition method. Its presence does not establish that edition as "
+         "the currently applicable Danish project basis; edition and National "
+         "Annex applicability must be confirmed in the project design basis.")
 
     h1("Grouped fatigue")
     h2("Elastic stress ranges")

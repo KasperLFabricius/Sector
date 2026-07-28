@@ -126,6 +126,48 @@ def test_manual_covers_both_examples_and_all_crack_editions():
     assert "mild steel" in text.lower() and "prestress" in text.lower()
 
 
+def test_manual_documents_2023_xi1_direct_tension_and_scope_gate():
+    text = "\n".join(
+        value
+        for block in manual.manual_blocks()
+        for value in block[1:]
+        if isinstance(value, str)
+    )
+    assert "Formula (9.12)" in text
+    assert "\\xi_1=\\sqrt{\\xi\\,\\phi_s/\\phi_p}" in text
+    assert "positive global diameter override" in text
+    assert "both $\\phi_s$ and every $\\phi_p$" in text
+    assert "solid rectangular-section branch" in text
+    assert "one-directional dominant strain-gradient assessment" in text
+    assert "blocking **NOT ASSESSED**" in text
+    assert "does not establish that edition as the currently applicable Danish" in text
+
+
+def test_manual_separates_crack_history_duration_and_acceptance_combination():
+    text = "\n".join(
+        value
+        for block in manual.manual_blocks()
+        for value in block[1:]
+        if isinstance(value, str)
+    )
+
+    assert "Acceptance combination is not load duration" in text
+    assert "never assumes that a long response is" in text
+    assert "quasi-permanent" in text
+    assert "Bonded prestress uses the **frequent** combination" in text
+    assert "Table 9.1 appearance and Table 9.2 durability" in text
+    assert "Protection Levels 2/3" in text
+    assert "XD/XS and XF require **frequent" in text
+    assert "separate positive crack-width limit for every applicable combination" in text
+    assert "project schema" in text
+    assert "Boolean values are never accepted" in text
+    assert "complete, non-empty mapping scope" in text
+    assert "strict fingerprint" in text
+    assert "response IDs, values and governing evidence" in text
+    assert "Every publication boundary validates and reconstructs it" in text
+    assert "NOT ASSESSED / REVIEW" in text
+
+
 def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     blocks = manual.manual_blocks()
     text = "\n".join(str(block) for block in blocks)

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
 import pathlib
 import sys
 from types import SimpleNamespace as NS
 
+import numpy as np
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -16,7 +19,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import detailing  # noqa: E402
+from sector import detailing, sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -56,7 +59,22 @@ def _inp():
         "P_el_l": 0.0, "Mx_el_l": 80.0, "My_el_l": 0.0,
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
         "nl": 15.0, "ns": 6.0, "sls_fctm": 2.9, "sls_cw": True,
+        "sls_phi": 0.0, "sls_k1": 0.8,
+        "sls_tendon_bond": "Plain round (k1 = 1.6)",
+        "sls_tendon_k1": 1.6, "sls_tendon_xi": 0.50,
         "conc_Ec": 33.0,
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_protection_class": sls.PROTECTION_NOT_ESTABLISHED,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
+        "sls_exposure_context": "XC3 / durability",
+        "sls_check_appearance": False,
+        "sls_appearance_limit": 0.0,
+        "sls_check_durability": True,
+        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
+        "sls_project_characteristic_limit": 0.0,
+        "sls_project_frequent_limit": 0.0,
+        "sls_project_quasi_permanent_limit": 0.0,
         "sls_wk_limit": 0.30, "sls_conc_limit_pct": 60.0,
         "sls_steel_limit_pct": 80.0, "sls_pre_limit_pct": 75.0,
         "sls_limit_source": "DB-SLS-01 section 4",
@@ -75,12 +93,62 @@ def _crack():
         "hc_ef": 0.125, "phi": 16.0, "cover": 40.0,
         "coarse": False, "edition": "2004", "kw": 1.0,
         "k1_r": 1.0, "kfl": 1.0, "sr_max_geometric": False,
+        "as_eff": 0.0005, "ap_eff": 0.0, "ap_eff_weighted": 0.0,
+        "xi1": None, "reinforcement_type": "mild", "bc_ef": 0.0,
+        "direct_tension": False, "scope": "dominant-direction",
+        "direction_deg": 90.0,
     }
-    return dict(candidate, gov_bar=1, candidates=[candidate])
+    return dict(
+        candidate,
+        gov_bar=1,
+        xi1_min=None,
+        xi1_max=None,
+        candidates=[candidate],
+    )
+
+
+def _report_mapping_scope(contexts):
+    scope = []
+    seen = set()
+    for name, context in contexts.items():
+        response_id = context["response_id"]
+        if response_id in seen:
+            continue
+        seen.add(response_id)
+        scope.append({
+            "combination": context["combination"],
+            "duration": context["duration"],
+            "response": name,
+            "response_id": response_id,
+            "elastic_case": "EL-TEST",
+            "state": response_id,
+            "provenance": context["provenance"],
+        })
+    return scope
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_tendon_xi",
+        "sls_wk_limit",
+        "sls_appearance_limit",
+        "sls_project_characteristic_limit",
+        "sls_project_frequent_limit",
+        "sls_project_quasi_permanent_limit",
+    ],
+)
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+def test_report_boundary_rejects_boolean_crack_numerics(key, value):
+    inp = _inp()
+    inp[key] = value
+
+    with pytest.raises(ValueError, match=key):
+        sector_report.build_report({}, inp, _out(), figures=False)
 
 
 def _out():
-    return {
+    out = {
         "plastic": {"mx": [100.0, 0.0, -100.0, 0.0], "my": [0.0, 100.0, 0.0, -100.0],
                     "max_mx": 100.0, "max_my": 100.0, "min_mx": -100.0, "min_my": -100.0,
                     "util": 0.8, "closed": True,
@@ -141,9 +209,116 @@ def _out():
                         "value": 0.213, "limit": 0.30, "util": 0.71,
                         "margin": 0.087, "status": "OK",
                         "case": "Long-term", "governing": "bar 1",
-                        "criterion": "0.3 mm",
+                        "criterion": sls.CRITERION_DURABILITY,
+                        "required_combination": (
+                            sls.COMBINATION_QUASI_PERMANENT
+                        ),
+                        "criterion_source": (
+                            "DS/EN 1992-1-1:2004 section 7.3.1(5), "
+                            "Table 7.1N"
+                        ),
+                        "applicability": {},
+                        "criteria": [{
+                            "criterion_id": "standard-durability",
+                            "kind": sls.CRITERION_DURABILITY,
+                            "criterion_source_type": (
+                                sls.CRITERION_MODE_STANDARD
+                            ),
+                            "criterion_source": (
+                                "DS/EN 1992-1-1:2004 section 7.3.1(5), "
+                                "Table 7.1N"
+                            ),
+                            "required_combination": (
+                                sls.COMBINATION_QUASI_PERMANENT
+                            ),
+                            "matched_responses": ["Long-term"],
+                            "applicability": {},
+                            "limit": 0.30,
+                            "value": 0.213,
+                            "status": "OK",
+                        }],
+                        "response_contexts": {
+                            "Long-term": {
+                                "combination": (
+                                    sls.COMBINATION_QUASI_PERMANENT
+                                ),
+                                "response_id": "long",
+                                "duration": "Sustained / long-term response",
+                                "provenance": (
+                                    "Elastic case 'EL-TEST', "
+                                    "long_combination table field"
+                                ),
+                            },
+                            "Total (long + short)": {
+                                "combination": (
+                                    sls.COMBINATION_CHARACTERISTIC
+                                ),
+                                "response_id": "total",
+                                "duration": (
+                                    "Instantaneous total (long + short) response"
+                                ),
+                                "provenance": (
+                                    "Elastic case 'EL-TEST', "
+                                    "total_combination table field"
+                                ),
+                            },
+                        },
+                        "informational_responses": [
+                            "Total (long + short)"
+                        ],
                     },
                     "crack_code": "EN 1992-1-1:2005", "crack_member": None}}
+    elastic = out["elastic"]
+    contexts = copy.deepcopy(
+        elastic["crack_assessment"]["response_contexts"]
+    )
+    contexts["Long-term"]["solver_provenance"] = {"state": "long"}
+    contexts["Total (long + short)"]["solver_provenance"] = {
+        "state": "total",
+    }
+    mapping_scope = [
+        {
+            "combination": context["combination"],
+            "duration": context["duration"],
+            "response": name,
+            "response_id": context["response_id"],
+            "elastic_case": "EL-TEST",
+            "state": (
+                "long"
+                if name == "Long-term"
+                else "total"
+            ),
+            "provenance": context["provenance"],
+        }
+        for name, context in contexts.items()
+    ]
+    responses = {
+        "Long-term": elastic["crack"],
+        "Total (long + short)": elastic["crack_short"],
+    }
+    elastic["crack_assessment"] = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=[{
+            "id": "standard-durability",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": (
+                "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
+            ),
+            "required_combination": (
+                sls.COMBINATION_QUASI_PERMANENT
+            ),
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    elastic["crack_response_contexts"] = contexts
+    elastic["crack_response_mapping_scope"] = mapping_scope
+    elastic["crack_responses"] = responses
+    return out
 
 
 def _fatigue_report_fixture():
@@ -1158,7 +1333,15 @@ def test_report_escapes_user_entered_action_provenance():
 
 
 def test_report_mirrors_the_views():
-    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    out = _out()
+    binding_before = copy.deepcopy(
+        out["elastic"]["crack_assessment"]["criteria"][0][
+            "acceptance_evidence"
+        ]
+    )
+    txt = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
     flat = " ".join(txt.split())
     assert "Fc" in txt and "NA x" in txt           # full plastic table columns
     assert "PASS - Plastic bending" in txt
@@ -1168,10 +1351,13 @@ def test_report_mirrors_the_views():
     assert "Governing concrete corner response" in txt
     assert "Governing reinforcement and tendon response" in txt
     assert "Cracked" in txt                        # cracked transformed-props column
-    assert "both load cases" in txt                # full crack-width table
+    assert "both response states" in txt           # full crack-width table
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
     assert "Utilisation check" in txt              # analysis settings documented
     assert "Max / Min" in txt                      # both extremes for Mx and My
+    assert out["elastic"]["crack_assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ] == binding_before
 
 
 def test_report_qa_appendix_is_optional_and_identified_on_the_cover():
@@ -1202,6 +1388,11 @@ def test_report_includes_sls_criteria_strain_and_candidate_evidence():
     assert "Bar diameter" not in txt
     assert "bar 1" in txt
     assert "0.300 mm" in txt and "0.213 mm" in txt
+    assert "Quasi-permanent" in txt
+    assert "Characteristic" in txt
+    assert "Informational" in txt
+    assert "Table 7.1N" in txt
+    assert "long_combination table" in txt
     assert chr(0x394) + chr(0x3B5) in txt
     assert "delta eps" not in txt
 
@@ -1239,6 +1430,20 @@ def test_report_keeps_crack_criterion_when_no_width_is_calculated():
         cracked=False,
         crack=None,
         crack_short=None,
+        crack_responses={
+            "Long-term": None,
+            "Total (long + short)": None,
+        },
+        crack_dispositions={
+            "Long-term": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+            },
+            "Total (long + short)": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+            },
+        },
         crack_assessment={
             "value": None,
             "limit": 0.30,
@@ -1248,13 +1453,578 @@ def test_report_keeps_crack_criterion_when_no_width_is_calculated():
             "case": None,
             "governing": None,
             "criterion": "0.3 mm",
+            "reason": "The section remained uncracked.",
         },
     )
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "NOT APPLICABLE" in txt
     assert "limit 0.300 mm" in txt
     assert "No crack width:" in txt
+    assert "The section remained uncracked." in txt
     assert "DB-SLS-01 section 4" in txt
+
+
+def test_report_never_publishes_pass_for_boolean_crack_result():
+    out = _out()
+    elastic = out["elastic"]
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "long",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total (long + short)": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
+            "response_id": "total",
+            "provenance": "controlled characteristic mapping",
+            "solver_provenance": {"state": "long-plus-short"},
+        },
+    }
+    mapping_scope = _report_mapping_scope(contexts)
+    assessment = sls.crack_assessment(
+        {
+            "Long-term": {
+                "wk": 0.22,
+                "element_id": "bar 1",
+            },
+            "Total (long + short)": {
+                "wk": 0.25,
+                "element_id": "bar 1",
+            },
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-durability",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+    elastic["crack"]["wk"] = 0.22
+    elastic["crack_short"]["wk"] = np.bool_(False)
+    elastic["crack_assessment"] = assessment
+    elastic["crack_response_contexts"] = contexts
+    elastic["crack_response_mapping_scope"] = mapping_scope
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+
+    assert "NOT ASSESSED - Crack width" in text
+    assert "PASS - Crack width" not in text
+    assert (
+        "prior acceptance assessment was invalidated"
+        in " ".join(text.split())
+    )
+
+
+def test_report_preserves_dk_coarse_matched_response_as_criterion_input():
+    out = _out()
+    elastic = out["elastic"]
+    responses = {
+        "Long-term (fine)": dict(_crack(), coarse=False, wk=0.20),
+        "Total (fine)": dict(_crack(), coarse=False, wk=0.25),
+        "Long-term (coarse)": dict(_crack(), coarse=True, wk=0.10),
+        "Total (coarse)": dict(_crack(), coarse=True, wk=0.12),
+    }
+    contexts = {
+        name: {
+            "combination": (
+                sls.COMBINATION_QUASI_PERMANENT
+                if name.startswith("Long-term")
+                else sls.COMBINATION_CHARACTERISTIC
+            ),
+            "duration": (
+                "long" if name.startswith("Long-term") else "short"
+            ),
+            "response_id": (
+                "long" if name.startswith("Long-term") else "total"
+            ),
+            "provenance": (
+                "controlled QP mapping"
+                if name.startswith("Long-term")
+                else "controlled characteristic mapping"
+            ),
+            "solver_provenance": {
+                "state": (
+                    "long" if name.startswith("Long-term") else "total"
+                ),
+            },
+        }
+        for name in responses
+    }
+    mapping_scope = _report_mapping_scope(contexts)
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-durability",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled DK criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["status"] == "OK"
+    assert assessment["criteria"][0]["matched_responses"] == [
+        "Long-term (fine)",
+        "Long-term (coarse)",
+    ]
+    elastic.update(
+        crack=responses["Long-term (fine)"],
+        crack_short=responses["Total (fine)"],
+        crack_coarse=responses["Long-term (coarse)"],
+        crack_short_coarse=responses["Total (coarse)"],
+        crack_responses=responses,
+        crack_response_contexts=contexts,
+        crack_response_mapping_scope=mapping_scope,
+        crack_dispositions={
+            name: {"status": "CALCULATED"} for name in responses
+        },
+        crack_assessment=assessment,
+        crack_code="DS/EN 1992-1-1 + DK NA",
+    )
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+
+    assert "PASS - Crack width" in text
+    assert "NOT ASSESSED - Crack width" not in text
+
+
+def test_report_formats_decompression_as_concrete_stress_not_crack_width():
+    out = _out()
+    elastic = out["elastic"]
+    response = dict(
+        elastic["crack"],
+        decompression={
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "solver_provenance": {"state": "long"},
+        },
+    )
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "long",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total (long + short)": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
+            "response_id": "total",
+            "provenance": "controlled characteristic mapping",
+            "solver_provenance": {"state": "total"},
+        },
+    }
+    mapping_scope = _report_mapping_scope(contexts)
+    assessment = sls.crack_assessment(
+        {
+            "Long-term": response,
+            "Total (long + short)": elastic["crack_short"],
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["criterion"] == sls.CRITERION_DECOMPRESSION
+    elastic.update(
+        crack=response,
+        crack_responses={
+            "Long-term": response,
+            "Total (long + short)": elastic["crack_short"],
+        },
+        crack_response_contexts=contexts,
+        crack_response_mapping_scope=mapping_scope,
+        crack_assessment=assessment,
+    )
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "PASS - Decompression" in compact
+    assert "-0.250 MPa" in compact
+    assert "compression required" in compact
+    assert "-0.250 mm" not in compact
+
+
+def test_report_reapplies_failure_precedence_over_incomplete_criterion():
+    out = _out()
+    elastic = out["elastic"]
+    elastic["crack"]["wk"] = 0.31
+    elastic["crack"]["element_id"] = "bar 1"
+    assessment = sls.crack_assessment(
+        elastic["crack_responses"],
+        valid=True,
+        criteria=[
+            {
+                "id": "qa-width",
+                "kind": sls.CRITERION_DURABILITY,
+                "source_type": sls.CRITERION_MODE_STANDARD,
+                "source": "QA controlled durability criterion",
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+                "limit_mm": 0.30,
+                "applicability": {
+                    "prestress_class": (
+                        sls.PRESTRESS_REINFORCED_UNBONDED
+                    ),
+                },
+            },
+            {
+                "id": "qa-decompression",
+                "kind": sls.CRITERION_DECOMPRESSION,
+                "source_type": sls.CRITERION_MODE_STANDARD,
+                "source": "QA controlled decompression criterion",
+                "required_combination": sls.COMBINATION_FREQUENT,
+                "limit_mm": None,
+                "applicability": {
+                    "prestress_class": (
+                        sls.PRESTRESS_REINFORCED_UNBONDED
+                    ),
+                },
+            },
+        ],
+        response_contexts=elastic["crack_response_contexts"],
+        response_mapping_scope=elastic["crack_response_mapping_scope"],
+    )
+    assert assessment["status"] == "EXCEEDED"
+    assessment.update(
+        status="NOT ASSESSED",
+        verdict="REVIEW",
+        value=None,
+        util=None,
+        margin=None,
+        acceptance_evidence=None,
+    )
+    elastic["crack_assessment"] = assessment
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "FAIL - Crack width" in compact
+    assert "NOT ASSESSED - Crack width" not in compact
+    assert "0.310 mm" in compact
+
+
+def test_report_rejects_scalar_matched_response_evidence():
+    out = _out()
+    elastic = out["elastic"]
+    assessment = sls.crack_assessment(
+        {
+            "Long-term": {
+                "wk": elastic["crack"]["wk"],
+                "element_id": elastic["crack"]["element_id"],
+            },
+        },
+        valid=True,
+        criteria=[{
+            "id": "qa-width",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled durability criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {},
+        }],
+        response_contexts={
+            "Long-term": {
+                "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "response_id": "long",
+                "duration": "Sustained / long-term response",
+            },
+        },
+    )
+    assessment["criteria"][0]["matched_responses"] = True
+    elastic["crack_assessment"] = assessment
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "PASS - Crack width" not in compact
+    assert "matched responses are not a structured list" in compact
+
+
+def test_report_invalidates_stale_pass_when_governing_width_changes():
+    out = _out()
+    elastic = out["elastic"]
+    assert elastic["crack_assessment"]["status"] == "OK"
+    assert elastic["crack_assessment"]["value"] == pytest.approx(0.213)
+    elastic["crack"]["wk"] = 0.45
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "PASS - Crack width" not in compact
+    assert "immutable acceptance evidence does not match" in compact
+
+
+@pytest.mark.parametrize(
+    ("mutation", "changed_value"),
+    [
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2"}),
+        ("criterion_source", "Changed criterion"),
+        ("applicability", {"member": "changed"}),
+        ("required_combination", sls.COMBINATION_FREQUENT),
+        ("mapping_scope", None),
+    ],
+)
+def test_report_rejects_each_canonical_width_binding_mutation(
+    mutation,
+    changed_value,
+):
+    out = _out()
+    elastic = out["elastic"]
+    if mutation in {
+        "response_id",
+        "duration",
+        "provenance",
+        "solver_provenance",
+    }:
+        elastic["crack_response_contexts"]["Long-term"][
+            mutation
+        ] = copy.deepcopy(changed_value)
+    elif mutation == "mapping_scope":
+        elastic["crack_response_mapping_scope"] = [{
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "Sustained / long-term response",
+            "response": "Long-term",
+            "response_id": "long",
+            "elastic_case": "EL-TEST",
+            "state": "long",
+            "provenance": (
+                "Elastic case 'EL-TEST', long_combination table field"
+            ),
+        }]
+    else:
+        elastic["crack_assessment"]["criteria"][0][
+            mutation
+        ] = copy.deepcopy(changed_value)
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "PASS - Crack width" not in compact
+    assert "prior acceptance assessment was invalidated" in compact
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        pytest.param("response-container", id="response-container"),
+        pytest.param("text-width", id="text-crack-width"),
+    ],
+)
+def test_report_rejects_fingerprint_valid_malformed_binding_schema(
+    malformation,
+):
+    out = _out()
+    binding = out["elastic"]["crack_assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    if malformation == "response-container":
+        binding["matched_responses"] = ["Long-term"]
+    else:
+        for response in binding["matched_responses"]:
+            acceptance = response["acceptance"]
+            acceptance["value_mm"] = str(acceptance["value_mm"])
+        binding["outcome"]["value"] = str(binding["outcome"]["value"])
+    body = {
+        key: value
+        for key, value in binding.items()
+        if key != "fingerprint"
+    }
+    binding["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "PASS - Crack width" not in compact
+    assert "invalid immutable acceptance evidence" in compact
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("status", "EXCEEDED"),
+        ("value", -0.10),
+        ("governing", "concrete point 2"),
+        ("solver_provenance", {"state": "changed"}),
+    ],
+)
+def test_report_rejects_each_decompression_binding_mutation(
+    field,
+    changed_value,
+):
+    out = _out()
+    elastic = out["elastic"]
+    response = dict(
+        elastic["crack"],
+        decompression={
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "solver_provenance": {"state": "long"},
+        },
+    )
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "long",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total (long + short)": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
+            "response_id": "total",
+            "provenance": "controlled characteristic mapping",
+            "solver_provenance": {"state": "total"},
+        },
+    }
+    mapping_scope = _report_mapping_scope(contexts)
+    responses = {
+        "Long-term": response,
+        "Total (long + short)": elastic["crack_short"],
+    }
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["verdict"] == "PASS"
+    response["decompression"][field] = copy.deepcopy(changed_value)
+    elastic.update(
+        crack=response,
+        crack_responses=responses,
+        crack_response_contexts=contexts,
+        crack_response_mapping_scope=mapping_scope,
+        crack_assessment=assessment,
+    )
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Decompression" in compact
+    assert "PASS - Decompression" not in compact
+    assert "prior acceptance assessment was invalidated" in compact
+
+
+def test_report_carries_2023_mixed_reinforcement_and_scope_provenance():
+    inp = _inp()
+    inp["tendons"] = [(0.0, -0.10, 400.0)]
+    out = _out()
+    elastic = out["elastic"]
+    for key in ("crack", "crack_short"):
+        crack = elastic[key]
+        crack.update(
+            edition="2023",
+            kw=1.7,
+            k1_r=1.15,
+            kfl=0.82,
+            as_eff=0.0005,
+            ap_eff=0.0004,
+            ap_eff_weighted=0.0002,
+            xi1_min=0.5,
+            xi1_max=0.5,
+            scope="dominant-direction",
+            direction_deg=90.0,
+        )
+    elastic.update(
+        crack_code="EN 1992-1-1:2023",
+        crack_edition="2023",
+        crack_scope_note=(
+            "One-directional dominant strain-gradient assessment only. "
+            "Orthogonal or inclined crack systems are not assessed."
+        ),
+    )
+
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    flat = " ".join(txt.split())
+    assert "Crack-control conclusion limitation" in flat
+    assert "One-directional dominant strain-gradient" in flat
+    assert "Prestressing-steel bond condition" in flat
+    assert "Prestressing bond-strength ratio" in flat
+    assert "per-tendon reinforcement-table values" in flat
+    assert "Weighted prestressing area" in flat
+    assert "Eq (9.12)" in flat
+    assert "0.000200" in flat
+
+    inp["sls_phi"] = 18.0
+    override_txt = _pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    )
+    override_flat = " ".join(override_txt.split())
+    assert "18.000 mm global crack-width override" in override_flat
+    assert "per-tendon reinforcement-table values" not in override_flat
 
 
 def test_report_renders_greek_glyphs():
@@ -1302,14 +2072,69 @@ def test_oversized_reinforcement_table_repeats_its_header():
     assert all("x (mm)" in page and "y (mm)" in page for page in bar_pages)
 
 
-def test_report_crack_worked_uses_the_governing_case():
-    # When the short-term load gives the larger wk, the worked example uses it.
+def test_report_crack_worked_uses_the_routed_response_not_the_largest_response():
+    # The explicit QP criterion routes to the sustained response even when the
+    # unrelated total/characteristic response has a larger crack width.
     out = _out()
     out["elastic"]["crack"] = dict(_crack(), wk=0.15)
     out["elastic"]["crack_short"] = dict(_crack(), wk=0.30)
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "short-term" in txt
-    assert "governing case (long-term)" not in txt
+    assert "routed response (Long-term)" in txt
+    assert "informational example" not in txt
+
+
+def test_report_project_crack_basis_lists_only_explicit_project_limits():
+    inp = _inp()
+    inp.update({
+        "sls_criterion_mode": sls.CRITERION_MODE_PROJECT,
+        "sls_project_frequent_limit": 0.24,
+        "sls_project_quasi_permanent_limit": 0.21,
+        # This disabled standard-mode value is retained in session state but is
+        # not applicable and therefore must not be presented as an active input.
+        "sls_wk_limit": 0.30,
+    })
+
+    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+
+    assert "Project criterion applicability / limits" in txt
+    assert "Frequent: 0.240 mm" in txt
+    assert "Quasi-permanent: 0.210 mm" in txt
+    assert "Durability crack-width criterion" not in txt
+
+
+def test_report_roundtrips_2023_structured_route_and_rejected_state():
+    inp = _inp()
+    inp.update({
+        "sls_edition": "2023",
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_protection_class": sls.PROTECTION_LEVEL_2_OR_3,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
+        "sls_invalid_numeric_inputs": ("sls_wk_limit",),
+    })
+    out = _out()
+    out["elastic"]["crack_assessment"] = {
+        "status": "NOT ASSESSED",
+        "verdict": "REVIEW",
+        "reason": "Rejected numeric state remains unrepaired.",
+        "criteria": [],
+        "informational_responses": [],
+    }
+
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+
+    compact = " ".join(txt.split())
+    assert sls.PROTECTION_LEVEL_2_OR_3 in compact
+    assert sls.EXPOSURE_XC2_XC4 in compact
+    assert "sls_wk_limit" in compact
+    assert "NOT ASSESSED / REVIEW" in compact
+
+
+def test_report_rejects_stale_pass_with_retained_invalid_crack_state():
+    inp = _inp()
+    inp["sls_invalid_numeric_inputs"] = ("sls_wk_limit",)
+
+    with pytest.raises(ValueError, match="does not fail closed"):
+        sector_report.build_report({}, inp, _out(), figures=False)
 
 
 def test_report_wide_spacing_shows_geometric_formula():

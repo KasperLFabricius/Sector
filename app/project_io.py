@@ -3,8 +3,9 @@
 A project file is JSON: the four point tables (concrete corners, voids, bars and
 tendons, all in millimetres), Plastic and Elastic load-case tables, an optional
 grouped fatigue spectrum, and the remaining material and analysis-setting inputs.
-The geometry and action tables are the source of truth. Only the *inputs* are
-stored -- results are recomputed on load.
+The geometry and action tables are the source of truth. Live numerical results
+are recomputed on load; an optional compact crack-control result summary is kept
+only inside the input-hash-bound calculation-provenance record.
 
 The functions here are pure (no Streamlit), so the round trip is unit-tested
 directly; the app wires the download / upload widgets to them.
@@ -23,12 +24,19 @@ import fatigue_inputs
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
-from sector import codes, detailing, geometry
+from sector import codes, detailing, geometry, sls
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 15  # v15: explicit tensile/fatigue factor bases and provenance
+VERSION = 18  # v18: structured 2023 Table 9.2 routing and strict crack numerics
+DEFAULT_SLS_TENDON_BOND = "Plain round (k1 = 1.6)"
+DEFAULT_SLS_TENDON_XI = 0.0
+DEFAULT_SLS_CRITERION_MODE = sls.CRITERION_MODE_LEGACY
+DEFAULT_SLS_PRESTRESS_CLASS = sls.PRESTRESS_REINFORCED_UNBONDED
+DEFAULT_SLS_PROTECTION_CLASS = sls.PROTECTION_NOT_ESTABLISHED
+DEFAULT_SLS_EXPOSURE_CLASS = sls.EXPOSURE_NOT_ESTABLISHED
+DEFAULT_SLS_DECOMPRESSION = sls.DECOMPRESSION_NOT_ESTABLISHED
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
     "shear_cot_min",
@@ -230,6 +238,13 @@ SCALAR_KEYS = [
     "mode", "v_min", "v_max", "v_inc", "pl_check_util",
     "pl_interaction",
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_tendon_bond", "sls_tendon_xi",
+    "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
+    "sls_exposure_class", "sls_exposure_context",
+    "sls_check_appearance", "sls_appearance_limit",
+    "sls_check_durability", "sls_decompression_applicability",
+    "sls_project_characteristic_limit", "sls_project_frequent_limit",
+    "sls_project_quasi_permanent_limit",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
     # Fatigue factor provenance. Presets expose every applied multiplier;
@@ -300,6 +315,29 @@ def _validate_factor_scalars(scalars: dict) -> None:
             codes.strict_positive_real(value, key)
         except ValueError as exc:
             raise ValueError(f"invalid project material factor: {exc}") from exc
+
+
+def _validate_crack_numeric_scalars(scalars: dict) -> None:
+    """Reject Boolean, non-numeric and non-finite crack inputs at file boundaries."""
+    for key in sls.CRACK_NUMERIC_INPUT_KEYS:
+        if key not in scalars:
+            continue
+        value = scalars[key]
+        if sls.is_boolean_value(value) or isinstance(value, str):
+            raise ValueError(
+                f"invalid project crack-control input: {key} must be a real "
+                "number, not Boolean/text"
+            )
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"invalid project crack-control input: {key} must be a real number"
+            ) from exc
+        if not math.isfinite(number):
+            raise ValueError(
+                f"invalid project crack-control input: {key} must be finite"
+            )
 
 
 def _cell(v):
@@ -374,6 +412,35 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
         )
     }
+    # Crack-control applicability fields are written even for deliberately
+    # partial saves so a reused UI session cannot inherit a previous project's
+    # combination route or silently revive the pre-v17 max-of-duration check.
+    scalar_payload.setdefault(
+        "sls_tendon_bond", DEFAULT_SLS_TENDON_BOND
+    )
+    scalar_payload.setdefault("sls_tendon_xi", DEFAULT_SLS_TENDON_XI)
+    scalar_payload.setdefault(
+        "sls_criterion_mode", DEFAULT_SLS_CRITERION_MODE
+    )
+    scalar_payload.setdefault(
+        "sls_prestress_class", DEFAULT_SLS_PRESTRESS_CLASS
+    )
+    scalar_payload.setdefault(
+        "sls_protection_class", DEFAULT_SLS_PROTECTION_CLASS
+    )
+    scalar_payload.setdefault(
+        "sls_exposure_class", DEFAULT_SLS_EXPOSURE_CLASS
+    )
+    scalar_payload.setdefault("sls_exposure_context", "")
+    scalar_payload.setdefault("sls_check_appearance", False)
+    scalar_payload.setdefault("sls_appearance_limit", 0.0)
+    scalar_payload.setdefault("sls_check_durability", False)
+    scalar_payload.setdefault(
+        "sls_decompression_applicability", DEFAULT_SLS_DECOMPRESSION
+    )
+    scalar_payload.setdefault("sls_project_characteristic_limit", 0.0)
+    scalar_payload.setdefault("sls_project_frequent_limit", 0.0)
+    scalar_payload.setdefault("sls_project_quasi_permanent_limit", 0.0)
     # Empty override widgets use ``None`` in Streamlit state. Persist them exactly
     # like absent optional values so a no-edit load/save keeps the canonical input
     # hash stable and never synthesises an approved numeric factor.
@@ -381,6 +448,7 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         if scalar_payload.get(key) is None:
             scalar_payload.pop(key, None)
     _validate_factor_scalars(scalar_payload)
+    _validate_crack_numeric_scalars(scalar_payload)
     # These v6 controls were global because one shear component existed. Their
     # values are consumed only by the v7 migration and are not written again.
     for key in ("shear_axis", "shear_tension", "shear_bw", "shear_link_legs"):
@@ -521,12 +589,23 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
             key: calculation.get(key)
             for key in (
                 "performed_at_utc", "sector_version", "source_revision",
-                "input_sha256",
+                "input_sha256", "crack_control",
             )
             if calculation.get(key) not in (None, "")
         }
+        if "crack_control" in record:
+            record["crack_control"] = (
+                sls.publication_safe_crack_control_record(
+                    record.get("crack_control")
+                )
+            )
+            if record["crack_control"] is None:
+                record.pop("crack_control")
         record["matches_saved_inputs"] = record.get("input_sha256") == digest
         payload["calculation"] = record
+        payload["provenance"]["results_included"] = bool(
+            (record.get("crack_control") or {}).get("cases")
+        )
     return json.dumps(payload, indent=2)
 
 
@@ -543,6 +622,7 @@ def project_provenance(text: str) -> dict:
         raise ValueError("malformed 'tables' or 'scalars' section")
     _reject_unsupported_strut_settings(raw_scalars)
     _validate_factor_scalars(raw_scalars)
+    _validate_crack_numeric_scalars(raw_scalars)
     provenance = data.get("provenance")
     if not isinstance(provenance, dict):
         return {
@@ -580,6 +660,14 @@ def project_provenance(text: str) -> dict:
         if isinstance(data.get("calculation"), dict) else None
     )
     if calculation is not None:
+        if "crack_control" in calculation:
+            calculation["crack_control"] = (
+                sls.publication_safe_crack_control_record(
+                    calculation.get("crack_control")
+                )
+            )
+            if calculation["crack_control"] is None:
+                calculation.pop("crack_control")
         calculation["matches_saved_inputs"] = (
             bool(calculation.get("input_sha256"))
             and calculation.get("input_sha256") == actual
@@ -590,7 +678,12 @@ def project_provenance(text: str) -> dict:
         "saved_at_utc": provenance.get("saved_at_utc"),
         "input_sha256": recorded,
         "input_hash_valid": bool(recorded) and recorded == actual,
-        "results_included": bool(provenance.get("results_included", False)),
+        "results_included": bool(
+            (
+                (calculation or {}).get("crack_control")
+                or {}
+            ).get("cases")
+        ),
         "calculation": calculation,
     }
 
@@ -615,6 +708,7 @@ def parse_project(text: str):
         raise ValueError("malformed 'tables' or 'scalars' section")
     _reject_unsupported_strut_settings(raw_scalars)
     _validate_factor_scalars(raw_scalars)
+    _validate_crack_numeric_scalars(raw_scalars)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
@@ -820,6 +914,88 @@ def parse_project(text: str):
                 else fatigue_inputs.FACTOR_MODE_PRESET
             ),
         )
+    # v16 makes the prestressing bond condition and xi input explicit for the
+    # 2023 effective reinforcement ratio.  Default absent keys for every input
+    # version, including partial v16 files produced by external callers.  The
+    # conservative poor-bond choice and blocking zero xi prevent a reused UI
+    # session from silently turning an incomplete mixed-reinforcement check into
+    # a calculated result.
+    scalars.setdefault("sls_tendon_bond", DEFAULT_SLS_TENDON_BOND)
+    scalars.setdefault("sls_tendon_xi", DEFAULT_SLS_TENDON_XI)
+    # v17 separates response duration from SLS-combination class and records
+    # criterion source/applicability. Older or partial files retain their former
+    # numerical limit only as evidence and require an explicit engineer decision.
+    if (
+        data.get("version", 1) < 17
+        or "sls_criterion_mode" not in raw_scalars
+    ):
+        scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+    scalars.setdefault(
+        "sls_prestress_class", DEFAULT_SLS_PRESTRESS_CLASS
+    )
+    scalars.setdefault(
+        "sls_protection_class", DEFAULT_SLS_PROTECTION_CLASS
+    )
+    scalars.setdefault("sls_exposure_class", DEFAULT_SLS_EXPOSURE_CLASS)
+    scalars.setdefault("sls_exposure_context", "")
+    scalars.setdefault("sls_check_appearance", False)
+    scalars.setdefault("sls_appearance_limit", 0.0)
+    scalars.setdefault("sls_check_durability", False)
+    scalars.setdefault(
+        "sls_decompression_applicability", DEFAULT_SLS_DECOMPRESSION
+    )
+    scalars.setdefault("sls_project_characteristic_limit", 0.0)
+    scalars.setdefault("sls_project_frequent_limit", 0.0)
+    scalars.setdefault("sls_project_quasi_permanent_limit", 0.0)
+    # A current-version file may still be partial or hand-edited. Never let an
+    # unknown routing token fall through the Streamlit selectbox to its fresh-
+    # project default, because that could silently turn ambiguous legacy evidence
+    # into a standard-derived ordinary-reinforced assessment.
+    criterion_mode = scalars.get("sls_criterion_mode")
+    prestress_class = scalars.get("sls_prestress_class")
+    protection_class = scalars.get("sls_protection_class")
+    exposure_class = scalars.get("sls_exposure_class")
+    edition_2023 = "2023" in str(scalars.get("sls_code") or "")
+    # A v17 2023 bonded project cannot distinguish Table 9.2 Protection Level 1
+    # from Levels 2/3, and a v17 2023 reinforced/unbonded file has only free
+    # exposure text, not a controlled Table 9.2 row. Preserve its numeric evidence
+    # but require an explicit current-schema routing decision. The already
+    # structured 2004 route does not depend on either new field and remains valid.
+    if (
+        data.get("version", 1) < 18
+        and criterion_mode == sls.CRITERION_MODE_STANDARD
+        and edition_2023
+    ):
+        scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+        criterion_mode = DEFAULT_SLS_CRITERION_MODE
+    if criterion_mode not in sls.CRITERION_MODES:
+        scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+    if prestress_class not in sls.PRESTRESS_CLASSES:
+        scalars["sls_prestress_class"] = DEFAULT_SLS_PRESTRESS_CLASS
+        if criterion_mode == sls.CRITERION_MODE_STANDARD:
+            scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+    if protection_class not in sls.PROTECTION_CLASSES:
+        scalars["sls_protection_class"] = DEFAULT_SLS_PROTECTION_CLASS
+        if (
+            criterion_mode == sls.CRITERION_MODE_STANDARD
+            and edition_2023
+            and prestress_class == sls.PRESTRESS_BONDED
+        ):
+            scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+    if exposure_class not in sls.EXPOSURE_CLASSES_2023:
+        scalars["sls_exposure_class"] = DEFAULT_SLS_EXPOSURE_CLASS
+        if (
+            criterion_mode == sls.CRITERION_MODE_STANDARD
+            and edition_2023
+        ):
+            scalars["sls_criterion_mode"] = DEFAULT_SLS_CRITERION_MODE
+    if (
+        scalars.get("sls_decompression_applicability")
+        not in sls.DECOMPRESSION_OPTIONS
+    ):
+        # "Not established" remains blocking for bonded prestress, while the
+        # field is immaterial for reinforced/unbonded and project criteria.
+        scalars["sls_decompression_applicability"] = DEFAULT_SLS_DECOMPRESSION
     if (
         bool(scalars.get("fatigue_on"))
         or "fatigue_factor_mode" in scalars

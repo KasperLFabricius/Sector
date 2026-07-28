@@ -36,6 +36,7 @@ def build_fixture_pdf() -> bytes:
 def validate_pdf_content(pdf: bytes) -> str:
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    normalized_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
     for token in (
@@ -122,9 +123,17 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Governing",
         "PDF report",
         "Every computed case",
+        "Formula (9.12)",
+        "solid rectangular-section branch",
+        "Crack-control scope",
+        "Orthogonal or inclined crack systems",
+        "Acceptance combination is not load duration",
+        "Table 9.1 appearance",
+        "NOT ASSESSED / REVIEW",
+        "currently applicable Danish",
         "Part D - Reference",
     ):
-        if expected not in text:
+        if expected not in normalized_text:
             raise AssertionError(f"expected manual content is missing: {expected}")
     return text
 

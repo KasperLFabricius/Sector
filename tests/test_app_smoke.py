@@ -6,17 +6,21 @@ for each analysis mode, and assert it produces results without error.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
+import hashlib
 import json
 import pathlib
 import re
 import sys
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from streamlit.testing.v1 import AppTest
+from sector import sls
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
@@ -363,6 +367,15 @@ def test_persisted_settings_use_the_seeded_number_helper():
     # value=. (wall_mm keeps key= -- it has a dimension-dependent max, so it seeds and
     # clamps by hand -- but still passes no value=, so it does not warn.)
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
+                "sls_tendon_bond", "sls_tendon_xi",
+                "sls_criterion_mode", "sls_prestress_class",
+                "sls_protection_class", "sls_exposure_class",
+                "sls_exposure_context", "sls_check_appearance",
+                "sls_appearance_limit", "sls_check_durability",
+                "sls_decompression_applicability",
+                "sls_project_characteristic_limit",
+                "sls_project_frequent_limit",
+                "sls_project_quasi_permanent_limit",
                 "label_scale", "label_min_gap",                # seeded number inputs
                 "pl_check_util", "pl_interaction",              # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
@@ -473,6 +486,193 @@ def test_loading_a_project_applies_a_seeded_setting(tmp_path):
     assert "_clear_section_undo" not in at.session_state
 
 
+def test_loading_partial_current_project_clears_crack_routing_and_bond_inputs():
+    import json
+    import project_io
+
+    at = _fresh()
+    at.run()
+    at.session_state["_pending_project"] = project_io.dump_project(
+        {},
+        {
+            "sls_tendon_bond": "Ribbed / high bond (k1 = 0.8)",
+            "sls_tendon_xi": 0.65,
+        },
+    )
+    at.run()
+    assert not at.exception
+    assert at.session_state["sls_tendon_bond"] == (
+        "Ribbed / high bond (k1 = 0.8)"
+    )
+    assert at.session_state["sls_tendon_xi"] == pytest.approx(0.65)
+
+    # External callers may still provide a valid current-version partial file.
+    # Loading it is a whole-input replacement and must not retain the prior
+    # project's favourable tendon properties in either live or durable state.
+    at.session_state["_pending_project"] = json.dumps({
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": {
+            "sls_cw": True,
+            "sls_code": "EN 1992-1-1:2023",
+        },
+    })
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["sls_tendon_bond"] == (
+        project_io.DEFAULT_SLS_TENDON_BOND
+    )
+    assert at.session_state["sls_tendon_xi"] == pytest.approx(
+        project_io.DEFAULT_SLS_TENDON_XI
+    )
+    assert at.session_state["sls_criterion_mode"] == (
+        sls.CRITERION_MODE_LEGACY
+    )
+    durable = at.session_state["_durable_input_scalars"]
+    assert durable["sls_tendon_bond"] == project_io.DEFAULT_SLS_TENDON_BOND
+    assert durable["sls_tendon_xi"] == pytest.approx(
+        project_io.DEFAULT_SLS_TENDON_XI
+    )
+    assert durable["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
+
+
+def test_loading_v17_boolean_crack_json_is_rejected_before_session_apply():
+    import project_io
+
+    at = _fresh()
+    at.run()
+    before_limit = at.session_state["sls_wk_limit"]
+    at.session_state["_pending_project"] = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 17,
+        "tables": {},
+        "scalars": {
+            "sls_code": "EN 1992-1-1:2023",
+            "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+            "sls_prestress_class": sls.PRESTRESS_BONDED,
+            "sls_wk_limit": True,
+            "sls_tendon_xi": True,
+        },
+    })
+
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["sls_wk_limit"] == before_limit
+    assert not isinstance(at.session_state["sls_wk_limit"], bool)
+    assert not isinstance(
+        at.session_state["_durable_input_scalars"]["sls_wk_limit"],
+        bool,
+    )
+    level, message = at.session_state["_project_msg"]
+    assert level == "error"
+    assert "sls_tendon_xi" in message or "sls_wk_limit" in message
+
+
+def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results():
+    import load_cases
+    import project_io
+
+    tables = {
+        load_cases.ELASTIC_TABLE_KEY: load_cases.normalise_table([{
+            "name": "SLS-QP",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "total_combination": sls.COMBINATION_CHARACTERISTIC,
+            "mx_long_ed_knm": 80.0,
+            "mx_short_ed_knm": 20.0,
+            "check_crack_width": True,
+        }], load_cases.ELASTIC_TABLE_KEY),
+    }
+    scalars = {
+        "mode": "Elastic",
+        "sls_code": "EN 1992-1-1:2023",
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_prestress_class": sls.PRESTRESS_BONDED,
+        "sls_protection_class": sls.PROTECTION_LEVEL_2_OR_3,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
+        "sls_exposure_context": "XC3 / durability",
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
+    }
+    digest = project_io.input_sha256(tables, scalars)
+    crack_control = {
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": {
+                "status": "OK",
+                "verdict": "PASS",
+                "case": "QP",
+                "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+                "value": 0.22,
+                "limit": 0.30,
+            },
+            "responses": [{
+                "name": "QP",
+                "wk_mm": 0.22,
+                "acceptance_role": "criterion input",
+                "context": {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "response_id": "qp",
+                    "solver_provenance": {"state": "long"},
+                },
+            }],
+        }],
+    }
+    text = project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "e" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+    payload = json.loads(text)
+    stale_case = payload["calculation"]["crack_control"]["cases"][0]
+    stale_case["responses"][0]["wk_mm"] = None
+    stale_case["responses"][0]["result_validation"] = (
+        "Injected rejected response in loaded audit snapshot."
+    )
+    text = json.dumps(payload)
+    expected_record = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
+
+    at = _fresh()
+    at.run()
+    at.session_state["results"] = {"stale": True}
+    at.session_state["_pending_project"] = text
+    at.run()
+
+    assert not at.exception
+    assert "results" not in at.session_state
+    assert at.session_state["sls_criterion_mode"] == (
+        sls.CRITERION_MODE_STANDARD
+    )
+    assert at.session_state["sls_exposure_context"] == "XC3 / durability"
+    assert at.session_state["sls_protection_class"] == (
+        sls.PROTECTION_LEVEL_2_OR_3
+    )
+    assert at.session_state["sls_exposure_class"] == sls.EXPOSURE_XC2_XC4
+    elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY]
+    assert elastic.loc[0, "long_combination"] == (
+        sls.COMBINATION_QUASI_PERMANENT
+    )
+    loaded_record = at.session_state["calculation_record"]["crack_control"]
+    assert loaded_record == expected_record
+    loaded_assessment = loaded_record["cases"][0]["assessment"]
+    assert loaded_assessment["status"] == "NOT ASSESSED"
+    assert loaded_assessment["verdict"] == "REVIEW"
+    assert loaded_assessment["value"] is None
+    assert loaded_assessment["publication_validation"]["status"] == "REJECTED"
+    assert at.session_state["calculation_record"]["matches_saved_inputs"] is True
+
+
 def test_about_panel_shows_version_author_and_licensee():
     # The About panel carries the single-source release and ownership metadata.
     at = _fresh()
@@ -523,6 +723,9 @@ def test_calculate_elastic_produces_bar_stresses():
     res = at.session_state["results"]
     assert "elastic" in res
     assert len(res["elastic"]["total"]) > 0
+    # Result provenance is added only for an enabled crack-control calculation;
+    # an ordinary elastic run must not persist an irrelevant REVIEW snapshot.
+    assert "crack_control" not in at.session_state["calculation_record"]
 
 
 def test_combined_elastic_reports_four_columns():
@@ -2009,6 +2212,131 @@ def test_boolean_factor_session_state_fails_closed_in_both_mirrors(
     assert set(repaired) == set(expected_keys) - {"fatigue_gamma_s"}
 
 
+def test_boolean_crack_state_is_blocked_in_live_durable_result_and_autosave(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+    rejected_state = {
+        "sls_wk_limit": True,
+        "sls_tendon_xi": np.bool_(True),
+    }
+    durable = dict(at.session_state["_durable_input_scalars"])
+    for key, value in rejected_state.items():
+        at.session_state[key] = value
+        durable[key] = value
+    at.session_state["_durable_input_scalars"] = durable
+
+    at.run()
+
+    expected = tuple(sorted(rejected_state))
+    assert not at.exception
+    assert at.session_state["_invalid_crack_input_keys"] == expected
+    for key in rejected_state:
+        assert not isinstance(at.session_state[key], (bool, np.bool_))
+        assert not isinstance(
+            at.session_state["_durable_input_scalars"][key],
+            (bool, np.bool_),
+        )
+    inp = at.session_state["_latest_inputs"]
+    assert inp["sls_invalid_numeric_inputs"] == expected
+    assert any(
+        "Rejected Boolean/non-numeric crack-control state" in item.value
+        for item in at.error
+    )
+
+    _calculate(at)
+    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert "unrepaired" in assessment["reason"]
+    assert "sls_wk_limit" in assessment["reason"]
+
+    _goto_page(at, "Inputs")
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+    assert not (tmp_path / "autosave.json").exists()
+
+    # A real widget edit clears only that key; reconstructed numeric defaults do
+    # not clear the other rejection marker.
+    at.number_input(key="sls_wk_limit").set_value(0.30).run()
+    assert at.session_state["_invalid_crack_input_keys"] == (
+        "sls_tendon_xi",
+    )
+
+
+@pytest.mark.parametrize("pending_value", [np.bool_(True), 0.0])
+def test_invalid_pending_crack_event_cannot_become_an_explicit_repair(
+    monkeypatch,
+    pending_value,
+):
+    import sector_app
+
+    key = "sls_wk_limit"
+    state = {
+        key: np.bool_(True),
+        sector_app._INPUT_STATE_KEY: {key: True},
+        sector_app._PENDING_INPUT_EVENTS_KEY: {key: pending_value},
+    }
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+
+    sector_app._sanitise_crack_input_state()
+    assert state[sector_app._INVALID_CRACK_INPUT_KEYS_KEY] == (key,)
+    assert key not in state[sector_app._PENDING_INPUT_EVENTS_KEY]
+
+    # Simulate an interrupted rerun: the pending journal survives exactly as the
+    # sanitizer left it. A second reconstruction must retain the rejection.
+    sector_app._sanitise_crack_input_state()
+    assert state[sector_app._INVALID_CRACK_INPUT_KEYS_KEY] == (key,)
+
+    # A genuine widget event carries the current checked value and may repair it.
+    state[key] = 0.30
+    state[sector_app._PENDING_INPUT_EVENTS_KEY][key] = 0.30
+    sector_app._sanitise_crack_input_state()
+    assert sector_app._INVALID_CRACK_INPUT_KEYS_KEY not in state
+
+
+@pytest.mark.parametrize("value", [True, np.bool_(True)])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "sls_fctm",
+        "sls_conc_limit_pct",
+        "sls_steel_limit_pct",
+        "sls_pre_limit_pct",
+    ],
+)
+def test_headless_analysis_rejects_boolean_sls_before_solver_use(key, value):
+    import sector_app
+
+    with pytest.raises(ValueError, match=key):
+        sector_app.run_analysis({"sls_cw": False, key: value})
+
+
 def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
     tmp_path,
     monkeypatch,
@@ -2872,6 +3200,25 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     import sys as _sys
     at = _fresh()
     at.run()
+    _set(
+        at,
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        ("checkbox", "sls_cw", True),
+    )
+    _set(
+        at,
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
     at.session_state["_autosave_t"] = 0.0          # make a save due, then rerun
     at.run()
     saved = tmp_path / "autosave.json"
@@ -2880,6 +3227,12 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     import project_io  # noqa: E402
     tables, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
     assert len(tables["corners_base"]) >= 3        # the live section, not blank
+    assert tables["elastic_cases_base"].loc[0, "long_combination"] == (
+        sls.COMBINATION_QUASI_PERMANENT
+    )
+    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_STANDARD
+    assert scalars["sls_exposure_class"] == sls.EXPOSURE_XC2_XC4
+    assert scalars["sls_exposure_context"] == "XC3 / durability"
     assert at.session_state["_autosave_last"]      # the panel records the time
 
 
@@ -3473,7 +3826,9 @@ def test_design_basis_summary_identifies_alignment_and_limitations():
         torsion_method="DS/EN 1992-1-1:2005 + DK NA:2024",
     )
     assert crack_only_2023["mixed"] is True
-    assert crack_only_2023["limitations"] == []
+    assert crack_only_2023["limitations"] == [
+        sector_app.CRACK_DIRECTIONAL_LIMITATION
+    ]
 
 
 def test_es_field_present_and_editable():
@@ -3722,12 +4077,19 @@ def test_inputs_carry_help_tooltips():
         r"Start angle $\varphi_{NA,\min}$ ($^\circ$)"
     )
     assert at.number_input(key="sls_wk_limit").label == (
-        r"Crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)"
+        r"Durability crack-width limit "
+        r"$w_{\mathrm{lim}}$ (mm, 0 = not assessed)"
     )
     assert at.number_input(key="detailing_d_upper").label == (
         r"Maximum aggregate size $D_{\mathrm{upper}}$ (mm)"
     )
     assert at.selectbox(key="sls_bond").label == r"Mild-steel bond ($k_1$)"
+    assert at.selectbox(key="sls_tendon_bond").label == (
+        r"Prestressing-steel bond condition ($k_b$)"
+    )
+    assert at.number_input(key="sls_tendon_xi").label == (
+        r"Prestressing bond-strength ratio $\xi$ (0 = not assessed)"
+    )
     at.toggle(key="fatigue_on").set_value(True).run()
     _goto_material_tab(at, "Fatigue details")
     fatigue_detail_keys = (
@@ -3886,6 +4248,7 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     ]
     assert list(elastic.columns) == [
         "name", "description",
+        "long_combination", "total_combination",
         "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
         "check_stress", "check_crack_width",
@@ -3913,6 +4276,83 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "el_long_P", "el_long_Mx", "el_long_My",
         "el_short_P", "el_short_Mx", "el_short_My", "sls_cw",
     })
+
+
+def test_native_data_editor_state_is_not_replayed_through_session_state():
+    at = _fresh()
+    at.run()
+
+    # A real browser edit puts this Streamlit-owned delta in the callback state.
+    # Reassigning it before data_editor is reconstructed raises
+    # StreamlitValueAssignmentNotAllowedError.
+    at.session_state["_pending_input_events"] = {
+        "elastic_cases_editor": {
+            "edited_rows": {0: {"check_crack_width": True}},
+            "added_rows": [],
+            "deleted_rows": [],
+        },
+    }
+    at.run()
+
+    assert not at.exception
+    assert "_pending_input_events" not in at.session_state
+    assert _widget(at.dataframe, "elastic_cases_editor").value is not None
+
+
+def test_native_editor_callback_commits_delta_before_interrupted_recovery(
+    monkeypatch,
+):
+    import fatigue_inputs
+    import load_cases
+    import sector_app
+
+    plastic_key = load_cases.PLASTIC_TABLE_KEY
+    plastic_seed = load_cases.normalise_table([
+        {"name": "P1", "mx_ed_knm": 10.0},
+        {"name": "P2", "mx_ed_knm": 20.0},
+    ], plastic_key)
+    state = {
+        "_main_page": "Inputs",
+        plastic_key: plastic_seed.copy(deep=True),
+        f"_{plastic_key}_editor_seed": plastic_seed.copy(deep=True),
+        "plastic_cases_editor": {
+            "edited_rows": {"0": {"mx_ed_knm": 125.0}},
+            "deleted_rows": [1],
+            "added_rows": [{"name": "P3", "mx_ed_knm": 75.0}],
+        },
+    }
+    monkeypatch.setattr(sector_app.st, "session_state", state)
+
+    sector_app._record_input_event(
+        "plastic_cases_editor",
+        sector_app._commit_case_editor_delta,
+        (plastic_key,),
+    )
+
+    committed = state[plastic_key]
+    assert committed["name"].tolist() == ["P1", "P3"]
+    assert committed["mx_ed_knm"].tolist() == pytest.approx([125.0, 75.0])
+    assert "_pending_input_events" not in state
+
+    fatigue_key = fatigue_inputs.SPECTRUM_TABLE_KEY
+    fatigue_seed = fatigue_inputs.normalise_spectrum_table([
+        {"spectrum": "S1", "name": "F1", "cycles": 1000.0},
+    ])
+    state.update({
+        fatigue_key: fatigue_seed.copy(deep=True),
+        f"_{fatigue_key}_editor_seed": fatigue_seed.copy(deep=True),
+        "fatigue_spectrum_editor": {
+            "edited_rows": {0: {"cycles": 2500.0}},
+            "deleted_rows": [],
+            "added_rows": [],
+        },
+    })
+    sector_app._record_input_event(
+        "fatigue_spectrum_editor",
+        sector_app._commit_fatigue_editor_delta,
+    )
+    assert state[fatigue_key].loc[0, "cycles"] == pytest.approx(2500.0)
+    assert "_pending_input_events" not in state
 
 
 def test_detailing_controls_run_selected_case_and_section_wide_spacing():
@@ -4010,6 +4450,8 @@ def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
         {
             "name": "EL-CRACK",
             "description": "Frequent",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "total_combination": sls.COMBINATION_FREQUENT,
             "mx_long_ed_knm": 120.0,
             "mx_short_ed_knm": 30.0,
             "check_crack_width": True,
@@ -4025,10 +4467,56 @@ def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
         frame.value for frame in at.dataframe
         if "Action part" in frame.value.columns
     )
-    assert actions["Action part"].tolist() == ["Long-term", "Short-term"]
+    assert actions["Action part"].tolist() == ["Long-term", "Short increment"]
+    assert actions["Response SLS combination"].tolist() == [
+        sls.COMBINATION_QUASI_PERMANENT,
+        sls.COMBINATION_FREQUENT,
+    ]
     assert actions["Mx_Ed [kNm]"].tolist() == pytest.approx([120.0, 30.0])
     assert any("Acceptance: crack width" in caption.value for caption in at.caption)
     assert not at.exception
+
+
+def test_duplicate_crack_combination_mappings_across_cases_fail_closed():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Elastic"))
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, [
+        {
+            "name": "EL-QP-A",
+            "description": "First independent QP response",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "mx_long_ed_knm": 400.0,
+            "check_crack_width": True,
+        },
+        {
+            "name": "EL-QP-B",
+            "description": "Second independent QP response",
+            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "mx_long_ed_knm": 350.0,
+            "check_crack_width": True,
+        },
+    ])
+    _set(
+        at,
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+    _calculate(at)
+
+    assert not at.exception
+    entries = at.session_state["results"]["elastic_cases"]
+    assert [entry["name"] for entry in entries] == ["EL-QP-A", "EL-QP-B"]
+    for entry in entries:
+        assessment = entry["results"]["elastic"]["crack_assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert "across checked Elastic cases" in assessment["reason"]
+        assert {
+            item["response_id"]
+            for item in assessment["response_provenance"]
+        } == {"EL-QP-A:long", "EL-QP-B:long"}
 
 
 def test_results_overview_shows_action_provenance_and_explicit_states():
@@ -4592,6 +5080,1283 @@ def test_crack_width_reports_both_load_cases():
     assert e["crack"]["cover"] > 0.0       # auto cover from the geometry
 
 
+def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        (
+            "selectbox",
+            "sls_total_combination",
+            sls.COMBINATION_CHARACTERISTIC,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+    first = at.session_state["results"]["elastic"]
+    qp_width = first["crack"]["wk"]
+    total_width = first["crack_short"]["wk"]
+    assert total_width > qp_width
+    separating_limit = (qp_width + total_width) / 2.0
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "sls_wk_limit", separating_limit),
+    )
+
+    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
+    assert qp_width < separating_limit < total_width
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+    assert assessment["case"] == "Long-term"
+    assert assessment["value"] == pytest.approx(qp_width)
+    assert assessment["informational_responses"] == [
+        "Total (long + short)"
+    ]
+    raw_binding = assessment["criteria"][0]["acceptance_evidence"]
+    assert raw_binding["schema"] == sls.CRACK_ACCEPTANCE_EVIDENCE_SCHEMA
+    assert len(raw_binding["fingerprint"]) == 64
+    recorded = at.session_state["calculation_record"]["crack_control"]
+    recorded_case = recorded["cases"][0]
+    assert recorded_case["assessment"]["verdict"] == "PASS"
+    recorded_binding = recorded_case["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    assert recorded_binding["fingerprint"] == raw_binding["fingerprint"]
+    assert recorded_case["response_mapping_scope"] == (
+        first["crack_response_mapping_scope"]
+    )
+    assert any(
+        response["wk_mm"] == pytest.approx(total_width)
+        and response["acceptance_role"] == "informational"
+        for response in recorded_case["responses"]
+    )
+
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+    import project_io
+    provenance = project_io.project_provenance(
+        (tmp_path / "autosave.json").read_text(encoding="utf-8")
+    )
+    assert provenance["results_included"] is True
+    saved_case = provenance["calculation"]["crack_control"]["cases"][0]
+    assert saved_case["assessment"]["verdict"] == "PASS"
+    assert saved_case["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]["fingerprint"] == raw_binding["fingerprint"]
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+
+    stale_record = copy.deepcopy(
+        at.session_state["calculation_record"]
+    )
+    stale_case = stale_record["crack_control"]["cases"][0]
+    criterion_response = next(
+        response
+        for response in stale_case["responses"]
+        if response["acceptance_role"] == "criterion input"
+    )
+    criterion_response["wk_mm"] = total_width
+    assert stale_case["assessment"]["verdict"] == "PASS"
+    at.session_state["calculation_record"] = stale_record
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+
+    provenance = project_io.project_provenance(
+        (tmp_path / "autosave.json").read_text(encoding="utf-8")
+    )
+    saved_case = provenance["calculation"]["crack_control"]["cases"][0]
+    assert saved_case["assessment"]["status"] == "NOT ASSESSED"
+    assert saved_case["assessment"]["verdict"] == "REVIEW"
+    assert saved_case["assessment"]["value"] is None
+    assert saved_case["assessment"]["util"] is None
+    assert saved_case["assessment"]["margin"] is None
+    assert saved_case["assessment"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+
+
+def test_boolean_calculated_crack_width_cannot_create_pass_record():
+    import sector_app
+
+    criteria = sls.crack_criteria_from_inputs({
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_edition": "2004",
+        "sls_code": "EN 1992-1-1:2005",
+        "sls_member": "Beam",
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_exposure_context": "XC3 / durability",
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": (
+            sls.DECOMPRESSION_NOT_REQUIRED
+        ),
+    })
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "response_id": "long",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total (long + short)": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "response_id": "total",
+            "solver_provenance": {"state": "long-plus-short"},
+        },
+    }
+    rejected_wk = np.asarray(False, dtype=object)
+    assessment = sls.crack_assessment(
+        {
+            "Long-term": {
+                "wk": 0.22,
+                "element_id": "R1",
+            },
+            "Total (long + short)": {
+                "wk": rejected_wk,
+                "element_id": "R1",
+            },
+        },
+        valid=True,
+        criteria=criteria,
+        response_contexts=contexts,
+    )
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {
+                "Long-term": {
+                    "wk": 0.22,
+                    "element_id": "R1",
+                },
+                "Total (long + short)": {
+                    "wk": rejected_wk,
+                    "element_id": "R1",
+                },
+            },
+            "crack_dispositions": {
+                "Long-term": {"status": "OK"},
+                "Total (long + short)": {"status": "OK"},
+            },
+            "crack_response_contexts": contexts,
+        },
+    })
+
+    recorded = record["cases"][0]
+    assert recorded["assessment"]["status"] == "NOT ASSESSED"
+    assert recorded["assessment"]["verdict"] == "REVIEW"
+    responses = {
+        response["name"]: response for response in recorded["responses"]
+    }
+    assert responses["Long-term"]["wk_mm"] == pytest.approx(0.22)
+    rejected = responses["Total (long + short)"]
+    assert rejected["wk_mm"] is None
+    assert rejected["acceptance_role"] == "informational"
+    assert "rejected" in rejected[
+        "result_validation"
+    ].lower()
+    assert '"PASS"' not in json.dumps(record)
+
+
+def test_non_mapping_crack_response_is_retained_as_rejected_record():
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=[{
+            "id": "qa-durability",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {"QP": 1.0},
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    })
+
+    recorded = record["cases"][0]
+    assert recorded["assessment"]["status"] == "NOT ASSESSED"
+    assert recorded["assessment"]["verdict"] == "REVIEW"
+    assert recorded["assessment"]["value"] is None
+    assert recorded["assessment"]["util"] is None
+    assert recorded["assessment"]["margin"] is None
+    assert recorded["assessment"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
+    assert recorded["assessment"]["solver_provenance"] == [{
+        "response": "QP",
+        "solver": {"state": "long"},
+    }]
+    response = recorded["responses"][0]
+    assert response["wk_mm"] is None
+    assert "response rejected" in response["result_validation"].lower()
+    assert '"PASS"' not in json.dumps(record)
+
+
+def _canonical_app_width_results():
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "map-v1",
+            "solver_provenance": {"solve": "v1", "converged": True},
+        }
+        for name in ("Fine", "Coarse")
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "map-v1",
+        "solver_provenance": {"solve": "v1", "converged": True},
+    }]
+    responses = {
+        "Fine": {"wk": 0.22, "element_id": "R1"},
+        "Coarse": {"wk": 0.18, "element_id": "R2"},
+    }
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-width",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled durability criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["verdict"] == "PASS"
+    return {
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": responses,
+            "crack_dispositions": {
+                name: {"status": "OK"} for name in responses
+            },
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    }
+
+
+def _reseal_app_acceptance_binding(binding):
+    body = {
+        key: value
+        for key, value in binding.items()
+        if key != "fingerprint"
+    }
+    binding["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def test_legacy_scalar_analysis_constructs_complete_explicit_mapping_scope(
+    monkeypatch,
+):
+    import sector_app
+
+    captured = {}
+
+    def capture(single_input, **_kwargs):
+        captured.update(single_input)
+        return {}
+
+    monkeypatch.setattr(sector_app, "_run_single_analysis", capture)
+    inp = {
+        "section": object(),
+        "sls_cw": True,
+        "sls_long_combination": sls.COMBINATION_QUASI_PERMANENT,
+        "sls_total_combination": sls.COMBINATION_CHARACTERISTIC,
+    }
+
+    assert sector_app.run_analysis(inp) == {}
+    scope = captured["sls_response_mapping_scope"]
+
+    assert "sls_response_mapping_scope" not in inp
+    assert [item["response_id"] for item in scope] == ["long", "total"]
+    assert [item["state"] for item in scope] == ["long", "total"]
+    assert all(item["duration"] for item in scope)
+    assert all(item["provenance"] for item in scope)
+    assert captured["sls_response_provenance"]["long"].startswith(
+        "Legacy scalar"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "changed_value"),
+    [
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2", "converged": True}),
+        ("width", 0.21),
+        ("governing_element", "R9"),
+        ("scope_duration", "short"),
+        ("scope_provenance", "map-v2"),
+        ("criterion_source", "Changed durability criterion"),
+        ("applicability", {"member": "changed"}),
+    ],
+)
+def test_calculation_record_rejects_each_acceptance_binding_mutation(
+    mutation,
+    changed_value,
+):
+    import sector_app
+
+    results = _canonical_app_width_results()
+    elastic = results["elastic"]
+    if mutation in {
+        "response_id",
+        "duration",
+        "provenance",
+        "solver_provenance",
+    }:
+        for context in elastic["crack_response_contexts"].values():
+            context[mutation] = copy.deepcopy(changed_value)
+    elif mutation == "width":
+        elastic["crack_responses"]["Fine"]["wk"] = changed_value
+    elif mutation == "governing_element":
+        elastic["crack_responses"]["Fine"]["element_id"] = changed_value
+    elif mutation.startswith("scope_"):
+        elastic["crack_response_mapping_scope"][0][
+            mutation.removeprefix("scope_")
+        ] = copy.deepcopy(changed_value)
+    else:
+        elastic["crack_assessment"]["criteria"][0][
+            mutation
+        ] = copy.deepcopy(changed_value)
+
+    record = sector_app.crack_control_calculation_record(results)
+    assessment = record["cases"][0]["assessment"]
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert assessment["acceptance_evidence"] is None
+    assert assessment["publication_validation"]["reason"]
+
+
+def test_changed_governing_crack_response_invalidates_stale_pass_record():
+    import sector_app
+
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        }
+        for name in ("QP",)
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    criteria = [{
+        "id": "qa-durability",
+        "kind": sls.CRITERION_DURABILITY,
+        "source_type": sls.CRITERION_MODE_STANDARD,
+        "source": "QA controlled criterion",
+        "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+        "limit_mm": 0.30,
+        "applicability": {"member": "reinforced"},
+    }]
+    stale_assessment = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=criteria,
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert stale_assessment["verdict"] == "PASS"
+
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": stale_assessment,
+            "crack_responses": {
+                "QP": {"wk": 0.45, "element_id": "R1"},
+            },
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    })
+
+    recorded = record["cases"][0]
+    assert recorded["responses"][0]["wk_mm"] == pytest.approx(0.45)
+    assert recorded["assessment"]["status"] == "NOT ASSESSED"
+    assert recorded["assessment"]["verdict"] == "REVIEW"
+    assert recorded["assessment"]["value"] is None
+    assert "immutable acceptance evidence does not match" in (
+        recorded["assessment"]["publication_validation"]["reason"]
+    )
+    assert '"PASS"' not in json.dumps(record)
+
+    changed_element = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": stale_assessment,
+            "crack_responses": {
+                "QP": {"wk": 0.22, "element_id": "R2"},
+            },
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    })
+    element_assessment = changed_element["cases"][0]["assessment"]
+    assert element_assessment["status"] == "NOT ASSESSED"
+    assert "immutable acceptance evidence does not match" in (
+        element_assessment["publication_validation"]["reason"]
+    )
+
+
+def test_current_decompression_evidence_preserves_matching_pass_record():
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "reason": "Concrete remains in compression at tendon level.",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {"QP": response},
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    })
+
+    recorded = record["cases"][0]
+    assert recorded["assessment"]["status"] == "OK"
+    assert recorded["assessment"]["verdict"] == "PASS"
+    assert recorded["assessment"]["value"] == pytest.approx(-0.25)
+    assert recorded["assessment"]["governing"] == "concrete point 1"
+    assert recorded["responses"][0]["decompression"]["status"] == "OK"
+    assert "publication_validation" not in recorded["assessment"]
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value", "reason_text"),
+    [
+        ("value", -0.10, "calculated acceptance evidence"),
+        ("value", True, "decompression evidence is incomplete"),
+        (
+            "solver_provenance",
+            float("nan"),
+            "decompression evidence is incomplete",
+        ),
+        (
+            "governing",
+            "concrete point 2",
+            "calculated acceptance evidence",
+        ),
+    ],
+)
+def test_changed_decompression_evidence_invalidates_stale_pass_record(
+    field,
+    changed_value,
+    reason_text,
+):
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    original_response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "reason": "Concrete remains in compression at tendon level.",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": original_response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    changed_response = copy.deepcopy(original_response)
+    changed_response["decompression"][field] = changed_value
+
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {"QP": changed_response},
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    })
+
+    recorded = record["cases"][0]["assessment"]
+    assert recorded["status"] == "NOT ASSESSED"
+    assert recorded["verdict"] == "REVIEW"
+    assert recorded["value"] is None
+    assert reason_text in recorded["publication_validation"]["reason"]
+
+
+def test_changed_non_governing_decompression_evidence_invalidates_pass():
+    import sector_app
+
+    contexts = {
+        name: {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "long",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        }
+        for name in ("Fine", "Coarse")
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "long",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "reason": "Concrete remains in compression at tendon level.",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    original_responses = {
+        "Fine": copy.deepcopy(response),
+        "Coarse": copy.deepcopy(response),
+    }
+    assessment = sls.crack_assessment(
+        original_responses,
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    assert assessment["status"] == "OK"
+    assert assessment["verdict"] == "PASS"
+    assert assessment["criteria"][0]["matched_responses"] == [
+        "Fine",
+        "Coarse",
+    ]
+
+    current_responses = copy.deepcopy(original_responses)
+    current_responses["Coarse"]["decompression"]["value"] = -0.10
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": current_responses,
+            "crack_dispositions": {
+                "Fine": {"status": "OK"},
+                "Coarse": {"status": "OK"},
+            },
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    })
+
+    recorded = record["cases"][0]["assessment"]
+    assert recorded["status"] == "NOT ASSESSED"
+    assert recorded["verdict"] == "REVIEW"
+    assert recorded["value"] is None
+    assert "conflicting decompression acceptance evidence" in (
+        recorded["publication_validation"]["reason"]
+    )
+
+
+def _download_and_autosave_publications(
+    sector_app,
+    crack_control,
+    tmp_path,
+    monkeypatch,
+):
+    calculation = {
+        "input_sha256": "stale",
+        "crack_control": copy.deepcopy(crack_control),
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(sector_app, "_project_state", lambda: ({}, {}))
+
+    download_text = sector_app._gather_project()
+    download = json.loads(download_text)["calculation"][
+        "crack_control"
+    ]["cases"][0]["assessment"]
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: "current-input-hash",
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        captured["path"] = path
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+    saved = json.loads(captured["data"])["calculation"][
+        "crack_control"
+    ]["cases"][0]["assessment"]
+    return (download, durable, saved), (download_text, captured["data"])
+
+
+@pytest.mark.parametrize(
+    ("mutation", "changed_value"),
+    [
+        ("response_id", "other"),
+        ("duration", "short"),
+        ("provenance", "map-v2"),
+        ("solver_provenance", {"solve": "v2", "converged": True}),
+        ("scope_duration", "short"),
+    ],
+)
+def test_download_session_and_autosave_reject_width_binding_mutations(
+    mutation,
+    changed_value,
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    record = sector_app.crack_control_calculation_record(
+        _canonical_app_width_results()
+    )
+    assert record["cases"][0]["assessment"]["verdict"] == "PASS"
+    case = record["cases"][0]
+    if mutation.startswith("scope_"):
+        case["response_mapping_scope"][0][
+            mutation.removeprefix("scope_")
+        ] = copy.deepcopy(changed_value)
+    else:
+        for response in case["responses"]:
+            response["context"][mutation] = copy.deepcopy(changed_value)
+
+    assessments, texts = _download_and_autosave_publications(
+        sector_app,
+        record,
+        tmp_path,
+        monkeypatch,
+    )
+
+    for assessment in assessments:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["acceptance_evidence"] is None
+    assert all('"verdict": "PASS"' not in text for text in texts)
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        pytest.param("response-container", id="response-container"),
+        pytest.param("text-width", id="text-crack-width"),
+    ],
+)
+def test_download_session_and_autosave_reject_malformed_binding_schema(
+    malformation,
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    record = sector_app.crack_control_calculation_record(
+        _canonical_app_width_results()
+    )
+    binding = record["cases"][0]["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    if malformation == "response-container":
+        binding["matched_responses"] = ["Fine"]
+    else:
+        for response in binding["matched_responses"]:
+            acceptance = response["acceptance"]
+            acceptance["value_mm"] = str(acceptance["value_mm"])
+        binding["outcome"]["value"] = str(binding["outcome"]["value"])
+    _reseal_app_acceptance_binding(binding)
+
+    assessments, texts = _download_and_autosave_publications(
+        sector_app,
+        record,
+        tmp_path,
+        monkeypatch,
+    )
+
+    for assessment in assessments:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["acceptance_evidence"] is None
+        assert "invalid immutable acceptance evidence" in (
+            assessment["publication_validation"]["reason"]
+        )
+    assert all('"verdict": "PASS"' not in text for text in texts)
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("status", "EXCEEDED"),
+        ("value", -0.10),
+        ("governing", "concrete point 2"),
+        ("solver_provenance", {"state": "changed"}),
+    ],
+)
+def test_download_session_and_autosave_reject_decompression_mutations(
+    field,
+    changed_value,
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    record = sector_app.crack_control_calculation_record({
+        "elastic": {
+            "show_cw": True,
+            "crack_assessment": assessment,
+            "crack_responses": {"QP": response},
+            "crack_dispositions": {"QP": {"status": "OK"}},
+            "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
+        },
+    })
+    assert record["cases"][0]["assessment"]["verdict"] == "PASS"
+    record["cases"][0]["responses"][0]["decompression"][
+        field
+    ] = copy.deepcopy(changed_value)
+
+    assessments, texts = _download_and_autosave_publications(
+        sector_app,
+        record,
+        tmp_path,
+        monkeypatch,
+    )
+
+    for published in assessments:
+        assert published["status"] == "NOT ASSESSED"
+        assert published["verdict"] == "REVIEW"
+        assert published["acceptance_evidence"] is None
+    assert all('"verdict": "PASS"' not in text for text in texts)
+
+
+def test_download_and_autosave_share_decompression_publication_guard(
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
+    response = {
+        "wk": 0.18,
+        "element_id": "T1",
+        "decompression": {
+            "status": "OK",
+            "value": -0.25,
+            "governing": "concrete point 1",
+            "solver_provenance": {"state": "long"},
+        },
+    }
+    assessment = sls.crack_assessment(
+        {"QP": response},
+        valid=True,
+        criteria=[{
+            "id": "qa-decompression",
+            "kind": sls.CRITERION_DECOMPRESSION,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": "QA controlled decompression criterion",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": None,
+            "applicability": {"member": "bonded prestress"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    invalid_response = copy.deepcopy(response)
+    invalid_response["decompression"]["solver_provenance"][
+        "residual"
+    ] = float("inf")
+    stale_record = {
+        "cases": [{
+            "case": "SLS-QP",
+            "assessment": assessment,
+            "response_mapping_scope": mapping_scope,
+            "responses": [{
+                "name": "QP",
+                "wk_mm": invalid_response["wk"],
+                "element_id": invalid_response["element_id"],
+                "decompression": invalid_response["decompression"],
+                "acceptance_role": "criterion input",
+                "context": contexts["QP"],
+            }],
+        }],
+    }
+    calculation = {
+        "input_sha256": "stale",
+        "crack_control": stale_record,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(sector_app, "_project_state", lambda: ({}, {}))
+
+    download_text = sector_app._gather_project()
+    download_record = json.loads(download_text)["calculation"][
+        "crack_control"
+    ]
+    download_assessment = download_record["cases"][0]["assessment"]
+    assert download_assessment["status"] == "NOT ASSESSED"
+    assert download_assessment["verdict"] == "REVIEW"
+    assert "Infinity" not in download_text
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: "current-input-hash",
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        captured["path"] = path
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+    saved = json.loads(captured["data"])["calculation"][
+        "crack_control"
+    ]["cases"][0]["assessment"]
+    assert durable["status"] == "NOT ASSESSED"
+    assert saved["status"] == "NOT ASSESSED"
+    assert "Infinity" not in captured["data"]
+
+
+def test_crack_panel_labels_decompression_evidence_in_mpa(monkeypatch):
+    import sector_app
+
+    rendered = {
+        "success": [],
+        "dataframes": [],
+    }
+    fake_st = SimpleNamespace(
+        markdown=lambda *_args, **_kwargs: None,
+        caption=lambda *_args, **_kwargs: None,
+        success=lambda message, **_kwargs: rendered["success"].append(message),
+        error=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        info=lambda *_args, **_kwargs: None,
+        dataframe=lambda data, **_kwargs: rendered["dataframes"].append(data),
+    )
+    monkeypatch.setattr(sector_app, "st", fake_st)
+    sector_app._crack_width_panel({
+        "crack": None,
+        "crack_short": None,
+        "crack_code": "EN 1992-1-1:2023",
+        "crack_assessment": {
+            "status": "OK",
+            "criterion": sls.CRITERION_DECOMPRESSION,
+            "value": -0.25,
+            "limit": None,
+            "case": "QP",
+            "governing": "concrete point 1",
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "criterion_source": "QA controlled criterion",
+            "criteria": [{
+                "kind": sls.CRITERION_DECOMPRESSION,
+                "status": "OK",
+                "value": -0.25,
+                "limit": None,
+                "matched_responses": ["QP"],
+                "required_combination": (
+                    sls.COMBINATION_QUASI_PERMANENT
+                ),
+            }],
+            "response_contexts": {},
+        },
+    })
+
+    assert len(rendered["success"]) == 1
+    assert "-0.250 MPa" in rendered["success"][0]
+    assert "-0.250 mm" not in rendered["success"][0]
+    criterion_row = rendered["dataframes"][0][0]
+    assert criterion_row["Limit / requirement"] == "compression required"
+    assert criterion_row["Result"] == "-0.250 MPa"
+
+
+def test_2023_protection_route_change_invalidates_elastic_cache():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 100.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+    )
+    _set(
+        at,
+        ("selectbox", "sls_prestress_class", sls.PRESTRESS_BONDED),
+        ("selectbox", "sls_exposure_class", sls.EXPOSURE_XC2_XC4),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        (
+            "selectbox",
+            "sls_total_combination",
+            sls.COMBINATION_FREQUENT,
+        ),
+    )
+    _set(
+        at,
+        (
+            "selectbox",
+            "sls_protection_class",
+            sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
+        ),
+    )
+    _calculate(at)
+    first = at.session_state["results"]["elastic"]
+    assert [
+        (item["kind"], item["required_combination"])
+        for item in first["crack_criteria"]
+    ] == [
+        (sls.CRITERION_DURABILITY, sls.COMBINATION_FREQUENT),
+        (sls.CRITERION_DECOMPRESSION, sls.COMBINATION_QUASI_PERMANENT),
+    ]
+
+    _set_and_click(
+        at,
+        "calculate",
+        (
+            "selectbox",
+            "sls_protection_class",
+            sls.PROTECTION_LEVEL_2_OR_3,
+        ),
+    )
+    second = at.session_state["results"]["elastic"]
+
+    assert second is not first
+    assert [
+        (item["kind"], item["required_combination"])
+        for item in second["crack_criteria"]
+    ] == [
+        (sls.CRITERION_DURABILITY, sls.COMBINATION_QUASI_PERMANENT),
+    ]
+
+
+def test_missing_response_combination_is_review_with_mapping_provenance():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+
+    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["verdict"] == "REVIEW"
+    assert "No calculated response" in assessment["reason"]
+    assert assessment["response_contexts"]["Long-term"]["combination"] == (
+        sls.COMBINATION_UNSPECIFIED
+    )
+    assert "long_combination table field" in (
+        assessment["response_contexts"]["Long-term"]["provenance"]
+    )
+
+
 def test_crack_limit_verdict_and_candidate_table_are_retained():
     at = _fresh()
     at.run()
@@ -4600,14 +6365,20 @@ def test_crack_limit_verdict_and_candidate_table_are_retained():
         ("radio", "mode", "Elastic"),
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
         ("number_input", "sls_wk_limit", 0.01),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
         ("text_input", "sls_limit_source", "Project crack criterion"),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["crack_assessment"]["status"] == "EXCEEDED"
     assert e["crack_assessment"]["limit"] == pytest.approx(0.01)
-    assert e["crack_assessment"]["case"] in {"Long-term", "Short-term"}
+    assert e["crack_assessment"]["case"] == "Long-term"
     assert e["crack_assessment"]["governing"].startswith(("R", "P"))
     assert e["crack"]["candidates"]
     assert e["crack"]["candidates"][0]["wk"] == pytest.approx(e["crack"]["wk"])
@@ -4633,7 +6404,13 @@ def test_crack_limit_and_source_are_retained_when_no_width_is_calculated():
         ("number_input", "el_long_Mx", 0.0),
         ("number_input", "el_short_Mx", 0.0),
         ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
         ("number_input", "sls_wk_limit", 0.25),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
         ("text_input", "sls_limit_source", "Project no-crack criterion"),
     )
     assert not at.exception
@@ -4663,6 +6440,12 @@ def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
         ("number_input", "el_short_Mx", 150.0),
         ("checkbox", "sls_cw", True),
         ("selectbox", "sls_code", "DS/EN 1992-1-1 + DK NA"),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
@@ -4671,6 +6454,24 @@ def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
     assert e["crack"]["coarse"] is False and e["crack_coarse"]["coarse"] is True
     assert e["crack_coarse"]["wk"] < e["crack"]["wk"]             # coarse < fine, long-term
     assert e["crack_short_coarse"]["wk"] < e["crack_short"]["wk"]  # coarse < fine, short-term
+    acceptance_status = e["crack_assessment"]["status"]
+    assert acceptance_status in {"OK", "EXCEEDED"}
+    criterion = next(
+        item
+        for item in e["crack_assessment"]["criteria"]
+        if item["status"] == acceptance_status
+    )
+    assert criterion["matched_responses"] == [
+        "Long-term (fine)",
+        "Long-term (coarse)",
+    ]
+    recorded = at.session_state["calculation_record"]["crack_control"][
+        "cases"
+    ][0]["assessment"]
+    assert recorded["status"] == acceptance_status
+    assert recorded["verdict"] == (
+        "PASS" if acceptance_status == "OK" else "FAIL"
+    )
 
 
 def test_non_dk_na_reports_no_coarse_columns():
@@ -4708,6 +6509,139 @@ def test_ec2_2023_crack_edition_calculates():
     assert e["crack_code"] == "EN 1992-1-1:2023"
     assert e["crack"]["edition"] == "2023" and e["crack"]["kw"] == 1.7
     assert e["crack"]["wk"] > 0.0 and e["crack"]["k1_r"] >= 1.0
+
+
+def test_ec2_2023_mixed_reinforcement_fails_closed_without_xi_then_calculates():
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pre_IS", 5.0),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+    assert not at.exception
+    missing = at.session_state["results"]["elastic"]
+    assert missing["crack_assessment"]["status"] == "NOT ASSESSED"
+    assert "bond ratio xi" in missing["crack_assessment"]["reason"]
+    assert missing["crack_assessment"]["value"] is None
+    _select_view(at, "Results Overview")
+    assert any(
+        item.value.startswith("NOT ASSESSED -")
+        for item in at.warning
+    )
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "sls_tendon_xi", 0.50),
+    )
+    assert not at.exception
+    calculated = at.session_state["results"]["elastic"]
+    assert calculated["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
+    assert calculated["crack"] is not None
+    assert calculated["crack"]["ap_eff"] > 0.0
+    assert 0.0 < calculated["crack"]["ap_eff_weighted"] < \
+        calculated["crack"]["ap_eff"]
+    assert calculated["crack"]["xi1_min"] > 0.0
+    assert calculated["crack"]["xi1_max"] <= 1.0
+    tendon_candidates = [
+        candidate
+        for candidate in calculated["crack"]["candidates"]
+        if candidate["element_type"] == "Tendon"
+    ]
+    assert tendon_candidates
+    latest = at.session_state["_latest_inputs"]
+    n_bars = len(latest["bars"])
+    for candidate in tendon_candidates:
+        tendon_index = candidate["element_no"] - 1
+        material = latest["tendon_materials"][tendon_index]
+        locked_in_mpa = material.Es * material.IS
+        assert locked_in_mpa > 0.0
+        global_index = n_bars + tendon_index
+        # The long-term crack candidate is the passive increment Delta sigma_p:
+        # the combined solver's displayed Long column includes Ep*IS once, while
+        # analyse_cracking already returns the passive value.
+        assert candidate["sigma_s"] == pytest.approx(
+            calculated["long"][global_index] - locked_in_mpa,
+            rel=0.02,
+        )
+
+
+def test_ec2_2023_uniform_direct_tension_is_explicitly_scoped():
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "bot_n", 4),
+        ("number_input", "top_n", 4),
+        ("number_input", "bot_d", 16.0),
+        ("number_input", "top_d", 16.0),
+        ("number_input", "bot_c_mm", 40.0),
+        ("number_input", "top_c_mm", 40.0),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_P", 1000.0),
+        ("number_input", "el_long_Mx", 0.0),
+        ("number_input", "el_long_My", 0.0),
+        ("number_input", "el_short_P", 0.0),
+        ("number_input", "el_short_Mx", 0.0),
+        ("number_input", "el_short_My", 0.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / appearance"),
+    )
+    assert not at.exception
+    elastic = at.session_state["results"]["elastic"]
+    assert elastic["crack_assessment"]["status"] in {
+        "OK", "EXCEEDED"
+    }, elastic["crack_assessment"].get("reason")
+    assert elastic["crack"]["direct_tension"] is True
+    assert elastic["crack"]["scope"] == "uniform-direct-tension"
+    assert elastic["crack"]["kfl"] == pytest.approx(1.0)
+    assert elastic["crack"]["k1_r"] == pytest.approx(1.0)
+    _select_view(at, "Results Overview")
+    assert any(
+        "Crack-control conclusion limitation" in item.value
+        for item in at.warning
+    )
+    _select_view(at, "Elastic Results")
+    assert not at.exception
+    assert any(
+        "Crack-control scope" in item.value
+        for item in at.warning
+    )
 
 
 def test_old_crack_code_alias_targets_a_current_option():
@@ -4877,10 +6811,39 @@ def test_short_term_load_triggers_cracking():
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True                    # cracked by the short-term peak
     assert e["lambda_cr"] < 1.0
-    # Both crack widths are reported: the quasi-permanent (long-term) one for the
-    # code limit and the short-term one under the peak.
+    # Both duration-state crack widths remain reported. Acceptance combination is
+    # a separate explicit input and is not inferred in this calculation-only test.
     assert e["crack"] is not None and e["crack"]["wk"] > 0.0
     assert e["crack_short"] is not None and e["crack_short"]["wk"] > 0.0
+
+
+def test_short_term_only_crack_verdict_ignores_no_tension_long_term():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 0.0),
+        ("number_input", "el_short_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        (
+            "selectbox",
+            "sls_total_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+
+    assert not at.exception
+    elastic = at.session_state["results"]["elastic"]
+    assert elastic["crack"] is None
+    assert elastic["crack_short"] is not None
+    assert elastic["crack_dispositions"]["Long-term"]["status"] == (
+        "NOT APPLICABLE"
+    )
+    assert elastic["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
+    assert elastic["crack_assessment"]["case"] == "Total (long + short)"
 
 
 def test_cracked_properties_use_the_governing_load_when_long_term_is_zero():

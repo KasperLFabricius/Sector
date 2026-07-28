@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import result_presentation as presentation  # noqa: E402
+from sector import sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -270,6 +271,35 @@ def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
     assert by_check["Plastic bending"]["status"] == "PASS"
     assert by_check["Reinforcement stress"]["status"] == "FAIL"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_result_summary_formats_decompression_as_concrete_stress():
+    rows = presentation.result_summary_rows(
+        _inp(mode="Elastic", sls_cw=True),
+        {
+            "elastic": {
+                "converged": True,
+                "stress_assessments": {},
+                "show_cw": True,
+                "crack_assessment": {
+                    "status": "OK",
+                    "criterion": sls.CRITERION_DECOMPRESSION,
+                    "value": -0.25,
+                    "limit": None,
+                    "util": None,
+                    "reason": "Concrete remains in compression.",
+                },
+            },
+        },
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Decompression"]["status"] == "PASS"
+    assert by_check["Decompression"]["result"] == "-0.250 MPa"
+    assert by_check["Decompression"]["criterion"] == (
+        "concrete stress <= 0 MPa"
+    )
+    assert "Crack width" not in by_check
 
 
 def test_stale_summary_retains_last_status_as_evidence():

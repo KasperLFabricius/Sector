@@ -18,12 +18,14 @@ not depend on a Greek-capable font.
 from __future__ import annotations
 
 import atexit
+import copy
 import datetime
 import io
 import math
 import os
 import re
 import threading
+from collections.abc import Mapping
 from html import escape as _stdlib_html_escape
 
 from reportlab.lib import colors
@@ -44,8 +46,10 @@ import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
 from sector import detailing
+from sector import sls as sls_core
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
+from sector.serviceability import CRACK_DIRECTIONAL_LIMITATION
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
@@ -645,6 +649,14 @@ class ReportBuilder:
         governing = presentation.summary_governing_case_flags(rows)
         overall = presentation.overall_summary_status(rows)
         self._h2(f"Results overview - {overall}")
+        if any(
+            row["check"] in {"Crack width", "Decompression"}
+            for row in rows
+        ):
+            self._p(
+                "<b>Crack-control conclusion limitation.</b> "
+                f"{CRACK_DIRECTIONAL_LIMITATION}"
+            )
         data = [[
             "Check", "Action set", "Status", "Result", "Criterion", "Gov."
         ]]
@@ -1360,7 +1372,8 @@ class ReportBuilder:
             if elastic:
                 self._small("<b>Elastic cases</b>")
                 rows = [[
-                    "Case", "Description", "Part", "N<sub>Ed</sub>",
+                    "Case", "Description", "Action part", "Response combination",
+                    "N<sub>Ed</sub>",
                     "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
                     "Stress", "Crack",
                 ]]
@@ -1375,23 +1388,29 @@ class ReportBuilder:
                     ]
                     rows.append(common + [
                         "Long",
+                        _html_escape(row["long_combination"]),
                         _fmt(row["n_long_ed_kn"], 3),
                         _fmt(row["mx_long_ed_knm"], 3),
                         _fmt(row["my_long_ed_knm"], 3),
                     ] + flags)
-                    rows.append(["", "", "Short",
+                    rows.append(["", "", "Short increment",
+                                 _html_escape(row["total_combination"]),
                                  _fmt(row["n_short_ed_kn"], 3),
                                  _fmt(row["mx_short_ed_knm"], 3),
                                  _fmt(row["my_short_ed_knm"], 3), "", ""])
                 self._table(
                     rows,
-                    [20 * mm, 35 * mm, 17 * mm, 22 * mm, 24 * mm,
-                     24 * mm, 14 * mm, 14 * mm],
-                    font=6.7,
+                    [17 * mm, 27 * mm, 23 * mm, 25 * mm, 18 * mm,
+                     20 * mm, 20 * mm, 12 * mm, 12 * mm],
+                    font=5.9,
                     keep=False,
                 )
-                self._small("N in kN; M in kNm. Stress and crack acceptance are "
-                            "selected per case; their limits are global.")
+                self._small(
+                    "N in kN; M in kNm. The first row forms the sustained/long "
+                    "response; adding the second row forms the total response. "
+                    "Their combination fields independently route crack "
+                    "acceptance. Not designated cannot support a verdict."
+                )
             fatigue_rows = (
                 fatigue_inputs.spectrum_records(
                     inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
@@ -1658,9 +1677,96 @@ class ReportBuilder:
             if crack_results:
                 crack_el = crack_results[0]
                 rows.append(["Crack-width code", str(crack_el.get("crack_code", "-"))])
-                rows.append(["Crack-width criterion",
-                             f"{_fmt(inp.get('sls_wk_limit'), 3)} mm"
-                             if inp.get("sls_wk_limit") else "not assessed"])
+                rows.append(["Crack-criterion mode",
+                             str(inp.get("sls_criterion_mode") or "legacy / review")])
+                rows.append(["Prestress/member class",
+                             str(inp.get("sls_prestress_class") or "not stated")])
+                rows.append([
+                    "2023 bonded-tendon protection / member group",
+                    str(
+                        inp.get("sls_protection_class")
+                        or sls_core.PROTECTION_NOT_ESTABLISHED
+                    ),
+                ])
+                rows.append([
+                    "2023 Table 9.2 exposure group",
+                    str(
+                        inp.get("sls_exposure_class")
+                        or sls_core.EXPOSURE_NOT_ESTABLISHED
+                    ),
+                ])
+                rows.append(["Exposure/application",
+                             str(inp.get("sls_exposure_context") or "not stated")])
+                rejected_crack_inputs = tuple(
+                    inp.get("sls_invalid_numeric_inputs") or ()
+                )
+                if rejected_crack_inputs:
+                    rows.append([
+                        "Rejected crack-control numeric state",
+                        ", ".join(str(key) for key in rejected_crack_inputs)
+                        + " - NOT ASSESSED / REVIEW",
+                    ])
+                criterion_mode = inp.get("sls_criterion_mode")
+                if criterion_mode == sls_core.CRITERION_MODE_STANDARD:
+                    if inp.get("sls_check_durability"):
+                        rows.append(["Durability crack-width criterion",
+                                     f"{_fmt(inp.get('sls_wk_limit'), 3)} mm"
+                                     if inp.get("sls_wk_limit")
+                                     else "not assessed"])
+                    if inp.get("sls_check_appearance"):
+                        rows.append(["Appearance crack-width criterion",
+                                     f"{_fmt(inp.get('sls_appearance_limit'), 3)} mm"
+                                     if inp.get("sls_appearance_limit")
+                                     else "not assessed"])
+                    if (
+                        inp.get("sls_prestress_class")
+                        == sls_core.PRESTRESS_BONDED
+                    ):
+                        rows.append([
+                            "Bonded-prestress decompression applicability",
+                            (
+                                "Derived from the structured Table 9.2 "
+                                "protection/exposure route"
+                                if str(inp.get("sls_edition") or "") == "2023"
+                                else str(
+                                    inp.get("sls_decompression_applicability")
+                                    or "not established"
+                                )
+                            ),
+                        ])
+                elif criterion_mode == sls_core.CRITERION_MODE_PROJECT:
+                    project_limits = [
+                        f"{label}: {_fmt(inp.get(key), 3)} mm"
+                        for label, key in (
+                            (
+                                "Characteristic",
+                                "sls_project_characteristic_limit",
+                            ),
+                            ("Frequent", "sls_project_frequent_limit"),
+                            (
+                                "Quasi-permanent",
+                                "sls_project_quasi_permanent_limit",
+                            ),
+                        )
+                        if inp.get(key)
+                    ]
+                    rows.append([
+                        "Project criterion applicability / limits",
+                        (
+                            "; ".join(project_limits)
+                            if project_limits else "none established"
+                        ),
+                    ])
+                else:
+                    rows.append([
+                        "Legacy retained crack-width evidence",
+                        (
+                            f"{_fmt(inp.get('sls_wk_limit'), 3)} mm; "
+                            "combination applicability requires review"
+                            if inp.get("sls_wk_limit")
+                            else "no applicable criterion established"
+                        ),
+                    ])
                 if crack_el.get("crack_member"):
                     rows.append(["Member type", str(crack_el["crack_member"])])
                 dia = inp.get("sls_phi") or 0.0
@@ -1669,6 +1775,36 @@ class ReportBuilder:
                               else f"{_fmt(dia, 3)} mm global override")])
                 rows.append(["Mild-steel bond coefficient k<sub>1</sub>",
                              _fmt(inp.get("sls_k1"), 3)])
+                if inp.get("tendons") and crack_el.get("crack_edition") == "2023":
+                    tendon_k1 = inp.get("sls_tendon_k1")
+                    tendon_kb = (
+                        0.9
+                        if tendon_k1 is not None and float(tendon_k1) <= 1.0
+                        else 1.2
+                    )
+                    rows.append([
+                        "Prestressing-steel bond condition / k<sub>b</sub>",
+                        f"{inp.get('sls_tendon_bond') or 'not stated'} / "
+                        f"{_fmt(tendon_kb, 1)}",
+                    ])
+                    tendon_xi = inp.get("sls_tendon_xi")
+                    rows.append([
+                        "Prestressing bond-strength ratio xi",
+                        (
+                            _fmt(tendon_xi, 4)
+                            if tendon_xi is not None and float(tendon_xi) > 0.0
+                            else "not supplied - crack width is NOT ASSESSED "
+                                 "when a tendon contributes"
+                        ),
+                    ])
+                    rows.append([
+                        "Prestressing diameter phi<sub>p</sub> source",
+                        (
+                            "per-tendon reinforcement-table values"
+                            if not dia
+                            else f"{_fmt(dia, 3)} mm global crack-width override"
+                        ),
+                    ])
         fatigue_rows = None
         fatigue = self._base_out.get("fatigue")
         if fatigue is not None:
@@ -4168,57 +4304,362 @@ class ReportBuilder:
         if not el.get("show_cw"):
             self._small("Crack width was not requested for this run.")
             return
-        cl, cs = el.get("crack"), el.get("crack_short")
-        clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
+        def reportable_crack(response):
+            if response is None:
+                return response
+            if not isinstance(response, Mapping):
+                return None
+            return (
+                response
+                if sls_core.crack_width_numeric_value(response.get("wk"))
+                is not None
+                else None
+            )
+
+        cl = reportable_crack(el.get("crack"))
+        cs = reportable_crack(el.get("crack_short"))
+        clc = reportable_crack(el.get("crack_coarse"))
+        csc = reportable_crack(el.get("crack_short_coarse"))
         no_results = cl is None and cs is None and clc is None and csc is None
-        assessment = el.get("crack_assessment") or {}
+        raw_assessment = el.get("crack_assessment")
+        raw_assessment = (
+            raw_assessment if isinstance(raw_assessment, Mapping) else {}
+        )
+        # Current solver output is authoritative. Stored assessment contexts
+        # are immutable evidence to compare, never a fallback that can mask a
+        # changed or missing current response mapping.
+        raw_response_contexts = el.get("crack_response_contexts")
+        response_contexts = (
+            raw_response_contexts
+            if isinstance(raw_response_contexts, Mapping)
+            else {}
+        )
+        informational = set(
+            raw_assessment.get("informational_responses") or []
+        )
+        raw_dispositions = el.get("crack_dispositions") or {}
+        dispositions = (
+            raw_dispositions
+            if isinstance(raw_dispositions, Mapping)
+            else {}
+        )
+        current_responses = {}
+        canonical_responses = el.get("crack_responses")
+        if isinstance(canonical_responses, Mapping):
+            current_responses.update(canonical_responses)
+        elif canonical_responses is not None:
+            current_responses["crack responses"] = canonical_responses
+        visible_responses = (
+            ("crack", ("Long-term (fine)", "Long-term")),
+            (
+                "crack_short",
+                ("Total (fine)", "Total (long + short)"),
+            ),
+            (
+                "crack_coarse",
+                ("Long-term (coarse)", "Long-term coarse"),
+            ),
+            (
+                "crack_short_coarse",
+                (
+                    "Total (coarse)",
+                    "Total (long + short) coarse",
+                ),
+            ),
+        )
+        known_response_names = (
+            set(current_responses)
+            | set(response_contexts)
+            | set(dispositions)
+        )
+        for field, aliases in visible_responses:
+            if field not in el:
+                continue
+            name = next(
+                (
+                    alias
+                    for alias in aliases
+                    if alias in known_response_names
+                ),
+                aliases[-1],
+            )
+            # The visible response is the current solver state. Overlay it on
+            # its canonical identity so stale saved/report aliases cannot hide
+            # invalid current evidence, while DK fine/coarse responses retain
+            # the same names used by the routed criterion.
+            current_responses[name] = el.get(field)
+
+        response_records = []
+        for name, raw_response in current_responses.items():
+            response_is_mapping = isinstance(raw_response, Mapping)
+            response = raw_response if response_is_mapping else {}
+            raw_wk = response.get("wk")
+            width = sls_core.crack_width_numeric_value(raw_wk)
+            disposition = dispositions.get(name) or {}
+            disposition = (
+                disposition if isinstance(disposition, Mapping) else {}
+            )
+            not_applicable_null = (
+                raw_response is None
+                and str(disposition.get("status") or "").upper()
+                == "NOT APPLICABLE"
+            )
+            rejected = (
+                not not_applicable_null
+                and (
+                    not response_is_mapping
+                    or width is None
+                )
+            )
+            context = response_contexts.get(name) or {}
+            record = {
+                "name": name,
+                "wk_mm": None if rejected else raw_wk,
+                "element_id": response.get("element_id"),
+                "context": dict(context) if isinstance(context, Mapping) else {},
+                "solver_status": disposition.get("status"),
+                "solver_reason": disposition.get("reason"),
+                "acceptance_role": (
+                    "informational"
+                    if name in informational
+                    else "criterion input"
+                ),
+            }
+            if response.get("decompression") is not None:
+                record["decompression"] = copy.deepcopy(
+                    response.get("decompression")
+                )
+            if rejected:
+                record["result_validation"] = (
+                    "Current report crack response rejected; no numeric "
+                    "acceptance evidence retained."
+                )
+            response_records.append(record)
+        elastic_case = el.get("elastic_case")
+        elastic_case = (
+            elastic_case if isinstance(elastic_case, Mapping) else {}
+        )
+        publication_record = (
+            sls_core.publication_safe_crack_control_record({
+                "cases": [{
+                    "case": str(
+                        elastic_case.get("id")
+                        or "Elastic"
+                    ),
+                    "assessment": raw_assessment,
+                    "response_mapping_scope": copy.deepcopy(
+                        el.get("crack_response_mapping_scope")
+                    ),
+                    "responses": response_records,
+                }],
+            })
+            or {"cases": []}
+        )
+        publication_cases = publication_record.get("cases") or []
+        assessment = (
+            publication_cases[0].get("assessment") or {}
+            if publication_cases else {}
+        )
         status = assessment.get("status", "NOT ASSESSED")
         display_status = presentation.assessment_status_label(status)
         value = assessment.get("value")
         limit = assessment.get("limit")
         margin = assessment.get("margin")
+        decompression_governs = (
+            assessment.get("criterion") == sls_core.CRITERION_DECOMPRESSION
+        )
+        status_label = (
+            "Decompression" if decompression_governs else "Crack width"
+        )
+        result_label = (
+            "governing concrete stress"
+            if decompression_governs else "governing w<sub>k</sub>"
+        )
+        result_text = (
+            "-"
+            if value is None
+            else (
+                f"{_fmt(value, 3)} MPa"
+                if decompression_governs
+                else f"{_fmt(value, 3)} mm"
+            )
+        )
+        limit_text = (
+            "compression required"
+            if decompression_governs
+            else (
+                "not supplied"
+                if limit is None or limit <= 0.0
+                else f"{_fmt(limit, 3)} mm"
+            )
+        )
         text = (
-            f"{display_status} - Crack width | governing w<sub>k</sub> "
-            f"{'-' if value is None else _fmt(value, 3) + ' mm'} | limit "
-            f"{'not supplied' if limit is None or limit <= 0.0 else _fmt(limit, 3) + ' mm'} | "
+            f"{display_status} - {status_label} | {result_label} "
+            f"{result_text} | limit {limit_text} | "
             f"case {assessment.get('case') or '-'} | "
             f"element {assessment.get('governing') or '-'}"
         )
         if margin is not None:
-            text += f" | margin {_fmt(margin, 3)} mm"
+            margin_unit = "MPa" if decompression_governs else "mm"
+            text += f" | margin {_fmt(margin, 3)} {margin_unit}"
         self._status_block(text, status)
-        self._small(f"Criteria: {el.get('sls_limit_source', '-')}.")
+        self._small(
+            "Acceptance route: "
+            f"{assessment.get('required_combination') or 'not established'}; "
+            "source: "
+            f"{assessment.get('criterion_source') or el.get('sls_limit_source', '-')}."
+        )
+        if (
+            not no_results
+            and status in {"INVALID", "NOT ASSESSED"}
+            and assessment.get("reason")
+        ):
+            self._small(
+                "Assessment note: " + str(assessment.get("reason"))
+            )
+        criteria = assessment.get("criteria") or []
+        if criteria:
+            def criterion_measure(item, key):
+                value = item.get(key)
+                if value is None:
+                    return "-"
+                unit = (
+                    "MPa"
+                    if item.get("kind") == sls_core.CRITERION_DECOMPRESSION
+                    else "mm"
+                )
+                return f"{_fmt(value, 3)} {unit}"
+
+            rows = [[
+                "Criterion", "Required combination", "Matched response",
+                "Limit", "Result", "Status", "Source",
+            ]]
+            rows.extend([
+                [
+                    _html_escape(item.get("kind") or "-"),
+                    _html_escape(item.get("required_combination") or "-"),
+                    _html_escape(
+                        ", ".join(item.get("matched_responses") or []) or "-"
+                    ),
+                    (
+                        "compression required"
+                        if item.get("kind")
+                        == sls_core.CRITERION_DECOMPRESSION
+                        else criterion_measure(item, "limit")
+                    ),
+                    criterion_measure(item, "value"),
+                    _html_escape(
+                        presentation.assessment_status_label(item.get("status"))
+                    ),
+                    _html_escape(item.get("criterion_source") or "-"),
+                ]
+                for item in criteria
+            ])
+            self._table(
+                rows,
+                [
+                    28 * mm, 25 * mm, 28 * mm, 15 * mm,
+                    15 * mm, 19 * mm, 48 * mm,
+                ],
+                font=5.7,
+                keep=False,
+            )
+        response_contexts = assessment.get("response_contexts") or {}
+        if response_contexts:
+            informational = set(
+                assessment.get("informational_responses") or []
+            )
+            rows = [[
+                "Calculated response", "Duration state", "SLS combination",
+                "Acceptance role", "Mapping provenance",
+            ]]
+            rows.extend([
+                [
+                    _html_escape(name),
+                    _html_escape(context.get("duration") or "-"),
+                    _html_escape(context.get("combination") or "-"),
+                    (
+                        "Informational"
+                        if name in informational else "Criterion input"
+                    ),
+                    _html_escape(context.get("provenance") or "-"),
+                ]
+                for name, context in response_contexts.items()
+            ])
+            self._table(
+                rows,
+                [31 * mm, 42 * mm, 27 * mm, 24 * mm, 54 * mm],
+                font=6.0,
+                keep=False,
+            )
+        self._p(
+            "<b>Crack-control scope.</b> "
+            f"{el.get('crack_scope_note') or CRACK_DIRECTIONAL_LIMITATION}"
+        )
         if no_results:
-            self._small("No crack width: section uncracked or no reinforcement "
-                        "in tension.")
+            self._small(
+                "No crack width: "
+                + (
+                    assessment.get("reason")
+                    or "section uncracked or no reinforcement in tension."
+                )
+            )
             return
         self._crack_table(cl, cs, clc, csc)
-        # Work the case that actually governs (the larger crack width) over every
-        # reported load case and crack system.
+        # Work the response that governs the routed criterion. A larger response
+        # from another combination remains visible in the table but is not
+        # relabelled as the acceptance governor.
         if clc is not None or csc is not None:
-            cases = [(cl, "long-term (fine)"), (cs, "short-term (fine)"),
-                     (clc, "long-term (coarse)"), (csc, "short-term (coarse)")]
+            cases = [
+                (cl, "Long-term (fine)"),
+                (cs, "Total (fine)"),
+                (clc, "Long-term (coarse)"),
+                (csc, "Total (coarse)"),
+            ]
         else:
-            cases = [(cl, "long-term"), (cs, "short-term")]
-        gov_case, gov_which = max(((c, w) for c, w in cases if c),
-                                  key=lambda cw: cw[0].get("wk", 0.0))
+            cases = [
+                (cl, "Long-term"),
+                (cs, "Total (long + short)"),
+            ]
+        assessment_case = assessment.get("case")
+        selected = [
+            (case, name)
+            for case, name in cases
+            if case and name == assessment_case
+        ]
+        if selected:
+            gov_case, gov_which = selected[0]
+        else:
+            gov_case, gov_which = max(
+                ((case, name) for case, name in cases if case),
+                key=lambda pair: pair[0].get("wk", 0.0),
+            )
+            gov_which += " - informational example"
         self._crack_worked(gov_case, gov_which)
         self._crack_candidates(cases)
 
     def _crack_table(self, cl, cs, clc=None, csc=None):
-        # The full crack-width breakdown for both load cases, matching the view.
-        self._h2("Crack width - both load cases")
+        # The full crack-width breakdown for both calculated duration states,
+        # matching the view. Combination applicability is reported separately.
+        self._h2("Crack width - both response states")
         # wk, sr_max, phi and cover come from the engine already in mm; hc_ef (m)
         # and ac_eff (m^2) are metric.
         specs = [("Crack width w<sub>k</sub> (mm)", "wk", 3, 1.0),
                  ("Crack spacing s<sub>r,max</sub> (mm)", "sr_max", 1, 1.0),
                  ("Mean strain eps<sub>sm</sub>-eps<sub>cm</sub> (permille)", "esm_ecm", 4, 1000.0),
-                 ("Steel stress sigma<sub>s</sub> (MPa)", "sigma_s", 1, 1.0),
+                 ("Steel stress sigma<sub>s</sub> / &#916;sigma<sub>p</sub> (MPa)", "sigma_s", 1, 1.0),
                  ("Effective ratio rho<sub>p,eff</sub>", "rho_p_eff", 4, 1.0),
+                 ("Mild area A<sub>s,eff</sub> (m<super>2</super>)", "as_eff", 6, 1.0),
+                 ("Prestressing area A<sub>p,eff</sub> (m<super>2</super>)", "ap_eff", 6, 1.0),
+                 ("Weighted prestressing area xi<sub>1</sub>A<sub>p,eff</sub> (m<super>2</super>)", "ap_eff_weighted", 6, 1.0),
+                 ("xi<sub>1</sub> range", "_xi1_range", None, 1.0),
                  ("Effective height h<sub>c,ef</sub> (mm)", "hc_ef", 1, _MM),
+                 ("Direct-tension width b<sub>c,eff</sub> (mm)", "bc_ef", 1, _MM),
                  ("Effective area A<sub>c,eff</sub> (m<super>2</super>)", "ac_eff", 5, 1.0),
                  ("Clear cover c (mm)", "cover", 1, 1.0),
                  ("Element diameter phi (mm)", "phi", 1, 1.0),
+                 ("Assessment scope", "scope", None, 1.0),
+                 ("Dominant direction (deg)", "direction_deg", 1, 1.0),
                  ("Governing element", "element_id", None, 1.0)]
 
         def col(c):
@@ -4226,19 +4667,32 @@ class ReportBuilder:
                 return ["-"] * len(specs)
             out = []
             for _label, key, nd, scale in specs:
-                value = c.get(key, "-")
-                out.append(str(value) if nd is None else
-                           _fmt(float(value) * scale, nd))
+                if key == "_xi1_range":
+                    low, high = c.get("xi1_min"), c.get("xi1_max")
+                    value = (
+                        "-"
+                        if low is None or high is None
+                        else f"{_fmt(low, 4)} - {_fmt(high, 4)}"
+                    )
+                else:
+                    value = c.get(key)
+                    if value is None:
+                        value = "-"
+                    elif nd is not None:
+                        value = _fmt(float(value) * scale, nd)
+                    else:
+                        value = str(value)
+                out.append(value)
             return out
 
         if clc is not None or csc is not None:
             # DK NA: fine and coarse crack systems, each for both load cases.
-            header = ["Quantity", "Long-term (fine)", "Short-term (fine)",
-                      "Long-term (coarse)", "Short-term (coarse)"]
+            header = ["Quantity", "Long-term (fine)", "Total (fine)",
+                      "Long-term (coarse)", "Total (coarse)"]
             cols = [col(cl), col(cs), col(clc), col(csc)]
             widths = [66 * mm, 25 * mm, 25 * mm, 25 * mm, 25 * mm]
         else:
-            header = ["Quantity", "Long-term", "Short-term"]
+            header = ["Quantity", "Long-term", "Total (long + short)"]
             cols = [col(cl), col(cs)]
             widths = [85 * mm, 38 * mm, 38 * mm]
         rows = [header]
@@ -4249,9 +4703,9 @@ class ReportBuilder:
     def _crack_worked(self, cw, which=""):
         if not cw:
             return
-        self._h2(f"Crack width worked - governing case ({which})" if which
-                 else "Crack width worked (governing element)")
-        self._small(f"Governing element (largest w<sub>k</sub>): "
+        self._h2(f"Crack width worked - routed response ({which})" if which
+                 else "Crack width worked (routed element)")
+        self._small(f"Response-governing element (largest w<sub>k</sub>): "
                     f"{cw.get('element_id', 'element ' + str(cw.get('gov_bar','-')))}; "
                     f"clear cover c = {_fmt(cw.get('cover',0), 3)} mm.")
         code = self.out["elastic"].get("crack_code")
@@ -4320,7 +4774,7 @@ class ReportBuilder:
                           ("N" if case_max > 0.0 and wk >= 0.9 * case_max else ""))
                 rows.append([
                     label.replace("Long-term", "LT").replace("long-term", "LT")
-                    .replace("Short-term", "ST").replace("short-term", "ST"),
+                    .replace("Total", "TOT"),
                     f"{rank}{marker}",
                     row.get("element_id", "-"),
                     _fmt(row.get("x_mm"), 1),
@@ -4345,7 +4799,8 @@ class ReportBuilder:
             font=5.4, keep=False,
         )
         self._small(
-            "LT = long-term; ST = short-term. Coordinates, c, phi and "
+            "LT = sustained/long-duration response; TOT = instantaneous total "
+            "(long + short) response. Coordinates, c, phi and "
             "s<sub>r</sub> in mm; sigma<sub>s</sub> in MPa; "
             "A<sub>c,eff</sub> in m<super>2</super>; &#916;eps "
             "dimensionless; w<sub>k</sub> in mm. G = governing; "
@@ -4354,12 +4809,63 @@ class ReportBuilder:
 
     def _crack_worked_2023(self, cw, code):
         """The EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
+        xi_low, xi_high = cw.get("xi1_min"), cw.get("xi1_max")
+        xi_text = (
+            "not applicable"
+            if xi_low is None or xi_high is None
+            else f"{_fmt(xi_low, 4)} to {_fmt(xi_high, 4)}"
+        )
         self._formula(
-            "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
-            "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
-            ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
-            subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
-                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
+            "rho<sub>p,eff</sub> = "
+            "(A<sub>s,eff</sub> + xi<sub>1</sub>A<sub>p,eff</sub>)"
+            " / A<sub>c,eff</sub>",
+            ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.12); "
+                "xi<sub>1</sub> from Eq (9.6)",
+            subst=(
+                f"A<sub>s,eff</sub> = {_fmt(cw.get('as_eff'), 6)} m"
+                "<super>2</super>; "
+                f"A<sub>p,eff</sub> = {_fmt(cw.get('ap_eff'), 6)} m"
+                "<super>2</super>; "
+                f"sum(xi<sub>1</sub>A<sub>p</sub>) = "
+                f"{_fmt(cw.get('ap_eff_weighted'), 6)} m<super>2</super>; "
+                f"xi<sub>1</sub> range = {xi_text}; "
+                f"A<sub>c,eff</sub> = {_fmt(cw.get('ac_eff'), 6)} m"
+                "<super>2</super>"
+            ),
+            result=(
+                f"rho<sub>p,eff</sub> = "
+                f"{_fmt(cw.get('rho_p_eff'), 6)}"
+            ),
+        )
+        if cw.get("direct_tension"):
+            self._formula(
+                "s<sub>r,m,cal</sub> = 1.5&#183;c + "
+                "(k<sub>b</sub>/7.2)&#183;phi/rho<sub>p,eff</sub>",
+                ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15) and "
+                    "Eq (9.20), uniform direct tension",
+                subst=(
+                    "k<sub>fl</sub> = 1.00; k<sub>1/r</sub> = 1.00; "
+                    "no bending (h-x) cap; "
+                    f"h<sub>c,eff</sub> = {_fmt(cw.get('hc_ef', 0) * _MM, 3)} "
+                    f"mm; b<sub>c,eff</sub> = "
+                    f"{_fmt(cw.get('bc_ef', 0) * _MM, 3)} mm"
+                ),
+                result=(
+                    f"s<sub>r,m,cal</sub> = "
+                    f"{_fmt(cw.get('sr_max', 0), 3)} mm"
+                ),
+            )
+        else:
+            self._formula(
+                "s<sub>r,m,cal</sub> = 1.5&#183;c + "
+                "(k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
+                "&#183;phi/rho<sub>p,eff</sub> &lt;= "
+                "(1.3/k<sub>w</sub>)&#183;(h-x)",
+                ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
+                subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
+                      f"s<sub>r,m,cal</sub> = "
+                      f"{_fmt(cw.get('sr_max',0), 3)} mm",
+            )
         self._formula(
             "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
             "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
@@ -4375,12 +4881,20 @@ class ReportBuilder:
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
         if code:
-            self._small(f"Crack-width code: {code}. Refined control of cracking "
-                        "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
-                        "width to the calculated value, k<sub>1/r</sub> = (h-x)/"
-                        "(h-a<sub>y</sub>-x) accounts for curvature, and the mean "
-                        "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
-                        "/E<sub>s</sub>.")
+            scope_text = (
+                "Validated solid-rectangle uniform direct-tension branch; "
+                "k<sub>fl</sub> = k<sub>1/r</sub> = 1.00."
+                if cw.get("direct_tension")
+                else "Dominant strain-gradient bending branch; k<sub>1/r</sub> "
+                     "= (h-x)/(h-a<sub>y</sub>-x)."
+            )
+            self._small(
+                f"Crack-width code: {code}. Refined control of cracking "
+                "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
+                "width to the calculated value, and the mean-strain lower bound "
+                "is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>/E<sub>s</sub>. "
+                f"{scope_text}"
+            )
 
     def _fatigue(self):
         payload = self._base_out["fatigue"]
@@ -5341,6 +5855,38 @@ def build_report(
     is assembled, so the UI can show a progress bar. ``qa_appendix`` adds the
     consolidated references-and-notes chapter.
     """
+    invalid_crack_numerics = sls_core.crack_numeric_input_issues(inp)
+    if invalid_crack_numerics:
+        raise ValueError(
+            "report generation rejected Boolean crack-control numerics: "
+            + ", ".join(invalid_crack_numerics)
+        )
+    rejected_crack_state = tuple(inp.get("sls_invalid_numeric_inputs") or ())
+    if rejected_crack_state:
+        elastic_payloads = []
+        if isinstance(out.get("elastic"), dict):
+            elastic_payloads.append(out["elastic"])
+        for case in out.get("elastic_cases", ()) or ():
+            if not isinstance(case, dict):
+                continue
+            results = case.get("results")
+            if isinstance(results, dict) and isinstance(
+                results.get("elastic"), dict
+            ):
+                elastic_payloads.append(results["elastic"])
+        unsafe = [
+            payload.get("crack_assessment", {}).get("status")
+            for payload in elastic_payloads
+            if isinstance(payload.get("crack_assessment"), dict)
+            and str(
+                payload["crack_assessment"].get("status") or ""
+            ).upper() not in {"NOT ASSESSED", "INVALID"}
+        ]
+        if unsafe:
+            raise ValueError(
+                "report generation rejected a crack-control result that does "
+                "not fail closed against the retained invalid numeric state"
+            )
     buffer = io.BytesIO()
     ReportBuilder(
         buffer,
