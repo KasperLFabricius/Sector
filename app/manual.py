@@ -806,7 +806,10 @@ def manual_blocks() -> list:
        "as an ordinary 1-1 provision. Every standard-derived Miner route fixes "
        "$C=14$. Another coefficient is available only under the separate project "
        "S-N method with its document/clause/approval source; it is not reported as "
-       "Expression (6.106) or E.8.")
+       "Expression (6.106) or E.8. Calculated fatigue evidence also stores the "
+       "whole-calculation design methodology; UI and report publication compare "
+       "that binding with the calculation input snapshot and reject a relabelled "
+       "bridge applicability.")
     table(["Input", "Use"],
           [["$\\gamma_{Ff}$", "Factors the cyclic action increment before the elastic solve"],
            ["$\\gamma_s$", "Reduces the reinforcement S-N resistance and yield/proof limit"],

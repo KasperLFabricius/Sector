@@ -2081,6 +2081,7 @@ def test_fatigue_view_fails_closed_on_relabelled_or_malformed_payload(
         "passed": True,
         "errors": (),
         "edition": fatigue_inputs.EC2_2_2005_AC,
+        "design_methodology": bridge.EN1992_2_BASE,
         "checks": {"reinforcement": False, "concrete": True},
         "concrete_method": fatigue_analysis.CONCRETE_EQUIVALENT,
         "concrete_parameters": {
@@ -2093,7 +2094,10 @@ def test_fatigue_view_fails_closed_on_relabelled_or_malformed_payload(
         rendered["errors"].clear()
         rendered["markdown"].clear()
         sector_app.fatigue_view(
-            {"fatigue_on": True},
+            {
+                "fatigue_on": True,
+                "design_methodology": bridge.EN1992_2_BASE,
+            },
             {"fatigue": payload},
         )
         assert any(
@@ -2105,6 +2109,35 @@ def test_fatigue_view_fails_closed_on_relabelled_or_malformed_payload(
             or "structured list of typed messages" in message
             for message in rendered["markdown"]
         )
+
+    rendered["errors"].clear()
+    rendered["markdown"].clear()
+    relabelled_basis = {
+        **base,
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+        "concrete_miner_source": "DB-FAT-21 / checker approval",
+        "concrete_parameters": {
+            "c": 14.0,
+            "method": fatigue_analysis.CONCRETE_MINER,
+        },
+    }
+    sector_app.fatigue_view(
+        {
+            "fatigue_on": True,
+            "design_methodology": bridge.COMPONENT_METHODS,
+        },
+        {"fatigue": relabelled_basis},
+    )
+    assert any(
+        message.startswith("INVALID -")
+        for message in rendered["errors"]
+    )
+    assert any(
+        "project-basis adoption" in message
+        for message in rendered["markdown"]
+    )
 
 
 def test_app_fatigue_factor_switches_and_approved_override_persist():
@@ -2853,6 +2886,10 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert not at.exception
     fatigue = at.session_state["results"]["fatigue"]
     assert fatigue["governing_spectrum"] == "Traffic"
+    assert fatigue["design_methodology"] == bridge.COMPONENT_METHODS
+    assert at.session_state["result_input_snapshot"]["design_methodology"] == (
+        bridge.COMPONENT_METHODS
+    )
     assert len(fatigue["spectra"]) == 1
     assert fatigue["partial_factors"]["gamma_s"] == pytest.approx(1.32)
     assert fatigue["factor_basis"]["gamma_s_derivation"] == (
@@ -2947,6 +2984,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         if list(frame.value.columns) == ["Item", "Value"]
     )
     assert "Edition" in set(basis_table["Item"])
+    assert "Design methodology" in set(basis_table["Item"])
     assert "gamma_Ff" in set(basis_table["Item"])
     assert basis_table["Value"].map(type).eq(str).all()
 

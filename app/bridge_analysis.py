@@ -573,24 +573,37 @@ def _bridge_fatigue_context_errors(
     *,
     check_key: str,
 ) -> tuple[str, ...]:
-    if inp is None:
-        return ()
     errors = []
-    if _typed_bool(inp.get("fatigue_on")) is not True:
-        errors.append("current bridge inputs do not enable fatigue")
-    input_flag = (
-        "fatigue_check_steel"
-        if check_key == "reinforcement"
-        else "fatigue_check_concrete"
-    )
-    if _typed_bool(inp.get(input_flag)) is not True:
-        errors.append(f"current bridge inputs do not enable {check_key} fatigue")
-    if inp.get("fatigue_edition") != fatigue_inputs.EC2_2_2005_AC:
-        errors.append("current fatigue edition is not the EN 1992-2 bridge edition")
+    if payload.get("design_methodology") != bridge.EN1992_2_BASE:
+        errors.append(
+            "calculated fatigue evidence is not bound to the EN 1992-2 "
+            "whole-calculation methodology"
+        )
     if payload.get("edition") != fatigue_inputs.EC2_2_2005_AC:
         errors.append("calculated fatigue edition is not the EN 1992-2 bridge edition")
+    if inp is not None:
+        if inp.get("design_methodology") != bridge.EN1992_2_BASE:
+            errors.append(
+                "current inputs do not select the EN 1992-2 "
+                "whole-calculation methodology"
+            )
+        if _typed_bool(inp.get("fatigue_on")) is not True:
+            errors.append("current bridge inputs do not enable fatigue")
+        input_flag = (
+            "fatigue_check_steel"
+            if check_key == "reinforcement"
+            else "fatigue_check_concrete"
+        )
+        if _typed_bool(inp.get(input_flag)) is not True:
+            errors.append(
+                f"current bridge inputs do not enable {check_key} fatigue"
+            )
+        if inp.get("fatigue_edition") != fatigue_inputs.EC2_2_2005_AC:
+            errors.append(
+                "current fatigue edition is not the EN 1992-2 bridge edition"
+            )
     if check_key == "concrete":
-        if (
+        if inp is not None and (
             inp.get("fatigue_concrete_method")
             != fatigue_analysis.CONCRETE_MINER
         ):
@@ -612,22 +625,23 @@ def _bridge_fatigue_context_errors(
                 "calculated concrete Miner applicability is not bound to "
                 "the EN 1992-2 bridge methodology"
             )
-        input_c = inp.get("fatigue_concrete_c")
-        if (
-            isinstance(input_c, bool)
-            or type(input_c).__name__ == "bool_"
-            or not isinstance(input_c, (int, float))
-            or not math.isfinite(float(input_c))
-            or not math.isclose(
-                float(input_c),
-                fatigue_inputs.STANDARD_CONCRETE_MINER_C,
-                rel_tol=0.0,
-                abs_tol=1.0e-12,
-            )
-        ):
-            errors.append(
-                "current bridge concrete Miner input is not bound to C = 14"
-            )
+        if inp is not None:
+            input_c = inp.get("fatigue_concrete_c")
+            if (
+                isinstance(input_c, bool)
+                or type(input_c).__name__ == "bool_"
+                or not isinstance(input_c, (int, float))
+                or not math.isfinite(float(input_c))
+                or not math.isclose(
+                    float(input_c),
+                    fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+                    rel_tol=0.0,
+                    abs_tol=1.0e-12,
+                )
+            ):
+                errors.append(
+                    "current bridge concrete Miner input is not bound to C = 14"
+                )
         concrete_parameters = payload.get("concrete_parameters")
         calculated_c = (
             concrete_parameters.get("c")
@@ -658,7 +672,14 @@ def reinforcement_fatigue_evidence(
 ) -> bridge.ExternalEvidence:
     """Return the reinforcement-only fatigue verdict."""
 
-    payload = results.get("fatigue")
+    payload = fatigue_analysis.publication_safe_result(
+        results.get("fatigue"),
+        design_methodology=(
+            inp.get("design_methodology")
+            if isinstance(inp, Mapping)
+            else None
+        ),
+    )
     if not isinstance(payload, Mapping):
         return bridge.ExternalEvidence(
             status=bridge.STATUS_NOT_RUN,
@@ -753,7 +774,14 @@ def concrete_fatigue_evidence(
 ) -> bridge.ExternalEvidence:
     """Return the concrete-only fatigue verdict, not the mixed fatigue aggregate."""
 
-    payload = results.get("fatigue")
+    payload = fatigue_analysis.publication_safe_result(
+        results.get("fatigue"),
+        design_methodology=(
+            inp.get("design_methodology")
+            if isinstance(inp, Mapping)
+            else None
+        ),
+    )
     if not isinstance(payload, Mapping):
         return bridge.ExternalEvidence(
             status=bridge.STATUS_NOT_RUN,

@@ -520,10 +520,9 @@ def _validate_fatigue_miner_scalars(
             scalars.get("fatigue_concrete_miner_source") or ""
         ).strip(),
         coefficient_c=coefficient,
-        bridge_standard_active=(
-            scalars.get("fatigue_edition")
-            == fatigue_inputs.EC2_2_2005_AC
-            and scalars.get("design_methodology") == bridge.EN1992_2_BASE
+        design_methodology=str(
+            scalars.get("design_methodology")
+            or bridge.COMPONENT_METHODS
         ),
     )
     if errors:

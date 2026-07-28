@@ -8913,8 +8913,22 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
         )
 
 
+def _publication_safe_fatigue_result(inp, results):
+    return fatigue_analysis.publication_safe_result(
+        (results or {}).get("fatigue"),
+        design_methodology=(inp or {}).get("design_methodology"),
+    )
+
+
 def results_overview_view(inp, results, *, stale=False):
     """One-screen status and provenance register for every requested check."""
+    safe_results = dict(results or {})
+    if safe_results.get("fatigue") is not None:
+        safe_results["fatigue"] = _publication_safe_fatigue_result(
+            inp,
+            safe_results,
+        )
+    results = safe_results
     rows = presentation.multi_case_summary_rows(inp, results, stale=stale)
     overall = presentation.overall_summary_status(rows)
     counts = {status: sum(row["status"] == status for row in rows)
@@ -10770,6 +10784,10 @@ def _fatigue_result_basis_panel(payload):
     rows = [
         ("Edition", payload.get("edition") or "-"),
         (
+            "Design methodology",
+            payload.get("design_methodology") or "-",
+        ),
+        (
             "Checks",
             ", ".join(
                 label
@@ -10870,9 +10888,7 @@ def fatigue_view(inp, results, *, stale=False):
     if not inp.get("fatigue_on"):
         st.info("Enable Fatigue in Analysis settings, then press Calculate.")
         return
-    payload = fatigue_analysis.publication_safe_result(
-        (results or {}).get("fatigue")
-    )
+    payload = _publication_safe_fatigue_result(inp, results)
     if payload is None:
         st.info("Press Calculate to assess the grouped spectra.")
         return
@@ -12495,6 +12511,7 @@ def _analysis_workspace(inp):
             "before viewing its input-dependent results."
         )
         return
+    result_inp = result_snapshot if stale else inp
     if st.session_state.get("_case_error"):
         st.error(st.session_state["_case_error"])
 
@@ -12512,9 +12529,8 @@ def _analysis_workspace(inp):
             + " Other requested analyses remain available; the fatigue result "
             "will be INVALID until the assignments are resolved."
         )
-    fatigue_errors = tuple(
-        ((results or {}).get("fatigue") or {}).get("errors") or ()
-    )
+    safe_fatigue = _publication_safe_fatigue_result(result_inp, results)
+    fatigue_errors = tuple((safe_fatigue or {}).get("errors") or ())
     if fatigue_errors and view != "Fatigue Results":
         st.error(
             "Fatigue not assessed: "
@@ -12525,7 +12541,6 @@ def _analysis_workspace(inp):
     # A stale result must be rendered wholly against the inputs that produced it.
     # Apply this before selecting a case or deciding which checks were enabled so
     # every result view receives one internally consistent input/result pair.
-    result_inp = result_snapshot if stale else inp
     family = (
         "elastic" if view == "Elastic Results"
         else "plastic" if (

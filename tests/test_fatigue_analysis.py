@@ -683,6 +683,7 @@ def test_run_passes_exact_prepared_contract_and_returns_compact_summary():
     assert result["utilisation"] == 0.91
     assert result["converged"] is True
     assert result["passed"] is True
+    assert result["design_methodology"] == bridge.COMPONENT_METHODS
     assert result["authority_reference"] == (
         fatigue_inputs.METHOD_REFERENCES[
             fatigue_inputs.METHOD_USER_GROUPED
@@ -769,8 +770,23 @@ def test_bridge_edition_owns_corrected_concrete_miner_expression():
     assert prepared.concrete_miner_basis == (
         fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     )
+    assert prepared.design_methodology == bridge.EN1992_2_BASE
     assert "corrected Expression (6.106)" in references["concrete"]
     assert "project-basis adoption" not in references["concrete"]
+
+
+def test_unknown_whole_calculation_methodology_blocks_headless_fatigue():
+    inp = _base(design_methodology="Unbound bridge label")
+
+    assert any(
+        "whole-calculation design methodology" in error
+        for error in fatigue_analysis.validation_errors(inp)
+    )
+    with pytest.raises(
+        ValueError,
+        match="whole-calculation design methodology",
+    ):
+        fatigue_analysis.prepare(inp)
 
 
 def test_bridge_standard_c100_false_pass_is_blocked_and_c14_governs():
@@ -844,22 +860,25 @@ def test_nonstandard_concrete_c_requires_separate_sourced_project_method():
 
 
 @pytest.mark.parametrize(
-    ("edition", "basis", "coefficient", "expected"),
+    ("edition", "methodology", "basis", "coefficient", "expected"),
     [
         (
             fatigue_inputs.EC2_2023,
+            bridge.COMPONENT_METHODS,
             fatigue_inputs.MINER_BASIS_2023_STANDARD,
             100.0,
             "fixes C = 14",
         ),
         (
             fatigue_inputs.EC2_2023,
+            bridge.EN1992_2_BASE,
             fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
             14.0,
             "requires the DS/EN 1992-2",
         ),
         (
             fatigue_inputs.EC2_2023,
+            bridge.COMPONENT_METHODS,
             "",
             14.0,
             "missing its standard applicability binding",
@@ -868,6 +887,7 @@ def test_nonstandard_concrete_c_requires_separate_sourced_project_method():
 )
 def test_fatigue_publication_revalidates_standard_c_and_applicability(
     edition,
+    methodology,
     basis,
     coefficient,
     expected,
@@ -875,6 +895,7 @@ def test_fatigue_publication_revalidates_standard_c_and_applicability(
     payload = {
         "errors": (),
         "edition": edition,
+        "design_methodology": methodology,
         "checks": {"reinforcement": False, "concrete": True},
         "concrete_method": fatigue_analysis.CONCRETE_MINER,
         "concrete_miner_basis": basis,
@@ -885,7 +906,10 @@ def test_fatigue_publication_revalidates_standard_c_and_applicability(
         },
     }
 
-    safe = fatigue_analysis.publication_safe_result(payload)
+    safe = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=methodology,
+    )
 
     assert safe["valid"] is False
     assert any(expected in error for error in safe["errors"])
@@ -898,6 +922,7 @@ def test_fatigue_publication_rejects_top_level_method_relabel():
         "converged": True,
         "passed": True,
         "edition": fatigue_inputs.EC2_2_2005_AC,
+        "design_methodology": bridge.EN1992_2_BASE,
         "checks": {"reinforcement": False, "concrete": True},
         "concrete_method": fatigue_analysis.CONCRETE_EQUIVALENT,
         "concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
@@ -908,7 +933,10 @@ def test_fatigue_publication_rejects_top_level_method_relabel():
         },
     }
 
-    safe = fatigue_analysis.publication_safe_result(payload)
+    safe = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
 
     assert safe["valid"] is False
     assert safe["converged"] is False
@@ -936,12 +964,16 @@ def test_fatigue_publication_rejects_malformed_error_container(raw_errors):
         "valid": True,
         "converged": True,
         "passed": True,
+        "design_methodology": bridge.COMPONENT_METHODS,
         "checks": {"reinforcement": False, "concrete": False},
         "concrete_method": None,
         "concrete_parameters": None,
     }
 
-    safe = fatigue_analysis.publication_safe_result(payload)
+    safe = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
 
     assert safe["valid"] is False
     assert safe["converged"] is False
@@ -950,6 +982,91 @@ def test_fatigue_publication_rejects_malformed_error_container(raw_errors):
         "structured list of typed messages" in error
         for error in safe["errors"]
     )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        (
+            {"concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD},
+            "project-basis adoption",
+        ),
+        (
+            {"design_methodology": bridge.EN1992_2_BASE},
+            "conflicts with the calculation input snapshot",
+        ),
+        (
+            {"design_methodology": None},
+            "missing its typed design-methodology binding",
+        ),
+    ],
+)
+def test_fatigue_publication_binds_miner_basis_to_calculation_methodology(
+    mutation,
+    expected,
+):
+    payload = {
+        "errors": (),
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "edition": fatigue_inputs.EC2_2_2005_AC,
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "checks": {"reinforcement": False, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION,
+        "concrete_miner_source": "DB-FAT-21 / checker approval",
+        "concrete_parameters": {
+            "c": 14.0,
+            "method": fatigue_analysis.CONCRETE_MINER,
+        },
+    }
+    unchanged = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+    assert unchanged["errors"] == ()
+    assert unchanged["passed"] is True
+
+    payload.update(mutation)
+    safe = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+    assert safe["valid"] is False
+    assert safe["converged"] is False
+    assert safe["passed"] is False
+    assert any(expected in error for error in safe["errors"])
+
+
+def test_fatigue_publication_accepts_bound_bridge_methodology_control():
+    payload = {
+        "errors": (),
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "edition": fatigue_inputs.EC2_2_2005_AC,
+        "design_methodology": bridge.EN1992_2_BASE,
+        "checks": {"reinforcement": False, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+        "concrete_miner_source": "",
+        "concrete_parameters": {
+            "c": 14.0,
+            "method": fatigue_analysis.CONCRETE_MINER,
+        },
+    }
+
+    safe = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
+
+    assert safe["errors"] == ()
+    assert safe["valid"] is True
+    assert safe["converged"] is True
+    assert safe["passed"] is True
 
 
 def test_bridge_edition_outside_bridge_method_requires_sourced_adoption():
@@ -1060,6 +1177,7 @@ def test_invalid_result_preserves_missing_assignments_without_running_fatigue():
     assert payload["valid"] is False
     assert payload["converged"] is False
     assert payload["passed"] is False
+    assert payload["design_methodology"] == bridge.COMPONENT_METHODS
     assert payload["spectra"] == ()
     assert payload["utilisation"] is None
     assert "R1: fatigue detail ID is required" in payload["errors"]

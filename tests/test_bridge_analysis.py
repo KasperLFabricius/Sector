@@ -397,6 +397,10 @@ def test_malformed_fatigue_utilisation_cannot_pass(
             },
             "Miner applicability",
         ),
+        (
+            {"design_methodology": bridge.COMPONENT_METHODS},
+            "whole-calculation methodology",
+        ),
     ],
 )
 def test_bridge_concrete_fatigue_rejects_mismatched_result_context(
@@ -413,6 +417,7 @@ def test_bridge_concrete_fatigue_rejects_mismatched_result_context(
     )
     payload = {
         "edition": "DS/EN 1992-2:2005 + AC:2008",
+        "design_methodology": bridge.EN1992_2_BASE,
         "checks": {"concrete": True},
         "concrete_method": "Explicit Palmgren-Miner spectrum",
         "concrete_miner_basis": "EN 1992-2 bridge methodology",
@@ -458,6 +463,7 @@ def test_bridge_concrete_fatigue_requires_c14_in_input_and_result(
     )
     payload = {
         "edition": "DS/EN 1992-2:2005 + AC:2008",
+        "design_methodology": bridge.EN1992_2_BASE,
         "checks": {"concrete": True},
         "concrete_method": "Explicit Palmgren-Miner spectrum",
         "concrete_miner_basis": "EN 1992-2 bridge methodology",

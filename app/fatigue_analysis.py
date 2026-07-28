@@ -71,6 +71,7 @@ class PreparedFatigueAnalysis:
     basis: Mapping
     factor_basis: Mapping
     warnings: tuple[str, ...]
+    design_methodology: str
     concrete_method: str | None
     concrete_miner_basis: str | None
     concrete_miner_source: str
@@ -110,7 +111,7 @@ def concrete_miner_parameter_errors(
     miner_basis: str,
     miner_source: str,
     coefficient_c,
-    bridge_standard_active: bool,
+    design_methodology: str,
 ) -> list[str]:
     """Validate the authority binding for a concrete Miner life relation.
 
@@ -161,7 +162,7 @@ def concrete_miner_parameter_errors(
     if not edition:
         return list(dict.fromkeys(errors))
 
-    if bridge_standard_active:
+    if design_methodology == bridge.EN1992_2_BASE:
         if edition != fatigue_inputs.EC2_2_2005_AC:
             errors.append(
                 "The EN 1992-2 bridge Miner applicability requires the "
@@ -215,6 +216,19 @@ def _edition(value) -> str:
         "DK NA:2024, DS/EN 1992-2:2005 + AC:2008, or "
         "DS/EN 1992-1-1:2023"
     )
+
+
+def _design_methodology(value, *, allow_default: bool = True) -> str:
+    if value is None and allow_default:
+        return bridge.COMPONENT_METHODS
+    if not isinstance(value, str):
+        raise ValueError("Select a valid whole-calculation design methodology")
+    methodology = value.strip()
+    if not methodology and allow_default:
+        return bridge.COMPONENT_METHODS
+    if methodology not in bridge.METHODOLOGIES:
+        raise ValueError("Select a valid whole-calculation design methodology")
+    return methodology
 
 
 def _factor_mode(inp: Mapping) -> tuple[str, bool]:
@@ -590,6 +604,13 @@ def validation_errors(inp: Mapping) -> list[str]:
             errors.append(str(inp[key]))
 
     try:
+        design_methodology = _design_methodology(
+            inp.get("design_methodology")
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        design_methodology = ""
+    try:
         edition = _edition(inp.get("fatigue_edition"))
     except ValueError as exc:
         errors.append(str(exc))
@@ -643,17 +664,13 @@ def validation_errors(inp: Mapping) -> list[str]:
             miner_source = str(
                 inp.get("fatigue_concrete_miner_source") or ""
             ).strip()
-            bridge_standard_active = (
-                edition == fatigue_inputs.EC2_2_2005_AC
-                and inp.get("design_methodology") == bridge.EN1992_2_BASE
-            )
             errors.extend(concrete_miner_parameter_errors(
                 edition=edition,
                 concrete_method=concrete_method,
                 miner_basis=miner_basis,
                 miner_source=miner_source,
                 coefficient_c=inp.get("fatigue_concrete_c"),
-                bridge_standard_active=bridge_standard_active,
+                design_methodology=design_methodology,
             ))
         concrete = inp.get("concrete")
         if concrete is None:
@@ -857,6 +874,12 @@ def validation_warnings(inp: Mapping) -> list[str]:
         edition = _edition(inp.get("fatigue_edition"))
     except ValueError:
         edition = ""
+    try:
+        design_methodology = _design_methodology(
+            inp.get("design_methodology")
+        )
+    except ValueError:
+        design_methodology = ""
     concrete_method = str(
         inp.get("fatigue_concrete_method") or CONCRETE_MINER
     )
@@ -872,7 +895,7 @@ def validation_warnings(inp: Mapping) -> list[str]:
             and edition != fatigue_inputs.EC2_2023
             and not (
                 edition == fatigue_inputs.EC2_2_2005_AC
-                and inp.get("design_methodology") == bridge.EN1992_2_BASE
+                and design_methodology == bridge.EN1992_2_BASE
             )
             and inp.get("fatigue_concrete_miner_basis")
             == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
@@ -948,6 +971,12 @@ def invalid_result(
         edition = _edition(raw_edition)
     except ValueError:
         edition = raw_edition or "-"
+    try:
+        design_methodology = _design_methodology(
+            inp.get("design_methodology")
+        )
+    except ValueError:
+        design_methodology = None
     method = str(basis.get("method") or "")
     try:
         resolved_gamma_s, resolved_gamma_c, factor_basis = (
@@ -979,6 +1008,7 @@ def invalid_result(
         "errors": unique_errors,
         "warnings": tuple(validation_warnings(inp)),
         "edition": edition,
+        "design_methodology": design_methodology,
         "checks": {
             "reinforcement": bool(inp.get("fatigue_check_steel")),
             "concrete": bool(inp.get("fatigue_check_concrete")),
@@ -1014,7 +1044,11 @@ def invalid_result(
     }
 
 
-def publication_safe_result(payload: Mapping | None) -> dict | None:
+def publication_safe_result(
+    payload: Mapping | None,
+    *,
+    design_methodology: str | None,
+) -> dict | None:
     """Return a fail-closed fatigue payload for UI/report publication."""
 
     if not isinstance(payload, Mapping):
@@ -1035,6 +1069,37 @@ def publication_safe_result(payload: Mapping | None) -> dict | None:
     if malformed_errors:
         errors.append(
             "Published fatigue errors are not a structured list of typed messages"
+        )
+    try:
+        stored_methodology = _design_methodology(
+            payload.get("design_methodology"),
+            allow_default=False,
+        )
+    except ValueError:
+        stored_methodology = ""
+        errors.append(
+            "Published fatigue evidence is missing its typed design-methodology "
+            "binding"
+        )
+    try:
+        current_methodology = _design_methodology(
+            design_methodology,
+            allow_default=False,
+        )
+    except ValueError:
+        current_methodology = ""
+        errors.append(
+            "Current fatigue design methodology is unavailable for publication "
+            "correlation"
+        )
+    if (
+        stored_methodology
+        and current_methodology
+        and stored_methodology != current_methodology
+    ):
+        errors.append(
+            "Published fatigue design methodology conflicts with the calculation "
+            "input snapshot"
         )
     checks = payload.get("checks")
     if not isinstance(checks, Mapping):
@@ -1085,10 +1150,17 @@ def publication_safe_result(payload: Mapping | None) -> dict | None:
             miner_basis=str(basis or ""),
             miner_source=str(source or ""),
             coefficient_c=parameters.get("c"),
-            bridge_standard_active=(
-                basis == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-            ),
+            design_methodology=stored_methodology,
         ))
+        if (
+            method == CONCRETE_MINER
+            and stored_methodology == bridge.EN1992_2_BASE
+            and basis != fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ):
+            errors.append(
+                "Published bridge concrete Miner evidence is missing its "
+                "whole-calculation methodology applicability binding"
+            )
         if (
             method == CONCRETE_MINER
             and edition == fatigue_inputs.EC2_2023
@@ -1189,6 +1261,9 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         raise ValueError("; ".join(errors))
 
     section = inp["section"]
+    design_methodology = _design_methodology(
+        inp.get("design_methodology")
+    )
     bars, tendons = _records(inp)
     bar_materials = list(inp.get("bar_materials") or [])
     tendon_materials = list(inp.get("tendon_materials") or [])
@@ -1240,7 +1315,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             )
         elif (
             edition == fatigue_inputs.EC2_2_2005_AC
-            and inp.get("design_methodology") == bridge.EN1992_2_BASE
+            and design_methodology == bridge.EN1992_2_BASE
         ):
             concrete_miner_basis = fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
         elif edition == fatigue_inputs.EC2_2023:
@@ -1357,6 +1432,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         basis=basis,
         factor_basis=factor_basis,
         warnings=tuple(validation_warnings(inp)),
+        design_methodology=design_methodology,
         concrete_method=concrete_method,
         concrete_miner_basis=concrete_miner_basis,
         concrete_miner_source=concrete_miner_source,
@@ -1482,6 +1558,7 @@ def analysis_signature(inp: Mapping) -> tuple:
             )
         ),
         prepared.warnings,
+        prepared.design_methodology,
         prepared.concrete_method,
         prepared.concrete_miner_basis,
         prepared.concrete_miner_source,
@@ -1532,6 +1609,7 @@ def run_analysis(
         )
     return {
         "edition": prepared.edition,
+        "design_methodology": prepared.design_methodology,
         "checks": {
             "reinforcement": prepared.check_reinforcement,
             "concrete": prepared.check_concrete,

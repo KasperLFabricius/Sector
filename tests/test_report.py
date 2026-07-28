@@ -325,6 +325,7 @@ def _fatigue_report_fixture():
     inp = _inp()
     inp.update({
         "mode": "",
+        "design_methodology": bridge.COMPONENT_METHODS,
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_check_steel": True,
@@ -503,6 +504,7 @@ def _fatigue_report_fixture():
     )
     payload = {
         "edition": fatigue_inputs.EC2_2023,
+        "design_methodology": bridge.COMPONENT_METHODS,
         "checks": {"reinforcement": True, "concrete": True},
         "concrete_method": "Explicit Palmgren-Miner spectrum",
         "concrete_miner_basis": fatigue_inputs.MINER_BASIS_2023_STANDARD,
@@ -729,6 +731,29 @@ def test_report_fails_closed_if_miner_payload_is_relabelled_equivalent():
     assert "INVALID - fatigue not assessed" in text
     assert "method conflicts with its calculation parameters" in text
     assert "C 100.000" not in text
+
+
+def test_report_rejects_bridge_basis_relabel_under_component_methodology():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    inp["fatigue_edition"] = fatigue_inputs.EC2_2_2005_AC
+    inp["fatigue_concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    inp["fatigue_concrete_miner_source"] = "DB-FAT-21 / checker approval"
+    payload["edition"] = fatigue_inputs.EC2_2_2005_AC
+    payload["concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+    payload["concrete_miner_source"] = "DB-FAT-21 / checker approval"
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "project-basis adoption" in text
+    assert bridge.COMPONENT_METHODS in text
 
 
 def test_report_fails_closed_on_malformed_fatigue_error_container():

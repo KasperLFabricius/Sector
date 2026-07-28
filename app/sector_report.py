@@ -463,7 +463,11 @@ class ReportBuilder:
         canonical_out = dict(out or {})
         if canonical_out.get("fatigue") is not None:
             canonical_out["fatigue"] = fatigue_analysis.publication_safe_result(
-                canonical_out.get("fatigue")
+                canonical_out.get("fatigue"),
+                design_methodology=inp.get(
+                    "design_methodology",
+                    bridge_core.COMPONENT_METHODS,
+                ),
             )
         self.out = canonical_out
         # Keep the complete table-level payload available while the existing
@@ -1962,6 +1966,12 @@ class ReportBuilder:
             fatigue_rows = [["Setting", "Value"]]
             fatigue_rows.extend([
                 ["Fatigue edition", str(fatigue.get("edition") or "-")],
+                [
+                    "Fatigue design methodology",
+                    _html_escape(str(
+                        fatigue.get("design_methodology") or "-"
+                    )),
+                ],
                 [
                     "Fatigue checks",
                     ", ".join(
@@ -5073,6 +5083,8 @@ class ReportBuilder:
         ) or "-"
         self._small(
             f"<b>Edition:</b> {_html_escape(str(payload.get('edition') or '-'))}; "
+            "<b>design methodology:</b> "
+            f"{_html_escape(str(payload.get('design_methodology') or '-'))}; "
             f"<b>checks:</b> {check_text}. Each spectrum is independent."
         )
         warnings = tuple(payload.get("warnings") or ())
@@ -5094,6 +5106,12 @@ class ReportBuilder:
         concrete_parameters = payload.get("concrete_parameters") or {}
         basis_rows = [
             ["Item", "Value"],
+            [
+                "Design methodology",
+                _html_escape(str(
+                    payload.get("design_methodology") or "-"
+                )),
+            ],
             ["Authority", _html_escape(str(basis.get("authority") or "-"))],
             ["Method", _html_escape(str(basis.get("method") or "-"))],
             ["Authority reference",
