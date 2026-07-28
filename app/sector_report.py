@@ -3949,6 +3949,51 @@ class ReportBuilder:
                     "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check captures and which "
                     "stays the authoritative combined verification.")
 
+    def _torsion_material_factor_basis(self, t):
+        factor_basis = t.get("material_factor_basis") or {}
+        self._h2("Material-factor basis")
+        factor_rows = [
+            ["Item", "Value"],
+            ["Factor source",
+             _html_escape(str(factor_basis.get("mode") or "-"))],
+            ["Provision",
+             _html_escape(str(factor_basis.get("reference") or "-"))],
+            ["gamma<sub>0</sub>", _fmt(factor_basis.get("gamma0"), 3)],
+            ["gamma<sub>3</sub>", _fmt(factor_basis.get("gamma3"), 3)],
+            ["Compression preset",
+             _fmt(factor_basis.get("compression_preset"), 3)],
+            ["Final compression factor",
+             _fmt(factor_basis.get("compression_final"), 3)],
+            ["Tension base", _fmt(factor_basis.get("tension_base"), 3)],
+            ["Tension derivation",
+             _html_escape(str(
+                 factor_basis.get("tension_derivation") or "-"
+             ))],
+            ["Final tension factor",
+             _fmt(factor_basis.get("tension_final"), 3)],
+            ["Concrete tension coefficient alpha<sub>ct</sub>",
+             _fmt(t["alpha_ct"], 3)],
+        ]
+        if factor_basis.get("approval_reference"):
+            factor_rows.append([
+                "Override approval/source",
+                _html_escape(str(factor_basis["approval_reference"])),
+            ])
+        self._table(factor_rows, [55 * mm, 110 * mm], keep=False)
+
+    def _torsion_fctd_trace(self, t):
+        factor_basis = t.get("material_factor_basis") or {}
+        self._formula(
+            "f<sub>ctd</sub> = alpha<sub>ct</sub> "
+            "f<sub>ctk,0.05</sub> / gamma<sub>ct</sub> = "
+            "alpha<sub>ct</sub> 0.7 f<sub>ctm</sub> / "
+            "gamma<sub>ct</sub>",
+            ref=_html_escape(str(factor_basis.get("reference") or "-")),
+            subst=f"{_fmt(t['alpha_ct'], 3)} &#183; "
+                  f"{_fmt(t.get('fctk_005'), 3)} / "
+                  f"{_fmt(t.get('gamma_ct'), 3)}",
+            result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")
+
     def _subtube_section(self, t):
         """Torsion of a subdivided compound section (EN 1992-1-1 6.3.1(3)-(4))."""
         subs = t["subtubes"]
@@ -3960,9 +4005,11 @@ class ReportBuilder:
                 "rectangle (web) carries the shear in the combined V+T checks. Its "
                 "positioned rectangle union has been validated against the concrete "
                 "outline and voids before these results are issued.")
+        self._torsion_material_factor_basis(t)
+        self._torsion_fctd_trace(t)
         rows = [["Sub-tube", "centre x, y<br/>b x h (mm)", "t<sub>ef</sub>",
                  "A<sub>k</sub> (mm2)", "share", "T<sub>Ed,i</sub>",
-                 "T<sub>Rd,i</sub>", "util", "governs"]]
+                 "T<sub>Rd,i</sub>", "T<sub>Rd,c,i</sub>", "util", "governs"]]
         for i, s in enumerate(subs):
             role = "web" if i == 0 else f"part {i + 1}"
             ut = ("inf" if not math.isfinite(s["util"])
@@ -3972,9 +4019,21 @@ class ReportBuilder:
                          f"{_fmt(s['b_mm'], 0)}x{_fmt(s['h_mm'], 0)}",
                          _fmt(s["tube"]["tef"], 1), _fmt(s["tube"]["Ak"] * 1e6, 0),
                          f"{_fmt(s['stiffness'] / c_tot * 100, 0)}%",
-                         _fmt(s["t_ed"], 2), _fmt(s["trd"], 2), ut, s["governs"]])
-        self._table(rows, [16 * mm, 24 * mm, 14 * mm, 18 * mm, 13 * mm, 16 * mm,
-                           16 * mm, 12 * mm, 25 * mm])
+                         _fmt(s["t_ed"], 2), _fmt(s["trd"], 2),
+                         _fmt(s.get("trd_c"), 2), ut, s["governs"]])
+        self._table(
+            rows,
+            [
+                14 * mm, 22 * mm, 12 * mm, 16 * mm, 14 * mm,
+                15 * mm, 15 * mm, 15 * mm, 11 * mm, 22 * mm,
+            ],
+        )
+        self._small(
+            "T<sub>Rd,c,i</sub> = 2 A<sub>k,i</sub> t<sub>ef,i</sub> "
+            "f<sub>ctd</sub> is the cracking reference for each sub-tube. It is "
+            "reported separately and is not pooled into the designed-reinforcement "
+            "resistance T<sub>Rd,i</sub>."
+        )
         # The torque is split by STIFFNESS, not capacity, so the governing check is the
         # WORST sub-tube (max util), not TEd / sum(TRd_i).
         util = t["util"]
@@ -4009,11 +4068,13 @@ class ReportBuilder:
         inter = t.get("interaction")
         if inter is None:
             return
+        start = len(self.flow)
         self._h2("Combined shear + torsion (concrete crushing)")
         if not inter.get("valid"):
             self._small(
                 "Not evaluated: the shared member-angle calculation is invalid."
             )
+            self._keep_from(start)
             return
         val = inter["value"]
         val_txt = _pct(val)
@@ -4036,6 +4097,7 @@ class ReportBuilder:
                                             show_verdict=inter.get(
                                                 "code_applicable", True)),
                   120, 100)
+        self._keep_from(start)
 
     def _torsion(self):
         t = self.out["torsion"]
@@ -4203,8 +4265,6 @@ class ReportBuilder:
                  _fmt(t.get("gamma_c"), 3)],
                 ["Concrete tension factor", "gamma<sub>ct</sub>",
                  _fmt(t.get("gamma_ct"), 3)],
-                ["Concrete tension coefficient", "alpha<sub>ct</sub>",
-                 _fmt(t["alpha_ct"], 3)],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
@@ -4218,34 +4278,7 @@ class ReportBuilder:
             self._small("nu = nu<sub>v</sub> (raised from nu<sub>t</sub>) under DK NA "
                         "Figur 5.100 NA: closed stirrups round the periphery and "
                         "distributed longitudinal steel on both faces.")
-        factor_basis = t.get("material_factor_basis") or {}
-        self._h2("Material-factor basis")
-        factor_rows = [
-            ["Item", "Value"],
-            ["Factor source",
-             _html_escape(str(factor_basis.get("mode") or "-"))],
-            ["Provision",
-             _html_escape(str(factor_basis.get("reference") or "-"))],
-            ["gamma<sub>0</sub>", _fmt(factor_basis.get("gamma0"), 3)],
-            ["gamma<sub>3</sub>", _fmt(factor_basis.get("gamma3"), 3)],
-            ["Compression preset",
-             _fmt(factor_basis.get("compression_preset"), 3)],
-            ["Final compression factor",
-             _fmt(factor_basis.get("compression_final"), 3)],
-            ["Tension base", _fmt(factor_basis.get("tension_base"), 3)],
-            ["Tension derivation",
-             _html_escape(str(
-                 factor_basis.get("tension_derivation") or "-"
-             ))],
-            ["Final tension factor",
-             _fmt(factor_basis.get("tension_final"), 3)],
-        ]
-        if factor_basis.get("approval_reference"):
-            factor_rows.append([
-                "Override approval/source",
-                _html_escape(str(factor_basis["approval_reference"])),
-            ])
-        self._table(factor_rows, [55 * mm, 110 * mm], keep=False)
+        self._torsion_material_factor_basis(t)
         self._h2("Resistances")
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
@@ -4267,16 +4300,7 @@ class ReportBuilder:
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
             result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
                    f"(governed by {t['governs']})")
-        self._formula(
-            "f<sub>ctd</sub> = alpha<sub>ct</sub> "
-            "f<sub>ctk,0.05</sub> / gamma<sub>ct</sub> = "
-            "alpha<sub>ct</sub> 0.7 f<sub>ctm</sub> / "
-            "gamma<sub>ct</sub>",
-            ref=_html_escape(str(factor_basis.get("reference") or "-")),
-            subst=f"{_fmt(t['alpha_ct'], 3)} &#183; "
-                  f"{_fmt(t.get('fctk_005'), 3)} / "
-                  f"{_fmt(t.get('gamma_ct'), 3)}",
-            result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")
+        self._torsion_fctd_trace(t)
         self._formula(
             "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
             ref="cracking (tau = f<sub>ctd</sub>)",
@@ -4310,6 +4334,7 @@ class ReportBuilder:
         # torsion payload has no shear companion and must not replace those screens.
         mr = None if directional else t.get("min_reinf")
         if mr is not None and mr.get("applicable"):
+            start = len(self.flow)
             self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
             vv = ("minimum reinforcement suffices" if mr["ok"]
                   else "designed reinforcement required")
@@ -4325,6 +4350,7 @@ class ReportBuilder:
             self._small("If &#8804; 1, only minimum shear + torsion reinforcement is "
                         "required (no designed stirrups for these actions). "
                         + solid_note)
+            self._keep_from(start)
         self._crushing_interaction(t)
 
     def _elastic(self):

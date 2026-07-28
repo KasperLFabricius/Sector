@@ -999,3 +999,23 @@ mandatory; this matrix does not self-certify PR closure.
   Thirty-three focused capacity, Danish coefficient and report checks plus three
   inherited/Danish live AppTests pass. Run `30404055147` was canceled before
   completion and is not counted as the single exact-head CI gate.
+- Codex rereview of exact head
+  `689d583631e37d33194ed5da0850e4445625cb3a` identified that the subdivided
+  torsion report returned after its sub-tube table and therefore omitted the
+  Danish coefficient, `fctd` derivation and per-tube cracking evidence. The
+  single- and multi-tube paths now share one material-factor and `fctd` trace,
+  while the compound table reports each `T_Rd,c,i` separately without inventing
+  a pooled compound cracking resistance. The focused red report regression also
+  binds the `alpha_ct = 0.8` operands and both per-tube values. Visual inspection
+  caught and repaired a pagination split between the combined V+T heading and
+  its result; the regression now requires that complete block on one page.
+  Twelve focused torsion-report checks and both canonical rendered-report checks
+  pass. The final 12-page raster was inspected on affected pages 7-8 and
+  pagination-boundary pages 11-12 with no clipping, overlap or orphaned result
+  block. The 42-page canonical fixture then exposed a single-tube Eq. 6.31
+  formula/result split caused by the additional trace row; that complete
+  heading/formula/result/note block is now kept together and the canonical
+  content validator binds it to one page. The final canonical raster was
+  inspected on affected pages 21-22 and pagination-boundary pages 41-42 with no
+  clipping, overlap or orphaned result block. Run `30405116136` was canceled
+  before completion and is not counted as the single exact-head CI gate.

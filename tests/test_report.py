@@ -3164,17 +3164,39 @@ def test_report_torsion_subdivided():
     t["subdivided"] = True
     t["subtubes"] = subs
     t["trd"] = 110.0
+    t["alpha_ct"] = 0.8
+    t["fctd"] = 0.8 * t["fctk_005"] / t["gamma_ct"]
+    subs[0]["trd_c"] = 12.345
+    subs[1]["trd_c"] = 6.789
     # P1: governing = the worst sub-tube (part 2 here), not the pooled TEd/sum(TRd).
     t["util"] = max(s["util"] for s in subs)
     t["governing_sub"] = 1
     t["asl_req"] = 1400.0
     out["torsion"] = t
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    txt = " ".join(_pdf_text(pdf).split())
     assert "Sub-tubes" in txt                        # the compound-section heading
     assert "6.3.1(3)" in txt                         # the sub-division clause
     assert "web" in txt
     assert "governing" in txt                        # P1: governing (max) utilisation
     assert "6.29" in txt                             # P2: crushing printed in sub-report
+    assert "Concrete tension coefficient" in txt
+    assert "0.800" in txt and "1.058" in txt
+    assert "12.35" in txt and "6.79" in txt
+
+    import io
+    import pypdf
+
+    pages = [
+        page.extract_text() or ""
+        for page in pypdf.PdfReader(io.BytesIO(pdf)).pages
+    ]
+    interaction_page = next(
+        page for page in pages
+        if "Combined shear + torsion (concrete crushing)" in page
+    )
+    assert "68.2" in interaction_page
+    assert "Evaluated at the common strut angle" in interaction_page
 
 
 def test_report_invalid_subtube_partition_withholds_verdict():
