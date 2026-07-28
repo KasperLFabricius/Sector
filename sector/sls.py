@@ -67,6 +67,18 @@ EXPOSURE_CLASSES_2023 = (
     EXPOSURE_XF,
 )
 
+EDITION_BRIDGE_2005_AC = "bridge-2005-ac2008"
+BRIDGE_EXPOSURE_NOT_ESTABLISHED = "Not established"
+BRIDGE_EXPOSURE_X0_XC1 = "X0 / XC1"
+BRIDGE_EXPOSURE_XC2_XC4 = "XC2 / XC3 / XC4"
+BRIDGE_EXPOSURE_XD_XS = "XD / XS"
+BRIDGE_EXPOSURE_CLASSES = (
+    BRIDGE_EXPOSURE_NOT_ESTABLISHED,
+    BRIDGE_EXPOSURE_X0_XC1,
+    BRIDGE_EXPOSURE_XC2_XC4,
+    BRIDGE_EXPOSURE_XD_XS,
+)
+
 DECOMPRESSION_NOT_ESTABLISHED = "Not established"
 DECOMPRESSION_REQUIRED = "Required"
 DECOMPRESSION_NOT_REQUIRED = "Not required"
@@ -2490,6 +2502,11 @@ def _standard_reference(edition: str, kind: str, dk_na: bool) -> str:
     if edition == "2023":
         table = "Table 9.1" if kind == CRITERION_APPEARANCE else "Table 9.2"
         return f"DS/EN 1992-1-1:2023 section 9.2.1(6), {table}"
+    if edition == EDITION_BRIDGE_2005_AC:
+        return (
+            "DS/EN 1992-2:2005 section 7.3.1(105), Table 7.101N; "
+            "EN 1992-2:2005/AC:2008"
+        )
     base = "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
     if dk_na:
         return (
@@ -2559,6 +2576,10 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
     exposure_class = str(
         inp.get("sls_exposure_class") or EXPOSURE_NOT_ESTABLISHED
     ).strip()
+    bridge_exposure_class = str(
+        inp.get("sls_bridge_exposure_class")
+        or BRIDGE_EXPOSURE_NOT_ESTABLISHED
+    ).strip()
     prestress_class = str(inp.get("sls_prestress_class") or "").strip()
     protection_class = str(
         inp.get("sls_protection_class") or PROTECTION_NOT_ESTABLISHED
@@ -2571,6 +2592,7 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         "prestress_class": prestress_class or None,
         "exposure": exposure or None,
         "exposure_class": exposure_class,
+        "bridge_exposure_class": bridge_exposure_class,
         "protection_class": protection_class,
         "method": code or None,
     }
@@ -2706,7 +2728,7 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         )]
 
     base_reasons = []
-    if edition not in {"2004", "2023"}:
+    if edition not in {"2004", "2023", EDITION_BRIDGE_2005_AC}:
         base_reasons.append("The selected code edition is not supported.")
     if prestress_class not in PRESTRESS_CLASSES:
         base_reasons.append(
@@ -2715,6 +2737,13 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
     if edition == "2004" and not exposure:
         base_reasons.append(
             "State the exposure/application context used to establish applicability."
+        )
+    if (
+        edition == EDITION_BRIDGE_2005_AC
+        and bridge_exposure_class not in BRIDGE_EXPOSURE_CLASSES[1:]
+    ):
+        base_reasons.append(
+            "Select the governing DS/EN 1992-2 Table 7.101N exposure group."
         )
     base_reason = " ".join(base_reasons) or None
     criteria = []
@@ -2746,6 +2775,79 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         ))
 
     durability_selected = bool(inp.get("sls_check_durability"))
+    if durability_selected and edition == EDITION_BRIDGE_2005_AC:
+        reference = _criterion_source(
+            _standard_reference(
+                edition, CRITERION_DURABILITY, dk_na
+            ),
+            source,
+        )
+        if base_reason:
+            criteria.append(_criterion_record(
+                "bridge-standard-durability-routing",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=reference,
+                required_combination=None,
+                limit_mm=None,
+                applicability=applicability,
+                configuration_reason=base_reason,
+            ))
+        elif prestress_class == PRESTRESS_REINFORCED_UNBONDED:
+            criteria.append(_criterion_record(
+                "bridge-standard-durability",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=reference,
+                required_combination=COMBINATION_QUASI_PERMANENT,
+                limit_mm=0.30,
+                applicability=applicability,
+            ))
+        elif prestress_class == PRESTRESS_BONDED:
+            if bridge_exposure_class in {
+                BRIDGE_EXPOSURE_X0_XC1,
+                BRIDGE_EXPOSURE_XC2_XC4,
+            }:
+                criteria.append(_criterion_record(
+                    "bridge-standard-durability",
+                    CRITERION_DURABILITY,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=COMBINATION_FREQUENT,
+                    limit_mm=0.20,
+                    applicability=applicability,
+                ))
+            if bridge_exposure_class == BRIDGE_EXPOSURE_XC2_XC4:
+                criteria.append(_criterion_record(
+                    "bridge-standard-decompression",
+                    CRITERION_DECOMPRESSION,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=COMBINATION_QUASI_PERMANENT,
+                    limit_mm=None,
+                    applicability={
+                        **applicability,
+                        "decompression_applicability": (
+                            "Table 7.101N required"
+                        ),
+                    },
+                ))
+            elif bridge_exposure_class == BRIDGE_EXPOSURE_XD_XS:
+                criteria.append(_criterion_record(
+                    "bridge-standard-decompression",
+                    CRITERION_DECOMPRESSION,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=COMBINATION_FREQUENT,
+                    limit_mm=None,
+                    applicability={
+                        **applicability,
+                        "decompression_applicability": (
+                            "Table 7.101N required"
+                        ),
+                    },
+                ))
+
     if durability_selected and edition == "2023":
         route_reason = base_reason
         if exposure_class not in EXPOSURE_CLASSES_2023[1:]:

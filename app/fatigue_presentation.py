@@ -22,12 +22,26 @@ def value(record, name, default=None):
 def items(record, name):
     """Return a result collection as a tuple."""
 
-    return tuple(value(record, name, ()) or ())
+    raw = value(record, name, ())
+    if raw is None or isinstance(raw, (str, bytes, bytearray, Mapping)):
+        return ()
+    try:
+        return tuple(raw)
+    except TypeError:
+        return ()
+
+
+def _typed_bool(raw):
+    if isinstance(raw, bool) or type(raw).__name__ == "bool_":
+        return bool(raw)
+    return None
 
 
 def finite_number(raw):
     """Return a finite float, otherwise ``None``."""
 
+    if _typed_bool(raw) is not None:
+        return None
     try:
         number = float(raw)
     except (TypeError, ValueError):
@@ -43,6 +57,8 @@ def evidence_number(raw):
     an infinite failure must remain visible in result tables and reports.
     """
 
+    if _typed_bool(raw) is not None:
+        return None
     try:
         number = float(raw)
     except (TypeError, ValueError):
@@ -53,9 +69,13 @@ def evidence_number(raw):
 def result_status(result):
     """Return the acceptance status of one computed spectrum/component."""
 
-    if result is None or not bool(value(result, "converged", False)):
+    if result is None:
         return "INVALID"
-    return "PASS" if bool(value(result, "passed", False)) else "FAIL"
+    converged = _typed_bool(value(result, "converged"))
+    passed = _typed_bool(value(result, "passed"))
+    if converged is not True or passed is None:
+        return "INVALID"
+    return "PASS" if passed else "FAIL"
 
 
 def overall_status(payload, *, stale=False):

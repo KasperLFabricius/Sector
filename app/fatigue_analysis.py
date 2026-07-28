@@ -69,6 +69,8 @@ class PreparedFatigueAnalysis:
     factor_basis: Mapping
     warnings: tuple[str, ...]
     concrete_method: str | None
+    concrete_miner_basis: str | None
+    concrete_miner_source: str
 
 
 def _positive(value, label: str, errors: list[str]) -> float | None:
@@ -104,11 +106,14 @@ def _edition(value) -> str:
         return text
     if "2023" in text:
         return fatigue_inputs.EC2_2023
+    if "1992-2" in text and ("2005" in text or "2004" in text):
+        return fatigue_inputs.EC2_2_2005_AC
     if "2005" in text or "2004" in text:
         return fatigue_inputs.EC2_2005
     raise ValueError(
         "fatigue edition must identify DS/EN 1992-1-1:2005, "
-        "DK NA:2024 or DS/EN 1992-1-1:2023"
+        "DK NA:2024, DS/EN 1992-2:2005 + AC:2008, or "
+        "DS/EN 1992-1-1:2023"
     )
 
 
@@ -174,6 +179,8 @@ def _resolved_factor_basis(inp: Mapping, edition: str) -> tuple[float, float, di
 def calculation_references(
     edition: str,
     concrete_method: str = CONCRETE_MINER,
+    concrete_miner_basis: str | None = None,
+    concrete_miner_source: str = "",
 ) -> dict[str, str]:
     """Return the explicit steel and concrete fatigue-method references."""
 
@@ -190,6 +197,7 @@ def calculation_references(
                 else "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)"
             ),
         }
+    bridge_edition = selected == fatigue_inputs.EC2_2_2005_AC
     national = (
         " with DK NA:2024 resolved final factors"
         if selected == fatigue_inputs.EC2_2005_DKNA
@@ -206,7 +214,15 @@ def calculation_references(
                 "Formula (6.72)"
             )
             if equivalent
-            else "DS/EN 1992-2:2005/AC:2008, corrected clause 6.106"
+            else (
+                "DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)"
+                if bridge_edition
+                else (
+                    "Approved project-basis adoption of DS/EN 1992-2:2005/"
+                    "AC:2008 corrected Expression (6.106); source: "
+                    + str(concrete_miner_source or "").strip()
+                )
+            )
         ) + national,
     }
 
@@ -506,6 +522,36 @@ def validation_errors(inp: Mapping) -> list[str]:
                 "Concrete fatigue C",
                 errors,
             )
+            miner_basis = str(
+                inp.get("fatigue_concrete_miner_basis") or ""
+            ).strip()
+            miner_source = str(
+                inp.get("fatigue_concrete_miner_source") or ""
+            ).strip()
+            if edition == fatigue_inputs.EC2_2_2005_AC:
+                if miner_basis not in {
+                    "",
+                    fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+                }:
+                    errors.append(
+                        "The EN 1992-2 edition uses its bridge-standard "
+                        "corrected Expression (6.106) basis"
+                    )
+            elif "2023" not in edition:
+                if (
+                    miner_basis
+                    != fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+                ):
+                    errors.append(
+                        "Explicit 2005 concrete Miner fatigue is an EN 1992-2 "
+                        "method; select an approved project-basis adoption or "
+                        "use the EN 1992-1-1 Formula (6.72) equivalent method"
+                    )
+                if not miner_source:
+                    errors.append(
+                        "The project-basis adoption of bridge concrete Miner "
+                        "fatigue requires a document/clause/approval source"
+                    )
         concrete = inp.get("concrete")
         if concrete is None:
             errors.append("Concrete material is required for concrete fatigue")
@@ -705,6 +751,27 @@ def validation_warnings(inp: Mapping) -> list[str]:
         return []
     warnings = []
     try:
+        edition = _edition(inp.get("fatigue_edition"))
+    except ValueError:
+        edition = ""
+    if (
+        bool(inp.get("fatigue_check_concrete"))
+        and str(
+            inp.get("fatigue_concrete_method") or CONCRETE_MINER
+        ) == CONCRETE_MINER
+        and edition
+        and edition not in {
+            fatigue_inputs.EC2_2_2005_AC,
+            fatigue_inputs.EC2_2023,
+        }
+        and inp.get("fatigue_concrete_miner_basis")
+        == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    ):
+        warnings.append(
+            "EN 1992-2 corrected Expression (6.106) is used by explicit "
+            "project-basis adoption outside the bridge methodology"
+        )
+    try:
         warnings.extend(
             fatigue_inputs.basis_warnings(
                 inp.get(fatigue_inputs.BASIS_KEY)
@@ -806,6 +873,15 @@ def invalid_result(
             "reinforcement": bool(inp.get("fatigue_check_steel")),
             "concrete": bool(inp.get("fatigue_check_concrete")),
         },
+        "concrete_method": (
+            str(inp.get("fatigue_concrete_method") or CONCRETE_MINER)
+            if bool(inp.get("fatigue_check_concrete"))
+            else None
+        ),
+        "concrete_miner_basis": inp.get("fatigue_concrete_miner_basis"),
+        "concrete_miner_source": str(
+            inp.get("fatigue_concrete_miner_source") or ""
+        ).strip(),
         "basis": dict(basis),
         "authority_reference": fatigue_inputs.METHOD_REFERENCES.get(
             method, "-"
@@ -952,6 +1028,21 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         # defensive guard at the preparation boundary for custom integrations.
         raise ValueError("; ".join(proof_errors))
     edition = _edition(inp.get("fatigue_edition"))
+    concrete_miner_basis = None
+    concrete_miner_source = ""
+    if check_concrete and concrete_method == CONCRETE_MINER:
+        if edition == fatigue_inputs.EC2_2_2005_AC:
+            concrete_miner_basis = fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        elif edition == fatigue_inputs.EC2_2023:
+            concrete_miner_basis = fatigue_inputs.MINER_BASIS_2023_STANDARD
+        else:
+            concrete_miner_basis = str(
+                inp.get("fatigue_concrete_miner_basis")
+                or fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+            )
+        concrete_miner_source = str(
+            inp.get("fatigue_concrete_miner_source") or ""
+        ).strip()
     resolved_gamma_s, resolved_gamma_c, factor_basis = (
         _resolved_factor_basis(inp, edition)
     )
@@ -1053,6 +1144,8 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         factor_basis=factor_basis,
         warnings=tuple(validation_warnings(inp)),
         concrete_method=concrete_method,
+        concrete_miner_basis=concrete_miner_basis,
+        concrete_miner_source=concrete_miner_source,
     )
 
 
@@ -1176,6 +1269,8 @@ def analysis_signature(inp: Mapping) -> tuple:
         ),
         prepared.warnings,
         prepared.concrete_method,
+        prepared.concrete_miner_basis,
+        prepared.concrete_miner_source,
     )
 
 
@@ -1210,6 +1305,8 @@ def run_analysis(
     references = calculation_references(
         prepared.edition,
         prepared.concrete_method or CONCRETE_MINER,
+        prepared.concrete_miner_basis,
+        prepared.concrete_miner_source,
     )
     if (
         prepared.check_reinforcement
@@ -1226,6 +1323,8 @@ def run_analysis(
             "concrete": prepared.check_concrete,
         },
         "concrete_method": prepared.concrete_method,
+        "concrete_miner_basis": prepared.concrete_miner_basis,
+        "concrete_miner_source": prepared.concrete_miner_source,
         "basis": dict(prepared.basis),
         "authority_reference": fatigue_inputs.METHOD_REFERENCES[
             prepared.basis["method"]

@@ -259,6 +259,7 @@ def test_prepare_preserves_float_coercible_non_factor_inputs():
 def test_prepare_resolves_dk_fatigue_preset_from_edition_and_categories():
     inp = _use_2005_fatigue_details(_base(
         fatigue_edition=fatigue_inputs.EC2_2005_DKNA,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_EQUIVALENT,
         fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_PRESET,
         fatigue_gamma0=0.95,
         fatigue_gamma3=1.10,
@@ -705,6 +706,82 @@ def test_equivalent_concrete_method_is_mapped_and_referenced_explicitly():
         prepared.concrete_method,
     )
     assert "Formula (E.2)" in references["concrete"]
+
+
+def test_ordinary_2005_concrete_miner_requires_explicit_bridge_method_adoption():
+    inp = _base(
+        fatigue_edition=fatigue_inputs.EC2_2005,
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+    )
+
+    errors = fatigue_analysis.validation_errors(inp)
+
+    assert any("project-basis adoption" in error for error in errors)
+    assert any("document/clause/approval source" in error for error in errors)
+
+
+def test_ordinary_2005_approved_concrete_miner_adoption_is_warned_and_sourced():
+    inp = _base(
+        fatigue_edition=fatigue_inputs.EC2_2005,
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+        ),
+        fatigue_concrete_miner_source="DB-FAT-21 / checker approval",
+    )
+
+    prepared = fatigue_analysis.prepare(inp)
+    references = fatigue_analysis.calculation_references(
+        prepared.edition,
+        prepared.concrete_method,
+        prepared.concrete_miner_basis,
+        prepared.concrete_miner_source,
+    )
+
+    assert prepared.concrete_miner_basis == (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    assert "DB-FAT-21" in references["concrete"]
+    assert any("project-basis adoption" in item for item in prepared.warnings)
+
+
+def test_bridge_edition_owns_corrected_concrete_miner_expression():
+    inp = _base(
+        fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+    )
+
+    prepared = fatigue_analysis.prepare(inp)
+    references = fatigue_analysis.calculation_references(
+        prepared.edition,
+        prepared.concrete_method,
+        prepared.concrete_miner_basis,
+        prepared.concrete_miner_source,
+    )
+
+    assert prepared.concrete_miner_basis == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+    assert "corrected Expression (6.106)" in references["concrete"]
+    assert "project-basis adoption" not in references["concrete"]
+
+
+def test_2023_concrete_miner_records_standard_applicability():
+    inp = _base(
+        fatigue_edition=fatigue_inputs.EC2_2023,
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+    )
+
+    prepared = fatigue_analysis.prepare(inp)
+
+    assert prepared.concrete_miner_basis == (
+        fatigue_inputs.MINER_BASIS_2023_STANDARD
+    )
+    assert prepared.concrete_miner_source == ""
 
 
 def test_adapter_runs_the_real_engine_for_a_mild_reinforced_section():

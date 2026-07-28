@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from streamlit.testing.v1 import AppTest
-from sector import sls
+from sector import bridge, sls
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
@@ -1923,7 +1923,6 @@ def test_app_restores_fatigue_inputs_into_the_ui():
         at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY],
         fatigue_inputs.PRESTRESS,
     )
-
     saved = project_io.dump_project(
         {
             key: at.session_state[key]
@@ -1941,6 +1940,46 @@ def test_app_restores_fatigue_inputs_into_the_ui():
         restored_tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
     ) == fatigue_inputs.spectrum_records(spectrum)
     assert restored_scalars["fatigue_gamma_s"] == 1.32
+
+
+def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
+    import bridge_inputs
+    import fatigue_inputs
+
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_BASE
+    ).run()
+
+    assert not at.exception
+    assert at.selectbox(key="fatigue_edition").value == (
+        fatigue_inputs.EC2_2_2005_AC
+    )
+    assert at.selectbox(key="sls_code").value == (
+        "DS/EN 1992-2:2005 + AC:2008"
+    )
+    assert at.selectbox(key="sls_criterion_mode").value == (
+        sls.CRITERION_MODE_STANDARD
+    )
+    assert all(
+        key in at.session_state
+        for key in bridge_inputs.TABLE_KEYS
+    )
+
+    _calculate(at)
+    payload = at.session_state["results"]["bridge_methodology"]
+
+    assert payload["active"] is True
+    assert payload["status"] != bridge.STATUS_PASS
+    assert all(
+        check["status"] == bridge.STATUS_NOT_ASSESSED
+        for check in payload["checks"]
+    )
+    _select_view(at, "Bridge Methodology")
+    assert any(
+        "NOT ASSESSED" in warning.value
+        for warning in at.warning
+    )
 
 
 def test_app_fatigue_factor_switches_and_approved_override_persist():
@@ -5894,6 +5933,114 @@ def _download_and_autosave_publications(
         "crack_control"
     ]["cases"][0]["assessment"]
     return (download, durable, saved), (download_text, captured["data"])
+
+
+def _bridge_bound_snapshot():
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id == "section_analysis"
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+    ))
+
+
+def test_download_session_and_autosave_reject_bridge_binding_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    bridge_record = _bridge_bound_snapshot()
+    bridge_record["checks"][0]["result"] = "mutated stored result"
+    calculation = {
+        "input_sha256": "stale",
+        "bridge_methodology": bridge_record,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(sector_app, "_project_state", lambda: ({}, {}))
+
+    download_text = sector_app._gather_project()
+    download = json.loads(download_text)["calculation"][
+        "bridge_methodology"
+    ]
+    assert download["status"] == bridge.STATUS_INVALID
+    assert any(
+        "fingerprint does not match" in error
+        for error in download["configuration_errors"]
+    )
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: "current-input-hash",
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]["bridge_methodology"]
+    saved = json.loads(captured["data"])["calculation"][
+        "bridge_methodology"
+    ]
+    assert durable["status"] == bridge.STATUS_INVALID
+    assert saved["status"] == bridge.STATUS_INVALID
+    assert durable == saved
 
 
 @pytest.mark.parametrize(

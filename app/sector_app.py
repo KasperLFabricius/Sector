@@ -30,6 +30,8 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import case_analysis  # noqa: E402
+import bridge_analysis  # noqa: E402
+import bridge_inputs  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import fatigue_presentation  # noqa: E402
@@ -43,8 +45,8 @@ from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import (capacity, codes, combined, detailing, geometry, kernels,  # noqa: E402
-                    material_presets as mp, shear, templates, torsion)
+from sector import (bridge, capacity, codes, combined, detailing, geometry,  # noqa: E402
+                    kernels, material_presets as mp, shear, templates, torsion)
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector import sls as sls_core  # noqa: E402
@@ -89,6 +91,10 @@ _CRACK_CODES = {
     "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
     "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
     "EN 1992-1-1:2023": dict(dk_na=False, edition="2023"),
+    "DS/EN 1992-2:2005 + AC:2008": dict(
+        dk_na=False,
+        edition=sls_core.EDITION_BRIDGE_2005_AC,
+    ),
 }
 # Old saved values for the (now merged) fine/coarse DK NA options.
 _CRACK_CODE_ALIASES = {
@@ -171,14 +177,18 @@ def _design_basis_summary(*, concrete_preset, mild_preset=None,
                           prestress_materials=None,
                           crack_code=None, shear_method=None, shear_links=False,
                           torsion_method=None, combined_method=None,
-                          detailing_method=None, fatigue_method=None):
+                          detailing_method=None, fatigue_method=None,
+                          methodology=None):
     """Whole-calculation edition map and any material hybrid/coverage qualification.
 
     Sector intentionally permits independent expert choices. This summary makes
     those choices conspicuous instead of silently presenting a mixed-edition report
     as one end-to-end code implementation.
     """
-    selections = [("Concrete material", concrete_preset)]
+    selections = []
+    if methodology:
+        selections.append(("Whole calculation", methodology))
+    selections.append(("Concrete material", concrete_preset))
     if mild_materials:
         selections.extend(
             (f"Reinforcing steel {item['id']}", item["preset"])
@@ -1815,6 +1825,10 @@ def _load_case_editors(box):
 
 
 _FATIGUE_EDITOR_KEY = "fatigue_spectrum_editor"
+_BRIDGE_EDITOR_KEYS = {
+    key: f"{key}_editor"
+    for key in bridge_inputs.TABLE_KEYS
+}
 _NON_REPLAYABLE_WIDGET_KEYS = frozenset({
     *_CASE_EDITOR_KEYS.values(),
     _FATIGUE_EDITOR_KEY,
@@ -1903,6 +1917,19 @@ def _commit_fatigue_editor_delta():
         seed, st.session_state.get(_FATIGUE_EDITOR_KEY)
     )
     st.session_state[key] = fatigue_inputs.normalise_spectrum_table(current)
+
+
+def _commit_bridge_editor_delta(key):
+    """Commit one bridge evidence-table event before an interrupted rerun."""
+
+    editor_key = _BRIDGE_EDITOR_KEYS[key]
+    seed_key = f"_{key}_editor_seed"
+    seed = st.session_state.get(seed_key, st.session_state.get(key))
+    current = _apply_native_editor_delta(
+        seed,
+        st.session_state.get(editor_key),
+    )
+    st.session_state[key] = bridge_inputs.normalise_table(current, key)
 
 
 def _fatigue_spectrum_column_config():
@@ -2009,6 +2036,143 @@ def _fatigue_spectrum_editor(box):
     current = fatigue_inputs.normalise_spectrum_table(edited)
     st.session_state[key] = current.copy(deep=True)
     return fatigue_inputs.active_spectrum_table(current)
+
+
+def _bridge_column_config(key):
+    """Readable strict columns for the four bridge evidence tables."""
+
+    text = lambda label, help_text, required=False: st.column_config.TextColumn(
+        label,
+        help=help_text,
+        required=required,
+        width="medium",
+    )
+    number = lambda label, help_text: st.column_config.NumberColumn(
+        label,
+        help=help_text,
+        format="%.3f",
+        required=True,
+        width="small",
+    )
+    if key == bridge_inputs.COVERAGE_TABLE_KEY:
+        return {
+            "check_id": text(
+                "Check ID",
+                "Canonical EN 1992-2 coverage row.",
+                True,
+            ),
+            "applicability": st.column_config.SelectboxColumn(
+                "Applicability *",
+                options=list(bridge.APPLICABILITY_OPTIONS),
+                default=bridge.NOT_ESTABLISHED,
+                required=True,
+                width="medium",
+                help=(
+                    "Required runs the implemented check. Not applicable needs "
+                    "a project-basis source and remains visible."
+                ),
+            ),
+            "source": text(
+                "Project-basis source *",
+                "Document/clause supporting this applicability decision.",
+            ),
+            "notes": text("Notes", "Optional applicability explanation."),
+        }
+    if key == bridge_inputs.BRITTLE_TABLE_KEY:
+        return {
+            "region_id": text("Tensile region *", "Unique region ID.", True),
+            "m_rep_knm": number("Mrep [kNm]", "Cracking/replacement moment."),
+            "z_s_m": number("zs [m]", "Internal lever arm."),
+            "f_yk_mpa": number("fyk [MPa]", "Characteristic steel strength."),
+            "as_provided_mm2": number(
+                "As,provided [mm2]",
+                "Provided reinforcement in this tensile region.",
+            ),
+        }
+    if key == bridge_inputs.BOX_WALL_TABLE_KEY:
+        return {
+            "wall_id": text("Wall *", "Unique box-wall ID.", True),
+            "cot_theta": number("cot(theta)", "Common strut angle for all walls."),
+            "v_ed_kn": number("VEd [kN]", "Wall shear action."),
+            "v_rd_max_kn": number("VRd,max [kN]", "Wall shear resistance."),
+            "t_ed_equivalent_kn": number(
+                "TEd,eq [kN]",
+                "Torsion-equivalent wall action.",
+            ),
+            "t_rd_max_equivalent_kn": number(
+                "TRd,max,eq [kN]",
+                "Torsion-equivalent wall resistance.",
+            ),
+        }
+    return {
+        "component": st.column_config.SelectboxColumn(
+            "Component *",
+            options=["Web", "Flange"],
+            required=True,
+            width="small",
+        ),
+        "act_mm2": number("Act [mm2]", "Effective concrete tension area."),
+        "k_c": number("kc", "Stress-distribution coefficient."),
+        "k": number("k", "Self-equilibrating stress coefficient."),
+        "fct_eff_mpa": number("fct,eff [MPa]", "Effective tensile strength."),
+        "sigma_s_mpa": number("sigma_s [MPa]", "Permitted steel stress."),
+        "as_provided_mm2": number(
+            "As,provided [mm2]",
+            "Provided component reinforcement.",
+        ),
+        "restrained_shrinkage": st.column_config.CheckboxColumn(
+            "Restrained shrinkage",
+            help="Applies the bridge fct,eff >= 2.9 MPa floor.",
+            default=False,
+            width="small",
+        ),
+    }
+
+
+def _bridge_table_editor(box, key, *, disabled=False):
+    """Render one canonical bridge evidence table with a stable editor seed."""
+
+    editor_key = _BRIDGE_EDITOR_KEYS[key]
+    seed_key = f"_{key}_editor_seed"
+    if key not in st.session_state:
+        st.session_state[key] = bridge_inputs.empty_table(key)
+    if editor_key not in st.session_state or seed_key not in st.session_state:
+        st.session_state[seed_key] = bridge_inputs.normalise_table(
+            st.session_state[key],
+            key,
+        )
+    seed = bridge_inputs.normalise_table(st.session_state[seed_key], key)
+    edited = box.data_editor(
+        seed,
+        key=editor_key,
+        **_input_widget_kwargs(
+            editor_key,
+            {
+                "num_rows": (
+                    "fixed"
+                    if key == bridge_inputs.COVERAGE_TABLE_KEY
+                    else "dynamic"
+                ),
+                "hide_index": True,
+                "width": "stretch",
+                "height": "auto",
+                "column_config": _bridge_column_config(key),
+                "column_order": bridge_inputs.TABLE_COLUMNS[key],
+                "disabled": (
+                    True
+                    if disabled
+                    else ["check_id"]
+                    if key == bridge_inputs.COVERAGE_TABLE_KEY
+                    else False
+                ),
+                "on_change": _commit_bridge_editor_delta,
+                "args": (key,),
+            },
+        ),
+    )
+    current = bridge_inputs.normalise_table(edited, key)
+    st.session_state[key] = current.copy(deep=True)
+    return current
 
 
 def _fatigue_basis_prefix():
@@ -2182,6 +2346,34 @@ def _fatigue_spectrum_signature(value):
                 except (TypeError, ValueError):
                     number = math.nan
                 cell = number if math.isfinite(number) else "<invalid>"
+            else:
+                cell = str(cell)
+            row.append(cell)
+        rows.append(tuple(row))
+    return tuple(rows)
+
+
+def _bridge_table_signature(value, key):
+    """Stable bridge-table content, retaining invalid cells as sentinels."""
+
+    frame = bridge_inputs.normalise_table(value, key)
+    rows = []
+    for record in frame.to_dict("records"):
+        row = []
+        for column in bridge_inputs.TABLE_COLUMNS[key]:
+            cell = record[column]
+            if column in bridge_inputs.NUMERIC_COLUMNS[key]:
+                try:
+                    number = float(cell)
+                except (TypeError, ValueError):
+                    number = math.nan
+                cell = number if math.isfinite(number) else "<invalid>"
+            elif column in bridge_inputs.BOOLEAN_COLUMNS[key]:
+                cell = (
+                    bool(cell)
+                    if isinstance(cell, bool)
+                    else ("<invalid>", repr(cell))
+                )
             else:
                 cell = str(cell)
             row.append(cell)
@@ -2745,6 +2937,11 @@ def _project_state():
         tables[fatigue_key] = fatigue_inputs.normalise_spectrum_table(
             st.session_state[fatigue_key]
         )
+    for key in bridge_inputs.TABLE_KEYS:
+        tables[key] = bridge_inputs.normalise_table(
+            st.session_state.get(key),
+            key,
+        )
     return tables, scalars
 
 
@@ -2840,19 +3037,27 @@ def _perform_autosave() -> bool:
         return False
     record_changed_by_validation = False
     calculation = st.session_state.get("calculation_record")
-    if isinstance(calculation, Mapping) and "crack_control" in calculation:
-        current_crack_control = calculation.get("crack_control")
-        safe_crack_control = (
-            sls_core.publication_safe_crack_control_record(
-                current_crack_control
+    if isinstance(calculation, Mapping):
+        safe_calculation = copy.deepcopy(dict(calculation))
+        if "crack_control" in calculation:
+            current_crack_control = calculation.get("crack_control")
+            safe_crack_control = (
+                sls_core.publication_safe_crack_control_record(
+                    current_crack_control
+                )
             )
-        )
-        if safe_crack_control != current_crack_control:
-            safe_calculation = copy.deepcopy(dict(calculation))
             if safe_crack_control is None:
                 safe_calculation.pop("crack_control", None)
             else:
                 safe_calculation["crack_control"] = safe_crack_control
+        if "bridge_methodology" in calculation:
+            current_bridge = calculation.get("bridge_methodology")
+            safe_bridge = bridge.publication_safe_record(current_bridge)
+            if safe_bridge is None:
+                safe_calculation.pop("bridge_methodology", None)
+            else:
+                safe_calculation["bridge_methodology"] = safe_bridge
+        if safe_calculation != calculation:
             st.session_state["calculation_record"] = safe_calculation
             record_changed_by_validation = True
     if (
@@ -3004,6 +3209,7 @@ def _apply_pending_project() -> None:
     replaceable_factor_keys = (
         *project_io.FATIGUE_SCALAR_KEYS,
         *project_io.TORSION_FACTOR_SCALAR_KEYS,
+        *project_io.BRIDGE_SCALAR_KEYS,
     )
     for key in replaceable_factor_keys:
         st.session_state.pop(key, None)
@@ -3022,6 +3228,11 @@ def _apply_pending_project() -> None:
         st.session_state.pop(fatigue_key, None)
         st.session_state.pop("fatigue_spectrum_editor", None)
         st.session_state.pop(f"_{fatigue_key}_editor_seed", None)
+    for key in bridge_inputs.TABLE_KEYS:
+        if key not in tables:
+            st.session_state.pop(key, None)
+            st.session_state.pop(_BRIDGE_EDITOR_KEYS[key], None)
+            st.session_state.pop(f"_{key}_editor_seed", None)
     for key, df in tables.items():
         if key in load_cases.CASE_TABLE_KEYS:
             _reseed_case_table(key, df)
@@ -3030,6 +3241,11 @@ def _apply_pending_project() -> None:
             st.session_state[key] = fatigue_inputs.normalise_spectrum_table(df)
             st.session_state.pop("fatigue_spectrum_editor", None)
             st.session_state.pop(f"_{fatigue_key}_editor_seed", None)
+            continue
+        if key in bridge_inputs.TABLE_KEYS:
+            st.session_state[key] = bridge_inputs.normalise_table(df, key)
+            st.session_state.pop(_BRIDGE_EDITOR_KEYS[key], None)
+            st.session_state.pop(f"_{key}_editor_seed", None)
             continue
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.
@@ -3830,7 +4046,8 @@ _ELASTIC_CONTEXT_SIG_KEYS = (
     "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_tendon_bond", "sls_tendon_xi",
     "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
-    "sls_exposure_class", "sls_exposure_context",
+    "sls_exposure_class", "sls_bridge_exposure_class",
+    "sls_exposure_context",
     "sls_check_appearance", "sls_appearance_limit",
     "sls_check_durability", "sls_decompression_applicability",
     "sls_project_characteristic_limit", "sls_project_frequent_limit",
@@ -3891,6 +4108,9 @@ def build_inputs(host=st):
         st.session_state[
             fatigue_inputs.SPECTRUM_TABLE_KEY
         ] = fatigue_inputs.empty_spectrum_table()
+    for key in bridge_inputs.TABLE_KEYS:
+        if key not in st.session_state:
+            st.session_state[key] = bridge_inputs.empty_table(key)
     mild_catalogue = mat_catalog.normalise_catalog(
         st.session_state[mat_catalog.MILD_CATALOG_KEY], "mild"
     )
@@ -3928,6 +4148,10 @@ def build_inputs(host=st):
     det = aset.expander("Reinforcement detailing", expanded=False)
     fat = aset.expander("Fatigue", expanded=False)
     sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
+    brg = aset.expander(
+        "Bridge methodology (DS/EN 1992-2 base)",
+        expanded=False,
+    )
     about_slot = project.container()
     report_slot = project.container()
     save_slot = project.container()
@@ -3947,6 +4171,136 @@ def build_inputs(host=st):
             },
         ),
     )
+    design_methodology = _seeded_selectbox(
+        aset,
+        "Whole-calculation methodology",
+        list(bridge.METHODOLOGIES),
+        bridge.COMPONENT_METHODS,
+        "design_methodology",
+        help=(
+            "Independent component methods preserves Sector's normal expert "
+            "method selection. The DS/EN 1992-2 base option activates a separate "
+            "coverage/applicability gate and never treats an ordinary 1-1 result "
+            "as a complete bridge-method verdict."
+        ),
+    )
+    bridge_method_active = design_methodology == bridge.EN1992_2_BASE
+    if bridge_method_active:
+        # These methods are owned by the bridge base selection. The numerical
+        # crack-spacing model still inherits the 2004-family calculation, while
+        # acceptance is routed by the bridge edition token.
+        st.session_state["fatigue_edition"] = fatigue_inputs.EC2_2_2005_AC
+        st.session_state["sls_code"] = "DS/EN 1992-2:2005 + AC:2008"
+        st.session_state["sls_criterion_mode"] = (
+            sls_core.CRITERION_MODE_STANDARD
+        )
+        st.session_state["sls_check_appearance"] = False
+    brg.caption(
+        "EN 1992-2 inherits compatible EN 1992-1-1 clauses and separately "
+        "records every bridge override, addition, and unsupported provision. "
+        "A required gap blocks the whole methodology verdict."
+    )
+    brg.dataframe(
+        pd.DataFrame(bridge.coverage_matrix())[
+            ["check_id", "title", "disposition", "bridge_reference"]
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+    brg.markdown("**Applicability and project-basis decisions**")
+    bridge_coverage_table = _bridge_table_editor(
+        brg,
+        bridge_inputs.COVERAGE_TABLE_KEY,
+        disabled=not bridge_method_active,
+    )
+    bc1, bc2 = brg.columns(2)
+    bridge_brittle_method = _seeded_selectbox(
+        bc1,
+        "Prestressed brittle-failure method",
+        list(bridge.BRITTLE_METHODS),
+        bridge.BRITTLE_NOT_ESTABLISHED,
+        "bridge_brittle_method",
+        disabled=not bridge_method_active,
+        help=(
+            "Sector calculates Method b. Methods a/c remain recorded but "
+            "explicitly NOT ASSESSED."
+        ),
+    )
+    bridge_expected_box_walls = _seeded_number(
+        bc2,
+        "Expected box-wall rows",
+        0,
+        100,
+        0,
+        1,
+        "bridge_expected_box_walls",
+        disabled=not bridge_method_active,
+        help="Exact number of separately assessed box walls; 0 only when not applicable.",
+    )
+    bridge_minimum_scope = _seeded_selectbox(
+        bc1,
+        "Minimum crack-reinforcement components",
+        list(bridge.MINIMUM_SCOPES),
+        bridge.MINIMUM_SCOPE_NOT_ESTABLISHED,
+        "bridge_minimum_scope",
+        disabled=not bridge_method_active,
+    )
+    bridge_shear_scope = _seeded_selectbox(
+        bc2,
+        "Bridge shear/detailing scope",
+        list(bridge.SHEAR_SCOPES),
+        bridge.SHEAR_SCOPE_NOT_ESTABLISHED,
+        "bridge_shear_scope",
+        disabled=not bridge_method_active,
+        help=(
+            "Inherited member shear can be accepted only after the project "
+            "records that no added bridge web/interface model is required."
+        ),
+    )
+    bridge_exposure = _seeded_selectbox(
+        bc1,
+        "Bridge SLS stress exposure/applicability",
+        list(bridge.BRIDGE_EXPOSURES),
+        bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
+        "bridge_exposure",
+        disabled=not bridge_method_active,
+        help=(
+            "The 0.60 fck characteristic stress criterion is implemented for "
+            "the XD/XF/XS bridge application. Other cases need an explicit "
+            "not-applicable decision and source."
+        ),
+    )
+    brg.markdown("**Prestressed Method-b tensile regions**")
+    bridge_brittle_table = _bridge_table_editor(
+        brg,
+        bridge_inputs.BRITTLE_TABLE_KEY,
+        disabled=not bridge_method_active,
+    )
+    brg.markdown("**Box-wall shear/torsion evidence**")
+    bridge_box_wall_table = _bridge_table_editor(
+        brg,
+        bridge_inputs.BOX_WALL_TABLE_KEY,
+        disabled=not bridge_method_active,
+    )
+    brg.markdown("**Separate web/flange minimum crack reinforcement**")
+    bridge_minimum_table = _bridge_table_editor(
+        brg,
+        bridge_inputs.MINIMUM_TABLE_KEY,
+        disabled=not bridge_method_active,
+    )
+    bridge_tables = {
+        bridge_inputs.COVERAGE_TABLE_KEY: bridge_coverage_table,
+        bridge_inputs.BRITTLE_TABLE_KEY: bridge_brittle_table,
+        bridge_inputs.BOX_WALL_TABLE_KEY: bridge_box_wall_table,
+        bridge_inputs.MINIMUM_TABLE_KEY: bridge_minimum_table,
+    }
+    bridge_table_errors = bridge_inputs.all_table_errors(bridge_tables)
+    if bridge_method_active and bridge_table_errors:
+        brg.error(
+            "Bridge evidence table input is incomplete: "
+            + "; ".join(bridge_table_errors)
+            + "."
+        )
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
     fatigue_on = _seeded_toggle(
@@ -3962,7 +4316,7 @@ def build_inputs(host=st):
         list(fatigue_inputs.EDITIONS),
         fatigue_inputs.EC2_2005_DKNA,
         "fatigue_edition",
-        disabled=not fatigue_on,
+        disabled=not fatigue_on or bridge_method_active,
         help="Selects the Eurocode fatigue-resistance expressions and preset values.",
     )
     _prepare_factor_mode_state(
@@ -4078,6 +4432,75 @@ def build_inputs(host=st):
             "amplitude for 10^6 cycles, and its Cycles value is ignored for concrete."
         ),
     )
+    if (
+        fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
+        and fatigue_edition == fatigue_inputs.EC2_2_2005_AC
+    ):
+        st.session_state["fatigue_concrete_miner_basis"] = (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        )
+    elif "2023" in fatigue_edition:
+        st.session_state["fatigue_concrete_miner_basis"] = (
+            fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+        )
+    fatigue_concrete_miner_basis = _seeded_selectbox(
+        fat,
+        "Concrete Miner method applicability",
+        list(fatigue_inputs.MINER_BASES),
+        fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED,
+        "fatigue_concrete_miner_basis",
+        disabled=(
+            not (
+                fatigue_on
+                and fatigue_check_concrete
+                and fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
+            )
+            or fatigue_edition == fatigue_inputs.EC2_2_2005_AC
+            or "2023" in fatigue_edition
+        ),
+        help=(
+            "The corrected 2005 Miner life equation belongs to EN 1992-2. "
+            "Outside the bridge methodology it is available only through an "
+            "explicit approved project-basis adoption. The 2023 Miner method "
+            "uses its own E.5.3 expressions."
+        ),
+    )
+    fatigue_concrete_miner_source = _seeded_text(
+        fat,
+        "Concrete Miner adoption source",
+        "",
+        "fatigue_concrete_miner_source",
+        disabled=not (
+            fatigue_on
+            and fatigue_check_concrete
+            and fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
+            and fatigue_concrete_miner_basis
+            == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+        ),
+        help=(
+            "Project design-basis clause, checker approval, or other source "
+            "adopting the bridge expression outside an EN 1992-2 methodology."
+        ),
+    )
+    if (
+        fatigue_on
+        and fatigue_check_concrete
+        and fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
+        and fatigue_edition not in {
+            fatigue_inputs.EC2_2_2005_AC,
+            fatigue_inputs.EC2_2023,
+        }
+        and (
+            fatigue_concrete_miner_basis
+            != fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+            or not str(fatigue_concrete_miner_source).strip()
+        )
+    ):
+        fat.warning(
+            "The 2005 explicit concrete Miner equation is bridge-specific. "
+            "Choose the 1-1 equivalent method or record an approved project "
+            "adoption and source."
+        )
     if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
         fat.error(
             "Legacy saved fatigue factors are retained but not approved. Select "
@@ -4438,7 +4861,10 @@ def build_inputs(host=st):
         **_input_widget_kwargs(
             "sls_code",
             {
-                "disabled": not (elastic_on and sls_cw),
+                "disabled": (
+                    not (elastic_on and sls_cw)
+                    or bridge_method_active
+                ),
                 "help": (
                     "Crack-spacing method. The DK NA reports fine and coarse "
                     "systems; the 2023 option uses the refined model in 9.2.3. "
@@ -4455,7 +4881,10 @@ def build_inputs(host=st):
         list(sls_core.CRITERION_MODES),
         sls_core.CRITERION_MODE_STANDARD,
         "sls_criterion_mode",
-        disabled=not (elastic_on and sls_cw),
+        disabled=(
+            not (elastic_on and sls_cw)
+            or bridge_method_active
+        ),
         help=(
             "Standard-derived routes appearance/durability criteria to the "
             "combination required by the selected edition, member/protection "
@@ -4520,6 +4949,25 @@ def build_inputs(host=st):
             "Sector does not parse or infer it from free text."
         ),
     )
+    sls_bridge_exposure_class = _seeded_selectbox(
+        scw,
+        "EN 1992-2 Table 7.101N governing exposure group",
+        list(sls_core.BRIDGE_EXPOSURE_CLASSES),
+        project_io.DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS,
+        "sls_bridge_exposure_class",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == sls_core.EDITION_BRIDGE_2005_AC
+        ),
+        help=(
+            "Select the bridge table row explicitly. It routes reinforced/"
+            "unbonded width to quasi-permanent, bonded width to frequent, and "
+            "bonded decompression to the required quasi-permanent or frequent "
+            "combination. Duration is never used as a substitute."
+        ),
+    )
     sls_exposure_context = _seeded_text(
         scw,
         "Exposure / application context",
@@ -4541,7 +4989,7 @@ def build_inputs(host=st):
             elastic_on
             and sls_cw
             and standard_criteria
-        ),
+        ) or bridge_method_active,
         help=(
             "Adds a separate appearance criterion. This standard-derived route "
             "is implemented for the 2023 edition; selecting it with another "
@@ -4570,7 +5018,13 @@ def build_inputs(host=st):
         scw,
         (
             "Assess durability criterion "
-            + ("(Table 9.2)" if sls_edition == "2023" else "(Table 7.1N)")
+            + (
+                "(Table 9.2)"
+                if sls_edition == "2023"
+                else "(Table 7.101N)"
+                if sls_edition == sls_core.EDITION_BRIDGE_2005_AC
+                else "(Table 7.1N)"
+            )
         ),
         True,
         "sls_check_durability",
@@ -4593,12 +5047,25 @@ def build_inputs(host=st):
             and sls_cw
             and standard_criteria
             and sls_check_durability
-        ),
+        ) or sls_edition == sls_core.EDITION_BRIDGE_2005_AC,
         help=(
             "Limit selected from the applicable standard table. Only a response "
-            "explicitly tagged with the required SLS combination can govern."
+            "explicitly tagged with the required SLS combination can govern. "
+            "EN 1992-2 standard limits are fixed by Table 7.101N and ignore this "
+            "user-defined field."
         ),
     )
+    if (
+        elastic_on
+        and sls_cw
+        and standard_criteria
+        and sls_edition == sls_core.EDITION_BRIDGE_2005_AC
+    ):
+        scw.caption(
+            "Table 7.101N owns the standard value: 0.30 mm QP for reinforced/"
+            "unbonded, 0.20 mm frequent for the applicable bonded rows, or "
+            "decompression only for XD/XS."
+        )
     sls_decompression_applicability = _seeded_selectbox(
         scw,
         "2004 quasi-permanent decompression applicability",
@@ -5759,6 +6226,7 @@ def build_inputs(host=st):
         combined_method if combined_on else torsion_method
     ) if torsion_on else None
     design_basis = _design_basis_summary(
+        methodology=design_methodology,
         concrete_preset=concrete_preset,
         mild_materials=used_mild_entries,
         prestress_materials=used_prestress_entries,
@@ -5919,6 +6387,8 @@ def build_inputs(host=st):
             bool(fatigue_check_steel),
             bool(fatigue_check_concrete),
             fatigue_concrete_method,
+            fatigue_concrete_miner_basis,
+            str(fatigue_concrete_miner_source).strip(),
             fatigue_factor_mode,
             str(fatigue_factor_approval).strip(),
             ("invalid_factor_input_keys", invalid_factor_input_keys),
@@ -5950,7 +6420,23 @@ def build_inputs(host=st):
         if fatigue_on
         else ("fatigue", False)
     )
-    sig = plastic_sig + elastic_sig + (fatigue_sig,)
+    bridge_sig = (
+        "bridge-methodology",
+        design_methodology,
+        bridge_brittle_method,
+        int(bridge_expected_box_walls),
+        bridge_minimum_scope,
+        bridge_shear_scope,
+        bridge_exposure,
+        tuple(
+            (
+                key,
+                _bridge_table_signature(bridge_tables[key], key),
+            )
+            for key in bridge_inputs.TABLE_KEYS
+        ),
+    )
+    sig = plastic_sig + elastic_sig + (fatigue_sig, bridge_sig)
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
@@ -5994,6 +6480,24 @@ def build_inputs(host=st):
                 mild_preset=mild_preset,
                 prestress_preset=prestress_preset,
                 design_basis=design_basis,
+                design_methodology=design_methodology,
+                bridge_brittle_method=bridge_brittle_method,
+                bridge_expected_box_walls=bridge_expected_box_walls,
+                bridge_minimum_scope=bridge_minimum_scope,
+                bridge_shear_scope=bridge_shear_scope,
+                bridge_exposure=bridge_exposure,
+                bridge_coverage_base=bridge_tables[
+                    bridge_inputs.COVERAGE_TABLE_KEY
+                ],
+                bridge_brittle_regions_base=bridge_tables[
+                    bridge_inputs.BRITTLE_TABLE_KEY
+                ],
+                bridge_box_walls_base=bridge_tables[
+                    bridge_inputs.BOX_WALL_TABLE_KEY
+                ],
+                bridge_minimum_components_base=bridge_tables[
+                    bridge_inputs.MINIMUM_TABLE_KEY
+                ],
                 plastic_case={
                     "id": str(pl_case_id).strip(),
                     "type": pl_case_type,
@@ -6037,6 +6541,7 @@ def build_inputs(host=st):
                 sls_prestress_class=sls_prestress_class,
                 sls_protection_class=sls_protection_class,
                 sls_exposure_class=sls_exposure_class,
+                sls_bridge_exposure_class=sls_bridge_exposure_class,
                 sls_exposure_context=sls_exposure_context,
                 sls_invalid_numeric_inputs=_invalid_crack_input_keys(),
                 sls_check_appearance=sls_check_appearance,
@@ -6115,6 +6620,12 @@ def build_inputs(host=st):
                 fatigue_check_steel=fatigue_check_steel,
                 fatigue_check_concrete=fatigue_check_concrete,
                 fatigue_concrete_method=fatigue_concrete_method,
+                fatigue_concrete_miner_basis=(
+                    fatigue_concrete_miner_basis
+                ),
+                fatigue_concrete_miner_source=(
+                    fatigue_concrete_miner_source
+                ),
                 fatigue_factor_mode=fatigue_factor_mode,
                 fatigue_factor_approval=fatigue_factor_approval,
                 fatigue_gamma0=fatigue_gamma0,
@@ -6428,6 +6939,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             total=total, long=mpa(r.bar_stress_long), dif=mpa(r.bar_stress_dif),
             rst1=mpa(r.bar_stress_rst1),
             max_conc=r.max_concrete_compression / 1000.0,
+            max_conc_long=r.long.max_concrete_compression / 1000.0,
             max_conc_xy=tuple(r.short_term.max_concrete_xy),
             # Public point identifiers are one-based everywhere; the engine keeps
             # zero-based arrays internally.
@@ -6971,6 +7483,7 @@ def run_analysis(
                 if reuse_fatigue is not None
                 else _run_fatigue_or_invalid(inp)
             )
+        result["bridge_methodology"] = bridge_analysis.assess(inp, result)
         return result
 
     def _runner(case_inp, *, reuse_plastic=None):
@@ -6997,6 +7510,7 @@ def run_analysis(
             if reuse_fatigue is not None
             else _run_fatigue_or_invalid(inp)
         )
+    result["bridge_methodology"] = bridge_analysis.assess(inp, result)
     return result
 
 
@@ -8215,7 +8729,7 @@ def _transverse_detailing_result(inp, out):
 
 # View order follows the checking workflow: consolidated status first, then the
 # plastic, elastic, shear, torsion and combined details.
-VIEWS = ["Results Overview", "Plastic Results", "N-M Interaction",
+VIEWS = ["Results Overview", "Bridge Methodology", "Plastic Results", "N-M Interaction",
          "Elastic Results", "Fatigue Results", "Detailing", "Shear", "Torsion",
          "M-V-T Combined"]
 _RESULT_VIEWS = tuple(VIEWS)
@@ -8477,6 +8991,75 @@ def results_overview_view(inp, results, *, stale=False):
     )
     st.dataframe(styled, hide_index=True, width="stretch",
                  height=min(35 * (len(display) + 1) + 3, 560))
+
+
+def bridge_methodology_view(inp, results, *, stale=False):
+    """Render the complete EN 1992-2 coverage matrix and typed check evidence."""
+
+    if inp.get("design_methodology") != bridge.EN1992_2_BASE:
+        st.info(
+            "Select the DS/EN 1992-2 base whole-calculation methodology in "
+            "Analysis settings to activate this gate."
+        )
+        return
+    payload = bridge.publication_safe_record(
+        (results or {}).get("bridge_methodology")
+    )
+    if payload is None:
+        st.info("Press Calculate to assess the bridge methodology.")
+        return
+    status = "STALE" if stale else payload["status"]
+    message = f"{status} - DS/EN 1992-2 base methodology"
+    if status == "PASS":
+        st.success(message)
+    elif status in {"FAIL", "INVALID"}:
+        st.error(message)
+    else:
+        st.warning(message)
+    st.caption(payload["source"])
+    st.markdown("**Standards coverage matrix**")
+    st.dataframe(
+        pd.DataFrame(payload["coverage_matrix"])[[
+            "title",
+            "disposition",
+            "inherited_reference",
+            "bridge_reference",
+            "implementation",
+        ]],
+        hide_index=True,
+        width="stretch",
+    )
+    st.markdown("**Applicability and acceptance register**")
+    rows = []
+    for check in payload["checks"]:
+        rows.append({
+            "Check": check["title"],
+            "Disposition": check["disposition"],
+            "Status": "STALE" if stale else check["status"],
+            "Result": check["result"],
+            "Criterion": check["criterion"],
+            "Utilisation": check["utilisation"],
+            "Source": check["source"],
+            "Reason": check["reason"],
+        })
+    st.dataframe(rows, hide_index=True, width="stretch")
+    for check in payload["checks"]:
+        if not check.get("evidence"):
+            continue
+        with st.expander(f"Evidence - {check['title']}", expanded=False):
+            st.dataframe(
+                list(check["evidence"]),
+                hide_index=True,
+                width="stretch",
+            )
+    if payload.get("configuration_errors"):
+        st.error(
+            "Stored/calculated bridge evidence validation: "
+            + "; ".join(payload["configuration_errors"])
+            + "."
+        )
+    for limitation in payload.get("limitations") or ():
+        st.warning(limitation)
 
 
 def _detailing_status_callout(status, message):
@@ -11782,6 +12365,11 @@ def _analysis_workspace(inp):
             )
             if crack_control_record is not None:
                 calculation_record["crack_control"] = crack_control_record
+            bridge_record = bridge.publication_safe_record(
+                st.session_state["results"].get("bridge_methodology")
+            )
+            if bridge_record is not None:
+                calculation_record["bridge_methodology"] = bridge_record
             st.session_state["calculation_record"] = calculation_record
         else:
             st.session_state.pop("result_input_snapshot", None)
@@ -11875,6 +12463,8 @@ def _analysis_workspace(inp):
 
     if view == "Results Overview":
         results_overview_view(result_inp, results, stale=stale)
+    elif view == "Bridge Methodology":
+        bridge_methodology_view(result_inp, results, stale=stale)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":

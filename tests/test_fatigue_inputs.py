@@ -12,6 +12,7 @@ from app import fatigue_inputs as fi
     [
         (fi.EC2_2005, 1.15, 1.50),
         (fi.EC2_2005_DKNA, 1.32, 1.595),
+        (fi.EC2_2_2005_AC, 1.15, 1.50),
         (fi.EC2_2023, 1.15, 1.50),
     ],
 )

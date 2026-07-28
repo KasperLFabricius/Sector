@@ -206,6 +206,10 @@ def _inputs() -> dict:
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+        ),
+        "fatigue_concrete_miner_source": "QA-DB-FAT-MINER-01",
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
         "fatigue_gamma0": 1.0,
         "fatigue_gamma3": 1.0,
@@ -1369,6 +1373,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Spectrum summary",
         "Reinforcement fatigue",
         "Concrete fatigue",
+        "Approved project-basis adoption",
+        "QA-DB-FAT-MINER-01",
         "Certified governing-fibre search",
         "Torsion and shear fatigue are not assessed",
         "Physical resistance components",

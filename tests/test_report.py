@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import detailing, sls  # noqa: E402
+from sector import bridge, detailing, sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -664,6 +664,36 @@ def test_report_keeps_spectrum_and_factor_approvals_distinct():
     assert "VD-FLM5-AGREEMENT" not in appendix.split(
         "Partial-factor provenance", 1
     )[1]
+
+
+def test_report_exposes_ordinary_miner_adoption_and_source():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    inp["fatigue_edition"] = fatigue_inputs.EC2_2005
+    inp["fatigue_concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    inp["fatigue_concrete_miner_source"] = "DB-FAT-21 / checker approval"
+    payload["edition"] = fatigue_inputs.EC2_2005
+    payload["concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    payload["concrete_miner_source"] = "DB-FAT-21 / checker approval"
+    payload["calculation_references"]["concrete"] = (
+        "Approved project-basis adoption of DS/EN 1992-2:2005/AC:2008 "
+        "corrected Expression (6.106); source: "
+        "DB-FAT-21 / checker approval"
+    )
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Concrete Miner applicability" in text
+    assert fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION in text
+    assert "Concrete Miner adoption source" in text
+    assert "DB-FAT-21 / checker approval" in text
+    assert "corrected Expression (6.106)" in text
 
 
 def test_report_includes_damage_equivalent_concrete_method_evidence():
@@ -3381,3 +3411,115 @@ def test_report_shared_longitudinal_note_states_the_common_angle():
         {}, _inp(), _combined_longitudinal("utilisation"), figures=False)).split())
     assert "ONE member strut angle shared" in txt
     assert "minimise the governing utilisation" in txt
+
+
+def _bridge_report_record():
+    check_ids = (
+        "section_analysis",
+        "prestress_brittle",
+        "bridge_shear_detailing",
+        "box_wall_torsion",
+        "reinforcement_fatigue",
+        "concrete_fatigue",
+        "shear_torsion_fatigue",
+        "sls_stress",
+        "sls_crack",
+        "web_flange_minimum",
+        "deflection",
+        "segmental_joints",
+    )
+    record = {
+        "methodology": bridge.EN1992_2_BASE,
+        "active": True,
+        "status": bridge.STATUS_NOT_APPLICABLE,
+        "configuration_errors": [],
+        "checks": [
+            {
+                "check_id": check_id,
+                "status": bridge.STATUS_NOT_APPLICABLE,
+                "result": "-",
+                "criterion": "-",
+                "source": "DB-BRIDGE-01",
+                "reason": "Project applicability resolved as not applicable.",
+                "evidence": [],
+            }
+            for check_id in check_ids
+        ],
+    }
+    record["evidence_schema"] = bridge.BRIDGE_EVIDENCE_SCHEMA
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+    )
+    return record
+
+
+def test_report_publishes_bridge_coverage_and_check_gate():
+    out = _out()
+    out["bridge_methodology"] = _bridge_report_record()
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    )).split())
+
+    assert "Bridge methodology" in text
+    assert "Coverage matrix" in text
+    assert "inherited" in text
+    assert "overridden" in text
+    assert "added" in text
+    assert "not assessed" in text
+    assert "DB-BRIDGE-01" in text
+
+
+def test_report_publishes_bound_bridge_calculation_evidence():
+    out = _out()
+    record = _bridge_report_record()
+    stress = next(
+        check
+        for check in record["checks"]
+        if check["check_id"] == "sls_stress"
+    )
+    stress.update(
+        status=bridge.STATUS_PASS,
+        result="20.000 MPa (SLS-CHAR:total)",
+        criterion="characteristic compression <= 24.000 MPa",
+        utilisation=20.0 / 24.0,
+        evidence=[{
+            "response_id": "SLS-CHAR:total",
+            "combination": "Characteristic",
+            "compression_mpa": 20.0,
+            "limit_mpa": 24.0,
+            "solver_provenance": {"solve": "elastic-v1"},
+        }],
+    )
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+    )
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    )).split())
+
+    assert "Bound calculation evidence" in text
+    assert "SLS-CHAR:total" in text
+    assert "compression_mpa" in text
+    assert "limit_mpa" in text
+    assert "elastic-v1" in text
+
+
+def test_report_fails_closed_when_stored_bridge_check_is_missing():
+    out = _out()
+    record = _bridge_report_record()
+    record["checks"] = record["checks"][:-1]
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    )).split())
+
+    assert "Bridge methodology" in text
+    assert "INVALID" in text
+    assert "Publication validation" in text
+    assert "missing bridge check" in text

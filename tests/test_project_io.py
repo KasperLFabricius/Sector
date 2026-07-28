@@ -16,11 +16,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_inputs  # noqa: E402
+import bridge_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from sector import codes, detailing, sls  # noqa: E402
+from sector import bridge, codes, detailing, sls  # noqa: E402
 
 
 def _v17_crack_defaults():
@@ -39,6 +40,20 @@ def _v17_crack_defaults():
         "sls_project_characteristic_limit": 0.0,
         "sls_project_frequent_limit": 0.0,
         "sls_project_quasi_permanent_limit": 0.0,
+    }
+
+
+def _v19_bridge_defaults():
+    return {
+        "sls_bridge_exposure_class": (
+            project_io.DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS
+        ),
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "bridge_brittle_method": bridge.BRITTLE_NOT_ESTABLISHED,
+        "bridge_expected_box_walls": 0,
+        "bridge_minimum_scope": bridge.MINIMUM_SCOPE_NOT_ESTABLISHED,
+        "bridge_shear_scope": bridge.SHEAR_SCOPE_NOT_ESTABLISHED,
+        "bridge_exposure": bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
     }
 
 
@@ -137,6 +152,7 @@ def test_round_trip_tables_and_scalars():
         if key not in load_cases.LEGACY_SCALAR_KEYS
     }
     expected_scalars.update(_v17_crack_defaults())
+    expected_scalars.update(_v19_bridge_defaults())
     assert rs == expected_scalars
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == "PL-17"
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "description"] == (
@@ -465,6 +481,205 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     assert project_io.input_sha256(restored, restored_scalars) == (
         project_io.input_sha256(tables, scalars)
     )
+
+
+def test_v19_round_trip_preserves_typed_bridge_tables_and_methodology():
+    tables = _tables()
+    coverage = bridge_inputs.default_coverage_records()
+    for row in coverage:
+        row["applicability"] = (
+            bridge.REQUIRED
+            if row["check_id"] in {"sls_stress", "sls_crack"}
+            else bridge.NOT_APPLICABLE
+        )
+        row["source"] = f"DB-{row['check_id']}"
+    tables.update({
+        bridge_inputs.COVERAGE_TABLE_KEY:
+            bridge_inputs.table_from_records(
+                coverage,
+                bridge_inputs.COVERAGE_TABLE_KEY,
+            ),
+        bridge_inputs.BRITTLE_TABLE_KEY:
+            bridge_inputs.empty_table(bridge_inputs.BRITTLE_TABLE_KEY),
+        bridge_inputs.BOX_WALL_TABLE_KEY:
+            bridge_inputs.empty_table(bridge_inputs.BOX_WALL_TABLE_KEY),
+        bridge_inputs.MINIMUM_TABLE_KEY:
+            bridge_inputs.table_from_records([{
+                "component": "Web",
+                "act_mm2": 100_000.0,
+                "k_c": 0.4,
+                "k": 1.0,
+                "fct_eff_mpa": 2.8,
+                "sigma_s_mpa": 300.0,
+                "as_provided_mm2": 500.0,
+                "restrained_shrinkage": True,
+            }], bridge_inputs.MINIMUM_TABLE_KEY),
+    })
+    scalars = {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "bridge_brittle_method": bridge.BRITTLE_METHOD_B,
+        "bridge_expected_box_walls": 0,
+        "bridge_minimum_scope": bridge.MINIMUM_SCOPE_WEB,
+        "bridge_shear_scope": bridge.SHEAR_SCOPE_MEMBER,
+        "bridge_exposure": bridge.BRIDGE_EXPOSURE_XD_XS,
+        "sls_bridge_exposure_class": sls.BRIDGE_EXPOSURE_XD_XS,
+    }
+
+    text = project_io.dump_project(tables, scalars)
+    payload = json.loads(text)
+    restored, restored_scalars = project_io.parse_project(text)
+
+    assert payload["version"] == 19
+    assert payload["bridge"]["version"] == bridge_inputs.VERSION
+    assert restored_scalars["design_methodology"] == bridge.EN1992_2_BASE
+    assert restored_scalars["bridge_minimum_scope"] == bridge.MINIMUM_SCOPE_WEB
+    assert (
+        restored_scalars["sls_bridge_exposure_class"]
+        == sls.BRIDGE_EXPOSURE_XD_XS
+    )
+    assert bridge_inputs.table_records(
+        restored[bridge_inputs.COVERAGE_TABLE_KEY],
+        bridge_inputs.COVERAGE_TABLE_KEY,
+    ) == bridge_inputs.table_records(
+        tables[bridge_inputs.COVERAGE_TABLE_KEY],
+        bridge_inputs.COVERAGE_TABLE_KEY,
+    )
+    assert bridge_inputs.table_records(
+        restored[bridge_inputs.MINIMUM_TABLE_KEY],
+        bridge_inputs.MINIMUM_TABLE_KEY,
+    ) == bridge_inputs.table_records(
+        tables[bridge_inputs.MINIMUM_TABLE_KEY],
+        bridge_inputs.MINIMUM_TABLE_KEY,
+    )
+    assert project_io.input_sha256(restored, restored_scalars) == (
+        project_io.input_sha256(tables, scalars)
+    )
+
+
+def test_pre_v19_project_cannot_inherit_bridge_methodology_from_session():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 18,
+        "tables": {},
+        "scalars": {
+            "design_methodology": bridge.EN1992_2_BASE,
+        },
+    }
+
+    tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars["design_methodology"] == bridge.COMPONENT_METHODS
+    assert not any(key in tables for key in bridge_inputs.TABLE_KEYS)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("design_methodology", "EN 1992-2-ish"),
+        ("bridge_expected_box_walls", True),
+        ("bridge_expected_box_walls", 1.5),
+        ("bridge_exposure", "XC maybe"),
+    ],
+)
+def test_bridge_scalar_boundary_rejects_unknown_or_false_numeric_state(
+    field,
+    value,
+):
+    with pytest.raises(ValueError, match="bridge|methodology"):
+        project_io.dump_project({}, {field: value})
+
+
+def _bridge_calculation_snapshot():
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id == "section_analysis"
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="one inherited section solve converged",
+            criterion="requested section solver converges",
+            source="DS/EN 1992-2 inherited section analysis",
+            reason="Elastic case SLS-1 converged",
+        ),
+    ))
+
+
+def test_project_roundtrips_bound_bridge_calculation_snapshot():
+    scalars = {"design_methodology": bridge.EN1992_2_BASE}
+    calculation = {
+        "input_sha256": project_io.input_sha256({}, scalars),
+        "bridge_methodology": _bridge_calculation_snapshot(),
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation=calculation,
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+    saved = payload["calculation"]["bridge_methodology"]
+    restored = provenance["calculation"]["bridge_methodology"]
+
+    assert saved == restored
+    assert saved["status"] == bridge.STATUS_PASS
+    assert saved["evidence_schema"] == bridge.BRIDGE_EVIDENCE_SCHEMA
+    assert payload["provenance"]["results_included"] is True
+
+
+def test_project_publication_rejects_mutated_bridge_snapshot():
+    scalars = {"design_methodology": bridge.EN1992_2_BASE}
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": project_io.input_sha256({}, scalars),
+            "bridge_methodology": _bridge_calculation_snapshot(),
+        },
+    )
+    payload = json.loads(text)
+    payload["calculation"]["bridge_methodology"]["checks"][0][
+        "result"
+    ] = "mutated stored result"
+
+    provenance = project_io.project_provenance(json.dumps(payload))
+    restored = provenance["calculation"]["bridge_methodology"]
+
+    assert restored["status"] == bridge.STATUS_INVALID
+    assert any(
+        "fingerprint does not match" in error
+        for error in restored["configuration_errors"]
+    )
+
+
+def test_project_rejects_duplicate_bridge_coverage_rows_and_future_schema():
+    payload = json.loads(project_io.dump_project({}, {}))
+    coverage = payload["bridge"]["tables"][
+        bridge_inputs.COVERAGE_TABLE_KEY
+    ]
+    coverage.append(dict(coverage[0]))
+
+    with pytest.raises(ValueError, match="duplicate check_id"):
+        project_io.parse_project(json.dumps(payload))
+
+    payload = json.loads(project_io.dump_project({}, {}))
+    payload["bridge"]["version"] = bridge_inputs.VERSION + 1
+    with pytest.raises(ValueError, match="schema version"):
+        project_io.parse_project(json.dumps(payload))
 
 
 def test_implicit_fatigue_factor_mode_round_trips_by_dedicated_approval():
@@ -983,6 +1198,7 @@ def test_unknown_scalar_keys_are_dropped():
         "sls_tendon_bond": project_io.DEFAULT_SLS_TENDON_BOND,
         "sls_tendon_xi": project_io.DEFAULT_SLS_TENDON_XI,
         **_v17_crack_defaults(),
+        **_v19_bridge_defaults(),
     }
 
 

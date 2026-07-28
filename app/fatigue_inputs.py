@@ -50,8 +50,19 @@ STRESS_MODELS = (
 
 EC2_2005 = "DS/EN 1992-1-1:2005"
 EC2_2005_DKNA = "DS/EN 1992-1-1:2005 + DK NA:2024"
+EC2_2_2005_AC = "DS/EN 1992-2:2005 + AC:2008"
 EC2_2023 = "DS/EN 1992-1-1:2023"
-EDITIONS = (EC2_2005, EC2_2005_DKNA, EC2_2023)
+EDITIONS = (EC2_2005, EC2_2005_DKNA, EC2_2_2005_AC, EC2_2023)
+
+MINER_BASIS_NOT_ESTABLISHED = "Not established - review required"
+MINER_BASIS_BRIDGE_STANDARD = "EN 1992-2 bridge methodology"
+MINER_BASIS_2023_STANDARD = "EN 1992-1-1:2023 standard"
+MINER_BASIS_PROJECT_ADOPTION = "Approved project-basis adoption"
+MINER_BASES = (
+    MINER_BASIS_NOT_ESTABLISHED,
+    MINER_BASIS_BRIDGE_STANDARD,
+    MINER_BASIS_PROJECT_ADOPTION,
+)
 
 FACTOR_MODE_PRESET = codes.FACTOR_MODE_PRESET
 FACTOR_MODE_OVERRIDE = codes.FACTOR_MODE_OVERRIDE
@@ -85,6 +96,16 @@ FATIGUE_FACTOR_PRESETS = {
         "reference": (
             "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01, "
             "2.4.2.4(1), Table 2.1Na NA and fatigue paragraph"
+        ),
+    },
+    EC2_2_2005_AC: {
+        "gamma_s_base": 1.15,
+        "gamma_c_base": 1.50,
+        "fatigue_multiplier": 1.0,
+        "uses_gamma0_gamma3": False,
+        "reference": (
+            "DS/EN 1992-2:2005 + AC:2008; inherited EN 1992-1-1 "
+            "fatigue material factors"
         ),
     },
     EC2_2023: {

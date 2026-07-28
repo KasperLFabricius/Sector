@@ -12,7 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import result_presentation as presentation  # noqa: E402
-from sector import sls  # noqa: E402
+from sector import bridge, sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -1058,3 +1058,54 @@ def test_multi_case_summary_adds_section_wide_spacing_only_once():
         if row["check"].startswith("Longitudinal minimum reinforcement")
     ]
     assert [row["case"] for row in minimum_rows] == ["PL-A", "PL-B"]
+
+
+def _bridge_snapshot():
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id == "section_analysis"
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+    ))
+
+
+def test_bridge_summary_uses_publication_safe_bound_evidence():
+    payload = _bridge_snapshot()
+    payload["checks"][0]["result"] = "mutated stored result"
+    inp = _inp(
+        design_methodology=bridge.EN1992_2_BASE,
+        mode="",
+    )
+
+    rows = presentation.multi_case_summary_rows(
+        inp,
+        {"bridge_methodology": payload},
+    )
+
+    assert any(
+        row["check"] == "Bridge methodology configuration"
+        and row["status"] == "INVALID"
+        and "fingerprint does not match" in row["note"]
+        for row in rows
+    )
+    assert presentation.overall_summary_status(rows) == "INVALID"

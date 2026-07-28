@@ -354,6 +354,29 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
     assert "termination reason" not in text
 
 
+def test_manual_documents_bridge_methodology_routing_and_limitations():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "DS/EN 1992-2:2005 + AC:2008 bridge methodology",
+        "whole-calculation methodology",
+        "Inherited",
+        "Overridden",
+        "Added",
+        "Not assessed",
+        "Method-b tensile region",
+        "one common",
+        "web/flange",
+        "Table 7.101N",
+        "Response duration and SLS combination class are separate",
+        "quasi-permanent response",
+        "unrelated calculated response",
+        "approved project-basis adoption",
+        "Bridge Methodology",
+        "cannot retain a stronger report verdict",
+    ):
+        assert expected in text
+
+
 def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
     result, properties, gamma_s = manual.example_fatigue_reinforcement()
     assert result["element_id"] == "R1"

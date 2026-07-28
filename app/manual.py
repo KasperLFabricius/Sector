@@ -452,6 +452,12 @@ def manual_blocks() -> list:
          "mixed-edition calculation. The 2023 shear methods with and without links "
          "and the refined crack model are implemented. Torsion and combined M-V-T "
          "remain on the 2005 family and are identified as such.")
+    call("standard", "The selectable **DS/EN 1992-2:2005 + AC:2008 bridge "
+         "methodology** is a fail-closed whole-calculation gate. It records which "
+         "DS/EN 1992-1-1:2004 provisions are inherited, which bridge provisions "
+         "override or add to them, and which required bridge topics Sector does not "
+         "assess. A PASS is therefore limited to the explicitly resolved coverage "
+         "matrix; it is never a claim of complete bridge design.")
 
     h2("What Sector computes - at a glance")
     md("- **Plastic bending capacity.** The biaxial $M_x$-$M_y$ interaction "
@@ -539,8 +545,9 @@ def manual_blocks() -> list:
        "These previews update live. The **Analysis** page contains only "
        "calculated results selected with the **View** dropdown.")
     table(["View", "Shows"],
-          [["Results Overview", "All cases, statuses, criteria and governing checks"],
-           ["Plastic Results", "Selected case: M-M envelope and utilisation"],
+           [["Results Overview", "All cases, statuses, criteria and governing checks"],
+            ["Bridge Methodology", "Bridge coverage, applicability, evidence and blocking limitations"],
+            ["Plastic Results", "Selected case: M-M envelope and utilisation"],
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
            ["Fatigue Results", "All spectra; selected spectrum, element, fibre and bin evidence"],
@@ -555,9 +562,11 @@ def manual_blocks() -> list:
 
     h1("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
-       "load cases and provenance. Loading a project restores its inputs and clears "
-       "earlier results; press *Calculate* to create current results. Compatible "
-       "older files are migrated when loaded.")
+       "load cases, bridge applicability/evidence tables and provenance. Loading a "
+       "project restores its inputs and clears earlier results; press *Calculate* "
+       "to create current results. Compatible older files are migrated when loaded. "
+       "A pre-bridge project cannot inherit a bridge-method selection or unresolved "
+       "applicability from the current session.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
@@ -725,6 +734,26 @@ def manual_blocks() -> list:
          "beam webs, lap length and bundle verification remain separate detailing "
          "reviews. Ordinary bars are assumed anchored to develop the entered "
          "$f_{yk}$; reduce it where the force cannot be developed.")
+    h2("Bridge methodology")
+    md("Select **DS/EN 1992-2:2005 + AC:2008** under the whole-calculation "
+       "methodology to activate the bridge-base gate. Every mandatory coverage row "
+       "must be set to **Required** or **Not applicable**; a not-applicable decision "
+       "requires a project-basis source. Missing decisions, unsupported required "
+       "topics, incompatible component editions, or incomplete evidence produce "
+       "**NOT ASSESSED / REVIEW** rather than an inferred pass.")
+    table(["Relationship", "Bridge-base treatment"],
+          [["Inherited", "2005-family cross-section/material analysis, ordinary member shear and reinforcement fatigue, with explicit compatibility/provenance"],
+           ["Overridden", "Box-wall shear plus torsion, bridge SLS stress and crack/decompression routing, and separate web/flange minimum crack reinforcement"],
+           ["Added", "Prestressed brittle-failure avoidance and the corrected bridge concrete-fatigue life equation"],
+           ["Not assessed", "Shear/torsion fatigue, member deflection and segmental-joint provisions; if required they block the methodology conclusion"]])
+    md("The bridge evidence tables record each Method-b tensile region "
+       "($M_{rep}$, $z_s$, $f_{yk}$ and provided steel), every declared box wall "
+       "with one common $\\cot\\theta$, and web/flange crack-minimum data separately. "
+       "The expected wall count, bridge shear scope, exposure and applicability "
+       "sources are persisted with project, calculation record, autosave and report. "
+       "A required Method a/c, bridge interface model or other unsupported branch is "
+       "reported as not assessed; Sector does not silently replace it with Method b "
+       "or ordinary member shear.")
     h2("Crack width")
     md("Tick **Crack width** on each Elastic table row that requires acceptance. "
        "If any row is ticked, the global crack settings apply to every ticked row. "
@@ -734,12 +763,21 @@ def manual_blocks() -> list:
        "and -- for the DK NA -- the member type are the inputs.")
     table(["Crack-width code", "What it changes"],
           [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
+           ["DS/EN 1992-2:2005", "The base 2005 crack model with bridge member/exposure acceptance routed by Table 7.101N"],
            ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
     call("standard", "The DK NA reports the fine and the coarse crack system side "
          "by side, each for the sustained and total (long + short) response "
          "(four crack widths). "
          "Part C derives every model in full with the worked crack width.")
+    call("standard", "Response duration and SLS combination class are separate. "
+         "For the bridge base, Table 7.101N routes ordinary reinforced/unbonded "
+         "width acceptance to the quasi-permanent response and bonded-prestress "
+         "criteria to the required frequent width/decompression and, where stated, "
+         "quasi-permanent decompression response. An unrelated calculated response "
+         "remains informational and cannot govern that criterion. Missing, duplicate "
+         "or non-unique required-combination evidence blocks the verdict; crack-history "
+         "selection remains separate from acceptance routing.")
     h2("Grouped fatigue")
     md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
        "**Reinforcement** and/or **Concrete**. The edition-derived factor source "
@@ -755,7 +793,11 @@ def manual_blocks() -> list:
        "**Damage-equivalent stress amplitude**. The explicit method uses every "
        "entered cycle count. For the equivalent method, each row's long/total "
        "action pair must already represent an equivalent amplitude for $10^6$ "
-       "cycles; its Cycles value is ignored for concrete.")
+       "cycles; its Cycles value is ignored for concrete. The corrected explicit "
+       "2005 Miner life equation belongs to the DS/EN 1992-2 bridge edition. Under "
+       "ordinary DS/EN 1992-1-1:2005 it is available only as an explicitly approved "
+       "project-basis adoption with its own source and warning; it is never labelled "
+       "as an ordinary 1-1 provision.")
     table(["Input", "Use"],
           [["$\\gamma_{Ff}$", "Factors the cyclic action increment before the elastic solve"],
            ["$\\gamma_s$", "Reduces the reinforcement S-N resistance and yield/proof limit"],
@@ -777,10 +819,12 @@ def manual_blocks() -> list:
        "required evidence produces **Review**, not an unstated assumption.")
     table(["Fatigue edition", "Implemented resistance basis"],
           [["DS/EN 1992-1-1:2005",
-            "Steel 6.8.4 and Tables 6.3N/6.4N; concrete 6.72 equivalent method or corrected DS/EN 1992-2 6.106 Miner method"],
-           ["DS/EN 1992-1-1:2005 + DK NA:2024",
-            "Same models; preset gamma_s,fat = 1.20 x 1.10 x gamma0 x gamma3 and gamma_c,fat = 1.45 x 1.10 x gamma0 x gamma3"],
-           ["DS/EN 1992-1-1:2023",
+            "Steel 6.8.4 and Tables 6.3N/6.4N; concrete 6.72 equivalent method; bridge 6.106 Miner only by approved project-basis adoption"],
+            ["DS/EN 1992-1-1:2005 + DK NA:2024",
+            "Same ownership rule; preset gamma_s,fat = 1.20 x 1.10 x gamma0 x gamma3 and gamma_c,fat = 1.45 x 1.10 x gamma0 x gamma3"],
+            ["DS/EN 1992-2:2005 + AC:2008",
+             "Inherited reinforcement fatigue plus bridge-owned corrected Expression 6.106 concrete Miner method"],
+            ["DS/EN 1992-1-1:2023",
             "Reinforcement Annex E.5 and Tables E.1/E.2; concrete E.2 equivalent method or E.7-E.8 Miner method"]])
     call("limit", "Each named spectrum is assessed independently. Sector does not "
          "combine spectra or derive traffic cycles, dynamic allowance or lane/track "
@@ -1008,7 +1052,11 @@ def manual_blocks() -> list:
        "evidence, factors, references and provenance. Zero-action checks remain "
        "visible as not applicable and are not given a false result. The optional "
        "QA appendix adds one consolidated chapter of standards references and "
-       "implementation notes.")
+       "implementation notes. When the bridge methodology is active, a dedicated "
+       "chapter publishes the canonical inherited/overridden/added/not-assessed "
+       "coverage matrix, every applicability/check result, its source and all "
+       "blocking limitations. Missing or malformed stored bridge evidence is "
+       "downgraded at publication and cannot retain a stronger report verdict.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -1456,10 +1504,13 @@ def manual_blocks() -> list:
        "The applied method and adjustment are reported for every bin.")
 
     h2("Concrete compression fatigue")
-    md("The fatigue strength is edition-specific. For the 2005 family Sector uses "
-       "the corrected DS/EN 1992-2 expression\n\n"
+    md("The fatigue strength is edition-specific. The DS/EN 1992-2:2005 + AC:2008 "
+       "bridge methodology owns the corrected bridge expression\n\n"
        "$$f_{cd,fat}=k_1\\,\\beta_{cc}(t_0)\\,\\alpha_{cc}"
        "\\frac{f_{ck}}{\\gamma_{c,fat}}\\left(1-\\frac{f_{ck}}{250}\\right).$$\n\n"
+       "Ordinary DS/EN 1992-1-1:2005 may use this explicit Miner model only through "
+       "an approved project-basis adoption that records its authority source and "
+       "retains the adoption warning. "
        "For 2023:\n\n"
        "$$\\eta_{cc}=\\min\\left[\\left(\\frac{40}{f_{ck}}\\right)^{1/3},1\\right],"
        "\\quad\\eta_{cc,fat}=\\min(0.85\\eta_{cc},0.8),\\quad "
@@ -1488,15 +1539,19 @@ def manual_blocks() -> list:
 
     h2("Edition and scope summary")
     table(["Edition", "Reinforcement", "Concrete", "Mixed bond"],
-          [["DS/EN 1992-1-1:2005",
-            "6.8.4; Tables 6.3N/6.4N",
-           "6.72 equivalent or corrected DS/EN 1992-2:2005/AC:2008 6.106 Miner",
-            "6.8.2(2) eta correction"],
-           ["DS/EN 1992-1-1:2005 + DK NA:2024",
-            "Same method; derived or approved Danish final factors",
-            "Same selectable methods; derived or approved Danish final factors",
-            "6.8.2(2) eta correction"],
-           ["DS/EN 1992-1-1:2023",
+           [["DS/EN 1992-1-1:2005",
+             "6.8.4; Tables 6.3N/6.4N",
+             "6.72 equivalent; bridge 6.106 Miner only by approved project adoption",
+             "6.8.2(2) eta correction"],
+            ["DS/EN 1992-1-1:2005 + DK NA:2024",
+             "Same method; derived or approved Danish final factors",
+             "6.72 equivalent; bridge Miner adoption requires separate authority source",
+             "6.8.2(2) eta correction"],
+            ["DS/EN 1992-2:2005 + AC:2008",
+             "Inherited 1-1 6.8 reinforcement method",
+             "Bridge-owned corrected 6.106 Miner or inherited 6.72 equivalent method",
+             "Inherited 6.8.2(2) eta correction"],
+            ["DS/EN 1992-1-1:2023",
             "Annex E.5; Tables E.1/E.2",
             "E.2 equivalent or E.7-E.8 Miner",
             "10.3(2) equivalent tendon area"]])
@@ -1736,6 +1791,11 @@ def manual_blocks() -> list:
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
            ["Reinforcement fatigue (2005)", "DS/EN 1992-1-1:2005+A1:2014 6.8.2, 6.8.4 and Tables 6.3N/6.4N"],
            ["Concrete fatigue (2005)", "DS/EN 1992-1-1:2005 6.8.7 / Formula (6.72); DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
+            ["Bridge methodology relationship", "DS/EN 1992-2:2005 1.1.2 and clause-by-clause inheritance from DS/EN 1992-1-1:2004"],
+            ["Bridge prestress brittle failure", "DS/EN 1992-2:2005 5.10.1(106) and 6.1(109)-(110)"],
+            ["Bridge box-wall shear/torsion", "DS/EN 1992-2:2005 6.3.2(101)-(104); AC:2008"],
+            ["Bridge SLS stress/crack criteria", "DS/EN 1992-2:2005 7.2(102), 7.3.1(105) and Table 7.101N"],
+            ["Bridge web/flange crack minimum", "DS/EN 1992-2:2005 7.3.2(102)-(105); AC:2008"],
            ["Reinforcement fatigue (2023)", "DS/EN 1992-1-1:2023 Annex E.5 and Tables E.1/E.2"],
            ["Concrete fatigue (2023)", "DS/EN 1992-1-1:2023 E.4.3 / Formula (E.2); E.5.3 / Formulae (E.7)-(E.8)"],
            ["Minimum reinforcement (2005 / DK NA)", "DS/EN 1992-1-1 9.2.1.1(1), Formula (9.1N); DK NA:2024"],
@@ -1766,6 +1826,11 @@ def manual_blocks() -> list:
        "owns the cycle spectrum, dynamic effects, concurrence, authority "
        "adjustments and approvals; provenance fields document them but do not "
        "modify the calculation. Shear and torsion fatigue are not included.\n"
+       "- **Bridge-methodology scope.** The bridge gate covers only the explicit "
+       "coverage matrix and evidence published with the result. Required shear/"
+       "torsion fatigue, member deflection, segmental joints, unsupported brittle "
+       "methods or bridge interface models remain NOT ASSESSED and prevent an "
+       "overall PASS.\n"
        "- **Detailing scope.** The modelled-direction check does not credit tendons and "
        "does not verify the DK NA high-web side-face rule. The clear-spacing check "
        "uses the entered section-plane geometry; anchorage, lap length, bundle "
@@ -2194,7 +2259,11 @@ def build_manual_pdf(buffer, figures=True):
                      for h in headers]]
             data += [[Paragraph(_inline_md_to_rl(str(c)), styles["MSmall"]) for c in row]
                      for row in rows]
-            t = Table(data, colWidths=[page_w / ncol] * ncol)
+            t = Table(
+                data,
+                colWidths=[page_w / ncol] * ncol,
+                repeatRows=1,
+            )
             t.setStyle(TableStyle([
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
