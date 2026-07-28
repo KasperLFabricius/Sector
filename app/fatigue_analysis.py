@@ -86,6 +86,28 @@ def _json_equivalent(left, right) -> bool:
         return False
 
 
+def _numeric_equivalent(left, right) -> bool:
+    """Compare finite real evidence without equating Booleans to numbers."""
+
+    if conformance.is_boolean(left) or conformance.is_boolean(right):
+        return False
+    try:
+        left_value = float(left)
+        right_value = float(right)
+    except (TypeError, ValueError):
+        return False
+    return (
+        math.isfinite(left_value)
+        and math.isfinite(right_value)
+        and math.isclose(
+            left_value,
+            right_value,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        )
+    )
+
+
 @dataclass(frozen=True)
 class PreparedFatigueAnalysis:
     """Validated, solver-ready fatigue input in canonical element order."""
@@ -521,6 +543,218 @@ def bridge_publication_context(inp: Mapping | None) -> dict:
         "parameter_conformance": list(parameter_records),
         "errors": list(dict.fromkeys(errors)),
     }
+
+
+def bridge_result_context_errors(
+    payload: Mapping | None,
+    context: Mapping | None,
+    *,
+    check_key: str,
+) -> tuple[str, ...]:
+    """Correlate calculated fatigue evidence with current bridge inputs.
+
+    The fatigue payload is independently self-validating, but that cannot prove
+    that it was calculated from the inputs which are current now. This adapter
+    gate binds the complete active factor/method record set to the same
+    canonical context used by bridge publication.
+    """
+
+    if check_key not in {"reinforcement", "concrete"}:
+        return ("bridge fatigue adapter check is missing or unknown",)
+    current, context_errors = bridge.validate_fatigue_publication_context(
+        context,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
+    errors = list(context_errors)
+    if not isinstance(payload, Mapping):
+        errors.append("calculated fatigue evidence is missing or malformed")
+        return tuple(dict.fromkeys(errors))
+    if current is None:
+        return tuple(dict.fromkeys(errors))
+
+    payload_checks = payload.get("checks")
+    if (
+        not isinstance(payload_checks, Mapping)
+        or set(payload_checks) != {"reinforcement", "concrete"}
+        or not all(
+            isinstance(payload_checks.get(key), bool)
+            for key in ("reinforcement", "concrete")
+        )
+    ):
+        errors.append(
+            "calculated fatigue check selection is missing or malformed"
+        )
+    elif not _json_equivalent(
+        dict(payload_checks),
+        current["checks"],
+    ):
+        errors.append(
+            "calculated fatigue check selection conflicts with current "
+            "fatigue inputs"
+        )
+    current_enabled = current["checks"].get(check_key)
+    payload_enabled = (
+        payload_checks.get(check_key)
+        if isinstance(payload_checks, Mapping)
+        else None
+    )
+    if current_enabled is not True and payload_enabled is True:
+        errors.append(
+            f"current bridge inputs do not enable {check_key} fatigue"
+        )
+    if (
+        payload.get("design_methodology")
+        != current["design_methodology"]
+    ):
+        errors.append(
+            "calculated fatigue evidence is not bound to the current "
+            "EN 1992-2 whole-calculation methodology"
+        )
+    if payload.get("edition") != current["edition"]:
+        errors.append(
+            "calculated fatigue edition conflicts with current fatigue inputs"
+        )
+
+    expected_ids = []
+    if current["checks"]["reinforcement"]:
+        expected_ids.append("fatigue.gamma_s")
+    if current["checks"]["concrete"]:
+        expected_ids.extend((
+            "fatigue.gamma_c",
+            "concrete_fatigue.miner_c",
+        ))
+    expected_records = [
+        current["records_by_id"][parameter_id]
+        for parameter_id in expected_ids
+    ]
+    if not _json_equivalent(
+        payload.get("parameter_conformance"),
+        expected_records,
+    ):
+        errors.append(
+            "calculated fatigue parameter records conflict with current "
+            "fatigue factor/method conformance"
+        )
+
+    factor_basis = payload.get("factor_basis")
+    partial_factors = payload.get("partial_factors")
+    if not isinstance(factor_basis, Mapping):
+        errors.append("calculated fatigue factor basis is malformed")
+    if not isinstance(partial_factors, Mapping):
+        errors.append("calculated fatigue partial factors are malformed")
+    if isinstance(factor_basis, Mapping):
+        if factor_basis.get("mode") != current["factor_mode"]:
+            errors.append(
+                "calculated fatigue factor mode conflicts with current "
+                "fatigue factor mode"
+            )
+        if (
+            factor_basis.get("approval_reference")
+            != current["factor_approval"]
+        ):
+            errors.append(
+                "calculated fatigue factor approval conflicts with current "
+                "fatigue factor approval"
+            )
+        factor_records = factor_basis.get("parameter_conformance")
+        if not isinstance(factor_records, Mapping):
+            errors.append(
+                "calculated fatigue factor conformance is malformed"
+            )
+        else:
+            for factor_key, parameter_id in (
+                ("gamma_s", "fatigue.gamma_s"),
+                ("gamma_c", "fatigue.gamma_c"),
+            ):
+                if parameter_id not in current["records_by_id"]:
+                    continue
+                expected_record = current["records_by_id"][parameter_id]
+                if not _json_equivalent(
+                    factor_records.get(factor_key),
+                    expected_record,
+                ):
+                    errors.append(
+                        f"calculated fatigue {factor_key} conformance "
+                        "conflicts with current fatigue factor conformance"
+                    )
+                expected_value = expected_record.get("actual_value")
+                if not _numeric_equivalent(
+                    factor_basis.get(factor_key),
+                    expected_value,
+                ):
+                    errors.append(
+                        f"calculated fatigue {factor_key} conflicts with "
+                        "current fatigue factor value"
+                    )
+                if (
+                    isinstance(partial_factors, Mapping)
+                    and not _numeric_equivalent(
+                        partial_factors.get(factor_key),
+                        expected_value,
+                    )
+                ):
+                    errors.append(
+                        f"calculated fatigue partial factor {factor_key} "
+                        "conflicts with current fatigue factor value"
+                    )
+
+    if current["checks"]["concrete"]:
+        for payload_key, current_key, label in (
+            ("concrete_method", "concrete_method", "method"),
+            (
+                "concrete_miner_basis",
+                "concrete_miner_basis",
+                "Miner basis conformance",
+            ),
+            (
+                "concrete_miner_source",
+                "concrete_miner_source",
+                "Miner source/approval",
+            ),
+        ):
+            if payload.get(payload_key) != current[current_key]:
+                errors.append(
+                    f"calculated concrete-fatigue {label} conflicts with "
+                    "current fatigue inputs"
+                )
+        concrete_parameters = payload.get("concrete_parameters")
+        expected_miner = current["records_by_id"].get(
+            "concrete_fatigue.miner_c"
+        )
+        if not isinstance(concrete_parameters, Mapping):
+            errors.append(
+                "calculated concrete-fatigue parameters are malformed"
+            )
+        else:
+            if (
+                concrete_parameters.get("method")
+                != current["concrete_method"]
+            ):
+                errors.append(
+                    "calculated concrete-fatigue parameter method conflicts "
+                    "with current fatigue inputs"
+                )
+            if not _numeric_equivalent(
+                concrete_parameters.get("c"),
+                (
+                    expected_miner.get("actual_value")
+                    if isinstance(expected_miner, Mapping)
+                    else None
+                ),
+            ):
+                errors.append(
+                    "current and calculated concrete Miner coefficients "
+                    "conflict"
+                )
+            if not _json_equivalent(
+                concrete_parameters.get("parameter_conformance"),
+                expected_miner,
+            ):
+                errors.append(
+                    "calculated concrete Miner conformance conflicts with "
+                    "current fatigue inputs"
+                )
+    return tuple(dict.fromkeys(errors))
 
 
 def calculation_references(

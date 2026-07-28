@@ -1501,7 +1501,7 @@ def assess_base_methodology(evidence: BridgeBaseEvidence) -> dict[str, Any]:
     })
 
 
-def _validated_fatigue_publication_context(
+def validate_fatigue_publication_context(
     context: Mapping | None,
     *,
     design_methodology: str | None,
@@ -2039,7 +2039,7 @@ def publication_safe_record(
     (
         validated_fatigue_context,
         fatigue_context_errors,
-    ) = _validated_fatigue_publication_context(
+    ) = validate_fatigue_publication_context(
         fatigue_context,
         design_methodology=EN1992_2_BASE,
     )

@@ -790,3 +790,34 @@ mandatory; this matrix does not self-certify PR closure.
   publication closed. The obsolete exact-head AppTest was stopped; all 109
   direct bridge/adapter checks and all 548 affected checks pass before the next
   immutable remediation head.
+- Exact head `b7502d14c7f32406b71434e2c840c6085b7a7f30` subsequently passed
+  the 548-check affected slice, 277 Streamlit checks, 115 ASCII/version checks,
+  complete GitHub CI (2,095 tests; one known skip), reproducible package-content
+  verification without launching the executable, and Codex Review with zero
+  unresolved threads. Independent QA nevertheless rejected that immutable head:
+  the later bridge-publication sanitizer correctly rejected stale factor
+  records, but the earlier raw/headless bridge-fatigue adapters compared only
+  methodology, edition, enablement and concrete Miner context. A self-consistent
+  standard payload with `gamma_c = 1.50` could therefore produce a direct
+  selected-standard PASS beside current approved `gamma_c = 2.0` inputs before
+  any publication wrapper was called.
+- Both fatigue adapters now reconstruct the same schema-versioned
+  `bridge_publication_context` used by durable publication and pass it through
+  the shared context validator. Before emitting a calculated row, one canonical
+  correlation gate requires the exact active check set, methodology, edition,
+  factor mode/approval, active factor values and records, concrete method, Miner
+  coefficient/basis/source and complete ordered parameter-record set. A stale,
+  omitted or substituted field returns adapter/check `INVALID` and makes the raw
+  bridge aggregate `INVALID`, so no assessed engineering PASS is emitted;
+  matching approved custom factors `0.5`/`2.0`, matching missing-approval
+  overrides, and a sourced project S-N relation with `C = 100` remain calculated
+  `REVIEW` evidence rather than being replaced or mislabeled as a standard PASS.
+- The focused adapter matrix passes 45 checks, including both fatigue families,
+  isolated value/mode/approval drift, omitted records, a stale custom Miner
+  source, matching custom controls and raw otherwise-full-PASS bridge
+  assessments. The bridge/fatigue/publication/project affected slice passes all
+  311 checks, and the complete affected bridge/fatigue/project/report/manual
+  slice passes all 564 checks. Nine focused Streamlit live/durable controls and
+  all 115 ASCII/version controls also pass. Exact-head external review, full CI,
+  complete Streamlit, artifact and package gates must be repeated after the
+  remediation commit.

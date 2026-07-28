@@ -584,89 +584,12 @@ def _bridge_fatigue_context_errors(
     *,
     check_key: str,
 ) -> tuple[str, ...]:
-    errors = []
-    if payload.get("design_methodology") != bridge.EN1992_2_BASE:
-        errors.append(
-            "calculated fatigue evidence is not bound to the EN 1992-2 "
-            "whole-calculation methodology"
-        )
-    if payload.get("edition") != fatigue_inputs.EC2_2_2005_AC:
-        errors.append("calculated fatigue edition is not the EN 1992-2 bridge edition")
-    if inp is not None:
-        if inp.get("design_methodology") != bridge.EN1992_2_BASE:
-            errors.append(
-                "current inputs do not select the EN 1992-2 "
-                "whole-calculation methodology"
-            )
-        if _typed_bool(inp.get("fatigue_on")) is not True:
-            errors.append("current bridge inputs do not enable fatigue")
-        input_flag = (
-            "fatigue_check_steel"
-            if check_key == "reinforcement"
-            else "fatigue_check_concrete"
-        )
-        if _typed_bool(inp.get(input_flag)) is not True:
-            errors.append(
-                f"current bridge inputs do not enable {check_key} fatigue"
-            )
-        if inp.get("fatigue_edition") != fatigue_inputs.EC2_2_2005_AC:
-            errors.append(
-                "current fatigue edition is not the EN 1992-2 bridge edition"
-            )
-    if check_key == "concrete":
-        calculated_method = payload.get("concrete_method")
-        if calculated_method not in fatigue_analysis.CONCRETE_MINER_METHODS:
-            errors.append(
-                "calculated concrete fatigue method is not a Miner/S-N method"
-            )
-        if (
-            inp is not None
-            and inp.get("fatigue_concrete_method") != calculated_method
-        ):
-            errors.append(
-                "current and calculated concrete fatigue methods conflict"
-            )
-        concrete_parameters = payload.get("concrete_parameters")
-        calculated_c = (
-            concrete_parameters.get("c")
-            if isinstance(concrete_parameters, Mapping)
-            else None
-        )
-        if inp is not None:
-            input_c = inp.get("fatigue_concrete_c")
-            if (
-                isinstance(input_c, bool)
-                or type(input_c).__name__ == "bool_"
-                or _finite(input_c) is None
-                or float(input_c) <= 0.0
-            ):
-                errors.append(
-                    "current bridge concrete Miner coefficient is numerically "
-                    "invalid"
-                )
-            elif (
-                _finite(calculated_c) is not None
-                and not math.isclose(
-                    float(input_c),
-                    float(calculated_c),
-                    rel_tol=0.0,
-                    abs_tol=1.0e-12,
-                )
-            ):
-                errors.append(
-                    "current and calculated concrete Miner coefficients conflict"
-                )
-        if (
-            isinstance(calculated_c, bool)
-            or type(calculated_c).__name__ == "bool_"
-            or _finite(calculated_c) is None
-            or float(calculated_c) <= 0.0
-        ):
-            errors.append(
-                "calculated bridge concrete Miner coefficient is numerically "
-                "invalid"
-            )
-    return tuple(errors)
+    context = fatigue_analysis.bridge_publication_context(inp)
+    return fatigue_analysis.bridge_result_context_errors(
+        payload,
+        context,
+        check_key=check_key,
+    )
 
 
 def reinforcement_fatigue_evidence(
@@ -703,12 +626,6 @@ def reinforcement_fatigue_evidence(
             source="DS/EN 1992-1-1:2004 clauses 6.8.4-6.8.6, inherited",
             reason="Reinforcement fatigue enablement is not typed Boolean evidence.",
         )
-    if not enabled:
-        return bridge.ExternalEvidence(
-            status=bridge.STATUS_NOT_RUN,
-            source="DS/EN 1992-1-1:2004 clauses 6.8.4-6.8.6, inherited",
-            reason="The reinforcement fatigue check is disabled.",
-        )
     context_errors = _bridge_fatigue_context_errors(
         inp,
         payload,
@@ -719,6 +636,12 @@ def reinforcement_fatigue_evidence(
             status=bridge.STATUS_INVALID,
             source="DS/EN 1992-1-1:2004 clauses 6.8.4-6.8.6, inherited",
             reason="; ".join(context_errors),
+        )
+    if not enabled:
+        return bridge.ExternalEvidence(
+            status=bridge.STATUS_NOT_RUN,
+            source="DS/EN 1992-1-1:2004 clauses 6.8.4-6.8.6, inherited",
+            reason="The reinforcement fatigue check is disabled.",
         )
     rows = []
     factor_basis = payload.get("factor_basis")
@@ -840,12 +763,6 @@ def concrete_fatigue_evidence(
             source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
             reason="Concrete fatigue enablement is not typed Boolean evidence.",
         )
-    if not enabled:
-        return bridge.ExternalEvidence(
-            status=bridge.STATUS_NOT_RUN,
-            source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
-            reason="The concrete fatigue check is disabled.",
-        )
     context_errors = _bridge_fatigue_context_errors(
         inp,
         payload,
@@ -856,6 +773,12 @@ def concrete_fatigue_evidence(
             status=bridge.STATUS_INVALID,
             source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
             reason="; ".join(context_errors),
+        )
+    if not enabled:
+        return bridge.ExternalEvidence(
+            status=bridge.STATUS_NOT_RUN,
+            source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
+            reason="The concrete fatigue check is disabled.",
         )
     concrete_parameters = payload.get("concrete_parameters")
     if not isinstance(concrete_parameters, Mapping):

@@ -67,28 +67,51 @@ def _base_input(**changes):
     return value
 
 
-def _bridge_miner_payload(*, coefficient=14.0):
+def _bridge_fatigue_payload(
+    *,
+    coefficient=14.0,
+    reinforcement=False,
+    concrete=True,
+    factor_mode=fatigue_inputs.FACTOR_MODE_PRESET,
+    factor_approval="",
+    gamma_s=1.15,
+    gamma_c=1.50,
+    concrete_method=fatigue_analysis.CONCRETE_MINER,
+    miner_basis=fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+    miner_source="",
+):
     edition = fatigue_inputs.EC2_2_2005_AC
     gamma_s, gamma_c, factor_basis = (
         fatigue_inputs.resolve_fatigue_factors(
             edition,
-            mode=fatigue_inputs.FACTOR_MODE_PRESET,
-            gamma_s=1.15,
-            gamma_c=1.50,
+            mode=factor_mode,
+            gamma_s=gamma_s,
+            gamma_c=gamma_c,
+            approval_reference=factor_approval,
         )
     )
-    miner = fatigue_analysis.concrete_miner_conformance(
-        edition=edition,
-        concrete_method=fatigue_analysis.CONCRETE_MINER,
-        miner_basis=fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
-        miner_source="",
-        coefficient_c=coefficient,
-        design_methodology=bridge.EN1992_2_BASE,
+    miner = (
+        fatigue_analysis.concrete_miner_conformance(
+            edition=edition,
+            concrete_method=concrete_method,
+            miner_basis=miner_basis,
+            miner_source=miner_source,
+            coefficient_c=coefficient,
+            design_methodology=bridge.EN1992_2_BASE,
+        )
+        if concrete
+        else None
     )
-    records = (
-        factor_basis["parameter_conformance"]["gamma_c"],
-        miner,
-    )
+    records = []
+    if reinforcement:
+        records.append(
+            factor_basis["parameter_conformance"]["gamma_s"]
+        )
+    if concrete:
+        records.extend((
+            factor_basis["parameter_conformance"]["gamma_c"],
+            miner,
+        ))
     aggregate = conformance.aggregate(
         records,
         analytical_status=conformance.STATUS_PASS,
@@ -101,12 +124,13 @@ def _bridge_miner_payload(*, coefficient=14.0):
         "passed": True,
         "edition": edition,
         "design_methodology": bridge.EN1992_2_BASE,
-        "checks": {"reinforcement": False, "concrete": True},
-        "concrete_method": fatigue_analysis.CONCRETE_MINER,
-        "concrete_miner_basis": (
-            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-        ),
-        "concrete_miner_source": "",
+        "checks": {
+            "reinforcement": reinforcement,
+            "concrete": concrete,
+        },
+        "concrete_method": concrete_method if concrete else None,
+        "concrete_miner_basis": miner_basis if concrete else None,
+        "concrete_miner_source": miner_source if concrete else "",
         "partial_factors": {
             "gamma_s": gamma_s,
             "gamma_c": gamma_c,
@@ -120,24 +144,91 @@ def _bridge_miner_payload(*, coefficient=14.0):
         "standard_passed": (
             aggregate["state"] == conformance.STATE_CONFORMS
         ),
-        "concrete_parameters": {
-            "c": coefficient,
-            "method": fatigue_analysis.CONCRETE_MINER,
-            "parameter_conformance": miner,
-        },
+        "concrete_parameters": (
+            {
+                "c": coefficient,
+                "method": concrete_method,
+                "parameter_conformance": miner,
+            }
+            if concrete
+            else None
+        ),
         "calculation_references": {
-            "concrete": "EN 1992-2 corrected Expression (6.106)",
+            **(
+                {"reinforcement": "EN 1992-1-1 inherited fatigue method"}
+                if reinforcement
+                else {}
+            ),
+            **(
+                {"concrete": "EN 1992-2 corrected Expression (6.106)"}
+                if concrete
+                else {}
+            ),
         },
         "spectra": [{
             "spectrum_name": "Traffic",
-            "concrete": [{
-                "fibre_index": 0,
-                "converged": True,
-                "passed": True,
-                "utilisation": 0.5,
-            }],
+            "reinforcement": (
+                [{
+                    "element_id": "R1",
+                    "kind": "mild",
+                    "detail_id": "D1",
+                    "converged": True,
+                    "passed": True,
+                    "damage_utilisation": 0.40,
+                    "yield_utilisation": 0.30,
+                    "utilisation": 0.40,
+                }]
+                if reinforcement
+                else []
+            ),
+            "concrete": (
+                [{
+                    "fibre_index": 0,
+                    "converged": True,
+                    "passed": True,
+                    "utilisation": 0.5,
+                }]
+                if concrete
+                else []
+            ),
         }],
     }
+
+
+def _bridge_miner_payload(*, coefficient=14.0):
+    return _bridge_fatigue_payload(coefficient=coefficient)
+
+
+def _bridge_fatigue_input(
+    *,
+    reinforcement=False,
+    concrete=True,
+    factor_mode=fatigue_inputs.FACTOR_MODE_PRESET,
+    factor_approval="",
+    gamma_s=1.15,
+    gamma_c=1.50,
+    coefficient=14.0,
+    concrete_method=fatigue_analysis.CONCRETE_MINER,
+    miner_basis=fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+    miner_source="",
+    **changes,
+):
+    value = _base_input(
+        fatigue_on=True,
+        fatigue_check_steel=reinforcement,
+        fatigue_check_concrete=concrete,
+        fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
+        fatigue_factor_mode=factor_mode,
+        fatigue_factor_approval=factor_approval,
+        fatigue_gamma_s=gamma_s,
+        fatigue_gamma_c=gamma_c,
+        fatigue_concrete_method=concrete_method,
+        fatigue_concrete_miner_basis=miner_basis,
+        fatigue_concrete_miner_source=miner_source,
+        fatigue_concrete_c=coefficient,
+    )
+    value.update(changes)
+    return value
 
 
 def _elastic_results(long_combination, total_combination):
@@ -543,6 +634,292 @@ def test_bridge_concrete_fatigue_rejects_mismatched_result_context(
 
 
 @pytest.mark.parametrize(
+    ("adapter", "family", "custom_factors", "payload_options", "parameter_id"),
+    [
+        (
+            bridge_analysis.reinforcement_fatigue_evidence,
+            "reinforcement",
+            {"gamma_s": 0.5, "gamma_c": 1.50},
+            {"reinforcement": True, "concrete": False},
+            "fatigue.gamma_s",
+        ),
+        (
+            bridge_analysis.concrete_fatigue_evidence,
+            "concrete",
+            {"gamma_s": 1.15, "gamma_c": 2.0},
+            {"reinforcement": False, "concrete": True},
+            "fatigue.gamma_c",
+        ),
+    ],
+)
+def test_bridge_fatigue_adapters_bind_current_custom_factor_context(
+    adapter,
+    family,
+    custom_factors,
+    payload_options,
+    parameter_id,
+):
+    current = _bridge_fatigue_input(
+        **payload_options,
+        factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        factor_approval="DB-CURRENT-FACTOR",
+        **custom_factors,
+    )
+    stale_standard = _bridge_fatigue_payload(**payload_options)
+
+    rejected = adapter({"fatigue": stale_standard}, current)
+
+    assert rejected.status == bridge.STATUS_INVALID
+    assert "current fatigue factor" in rejected.reason
+    assert "conflict" in rejected.reason
+
+    matching_custom = _bridge_fatigue_payload(
+        **payload_options,
+        factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        factor_approval="DB-CURRENT-FACTOR",
+        **custom_factors,
+    )
+    accepted = adapter({"fatigue": matching_custom}, current)
+
+    assert accepted.status == bridge.STATUS_REVIEW
+    assert accepted.evidence[0]["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_OVERRIDE
+    )
+    assert accepted.evidence[0]["fatigue_factor_approval"] == (
+        "DB-CURRENT-FACTOR"
+    )
+    records = {
+        record["parameter_id"]: record
+        for record in accepted.evidence[0][
+            "fatigue_parameter_conformance"
+        ]
+    }
+    assert records[parameter_id]["actual_value"] == (
+        custom_factors["gamma_s"]
+        if family == "reinforcement"
+        else custom_factors["gamma_c"]
+    )
+    assert records[parameter_id]["state"] == (
+        conformance.STATE_APPROVED_CUSTOM
+    )
+
+
+@pytest.mark.parametrize(
+    ("adapter", "payload_options", "custom_factors"),
+    [
+        (
+            bridge_analysis.reinforcement_fatigue_evidence,
+            {"reinforcement": True, "concrete": False},
+            {"gamma_s": 0.5, "gamma_c": 1.50},
+        ),
+        (
+            bridge_analysis.concrete_fatigue_evidence,
+            {"reinforcement": False, "concrete": True},
+            {"gamma_s": 1.15, "gamma_c": 2.0},
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("payload_mode", "payload_approval", "reason"),
+    [
+        (
+            fatigue_inputs.FACTOR_MODE_PRESET,
+            "",
+            "factor mode",
+        ),
+        (
+            fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "DB-STALE-APPROVAL",
+            "factor approval",
+        ),
+    ],
+)
+def test_bridge_fatigue_adapters_reject_self_consistent_mode_or_approval_drift(
+    adapter,
+    payload_options,
+    custom_factors,
+    payload_mode,
+    payload_approval,
+    reason,
+):
+    current = _bridge_fatigue_input(
+        **payload_options,
+        factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        factor_approval="DB-CURRENT-APPROVAL",
+        **custom_factors,
+    )
+    stale = _bridge_fatigue_payload(
+        **payload_options,
+        factor_mode=payload_mode,
+        factor_approval=payload_approval,
+        **custom_factors,
+    )
+
+    evidence = adapter({"fatigue": stale}, current)
+
+    assert evidence.status == bridge.STATUS_INVALID
+    assert reason in evidence.reason
+    assert "current fatigue factor" in evidence.reason
+
+
+@pytest.mark.parametrize(
+    ("adapter", "payload_options", "custom_factors", "omitted_id"),
+    [
+        (
+            bridge_analysis.reinforcement_fatigue_evidence,
+            {"reinforcement": True, "concrete": False},
+            {"gamma_s": 0.5, "gamma_c": 1.50},
+            "fatigue.gamma_s",
+        ),
+        (
+            bridge_analysis.concrete_fatigue_evidence,
+            {"reinforcement": False, "concrete": True},
+            {"gamma_s": 1.15, "gamma_c": 2.0},
+            "fatigue.gamma_c",
+        ),
+    ],
+)
+def test_bridge_fatigue_adapters_require_complete_current_parameter_records(
+    adapter,
+    payload_options,
+    custom_factors,
+    omitted_id,
+):
+    current = _bridge_fatigue_input(
+        **payload_options,
+        factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        factor_approval="DB-CURRENT-FACTOR",
+        **custom_factors,
+    )
+    payload = _bridge_fatigue_payload(
+        **payload_options,
+        factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        factor_approval="DB-CURRENT-FACTOR",
+        **custom_factors,
+    )
+    payload["parameter_conformance"] = [
+        record
+        for record in payload["parameter_conformance"]
+        if record["parameter_id"] != omitted_id
+    ]
+
+    evidence = adapter({"fatigue": payload}, current)
+
+    assert evidence.status == bridge.STATUS_INVALID
+    assert "parameter records" in evidence.reason
+    assert "current fatigue factor" in evidence.reason
+
+
+@pytest.mark.parametrize(
+    ("adapter", "current_options", "stale_options"),
+    [
+        (
+            bridge_analysis.reinforcement_fatigue_evidence,
+            {"reinforcement": True, "concrete": False},
+            {"reinforcement": False, "concrete": True},
+        ),
+        (
+            bridge_analysis.concrete_fatigue_evidence,
+            {"reinforcement": False, "concrete": True},
+            {"reinforcement": True, "concrete": False},
+        ),
+    ],
+)
+def test_bridge_fatigue_adapters_reject_stale_disabled_family_payloads(
+    adapter,
+    current_options,
+    stale_options,
+):
+    current = _bridge_fatigue_input(**current_options)
+    stale = _bridge_fatigue_payload(**stale_options)
+
+    evidence = adapter({"fatigue": stale}, current)
+
+    assert evidence.status == bridge.STATUS_INVALID
+    assert "check selection" in evidence.reason
+    assert "current fatigue inputs" in evidence.reason
+
+
+@pytest.mark.parametrize(
+    ("family", "payload_options", "custom_factors", "check_id"),
+    [
+        (
+            "reinforcement",
+            {"reinforcement": True, "concrete": False},
+            {"gamma_s": 0.5, "gamma_c": 1.50},
+            "reinforcement_fatigue",
+        ),
+        (
+            "concrete",
+            {"reinforcement": False, "concrete": True},
+            {"gamma_s": 1.15, "gamma_c": 2.0},
+            "concrete_fatigue",
+        ),
+    ],
+)
+def test_raw_bridge_assess_never_passes_stale_standard_fatigue_factors(
+    family,
+    payload_options,
+    custom_factors,
+    check_id,
+):
+    coverage = _coverage(
+        section_analysis=bridge.REQUIRED,
+        **{check_id: bridge.REQUIRED},
+    )
+    standard_input = _bridge_fatigue_input(
+        **payload_options,
+        **{bridge_inputs.COVERAGE_TABLE_KEY: coverage},
+    )
+    standard_payload = _bridge_fatigue_payload(**payload_options)
+
+    def assess(inp, payload):
+        results = _elastic_results(
+            sls.COMBINATION_CHARACTERISTIC,
+            sls.COMBINATION_QUASI_PERMANENT,
+        )
+        results["fatigue"] = payload
+        record = bridge_analysis.assess(inp, results)
+        check = next(
+            item for item in record["checks"]
+            if item["check_id"] == check_id
+        )
+        return record, check
+
+    standard_record, standard_check = assess(
+        standard_input,
+        standard_payload,
+    )
+    assert standard_record["status"] == bridge.STATUS_PASS
+    assert standard_check["status"] == bridge.STATUS_PASS
+
+    current_custom = {
+        **standard_input,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-CURRENT-FACTOR",
+        "fatigue_gamma_s": custom_factors["gamma_s"],
+        "fatigue_gamma_c": custom_factors["gamma_c"],
+    }
+    stale_record, stale_check = assess(current_custom, standard_payload)
+    assert stale_record["status"] == bridge.STATUS_INVALID
+    assert stale_check["status"] == bridge.STATUS_INVALID
+    assert "current fatigue factor" in stale_check["reason"]
+
+    custom_payload = _bridge_fatigue_payload(
+        **payload_options,
+        factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        factor_approval="DB-CURRENT-FACTOR",
+        **custom_factors,
+    )
+    custom_record, custom_check = assess(current_custom, custom_payload)
+    assert custom_record["status"] == bridge.STATUS_REVIEW
+    assert custom_check["status"] == bridge.STATUS_REVIEW
+    assert custom_check["evidence"][0]["analytical_status"] == (
+        bridge.STATUS_PASS
+    )
+
+
+@pytest.mark.parametrize(
     ("input_c", "result_c"),
     [
         (100.0, 14.0),
@@ -572,6 +949,19 @@ def test_bridge_concrete_fatigue_requires_exact_input_result_correlation(
     assert "current and calculated concrete Miner coefficients conflict" in (
         evidence.reason
     )
+
+
+def test_bridge_concrete_fatigue_correlation_accepts_equal_integer_real_values():
+    inp = _bridge_fatigue_input(coefficient=14.0)
+    payload = _bridge_fatigue_payload(coefficient=14)
+
+    evidence = bridge_analysis.concrete_fatigue_evidence(
+        {"fatigue": payload},
+        inp,
+    )
+
+    assert evidence.status == bridge.STATUS_PASS
+    assert evidence.evidence[0]["miner_coefficient_c"] == 14
 
 
 def test_bridge_concrete_fatigue_c100_is_analytical_review_not_standard_pass():
@@ -615,6 +1005,93 @@ def test_bridge_concrete_fatigue_c100_is_analytical_review_not_standard_pass():
         evidence.evidence[0]["parameter_conformance"]["state"]
         == conformance.STATE_REVIEW
     )
+
+
+def test_bridge_concrete_fatigue_sourced_c100_remains_calculated_custom_review():
+    source = "DB-SN-C100 / checker approval"
+    inp = _bridge_fatigue_input(
+        coefficient=100.0,
+        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        miner_source=source,
+    )
+    payload = _bridge_fatigue_payload(
+        coefficient=100.0,
+        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        miner_source=source,
+    )
+
+    evidence = bridge_analysis.concrete_fatigue_evidence(
+        {"fatigue": payload},
+        inp,
+    )
+
+    assert evidence.status == bridge.STATUS_REVIEW
+    assert evidence.evidence[0]["analytical_status"] == bridge.STATUS_PASS
+    assert evidence.evidence[0]["miner_coefficient_c"] == 100.0
+    assert evidence.evidence[0]["concrete_method"] == (
+        fatigue_analysis.CONCRETE_PROJECT_MINER
+    )
+    assert evidence.evidence[0]["concrete_miner_source"] == source
+    assert evidence.evidence[0]["parameter_conformance"]["state"] == (
+        conformance.STATE_APPROVED_CUSTOM
+    )
+
+
+def test_bridge_concrete_fatigue_rejects_self_consistent_stale_custom_source():
+    current_source = "DB-SN-C100 / current checker approval"
+    stale_source = "DB-SN-C100 / superseded approval"
+    inp = _bridge_fatigue_input(
+        coefficient=100.0,
+        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        miner_source=current_source,
+    )
+    stale = _bridge_fatigue_payload(
+        coefficient=100.0,
+        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        miner_source=stale_source,
+    )
+
+    evidence = bridge_analysis.concrete_fatigue_evidence(
+        {"fatigue": stale},
+        inp,
+    )
+
+    assert evidence.status == bridge.STATUS_INVALID
+    assert "Miner source/approval" in evidence.reason
+    assert "current fatigue inputs" in evidence.reason
+
+
+def test_bridge_fatigue_missing_override_approval_is_review_not_replaced():
+    inp = _bridge_fatigue_input(
+        factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        factor_approval="",
+        gamma_c=2.0,
+    )
+    payload = _bridge_fatigue_payload(
+        factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        factor_approval="",
+        gamma_c=2.0,
+    )
+
+    evidence = bridge_analysis.concrete_fatigue_evidence(
+        {"fatigue": payload},
+        inp,
+    )
+
+    assert evidence.status == bridge.STATUS_REVIEW
+    gamma_record = next(
+        record
+        for record in evidence.evidence[0][
+            "fatigue_parameter_conformance"
+        ]
+        if record["parameter_id"] == "fatigue.gamma_c"
+    )
+    assert gamma_record["actual_value"] == 2.0
+    assert gamma_record["state"] == conformance.STATE_REVIEW
 
 
 def test_bridge_concrete_fatigue_rejects_stale_miner_basis_evidence():
