@@ -1003,8 +1003,9 @@ def publication_safe_calculation_record(
     publication boundary rejected evidence, loading or re-saving the sanitized
     record must not infer a match merely because the rejected field is no longer
     present and the input hash still agrees. ``calculation_inputs`` is the one
-    canonical scalar snapshot used to reconstruct both methodology and bridge
-    fatigue conformance, so callers cannot supply those contexts independently.
+    canonical input snapshot used to reconstruct methodology, bridge fatigue
+    conformance, and Danish crack applicability, so callers cannot supply those
+    contexts independently.
     """
 
     if not isinstance(calculation, Mapping):
@@ -1044,6 +1045,8 @@ def publication_safe_calculation_record(
             record.pop("fatigue_conformance")
             publication_matches = False
     if "bridge_methodology" in calculation:
+        import bridge_analysis
+
         record["bridge_methodology"] = bridge.publication_safe_record(
             calculation.get("bridge_methodology"),
             design_methodology=design_methodology,
@@ -1052,6 +1055,12 @@ def publication_safe_calculation_record(
                 current_inputs
             ),
             danish_fck_mpa=bridge_inputs.danish_fck_mpa(current_inputs),
+            danish_crack_context=(
+                bridge_analysis.danish_crack_publication_context(
+                    current_inputs,
+                    crack_control_record=record.get("crack_control"),
+                )
+            ),
         )
         if record["bridge_methodology"] is None:
             record.pop("bridge_methodology")
@@ -1096,9 +1105,13 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
         },
     }
     if calculation:
+        publication_inputs = dict(content["scalars"])
+        publication_inputs.update(
+            _bridge_tables_from_payload(content.get("bridge"))
+        )
         record = publication_safe_calculation_record(
             calculation,
-            calculation_inputs=content["scalars"],
+            calculation_inputs=publication_inputs,
             input_digest=digest,
         )
         payload["calculation"] = record
@@ -1149,7 +1162,7 @@ def project_provenance(text: str) -> dict:
         raise ValueError("malformed 'fatigue' section")
     if raw_bridge is not None and not isinstance(raw_bridge, dict):
         raise ValueError("malformed 'bridge' section")
-    _bridge_tables_from_payload(raw_bridge)
+    bridge_tables = _bridge_tables_from_payload(raw_bridge)
     canonical_inputs = {"tables": raw_tables, "scalars": raw_scalars}
     if raw_load_cases is not None:
         canonical_inputs["load_cases"] = raw_load_cases
@@ -1166,7 +1179,7 @@ def project_provenance(text: str) -> dict:
     recorded = provenance.get("input_sha256")
     calculation = publication_safe_calculation_record(
         data.get("calculation"),
-        calculation_inputs=raw_scalars,
+        calculation_inputs={**raw_scalars, **bridge_tables},
         input_digest=actual,
     )
     return {

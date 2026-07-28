@@ -940,3 +940,38 @@ mandatory; this matrix does not self-certify PR closure.
   readable without clipping or overlap. Exact remediation SHA, exact-head
   rereview, the single completed GitHub full-suite run and independent reviewer
   disposition are recorded only after those gates actually complete.
+- Codex Review of exact head
+  `93d504d1e0b1afaa3024429f855ca7d42b5d7b7e` found one further P1
+  correlation gap: the stored `sls_crack` and `dk_direct_crack_method` bodies
+  could be altered and re-fingerprinted independently of the canonical current
+  crack result. Two focused red cases reproduced a false Danish PASS for each
+  check. Publication now requires a strict schema-versioned current crack
+  context, reconstructs both check bodies from the current typed applicability
+  decision and independently validated crack evidence, and requires exact body
+  equality. Live UI/summary/report paths build that authority from the current
+  solver response; project publication reconstructs it from the separately
+  sanitized sibling crack-control record and the saved coverage table. Missing,
+  malformed, Boolean, stale or conflicting context rejects publication and the
+  rejection latch survives save-load-resave.
+- The end-to-end control also exposed that the Danish direct-calculation gate
+  compared a legacy literal `durability` with the canonical SLS kind
+  `Durability crack width`. The gate now requires the canonical criterion
+  identity and kind, so a complete current direct width calculation evidences
+  the method even when the width itself fails its limit; the width verdict
+  remains independently PASS/FAIL. The new live-versus-saved control proves
+  identical reconstructed crack bodies, while a re-fingerprinted bridge-body
+  PASS beside an unchanged failing crack sibling is rejected through project
+  load and resave.
+- Post-remediation local evidence is green before the new commit: all 104
+  focused PR-05 rule/oracle/adversarial checks, 139 bridge core/adapter checks,
+  135 project publication and persistence checks, and the three directly
+  affected Streamlit/report/summary boundaries pass. The final bounded combined
+  gate passes 112 checks, including four bridge/Danish crack AppTests. Exact
+  remediation SHA, exact-head rereview and the one completed full GitHub CI gate
+  remain pending.
+- The refreshed focused report is again 15 pages with publication validation
+  `ACCEPTED`. Pages 6-15 were visually inspected across the pre-method boundary,
+  methodology/basis, coverage, check results, bound evidence, limitations and
+  final QA appendix; no clipping or overlap was found. This remediation changes
+  no manual content or pagination, so the already inspected 29-page manual
+  artifact remains the applicable PR-05 documentation evidence.

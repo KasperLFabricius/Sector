@@ -22,6 +22,21 @@ from sector import __version__, bridge, conformance, danish_bridge  # noqa: E402
 from tools import report_render_fixture  # noqa: E402
 
 
+def fixture_decisions() -> tuple[bridge.ApplicabilityDecision, ...]:
+    return tuple(
+        bridge.ApplicabilityDecision(
+            check_id,
+            (
+                bridge.REQUIRED
+                if check_id == "section_analysis"
+                else bridge.NOT_APPLICABLE
+            ),
+            f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+
+
 def fixture_inputs() -> dict:
     """Return a stable, complete Danish basis beside inherited section inputs."""
 
@@ -80,27 +95,29 @@ def fixture_inputs() -> dict:
         "bridge_alpha_ct_custom_methodology": "",
         "bridge_alpha_ct_approval_reference": "",
     })
+    inp[bridge_inputs.COVERAGE_TABLE_KEY] = (
+        bridge_inputs.table_from_records(
+            [
+                {
+                    "check_id": item.check_id,
+                    "applicability": item.applicability,
+                    "source": item.source,
+                    "notes": item.notes,
+                }
+                for item in fixture_decisions()
+            ],
+            bridge_inputs.COVERAGE_TABLE_KEY,
+        )
+    )
     return inp
 
 
 def fixture_record(inp: dict) -> dict:
     """Return the immutable Danish bridge record published by the fixture."""
 
-    decisions = tuple(
-        bridge.ApplicabilityDecision(
-            check_id,
-            (
-                bridge.REQUIRED
-                if check_id == "section_analysis"
-                else bridge.NOT_APPLICABLE
-            ),
-            f"DB-{check_id}",
-        )
-        for check_id in bridge.APPLICABILITY_CHECK_IDS
-    )
     return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
         methodology=bridge.EN1992_2_DK_NA,
-        decisions=decisions,
+        decisions=fixture_decisions(),
         has_tendons=False,
         has_hollow_section=False,
         fck_mpa=inp["concrete"].fck,
@@ -138,6 +155,7 @@ def validate_pdf_content(pdf: bytes) -> tuple[int, ...]:
     normalized = " ".join(texts)
     for expected in (
         bridge.EN1992_2_DK_NA,
+        "Publication validation status: ACCEPTED",
         "Danish infrastructure-manager and project basis",
         danish_bridge.MANAGER_ROAD_DIRECTORATE,
         "Departure applicability",

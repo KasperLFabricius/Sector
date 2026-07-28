@@ -14,7 +14,7 @@ from a disabled widget.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 import hashlib
 import json
 import math
@@ -26,6 +26,7 @@ from .fatigue import (
     CONCRETE_PROJECT_MINER,
     STANDARD_CONCRETE_MINER_C,
 )
+from .sls import CRITERION_DURABILITY as DANISH_DIRECT_CRACK_KIND
 
 
 COMPONENT_METHODS = "Independent component methods"
@@ -106,6 +107,9 @@ STATUS_REVIEW = "REVIEW"
 
 BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v2"
 DANISH_BRIDGE_EVIDENCE_SCHEMA = "sector.dk-bridge-methodology-evidence/v2"
+DANISH_CRACK_PUBLICATION_CONTEXT_SCHEMA = (
+    "sector.dk-bridge-crack-publication-context/v1"
+)
 FATIGUE_PUBLICATION_CONTEXT_SCHEMA = (
     "sector.bridge-fatigue-publication-context/v2"
 )
@@ -1736,7 +1740,8 @@ def _assess_danish_direct_crack(
             isinstance(row, Mapping)
             and str(row.get("criterion_id") or "").strip()
             == "bridge-dk-standard-durability"
-            and str(row.get("kind") or "").strip() == "durability"
+            and str(row.get("kind") or "").strip()
+            == DANISH_DIRECT_CRACK_KIND
             and str(row.get("status") or "").strip().upper()
             in {STATUS_PASS, STATUS_FAIL, STATUS_REVIEW}
             and str(row.get("result") or "").strip() not in {"", "-"}
@@ -1780,6 +1785,143 @@ def _assess_danish_direct_crack(
         evidence=crack.evidence,
         methodology=EN1992_2_DK_NA,
     )
+
+
+def danish_crack_publication_context(
+    crack: ExternalEvidence,
+    decision: ApplicabilityDecision,
+) -> dict[str, Any]:
+    """Return the strict current-evidence authority for Danish crack checks."""
+
+    if not isinstance(crack, ExternalEvidence):
+        raise ValueError(
+            "current Danish crack evidence is not typed ExternalEvidence"
+        )
+    if not isinstance(decision, ApplicabilityDecision):
+        raise ValueError(
+            "current Danish crack applicability is not typed evidence"
+        )
+    return _canonical_binding_value(
+        {
+            "schema": DANISH_CRACK_PUBLICATION_CONTEXT_SCHEMA,
+            "decision": asdict(decision),
+            "crack": asdict(crack),
+        },
+        path="current Danish crack publication context",
+    )
+
+
+def _expected_danish_crack_publication_checks(
+    context: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Reconstruct both Danish crack verdicts from current independent evidence."""
+
+    canonical = _canonical_binding_value(
+        context,
+        path="current Danish crack publication context",
+    )
+    if not isinstance(canonical, Mapping):
+        raise ValueError(
+            "current Danish crack publication context is not a mapping"
+        )
+    if set(canonical) != {"schema", "decision", "crack"}:
+        raise ValueError(
+            "current Danish crack publication-context fields are incomplete "
+            "or unknown"
+        )
+    if canonical.get("schema") != DANISH_CRACK_PUBLICATION_CONTEXT_SCHEMA:
+        raise ValueError(
+            "current Danish crack publication-context schema is missing or "
+            "unknown"
+        )
+
+    raw_decision = canonical.get("decision")
+    decision_keys = {item.name for item in fields(ApplicabilityDecision)}
+    if (
+        not isinstance(raw_decision, Mapping)
+        or set(raw_decision) != decision_keys
+    ):
+        raise ValueError(
+            "current Danish crack applicability fields are incomplete or "
+            "unknown"
+        )
+    if not all(
+        isinstance(raw_decision.get(key), str)
+        for key in decision_keys
+    ):
+        raise ValueError(
+            "current Danish crack applicability fields must be typed text"
+        )
+    decision = ApplicabilityDecision(**raw_decision)
+    if decision.check_id != "sls_crack":
+        raise ValueError(
+            "current Danish crack applicability has the wrong check identity"
+        )
+    if decision.applicability not in APPLICABILITY_OPTIONS:
+        raise ValueError(
+            "current Danish crack applicability token is unknown"
+        )
+
+    raw_crack = canonical.get("crack")
+    crack_keys = {item.name for item in fields(ExternalEvidence)}
+    if not isinstance(raw_crack, Mapping) or set(raw_crack) != crack_keys:
+        raise ValueError(
+            "current Danish crack evidence fields are incomplete or unknown"
+        )
+    for key in ("status", "result", "criterion", "source", "reason"):
+        if not isinstance(raw_crack.get(key), str):
+            raise ValueError(
+                f"current Danish crack evidence {key} is not typed text"
+            )
+    if raw_crack["status"] not in {
+        STATUS_PASS,
+        STATUS_FAIL,
+        STATUS_INVALID,
+        STATUS_NOT_ASSESSED,
+        STATUS_NOT_APPLICABLE,
+        STATUS_NOT_RUN,
+        STATUS_REVIEW,
+    }:
+        raise ValueError("current Danish crack evidence status is unknown")
+    utilisation = raw_crack.get("utilisation")
+    if utilisation is not None:
+        utilisation = _real(
+            utilisation,
+            "current Danish crack evidence utilisation",
+        )
+        if utilisation < 0.0:
+            raise ValueError(
+                "current Danish crack evidence utilisation must not be "
+                "negative"
+            )
+    raw_evidence = raw_crack.get("evidence")
+    if (
+        not isinstance(raw_evidence, list)
+        or not all(isinstance(row, Mapping) for row in raw_evidence)
+    ):
+        raise ValueError(
+            "current Danish crack evidence rows are malformed"
+        )
+    crack = ExternalEvidence(
+        status=raw_crack["status"],
+        result=raw_crack["result"],
+        criterion=raw_crack["criterion"],
+        source=raw_crack["source"],
+        reason=raw_crack["reason"],
+        utilisation=utilisation,
+        evidence=tuple(dict(row) for row in raw_evidence),
+    )
+    expected = (
+        _external_result("sls_crack", crack, decision),
+        _assess_danish_direct_crack(crack, decision),
+    )
+    return {
+        check.check_id: _bind_check_relationship(
+            check,
+            EN1992_2_DK_NA,
+        ).to_dict()
+        for check in expected
+    }
 
 
 def _assess_danish_methodology(
@@ -2532,6 +2674,7 @@ def publication_safe_record(
     fatigue_context: Mapping | None,
     danish_basis_context: Mapping[str, Any] | None = None,
     danish_fck_mpa: Any = None,
+    danish_crack_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Return a canonical fail-closed bridge calculation snapshot.
 
@@ -2620,9 +2763,27 @@ def publication_safe_record(
                 )
             except ValueError as exc:
                 correlation_errors.append(str(exc))
+        if not isinstance(danish_crack_context, Mapping):
+            correlation_errors.append(
+                "current Danish crack publication context is missing or "
+                "malformed"
+            )
+        else:
+            try:
+                expected_danish_checks.update(
+                    _expected_danish_crack_publication_checks(
+                        danish_crack_context
+                    )
+                )
+            except ValueError as exc:
+                correlation_errors.append(str(exc))
     elif stored_danish_basis is not None:
         correlation_errors.append(
             "base bridge evidence unexpectedly contains Danish basis state"
+        )
+    elif danish_crack_context is not None:
+        correlation_errors.append(
+            "base bridge evidence unexpectedly received Danish crack context"
         )
     (
         validated_fatigue_context,

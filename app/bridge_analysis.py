@@ -1159,6 +1159,103 @@ danish_basis_from_inputs = bridge_inputs.danish_basis_from_inputs
 danish_basis_context = bridge_inputs.danish_basis_context
 
 
+def _crack_results_from_record(record: Mapping | None) -> dict:
+    """Rebuild the adapter's current-response shape from a safe sibling record."""
+
+    safe = sls.publication_safe_crack_control_record(record)
+    if not isinstance(safe, Mapping):
+        return {}
+    entries = []
+    raw_cases = safe.get("cases")
+    if not isinstance(raw_cases, list):
+        return {}
+    for raw_case in raw_cases:
+        if not isinstance(raw_case, Mapping):
+            continue
+        responses = {}
+        contexts = {}
+        raw_responses = raw_case.get("responses")
+        for raw_response in (
+            raw_responses if isinstance(raw_responses, list) else ()
+        ):
+            if not isinstance(raw_response, Mapping):
+                continue
+            name = str(raw_response.get("name") or "").strip()
+            if not name:
+                continue
+            response = {
+                "wk": raw_response.get("wk_mm"),
+                "element_id": raw_response.get("element_id"),
+            }
+            if raw_response.get("decompression") is not None:
+                response["decompression"] = raw_response.get(
+                    "decompression"
+                )
+            responses[name] = response
+            contexts[name] = raw_response.get("context")
+        entries.append({
+            "name": str(raw_case.get("case") or "Elastic"),
+            "results": {
+                "elastic": {
+                    "crack_assessment": raw_case.get("assessment"),
+                    "crack_responses": responses,
+                    "crack_response_contexts": contexts,
+                    "crack_response_mapping_scope": raw_case.get(
+                        "response_mapping_scope"
+                    ),
+                },
+            },
+        })
+    return {"elastic_cases": entries}
+
+
+def danish_crack_publication_context(
+    inp: Mapping,
+    results: Mapping | None = None,
+    *,
+    crack_control_record: Mapping | None = None,
+) -> dict | None:
+    """Build current Danish crack authority from live or canonical saved evidence."""
+
+    if not isinstance(inp, Mapping):
+        return {"validation_error": "current bridge inputs are not a mapping"}
+    methodology = str(
+        inp.get("design_methodology") or bridge.COMPONENT_METHODS
+    ).strip()
+    if methodology != bridge.EN1992_2_DK_NA:
+        return None
+    try:
+        coverage = bridge_inputs.normalise_table(
+            inp.get(bridge_inputs.COVERAGE_TABLE_KEY),
+            bridge_inputs.COVERAGE_TABLE_KEY,
+        )
+    except (TypeError, ValueError):
+        coverage = bridge_inputs.empty_table(
+            bridge_inputs.COVERAGE_TABLE_KEY
+        )
+    decisions = bridge_inputs.decisions(coverage)
+    decision = next(
+        (
+            item
+            for item in decisions
+            if item.check_id == "sls_crack"
+        ),
+        bridge.ApplicabilityDecision("sls_crack"),
+    )
+    current_results = (
+        results
+        if isinstance(results, Mapping)
+        else _crack_results_from_record(crack_control_record)
+    )
+    try:
+        return bridge.danish_crack_publication_context(
+            crack_evidence(current_results),
+            decision,
+        )
+    except ValueError as exc:
+        return {"validation_error": str(exc)}
+
+
 def build_evidence(inp: Mapping, results: Mapping) -> bridge.BridgeBaseEvidence:
     """Construct the one complete typed evidence object used by the core gate."""
 

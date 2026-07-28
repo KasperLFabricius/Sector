@@ -21,6 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import bridge_inputs  # noqa: E402
+import bridge_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import project_io  # noqa: E402
 
@@ -114,9 +115,79 @@ def _mapping_scope(contexts):
             "elastic_case": "dk-elastic-1",
             "state": context["response_id"],
             "provenance": context["provenance"],
+            "solver_provenance": context["solver_provenance"],
         }
         for name, context in contexts.items()
     ]
+
+
+def _dk_crack_results(width=0.29):
+    case = {
+        "asset_class": "road",
+        "member_class": "nonprestressed",
+        "environment": "aggressive",
+    }
+    contexts = _response_contexts()
+    responses = {
+        "QP": {"wk": 0.01, "element_id": "bar 1"},
+        "Frequent": {"wk": width, "element_id": "bar 1"},
+    }
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=_criteria(case),
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope(contexts),
+    )
+    return {
+        "elastic_cases": [{
+            "name": "Danish SLS",
+            "results": {
+                "elastic": {
+                    "show_cw": True,
+                    "crack_assessment": assessment,
+                    "crack_responses": responses,
+                    "crack_response_contexts": contexts,
+                    "crack_response_mapping_scope": _mapping_scope(
+                        contexts
+                    ),
+                },
+            },
+        }],
+    }
+
+
+def _dk_crack_control_record(results):
+    elastic = results["elastic_cases"][0]["results"]["elastic"]
+    assessment = elastic["crack_assessment"]
+    informational = set(assessment.get("informational_responses") or ())
+    return sls.publication_safe_crack_control_record({
+        "cases": [{
+            "case": "Danish SLS",
+            "assessment": copy.deepcopy(assessment),
+            "response_mapping_scope": copy.deepcopy(
+                elastic["crack_response_mapping_scope"]
+            ),
+            "responses": [
+                {
+                    "name": name,
+                    "wk_mm": response["wk"],
+                    "element_id": response["element_id"],
+                    "solver_status": "OK",
+                    "solver_reason": "",
+                    "context": copy.deepcopy(
+                        elastic["crack_response_contexts"][name]
+                    ),
+                    "acceptance_role": (
+                        "informational"
+                        if name in informational
+                        else "criterion input"
+                    ),
+                }
+                for name, response in elastic["crack_responses"].items()
+            ],
+        }],
+    })
 
 
 def _basis(**changes):
@@ -220,6 +291,26 @@ def _project_scalars(**changes):
     }
     values.update(changes)
     return values
+
+
+def _project_tables(decisions=None):
+    selected = decisions or _decisions()
+    return {
+        bridge_inputs.COVERAGE_TABLE_KEY: (
+            bridge_inputs.table_from_records(
+                [
+                    {
+                        "check_id": item.check_id,
+                        "applicability": item.applicability,
+                        "source": item.source,
+                        "notes": item.notes,
+                    }
+                    for item in selected
+                ],
+                bridge_inputs.COVERAGE_TABLE_KEY,
+            )
+        ),
+    }
 
 
 def _torsion_input(alpha_ct):
@@ -904,7 +995,7 @@ def test_danish_direct_crack_method_can_pass_while_decompression_stays_blocking(
         evidence=(
             {
                 "criterion_id": "bridge-dk-standard-durability",
-                "kind": "durability",
+                "kind": bridge.DANISH_DIRECT_CRACK_KIND,
                 "status": bridge.STATUS_PASS,
                 "result": "0.090 mm",
                 "required_combination": sls.COMBINATION_FREQUENT,
@@ -1005,6 +1096,44 @@ def _dk_methodology_record(**scalar_changes):
     return bridge.assess_base_methodology(evidence)
 
 
+def _dk_crack_methodology_record(width=0.29):
+    scalars = _project_scalars()
+    decisions = tuple(
+        replace(
+            item,
+            applicability=bridge.REQUIRED,
+            source="DB-sls_crack",
+        )
+        if item.check_id == "sls_crack"
+        else item
+        for item in _decisions()
+    )
+    results = _dk_crack_results(width)
+    evidence = bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_DK_NA,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        brittle_method=bridge.BRITTLE_METHOD_A,
+        sls_crack=bridge_analysis.crack_evidence(results),
+        danish_basis=bridge_inputs.danish_basis_from_inputs(scalars),
+    )
+    return bridge.assess_base_methodology(evidence), results, decisions
+
+
+def _dk_crack_context(
+    *,
+    crack=bridge.ExternalEvidence(),
+    decisions=None,
+):
+    selected = decisions or _decisions()
+    decision = next(
+        item for item in selected if item.check_id == "sls_crack"
+    )
+    return bridge.danish_crack_publication_context(crack, decision)
+
+
 def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs():
     scalars = _project_scalars()
     context = bridge_inputs.danish_basis_context(scalars)
@@ -1017,6 +1146,7 @@ def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs
         fatigue_context=fatigue_context,
         danish_basis_context=context,
         danish_fck_mpa=scalars["conc_fck"],
+        danish_crack_context=_dk_crack_context(),
     )
     assert safe["publication_validation"]["status"] == "ACCEPTED"
 
@@ -1036,6 +1166,7 @@ def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs
         fatigue_context=fatigue_context,
         danish_basis_context=context,
         danish_fck_mpa=scalars["conc_fck"],
+        danish_crack_context=_dk_crack_context(),
     )
     assert rejected["publication_validation"]["status"] == "REJECTED"
     assert any(
@@ -1052,6 +1183,7 @@ def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs
         }),
         danish_basis_context=context,
         danish_fck_mpa=scalars["conc_fck"],
+        danish_crack_context=_dk_crack_context(),
     )
     assert switched["publication_validation"]["status"] == "REJECTED"
     assert switched["status"] == bridge.STATUS_INVALID
@@ -1108,6 +1240,7 @@ def test_publication_recomputes_danish_derived_checks_after_fingerprint_attack(
         fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
         danish_basis_context=bridge_inputs.danish_basis_context(scalars),
         danish_fck_mpa=scalars["conc_fck"],
+        danish_crack_context=_dk_crack_context(),
     )
     assert clean["publication_validation"]["status"] == "ACCEPTED"
     assert next(
@@ -1133,6 +1266,7 @@ def test_publication_recomputes_danish_derived_checks_after_fingerprint_attack(
         fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
         danish_basis_context=bridge_inputs.danish_basis_context(scalars),
         danish_fck_mpa=scalars["conc_fck"],
+        danish_crack_context=_dk_crack_context(),
     )
     assert safe["status"] == bridge.STATUS_INVALID
     assert safe["publication_validation"]["status"] == "REJECTED"
@@ -1154,6 +1288,7 @@ def test_danish_publication_requires_current_typed_positive_fck(bad_fck):
         fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
         danish_basis_context=bridge_inputs.danish_basis_context(scalars),
         danish_fck_mpa=bad_fck,
+        danish_crack_context=_dk_crack_context(),
     )
     assert safe["status"] == bridge.STATUS_INVALID
     assert safe["publication_validation"]["status"] == "REJECTED"
@@ -1190,9 +1325,10 @@ def test_project_publication_latches_rebound_danish_check_forgery():
         methodology=bridge.EN1992_2_DK_NA,
         danish_basis_context=record["danish_basis"],
     )
-    digest = project_io.input_sha256({}, scalars)
+    tables = _project_tables()
+    digest = project_io.input_sha256(tables, scalars)
     text = project_io.dump_project(
-        {},
+        tables,
         scalars,
         calculation={
             "performed_at_utc": "2026-07-28T12:00:00+00:00",
@@ -1213,9 +1349,10 @@ def test_project_publication_latches_rebound_danish_check_forgery():
 
 def test_project_calculation_record_rejects_basis_mutation_after_save():
     scalars = _project_scalars()
-    digest = project_io.input_sha256({}, scalars)
+    tables = _project_tables()
+    digest = project_io.input_sha256(tables, scalars)
     text = project_io.dump_project(
-        {},
+        tables,
         scalars,
         calculation={
             "performed_at_utc": "2026-07-28T12:00:00+00:00",
@@ -1244,4 +1381,249 @@ def test_project_calculation_record_rejects_basis_mutation_after_save():
         attacked["calculation"]["bridge_methodology"]
         ["publication_validation"]["status"]
         == "REJECTED"
+    )
+
+
+@pytest.mark.parametrize(
+    "check_id",
+    ["sls_crack", "dk_direct_crack_method"],
+)
+def test_publication_rejects_rebound_danish_crack_verdict_forgery(check_id):
+    """A bridge-body fingerprint is not current crack-response evidence."""
+
+    scalars = _project_scalars()
+    record = _dk_methodology_record()
+    attacked = copy.deepcopy(record)
+    attacked_check = next(
+        row for row in attacked["checks"] if row["check_id"] == check_id
+    )
+    assert attacked_check["status"] == bridge.STATUS_NOT_APPLICABLE
+    attacked_check.update(
+        status=bridge.STATUS_PASS,
+        result="Forged Danish crack acceptance",
+        criterion="Forged criterion",
+        source="Forged self-consistent source",
+        reason="Forged self-consistent reason",
+        evidence=[{
+            "criterion_id": "bridge-dk-standard-durability",
+            "kind": bridge.DANISH_DIRECT_CRACK_KIND,
+            "status": bridge.STATUS_PASS,
+            "result": "0.090 mm",
+            "solver_provenance": {"solver": "forged"},
+            "acceptance_evidence": {"schema": "forged"},
+        }],
+    )
+    attacked["status"] = bridge.STATUS_PASS
+    attacked["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        attacked["checks"],
+        attacked["configuration_errors"],
+        methodology=bridge.EN1992_2_DK_NA,
+        danish_basis_context=attacked["danish_basis"],
+    )
+
+    safe = bridge.publication_safe_record(
+        attacked,
+        design_methodology=bridge.EN1992_2_DK_NA,
+        fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_fck_mpa=scalars["conc_fck"],
+        danish_crack_context=_dk_crack_context(),
+    )
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        f"{check_id}: stored Danish derived check conflicts" in error
+        for error in safe["publication_validation"]["errors"]
+    )
+
+
+def test_live_and_saved_danish_crack_context_reconstruct_identical_verdicts():
+    record, results, decisions = _dk_crack_methodology_record(width=0.31)
+    scalars = _project_scalars()
+    inp = {
+        **scalars,
+        **_project_tables(decisions),
+    }
+    crack = next(
+        row for row in record["checks"] if row["check_id"] == "sls_crack"
+    )
+    direct = next(
+        row
+        for row in record["checks"]
+        if row["check_id"] == "dk_direct_crack_method"
+    )
+    assert crack["status"] == bridge.STATUS_FAIL
+    assert direct["status"] == bridge.STATUS_PASS
+
+    live_context = bridge_analysis.danish_crack_publication_context(
+        inp,
+        results,
+    )
+    saved_context = bridge_analysis.danish_crack_publication_context(
+        inp,
+        crack_control_record=_dk_crack_control_record(results),
+    )
+    assert saved_context == live_context
+
+    for context in (live_context, saved_context):
+        safe = bridge.publication_safe_record(
+            record,
+            design_methodology=bridge.EN1992_2_DK_NA,
+            fatigue_context=fatigue_analysis.bridge_publication_context(
+                scalars
+            ),
+            danish_basis_context=bridge_inputs.danish_basis_context(
+                scalars
+            ),
+            danish_fck_mpa=scalars["conc_fck"],
+            danish_crack_context=context,
+        )
+        assert safe["publication_validation"]["status"] == "ACCEPTED"
+        assert next(
+            row
+            for row in safe["checks"]
+            if row["check_id"] == "sls_crack"
+        )["status"] == bridge.STATUS_FAIL
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        None,
+        {"schema": bridge.DANISH_CRACK_PUBLICATION_CONTEXT_SCHEMA},
+        {
+            **_dk_crack_context(),
+            "crack": {
+                **_dk_crack_context()["crack"],
+                "utilisation": True,
+            },
+        },
+    ],
+)
+def test_danish_publication_rejects_missing_or_malformed_crack_context(
+    context,
+):
+    scalars = _project_scalars()
+    safe = bridge.publication_safe_record(
+        _dk_methodology_record(),
+        design_methodology=bridge.EN1992_2_DK_NA,
+        fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_fck_mpa=scalars["conc_fck"],
+        danish_crack_context=context,
+    )
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "Danish crack" in error
+        for error in safe["publication_validation"]["errors"]
+    )
+
+
+def test_project_crack_sibling_rejects_bridge_forgery_and_latches_resave():
+    record, results, decisions = _dk_crack_methodology_record(width=0.31)
+    sibling = _dk_crack_control_record(results)
+    scalars = _project_scalars()
+    tables = _project_tables(decisions)
+    digest = project_io.input_sha256(tables, scalars)
+    calculation = {
+        "performed_at_utc": "2026-07-28T12:00:00+00:00",
+        "sector_version": "0.91",
+        "source_revision": "pr05-crack-correlation",
+        "input_sha256": digest,
+        "crack_control": sibling,
+        "bridge_methodology": record,
+    }
+    clean_text = project_io.dump_project(
+        tables,
+        scalars,
+        calculation=calculation,
+    )
+    clean = project_io.project_provenance(clean_text)["calculation"]
+    assert clean["matches_saved_inputs"] is True
+    assert (
+        clean["bridge_methodology"]["publication_validation"]["status"]
+        == "ACCEPTED"
+    )
+
+    attacked = copy.deepcopy(record)
+    crack = next(
+        row
+        for row in attacked["checks"]
+        if row["check_id"] == "sls_crack"
+    )
+    crack["status"] = bridge.STATUS_PASS
+    crack["result"] = "0.010 mm"
+    attacked["status"] = bridge.STATUS_PASS
+    attacked["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        attacked["checks"],
+        attacked["configuration_errors"],
+        methodology=bridge.EN1992_2_DK_NA,
+        danish_basis_context=attacked["danish_basis"],
+    )
+    attacked_text = project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            **calculation,
+            "bridge_methodology": attacked,
+        },
+    )
+    attacked_provenance = project_io.project_provenance(attacked_text)
+    attacked_calculation = attacked_provenance["calculation"]
+    assert attacked_calculation["matches_saved_inputs"] is False
+    assert (
+        attacked_calculation["bridge_methodology"]
+        ["publication_validation"]["status"]
+        == "REJECTED"
+    )
+
+    loaded_tables, loaded_scalars = project_io.parse_project(attacked_text)
+    resaved_text = project_io.dump_project(
+        loaded_tables,
+        loaded_scalars,
+        calculation=attacked_calculation,
+    )
+    resaved = project_io.project_provenance(resaved_text)["calculation"]
+    assert resaved["matches_saved_inputs"] is False
+    assert (
+        resaved["bridge_methodology"]["publication_validation"]["status"]
+        == "REJECTED"
+    )
+
+
+def test_bridge_summary_rejects_rebound_danish_crack_verdict():
+    record, results, decisions = _dk_crack_methodology_record(width=0.31)
+    scalars = _project_scalars()
+    inp = {
+        **scalars,
+        **_project_tables(decisions),
+    }
+    attacked = copy.deepcopy(record)
+    crack = next(
+        row
+        for row in attacked["checks"]
+        if row["check_id"] == "sls_crack"
+    )
+    crack["status"] = bridge.STATUS_PASS
+    crack["result"] = "0.010 mm"
+    attacked["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        attacked["checks"],
+        attacked["configuration_errors"],
+        methodology=bridge.EN1992_2_DK_NA,
+        danish_basis_context=attacked["danish_basis"],
+    )
+
+    rows = bridge_analysis.presentation.bridge_summary_rows(
+        inp,
+        {
+            **results,
+            "bridge_methodology": attacked,
+        },
+    )
+    assert any(
+        row["check"] == "Bridge methodology configuration"
+        and row["status"] == bridge.STATUS_INVALID
+        and "sls_crack: stored Danish derived check conflicts" in row["note"]
+        for row in rows
     )

@@ -588,6 +588,8 @@ def fatigue_summary_rows(inp, results, *, stale=False):
 def bridge_summary_rows(inp, results, *, stale=False):
     """Return every explicit EN 1992-2 base-methodology gate row."""
 
+    import bridge_analysis
+
     inp = inp or {}
     results = results or {}
     raw_selected = inp.get("design_methodology")
@@ -598,6 +600,9 @@ def bridge_summary_rows(inp, results, *, stale=False):
         fatigue_context=fatigue_analysis.bridge_publication_context(inp),
         danish_basis_context=bridge_inputs.danish_basis_context(inp),
         danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
+        danish_crack_context=(
+            bridge_analysis.danish_crack_publication_context(inp, results)
+        ),
     )
     if not bridge.is_bridge_methodology(selected) and payload is None:
         return []

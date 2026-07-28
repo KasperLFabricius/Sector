@@ -2096,6 +2096,12 @@ def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
     )
     assert project_basis["status"] == bridge.STATUS_NOT_ASSESSED
     assert "Select the bridge class" in project_basis["reason"]
+    calculation_bridge = at.session_state["calculation_record"][
+        "bridge_methodology"
+    ]
+    assert calculation_bridge["publication_validation"]["status"] == (
+        "ACCEPTED"
+    )
 
 
 def test_danish_bridge_keeps_inherited_bridge_crack_numerics():

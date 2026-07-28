@@ -3752,6 +3752,25 @@ def _bridge_report_record():
 def _bridge_report_input(methodology=bridge.EN1992_2_BASE):
     inp = _inp()
     inp["design_methodology"] = methodology
+    if methodology == bridge.EN1992_2_DK_NA:
+        inp[bridge_inputs.COVERAGE_TABLE_KEY] = (
+            bridge_inputs.table_from_records(
+                [
+                    {
+                        "check_id": check_id,
+                        "applicability": (
+                            bridge.REQUIRED
+                            if check_id == "section_analysis"
+                            else bridge.NOT_APPLICABLE
+                        ),
+                        "source": f"DB-{check_id}",
+                        "notes": "",
+                    }
+                    for check_id in bridge.APPLICABILITY_CHECK_IDS
+                ],
+                bridge_inputs.COVERAGE_TABLE_KEY,
+            )
+        )
     return inp
 
 
@@ -3958,6 +3977,7 @@ def test_report_publishes_bound_danish_manager_basis_and_mapped_deicing():
     )).split())
 
     assert bridge.EN1992_2_DK_NA in text
+    assert "Publication validation status: ACCEPTED" in text
     assert "Danish infrastructure-manager and project basis" in text
     assert danish_bridge.MANAGER_ROAD_DIRECTORATE in text
     assert "DB-05 section 4.2" in text
@@ -3976,6 +3996,7 @@ def test_report_publishes_bound_danish_manager_basis_and_mapped_deicing():
     assert "departure applicability" in appendix
     assert "Danish bridge applicability provenance" in appendix
     assert "Danish bridge coefficient provenance" in appendix
+    assert "current Danish crack publication context is missing" not in text
 
 
 @pytest.mark.parametrize(

@@ -9606,6 +9606,9 @@ def bridge_methodology_view(inp, results, *, stale=False):
         fatigue_context=fatigue_analysis.bridge_publication_context(inp),
         danish_basis_context=bridge_inputs.danish_basis_context(inp),
         danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
+        danish_crack_context=(
+            bridge_analysis.danish_crack_publication_context(inp, results)
+        ),
     )
     if (
         not bridge.is_bridge_methodology(selected_methodology)
@@ -13046,6 +13049,12 @@ def _analysis_workspace(inp):
                 ),
                 danish_basis_context=bridge_inputs.danish_basis_context(inp),
                 danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
+                danish_crack_context=(
+                    bridge_analysis.danish_crack_publication_context(
+                        inp,
+                        st.session_state["results"],
+                    )
+                ),
             )
             if bridge_record is not None:
                 calculation_record["bridge_methodology"] = bridge_record

@@ -813,6 +813,8 @@ class ReportBuilder:
         # Reuse the one process-wide kaleido server (started on the first report and
         # left running) rather than starting and stopping one per report. A
         # tables-only report renders no figures, so it never starts a browser.
+        import bridge_analysis
+
         if self.figures:
             ensure_image_server()
         self._tick(0.05, "Cover and conventions...")
@@ -831,6 +833,12 @@ class ReportBuilder:
                 self._base_inp
             ),
             danish_fck_mpa=bridge_inputs.danish_fck_mpa(self._base_inp),
+            danish_crack_context=(
+                bridge_analysis.danish_crack_publication_context(
+                    self._base_inp,
+                    self._base_out,
+                )
+            ),
         )
         self._bridge_record = bridge_record
         if bridge_record is not None:
