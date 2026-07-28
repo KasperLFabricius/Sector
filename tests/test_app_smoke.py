@@ -5941,7 +5941,15 @@ def test_download_session_and_autosave_reject_width_binding_mutations(
     assert all('"verdict": "PASS"' not in text for text in texts)
 
 
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        pytest.param("response-container", id="response-container"),
+        pytest.param("text-width", id="text-crack-width"),
+    ],
+)
 def test_download_session_and_autosave_reject_malformed_binding_schema(
+    malformation,
     tmp_path,
     monkeypatch,
 ):
@@ -5953,7 +5961,13 @@ def test_download_session_and_autosave_reject_malformed_binding_schema(
     binding = record["cases"][0]["assessment"]["criteria"][0][
         "acceptance_evidence"
     ]
-    binding["matched_responses"] = ["Fine"]
+    if malformation == "response-container":
+        binding["matched_responses"] = ["Fine"]
+    else:
+        for response in binding["matched_responses"]:
+            acceptance = response["acceptance"]
+            acceptance["value_mm"] = str(acceptance["value_mm"])
+        binding["outcome"]["value"] = str(binding["outcome"]["value"])
     _reseal_app_acceptance_binding(binding)
 
     assessments, texts = _download_and_autosave_publications(

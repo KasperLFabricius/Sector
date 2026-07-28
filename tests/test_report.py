@@ -1852,12 +1852,27 @@ def test_report_rejects_each_canonical_width_binding_mutation(
     assert "prior acceptance assessment was invalidated" in compact
 
 
-def test_report_rejects_fingerprint_valid_malformed_binding_schema():
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        pytest.param("response-container", id="response-container"),
+        pytest.param("text-width", id="text-crack-width"),
+    ],
+)
+def test_report_rejects_fingerprint_valid_malformed_binding_schema(
+    malformation,
+):
     out = _out()
     binding = out["elastic"]["crack_assessment"]["criteria"][0][
         "acceptance_evidence"
     ]
-    binding["matched_responses"] = ["Long-term"]
+    if malformation == "response-container":
+        binding["matched_responses"] = ["Long-term"]
+    else:
+        for response in binding["matched_responses"]:
+            acceptance = response["acceptance"]
+            acceptance["value_mm"] = str(acceptance["value_mm"])
+        binding["outcome"]["value"] = str(binding["outcome"]["value"])
     body = {
         key: value
         for key, value in binding.items()

@@ -1203,12 +1203,13 @@ def _validated_acceptance_evidence_body(
         )
     kind = _optional_text(criterion.get("kind"))
     limit = criterion.get("limit_mm")
+    typed_limit = _finite_signed_numeric_value(limit)
     if kind == CRITERION_DECOMPRESSION:
         if limit is not None:
             issues.append(
                 "acceptance-evidence decompression criterion has a width limit"
             )
-    elif _finite_positive(limit) is None:
+    elif typed_limit is None or typed_limit <= 0.0:
         issues.append(
             "acceptance-evidence crack-width limit is missing or invalid"
         )
@@ -1332,11 +1333,13 @@ def _validated_acceptance_evidence_body(
             )
             if acceptance_keys_issue:
                 issues.append(acceptance_keys_issue)
-            if crack_width_numeric_value(
+            width_value = _finite_signed_numeric_value(
                 acceptance.get("value_mm")
-            ) is None:
+            )
+            if width_value is None or width_value < 0.0:
                 issues.append(
-                    f"{label} crack-width value is missing or invalid"
+                    f"{label} crack-width value is not finite typed numeric "
+                    "evidence"
                 )
             if not _explicit_evidence_field(
                 acceptance.get("governing_element")
@@ -1485,26 +1488,32 @@ def _validated_acceptance_evidence_body(
                 "governing": acceptance.get("governing"),
                 "limit": None,
             }
-    elif typed_responses and _finite_positive(limit) is not None:
-        numeric_responses = [
-            response
-            for response in typed_responses
-            if isinstance(response.get("acceptance"), Mapping)
-            and crack_width_numeric_value(
-                response["acceptance"].get("value_mm")
-            ) is not None
-        ]
+    elif (
+        typed_responses
+        and typed_limit is not None
+        and typed_limit > 0.0
+    ):
+        numeric_responses = []
+        for response in typed_responses:
+            acceptance = response.get("acceptance")
+            if not isinstance(acceptance, Mapping):
+                continue
+            width_value = _finite_signed_numeric_value(
+                acceptance.get("value_mm")
+            )
+            if width_value is not None and width_value >= 0.0:
+                numeric_responses.append((response, width_value))
         if len(numeric_responses) == len(typed_responses):
-            governing_response = max(
+            governing_response, value = max(
                 numeric_responses,
-                key=lambda response: (
-                    response["acceptance"]["value_mm"],
-                    _optional_text(response.get("label")) or "",
+                key=lambda response_and_value: (
+                    response_and_value[1],
+                    _optional_text(response_and_value[0].get("label"))
+                    or "",
                 ),
             )
-            value = governing_response["acceptance"]["value_mm"]
             expected_outcome = {
-                "status": "OK" if value <= limit else "EXCEEDED",
+                "status": "OK" if value <= typed_limit else "EXCEEDED",
                 "case": _optional_text(
                     governing_response.get("label")
                 ),
@@ -1512,7 +1521,7 @@ def _validated_acceptance_evidence_body(
                 "governing": governing_response["acceptance"].get(
                     "governing_element"
                 ),
-                "limit": limit,
+                "limit": typed_limit,
             }
 
     outcome = body.get("outcome")

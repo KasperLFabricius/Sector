@@ -568,6 +568,8 @@ def test_raw_and_publication_share_canonical_width_acceptance_binding():
         pytest.param("matched-entry-incomplete", id="matched-entry-incomplete"),
         pytest.param("matched-entry-missing-label", id="missing-label"),
         pytest.param("acceptance-not-mapping", id="acceptance-not-mapping"),
+        pytest.param("width-text", id="text-crack-width"),
+        pytest.param("limit-text", id="text-crack-width-limit"),
         pytest.param("scope-entry-not-mapping", id="scope-entry-not-mapping"),
         pytest.param("scope-empty", id="scope-empty"),
         pytest.param("unexpected-body-field", id="unexpected-body-field"),
@@ -590,6 +592,12 @@ def test_publication_rejects_fingerprint_valid_malformed_binding_body(
         binding["matched_responses"][0].pop("label")
     elif mutation == "acceptance-not-mapping":
         binding["matched_responses"][0]["acceptance"] = "0.22 mm"
+    elif mutation == "width-text":
+        binding["matched_responses"][0]["acceptance"]["value_mm"] = "0.22"
+        binding["outcome"]["value"] = "0.22"
+    elif mutation == "limit-text":
+        binding["criterion"]["limit_mm"] = "0.30"
+        binding["outcome"]["limit"] = "0.30"
     elif mutation == "scope-entry-not-mapping":
         binding["response_mapping_scope"] = ["QP"]
     elif mutation == "scope-empty":

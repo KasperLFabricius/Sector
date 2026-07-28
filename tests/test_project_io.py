@@ -1310,7 +1310,16 @@ def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
     assert provenance["calculation"]["matches_saved_inputs"] is True
 
 
-def test_project_roundtrip_rejects_fingerprint_valid_malformed_binding():
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        pytest.param("response-container", id="response-container"),
+        pytest.param("text-width", id="text-crack-width"),
+    ],
+)
+def test_project_roundtrip_rejects_fingerprint_valid_malformed_binding(
+    malformation,
+):
     scalars = {
         "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
         "sls_exposure_context": "XC3 / durability",
@@ -1320,7 +1329,13 @@ def test_project_roundtrip_rejects_fingerprint_valid_malformed_binding():
     binding = crack_control["cases"][0]["assessment"]["criteria"][0][
         "acceptance_evidence"
     ]
-    binding["matched_responses"] = ["Fine"]
+    if malformation == "response-container":
+        binding["matched_responses"] = ["Fine"]
+    else:
+        for response in binding["matched_responses"]:
+            acceptance = response["acceptance"]
+            acceptance["value_mm"] = str(acceptance["value_mm"])
+        binding["outcome"]["value"] = str(binding["outcome"]["value"])
     body = {
         key: value
         for key, value in binding.items()

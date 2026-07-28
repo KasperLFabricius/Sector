@@ -418,11 +418,11 @@ were refactored and audited as one state model:
 | Decompression evidence | `OK`/`EXCEEDED` carries typed status, finite signed MPa value, governing concrete location and solver provenance consistent with the response context and every alias. A solver-proven `NOT APPLICABLE` may omit value/location. | Missing, Boolean, non-scalar, non-finite, changed or conflicting status/value/location/provenance gives `NOT ASSESSED / REVIEW`; nested `NaN`/`Inf` cannot cross publication. |
 | Response role | Every current response mapped to the required combination is a criterion input; explicitly different combinations remain informational. | A required alias marked informational, a hidden/new required response or an unaccounted independent response invalidates stored PASS/FAIL evidence. |
 | Aggregate precedence | `INVALID` > `EXCEEDED` > `NOT ASSESSED` > `OK` > `NOT APPLICABLE`; a known exceedance remains FAIL while incomplete criteria remain visible. | Published top-level status, value, limit, utilization and margin are rebuilt from the canonical governing criterion, preventing aggregate drift. |
-| Publication chain | The raw and publication boundaries share one canonical body validator, sealer and binding comparator through calculation record, project save/load and loaded provenance, download, autosave and report. UI, overview and report use mm for width and MPa for decompression. | Fingerprint-valid but structurally malformed bodies, missing/malformed criterion source or applicability, stale value/status/governing element, changed identity/duration/mapping/solver evidence or non-finite nested evidence invalidate publication without raising. |
+| Publication chain | The raw and publication boundaries share one canonical body validator, sealer and binding comparator through calculation record, project save/load and loaded provenance, download, autosave and report. UI, overview and report use mm for width and MPa for decompression. | Fingerprint-valid but structurally malformed bodies, text-typed width/limit numerics, missing/malformed criterion source or applicability, stale value/status/governing element, changed identity/duration/mapping/solver evidence or non-finite nested evidence invalidate publication without raising. |
 
-The canonical-binding refactor adds 133 table-driven nodes beyond the prior 443,
-bringing cumulative lean F-043 evidence to 576 checks. Its refreshed bounded
-closure execution covers 770 nodes across core SLS, routing/source policy,
+The canonical-binding refactor adds 138 table-driven nodes beyond the prior 443,
+bringing cumulative lean F-043 evidence to 581 checks. Its refreshed bounded
+closure execution covers 775 nodes across core SLS, routing/source policy,
 calculation record/session, project save/load/provenance, download/autosave,
 manual/report and rendered-artifact boundaries. Exact-head external gates remain
 mandatory; this matrix does not self-certify PR closure.
@@ -494,7 +494,12 @@ mandatory; this matrix does not self-certify PR closure.
   user-directed stop condition again: sealing and publication now share the
   strict complete-body validator, the scalar compatibility adapter constructs
   an explicit complete scope, and adversarial raw-to-publication/project/session/
-  autosave/report tests fail closed without exceptions. All are locally
-  remediated.
+  autosave/report tests fail closed without exceptions. Review of
+  `d12796a8bda246f51a228162e67f7feefdbe0c7e` then found that a
+  fingerprint-valid text crack width could survive numeric coercion and raise
+  during outcome reconstruction. The canonical validator now requires typed
+  width and limit numerics, and the same adversarial binding is blocked through
+  publication, project round-trip, report, download, session and autosave. All
+  are locally remediated.
   New exact-head Codex Review, GitHub CI, original independent QA closure and
   merge remain pending; this implementation log does not self-certify closure.
