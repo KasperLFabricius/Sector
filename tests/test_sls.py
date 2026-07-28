@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 
 import numpy as np
 import pandas as pd
@@ -340,6 +342,78 @@ def _standard_inputs(**overrides):
     return values
 
 
+def _mapping_scope_from_contexts(
+    contexts,
+    *,
+    elastic_case="elastic-1",
+):
+    scope = []
+    seen_ids = set()
+    for name, context in contexts.items():
+        response_id = context["response_id"]
+        if response_id in seen_ids:
+            continue
+        seen_ids.add(response_id)
+        scope.append({
+            "combination": context["combination"],
+            "duration": context["duration"],
+            "response": name,
+            "response_id": response_id,
+            "elastic_case": elastic_case,
+            "state": response_id,
+            "provenance": context["provenance"],
+        })
+    return scope
+
+
+def _single_width_publication_fixture(width=0.22):
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
+    scope = _mapping_scope_from_contexts({"QP": context})
+    assessment = sls.crack_assessment(
+        {"QP": {"wk": width, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={"QP": context},
+        response_mapping_scope=scope,
+    )
+    publication_case = {
+        "case": "SLS-QP",
+        "assessment": assessment,
+        "response_mapping_scope": scope,
+        "responses": [{
+            "name": "QP",
+            "wk_mm": width,
+            "element_id": "R1",
+            "acceptance_role": "criterion input",
+            "context": context,
+        }],
+    }
+    return assessment, publication_case
+
+
+def _reseal_acceptance_binding(binding):
+    body = {
+        key: value
+        for key, value in binding.items()
+        if key != "fingerprint"
+    }
+    binding["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _canonical_width_binding_fixture():
     contexts = {
         name: {
@@ -486,6 +560,208 @@ def test_raw_and_publication_share_canonical_width_acceptance_binding():
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param("criterion-not-mapping", id="criterion-not-mapping"),
+        pytest.param("outcome-not-mapping", id="outcome-not-mapping"),
+        pytest.param("matched-entry-not-mapping", id="matched-entry-not-mapping"),
+        pytest.param("matched-entry-incomplete", id="matched-entry-incomplete"),
+        pytest.param("matched-entry-missing-label", id="missing-label"),
+        pytest.param("acceptance-not-mapping", id="acceptance-not-mapping"),
+        pytest.param("scope-entry-not-mapping", id="scope-entry-not-mapping"),
+        pytest.param("scope-empty", id="scope-empty"),
+        pytest.param("unexpected-body-field", id="unexpected-body-field"),
+    ],
+)
+def test_publication_rejects_fingerprint_valid_malformed_binding_body(
+    mutation,
+):
+    assessment, publication_case = _single_width_publication_fixture()
+    binding = assessment["criteria"][0]["acceptance_evidence"]
+    if mutation == "criterion-not-mapping":
+        binding["criterion"] = "durability"
+    elif mutation == "outcome-not-mapping":
+        binding["outcome"] = ["OK"]
+    elif mutation == "matched-entry-not-mapping":
+        binding["matched_responses"] = ["QP"]
+    elif mutation == "matched-entry-incomplete":
+        binding["matched_responses"] = [{"label": "QP"}]
+    elif mutation == "matched-entry-missing-label":
+        binding["matched_responses"][0].pop("label")
+    elif mutation == "acceptance-not-mapping":
+        binding["matched_responses"][0]["acceptance"] = "0.22 mm"
+    elif mutation == "scope-entry-not-mapping":
+        binding["response_mapping_scope"] = ["QP"]
+    elif mutation == "scope-empty":
+        binding["response_mapping_scope"] = []
+    else:
+        binding["unexpected"] = "fingerprint-valid"
+    _reseal_acceptance_binding(binding)
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert published["acceptance_evidence"] is None
+    assert "invalid immutable acceptance evidence" in (
+        published["publication_validation"]["reason"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mapping_scope",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param([], id="empty"),
+    ],
+)
+def test_raw_acceptance_requires_non_empty_complete_mapping_scope(
+    mapping_scope,
+):
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
+    result = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={"QP": context},
+        response_mapping_scope=mapping_scope,
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["acceptance_evidence"] is None
+    assert "mapping scope" in result["reason"].lower()
+
+
+def test_raw_acceptance_rejects_scope_truncated_before_informational_response():
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
+            "response_id": "total",
+            "provenance": "controlled characteristic mapping",
+            "solver_provenance": {"state": "total"},
+        },
+    }
+    result = sls.crack_assessment(
+        {
+            "QP": {"wk": 0.22, "element_id": "R1"},
+            "Total": {"wk": 0.31, "element_id": "R2"},
+        },
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": contexts["QP"],
+        }),
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["acceptance_evidence"] is None
+    assert "current response 'Total' identity 'total'" in result["reason"]
+    assert "complete table-wide" in result["reason"]
+
+
+@pytest.mark.parametrize(
+    ("field", "reason_fragment"),
+    [
+        ("duration", "duration state"),
+        ("provenance", "mapping provenance"),
+        ("solver_provenance", "solver provenance"),
+    ],
+)
+def test_raw_acceptance_requires_each_response_provenance_field(
+    field,
+    reason_fragment,
+):
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
+    mapping_scope = _mapping_scope_from_contexts({"QP": context})
+    current_context = copy.deepcopy(context)
+    current_context.pop(field)
+
+    result = sls.crack_assessment(
+        {"QP": {"wk": 0.22, "element_id": "R1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={"QP": current_context},
+        response_mapping_scope=mapping_scope,
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["acceptance_evidence"] is None
+    assert reason_fragment in result["reason"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["duration", "provenance", "solver_provenance"],
+)
+def test_publication_rejects_each_missing_response_provenance_field(field):
+    _assessment, publication_case = _single_width_publication_fixture()
+    publication_case["responses"][0]["context"].pop(field)
+
+    record = sls.publication_safe_crack_control_record({
+        "cases": [publication_case],
+    })
+    published = record["cases"][0]["assessment"]
+
+    assert published["status"] == "NOT ASSESSED"
+    assert published["verdict"] == "REVIEW"
+    assert published["acceptance_evidence"] is None
+    assert "acceptance evidence cannot be reconstructed" in (
+        published["publication_validation"]["reason"]
+    )
+
+
+def test_raw_width_acceptance_requires_governing_element_evidence():
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
+    result = sls.crack_assessment(
+        {"QP": {"wk": 0.22}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
+        response_contexts={"QP": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": context,
+        }),
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["verdict"] == "REVIEW"
+    assert result["acceptance_evidence"] is None
+    assert "governing crack-width element is missing" in result["reason"]
+
+
+@pytest.mark.parametrize(
     ("field", "changed_value"),
     [
         ("duration", "short"),
@@ -527,17 +803,28 @@ def test_raw_acceptance_rejects_scope_context_provenance_conflict(
 
 
 def test_raw_acceptance_rejects_unordered_fingerprint_evidence():
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "map-v1",
+        "solver_provenance": {"states": {"long", "cracked"}},
+    }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "map-v1",
+    }]
     result = sls.crack_assessment(
         {"QP": {"wk": 0.22, "element_id": "R1"}},
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-                "solver_provenance": {"states": {"long", "cracked"}},
-            },
-        },
+        response_contexts={"QP": context},
+        response_mapping_scope=mapping_scope,
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -566,11 +853,21 @@ def test_publication_rejects_exact_single_response_context_mutation(
         "provenance": "map-v1",
         "solver_provenance": {"solve": "v1"},
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "map-v1",
+    }]
     assessment = sls.crack_assessment(
         {"QP": {"wk": 0.22, "element_id": "R1"}},
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
         response_contexts={"QP": stored_context},
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["verdict"] == "PASS"
     current_context = copy.deepcopy(stored_context)
@@ -580,6 +877,7 @@ def test_publication_rejects_exact_single_response_context_mutation(
         "cases": [{
             "case": "SLS-QP",
             "assessment": assessment,
+            "response_mapping_scope": mapping_scope,
             "responses": [{
                 "name": "QP",
                 "wk_mm": 0.22,
@@ -594,8 +892,8 @@ def test_publication_rejects_exact_single_response_context_mutation(
     assert published["status"] == "NOT ASSESSED"
     assert published["verdict"] == "REVIEW"
     assert published["acceptance_evidence"] is None
-    assert "immutable acceptance evidence" in (
-        published["publication_validation"]["reason"]
+    assert "acceptance evidence" in (
+        published["publication_validation"]["reason"].lower()
     )
     assert assessment["response_contexts"]["QP"] == stored_context
 
@@ -739,9 +1037,21 @@ def test_duplicate_criterion_identity_cannot_emit_or_publish_acceptance():
         response_contexts={
             "QP": {
                 "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "duration": "long",
                 "response_id": "qp",
+                "provenance": "map-v1",
+                "solver_provenance": {"solve": "v1"},
             },
         },
+        response_mapping_scope=[{
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response": "QP",
+            "response_id": "qp",
+            "elastic_case": "elastic-1",
+            "state": "long",
+            "provenance": "map-v1",
+        }],
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -901,6 +1211,22 @@ def test_publication_rejects_decompression_response_context_mutations(
 
 def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
     criteria = sls.crack_criteria_from_inputs(_standard_inputs())
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "sustained",
+            "response_id": "long",
+            "provenance": "explicit long_combination field",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "instantaneous total",
+            "response_id": "total",
+            "provenance": "explicit total_combination field",
+            "solver_provenance": {"state": "total"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "Long-term": {"wk": 0.22, "element_id": "bar 2"},
@@ -908,20 +1234,8 @@ def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
         },
         valid=True,
         criteria=criteria,
-        response_contexts={
-            "Long-term": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "duration": "sustained",
-                "response_id": "long",
-                "provenance": "explicit long_combination field",
-            },
-            "Total": {
-                "combination": sls.COMBINATION_CHARACTERISTIC,
-                "duration": "instantaneous total",
-                "response_id": "total",
-                "provenance": "explicit total_combination field",
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
     assert result["status"] == "OK"
     assert result["verdict"] == "PASS"
@@ -945,7 +1259,10 @@ def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
             {
                 "Other": {
                     "combination": sls.COMBINATION_CHARACTERISTIC,
+                    "duration": "short",
                     "response_id": "other",
+                    "provenance": "controlled characteristic mapping",
+                    "solver_provenance": {"state": "short"},
                 },
             },
             "NOT ASSESSED",
@@ -958,7 +1275,10 @@ def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
             {
                 "QP": {
                     "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "duration": "long",
                     "response_id": "qp",
+                    "provenance": "controlled QP mapping",
+                    "solver_provenance": {"state": "long"},
                 },
             },
             "OK",
@@ -994,11 +1314,17 @@ def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
             {
                 "QP-A": {
                     "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "duration": "long",
                     "response_id": "qp-a",
+                    "provenance": "controlled QP-A mapping",
+                    "solver_provenance": {"state": "qp-a"},
                 },
                 "QP-B": {
                     "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "duration": "long",
                     "response_id": "qp-b",
+                    "provenance": "controlled QP-B mapping",
+                    "solver_provenance": {"state": "qp-b"},
                 },
             },
             "NOT ASSESSED",
@@ -1011,6 +1337,9 @@ def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
             {
                 "QP": {
                     "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "duration": "long",
+                    "provenance": "controlled missing-ID mapping",
+                    "solver_provenance": {"state": "long"},
                 },
             },
             "NOT ASSESSED",
@@ -1026,11 +1355,17 @@ def test_ordinary_2004_crack_verdict_uses_qp_not_larger_total_response():
             {
                 "Fine": {
                     "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "duration": "long",
                     "response_id": "long",
+                    "provenance": "controlled long mapping",
+                    "solver_provenance": {"state": "long"},
                 },
                 "Coarse": {
                     "combination": sls.COMBINATION_FREQUENT,
+                    "duration": "long",
                     "response_id": "long",
+                    "provenance": "controlled long mapping",
+                    "solver_provenance": {"state": "long"},
                 },
             },
             "NOT ASSESSED",
@@ -1047,11 +1382,22 @@ def test_crack_response_identity_state_matrix(
     expected_matched,
     reason_fragment,
 ):
+    scope_contexts = {}
+    for name, context in contexts.items():
+        scope_contexts[name] = {
+            **context,
+            "response_id": (
+                context.get("response_id") or f"scope:{name}"
+            ),
+        }
     result = sls.crack_assessment(
         responses,
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
         response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(
+            scope_contexts
+        ),
     )
 
     assert result["status"] == expected_status
@@ -1203,23 +1549,39 @@ def test_publication_response_identity_state_matrix(
     current_responses,
     reason_fragment,
 ):
+    stored_context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "long",
+        "provenance": "controlled mapping",
+        "solver_provenance": {"state": "long"},
+    }
     assessment = sls.crack_assessment(
         {"Fine": {"wk": 0.22, "element_id": "R1"}},
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "Fine": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "long",
-            },
-        },
+        response_contexts={"Fine": stored_context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "Fine": stored_context,
+        }),
     )
     assert assessment["verdict"] == "PASS"
 
+    current_responses = copy.deepcopy(current_responses)
+    current_contexts = {}
+    for index, response in enumerate(current_responses):
+        context = response["context"]
+        context.setdefault("duration", "long")
+        context.setdefault("provenance", "controlled mapping")
+        context.setdefault("solver_provenance", {"state": "long"})
+        current_contexts[f"{index}:{response['name']}"] = context
     record = sls.publication_safe_crack_control_record({
         "cases": [{
             "case": "SLS-QP",
             "assessment": assessment,
+            "response_mapping_scope": _mapping_scope_from_contexts(
+                current_contexts
+            ),
             "responses": current_responses,
         }],
     })
@@ -1235,35 +1597,12 @@ def test_publication_response_identity_state_matrix(
 
 
 def test_publication_rejects_status_not_supported_by_current_width():
-    assessment = sls.crack_assessment(
-        {"QP": {"wk": 0.31, "element_id": "R1"}},
-        valid=True,
-        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
-    )
+    assessment, publication_case = _single_width_publication_fixture(0.31)
     assert assessment["verdict"] == "FAIL"
     assessment["criteria"][0]["status"] = "OK"
 
     record = sls.publication_safe_crack_control_record({
-        "cases": [{
-            "case": "SLS-QP",
-            "assessment": assessment,
-            "responses": [{
-                "name": "QP",
-                "wk_mm": 0.31,
-                "element_id": "R1",
-                "acceptance_role": "criterion input",
-                "context": {
-                    "combination": sls.COMBINATION_QUASI_PERMANENT,
-                    "response_id": "qp",
-                },
-            }],
-        }],
+        "cases": [publication_case],
     })
     published = record["cases"][0]["assessment"]
 
@@ -1275,37 +1614,14 @@ def test_publication_rejects_status_not_supported_by_current_width():
 
 
 def test_publication_rebuilds_width_metrics_from_current_evidence():
-    assessment = sls.crack_assessment(
-        {"QP": {"wk": 0.22, "element_id": "R1"}},
-        valid=True,
-        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
-    )
+    assessment, publication_case = _single_width_publication_fixture()
     assessment["util"] = 99.0
     assessment["margin"] = -99.0
     assessment["criteria"][0]["util"] = 99.0
     assessment["criteria"][0]["margin"] = -99.0
 
     record = sls.publication_safe_crack_control_record({
-        "cases": [{
-            "case": "SLS-QP",
-            "assessment": assessment,
-            "responses": [{
-                "name": "QP",
-                "wk_mm": 0.22,
-                "element_id": "R1",
-                "acceptance_role": "criterion input",
-                "context": {
-                    "combination": sls.COMBINATION_QUASI_PERMANENT,
-                    "response_id": "qp",
-                },
-            }],
-        }],
+        "cases": [publication_case],
     })
     published = record["cases"][0]["assessment"]
 
@@ -1317,34 +1633,11 @@ def test_publication_rebuilds_width_metrics_from_current_evidence():
 
 
 def test_publication_rejects_acceptance_without_criterion_source():
-    assessment = sls.crack_assessment(
-        {"QP": {"wk": 0.22, "element_id": "R1"}},
-        valid=True,
-        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
-    )
+    assessment, publication_case = _single_width_publication_fixture()
     assessment["criteria"][0]["criterion_source"] = ""
 
     record = sls.publication_safe_crack_control_record({
-        "cases": [{
-            "case": "SLS-QP",
-            "assessment": assessment,
-            "responses": [{
-                "name": "QP",
-                "wk_mm": 0.22,
-                "element_id": "R1",
-                "acceptance_role": "criterion input",
-                "context": {
-                    "combination": sls.COMBINATION_QUASI_PERMANENT,
-                    "response_id": "qp",
-                },
-            }],
-        }],
+        "cases": [publication_case],
     })
     published = record["cases"][0]["assessment"]
 
@@ -1366,34 +1659,11 @@ def test_publication_rejects_acceptance_without_criterion_source():
 def test_publication_rejects_malformed_matched_response_container(
     matched_responses,
 ):
-    assessment = sls.crack_assessment(
-        {"QP": {"wk": 0.22, "element_id": "R1"}},
-        valid=True,
-        criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
-    )
+    assessment, publication_case = _single_width_publication_fixture()
     assessment["criteria"][0]["matched_responses"] = matched_responses
 
     record = sls.publication_safe_crack_control_record({
-        "cases": [{
-            "case": "SLS-QP",
-            "assessment": assessment,
-            "responses": [{
-                "name": "QP",
-                "wk_mm": 0.22,
-                "element_id": "R1",
-                "acceptance_role": "criterion input",
-                "context": {
-                    "combination": sls.COMBINATION_QUASI_PERMANENT,
-                    "response_id": "qp",
-                },
-            }],
-        }],
+        "cases": [publication_case],
     })
     published = record["cases"][0]["assessment"]
 
@@ -1405,6 +1675,22 @@ def test_publication_rejects_malformed_matched_response_container(
 
 
 def test_unrelated_not_assessed_response_cannot_block_qp_criterion():
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "long",
+            "provenance": "controlled long mapping",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "short",
+            "response_id": "total",
+            "provenance": "controlled total mapping",
+            "solver_provenance": {"state": "total"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "Long-term": {"wk": 0.18, "element_id": "bar 2"},
@@ -1412,16 +1698,8 @@ def test_unrelated_not_assessed_response_cannot_block_qp_criterion():
         },
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "Long-term": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "long",
-            },
-            "Total": {
-                "combination": sls.COMBINATION_FREQUENT,
-                "response_id": "total",
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
         dispositions={
             "Long-term": {
                 "status": "CALCULATED",
@@ -1444,6 +1722,22 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
         sls_prestress_class=sls.PRESTRESS_BONDED,
         sls_decompression_applicability=sls.DECOMPRESSION_REQUIRED,
     ))
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": "synthetic independent regression",
+        },
+        "Frequent": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "short",
+            "response_id": "frequent",
+            "provenance": "controlled frequent mapping",
+            "solver_provenance": {"state": "frequent"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "QP": {
@@ -1461,16 +1755,8 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
         },
         valid=True,
         criteria=criteria,
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-            "Frequent": {
-                "combination": sls.COMBINATION_FREQUENT,
-                "response_id": "frequent",
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
 
     assert result["status"] == "OK"
@@ -1617,6 +1903,13 @@ def test_bonded_prestress_routes_width_to_frequent_and_decompression_to_qp():
     ],
 )
 def test_decompression_rejects_incomplete_acceptance_evidence(evidence):
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
     result = sls.crack_assessment(
         {
             "QP": {
@@ -1635,12 +1928,10 @@ def test_decompression_rejects_incomplete_acceptance_evidence(evidence):
             "limit_mm": None,
             "applicability": {},
         }],
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
+        response_contexts={"QP": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": context,
+        }),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -1650,6 +1941,13 @@ def test_decompression_rejects_incomplete_acceptance_evidence(evidence):
 
 
 def test_decompression_rejects_solver_provenance_context_conflict():
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "response"},
+    }
     result = sls.crack_assessment(
         {
             "QP": {
@@ -1673,13 +1971,10 @@ def test_decompression_rejects_solver_provenance_context_conflict():
             "limit_mm": None,
             "applicability": {},
         }],
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-                "solver_provenance": {"state": "response"},
-            },
-        },
+        response_contexts={"QP": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": context,
+        }),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -1702,20 +1997,26 @@ def test_decompression_rejects_solver_provenance_context_conflict():
             id="valid-not-applicable",
         ),
         pytest.param(
-            {
-                "status": "NOT APPLICABLE",
-                "value": True,
-                "solver_provenance": {"state": "long"},
-            },
+                {
+                    "status": "NOT APPLICABLE",
+                    "value": True,
+                    "solver_provenance": {
+                        "state": "long",
+                        "converged": True,
+                    },
+                },
             "NOT ASSESSED",
             id="boolean-present-value",
         ),
         pytest.param(
-            {
-                "status": "NOT APPLICABLE",
-                "governing": float("inf"),
-                "solver_provenance": {"state": "long"},
-            },
+                {
+                    "status": "NOT APPLICABLE",
+                    "governing": float("inf"),
+                    "solver_provenance": {
+                        "state": "long",
+                        "converged": True,
+                    },
+                },
             "NOT ASSESSED",
             id="non-finite-present-location",
         ),
@@ -1733,6 +2034,16 @@ def test_decompression_not_applicable_evidence_state_matrix(
     evidence,
     expected_status,
 ):
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {
+            "state": "long",
+            "converged": True,
+        },
+    }
     result = sls.crack_assessment(
         {
             "QP": {
@@ -1751,12 +2062,10 @@ def test_decompression_not_applicable_evidence_state_matrix(
             "limit_mm": None,
             "applicability": {},
         }],
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
+        response_contexts={"QP": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": context,
+        }),
     )
 
     assert result["status"] == expected_status
@@ -1830,7 +2139,9 @@ def test_decompression_requires_consistent_evidence_for_all_matched_aliases(
     contexts = {
         name: {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "long",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         }
         for name in ("Fine", "Coarse")
@@ -1865,9 +2176,10 @@ def test_decompression_requires_consistent_evidence_for_all_matched_aliases(
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
 
     assert result["status"] == expected_status
@@ -1893,16 +2205,21 @@ def test_2023_appearance_and_durability_are_separate_qp_criteria():
         sls_appearance_limit=0.25,
         sls_wk_limit=0.30,
     ))
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
     result = sls.crack_assessment(
         {"QP": {"wk": 0.26, "element_id": "bar 2"}},
         valid=True,
         criteria=criteria,
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            }
-        },
+        response_contexts={"QP": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": context,
+        }),
     )
 
     assert result["status"] == "EXCEEDED"
@@ -1931,6 +2248,22 @@ def test_2023_bonded_appearance_qp_is_separate_from_frequent_durability():
         sls_appearance_limit=0.25,
         sls_decompression_applicability=sls.DECOMPRESSION_REQUIRED,
     ))
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "qp"},
+        },
+        "Frequent": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "short",
+            "response_id": "frequent",
+            "provenance": "controlled frequent mapping",
+            "solver_provenance": {"state": "frequent"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "QP": {
@@ -1947,16 +2280,8 @@ def test_2023_bonded_appearance_qp_is_separate_from_frequent_durability():
         },
         valid=True,
         criteria=criteria,
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-            "Frequent": {
-                "combination": sls.COMBINATION_FREQUENT,
-                "response_id": "frequent",
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
 
     assert result["status"] == "OK"
@@ -1984,6 +2309,22 @@ def test_known_width_failure_governs_over_incomplete_decompression():
         sls_protection_class=sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
         sls_exposure_class=sls.EXPOSURE_XC2_XC4,
     ))
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "qp"},
+        },
+        "Frequent": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "short",
+            "response_id": "frequent",
+            "provenance": "controlled frequent mapping",
+            "solver_provenance": {"state": "frequent"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "QP": {"wk": 0.18, "element_id": "tendon 1"},
@@ -1991,16 +2332,8 @@ def test_known_width_failure_governs_over_incomplete_decompression():
         },
         valid=True,
         criteria=criteria,
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-            "Frequent": {
-                "combination": sls.COMBINATION_FREQUENT,
-                "response_id": "frequent",
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
 
     assert result["status"] == "EXCEEDED"
@@ -2024,6 +2357,22 @@ def test_2023_bonded_protection_levels_2_3_use_qp_not_frequent_width():
         sls_protection_class=sls.PROTECTION_LEVEL_2_OR_3,
         sls_exposure_class=sls.EXPOSURE_XC2_XC4,
     ))
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "qp"},
+        },
+        "Frequent": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "short",
+            "response_id": "frequent",
+            "provenance": "controlled frequent mapping",
+            "solver_provenance": {"state": "frequent"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "QP": {"wk": 0.31, "element_id": "tendon 1"},
@@ -2031,16 +2380,8 @@ def test_2023_bonded_protection_levels_2_3_use_qp_not_frequent_width():
         },
         valid=True,
         criteria=criteria,
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-            "Frequent": {
-                "combination": sls.COMBINATION_FREQUENT,
-                "response_id": "frequent",
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
 
     assert result["status"] == "EXCEEDED"
@@ -2113,16 +2454,21 @@ def test_2023_bonded_missing_structured_route_is_not_assessed(
         sls_prestress_class=sls.PRESTRESS_BONDED,
     )
     inputs[missing_key] = missing_value
+    context = {
+        "combination": sls.COMBINATION_FREQUENT,
+        "duration": "short",
+        "response_id": "frequent",
+        "provenance": "controlled frequent mapping",
+        "solver_provenance": {"state": "frequent"},
+    }
     result = sls.crack_assessment(
         {"Frequent": {"wk": 0.20, "element_id": "tendon 1"}},
         valid=True,
         criteria=sls.crack_criteria_from_inputs(inputs),
-        response_contexts={
-            "Frequent": {
-                "combination": sls.COMBINATION_FREQUENT,
-                "response_id": "frequent",
-            },
-        },
+        response_contexts={"Frequent": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "Frequent": context,
+        }),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -2148,16 +2494,21 @@ def test_boolean_crack_numeric_is_rejected_before_favourable_coercion(
 ):
     inputs = _standard_inputs()
     inputs[key] = value
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
     result = sls.crack_assessment(
         {"QP": {"wk": 0.31, "element_id": "bar 1"}},
         valid=True,
         criteria=sls.crack_criteria_from_inputs(inputs),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
+        response_contexts={"QP": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": context,
+        }),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -2182,17 +2533,21 @@ def test_boolean_crack_numeric_is_rejected_before_favourable_coercion(
     ],
 )
 def test_boolean_calculated_crack_width_is_review_not_pass(wk):
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
     result = sls.crack_assessment(
         {"QP": {"wk": wk, "element_id": "bar 1"}},
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-                "solver_provenance": {"state": "long"},
-            },
-        },
+        response_contexts={"QP": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": context,
+        }),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -2218,6 +2573,22 @@ def test_boolean_calculated_crack_width_is_review_not_pass(wk):
     ],
 )
 def test_boolean_informational_crack_width_blocks_overall_pass(wk):
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
+            "response_id": "total",
+            "provenance": "controlled characteristic mapping",
+            "solver_provenance": {"state": "long-plus-short"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "QP": {"wk": 0.22, "element_id": "bar 1"},
@@ -2225,18 +2596,8 @@ def test_boolean_informational_crack_width_blocks_overall_pass(wk):
         },
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-                "solver_provenance": {"state": "long"},
-            },
-            "Total": {
-                "combination": sls.COMBINATION_CHARACTERISTIC,
-                "response_id": "total",
-                "solver_provenance": {"state": "long-plus-short"},
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -2260,6 +2621,13 @@ def test_boolean_informational_crack_width_blocks_overall_pass(wk):
 
 
 def test_non_mapping_response_fails_closed_before_decompression_routing():
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
     result = sls.crack_assessment(
         {"QP": 1.0},
         valid=True,
@@ -2272,13 +2640,10 @@ def test_non_mapping_response_fails_closed_before_decompression_routing():
             "limit_mm": None,
             "applicability": {},
         }],
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-                "solver_provenance": {"state": "long"},
-            },
-        },
+        response_contexts={"QP": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "QP": context,
+        }),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -2394,14 +2759,19 @@ def test_malformed_routing_evidence_fails_closed(
     routing_override,
     reason_fragment,
 ):
+    context = {
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
+    }
     arguments = {
         "criteria": sls.crack_criteria_from_inputs(_standard_inputs()),
-        "response_contexts": {
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
+        "response_contexts": {"QP": context},
+        "response_mapping_scope": _mapping_scope_from_contexts({
+            "QP": context,
+        }),
     }
     arguments.update(routing_override)
 
@@ -2418,19 +2788,21 @@ def test_malformed_routing_evidence_fails_closed(
 
 
 def test_missing_required_combination_is_review_with_response_provenance():
+    context = {
+        "combination": sls.COMBINATION_UNSPECIFIED,
+        "duration": "sustained",
+        "response_id": "long",
+        "provenance": "legacy project: no combination field",
+        "solver_provenance": {"solver": "cracked-section"},
+    }
     result = sls.crack_assessment(
         {"Long-term": {"wk": 0.18, "element_id": "bar 2"}},
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "Long-term": {
-                "combination": sls.COMBINATION_UNSPECIFIED,
-                "duration": "sustained",
-                "response_id": "long",
-                "provenance": "legacy project: no combination field",
-                "solver_provenance": {"solver": "cracked-section"},
-            }
-        },
+        response_contexts={"Long-term": context},
+        response_mapping_scope=_mapping_scope_from_contexts({
+            "Long-term": context,
+        }),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -2449,6 +2821,22 @@ def test_missing_required_combination_is_review_with_response_provenance():
 
 
 def test_duplicate_independent_mapping_for_required_combination_is_review():
+    contexts = {
+        "Long-term": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "long",
+            "provenance": "long response field",
+            "solver_provenance": {"state": "long"},
+        },
+        "Total": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "short",
+            "response_id": "total",
+            "provenance": "total response field",
+            "solver_provenance": {"state": "total"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "Long-term": {"wk": 0.18, "element_id": "bar 1"},
@@ -2456,20 +2844,8 @@ def test_duplicate_independent_mapping_for_required_combination_is_review():
         },
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "Long-term": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "long",
-                "provenance": "long response field",
-                "solver_provenance": {"state": "long"},
-            },
-            "Total": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "total",
-                "provenance": "total response field",
-                "solver_provenance": {"state": "total"},
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
 
     assert result["status"] == "NOT ASSESSED"
@@ -2481,20 +2857,24 @@ def test_duplicate_independent_mapping_for_required_combination_is_review():
     assert result["response_provenance"] == [
         {
             "response": "Long-term",
+            "response_id": "long",
+            "elastic_case": "elastic-1",
             "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": None,
+            "duration": "long",
             "mapping": "long response field",
         },
         {
             "response": "Total",
+            "response_id": "total",
+            "elastic_case": "elastic-1",
             "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": None,
+            "duration": "short",
             "mapping": "total response field",
         },
     ]
     assert result["solver_provenance"] == [
-        {"response": "Long-term", "solver": {"state": "long"}},
-        {"response": "Total", "solver": {"state": "total"}},
+        {"response": "Long-term", "solver": None},
+        {"response": "Total", "solver": None},
     ]
 
 
@@ -2506,22 +2886,26 @@ def test_duplicate_required_combination_across_elastic_cases_is_review():
         response_contexts={
             "Long-term": {
                 "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "long",
-                "provenance": "EL-QP-A long response",
+                "duration": "long",
+                "response_id": "EL-QP-A:long",
+                "provenance": "EL-QP-A long_combination table field",
+                "solver_provenance": {"state": "long"},
             },
         },
         response_mapping_scope=[
-            {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response": "EL-QP-A / long",
+                {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "duration": "long",
+                    "response": "EL-QP-A / long",
                 "response_id": "EL-QP-A:long",
                 "elastic_case": "EL-QP-A",
                 "state": "long",
                 "provenance": "EL-QP-A long_combination table field",
             },
-            {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response": "EL-QP-B / long",
+                {
+                    "combination": sls.COMBINATION_QUASI_PERMANENT,
+                    "duration": "long",
+                    "response": "EL-QP-B / long",
                 "response_id": "EL-QP-B:long",
                 "elastic_case": "EL-QP-B",
                 "state": "long",
@@ -2553,15 +2937,20 @@ def test_required_combination_must_match_table_scope_response_identity():
         response_contexts={
             "Long-term": {
                 "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "duration": "long",
                 "response_id": "stale:long",
+                "provenance": "stale long mapping",
+                "solver_provenance": {"state": "long"},
             },
         },
         response_mapping_scope=[{
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response": "EL-QP / long",
             "response_id": "EL-QP:long",
             "elastic_case": "EL-QP",
             "state": "long",
+            "provenance": "EL-QP long_combination table field",
         }],
     )
 
@@ -2579,15 +2968,20 @@ def test_required_combination_must_match_table_scope_combination():
         response_contexts={
             "Long-term": {
                 "combination": sls.COMBINATION_QUASI_PERMANENT,
+                "duration": "long",
                 "response_id": "EL-QP:long",
+                "provenance": "EL-QP long_combination table field",
+                "solver_provenance": {"state": "long"},
             },
         },
         response_mapping_scope=[{
             "combination": sls.COMBINATION_FREQUENT,
+            "duration": "long",
             "response": "EL-QP / long",
             "response_id": "EL-QP:long",
             "elastic_case": "EL-QP",
             "state": "long",
+            "provenance": "EL-QP long_combination table field",
         }],
     )
 
@@ -2606,6 +3000,22 @@ def test_project_criteria_require_explicit_per_combination_limits_and_source():
         "sls_project_frequent_limit": 0.24,
         "sls_project_quasi_permanent_limit": 0.21,
     })
+    contexts = {
+        "Frequent": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "short",
+            "response_id": "frequent",
+            "provenance": "controlled frequent mapping",
+            "solver_provenance": {"state": "frequent"},
+        },
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "qp"},
+        },
+    }
     result = sls.crack_assessment(
         {
             "Frequent": {"wk": 0.25, "element_id": "bar 1"},
@@ -2613,16 +3023,8 @@ def test_project_criteria_require_explicit_per_combination_limits_and_source():
         },
         valid=True,
         criteria=criteria,
-        response_contexts={
-            "Frequent": {
-                "combination": sls.COMBINATION_FREQUENT,
-                "response_id": "frequent",
-            },
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
     )
 
     assert result["status"] == "EXCEEDED"
@@ -2645,24 +3047,32 @@ def test_legacy_unstructured_call_fails_closed_instead_of_maxing_durations():
 
     assert result["status"] == "NOT ASSESSED"
     assert result["value"] is None
-    assert "structured criterion" in result["reason"]
+    assert "mapping scope is missing" in result["reason"]
 
 
 def test_not_applicable_reason_is_retained_for_required_combination():
+    contexts = {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "qp",
+            "provenance": "controlled QP mapping",
+            "solver_provenance": {"state": "qp"},
+        },
+        "Total": {
+            "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
+            "response_id": "total",
+            "provenance": "controlled characteristic mapping",
+            "solver_provenance": {"state": "total"},
+        },
+    }
     result = sls.crack_assessment(
         {"QP": None, "Total": None},
         valid=True,
         criteria=sls.crack_criteria_from_inputs(_standard_inputs()),
-        response_contexts={
-            "QP": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "qp",
-            },
-            "Total": {
-                "combination": sls.COMBINATION_CHARACTERISTIC,
-                "response_id": "total",
-            },
-        },
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
         dispositions={
             "QP": {
                 "status": "NOT APPLICABLE",

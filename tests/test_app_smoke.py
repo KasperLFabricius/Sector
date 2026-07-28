@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import json
 import pathlib
 import re
@@ -5277,10 +5278,21 @@ def test_non_mapping_crack_response_is_retained_as_rejected_record():
     contexts = {
         "QP": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "qp",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     assessment = sls.crack_assessment(
         {"QP": {"wk": 0.22, "element_id": "R1"}},
         valid=True,
@@ -5291,9 +5303,10 @@ def test_non_mapping_crack_response_is_retained_as_rejected_record():
             "source": "QA controlled criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": 0.30,
-            "applicability": {},
+            "applicability": {"member": "reinforced"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["status"] == "OK"
     assert assessment["verdict"] == "PASS"
@@ -5305,6 +5318,7 @@ def test_non_mapping_crack_response_is_retained_as_rejected_record():
             "crack_responses": {"QP": 1.0},
             "crack_dispositions": {"QP": {"status": "OK"}},
             "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
         },
     })
 
@@ -5382,6 +5396,55 @@ def _canonical_app_width_results():
     }
 
 
+def _reseal_app_acceptance_binding(binding):
+    body = {
+        key: value
+        for key, value in binding.items()
+        if key != "fingerprint"
+    }
+    binding["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def test_legacy_scalar_analysis_constructs_complete_explicit_mapping_scope(
+    monkeypatch,
+):
+    import sector_app
+
+    captured = {}
+
+    def capture(single_input, **_kwargs):
+        captured.update(single_input)
+        return {}
+
+    monkeypatch.setattr(sector_app, "_run_single_analysis", capture)
+    inp = {
+        "section": object(),
+        "sls_cw": True,
+        "sls_long_combination": sls.COMBINATION_QUASI_PERMANENT,
+        "sls_total_combination": sls.COMBINATION_CHARACTERISTIC,
+    }
+
+    assert sector_app.run_analysis(inp) == {}
+    scope = captured["sls_response_mapping_scope"]
+
+    assert "sls_response_mapping_scope" not in inp
+    assert [item["response_id"] for item in scope] == ["long", "total"]
+    assert [item["state"] for item in scope] == ["long", "total"]
+    assert all(item["duration"] for item in scope)
+    assert all(item["provenance"] for item in scope)
+    assert captured["sls_response_provenance"]["long"].startswith(
+        "Legacy scalar"
+    )
+
+
 @pytest.mark.parametrize(
     ("mutation", "changed_value"),
     [
@@ -5439,12 +5502,24 @@ def test_changed_governing_crack_response_invalidates_stale_pass_record():
     import sector_app
 
     contexts = {
-        "QP": {
+        name: {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "qp",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
-        },
+        }
+        for name in ("QP",)
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     criteria = [{
         "id": "qa-durability",
         "kind": sls.CRITERION_DURABILITY,
@@ -5452,13 +5527,14 @@ def test_changed_governing_crack_response_invalidates_stale_pass_record():
         "source": "QA controlled criterion",
         "required_combination": sls.COMBINATION_QUASI_PERMANENT,
         "limit_mm": 0.30,
-        "applicability": {},
+        "applicability": {"member": "reinforced"},
     }]
     stale_assessment = sls.crack_assessment(
         {"QP": {"wk": 0.22, "element_id": "R1"}},
         valid=True,
         criteria=criteria,
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert stale_assessment["verdict"] == "PASS"
 
@@ -5471,6 +5547,7 @@ def test_changed_governing_crack_response_invalidates_stale_pass_record():
             },
             "crack_dispositions": {"QP": {"status": "OK"}},
             "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
         },
     })
 
@@ -5493,6 +5570,7 @@ def test_changed_governing_crack_response_invalidates_stale_pass_record():
             },
             "crack_dispositions": {"QP": {"status": "OK"}},
             "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
         },
     })
     element_assessment = changed_element["cases"][0]["assessment"]
@@ -5508,10 +5586,21 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
     contexts = {
         "QP": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "qp",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     response = {
         "wk": 0.18,
         "element_id": "T1",
@@ -5533,9 +5622,10 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["status"] == "OK"
     assert assessment["verdict"] == "PASS"
@@ -5547,6 +5637,7 @@ def test_current_decompression_evidence_preserves_matching_pass_record():
             "crack_responses": {"QP": response},
             "crack_dispositions": {"QP": {"status": "OK"}},
             "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
         },
     })
 
@@ -5586,10 +5677,21 @@ def test_changed_decompression_evidence_invalidates_stale_pass_record(
     contexts = {
         "QP": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "qp",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     original_response = {
         "wk": 0.18,
         "element_id": "T1",
@@ -5611,9 +5713,10 @@ def test_changed_decompression_evidence_invalidates_stale_pass_record(
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     changed_response = copy.deepcopy(original_response)
     changed_response["decompression"][field] = changed_value
@@ -5625,6 +5728,7 @@ def test_changed_decompression_evidence_invalidates_stale_pass_record(
             "crack_responses": {"QP": changed_response},
             "crack_dispositions": {"QP": {"status": "OK"}},
             "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
         },
     })
 
@@ -5641,11 +5745,22 @@ def test_changed_non_governing_decompression_evidence_invalidates_pass():
     contexts = {
         name: {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "long",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         }
         for name in ("Fine", "Coarse")
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "long",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     response = {
         "wk": 0.18,
         "element_id": "T1",
@@ -5671,9 +5786,10 @@ def test_changed_non_governing_decompression_evidence_invalidates_pass():
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["status"] == "OK"
     assert assessment["verdict"] == "PASS"
@@ -5694,6 +5810,7 @@ def test_changed_non_governing_decompression_evidence_invalidates_pass():
                 "Coarse": {"status": "OK"},
             },
             "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
         },
     })
 
@@ -5824,6 +5941,38 @@ def test_download_session_and_autosave_reject_width_binding_mutations(
     assert all('"verdict": "PASS"' not in text for text in texts)
 
 
+def test_download_session_and_autosave_reject_malformed_binding_schema(
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    record = sector_app.crack_control_calculation_record(
+        _canonical_app_width_results()
+    )
+    binding = record["cases"][0]["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    binding["matched_responses"] = ["Fine"]
+    _reseal_app_acceptance_binding(binding)
+
+    assessments, texts = _download_and_autosave_publications(
+        sector_app,
+        record,
+        tmp_path,
+        monkeypatch,
+    )
+
+    for assessment in assessments:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["acceptance_evidence"] is None
+        assert "invalid immutable acceptance evidence" in (
+            assessment["publication_validation"]["reason"]
+        )
+    assert all('"verdict": "PASS"' not in text for text in texts)
+
+
 @pytest.mark.parametrize(
     ("field", "changed_value"),
     [
@@ -5844,10 +5993,21 @@ def test_download_session_and_autosave_reject_decompression_mutations(
     contexts = {
         "QP": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "qp",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     response = {
         "wk": 0.18,
         "element_id": "T1",
@@ -5868,9 +6028,10 @@ def test_download_session_and_autosave_reject_decompression_mutations(
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     record = sector_app.crack_control_calculation_record({
         "elastic": {
@@ -5879,6 +6040,7 @@ def test_download_session_and_autosave_reject_decompression_mutations(
             "crack_responses": {"QP": response},
             "crack_dispositions": {"QP": {"status": "OK"}},
             "crack_response_contexts": contexts,
+            "crack_response_mapping_scope": mapping_scope,
         },
     })
     assert record["cases"][0]["assessment"]["verdict"] == "PASS"
@@ -5909,10 +6071,21 @@ def test_download_and_autosave_share_decompression_publication_guard(
     contexts = {
         "QP": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "qp",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     response = {
         "wk": 0.18,
         "element_id": "T1",
@@ -5933,9 +6106,10 @@ def test_download_and_autosave_share_decompression_publication_guard(
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     invalid_response = copy.deepcopy(response)
     invalid_response["decompression"]["solver_provenance"][
@@ -5945,6 +6119,7 @@ def test_download_and_autosave_share_decompression_publication_guard(
         "cases": [{
             "case": "SLS-QP",
             "assessment": assessment,
+            "response_mapping_scope": mapping_scope,
             "responses": [{
                 "name": "QP",
                 "wk_mm": invalid_response["wk"],

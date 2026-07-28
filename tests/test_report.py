@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
 import pathlib
 import sys
@@ -103,6 +105,26 @@ def _crack():
         xi1_max=None,
         candidates=[candidate],
     )
+
+
+def _report_mapping_scope(contexts):
+    scope = []
+    seen = set()
+    for name, context in contexts.items():
+        response_id = context["response_id"]
+        if response_id in seen:
+            continue
+        seen.add(response_id)
+        scope.append({
+            "combination": context["combination"],
+            "duration": context["duration"],
+            "response": name,
+            "response_id": response_id,
+            "elastic_case": "EL-TEST",
+            "state": response_id,
+            "provenance": context["provenance"],
+        })
+    return scope
 
 
 @pytest.mark.parametrize(
@@ -250,6 +272,26 @@ def _out():
     contexts = copy.deepcopy(
         elastic["crack_assessment"]["response_contexts"]
     )
+    contexts["Long-term"]["solver_provenance"] = {"state": "long"}
+    contexts["Total (long + short)"]["solver_provenance"] = {
+        "state": "total",
+    }
+    mapping_scope = [
+        {
+            "combination": context["combination"],
+            "duration": context["duration"],
+            "response": name,
+            "response_id": context["response_id"],
+            "elastic_case": "EL-TEST",
+            "state": (
+                "long"
+                if name == "Long-term"
+                else "total"
+            ),
+            "provenance": context["provenance"],
+        }
+        for name, context in contexts.items()
+    ]
     responses = {
         "Long-term": elastic["crack"],
         "Total (long + short)": elastic["crack_short"],
@@ -268,12 +310,13 @@ def _out():
                 sls.COMBINATION_QUASI_PERMANENT
             ),
             "limit_mm": 0.30,
-            "applicability": {},
+            "applicability": {"member": "reinforced"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     elastic["crack_response_contexts"] = contexts
-    elastic["crack_response_mapping_scope"] = []
+    elastic["crack_response_mapping_scope"] = mapping_scope
     elastic["crack_responses"] = responses
     return out
 
@@ -1427,15 +1470,20 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
     contexts = {
         "Long-term": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "long",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
         "Total (long + short)": {
             "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
             "response_id": "total",
+            "provenance": "controlled characteristic mapping",
             "solver_provenance": {"state": "long-plus-short"},
         },
     }
+    mapping_scope = _report_mapping_scope(contexts)
     assessment = sls.crack_assessment(
         {
             "Long-term": {
@@ -1455,9 +1503,10 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
             "source": "QA controlled criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": 0.30,
-            "applicability": {},
+            "applicability": {"member": "reinforced"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["status"] == "OK"
     assert assessment["verdict"] == "PASS"
@@ -1465,6 +1514,7 @@ def test_report_never_publishes_pass_for_boolean_crack_result():
     elastic["crack_short"]["wk"] = np.bool_(False)
     elastic["crack_assessment"] = assessment
     elastic["crack_response_contexts"] = contexts
+    elastic["crack_response_mapping_scope"] = mapping_scope
 
     text = _pdf_text(sector_report.build_report(
         {}, _inp(), out, figures=False
@@ -1494,8 +1544,16 @@ def test_report_preserves_dk_coarse_matched_response_as_criterion_input():
                 if name.startswith("Long-term")
                 else sls.COMBINATION_CHARACTERISTIC
             ),
+            "duration": (
+                "long" if name.startswith("Long-term") else "short"
+            ),
             "response_id": (
                 "long" if name.startswith("Long-term") else "total"
+            ),
+            "provenance": (
+                "controlled QP mapping"
+                if name.startswith("Long-term")
+                else "controlled characteristic mapping"
             ),
             "solver_provenance": {
                 "state": (
@@ -1505,6 +1563,7 @@ def test_report_preserves_dk_coarse_matched_response_as_criterion_input():
         }
         for name in responses
     }
+    mapping_scope = _report_mapping_scope(contexts)
     assessment = sls.crack_assessment(
         responses,
         valid=True,
@@ -1515,9 +1574,10 @@ def test_report_preserves_dk_coarse_matched_response_as_criterion_input():
             "source": "QA controlled DK criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": 0.30,
-            "applicability": {},
+            "applicability": {"member": "reinforced"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["status"] == "OK"
     assert assessment["criteria"][0]["matched_responses"] == [
@@ -1531,6 +1591,7 @@ def test_report_preserves_dk_coarse_matched_response_as_criterion_input():
         crack_short_coarse=responses["Total (coarse)"],
         crack_responses=responses,
         crack_response_contexts=contexts,
+        crack_response_mapping_scope=mapping_scope,
         crack_dispositions={
             name: {"status": "CALCULATED"} for name in responses
         },
@@ -1561,15 +1622,20 @@ def test_report_formats_decompression_as_concrete_stress_not_crack_width():
     contexts = {
         "Long-term": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "long",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
         "Total (long + short)": {
             "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
             "response_id": "total",
+            "provenance": "controlled characteristic mapping",
             "solver_provenance": {"state": "total"},
         },
     }
+    mapping_scope = _report_mapping_scope(contexts)
     assessment = sls.crack_assessment(
         {
             "Long-term": response,
@@ -1583,9 +1649,10 @@ def test_report_formats_decompression_as_concrete_stress_not_crack_width():
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["criterion"] == sls.CRITERION_DECOMPRESSION
     elastic.update(
@@ -1595,6 +1662,7 @@ def test_report_formats_decompression_as_concrete_stress_not_crack_width():
             "Total (long + short)": elastic["crack_short"],
         },
         crack_response_contexts=contexts,
+        crack_response_mapping_scope=mapping_scope,
         crack_assessment=assessment,
     )
 
@@ -1648,6 +1716,7 @@ def test_report_reapplies_failure_precedence_over_incomplete_criterion():
             },
         ],
         response_contexts=elastic["crack_response_contexts"],
+        response_mapping_scope=elastic["crack_response_mapping_scope"],
     )
     assert assessment["status"] == "EXCEEDED"
     assessment.update(
@@ -1783,6 +1852,37 @@ def test_report_rejects_each_canonical_width_binding_mutation(
     assert "prior acceptance assessment was invalidated" in compact
 
 
+def test_report_rejects_fingerprint_valid_malformed_binding_schema():
+    out = _out()
+    binding = out["elastic"]["crack_assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    binding["matched_responses"] = ["Long-term"]
+    body = {
+        key: value
+        for key, value in binding.items()
+        if key != "fingerprint"
+    }
+    binding["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    text = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "PASS - Crack width" not in compact
+    assert "invalid immutable acceptance evidence" in compact
+
+
 @pytest.mark.parametrize(
     ("field", "changed_value"),
     [
@@ -1810,15 +1910,20 @@ def test_report_rejects_each_decompression_binding_mutation(
     contexts = {
         "Long-term": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "long",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
         "Total (long + short)": {
             "combination": sls.COMBINATION_CHARACTERISTIC,
+            "duration": "short",
             "response_id": "total",
+            "provenance": "controlled characteristic mapping",
             "solver_provenance": {"state": "total"},
         },
     }
+    mapping_scope = _report_mapping_scope(contexts)
     responses = {
         "Long-term": response,
         "Total (long + short)": elastic["crack_short"],
@@ -1833,9 +1938,10 @@ def test_report_rejects_each_decompression_binding_mutation(
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["verdict"] == "PASS"
     response["decompression"][field] = copy.deepcopy(changed_value)
@@ -1843,6 +1949,7 @@ def test_report_rejects_each_decompression_binding_mutation(
         crack=response,
         crack_responses=responses,
         crack_response_contexts=contexts,
+        crack_response_mapping_scope=mapping_scope,
         crack_assessment=assessment,
     )
 

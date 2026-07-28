@@ -6876,8 +6876,84 @@ def run_analysis(
             or inp.get("steel_error") or inp.get("material_error")):
         return {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
+        legacy_inp = inp
+        if inp.get("sls_cw"):
+            legacy_inp = dict(inp)
+            combinations = dict(
+                inp.get("sls_response_combinations") or {}
+            )
+            combinations.setdefault(
+                "long",
+                inp.get(
+                    "sls_long_combination",
+                    sls_core.COMBINATION_UNSPECIFIED,
+                ),
+            )
+            combinations.setdefault(
+                "total",
+                inp.get(
+                    "sls_total_combination",
+                    sls_core.COMBINATION_UNSPECIFIED,
+                ),
+            )
+            provenance = dict(
+                inp.get("sls_response_provenance") or {}
+            )
+            provenance.setdefault(
+                "long",
+                "Legacy scalar sls_long_combination input field",
+            )
+            provenance.setdefault(
+                "total",
+                "Legacy scalar sls_total_combination input field",
+            )
+            legacy_inp["sls_response_combinations"] = combinations
+            legacy_inp["sls_response_provenance"] = provenance
+            if inp.get("sls_response_mapping_scope") is None:
+                elastic_case = inp.get("elastic_case")
+                elastic_case = (
+                    elastic_case
+                    if isinstance(elastic_case, Mapping)
+                    else {}
+                )
+                elastic_case_id = str(
+                    elastic_case.get("id") or ""
+                ).strip()
+                elastic_case_label = (
+                    elastic_case_id
+                    or str(elastic_case.get("name") or "").strip()
+                    or "Legacy scalar input"
+                )
+                states = (
+                    (
+                        "long",
+                        "Sustained / long-term response",
+                    ),
+                    (
+                        "total",
+                        "Instantaneous total (long + short) response",
+                    ),
+                )
+                legacy_inp["sls_response_mapping_scope"] = [
+                    {
+                        "combination": combinations[state],
+                        "duration": duration,
+                        "response": (
+                            f"{elastic_case_label} / {state}"
+                        ),
+                        "response_id": (
+                            f"{elastic_case_id}:{state}"
+                            if elastic_case_id
+                            else state
+                        ),
+                        "elastic_case": elastic_case_label,
+                        "state": state,
+                        "provenance": provenance[state],
+                    }
+                    for state, duration in states
+                ]
         result = _run_single_analysis(
-            inp,
+            legacy_inp,
             reuse_plastic=reuse_plastic,
             reuse_elastic=reuse_elastic,
         )

@@ -325,7 +325,11 @@ def _validated_response_mapping_scope(
 ) -> tuple[list[dict], tuple[str, ...]]:
     """Normalize the table-wide mapping independently of an assessment."""
     if raw_scope is None:
-        return [], ()
+        if allow_empty:
+            return [], ()
+        return [], (
+            "Table-wide response mapping scope is missing.",
+        )
     if isinstance(
         raw_scope,
         (Mapping, str, bytes, bytearray),
@@ -366,6 +370,18 @@ def _validated_response_mapping_scope(
                 f"Table-wide response mapping {index + 1} has no explicit "
                 "response identity."
             )
+        for value, label in (
+            (context["duration"], "duration state"),
+            (context["provenance"], "mapping provenance"),
+            (_optional_text(raw.get("response")), "response label"),
+            (_optional_text(raw.get("elastic_case")), "elastic-case identity"),
+            (_optional_text(raw.get("state")), "response-state identity"),
+        ):
+            if value is None:
+                issues.append(
+                    f"Table-wide response mapping {index + 1} has no "
+                    f"explicit {label}."
+                )
         scope.append({
             "combination": context["combination"],
             "duration": context["duration"],
@@ -417,8 +433,6 @@ def _validated_decompression_evidence(
     raw_governing = raw.get("governing")
     explicit_solver_provenance = raw.get("solver_provenance")
     solver_provenance = explicit_solver_provenance
-    if solver_provenance is None:
-        solver_provenance = fallback_solver_provenance
 
     issues = []
     if status in {"OK", "EXCEEDED"} or raw_value is not None:
@@ -763,6 +777,21 @@ def _build_acceptance_evidence_binding(
                 f"matched response {name!r} does not carry the required "
                 f"{required} combination"
             )
+        if _optional_text(context.get("duration")) is None:
+            issues.append(
+                f"matched response {name!r} has no explicit duration state"
+            )
+        if _optional_text(context.get("provenance")) is None:
+            issues.append(
+                f"matched response {name!r} has no explicit mapping provenance"
+            )
+        if not _explicit_evidence_field(
+            context.get("solver_provenance"),
+            allow_nested_booleans=True,
+        ):
+            issues.append(
+                f"matched response {name!r} has no explicit solver provenance"
+            )
 
         entry = {
             "label": name,
@@ -805,12 +834,15 @@ def _build_acceptance_evidence_binding(
                 issues.append(
                     f"{name} crack-width evidence is missing or invalid"
                 )
+            governing_element = _response_governing_element(raw_response)
+            if not _explicit_evidence_field(governing_element):
+                issues.append(
+                    f"{name} governing crack-width element is missing"
+                )
             entry["acceptance"] = {
                 "type": "crack_width",
                 "value_mm": width,
-                "governing_element": _response_governing_element(
-                    raw_response
-                ),
+                "governing_element": governing_element,
             }
         response_entries.append(entry)
 
@@ -879,6 +911,43 @@ def _build_acceptance_evidence_binding(
     except ValueError as exc:
         canonical_scope = []
         issues.append(str(exc))
+    if not canonical_scope:
+        issues.append(
+            "complete table-wide response mapping scope is missing or empty"
+        )
+    scope_by_identity = {}
+    for item in canonical_scope:
+        scope_by_identity.setdefault(item.get("response_id"), []).append(item)
+    for name, context in contexts.items():
+        current_response_id = _optional_text(context.get("response_id"))
+        if current_response_id is None:
+            continue
+        scoped_contexts = scope_by_identity.get(current_response_id, [])
+        if len(scoped_contexts) != 1:
+            issues.append(
+                f"current response {name!r} identity {current_response_id!r} "
+                "is not represented exactly once in the complete table-wide "
+                "mapping scope"
+            )
+            continue
+        scoped_context = scoped_contexts[0]
+        context_conflicts = []
+        for scope_key, context_key, label in (
+            ("combination", "combination", "SLS combination"),
+            ("duration", "duration", "duration state"),
+            ("provenance", "provenance", "mapping provenance"),
+        ):
+            if not _evidence_values_equal(
+                scoped_context.get(scope_key),
+                context.get(context_key),
+            ):
+                context_conflicts.append(label)
+        if context_conflicts:
+            issues.append(
+                f"complete table-wide mapping scope conflicts with current "
+                f"response {name!r} in {', '.join(context_conflicts)}"
+            )
+
     if canonical_scope and response_id is not None:
         scoped_identity = [
             item
@@ -991,7 +1060,79 @@ def _build_acceptance_evidence_binding(
         "response_mapping_scope": canonical_scope,
         "outcome": outcome,
     })
-    fingerprint = hashlib.sha256(
+    validated_body, body_issues = _validated_acceptance_evidence_body(body)
+    if body_issues or validated_body is None:
+        return None, None, body_issues
+    fingerprint = _acceptance_evidence_fingerprint(validated_body)
+    binding = {**validated_body, "fingerprint": fingerprint}
+    return binding, body["outcome"], ()
+
+
+_ACCEPTANCE_EVIDENCE_BODY_KEYS = {
+    "schema",
+    "criterion",
+    "matched_responses",
+    "response_mapping_scope",
+    "outcome",
+}
+_ACCEPTANCE_EVIDENCE_CRITERION_KEYS = {
+    "id",
+    "kind",
+    "source_type",
+    "source",
+    "applicability",
+    "required_combination",
+    "limit_mm",
+}
+_ACCEPTANCE_EVIDENCE_RESPONSE_KEYS = {
+    "label",
+    "response_id",
+    "combination",
+    "duration",
+    "mapping_provenance",
+    "solver_provenance",
+    "acceptance",
+}
+_ACCEPTANCE_EVIDENCE_SCOPE_KEYS = {
+    "combination",
+    "duration",
+    "response",
+    "response_id",
+    "elastic_case",
+    "state",
+    "provenance",
+    "solver_provenance",
+}
+_ACCEPTANCE_EVIDENCE_OUTCOME_KEYS = {
+    "status",
+    "case",
+    "value",
+    "governing",
+    "limit",
+}
+
+
+def _schema_mapping_keys_issue(
+    value: Mapping,
+    expected: set[str],
+    *,
+    label: str,
+) -> str | None:
+    keys = set(value)
+    missing = sorted(expected - keys)
+    unexpected = sorted(keys - expected)
+    details = []
+    if missing:
+        details.append("missing " + ", ".join(missing))
+    if unexpected:
+        details.append("unexpected " + ", ".join(unexpected))
+    if not details:
+        return None
+    return f"{label} fields are invalid ({'; '.join(details)})"
+
+
+def _acceptance_evidence_fingerprint(body: Mapping) -> str:
+    return hashlib.sha256(
         json.dumps(
             body,
             sort_keys=True,
@@ -1000,8 +1141,404 @@ def _build_acceptance_evidence_binding(
             allow_nan=False,
         ).encode("utf-8")
     ).hexdigest()
-    binding = {**body, "fingerprint": fingerprint}
-    return binding, body["outcome"], ()
+
+
+def _validated_acceptance_evidence_body(
+    raw_body,
+) -> tuple[dict | None, tuple[str, ...]]:
+    """Validate the complete canonical v1 binding body and its invariants."""
+    if not isinstance(raw_body, Mapping):
+        return None, ("acceptance-evidence body is not a mapping",)
+    try:
+        body = _canonical_binding_value(
+            raw_body,
+            path="acceptance-evidence body",
+        )
+    except ValueError as exc:
+        return None, (str(exc),)
+
+    issues = []
+    body_keys_issue = _schema_mapping_keys_issue(
+        body,
+        _ACCEPTANCE_EVIDENCE_BODY_KEYS,
+        label="acceptance-evidence body",
+    )
+    if body_keys_issue:
+        issues.append(body_keys_issue)
+    if body.get("schema") != CRACK_ACCEPTANCE_EVIDENCE_SCHEMA:
+        issues.append("acceptance-evidence schema is missing or unsupported")
+
+    criterion = body.get("criterion")
+    if not isinstance(criterion, Mapping):
+        issues.append("acceptance-evidence criterion is not a mapping")
+        criterion = {}
+    else:
+        criterion_keys_issue = _schema_mapping_keys_issue(
+            criterion,
+            _ACCEPTANCE_EVIDENCE_CRITERION_KEYS,
+            label="acceptance-evidence criterion",
+        )
+        if criterion_keys_issue:
+            issues.append(criterion_keys_issue)
+    for key, label in (
+        ("id", "criterion identity"),
+        ("kind", "criterion kind"),
+        ("source_type", "criterion source type"),
+        ("source", "criterion source"),
+    ):
+        if _optional_text(criterion.get(key)) is None:
+            issues.append(f"acceptance-evidence {label} is missing")
+    applicability = criterion.get("applicability")
+    if not isinstance(applicability, Mapping) or not applicability:
+        issues.append(
+            "acceptance-evidence criterion applicability is not an "
+            "explicit non-empty mapping"
+        )
+    required = canonical_combination(
+        criterion.get("required_combination")
+    )
+    if required not in SLS_COMBINATIONS[1:]:
+        issues.append(
+            "acceptance-evidence required SLS combination is invalid"
+        )
+    kind = _optional_text(criterion.get("kind"))
+    limit = criterion.get("limit_mm")
+    if kind == CRITERION_DECOMPRESSION:
+        if limit is not None:
+            issues.append(
+                "acceptance-evidence decompression criterion has a width limit"
+            )
+    elif _finite_positive(limit) is None:
+        issues.append(
+            "acceptance-evidence crack-width limit is missing or invalid"
+        )
+
+    matched = body.get("matched_responses")
+    if not isinstance(matched, list) or not matched:
+        issues.append(
+            "acceptance-evidence matched responses are not a non-empty list"
+        )
+        matched = []
+    response_labels = []
+    response_ids = []
+    typed_responses = []
+    for index, raw_response in enumerate(matched):
+        label = f"acceptance-evidence matched response {index + 1}"
+        if not isinstance(raw_response, Mapping):
+            issues.append(f"{label} is not a mapping")
+            continue
+        response_keys_issue = _schema_mapping_keys_issue(
+            raw_response,
+            _ACCEPTANCE_EVIDENCE_RESPONSE_KEYS,
+            label=label,
+        )
+        if response_keys_issue:
+            issues.append(response_keys_issue)
+        response_label = _optional_text(raw_response.get("label"))
+        response_id = _optional_text(raw_response.get("response_id"))
+        duration = _optional_text(raw_response.get("duration"))
+        mapping_provenance = _optional_text(
+            raw_response.get("mapping_provenance")
+        )
+        if response_label is None:
+            issues.append(f"{label} has no response label")
+        else:
+            response_labels.append(response_label)
+        if response_id is None:
+            issues.append(f"{label} has no response identity")
+        else:
+            response_ids.append(response_id)
+        if canonical_combination(
+            raw_response.get("combination")
+        ) != required:
+            issues.append(
+                f"{label} does not carry the required SLS combination"
+            )
+        if duration is None:
+            issues.append(f"{label} has no duration state")
+        if mapping_provenance is None:
+            issues.append(f"{label} has no mapping provenance")
+        if not _explicit_evidence_field(
+            raw_response.get("solver_provenance"),
+            allow_nested_booleans=True,
+        ):
+            issues.append(f"{label} has no solver provenance")
+
+        acceptance = raw_response.get("acceptance")
+        if not isinstance(acceptance, Mapping):
+            issues.append(f"{label} acceptance is not a mapping")
+            continue
+        acceptance_type = _optional_text(acceptance.get("type"))
+        if kind == CRITERION_DECOMPRESSION:
+            expected_acceptance_keys = {
+                "type",
+                "status",
+                "value",
+                "governing",
+                "solver_provenance",
+            }
+            if acceptance_type != "decompression":
+                issues.append(
+                    f"{label} acceptance type is not decompression"
+                )
+            acceptance_keys_issue = _schema_mapping_keys_issue(
+                acceptance,
+                expected_acceptance_keys,
+                label=f"{label} acceptance",
+            )
+            if acceptance_keys_issue:
+                issues.append(acceptance_keys_issue)
+            if _upper_text(acceptance.get("status")) not in {
+                "OK",
+                "EXCEEDED",
+            }:
+                issues.append(
+                    f"{label} decompression status is invalid"
+                )
+            if _finite_signed_numeric_value(
+                acceptance.get("value")
+            ) is None:
+                issues.append(
+                    f"{label} decompression value is not finite numeric "
+                    "evidence"
+                )
+            if not _explicit_evidence_field(
+                acceptance.get("governing")
+            ):
+                issues.append(
+                    f"{label} decompression governing location is missing"
+                )
+            if not _explicit_evidence_field(
+                acceptance.get("solver_provenance"),
+                allow_nested_booleans=True,
+            ):
+                issues.append(
+                    f"{label} decompression solver provenance is missing"
+                )
+        else:
+            expected_acceptance_keys = {
+                "type",
+                "value_mm",
+                "governing_element",
+            }
+            if acceptance_type != "crack_width":
+                issues.append(
+                    f"{label} acceptance type is not crack_width"
+                )
+            acceptance_keys_issue = _schema_mapping_keys_issue(
+                acceptance,
+                expected_acceptance_keys,
+                label=f"{label} acceptance",
+            )
+            if acceptance_keys_issue:
+                issues.append(acceptance_keys_issue)
+            if crack_width_numeric_value(
+                acceptance.get("value_mm")
+            ) is None:
+                issues.append(
+                    f"{label} crack-width value is missing or invalid"
+                )
+            if not _explicit_evidence_field(
+                acceptance.get("governing_element")
+            ):
+                issues.append(
+                    f"{label} governing crack-width element is missing"
+                )
+        typed_responses.append(raw_response)
+
+    if len(response_labels) != len(set(response_labels)):
+        issues.append("acceptance-evidence response labels are duplicated")
+    if len(set(response_ids)) != 1 and matched:
+        issues.append(
+            "acceptance-evidence matched responses do not share one "
+            "response identity"
+        )
+    if typed_responses:
+        reference = typed_responses[0]
+        for response in typed_responses[1:]:
+            for key, label in (
+                ("response_id", "response identity"),
+                ("combination", "SLS combination"),
+                ("duration", "duration state"),
+                ("mapping_provenance", "mapping provenance"),
+                ("solver_provenance", "solver provenance"),
+            ):
+                if not _evidence_values_equal(
+                    reference.get(key),
+                    response.get(key),
+                ):
+                    issues.append(
+                        "acceptance-evidence aliases conflict in "
+                        f"{label}"
+                    )
+
+    scope = body.get("response_mapping_scope")
+    if not isinstance(scope, list) or not scope:
+        issues.append(
+            "acceptance-evidence response mapping scope is not a complete "
+            "non-empty list"
+        )
+        scope = []
+    scope_ids = []
+    typed_scope = []
+    for index, raw_scope in enumerate(scope):
+        label = f"acceptance-evidence mapping scope entry {index + 1}"
+        if not isinstance(raw_scope, Mapping):
+            issues.append(f"{label} is not a mapping")
+            continue
+        scope_keys_issue = _schema_mapping_keys_issue(
+            raw_scope,
+            _ACCEPTANCE_EVIDENCE_SCOPE_KEYS,
+            label=label,
+        )
+        if scope_keys_issue:
+            issues.append(scope_keys_issue)
+        scope_id = _optional_text(raw_scope.get("response_id"))
+        if scope_id is None:
+            issues.append(f"{label} has no response identity")
+        else:
+            scope_ids.append(scope_id)
+        if canonical_combination(
+            raw_scope.get("combination")
+        ) not in SLS_COMBINATIONS:
+            issues.append(f"{label} has an invalid SLS combination")
+        for key, field_label in (
+            ("duration", "duration state"),
+            ("response", "response label"),
+            ("elastic_case", "elastic-case identity"),
+            ("state", "response-state identity"),
+            ("provenance", "mapping provenance"),
+        ):
+            if _optional_text(raw_scope.get(key)) is None:
+                issues.append(f"{label} has no {field_label}")
+        scope_solver = raw_scope.get("solver_provenance")
+        if (
+            scope_solver is not None
+            and not _explicit_evidence_field(
+                scope_solver,
+                allow_nested_booleans=True,
+            )
+        ):
+            issues.append(f"{label} has invalid solver provenance")
+        typed_scope.append(raw_scope)
+    if len(scope_ids) != len(set(scope_ids)):
+        issues.append(
+            "acceptance-evidence mapping scope response identities are "
+            "duplicated"
+        )
+
+    matched_identity = (
+        response_ids[0]
+        if response_ids and len(set(response_ids)) == 1
+        else None
+    )
+    if matched_identity is not None:
+        matching_scope = [
+            item
+            for item in typed_scope
+            if item.get("response_id") == matched_identity
+        ]
+        if len(matching_scope) != 1:
+            issues.append(
+                "acceptance-evidence matched response identity is not "
+                "represented exactly once in the complete mapping scope"
+            )
+        elif typed_responses:
+            scoped = matching_scope[0]
+            reference = typed_responses[0]
+            for scope_key, response_key, label in (
+                ("combination", "combination", "SLS combination"),
+                ("duration", "duration", "duration state"),
+                (
+                    "provenance",
+                    "mapping_provenance",
+                    "mapping provenance",
+                ),
+            ):
+                if not _evidence_values_equal(
+                    scoped.get(scope_key),
+                    reference.get(response_key),
+                ):
+                    issues.append(
+                        "acceptance-evidence mapping scope conflicts with "
+                        f"the matched response in {label}"
+                    )
+
+    expected_outcome = None
+    if typed_responses and kind == CRITERION_DECOMPRESSION:
+        acceptance = typed_responses[0].get("acceptance")
+        if isinstance(acceptance, Mapping):
+            if any(
+                response.get("acceptance") != acceptance
+                for response in typed_responses[1:]
+            ):
+                issues.append(
+                    "acceptance-evidence decompression aliases carry "
+                    "conflicting acceptance evidence"
+                )
+            expected_outcome = {
+                "status": _upper_text(acceptance.get("status")),
+                "case": _optional_text(
+                    typed_responses[0].get("label")
+                ),
+                "value": acceptance.get("value"),
+                "governing": acceptance.get("governing"),
+                "limit": None,
+            }
+    elif typed_responses and _finite_positive(limit) is not None:
+        numeric_responses = [
+            response
+            for response in typed_responses
+            if isinstance(response.get("acceptance"), Mapping)
+            and crack_width_numeric_value(
+                response["acceptance"].get("value_mm")
+            ) is not None
+        ]
+        if len(numeric_responses) == len(typed_responses):
+            governing_response = max(
+                numeric_responses,
+                key=lambda response: (
+                    response["acceptance"]["value_mm"],
+                    _optional_text(response.get("label")) or "",
+                ),
+            )
+            value = governing_response["acceptance"]["value_mm"]
+            expected_outcome = {
+                "status": "OK" if value <= limit else "EXCEEDED",
+                "case": _optional_text(
+                    governing_response.get("label")
+                ),
+                "value": value,
+                "governing": governing_response["acceptance"].get(
+                    "governing_element"
+                ),
+                "limit": limit,
+            }
+
+    outcome = body.get("outcome")
+    if not isinstance(outcome, Mapping):
+        issues.append("acceptance-evidence outcome is not a mapping")
+    else:
+        outcome_keys_issue = _schema_mapping_keys_issue(
+            outcome,
+            _ACCEPTANCE_EVIDENCE_OUTCOME_KEYS,
+            label="acceptance-evidence outcome",
+        )
+        if outcome_keys_issue:
+            issues.append(outcome_keys_issue)
+        if expected_outcome is None:
+            issues.append(
+                "acceptance-evidence expected outcome cannot be reconstructed"
+            )
+        elif not _evidence_values_equal(outcome, expected_outcome):
+            issues.append(
+                "acceptance-evidence outcome is inconsistent with its "
+                "criterion and matched responses"
+            )
+
+    if issues:
+        return None, tuple(dict.fromkeys(issues))
+    return body, ()
 
 
 def _validated_acceptance_evidence_binding(
@@ -1017,8 +1554,14 @@ def _validated_acceptance_evidence_binding(
         )
     except ValueError as exc:
         return None, (str(exc),)
-    if binding.get("schema") != CRACK_ACCEPTANCE_EVIDENCE_SCHEMA:
-        return None, ("acceptance-evidence schema is missing or unsupported",)
+    expected_binding_keys = _ACCEPTANCE_EVIDENCE_BODY_KEYS | {"fingerprint"}
+    binding_keys_issue = _schema_mapping_keys_issue(
+        binding,
+        expected_binding_keys,
+        label="acceptance-evidence binding",
+    )
+    if binding_keys_issue:
+        return None, (binding_keys_issue,)
     fingerprint = _optional_text(binding.get("fingerprint"))
     if (
         fingerprint is None
@@ -1031,20 +1574,15 @@ def _validated_acceptance_evidence_binding(
         for key, value in binding.items()
         if key != "fingerprint"
     }
-    expected = hashlib.sha256(
-        json.dumps(
-            body,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
+    validated_body, body_issues = _validated_acceptance_evidence_body(body)
+    if body_issues or validated_body is None:
+        return None, body_issues
+    expected = _acceptance_evidence_fingerprint(validated_body)
     if fingerprint != expected:
         return None, (
             "acceptance-evidence fingerprint does not match its stored body",
         )
-    return binding, ()
+    return {**validated_body, "fingerprint": fingerprint}, ()
 
 
 def _acceptance_evidence_binding_conflicts(

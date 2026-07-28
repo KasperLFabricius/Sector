@@ -319,6 +319,10 @@ def test_duplicate_crack_mapping_scope_is_global_and_invalidates_row_cache():
                             f"Elastic case {case_name!r}, "
                             "long_combination table field"
                         ),
+                        "solver_provenance": {
+                            "state": "long",
+                            "elastic_case": case_name,
+                        },
                     }
                 },
             response_mapping_scope=case_inp["sls_response_mapping_scope"],

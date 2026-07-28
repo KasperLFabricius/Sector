@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import pathlib
 import sys
@@ -1309,6 +1310,58 @@ def test_project_roundtrips_hash_bound_crack_control_result_snapshot():
     assert provenance["calculation"]["matches_saved_inputs"] is True
 
 
+def test_project_roundtrip_rejects_fingerprint_valid_malformed_binding():
+    scalars = {
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_exposure_context": "XC3 / durability",
+    }
+    digest = project_io.input_sha256({}, scalars)
+    crack_control = _project_width_crack_control()
+    binding = crack_control["cases"][0]["assessment"]["criteria"][0][
+        "acceptance_evidence"
+    ]
+    binding["matched_responses"] = ["Fine"]
+    body = {
+        key: value
+        for key, value in binding.items()
+        if key != "fingerprint"
+    }
+    binding["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            body,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-27T10:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "7" * 40,
+            "input_sha256": digest,
+            "crack_control": crack_control,
+        },
+    )
+    saved = json.loads(text)["calculation"]["crack_control"]
+    loaded = project_io.project_provenance(text)[
+        "calculation"
+    ]["crack_control"]
+
+    for record in (saved, loaded):
+        assessment = record["cases"][0]["assessment"]
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["verdict"] == "REVIEW"
+        assert assessment["acceptance_evidence"] is None
+        assert "invalid immutable acceptance evidence" in (
+            assessment["publication_validation"]["reason"]
+        )
+
+
 @pytest.mark.parametrize(
     ("mutation", "changed_value"),
     [
@@ -1397,8 +1450,20 @@ def test_project_reapplies_failure_precedence_over_incomplete_criterion():
     digest = project_io.input_sha256({}, scalars)
     context = {
         "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
         "response_id": "qp",
+        "provenance": "controlled QP mapping",
+        "solver_provenance": {"state": "long"},
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     assessment = sls.crack_assessment(
         {"QP": {"wk": 0.31, "element_id": "R1"}},
         valid=True,
@@ -1431,6 +1496,7 @@ def test_project_reapplies_failure_precedence_over_incomplete_criterion():
             },
         ],
         response_contexts={"QP": context},
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["status"] == "EXCEEDED"
     # Simulate a stale aggregate while retaining canonical per-criterion
@@ -1447,7 +1513,7 @@ def test_project_reapplies_failure_precedence_over_incomplete_criterion():
         "cases": [{
             "case": "SLS-QP",
             "assessment": assessment,
-            "response_mapping_scope": [],
+            "response_mapping_scope": mapping_scope,
             "responses": [{
                 "name": "QP",
                 "wk_mm": 0.31,
@@ -1502,10 +1568,21 @@ def test_project_roundtrip_rejects_decompression_binding_mutation(
     contexts = {
         "QP": {
             "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
             "response_id": "qp",
+            "provenance": "controlled QP mapping",
             "solver_provenance": {"state": "long"},
         },
     }
+    mapping_scope = [{
+        "combination": sls.COMBINATION_QUASI_PERMANENT,
+        "duration": "long",
+        "response": "QP",
+        "response_id": "qp",
+        "elastic_case": "elastic-1",
+        "state": "long",
+        "provenance": "controlled QP mapping",
+    }]
     response = {
         "wk": 0.18,
         "element_id": "T1",
@@ -1526,9 +1603,10 @@ def test_project_roundtrip_rejects_decompression_binding_mutation(
             "source": "QA controlled decompression criterion",
             "required_combination": sls.COMBINATION_QUASI_PERMANENT,
             "limit_mm": None,
-            "applicability": {},
+            "applicability": {"member": "bonded prestress"},
         }],
         response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
     )
     assert assessment["verdict"] == "PASS"
     scalars = {
@@ -1550,6 +1628,7 @@ def test_project_roundtrip_rejects_decompression_binding_mutation(
                     "cases": [{
                         "case": "SLS-QP",
                         "assessment": assessment,
+                        "response_mapping_scope": mapping_scope,
                         "responses": [{
                             "name": "QP",
                             "wk_mm": current_response["wk"],

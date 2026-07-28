@@ -414,15 +414,15 @@ were refactored and audited as one state model:
 | Required response count | Exactly one explicit response identity; consistent fine/coarse aliases may share it. | Zero matches, multiple independent identities, duplicated table identities or an empty/malformed table scope give `NOT ASSESSED / REVIEW`. |
 | Identity and combination | Current response identity and required combination agree with the table-wide mapping scope. | Missing/stale identity, missing required combination, scope mismatch or a conflicting alias combination blocks routing without inferring from duration. |
 | Alias context | All labels sharing an identity agree on combination, duration, mapping provenance and solver provenance. | Any conflicting field blocks the whole routed criterion; no alias is silently demoted to informational. |
-| Immutable acceptance binding | Every accepted criterion has one schema-versioned, SHA-256-fingerprinted binding covering criterion metadata/applicability, required combination, matched label/ID aliases, response context/provenance, calculated/governing evidence and the full table scope. | Missing, duplicated, tampered or independently reconstructed mismatched evidence gives `NOT ASSESSED / REVIEW`; stored contexts are not replaced before this comparison. |
+| Immutable acceptance binding | Every accepted criterion has one strictly validated, schema-versioned, SHA-256-fingerprinted binding covering criterion metadata/applicability, required combination, matched label/ID aliases, explicit duration/mapping/solver provenance, calculated/governing evidence and a complete non-empty table scope. | Wrong body/container/field shape, missing provenance, empty/truncated scope, duplication, tampering or an independently reconstructed mismatch gives `NOT ASSESSED / REVIEW`; stored contexts are not replaced before this comparison. |
 | Decompression evidence | `OK`/`EXCEEDED` carries typed status, finite signed MPa value, governing concrete location and solver provenance consistent with the response context and every alias. A solver-proven `NOT APPLICABLE` may omit value/location. | Missing, Boolean, non-scalar, non-finite, changed or conflicting status/value/location/provenance gives `NOT ASSESSED / REVIEW`; nested `NaN`/`Inf` cannot cross publication. |
 | Response role | Every current response mapped to the required combination is a criterion input; explicitly different combinations remain informational. | A required alias marked informational, a hidden/new required response or an unaccounted independent response invalidates stored PASS/FAIL evidence. |
 | Aggregate precedence | `INVALID` > `EXCEEDED` > `NOT ASSESSED` > `OK` > `NOT APPLICABLE`; a known exceedance remains FAIL while incomplete criteria remain visible. | Published top-level status, value, limit, utilization and margin are rebuilt from the canonical governing criterion, preventing aggregate drift. |
-| Publication chain | The raw and publication boundaries share one canonical binding builder/validator through calculation record, project save/load and loaded provenance, download, autosave and report. UI, overview and report use mm for width and MPa for decompression. | Missing/malformed criterion source or applicability, stale value/status/governing element, changed identity/duration/mapping/solver evidence or non-finite nested evidence invalidates publication. |
+| Publication chain | The raw and publication boundaries share one canonical body validator, sealer and binding comparator through calculation record, project save/load and loaded provenance, download, autosave and report. UI, overview and report use mm for width and MPa for decompression. | Fingerprint-valid but structurally malformed bodies, missing/malformed criterion source or applicability, stale value/status/governing element, changed identity/duration/mapping/solver evidence or non-finite nested evidence invalidate publication without raising. |
 
-The canonical-binding refactor adds 110 table-driven nodes beyond the prior 443,
-bringing cumulative lean F-043 evidence to 553 checks. Its refreshed bounded
-closure execution covers 747 nodes across core SLS, routing/source policy,
+The canonical-binding refactor adds 133 table-driven nodes beyond the prior 443,
+bringing cumulative lean F-043 evidence to 576 checks. Its refreshed bounded
+closure execution covers 770 nodes across core SLS, routing/source policy,
 calculation record/session, project save/load/provenance, download/autosave,
 manual/report and rendered-artifact boundaries. Exact-head external gates remain
 mandatory; this matrix does not self-certify PR closure.
@@ -484,6 +484,17 @@ mandatory; this matrix does not self-certify PR closure.
   incomplete decompression evidence and known-failure precedence issues
   described above. Review of
   `2352d3bfc3316f10cce07e6850b91df1d7d65501` then found the
-  non-finite audit-evidence issue described above. All are locally remediated.
+  non-finite audit-evidence issue described above. Independent QA of
+  `96f60c75d6e9efbd6b6b94b3f1615c0eded0c96f` then found that stored acceptance
+  was not immutably bound to response identity/duration/mapping/solver
+  provenance. The first canonical refactor at
+  `1446ee35630591803f4c0ce4f0f95abc9ec80df2` was rejected by Codex Review for
+  fingerprint-valid malformed body shapes, missing/empty/truncated table scope
+  and nullable accepted-response provenance. That same-family P1 triggered the
+  user-directed stop condition again: sealing and publication now share the
+  strict complete-body validator, the scalar compatibility adapter constructs
+  an explicit complete scope, and adversarial raw-to-publication/project/session/
+  autosave/report tests fail closed without exceptions. All are locally
+  remediated.
   New exact-head Codex Review, GitHub CI, original independent QA closure and
   merge remain pending; this implementation log does not self-certify closure.
