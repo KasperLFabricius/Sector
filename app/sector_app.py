@@ -1833,6 +1833,7 @@ _BRIDGE_EDITOR_KEYS = {
 _NON_REPLAYABLE_WIDGET_KEYS = frozenset({
     *_CASE_EDITOR_KEYS.values(),
     _FATIGUE_EDITOR_KEY,
+    *_BRIDGE_EDITOR_KEYS.values(),
 })
 
 

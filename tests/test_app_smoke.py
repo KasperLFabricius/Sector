@@ -4711,6 +4711,18 @@ def test_native_data_editor_state_is_not_replayed_through_session_state():
             "added_rows": [],
             "deleted_rows": [],
         },
+        "bridge_box_walls_base_editor": {
+            "edited_rows": {},
+            "added_rows": [{
+                "wall_id": "W1",
+                "cot_theta": 10.0,
+                "v_ed_kn": 100.0,
+                "v_rd_max_kn": 200.0,
+                "t_ed_equivalent_kn": 10.0,
+                "t_rd_max_equivalent_kn": 200.0,
+            }],
+            "deleted_rows": [],
+        },
     }
     at.run()
 
@@ -4722,6 +4734,7 @@ def test_native_data_editor_state_is_not_replayed_through_session_state():
 def test_native_editor_callback_commits_delta_before_interrupted_recovery(
     monkeypatch,
 ):
+    import bridge_inputs
     import fatigue_inputs
     import load_cases
     import sector_app
@@ -4772,6 +4785,33 @@ def test_native_editor_callback_commits_delta_before_interrupted_recovery(
         sector_app._commit_fatigue_editor_delta,
     )
     assert state[fatigue_key].loc[0, "cycles"] == pytest.approx(2500.0)
+    assert "_pending_input_events" not in state
+
+    bridge_key = bridge_inputs.BOX_WALL_TABLE_KEY
+    bridge_seed = bridge_inputs.empty_table(bridge_key)
+    state.update({
+        bridge_key: bridge_seed.copy(deep=True),
+        f"_{bridge_key}_editor_seed": bridge_seed.copy(deep=True),
+        "bridge_box_walls_base_editor": {
+            "edited_rows": {},
+            "deleted_rows": [],
+            "added_rows": [{
+                "wall_id": "W1",
+                "cot_theta": 10.0,
+                "v_ed_kn": 100.0,
+                "v_rd_max_kn": 200.0,
+                "t_ed_equivalent_kn": 10.0,
+                "t_rd_max_equivalent_kn": 200.0,
+            }],
+        },
+    })
+    sector_app._record_input_event(
+        "bridge_box_walls_base_editor",
+        sector_app._commit_bridge_editor_delta,
+        (bridge_key,),
+    )
+    assert state[bridge_key].loc[0, "wall_id"] == "W1"
+    assert state[bridge_key].loc[0, "cot_theta"] == pytest.approx(10.0)
     assert "_pending_input_events" not in state
 
 

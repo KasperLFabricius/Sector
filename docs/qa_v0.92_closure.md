@@ -718,3 +718,14 @@ mandatory; this matrix does not self-certify PR closure.
   raster gates pass with all four grouped-fatigue figures present. Final
   exact-head full-suite, artifact, package, CI and review evidence is recorded
   only after the implementation commit.
+- A real Streamlit browser edit found that the input-event journal treated the
+  four native bridge evidence editors differently from the existing load and
+  fatigue editors. Replaying the bridge editor's Streamlit-owned delta through
+  session state raised `StreamlitValueAssignmentNotAllowedError` on the next
+  cell commit. All native editor keys now share the same non-replayable policy;
+  their callbacks commit the cumulative delta directly to the canonical table.
+  The focused regression reconstructs the exact pending bridge event and commits
+  a passing box-wall row with `cot(theta)=10`. Fresh live-browser evidence shows
+  the value retained first as REVIEW / NOT FULLY ASSESSED and then as an approved
+  custom input after methodology and approval/source are entered, with no second
+  runtime exception.
