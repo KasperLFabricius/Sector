@@ -86,6 +86,7 @@ def _external(
         )["assessment_status"]
         row.update({
             "status": row_status,
+            "methodology": context["design_methodology"],
             "fatigue_edition": context["edition"],
             "fatigue_factor_mode": context["factor_mode"],
             "fatigue_factor_approval": context["factor_approval"],
@@ -94,7 +95,6 @@ def _external(
         if fatigue_kind == "concrete":
             miner = records["concrete_fatigue.miner_c"]
             row.update({
-                "methodology": bridge.EN1992_2_BASE,
                 "concrete_method": context["concrete_method"],
                 "concrete_miner_basis": context["concrete_miner_basis"],
                 "concrete_miner_source": context["concrete_miner_source"],
@@ -1153,6 +1153,43 @@ def test_publication_rejects_changed_custom_factor_approval():
     assert any(
         "fatigue_factor_approval conflicts with current fatigue inputs"
         in error
+        for error in safe["configuration_errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("check_id", "mutation"),
+    [
+        ("reinforcement_fatigue", "changed"),
+        ("reinforcement_fatigue", "omitted"),
+        ("concrete_fatigue", "changed"),
+        ("concrete_fatigue", "omitted"),
+    ],
+)
+def test_publication_rejects_changed_or_omitted_fatigue_methodology(
+    check_id,
+    mutation,
+):
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    row = _check(raw, check_id)["evidence"][0]
+    if mutation == "changed":
+        row["methodology"] = bridge.COMPONENT_METHODS
+    else:
+        row.pop("methodology")
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
+    )
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert _check(safe, check_id)["status"] == bridge.STATUS_NOT_ASSESSED
+    assert any(
+        f"{check_id}: stored " in error
+        and "methodology conflicts with current fatigue inputs" in error
         for error in safe["configuration_errors"]
     )
 

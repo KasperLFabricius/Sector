@@ -772,6 +772,7 @@ def reinforcement_fatigue_evidence(
                 "fatigue_parameter_conformance": (
                     reinforcement_parameter_records
                 ),
+                "methodology": payload.get("design_methodology"),
                 "fatigue_edition": payload.get("edition"),
                 "fatigue_factor_mode": factor_basis.get("mode"),
                 "fatigue_factor_approval": (
@@ -923,7 +924,7 @@ def concrete_fatigue_evidence(
                     )
                     else ""
                 ),
-                "methodology": bridge.EN1992_2_BASE,
+                "methodology": payload.get("design_methodology"),
                 "concrete_method": payload.get("concrete_method"),
                 "concrete_miner_basis": payload.get(
                     "concrete_miner_basis"

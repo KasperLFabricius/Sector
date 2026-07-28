@@ -1753,6 +1753,7 @@ def _publication_fatigue_row_records(
             )
 
     metadata_fields = (
+        ("methodology", "design_methodology"),
         ("fatigue_edition", "edition"),
         ("fatigue_factor_mode", "factor_mode"),
         ("fatigue_factor_approval", "factor_approval"),
@@ -1801,6 +1802,7 @@ def _publication_parameter_evidence_errors(
         marker_fields = {
             "analytical_status",
             "fatigue_parameter_conformance",
+            "methodology",
             "fatigue_edition",
             "fatigue_factor_mode",
             "fatigue_factor_approval",

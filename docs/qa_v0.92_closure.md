@@ -779,3 +779,14 @@ mandatory; this matrix does not self-certify PR closure.
   decision remains valid without invented fatigue evidence. The full Streamlit,
   complete-suite, report/manual render, package-content, CI and review gates
   remain exact-head work and are not inferred from these focused results.
+- Codex Review of exact head
+  `e798f38b09007eb63a7384125e8cd4c2f692e636` found one remaining P1 in the
+  same correlation family: the concrete fatigue row carried a whole-calculation
+  `methodology` field, but the canonical metadata comparison omitted it. Both
+  reinforcement and concrete rows now carry the calculated methodology, and
+  the shared row validator compares it exactly with the current canonical
+  context alongside edition, factor mode/approval and Miner method/basis/source.
+  Changed and omitted methodology matrices for both fatigue families fail
+  publication closed. The obsolete exact-head AppTest was stopped; all 109
+  direct bridge/adapter checks and all 548 affected checks pass before the next
+  immutable remediation head.

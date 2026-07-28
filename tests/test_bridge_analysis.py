@@ -593,6 +593,7 @@ def test_bridge_concrete_fatigue_c100_is_analytical_review_not_standard_pass():
     assert evidence.status == bridge.STATUS_REVIEW
     assert evidence.evidence[0]["analytical_status"] == bridge.STATUS_PASS
     assert evidence.evidence[0]["miner_coefficient_c"] == 100.0
+    assert evidence.evidence[0]["methodology"] == bridge.EN1992_2_BASE
     assert evidence.evidence[0]["fatigue_edition"] == (
         fatigue_inputs.EC2_2_2005_AC
     )
