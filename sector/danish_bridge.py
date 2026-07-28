@@ -7,7 +7,7 @@ keeps numerical admissibility separate from standards conformance.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 import math
 from typing import Any, Mapping
 
@@ -172,6 +172,8 @@ class DanishBridgeBasis:
     environment_class: str = NOT_ESTABLISHED
     environment_source: str = ""
     special_rules: str = ""
+    departure_applicability: str = NOT_ESTABLISHED
+    departure_source: str = ""
     deviations: str = ""
     control_class: str = NOT_ESTABLISHED
     control_source: str = ""
@@ -258,6 +260,35 @@ def basis_context(basis: DanishBridgeBasis) -> dict[str, Any]:
         else:
             output[key] = _typed_text(value, key)
     return output
+
+
+def basis_from_context(value: Mapping[str, Any]) -> DanishBridgeBasis:
+    """Reconstruct typed basis evidence from an exact canonical snapshot."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("Danish bridge basis context must be an object")
+    expected = {field.name for field in fields(DanishBridgeBasis)}
+    actual = set(value)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        unknown = sorted(actual - expected)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unknown:
+            details.append("unknown " + ", ".join(unknown))
+        raise ValueError(
+            "Danish bridge basis context fields are incomplete or unknown"
+            + (": " + "; ".join(details) if details else "")
+        )
+    try:
+        basis = DanishBridgeBasis(**dict(value))
+        canonical = basis_context(basis)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Danish bridge basis context is invalid: {exc}") from exc
+    if canonical != dict(value):
+        raise ValueError("Danish bridge basis context is not canonical")
+    return basis
 
 
 def _result(
@@ -380,7 +411,7 @@ def assess_project_basis(basis: DanishBridgeBasis) -> dict[str, Any]:
         }
         and basis.environment_class != ENVIRONMENT_EXTRA_AGGRESSIVE
     ):
-        state = STATUS_REVIEW
+        state = STATUS_INVALID if state == STATUS_INVALID else STATUS_REVIEW
         mapping_reason += (
             " The selected surface requires the extra-aggressive Danish "
             "environmental route; Sector has not silently changed the selected "
@@ -390,13 +421,13 @@ def assess_project_basis(basis: DanishBridgeBasis) -> dict[str, Any]:
         basis.surface_condition == SURFACE_RAIL_EDGE
         and basis.asset_class != ASSET_RAIL
     ):
-        state = STATUS_REVIEW
+        state = STATUS_INVALID if state == STATUS_INVALID else STATUS_REVIEW
         mapping_reason += (
             " The railway edge-beam surface conflicts with the selected bridge "
             "class."
         )
     if basis.surface_condition == SURFACE_OTHER:
-        state = STATUS_REVIEW
+        state = STATUS_INVALID if state == STATUS_INVALID else STATUS_REVIEW
         mapping_reason += (
             " The project-defined surface has no mapped Sector calculation effect."
         )
@@ -439,8 +470,43 @@ def assess_project_basis(basis: DanishBridgeBasis) -> dict[str, Any]:
             missing.append("traffic/fatigue model")
         if not basis.traffic_fatigue_source:
             missing.append("traffic/fatigue source")
+    if basis.departure_applicability not in APPLICABILITY_OPTIONS:
+        return _result(
+            STATUS_INVALID,
+            source=AUTHORITY_SOURCE,
+            reason="Unknown departure / dispensation applicability token.",
+            evidence=(snapshot,),
+        )
+    if basis.departure_applicability == NOT_ESTABLISHED:
+        missing.append("departure / dispensation applicability")
+    elif basis.departure_applicability == APPLICABILITY_REQUIRED:
+        if not basis.deviations:
+            missing.append("departure description / methodology")
+        if not basis.departure_source:
+            missing.append("departure source")
+        if not basis.authority_approval_reference:
+            missing.append("departure authority approval")
+        state = STATUS_INVALID if state == STATUS_INVALID else STATUS_REVIEW
+        mapping_reason += (
+            " An explicitly applicable project departure is retained as an "
+            "authority/project variation and cannot be relabelled as an "
+            "unqualified Danish selected-standard PASS."
+        )
+    elif any(
+        (
+            basis.deviations,
+            basis.departure_source,
+            basis.authority_approval_reference,
+        )
+    ):
+        state = STATUS_INVALID if state == STATUS_INVALID else STATUS_REVIEW
+        mapping_reason += (
+            " Departure applicability is explicitly Not applicable but "
+            "departure text/source/approval is present; applicability is not "
+            "inferred from free text."
+        )
     if basis.control_class == CONTROL_MODIFIED:
-        state = STATUS_REVIEW
+        state = STATUS_INVALID if state == STATUS_INVALID else STATUS_REVIEW
         mapping_reason += " Modified control is not a Danish bridge option."
 
     factor_warnings: list[str] = []

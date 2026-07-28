@@ -879,12 +879,15 @@ mandatory; this matrix does not self-certify PR closure.
   errors.
 - Manager, bridge class, project basis, authority approval, environmental and
   de-icing sources, control/consequence class, traffic/fatigue applicability,
-  special rules and deviations are explicit typed fields. They are preserved
-  through project save-load-resave, live/durable session state,
+  special rules, and departure/dispensation applicability, methodology/source,
+  authority approval and description are explicit typed fields. They are
+  preserved through project save-load-resave, live/durable session state,
   autosave/download, calculation signatures and cache keys, immutable result
-  fingerprint, publication validation, UI and report. No authority or class is
-  inferred. Unmapped/conflicting choices retain the input and qualify or block
-  the selected-standard conclusion.
+  fingerprint, publication validation, UI and report. No authority, class or
+  departure is inferred. Unmapped/conflicting choices retain the input and
+  qualify or block the selected-standard conclusion. A complete approved
+  departure remains a qualified project variation and never becomes an
+  unqualified Danish selected-standard PASS.
 - The Danish crack router requires the exact Frequent response for every width
   criterion. Non-prestressed road, foot and railway bridges use 0.30 mm in
   aggressive and 0.20 mm in extra-aggressive environments. Prestressed road and
@@ -893,16 +896,35 @@ mandatory; this matrix does not self-certify PR closure.
   decompression response. A passing width cannot satisfy missing concrete
   stress evidence; missing, duplicate, ambiguous, malformed or stale
   correlation remains `NOT ASSESSED / REVIEW`.
-- The frozen independent PR-05 oracle/decision slice passes all 76 tests. The
+- Codex Review of exact initial head
+  `183ccc01a47dacfed3ba66622019560ed8b4144a` identified two P1 publication
+  gaps. First, a stored Danish project-basis, coefficient, high-strength or
+  cover result body could be altered and re-fingerprinted without semantic
+  revalidation. Second, free-text departure evidence had no independent typed
+  applicability decision, so a project departure could coexist with an
+  unqualified selected-standard PASS. Six focused red tests reproduced the
+  failures before remediation.
+- Danish publication evidence is now schema v2. Publication reconstructs the
+  current typed basis and positive finite concrete strength, independently
+  recomputes the four derived Danish checks, and requires exact check-body
+  equality before accepting a stored fingerprint. Manager, custom coefficient,
+  high-strength and cover PASS/REVIEW/FAIL relabelling attacks are rejected even
+  after the documented fingerprint is recomputed. Missing, Boolean,
+  non-finite, textual or non-positive current strength also fails publication
+  closed and latches `matches_saved_inputs = false` through project load and
+  resave.
+- The independent fixture now includes five explicit departure dispositions in
+  addition to the complete crack, cover, torsion and authority sets. The
+  focused PR-05 and documentation-assertion slice passes all 98 checks. The
   consolidated bridge, SLS, capacity, fatigue, publication and project
-  persistence regression slice passes all 721 tests. The complete manual suite
-  passes all 39 tests, the affected report/documentation slice passes all 47
-  selected tests, and four focused headless app controls cover base/Danish
-  selection, blocking non-inferred Danish fields and stale/mismatched state.
-- The 29-page no-figure manual raster was inspected on changed pages 7–11 and
-  the reference/pagination boundaries at pages 26–29. The 15-page focused
-  Danish report raster was inspected on changed pages 6–15, including the
-  selected basis, coverage/evidence/limitations and QA provenance appendix.
-  Both are readable without clipping or overlap. Exact commit SHA, Codex
-  Review, the single GitHub full-suite run and independent reviewer disposition
-  are recorded only after those gates actually complete.
+  persistence regression slice passes all 741 checks. The complete report and
+  manual suites pass all 196 checks, and the focused headless app control passes
+  with the new non-inferred departure selector/source fields.
+- The refreshed 29-page no-figure manual raster was inspected at the changed
+  Danish-methodology continuation on pages 7–9 and the final pagination
+  boundary on pages 28–29. The refreshed 15-page focused Danish report raster
+  was inspected on pages 6–15, including the selected departure basis,
+  coverage, bound evidence, limitations and QA provenance appendix. Both are
+  readable without clipping or overlap. Exact remediation SHA, exact-head
+  rereview, the single completed GitHub full-suite run and independent reviewer
+  disposition are recorded only after those gates actually complete.

@@ -47,7 +47,11 @@ def fixture_inputs() -> dict:
         "bridge_environment_class": danish_bridge.ENVIRONMENT_AGGRESSIVE,
         "bridge_environment_source": "DB-05 section 4.2",
         "bridge_special_rules": "No mapped special relaxation",
-        "bridge_deviations": "None recorded",
+        "bridge_departure_applicability": (
+            danish_bridge.APPLICABILITY_NOT_APPLICABLE
+        ),
+        "bridge_departure_source": "",
+        "bridge_deviations": "",
         "bridge_control_class": danish_bridge.CONTROL_NORMAL,
         "bridge_control_source": "DB-05 section 2.4",
         "bridge_consequence_class": danish_bridge.CONSEQUENCE_CC2,
@@ -136,6 +140,9 @@ def validate_pdf_content(pdf: bytes) -> tuple[int, ...]:
         bridge.EN1992_2_DK_NA,
         "Danish infrastructure-manager and project basis",
         danish_bridge.MANAGER_ROAD_DIRECTORATE,
+        "Departure applicability",
+        "Departure methodology / source",
+        "Departure authority approval",
         "DB-05 section 4.2",
         "DB-05 drawing G-02",
         "mapped_deicing_x_m",

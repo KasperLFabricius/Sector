@@ -4445,9 +4445,28 @@ def build_inputs(host=st):
     )
     bridge_authority_approval_reference = _seeded_text(
         dk1,
-        "General authority approval / dispensation reference",
+        "Departure authority approval / dispensation reference",
         "",
         "bridge_authority_approval_reference",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_departure_applicability = _seeded_selectbox(
+        dk2,
+        "Project departure / dispensation applicability",
+        list(danish_bridge.APPLICABILITY_OPTIONS),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_departure_applicability",
+        disabled=not dk_bridge_method_active,
+        help=(
+            "Select explicitly. Sector never infers a departure from free-text "
+            "notes or an authority reference."
+        ),
+    )
+    bridge_departure_source = _seeded_text(
+        dk1,
+        "Departure methodology / source clause",
+        "",
+        "bridge_departure_source",
         disabled=not dk_bridge_method_active,
     )
     bridge_environment_class = _seeded_selectbox(
@@ -4662,7 +4681,7 @@ def build_inputs(host=st):
     )
     bridge_deviations = _seeded_text_area(
         dkbox,
-        "Project deviations and reservations",
+        "Project departure / dispensation description",
         "",
         "bridge_deviations",
         disabled=not dk_bridge_method_active,
@@ -9586,6 +9605,7 @@ def bridge_methodology_view(inp, results, *, stale=False):
         design_methodology=selected_methodology,
         fatigue_context=fatigue_analysis.bridge_publication_context(inp),
         danish_basis_context=bridge_inputs.danish_basis_context(inp),
+        danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
     )
     if (
         not bridge.is_bridge_methodology(selected_methodology)
@@ -13025,6 +13045,7 @@ def _analysis_workspace(inp):
                     fatigue_analysis.bridge_publication_context(inp)
                 ),
                 danish_basis_context=bridge_inputs.danish_basis_context(inp),
+                danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
             )
             if bridge_record is not None:
                 calculation_record["bridge_methodology"] = bridge_record

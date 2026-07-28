@@ -224,5 +224,47 @@
       "asset_class": "road",
       "expected": "REVIEW_ONLY"
     }
+  ],
+  "departure_cases": [
+    {
+      "id": "explicit-no-departure",
+      "applicability": "not_applicable",
+      "description": "",
+      "source": "",
+      "approval": "",
+      "expected": "MAPPED"
+    },
+    {
+      "id": "departure-missing-approval",
+      "applicability": "required",
+      "description": "Project crack-width departure",
+      "source": "DB-05 section 7.3",
+      "approval": "",
+      "expected": "NOT_ASSESSED"
+    },
+    {
+      "id": "approved-departure",
+      "applicability": "required",
+      "description": "Project crack-width departure",
+      "source": "DB-05 section 7.3",
+      "approval": "VD-DISP-05",
+      "expected": "REVIEW_ONLY"
+    },
+    {
+      "id": "not-applicable-text-conflict",
+      "applicability": "not_applicable",
+      "description": "Unclassified reservation text",
+      "source": "",
+      "approval": "",
+      "expected": "CONFLICT_REVIEW"
+    },
+    {
+      "id": "departure-not-established",
+      "applicability": "not_established",
+      "description": "",
+      "source": "",
+      "approval": "",
+      "expected": "NOT_ASSESSED"
+    }
   ]
 }

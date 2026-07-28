@@ -394,6 +394,9 @@ def test_manual_documents_bridge_methodology_routing_and_limitations():
         "Frequent-combination crack width",
         "a passing crack width cannot substitute",
         "approved project-basis adoption",
+        "explicit departure/dispensation applicability decision",
+        "qualified project variation",
+        "departure applicability",
         "Bridge Methodology",
         "cannot retain a stronger report verdict",
     ):

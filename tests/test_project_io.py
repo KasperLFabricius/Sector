@@ -69,6 +69,10 @@ def _v19_bridge_defaults():
         "bridge_environment_class": danish_bridge.NOT_ESTABLISHED,
         "bridge_environment_source": "",
         "bridge_special_rules": "",
+        "bridge_departure_applicability": (
+            danish_bridge.NOT_ESTABLISHED
+        ),
+        "bridge_departure_source": "",
         "bridge_deviations": "",
         "bridge_control_class": danish_bridge.NOT_ESTABLISHED,
         "bridge_control_source": "",

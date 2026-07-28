@@ -830,6 +830,7 @@ class ReportBuilder:
             danish_basis_context=bridge_inputs.danish_basis_context(
                 self._base_inp
             ),
+            danish_fck_mpa=bridge_inputs.danish_fck_mpa(self._base_inp),
         )
         self._bridge_record = bridge_record
         if bridge_record is not None:
@@ -1075,7 +1076,9 @@ class ReportBuilder:
                 ("Infrastructure manager", "infrastructure_manager"),
                 ("Manager requirement source", "manager_source"),
                 ("Project design-basis source", "project_basis_source"),
-                ("Authority approval / dispensation", "authority_approval_reference"),
+                ("Departure applicability", "departure_applicability"),
+                ("Departure methodology / source", "departure_source"),
+                ("Departure authority approval", "authority_approval_reference"),
                 ("Danish environmental class", "environment_class"),
                 ("Environmental-class source", "environment_source"),
                 ("Surface condition", "surface_condition"),
@@ -1104,7 +1107,7 @@ class ReportBuilder:
                 ("alpha_ct custom method", "alpha_ct_custom_methodology"),
                 ("alpha_ct approval", "alpha_ct_approval_reference"),
                 ("Project special rules", "special_rules"),
-                ("Recorded deviations", "deviations"),
+                ("Departure / dispensation description", "deviations"),
             )
             basis_rows = [["Field", "Bound value"]]
             for label, key in basis_labels:
@@ -6102,8 +6105,10 @@ class ReportBuilder:
                 f"{basis_value('infrastructure_manager')}; bridge class: "
                 f"{basis_value('asset_class')}; manager requirement: "
                 f"{basis_value('manager_source')}; project design basis: "
-                f"{basis_value('project_basis_source')}; authority approval/"
-                f"dispensation: {basis_value('authority_approval_reference')}."
+                f"{basis_value('project_basis_source')}; departure applicability: "
+                f"{basis_value('departure_applicability')}; departure source: "
+                f"{basis_value('departure_source')}; departure authority approval: "
+                f"{basis_value('authority_approval_reference')}."
             )
             lines.append(
                 "Danish bridge applicability provenance - environment: "

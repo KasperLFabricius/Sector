@@ -132,6 +132,11 @@ def _basis(**changes):
         ),
         "environment_class": danish_bridge.ENVIRONMENT_AGGRESSIVE,
         "environment_source": "DB-05 section 4.2",
+        "departure_applicability": (
+            danish_bridge.APPLICABILITY_NOT_APPLICABLE
+        ),
+        "departure_source": "",
+        "deviations": "",
         "control_class": danish_bridge.CONTROL_NORMAL,
         "control_source": "DB-05 section 2.4",
         "consequence_class": danish_bridge.CONSEQUENCE_CC2,
@@ -179,7 +184,11 @@ def _project_scalars(**changes):
         "bridge_environment_class": danish_bridge.ENVIRONMENT_AGGRESSIVE,
         "bridge_environment_source": "DB-05 section 4.2",
         "bridge_special_rules": "No mapped special relaxation",
-        "bridge_deviations": "None recorded",
+        "bridge_departure_applicability": (
+            danish_bridge.APPLICABILITY_NOT_APPLICABLE
+        ),
+        "bridge_departure_source": "",
+        "bridge_deviations": "",
         "bridge_control_class": danish_bridge.CONTROL_NORMAL,
         "bridge_control_source": "DB-05 section 2.4",
         "bridge_consequence_class": danish_bridge.CONSEQUENCE_CC2,
@@ -271,6 +280,7 @@ def test_oracle_has_no_sector_import_and_frozen_fixture_is_self_consistent():
         ("cover_cases", "expected_mm"),
         ("torsion_cases", "expected_knm"),
         ("authority_cases", "expected"),
+        ("departure_cases", "expected"),
     ):
         for case in data[group]:
             actual = evaluated[group][case["id"]]
@@ -562,6 +572,48 @@ def test_manager_mapping_is_explicit_and_unmapped_choice_is_warning_only():
     assert "remain calculation inputs" in strict_factor["reason"]
 
 
+def test_departure_applicability_requires_source_and_approval_without_inference():
+    missing_decision = danish_bridge.assess_project_basis(_basis(
+        departure_applicability=danish_bridge.NOT_ESTABLISHED,
+    ))
+    assert missing_decision["status"] == danish_bridge.STATUS_NOT_ASSESSED
+    assert "departure / dispensation applicability" in missing_decision["reason"]
+
+    unapproved = danish_bridge.assess_project_basis(_basis(
+        departure_applicability=danish_bridge.APPLICABILITY_REQUIRED,
+        deviations="Project crack-width departure",
+        departure_source="DB-05 section 7.3",
+        authority_approval_reference="",
+    ))
+    assert unapproved["status"] == danish_bridge.STATUS_NOT_ASSESSED
+    assert "departure authority approval" in unapproved["reason"]
+
+    approved = danish_bridge.assess_project_basis(_basis(
+        departure_applicability=danish_bridge.APPLICABILITY_REQUIRED,
+        deviations="Project crack-width departure",
+        departure_source="DB-05 section 7.3",
+        authority_approval_reference="VD-DISP-05",
+    ))
+    assert approved["status"] == danish_bridge.STATUS_REVIEW
+    assert "cannot be relabelled as an unqualified" in approved["reason"]
+
+    conflicting_text = danish_bridge.assess_project_basis(_basis(
+        departure_applicability=danish_bridge.APPLICABILITY_NOT_APPLICABLE,
+        deviations="Unclassified reservation text",
+    ))
+    assert conflicting_text["status"] == danish_bridge.STATUS_REVIEW
+    assert "not inferred from free text" in conflicting_text["reason"]
+
+    malformed = danish_bridge.assess_project_basis(_basis(
+        asset_class="Silently inferred bridge class",
+        departure_applicability=danish_bridge.APPLICABILITY_REQUIRED,
+        deviations="Project crack-width departure",
+        departure_source="DB-05 section 7.3",
+        authority_approval_reference="VD-DISP-05",
+    ))
+    assert malformed["status"] == danish_bridge.STATUS_INVALID
+
+
 @pytest.mark.parametrize(
     "case",
     _fixture()["authority_cases"],
@@ -593,6 +645,34 @@ def test_production_authority_mapping_matches_independent_fixture(case):
             else "CONFLICT_REVIEW"
         ),
     }[state]
+    assert actual == case["expected"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    _fixture()["departure_cases"],
+    ids=lambda value: value["id"],
+)
+def test_production_departure_gate_matches_independent_fixture(case):
+    applicability = {
+        "not_established": danish_bridge.NOT_ESTABLISHED,
+        "required": danish_bridge.APPLICABILITY_REQUIRED,
+        "not_applicable": danish_bridge.APPLICABILITY_NOT_APPLICABLE,
+    }[case["applicability"]]
+    result = danish_bridge.assess_project_basis(_basis(
+        departure_applicability=applicability,
+        deviations=case["description"],
+        departure_source=case["source"],
+        authority_approval_reference=case["approval"],
+    ))
+    if result["status"] == danish_bridge.STATUS_PASS:
+        actual = "MAPPED"
+    elif result["status"] == danish_bridge.STATUS_NOT_ASSESSED:
+        actual = "NOT_ASSESSED"
+    elif "not inferred from free text" in result["reason"]:
+        actual = "CONFLICT_REVIEW"
+    else:
+        actual = "REVIEW_ONLY"
     assert actual == case["expected"]
 
 
@@ -900,6 +980,8 @@ def test_danish_project_save_load_resave_preserves_every_basis_field_and_hash():
         ("bridge_nominal_cover_mm", "45"),
         ("bridge_nominal_cover_mm", float("inf")),
         ("bridge_manager_source", True),
+        ("bridge_departure_applicability", "Silently inferred departure"),
+        ("bridge_departure_source", True),
         ("bridge_infrastructure_manager", "Unknown silent manager"),
     ],
 )
@@ -908,14 +990,15 @@ def test_project_boundary_rejects_malformed_danish_bridge_state(key, bad):
         project_io.dump_project({}, _project_scalars(**{key: bad}))
 
 
-def _dk_methodology_record():
-    basis = bridge_inputs.danish_basis_from_inputs(_project_scalars())
+def _dk_methodology_record(**scalar_changes):
+    scalars = _project_scalars(**scalar_changes)
+    basis = bridge_inputs.danish_basis_from_inputs(scalars)
     evidence = bridge.BridgeBaseEvidence(
         methodology=bridge.EN1992_2_DK_NA,
         decisions=_decisions(),
         has_tendons=False,
         has_hollow_section=False,
-        fck_mpa=40.0,
+        fck_mpa=scalars["conc_fck"],
         brittle_method=bridge.BRITTLE_METHOD_A,
         danish_basis=basis,
     )
@@ -933,6 +1016,7 @@ def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs
         design_methodology=bridge.EN1992_2_DK_NA,
         fatigue_context=fatigue_context,
         danish_basis_context=context,
+        danish_fck_mpa=scalars["conc_fck"],
     )
     assert safe["publication_validation"]["status"] == "ACCEPTED"
 
@@ -951,6 +1035,7 @@ def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs
         design_methodology=bridge.EN1992_2_DK_NA,
         fatigue_context=fatigue_context,
         danish_basis_context=context,
+        danish_fck_mpa=scalars["conc_fck"],
     )
     assert rejected["publication_validation"]["status"] == "REJECTED"
     assert any(
@@ -966,9 +1051,164 @@ def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs
             "design_methodology": bridge.EN1992_2_BASE,
         }),
         danish_basis_context=context,
+        danish_fck_mpa=scalars["conc_fck"],
     )
     assert switched["publication_validation"]["status"] == "REJECTED"
     assert switched["status"] == bridge.STATUS_INVALID
+
+
+@pytest.mark.parametrize(
+    ("check_id", "scalar_changes"),
+    [
+        (
+            "dk_project_basis",
+            {
+                "bridge_infrastructure_manager": danish_bridge.MANAGER_OTHER,
+            },
+        ),
+        (
+            "dk_concrete_coefficients",
+            {
+                "bridge_alpha_ct": 0.8,
+                "bridge_alpha_ct_basis": conformance.CUSTOM_BASIS,
+                "bridge_alpha_ct_custom_methodology": "Project tensile model",
+                "bridge_alpha_ct_approval_reference": "DB-05 / checker 04",
+            },
+        ),
+        (
+            "dk_high_strength",
+            {
+                "conc_fck": 60.0,
+                "bridge_high_strength_approval": (
+                    danish_bridge.APPROVAL_NOT_APPROVED
+                ),
+            },
+        ),
+        (
+            "dk_cover",
+            {
+                "bridge_nominal_cover_mm": 40.0,
+            },
+        ),
+    ],
+)
+def test_publication_recomputes_danish_derived_checks_after_fingerprint_attack(
+    check_id,
+    scalar_changes,
+):
+    scalars = _project_scalars(**scalar_changes)
+    record = _dk_methodology_record(**scalar_changes)
+    expected = next(
+        row for row in record["checks"] if row["check_id"] == check_id
+    )
+    assert expected["status"] != bridge.STATUS_PASS
+    clean = bridge.publication_safe_record(
+        record,
+        design_methodology=bridge.EN1992_2_DK_NA,
+        fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_fck_mpa=scalars["conc_fck"],
+    )
+    assert clean["publication_validation"]["status"] == "ACCEPTED"
+    assert next(
+        row for row in clean["checks"] if row["check_id"] == check_id
+    )["status"] == expected["status"]
+
+    attacked = copy.deepcopy(record)
+    attacked_check = next(
+        row for row in attacked["checks"] if row["check_id"] == check_id
+    )
+    attacked_check["status"] = bridge.STATUS_PASS
+    attacked["status"] = bridge.STATUS_PASS
+    attacked["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        attacked["checks"],
+        attacked["configuration_errors"],
+        methodology=bridge.EN1992_2_DK_NA,
+        danish_basis_context=attacked["danish_basis"],
+    )
+
+    safe = bridge.publication_safe_record(
+        attacked,
+        design_methodology=bridge.EN1992_2_DK_NA,
+        fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_fck_mpa=scalars["conc_fck"],
+    )
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        f"{check_id}: stored Danish derived check conflicts" in error
+        for error in safe["publication_validation"]["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_fck",
+    [None, True, np.bool_(False), "40", float("nan"), float("inf"), 0.0],
+)
+def test_danish_publication_requires_current_typed_positive_fck(bad_fck):
+    scalars = _project_scalars()
+    safe = bridge.publication_safe_record(
+        _dk_methodology_record(),
+        design_methodology=bridge.EN1992_2_DK_NA,
+        fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_fck_mpa=bad_fck,
+    )
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "current Danish bridge fck" in error
+        for error in safe["publication_validation"]["errors"]
+    )
+
+
+def test_project_publication_latches_rebound_danish_check_forgery():
+    scalars = _project_scalars(
+        bridge_alpha_ct=0.8,
+        bridge_alpha_ct_basis=conformance.CUSTOM_BASIS,
+        bridge_alpha_ct_custom_methodology="Project tensile model",
+        bridge_alpha_ct_approval_reference="DB-05 / checker 04",
+    )
+    record = _dk_methodology_record(
+        bridge_alpha_ct=0.8,
+        bridge_alpha_ct_basis=conformance.CUSTOM_BASIS,
+        bridge_alpha_ct_custom_methodology="Project tensile model",
+        bridge_alpha_ct_approval_reference="DB-05 / checker 04",
+    )
+    coefficient = next(
+        row
+        for row in record["checks"]
+        if row["check_id"] == "dk_concrete_coefficients"
+    )
+    assert coefficient["status"] == bridge.STATUS_REVIEW
+    coefficient["status"] = bridge.STATUS_PASS
+    record["status"] = bridge.STATUS_PASS
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+        methodology=bridge.EN1992_2_DK_NA,
+        danish_basis_context=record["danish_basis"],
+    )
+    digest = project_io.input_sha256({}, scalars)
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-28T12:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "pr05-review-attack",
+            "input_sha256": digest,
+            "bridge_methodology": record,
+        },
+    )
+    provenance = project_io.project_provenance(text)
+    assert provenance["calculation"]["matches_saved_inputs"] is False
+    assert (
+        provenance["calculation"]["bridge_methodology"]
+        ["publication_validation"]["status"]
+        == "REJECTED"
+    )
 
 
 def test_project_calculation_record_rejects_basis_mutation_after_save():

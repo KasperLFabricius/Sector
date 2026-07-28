@@ -204,6 +204,8 @@ BRIDGE_SCALAR_KEYS = (
     "bridge_environment_class",
     "bridge_environment_source",
     "bridge_special_rules",
+    "bridge_departure_applicability",
+    "bridge_departure_source",
     "bridge_deviations",
     "bridge_control_class",
     "bridge_control_source",
@@ -419,6 +421,9 @@ def _validate_bridge_scalars(scalars: dict) -> None:
             danish_bridge.FATIGUE_APPLICABILITY
         ),
         "bridge_environment_class": danish_bridge.ENVIRONMENT_CLASSES,
+        "bridge_departure_applicability": (
+            danish_bridge.APPLICABILITY_OPTIONS
+        ),
         "bridge_control_class": danish_bridge.CONTROL_CLASSES,
         "bridge_consequence_class": danish_bridge.CONSEQUENCE_CLASSES,
         "bridge_high_strength_approval": danish_bridge.APPROVAL_STATES,
@@ -489,6 +494,7 @@ def _validate_bridge_scalars(scalars: dict) -> None:
         "bridge_traffic_fatigue_source",
         "bridge_environment_source",
         "bridge_special_rules",
+        "bridge_departure_source",
         "bridge_deviations",
         "bridge_control_source",
         "bridge_consequence_source",
@@ -528,6 +534,8 @@ def _setdefault_danish_bridge_scalars(scalars: dict) -> None:
         "bridge_environment_class": danish_bridge.NOT_ESTABLISHED,
         "bridge_environment_source": "",
         "bridge_special_rules": "",
+        "bridge_departure_applicability": danish_bridge.NOT_ESTABLISHED,
+        "bridge_departure_source": "",
         "bridge_deviations": "",
         "bridge_control_class": danish_bridge.NOT_ESTABLISHED,
         "bridge_control_source": "",
@@ -1043,6 +1051,7 @@ def publication_safe_calculation_record(
             danish_basis_context=bridge_inputs.danish_basis_context(
                 current_inputs
             ),
+            danish_fck_mpa=bridge_inputs.danish_fck_mpa(current_inputs),
         )
         if record["bridge_methodology"] is None:
             record.pop("bridge_methodology")

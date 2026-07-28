@@ -597,6 +597,7 @@ def bridge_summary_rows(inp, results, *, stale=False):
         design_methodology=raw_selected,
         fatigue_context=fatigue_analysis.bridge_publication_context(inp),
         danish_basis_context=bridge_inputs.danish_basis_context(inp),
+        danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
     )
     if not bridge.is_bridge_methodology(selected) and payload is None:
         return []

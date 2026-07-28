@@ -796,9 +796,13 @@ def manual_blocks() -> list:
        "basis. Also record the environmental class and source, surface/de-icing "
        "applicability and source, construction/control and consequence classes with "
        "sources, traffic/fatigue applicability, high-strength approval where "
-       "$f_{ck}>50$ MPa, special project rules and deviations. Sector never infers "
-       "road, footbridge or railway class, manager, control class, consequence class "
-       "or authority from geometry, loads or another selection.")
+       "$f_{ck}>50$ MPa, special project rules, and an explicit departure/"
+       "dispensation applicability decision. An applicable departure requires its "
+       "description, methodology/source clause, and authority approval; even when "
+       "approved it remains a qualified project variation rather than a Danish "
+       "selected-standard PASS. Sector never infers road, footbridge or railway "
+       "class, manager, control class, consequence class, departure applicability, "
+       "or authority from geometry, free text, loads, or another selection.")
     table(["Explicit Danish choice", "Mapped Sector effect"],
           [["Road Directorate / local road + road or footbridge",
             "Mapped manager/class evidence; project source remains mandatory"],
@@ -814,10 +818,10 @@ def manual_blocks() -> list:
             "Requires the extra-aggressive environmental route; a conflicting selected class is retained and reported for review"]])
     md("The Danish concrete coefficients are "
        "$\\alpha_{cc}=\\alpha_{ct}=1.0$. A positive finite custom value remains the "
-       "actual calculation input. It is reported as a deviation and cannot produce "
-       "an unqualified Danish-standard PASS unless the custom method and approval "
-       "are complete; malformed, Boolean, non-finite or non-positive values are hard "
-       "errors. $\\alpha_{ct}$ changes the torsional cracking resistance through "
+       "actual calculation input. A complete custom method/source and approval can "
+       "produce only a qualified approved-custom verdict, never an unqualified "
+       "Danish-standard PASS; malformed, Boolean, non-finite or non-positive values "
+       "are hard errors. $\\alpha_{ct}$ changes the torsional cracking resistance through "
        "$f_{ctd}=\\alpha_{ct}f_{ctk,0.05}/\\gamma_{ct}$. The routed nominal-cover "
        "check uses 40/50 mm for non-prestressed/prestressed reinforcement in "
        "aggressive/extra-aggressive environments, 50/60 mm for post-tensioning "

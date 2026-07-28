@@ -119,6 +119,30 @@ def authority_mapping(manager: str, asset_class: str) -> str:
     )
 
 
+def departure_outcome(
+    applicability: str,
+    *,
+    description: str,
+    source: str,
+    approval: str,
+) -> str:
+    """Return the independent non-inferred departure/approval disposition."""
+
+    if applicability == "not_established":
+        return "NOT_ASSESSED"
+    if applicability == "required":
+        if not all((description, source, approval)):
+            return "NOT_ASSESSED"
+        return "REVIEW_ONLY"
+    if applicability == "not_applicable":
+        return (
+            "CONFLICT_REVIEW"
+            if any((description, source, approval))
+            else "MAPPED"
+        )
+    raise ValueError("unmapped departure applicability")
+
+
 def evaluate_fixture(path: str | Path) -> dict:
     """Evaluate the frozen JSON fixture with only independent oracle code."""
 
@@ -151,6 +175,15 @@ def evaluate_fixture(path: str | Path) -> dict:
                 case["manager"], case["asset_class"]
             )
             for case in data["authority_cases"]
+        },
+        "departure_cases": {
+            case["id"]: departure_outcome(
+                case["applicability"],
+                description=case["description"],
+                source=case["source"],
+                approval=case["approval"],
+            )
+            for case in data["departure_cases"]
         },
     }
 

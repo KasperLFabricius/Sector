@@ -567,6 +567,11 @@ def danish_basis_from_inputs(value: Mapping) -> danish_bridge.DanishBridgeBasis:
         ),
         environment_source=value.get("bridge_environment_source", ""),
         special_rules=value.get("bridge_special_rules", ""),
+        departure_applicability=value.get(
+            "bridge_departure_applicability",
+            danish_bridge.NOT_ESTABLISHED,
+        ),
+        departure_source=value.get("bridge_departure_source", ""),
         deviations=value.get("bridge_deviations", ""),
         control_class=value.get(
             "bridge_control_class", danish_bridge.NOT_ESTABLISHED
@@ -640,3 +645,18 @@ def danish_basis_context(value: Mapping) -> dict | None:
         return danish_bridge.basis_context(danish_basis_from_inputs(value))
     except ValueError as exc:
         return {"validation_error": str(exc)}
+
+
+def danish_fck_mpa(value: Mapping):
+    """Return the uncoerced current strength used by Danish publication checks."""
+
+    if not isinstance(value, Mapping):
+        return None
+    if value.get("design_methodology") != bridge.EN1992_2_DK_NA:
+        return None
+    concrete = value.get("concrete")
+    if isinstance(concrete, Mapping):
+        fck = concrete.get("fck")
+    else:
+        fck = getattr(concrete, "fck", None)
+    return value.get("conc_fck") if fck is None else fck

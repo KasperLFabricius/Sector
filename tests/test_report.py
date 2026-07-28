@@ -3890,7 +3890,11 @@ def test_report_publishes_bound_danish_manager_basis_and_mapped_deicing():
         "bridge_environment_class": danish_bridge.ENVIRONMENT_AGGRESSIVE,
         "bridge_environment_source": "DB-05 section 4.2",
         "bridge_special_rules": "No mapped special relaxation",
-        "bridge_deviations": "None recorded",
+        "bridge_departure_applicability": (
+            danish_bridge.APPLICABILITY_NOT_APPLICABLE
+        ),
+        "bridge_departure_source": "",
+        "bridge_deviations": "",
         "bridge_control_class": danish_bridge.CONTROL_NORMAL,
         "bridge_control_source": "DB-05 section 2.4",
         "bridge_consequence_class": danish_bridge.CONSEQUENCE_CC2,
@@ -3958,6 +3962,10 @@ def test_report_publishes_bound_danish_manager_basis_and_mapped_deicing():
     assert danish_bridge.MANAGER_ROAD_DIRECTORATE in text
     assert "DB-05 section 4.2" in text
     assert "DB-05 drawing G-02" in text
+    assert "Departure applicability" in text
+    assert danish_bridge.APPLICABILITY_NOT_APPLICABLE in text
+    assert "Departure methodology / source" in text
+    assert "Departure authority approval" in text
     assert "mapped_deicing_x_m" in text
     assert "mapped_deicing_y_m" in text
     appendix = text[text.index("QA appendix - references and notes"):]
@@ -3965,6 +3973,7 @@ def test_report_publishes_bound_danish_manager_basis_and_mapped_deicing():
     assert danish_bridge.MANAGER_ROAD_DIRECTORATE in appendix
     assert "VD bridge basis 2023+corr.2026" in appendix
     assert "DB-05 section 2.3" in appendix
+    assert "departure applicability" in appendix
     assert "Danish bridge applicability provenance" in appendix
     assert "Danish bridge coefficient provenance" in appendix
 

@@ -105,7 +105,7 @@ STATUS_NOT_RUN = "NOT RUN"
 STATUS_REVIEW = "REVIEW"
 
 BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v2"
-DANISH_BRIDGE_EVIDENCE_SCHEMA = "sector.dk-bridge-methodology-evidence/v1"
+DANISH_BRIDGE_EVIDENCE_SCHEMA = "sector.dk-bridge-methodology-evidence/v2"
 FATIGUE_PUBLICATION_CONTEXT_SCHEMA = (
     "sector.bridge-fatigue-publication-context/v2"
 )
@@ -1596,6 +1596,40 @@ def _danish_check(
     )
 
 
+def _expected_danish_publication_checks(
+    basis: danish_bridge.DanishBridgeBasis,
+    *,
+    fck_mpa: Any,
+) -> dict[str, dict[str, Any]]:
+    """Recompute every Danish check derived solely from current input context."""
+
+    expected = (
+        _danish_check(
+            "dk_project_basis",
+            danish_bridge.assess_project_basis(basis),
+        ),
+        _danish_check(
+            "dk_concrete_coefficients",
+            danish_bridge.assess_coefficients(basis),
+        ),
+        _danish_check(
+            "dk_high_strength",
+            danish_bridge.assess_high_strength(fck_mpa, basis),
+        ),
+        _danish_check(
+            "dk_cover",
+            danish_bridge.assess_cover(basis),
+        ),
+    )
+    return {
+        check.check_id: _bind_check_relationship(
+            check,
+            EN1992_2_DK_NA,
+        ).to_dict()
+        for check in expected
+    }
+
+
 def _bind_check_relationship(
     check: BridgeCheckResult,
     methodology: str,
@@ -2497,6 +2531,7 @@ def publication_safe_record(
     design_methodology: Any,
     fatigue_context: Mapping | None,
     danish_basis_context: Mapping[str, Any] | None = None,
+    danish_fck_mpa: Any = None,
 ) -> dict[str, Any] | None:
     """Return a canonical fail-closed bridge calculation snapshot.
 
@@ -2534,6 +2569,7 @@ def publication_safe_record(
             )
     stored_danish_basis = record.get("danish_basis")
     canonical_danish_basis = None
+    expected_danish_checks: dict[str, dict[str, Any]] = {}
     if stored_methodology == EN1992_2_DK_NA:
         if not isinstance(danish_basis_context, Mapping):
             correlation_errors.append(
@@ -2568,6 +2604,22 @@ def publication_safe_record(
                 "stored Danish bridge basis conflicts with the calculation "
                 "input snapshot"
             )
+        if canonical_danish_basis is not None:
+            try:
+                current_danish_basis = danish_bridge.basis_from_context(
+                    canonical_danish_basis
+                )
+                current_fck = _real(
+                    danish_fck_mpa,
+                    "current Danish bridge fck",
+                    positive=True,
+                )
+                expected_danish_checks = _expected_danish_publication_checks(
+                    current_danish_basis,
+                    fck_mpa=current_fck,
+                )
+            except ValueError as exc:
+                correlation_errors.append(str(exc))
     elif stored_danish_basis is not None:
         correlation_errors.append(
             "base bridge evidence unexpectedly contains Danish basis state"
@@ -2751,6 +2803,26 @@ def publication_safe_record(
                 local_errors.append(str(exc))
                 raw_evidence = ()
                 status = STATUS_NOT_ASSESSED
+        expected_danish_check = expected_danish_checks.get(check_id)
+        if expected_danish_check is not None:
+            try:
+                stored_danish_body = _binding_check(raw, index=0)
+                expected_danish_body = _binding_check(
+                    expected_danish_check,
+                    index=0,
+                )
+            except ValueError as exc:
+                local_errors.append(
+                    "stored Danish derived check is malformed: " + str(exc)
+                )
+                status = STATUS_NOT_ASSESSED
+            else:
+                if stored_danish_body != expected_danish_body:
+                    local_errors.append(
+                        "stored Danish derived check conflicts with the "
+                        "current calculation inputs"
+                    )
+                    status = STATUS_NOT_ASSESSED
         if (
             status in {STATUS_PASS, STATUS_FAIL, STATUS_REVIEW}
             and check_id in {

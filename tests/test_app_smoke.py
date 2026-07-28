@@ -2062,6 +2062,7 @@ def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
         "bridge_asset_class",
         "bridge_infrastructure_manager",
         "bridge_environment_class",
+        "bridge_departure_applicability",
         "bridge_control_class",
         "bridge_consequence_class",
         "bridge_deicing_applicability",
@@ -2070,6 +2071,8 @@ def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
     for key in (
         "bridge_manager_source",
         "bridge_project_basis_source",
+        "bridge_departure_source",
+        "bridge_authority_approval_reference",
         "bridge_environment_source",
         "bridge_deicing_source",
     ):
