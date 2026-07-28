@@ -2999,6 +2999,39 @@ def test_report_prints_actual_danish_alpha_ct_in_torsional_cracking_formula():
     assert "1.058" in text
 
 
+def test_report_keeps_torsion_factor_and_fctd_as_one_layout_block():
+    import io
+
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), _out(), figures=False
+    )
+    builder._p("Arbitrary preceding report content")
+    preceding = builder.flow[-1]
+    builder._torsion_material_factor_trace(_torsion_out())
+
+    assert builder.flow[0] is preceding
+    assert len(builder.flow) == 2
+    block = builder.flow[1]
+    assert isinstance(block, sector_report.KeepTogether)
+
+    text = []
+    for item in block._content:
+        if hasattr(item, "getPlainText"):
+            text.append(item.getPlainText())
+        elif isinstance(item, sector_report.Table):
+            text.extend(
+                cell.getPlainText()
+                for row in item._cellvalues
+                for cell in row
+                if hasattr(cell, "getPlainText")
+            )
+    normalized = " ".join(" ".join(text).split())
+    assert "Material-factor basis" in normalized
+    assert "Concrete tension coefficient" in normalized
+    assert "fctd = αct fctk,0.05 / γct" in normalized
+    assert "fctd = 1.322 MPa" in normalized
+
+
 def test_qa_appendix_distinguishes_factor_provenance_modes():
     inp, out = _fatigue_report_fixture()
     torsion = _torsion_out()

@@ -1019,3 +1019,18 @@ mandatory; this matrix does not self-certify PR closure.
   inspected on affected pages 21-22 and pagination-boundary pages 41-42 with no
   clipping, overlap or orphaned result block. Run `30405116136` was canceled
   before completion and is not counted as the single exact-head CI gate.
+- Codex rereview of exact head
+  `162c05834040cd3145a11ab08f3479547ceec440` identified that arbitrary
+  preceding content could still split the material-factor table from its
+  `fctd` derivation. The material-factor heading, complete table,
+  `alpha_ct`, derivation, result and source now form one layout-independent
+  keep-together block used by both the single- and subdivided-torsion paths.
+  A structural regression starts with unrelated preceding content and requires
+  the entire trace to remain one semantic flow block. Thirteen focused
+  torsion-report checks and both canonical rendered-report checks pass. The
+  refreshed 12-page compound raster was inspected on affected pages 7-8 and
+  boundaries 11-12; the refreshed 42-page canonical raster was inspected on
+  affected pages 21-22 and boundaries 41-42. Both keep the factor/`fctd`
+  correlation legible without clipping, overlap or orphaned results. Run
+  `30406932381` was canceled before completion and is not counted as the single
+  exact-head CI gate.

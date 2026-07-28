@@ -3949,7 +3949,8 @@ class ReportBuilder:
                     "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check captures and which "
                     "stays the authoritative combined verification.")
 
-    def _torsion_material_factor_basis(self, t):
+    def _torsion_material_factor_trace(self, t):
+        start = len(self.flow)
         factor_basis = t.get("material_factor_basis") or {}
         self._h2("Material-factor basis")
         factor_rows = [
@@ -3980,9 +3981,6 @@ class ReportBuilder:
                 _html_escape(str(factor_basis["approval_reference"])),
             ])
         self._table(factor_rows, [55 * mm, 110 * mm], keep=False)
-
-    def _torsion_fctd_trace(self, t):
-        factor_basis = t.get("material_factor_basis") or {}
         self._formula(
             "f<sub>ctd</sub> = alpha<sub>ct</sub> "
             "f<sub>ctk,0.05</sub> / gamma<sub>ct</sub> = "
@@ -3993,6 +3991,7 @@ class ReportBuilder:
                   f"{_fmt(t.get('fctk_005'), 3)} / "
                   f"{_fmt(t.get('gamma_ct'), 3)}",
             result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")
+        self._keep_from(start)
 
     def _subtube_section(self, t):
         """Torsion of a subdivided compound section (EN 1992-1-1 6.3.1(3)-(4))."""
@@ -4005,8 +4004,7 @@ class ReportBuilder:
                 "rectangle (web) carries the shear in the combined V+T checks. Its "
                 "positioned rectangle union has been validated against the concrete "
                 "outline and voids before these results are issued.")
-        self._torsion_material_factor_basis(t)
-        self._torsion_fctd_trace(t)
+        self._torsion_material_factor_trace(t)
         rows = [["Sub-tube", "centre x, y<br/>b x h (mm)", "t<sub>ef</sub>",
                  "A<sub>k</sub> (mm2)", "share", "T<sub>Ed,i</sub>",
                  "T<sub>Rd,i</sub>", "T<sub>Rd,c,i</sub>", "util", "governs"]]
@@ -4278,7 +4276,7 @@ class ReportBuilder:
             self._small("nu = nu<sub>v</sub> (raised from nu<sub>t</sub>) under DK NA "
                         "Figur 5.100 NA: closed stirrups round the periphery and "
                         "distributed longitudinal steel on both faces.")
-        self._torsion_material_factor_basis(t)
+        self._torsion_material_factor_trace(t)
         self._h2("Resistances")
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
@@ -4300,7 +4298,6 @@ class ReportBuilder:
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
             result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
                    f"(governed by {t['governs']})")
-        self._torsion_fctd_trace(t)
         self._formula(
             "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
             ref="cracking (tau = f<sub>ctd</sub>)",
