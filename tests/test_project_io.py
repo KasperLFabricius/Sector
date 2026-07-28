@@ -16,11 +16,13 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_inputs  # noqa: E402
+import fatigue_analysis  # noqa: E402
+import bridge_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from sector import codes, detailing, sls  # noqa: E402
+from sector import bridge, codes, conformance, detailing, sls  # noqa: E402
 
 
 def _v17_crack_defaults():
@@ -39,6 +41,20 @@ def _v17_crack_defaults():
         "sls_project_characteristic_limit": 0.0,
         "sls_project_frequent_limit": 0.0,
         "sls_project_quasi_permanent_limit": 0.0,
+    }
+
+
+def _v19_bridge_defaults():
+    return {
+        "sls_bridge_exposure_class": (
+            project_io.DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS
+        ),
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "bridge_brittle_method": bridge.BRITTLE_NOT_ESTABLISHED,
+        "bridge_expected_box_walls": 0,
+        "bridge_minimum_scope": bridge.MINIMUM_SCOPE_NOT_ESTABLISHED,
+        "bridge_shear_scope": bridge.SHEAR_SCOPE_NOT_ESTABLISHED,
+        "bridge_exposure": bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
     }
 
 
@@ -137,6 +153,7 @@ def test_round_trip_tables_and_scalars():
         if key not in load_cases.LEGACY_SCALAR_KEYS
     }
     expected_scalars.update(_v17_crack_defaults())
+    expected_scalars.update(_v19_bridge_defaults())
     assert rs == expected_scalars
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == "PL-17"
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "description"] == (
@@ -465,6 +482,598 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     assert project_io.input_sha256(restored, restored_scalars) == (
         project_io.input_sha256(tables, scalars)
     )
+
+
+def test_v20_round_trip_preserves_typed_bridge_tables_and_methodology():
+    tables = _tables()
+    coverage = bridge_inputs.default_coverage_records()
+    for row in coverage:
+        row["applicability"] = (
+            bridge.REQUIRED
+            if row["check_id"] in {"sls_stress", "sls_crack"}
+            else bridge.NOT_APPLICABLE
+        )
+        row["source"] = f"DB-{row['check_id']}"
+    tables.update({
+        bridge_inputs.COVERAGE_TABLE_KEY:
+            bridge_inputs.table_from_records(
+                coverage,
+                bridge_inputs.COVERAGE_TABLE_KEY,
+            ),
+        bridge_inputs.BRITTLE_TABLE_KEY:
+            bridge_inputs.empty_table(bridge_inputs.BRITTLE_TABLE_KEY),
+        bridge_inputs.BOX_WALL_TABLE_KEY:
+            bridge_inputs.empty_table(bridge_inputs.BOX_WALL_TABLE_KEY),
+        bridge_inputs.MINIMUM_TABLE_KEY:
+            bridge_inputs.table_from_records([{
+                "component": "Web",
+                "act_mm2": 100_000.0,
+                "k_c": 0.4,
+                "k": 1.0,
+                "fct_eff_mpa": 2.8,
+                "sigma_s_mpa": 300.0,
+                "as_provided_mm2": 500.0,
+                "restrained_shrinkage": True,
+            }], bridge_inputs.MINIMUM_TABLE_KEY),
+    })
+    scalars = {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "bridge_brittle_method": bridge.BRITTLE_METHOD_B,
+        "bridge_expected_box_walls": 0,
+        "bridge_minimum_scope": bridge.MINIMUM_SCOPE_WEB,
+        "bridge_shear_scope": bridge.SHEAR_SCOPE_MEMBER,
+        "bridge_exposure": bridge.BRIDGE_EXPOSURE_XD_XS,
+        "sls_bridge_exposure_class": sls.BRIDGE_EXPOSURE_XD_XS,
+    }
+
+    text = project_io.dump_project(tables, scalars)
+    payload = json.loads(text)
+    restored, restored_scalars = project_io.parse_project(text)
+
+    assert payload["version"] == 20
+    assert payload["bridge"]["version"] == bridge_inputs.VERSION
+    assert restored_scalars["design_methodology"] == bridge.EN1992_2_BASE
+    assert restored_scalars["bridge_minimum_scope"] == bridge.MINIMUM_SCOPE_WEB
+    assert (
+        restored_scalars["sls_bridge_exposure_class"]
+        == sls.BRIDGE_EXPOSURE_XD_XS
+    )
+    assert bridge_inputs.table_records(
+        restored[bridge_inputs.COVERAGE_TABLE_KEY],
+        bridge_inputs.COVERAGE_TABLE_KEY,
+    ) == bridge_inputs.table_records(
+        tables[bridge_inputs.COVERAGE_TABLE_KEY],
+        bridge_inputs.COVERAGE_TABLE_KEY,
+    )
+    assert bridge_inputs.table_records(
+        restored[bridge_inputs.MINIMUM_TABLE_KEY],
+        bridge_inputs.MINIMUM_TABLE_KEY,
+    ) == bridge_inputs.table_records(
+        tables[bridge_inputs.MINIMUM_TABLE_KEY],
+        bridge_inputs.MINIMUM_TABLE_KEY,
+    )
+    assert project_io.input_sha256(restored, restored_scalars) == (
+        project_io.input_sha256(tables, scalars)
+    )
+
+
+@pytest.mark.parametrize(
+    ("table_key", "record"),
+    [
+        (
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+            {
+                "wall_id": "Wall",
+                "cot_theta": 10.0,
+                "v_ed_kn": 10.0,
+                "v_rd_max_kn": 100.0,
+                "t_ed_equivalent_kn": 10.0,
+                "t_rd_max_equivalent_kn": 100.0,
+            },
+        ),
+        (
+            bridge_inputs.MINIMUM_TABLE_KEY,
+            {
+                "component": "Web",
+                "act_mm2": 100_000.0,
+                "k_c": 0.4,
+                "k": 0.01,
+                "fct_eff_mpa": 3.0,
+                "sigma_s_mpa": 300.0,
+                "as_provided_mm2": 5.0,
+                "restrained_shrinkage": False,
+            },
+        ),
+    ],
+)
+def test_project_round_trips_positive_custom_bridge_parameter_and_provenance(
+    table_key,
+    record,
+):
+    record.update({
+        "parameter_basis": conformance.CUSTOM_BASIS,
+        "custom_methodology": "Project bridge analysis method",
+        "approval_reference": "DB-BRIDGE-01 / checker A",
+    })
+    tables = _tables()
+    tables[table_key] = bridge_inputs.normalise_table([record], table_key)
+
+    text = project_io.dump_project(tables, {})
+    restored, _scalars = project_io.parse_project(text)
+    restored_record = bridge_inputs.table_records(
+        restored[table_key],
+        table_key,
+    )[0]
+
+    assert restored_record == bridge_inputs.table_records(
+        tables[table_key],
+        table_key,
+    )[0]
+    assert restored_record["parameter_basis"] == conformance.CUSTOM_BASIS
+    assert restored_record["custom_methodology"] == (
+        "Project bridge analysis method"
+    )
+    assert restored_record["approval_reference"] == (
+        "DB-BRIDGE-01 / checker A"
+    )
+
+
+def _bridge_miner_scalars(*, coefficient=14.0):
+    return {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "fatigue_on": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_check_concrete": True,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": coefficient,
+    }
+
+
+def test_project_round_trip_binds_bridge_standard_miner_c14():
+    text = project_io.dump_project({}, _bridge_miner_scalars())
+    _tables_out, scalars = project_io.parse_project(text)
+
+    assert scalars["fatigue_concrete_c"] == 14.0
+    assert scalars["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+
+
+def test_project_preserves_bridge_standard_miner_c100_for_review():
+    text = project_io.dump_project(
+        {},
+        _bridge_miner_scalars(coefficient=100.0),
+    )
+    _tables_out, scalars = project_io.parse_project(text)
+    provenance = project_io.project_provenance(text)
+
+    assert scalars["fatigue_concrete_c"] == 100.0
+    assert scalars["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+    assert provenance["input_hash_valid"] is True
+
+
+def test_project_round_trip_keeps_nonstandard_c_only_under_sourced_project_method():
+    scalars = {
+        **_bridge_miner_scalars(coefficient=100.0),
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        "fatigue_concrete_miner_source": "AUTH-SN-7 / checker approval",
+    }
+
+    text = project_io.dump_project({}, scalars)
+    _tables_out, restored = project_io.parse_project(text)
+
+    assert restored["fatigue_concrete_c"] == 100.0
+    assert restored["fatigue_concrete_method"] == (
+        fatigue_analysis.CONCRETE_PROJECT_MINER
+    )
+    assert restored["fatigue_concrete_miner_source"] == (
+        "AUTH-SN-7 / checker approval"
+    )
+
+    scalars["fatigue_concrete_miner_source"] = ""
+    text = project_io.dump_project({}, scalars)
+    _tables_out, restored = project_io.parse_project(text)
+
+    assert restored["fatigue_concrete_c"] == 100.0
+    assert restored["fatigue_concrete_miner_source"] == ""
+
+
+def test_pre_v19_project_cannot_inherit_bridge_methodology_from_session():
+    project = {
+        "format": project_io.FORMAT,
+        "version": 18,
+        "tables": {},
+        "scalars": {
+            "design_methodology": bridge.EN1992_2_BASE,
+        },
+    }
+
+    tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars["design_methodology"] == bridge.COMPONENT_METHODS
+    assert not any(key in tables for key in bridge_inputs.TABLE_KEYS)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("design_methodology", "EN 1992-2-ish"),
+        ("bridge_expected_box_walls", True),
+        ("bridge_expected_box_walls", 1.5),
+        ("bridge_exposure", "XC maybe"),
+    ],
+)
+def test_bridge_scalar_boundary_rejects_unknown_or_false_numeric_state(
+    field,
+    value,
+):
+    with pytest.raises(ValueError, match="bridge|methodology"):
+        project_io.dump_project({}, {field: value})
+
+
+def _bridge_calculation_snapshot():
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id == "section_analysis"
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="one inherited section solve converged",
+            criterion="requested section solver converges",
+            source="DS/EN 1992-2 inherited section analysis",
+            reason="Elastic case SLS-1 converged",
+        ),
+    ))
+
+
+def _bridge_concrete_fatigue_snapshot(scalars):
+    context = fatigue_analysis.bridge_publication_context(scalars)
+    assert context["errors"] == []
+    records = {
+        record["parameter_id"]: record
+        for record in context["parameter_conformance"]
+    }
+    concrete_records = (
+        records["fatigue.gamma_c"],
+        records["concrete_fatigue.miner_c"],
+    )
+    assessment_status = conformance.aggregate(
+        concrete_records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=context["edition"],
+    )["assessment_status"]
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id in {"section_analysis", "concrete_fatigue"}
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="one inherited section solve converged",
+            criterion="requested section solver converges",
+            source="DS/EN 1992-2 inherited section analysis",
+            reason="Elastic case SLS-1 converged",
+        ),
+        concrete_fatigue=bridge.ExternalEvidence(
+            status=assessment_status,
+            result="50.0 %",
+            criterion="<= 100 %",
+            source="DS/EN 1992-2:2005/AC:2008 Expression (6.106)",
+            reason="solver evidence retained",
+            utilisation=0.5,
+            evidence=({
+                "status": assessment_status,
+                "analytical_status": bridge.STATUS_PASS,
+                "methodology": bridge.EN1992_2_BASE,
+                "concrete_method": context["concrete_method"],
+                "concrete_miner_basis": context["concrete_miner_basis"],
+                "concrete_miner_source": context["concrete_miner_source"],
+                "miner_coefficient_c": records[
+                    "concrete_fatigue.miner_c"
+                ]["actual_value"],
+                "parameter_conformance": records[
+                    "concrete_fatigue.miner_c"
+                ],
+                "fatigue_parameter_conformance": concrete_records,
+                "fatigue_edition": context["edition"],
+                "fatigue_factor_mode": context["factor_mode"],
+                "fatigue_factor_approval": context["factor_approval"],
+                "fatigue_gamma_ff": context["gamma_ff"],
+            },),
+        ),
+    ))
+
+
+def _bridge_fatigue_scalars(*, custom=False):
+    scalars = {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "fatigue_on": True,
+        "fatigue_check_steel": False,
+        "fatigue_check_concrete": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_gamma_ff": 1.0,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+    }
+    if custom:
+        scalars.update({
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "fatigue_factor_approval": (
+                "DB-FAT-OVERRIDE-02 / checker approval"
+            ),
+            "fatigue_gamma_c": 2.0,
+        })
+    return scalars
+
+
+def test_project_roundtrips_bound_bridge_calculation_snapshot():
+    scalars = {"design_methodology": bridge.EN1992_2_BASE}
+    calculation = {
+        "input_sha256": project_io.input_sha256({}, scalars),
+        "bridge_methodology": _bridge_calculation_snapshot(),
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation=calculation,
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+    saved = payload["calculation"]["bridge_methodology"]
+    restored = provenance["calculation"]["bridge_methodology"]
+
+    assert saved == restored
+    assert saved["status"] == bridge.STATUS_PASS
+    assert saved["evidence_schema"] == bridge.BRIDGE_EVIDENCE_SCHEMA
+    assert saved["publication_validation"]["status"] == "ACCEPTED"
+    assert payload["calculation"]["matches_saved_inputs"] is True
+    assert payload["provenance"]["results_included"] is True
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "stale_standard",
+        "omitted_gamma_c",
+        "stale_gamma_ff",
+        "missing_gamma_ff",
+        "boolean_gamma_ff",
+        "non_finite_gamma_ff",
+    ],
+)
+def test_bridge_fatigue_rejection_latch_survives_save_load_and_resave(attack):
+    current_scalars = _bridge_fatigue_scalars(custom=True)
+    if attack == "stale_standard":
+        attacked = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_scalars()
+        )
+        stored_concrete = next(
+            check for check in attacked["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        assert current_scalars["fatigue_gamma_c"] == 2.0
+        assert stored_concrete["evidence"][0][
+            "fatigue_parameter_conformance"
+        ][0]["actual_value"] == 1.5
+    elif attack == "stale_gamma_ff":
+        current_scalars = _bridge_fatigue_scalars()
+        current_scalars["fatigue_gamma_ff"] = 2.0
+        attacked = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_scalars()
+        )
+        stored_concrete = next(
+            check for check in attacked["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        assert current_scalars["fatigue_gamma_ff"] == 2.0
+        assert stored_concrete["evidence"][0]["fatigue_gamma_ff"] == 1.0
+    elif attack in {
+        "missing_gamma_ff",
+        "boolean_gamma_ff",
+        "non_finite_gamma_ff",
+    }:
+        current_scalars = _bridge_fatigue_scalars()
+        attacked = _bridge_concrete_fatigue_snapshot(current_scalars)
+        stored_concrete = next(
+            check for check in attacked["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = stored_concrete["evidence"][0]
+        if attack == "missing_gamma_ff":
+            del row["fatigue_gamma_ff"]
+        elif attack == "boolean_gamma_ff":
+            row["fatigue_gamma_ff"] = True
+        else:
+            row["fatigue_gamma_ff"] = float("inf")
+        if attack != "non_finite_gamma_ff":
+            attacked["evidence_fingerprint"] = (
+                bridge.bridge_evidence_fingerprint(
+                    attacked["checks"],
+                    attacked["configuration_errors"],
+                )
+            )
+    else:
+        attacked = _bridge_concrete_fatigue_snapshot(current_scalars)
+        stored_concrete = next(
+            check for check in attacked["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = stored_concrete["evidence"][0]
+        row["fatigue_parameter_conformance"] = [
+            record
+            for record in row["fatigue_parameter_conformance"]
+            if record["parameter_id"] != "fatigue.gamma_c"
+        ]
+        row["status"] = bridge.STATUS_PASS
+        stored_concrete["status"] = bridge.STATUS_PASS
+        attacked["status"] = bridge.STATUS_PASS
+        attacked["evidence_fingerprint"] = (
+            bridge.bridge_evidence_fingerprint(
+                attacked["checks"],
+                attacked["configuration_errors"],
+            )
+        )
+    digest = project_io.input_sha256({}, current_scalars)
+    text = project_io.dump_project(
+        {},
+        current_scalars,
+        calculation={
+            "input_sha256": digest,
+            "bridge_methodology": attacked,
+        },
+    )
+    saved_payload = json.loads(text)
+    loaded = project_io.project_provenance(text)
+
+    for calculation in (
+        saved_payload["calculation"],
+        loaded["calculation"],
+    ):
+        saved_bridge = calculation["bridge_methodology"]
+        saved_concrete = next(
+            check for check in saved_bridge["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        assert calculation["matches_saved_inputs"] is False
+        assert saved_bridge["status"] == bridge.STATUS_INVALID
+        assert saved_bridge["publication_validation"]["status"] == "REJECTED"
+        assert saved_concrete["status"] == bridge.STATUS_NOT_ASSESSED
+    assert loaded["input_hash_valid"] is True
+    assert loaded["results_included"] is True
+
+    loaded_tables, loaded_scalars = project_io.parse_project(text)
+    resaved_text = project_io.dump_project(
+        loaded_tables,
+        loaded_scalars,
+        calculation=loaded["calculation"],
+    )
+    resaved = project_io.project_provenance(resaved_text)
+    assert resaved["input_hash_valid"] is True
+    assert resaved["calculation"]["matches_saved_inputs"] is False
+    assert resaved["calculation"]["bridge_methodology"][
+        "publication_validation"
+    ]["status"] == "REJECTED"
+    assert next(
+        check
+        for check in resaved["calculation"]["bridge_methodology"]["checks"]
+        if check["check_id"] == "concrete_fatigue"
+    )["status"] == bridge.STATUS_NOT_ASSESSED
+
+
+def test_project_rejects_bridge_snapshot_under_component_methodology():
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    calculation = {
+        "input_sha256": project_io.input_sha256({}, scalars),
+        "bridge_methodology": _bridge_calculation_snapshot(),
+    }
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation=calculation,
+    )
+    payload = json.loads(text)
+    provenance = project_io.project_provenance(text)
+    saved = payload["calculation"]["bridge_methodology"]
+    restored = provenance["calculation"]["bridge_methodology"]
+
+    for record in (saved, restored):
+        assert record["status"] == bridge.STATUS_INVALID
+        assert record["publication_validation"]["status"] == "REJECTED"
+        assert any(
+            "conflicts with the calculation input snapshot" in error
+            for error in record["publication_validation"]["errors"]
+        )
+    assert payload["calculation"]["matches_saved_inputs"] is False
+    assert provenance["calculation"]["matches_saved_inputs"] is False
+    assert payload["provenance"]["results_included"] is True
+
+
+def test_project_publication_rejects_mutated_bridge_snapshot():
+    scalars = {"design_methodology": bridge.EN1992_2_BASE}
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": project_io.input_sha256({}, scalars),
+            "bridge_methodology": _bridge_calculation_snapshot(),
+        },
+    )
+    payload = json.loads(text)
+    payload["calculation"]["bridge_methodology"]["checks"][0][
+        "result"
+    ] = "mutated stored result"
+
+    provenance = project_io.project_provenance(json.dumps(payload))
+    restored = provenance["calculation"]["bridge_methodology"]
+
+    assert restored["status"] == bridge.STATUS_INVALID
+    assert any(
+        "fingerprint does not match" in error
+        for error in restored["configuration_errors"]
+    )
+
+
+def test_project_rejects_duplicate_bridge_coverage_rows_and_future_schema():
+    payload = json.loads(project_io.dump_project({}, {}))
+    coverage = payload["bridge"]["tables"][
+        bridge_inputs.COVERAGE_TABLE_KEY
+    ]
+    coverage.append(dict(coverage[0]))
+
+    with pytest.raises(ValueError, match="duplicate check_id"):
+        project_io.parse_project(json.dumps(payload))
+
+    payload = json.loads(project_io.dump_project({}, {}))
+    payload["bridge"]["version"] = bridge_inputs.VERSION + 1
+    with pytest.raises(ValueError, match="schema version"):
+        project_io.parse_project(json.dumps(payload))
 
 
 def test_implicit_fatigue_factor_mode_round_trips_by_dedicated_approval():
@@ -983,6 +1592,7 @@ def test_unknown_scalar_keys_are_dropped():
         "sls_tendon_bond": project_io.DEFAULT_SLS_TENDON_BOND,
         "sls_tendon_xi": project_io.DEFAULT_SLS_TENDON_XI,
         **_v17_crack_defaults(),
+        **_v19_bridge_defaults(),
     }
 
 
@@ -1221,6 +1831,148 @@ def test_project_records_whether_calculation_matches_saved_inputs():
 
     assert matching["calculation"]["matches_saved_inputs"] is True
     assert changed["calculation"]["matches_saved_inputs"] is False
+
+
+def _approved_custom_fatigue_conformance_record():
+    edition = fatigue_inputs.EC2_2023
+    gamma_s, gamma_c, factor_basis = (
+        fatigue_inputs.resolve_fatigue_factors(
+            edition,
+            mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            gamma_s=0.5,
+            gamma_c=2.0,
+            approval_reference="DB-FAT-21 / checker approval",
+        )
+    )
+    miner_source = "AUTH-SN-7 / checker approval"
+    miner_record = fatigue_analysis.concrete_miner_conformance(
+        edition=edition,
+        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        miner_source=miner_source,
+        coefficient_c=100.0,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+    parameter_records = [
+        factor_basis["parameter_conformance"]["gamma_s"],
+        factor_basis["parameter_conformance"]["gamma_c"],
+        miner_record,
+    ]
+    aggregate = conformance.aggregate(
+        parameter_records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=edition,
+    )
+    payload = {
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "errors": (),
+        "edition": edition,
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "checks": {"reinforcement": True, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+        "concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        "concrete_miner_source": miner_source,
+        "partial_factors": {
+            "gamma_s": gamma_s,
+            "gamma_c": gamma_c,
+            "gamma_ff": 1.0,
+        },
+        "factor_basis": factor_basis,
+        "parameter_conformance": parameter_records,
+        "conformance": aggregate,
+        "assessment_status": aggregate["assessment_status"],
+        "qualified_verdict": aggregate["qualified_verdict"],
+        "standard_passed": False,
+        "concrete_parameters": {
+            "c": 100.0,
+            "method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+            "parameter_conformance": miner_record,
+        },
+    }
+    return fatigue_analysis.calculation_conformance_record(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+
+def test_project_round_trip_retains_bound_fatigue_conformance_evidence():
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    digest = project_io.input_sha256({}, scalars)
+    fatigue_record = _approved_custom_fatigue_conformance_record()
+    assert fatigue_record is not None
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "fatigue_conformance": fatigue_record,
+        },
+    )
+    saved = json.loads(text)
+    provenance = project_io.project_provenance(text)
+
+    assert saved["calculation"]["fatigue_conformance"] == fatigue_record
+    assert saved["calculation"]["matches_saved_inputs"] is True
+    assert saved["provenance"]["results_included"] is True
+    assert provenance["calculation"]["fatigue_conformance"] == fatigue_record
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+    assert provenance["results_included"] is True
+    assert fatigue_record["partial_factors"]["gamma_s"] == pytest.approx(0.5)
+    assert fatigue_record["partial_factors"]["gamma_c"] == pytest.approx(2.0)
+    assert fatigue_record["concrete_parameters"]["c"] == pytest.approx(100.0)
+    assert fatigue_record["concrete_miner_source"] == (
+        "AUTH-SN-7 / checker approval"
+    )
+    assert fatigue_record["conformance"]["state"] == (
+        conformance.STATE_APPROVED_CUSTOM
+    )
+
+
+def test_project_drops_mutated_fatigue_conformance_evidence_fail_closed():
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    digest = project_io.input_sha256({}, scalars)
+    fatigue_record = _approved_custom_fatigue_conformance_record()
+    assert fatigue_record is not None
+    fatigue_record["partial_factors"]["gamma_s"] = 1.15
+
+    saved = json.loads(project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "fatigue_conformance": fatigue_record,
+        },
+    ))
+
+    assert "fatigue_conformance" not in saved["calculation"]
+    assert saved["calculation"]["matches_saved_inputs"] is False
+    assert saved["provenance"]["results_included"] is False
+    restored = project_io.project_provenance(json.dumps(saved))
+    assert restored["calculation"]["matches_saved_inputs"] is False
+
+
+def test_project_preserves_explicit_false_publication_match_latch():
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    digest = project_io.input_sha256({}, scalars)
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "matches_saved_inputs": False,
+        },
+    )
+    saved = json.loads(text)
+    restored = project_io.project_provenance(text)
+
+    assert saved["calculation"]["matches_saved_inputs"] is False
+    assert restored["calculation"]["matches_saved_inputs"] is False
 
 
 def _project_width_crack_control():

@@ -21,6 +21,7 @@ import atexit
 import copy
 import datetime
 import io
+import json
 import math
 import os
 import re
@@ -40,11 +41,14 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import case_analysis
+import fatigue_analysis
 import fatigue_inputs
 import fatigue_presentation
 import viz
 import result_presentation as presentation
+from sector import bridge as bridge_core
 from sector import codes as ec2_codes
+from sector import conformance
 from sector import detailing
 from sector import sls as sls_core
 from sector import __licensee__ as SECTOR_LICENSEE
@@ -457,13 +461,22 @@ class ReportBuilder:
         self.buffer = buffer
         self.meta = meta or {}
         self.inp = inp
-        self.out = out or {}
+        canonical_out = dict(out or {})
+        if canonical_out.get("fatigue") is not None:
+            canonical_out["fatigue"] = fatigue_analysis.publication_safe_result(
+                canonical_out.get("fatigue"),
+                # Publication correlation must use the exact calculation-input
+                # snapshot. A missing legacy/direct-caller field is unavailable
+                # evidence, not permission to invent component-method authority.
+                design_methodology=inp.get("design_methodology"),
+            )
+        self.out = canonical_out
         # Keep the complete table-level payload available while the existing
         # detail renderers are temporarily pointed at one canonical case.  This
         # preserves their well-tested single-case contract without allowing the
         # first-row compatibility projection to hide later cases in the PDF.
         self._base_inp = inp
-        self._base_out = out or {}
+        self._base_out = canonical_out
         self.version = version
         self.figures = figures
         self.qa_appendix = bool(qa_appendix)
@@ -807,6 +820,17 @@ class ReportBuilder:
         self._theory()
         self._tick(0.2, "Section and materials...")
         self._inputs()
+        bridge_record = bridge_core.publication_safe_record(
+            self._base_out.get("bridge_methodology"),
+            design_methodology=self._base_inp.get("design_methodology"),
+            fatigue_context=fatigue_analysis.bridge_publication_context(
+                self._base_inp
+            ),
+        )
+        if bridge_record is not None:
+            self._tick(0.28, "Bridge methodology...")
+            self.flow.append(PageBreak())
+            self._bridge_methodology(bridge_record)
         if self._base_out.get("clear_spacing") is not None:
             self.flow.append(PageBreak())
             self.inp, self.out = self._base_inp, self._base_out
@@ -1010,6 +1034,148 @@ class ReportBuilder:
                 ["Curvature kappa", "1/m"],
                 ["Areas / second moments", "m<super>2</super> / m<super>4</super>"]]
         self._table(rows, [120 * mm, 45 * mm])
+
+    def _bridge_methodology(self, record):
+        """Publish the canonical bridge-methodology gate and its coverage."""
+
+        status = str(record.get("status") or bridge_core.STATUS_NOT_ASSESSED)
+        self._h1("Bridge methodology")
+        self._status_block(
+            f"{status} - {_html_escape(str(record.get('methodology') or '-'))}",
+            status,
+        )
+        self._p(
+            "<b>Method basis:</b> "
+            + _html_escape(str(record.get("source") or "-"))
+        )
+        publication_validation = record.get("publication_validation")
+        if isinstance(publication_validation, Mapping):
+            self._small(
+                "<b>Publication validation status:</b> "
+                + _html_escape(str(
+                    publication_validation.get("status") or "-"
+                ))
+            )
+        self._small(
+            "A PASS means every declared applicability row is resolved and each "
+            "required implemented check passed. It is not a complete bridge-design "
+            "claim. Unsupported or unresolved mandatory provisions block the "
+            "methodology conclusion."
+        )
+        for error in record.get("configuration_errors") or ():
+            self._small(
+                "<b>Publication validation:</b> "
+                + _html_escape(str(error))
+            )
+        for error in (
+            (record.get("publication_validation") or {}).get("errors")
+            or ()
+        ):
+            self._small(
+                "<b>Publication validation:</b> "
+                + _html_escape(str(error))
+            )
+
+        self._h2("Coverage matrix")
+        coverage_rows = [[
+            "Check", "Relationship", "Bridge reference", "Sector treatment"
+        ]]
+        coverage_rows.extend([
+            [
+                _html_escape(str(row.get("title") or row.get("check_id") or "-")),
+                _html_escape(str(row.get("disposition") or "-")),
+                _html_escape(str(row.get("bridge_reference") or "-")),
+                _html_escape(str(row.get("implementation") or "-")),
+            ]
+            for row in record.get("coverage_matrix") or ()
+        ])
+        self._table(
+            coverage_rows,
+            [35 * mm, 22 * mm, 49 * mm, 64 * mm],
+            font=6.4,
+            keep=False,
+        )
+
+        self._h2("Applicability and check results")
+        check_rows = [[
+            "Check", "Relationship", "Status", "Result / criterion"
+        ]]
+        for check in record.get("checks") or ():
+            result = _html_escape(str(check.get("result") or "-"))
+            criterion = _html_escape(str(check.get("criterion") or "-"))
+            check_rows.append([
+                _html_escape(str(
+                    check.get("title") or check.get("check_id") or "-"
+                )),
+                _html_escape(str(check.get("disposition") or "-")),
+                _html_escape(str(check.get("status") or "-")),
+                f"{result}<br/><b>Criterion:</b> {criterion}",
+            ])
+        self._table(
+            check_rows,
+            [40 * mm, 22 * mm, 25 * mm, 83 * mm],
+            font=6.6,
+            keep=False,
+        )
+
+        for check in record.get("checks") or ():
+            reason = str(check.get("reason") or "").strip()
+            source = str(check.get("source") or "").strip()
+            if not reason and not source:
+                continue
+            title = _html_escape(str(
+                check.get("title") or check.get("check_id") or "-"
+            ))
+            detail = []
+            if reason:
+                detail.append("<b>Basis:</b> " + _html_escape(reason))
+            if source:
+                detail.append("<b>Source:</b> " + _html_escape(source))
+            self._small(f"<b>{title}.</b> " + " ".join(detail))
+
+        evidence_rows = [["Check", "Evidence field", "Bound value"]]
+        for check in record.get("checks") or ():
+            title = str(
+                check.get("title") or check.get("check_id") or "-"
+            )
+            for row_number, evidence in enumerate(
+                check.get("evidence") or (),
+                start=1,
+            ):
+                if not isinstance(evidence, Mapping):
+                    continue
+                for field, value in evidence.items():
+                    if isinstance(value, (Mapping, list, tuple)):
+                        value = json.dumps(
+                            value,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=True,
+                        )
+                    elif isinstance(value, float):
+                        value = f"{value:.12g}"
+                    evidence_rows.append([
+                        _html_escape(title),
+                        _html_escape(f"{row_number}: {field}"),
+                        _html_escape(str(value)),
+                    ])
+        if len(evidence_rows) > 1:
+            self._h2("Bound calculation evidence")
+            self._table(
+                evidence_rows,
+                [42 * mm, 42 * mm, 86 * mm],
+                font=6.4,
+                keep=False,
+            )
+
+        limitations = tuple(record.get("limitations") or ())
+        if limitations:
+            self._h2("Explicit limitations")
+            for limitation in limitations:
+                self._small(
+                    "<b>Not assessed:</b> "
+                    + _html_escape(str(limitation))
+                )
 
     def _inputs(self):
         self._h1("Section and materials")
@@ -1808,14 +1974,25 @@ class ReportBuilder:
         fatigue_rows = None
         fatigue = self._base_out.get("fatigue")
         if fatigue is not None:
+            fatigue_errors = tuple(fatigue.get("errors") or ())
             checks = fatigue.get("checks") or {}
             factors = fatigue.get("partial_factors") or {}
             factor_basis = fatigue.get("factor_basis") or {}
-            concrete = fatigue.get("concrete_parameters") or {}
+            concrete = (
+                {}
+                if fatigue_errors
+                else fatigue.get("concrete_parameters") or {}
+            )
             fatigue_basis = fatigue.get("basis") or {}
             fatigue_rows = [["Setting", "Value"]]
             fatigue_rows.extend([
                 ["Fatigue edition", str(fatigue.get("edition") or "-")],
+                [
+                    "Fatigue design methodology",
+                    _html_escape(str(
+                        fatigue.get("design_methodology") or "-"
+                    )),
+                ],
                 [
                     "Fatigue checks",
                     ", ".join(
@@ -4908,7 +5085,9 @@ class ReportBuilder:
                 "other requested analyses were calculated"
                 if errors
                 else (
-                    f"{status} - {_html_escape(governing_name)} | utilisation "
+                    f"{status} - {_html_escape(str(
+                        payload.get('qualified_verdict') or status
+                    ))} | {_html_escape(governing_name)} | utilisation "
                     f"{_pct(fatigue_presentation.evidence_number(
                         payload.get('utilisation')
                     ))}"
@@ -4927,6 +5106,8 @@ class ReportBuilder:
         ) or "-"
         self._small(
             f"<b>Edition:</b> {_html_escape(str(payload.get('edition') or '-'))}; "
+            "<b>design methodology:</b> "
+            f"{_html_escape(str(payload.get('design_methodology') or '-'))}; "
             f"<b>checks:</b> {check_text}. Each spectrum is independent."
         )
         warnings = tuple(payload.get("warnings") or ())
@@ -4946,8 +5127,33 @@ class ReportBuilder:
         factors = payload.get("partial_factors") or {}
         factor_basis = payload.get("factor_basis") or {}
         concrete_parameters = payload.get("concrete_parameters") or {}
+        aggregate_conformance = payload.get("conformance") or {}
         basis_rows = [
             ["Item", "Value"],
+            [
+                "Design methodology",
+                _html_escape(str(
+                    payload.get("design_methodology") or "-"
+                )),
+            ],
+            [
+                "Standards conformance",
+                _html_escape(str(
+                    aggregate_conformance.get("state") or "-"
+                )),
+            ],
+            [
+                "Qualified verdict",
+                _html_escape(str(
+                    payload.get("qualified_verdict") or "-"
+                )),
+            ],
+            [
+                "Selected-standard verdict",
+                _html_escape(str(
+                    aggregate_conformance.get("standard_verdict") or "-"
+                )),
+            ],
             ["Authority", _html_escape(str(basis.get("authority") or "-"))],
             ["Method", _html_escape(str(basis.get("method") or "-"))],
             ["Authority reference",
@@ -5010,10 +5216,59 @@ class ReportBuilder:
                  _fmt(concrete_parameters.get("k1"), 3)],
                 ["C", _fmt(concrete_parameters.get("c"), 3)],
             ])
+            if payload.get("concrete_miner_basis") is not None:
+                basis_rows.extend([
+                    [
+                        "Concrete Miner applicability",
+                        _html_escape(str(
+                            payload.get("concrete_miner_basis") or "-"
+                        )),
+                    ],
+                    [
+                        "Concrete Miner authority source",
+                        _html_escape(str(
+                            payload.get("concrete_miner_source") or "-"
+                        )),
+                    ],
+                ])
         if basis.get("notes"):
             basis_rows.append([
                 "Notes", _html_escape(str(basis.get("notes")))
             ])
+        for record in payload.get("parameter_conformance") or ():
+            if not isinstance(record, Mapping):
+                continue
+            label = _html_escape(str(
+                record.get("label") or "Parameter"
+            ))
+            basis_rows.extend([
+                [
+                    f"{label} conformance",
+                    _html_escape(str(record.get("state") or "-")),
+                ],
+                [
+                    f"{label} actual / prescription",
+                    _html_escape(
+                        f"{record.get('actual_value')} / "
+                        f"{record.get('normative_requirement') or '-'}"
+                    ),
+                ],
+                [
+                    f"{label} custom methodology / approval",
+                    _html_escape(
+                        f"{record.get('custom_methodology') or '-'} / "
+                        f"{record.get('approval_reference') or '-'}"
+                    ),
+                ],
+            ])
+            if (
+                record.get("message")
+                and record.get("state") != conformance.STATE_CONFORMS
+            ):
+                basis_rows.append([
+                    f"{label} conformance note",
+                    _html_escape(str(record["message"])),
+                ])
         self._table(basis_rows, [52 * mm, 113 * mm], keep=False)
 
         references = payload.get("calculation_references") or {}

@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from streamlit.testing.v1 import AppTest
-from sector import sls
+from sector import bridge, sls
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
@@ -1872,6 +1872,53 @@ def test_save_load_round_trip_through_the_app():
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
+def test_loaded_fatigue_conformance_snapshot_is_retained_and_visible():
+    import project_io
+
+    at = _fresh()
+    at.run()
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in at.session_state
+    }
+    scalars["design_methodology"] = bridge.COMPONENT_METHODS
+    fatigue_record = _fatigue_bound_snapshot()
+    assert fatigue_record is not None
+    digest = project_io.input_sha256(tables, scalars)
+    source = project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "fatigue_conformance": fatigue_record,
+        },
+    )
+
+    at.session_state["_pending_project"] = source
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["calculation_record"][
+        "fatigue_conformance"
+    ] == fatigue_record
+    _goto_input_tab(at, "Project & report")
+    captions = " | ".join(item.value for item in at.caption)
+    assert "Recorded fatigue conformance" in captions
+    assert "APPROVED CUSTOM PASS" in captions
+    assert "gamma_s=0.5" in captions
+    assert "gamma_c,fat=2" in captions
+    assert "Miner C=100" in captions
+    assert bridge.COMPONENT_METHODS in captions
+    assert "DB-FAT-21 / checker approval" in captions
+    assert "AUTH-SN-7 / checker approval" in captions
+
+
 def test_app_restores_fatigue_inputs_into_the_ui():
     import fatigue_inputs
     import project_io
@@ -1923,7 +1970,6 @@ def test_app_restores_fatigue_inputs_into_the_ui():
         at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY],
         fatigue_inputs.PRESTRESS,
     )
-
     saved = project_io.dump_project(
         {
             key: at.session_state[key]
@@ -1943,8 +1989,406 @@ def test_app_restores_fatigue_inputs_into_the_ui():
     assert restored_scalars["fatigue_gamma_s"] == 1.32
 
 
+def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
+    import bridge_inputs
+    import fatigue_inputs
+
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_BASE
+    ).run()
+
+    assert not at.exception
+    assert at.selectbox(key="fatigue_edition").value == (
+        fatigue_inputs.EC2_2_2005_AC
+    )
+    assert at.selectbox(key="sls_code").value == (
+        "DS/EN 1992-2:2005 + AC:2008"
+    )
+    assert at.selectbox(key="sls_criterion_mode").value == (
+        sls.CRITERION_MODE_STANDARD
+    )
+    assert all(
+        key in at.session_state
+        for key in bridge_inputs.TABLE_KEYS
+    )
+
+    _calculate(at)
+    payload = at.session_state["results"]["bridge_methodology"]
+
+    assert payload["active"] is True
+    assert payload["status"] != bridge.STATUS_PASS
+    calculation_bridge = at.session_state["calculation_record"][
+        "bridge_methodology"
+    ]
+    assert calculation_bridge["publication_validation"]["status"] == (
+        "ACCEPTED"
+    )
+    assert at.session_state["result_input_snapshot"][
+        "design_methodology"
+    ] == bridge.EN1992_2_BASE
+    assert all(
+        check["status"] == bridge.STATUS_NOT_ASSESSED
+        for check in payload["checks"]
+    )
+    _select_view(at, "Bridge Methodology")
+    assert any(
+        "NOT ASSESSED" in warning.value
+        for warning in at.warning
+    )
+
+    _goto_page(at, "Inputs")
+    at.selectbox(key="design_methodology").set_value(
+        bridge.COMPONENT_METHODS
+    ).run()
+
+    assert not at.exception
+    assert at.session_state["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+    )
+
+
+def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
+    import sector_app
+
+    rendered = {"errors": [], "info": []}
+    fake_st = SimpleNamespace(
+        info=lambda message, **_kwargs: rendered["info"].append(message),
+        error=lambda message, **_kwargs: rendered["errors"].append(message),
+        success=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        caption=lambda *_args, **_kwargs: None,
+        markdown=lambda *_args, **_kwargs: None,
+        dataframe=lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(sector_app, "st", fake_st)
+
+    sector_app.bridge_methodology_view(
+        {"design_methodology": bridge.COMPONENT_METHODS},
+        {"bridge_methodology": _bridge_bound_snapshot()},
+    )
+
+    assert any(
+        message.startswith("INVALID -")
+        for message in rendered["errors"]
+    )
+    assert any(
+        "conflicts with the calculation input snapshot" in message
+        for message in rendered["errors"]
+    )
+    assert rendered["info"] == []
+
+
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [
+        ("stale_standard", "fatigue.gamma_c"),
+        ("omitted_gamma_c", "IDs/cardinality"),
+        ("stale_gamma_ff", "fatigue_gamma_ff"),
+    ],
+)
+def test_bridge_view_surfaces_fatigue_correlation_rejection(
+    attack,
+    expected,
+    monkeypatch,
+):
+    import contextlib
+    import sector_app
+
+    rendered = {"errors": [], "info": []}
+    fake_st = SimpleNamespace(
+        info=lambda message, **_kwargs: rendered["info"].append(message),
+        error=lambda message, **_kwargs: rendered["errors"].append(message),
+        success=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        caption=lambda *_args, **_kwargs: None,
+        markdown=lambda *_args, **_kwargs: None,
+        dataframe=lambda *_args, **_kwargs: None,
+        expander=lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(sector_app, "st", fake_st)
+
+    current_scalars = _bridge_fatigue_publication_scalars(custom=True)
+    if attack == "stale_standard":
+        record = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_publication_scalars()
+        )
+    elif attack == "stale_gamma_ff":
+        current_scalars = _bridge_fatigue_publication_scalars()
+        current_scalars["fatigue_gamma_ff"] = 2.0
+        record = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_publication_scalars()
+        )
+    else:
+        record = _bridge_concrete_fatigue_snapshot(current_scalars)
+        concrete = next(
+            check for check in record["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = concrete["evidence"][0]
+        row["fatigue_parameter_conformance"] = [
+            parameter
+            for parameter in row["fatigue_parameter_conformance"]
+            if parameter["parameter_id"] != "fatigue.gamma_c"
+        ]
+        row["status"] = bridge.STATUS_PASS
+        concrete["status"] = bridge.STATUS_PASS
+        record["status"] = bridge.STATUS_PASS
+        record["evidence_fingerprint"] = (
+            bridge.bridge_evidence_fingerprint(
+                record["checks"],
+                record["configuration_errors"],
+            )
+        )
+    sector_app.bridge_methodology_view(
+        current_scalars,
+        {"bridge_methodology": record},
+    )
+
+    assert any(
+        message.startswith("INVALID -")
+        for message in rendered["errors"]
+    )
+    assert any(
+        expected in message
+        for message in rendered["errors"]
+    )
+    assert rendered["info"] == []
+
+
+def test_standard_miner_custom_c_is_editable_warned_and_round_trips():
+    import fatigue_analysis
+    import fatigue_inputs
+    import project_io
+
+    at = _fresh().run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_BASE
+    ).run()
+
+    standard_c = at.number_input(key="fatigue_concrete_c")
+    assert standard_c.value == pytest.approx(14.0)
+    assert standard_c.disabled is False
+    assert at.session_state["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+
+    at.number_input(key="fatigue_concrete_c").set_value(100.0).run()
+    assert at.number_input(key="fatigue_concrete_c").value == pytest.approx(
+        100.0
+    )
+    assert any(
+        "does not conform to prescribed value = 14" in warning.value
+        for warning in at.warning
+    )
+
+    standard_saved = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    _tables, standard_restored = project_io.parse_project(standard_saved)
+    assert standard_restored["fatigue_concrete_c"] == 100.0
+    assert standard_restored["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+
+    at.selectbox(key="fatigue_concrete_method").set_value(
+        fatigue_analysis.CONCRETE_PROJECT_MINER
+    ).run()
+    assert at.number_input(key="fatigue_concrete_c").disabled is False
+    assert at.text_input(key="fatigue_concrete_miner_source").disabled is False
+    assert at.session_state["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+    )
+
+    at.number_input(key="fatigue_concrete_c").set_value(100.0).run()
+    at.text_input(key="fatigue_concrete_miner_source").set_value(
+        "AUTH-SN-7 / checker approval"
+    ).run()
+    saved = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    _tables, restored = project_io.parse_project(saved)
+    assert restored["fatigue_concrete_c"] == 100.0
+    assert restored["fatigue_concrete_method"] == (
+        fatigue_analysis.CONCRETE_PROJECT_MINER
+    )
+    assert restored["fatigue_concrete_miner_source"] == (
+        "AUTH-SN-7 / checker approval"
+    )
+
+    at.selectbox(key="fatigue_concrete_method").set_value(
+        fatigue_analysis.CONCRETE_MINER
+    ).run()
+    assert at.number_input(key="fatigue_concrete_c").value == pytest.approx(
+        100.0
+    )
+    assert at.number_input(key="fatigue_concrete_c").disabled is False
+
+
+def test_bridge_parameter_editor_columns_have_no_normative_numeric_clamp():
+    import bridge_inputs
+    import sector_app
+    from sector import conformance
+
+    for table_key, value_column in (
+        (bridge_inputs.BOX_WALL_TABLE_KEY, "cot_theta"),
+        (bridge_inputs.MINIMUM_TABLE_KEY, "k"),
+    ):
+        config = sector_app._bridge_column_config(table_key)
+        numeric = config[value_column]["type_config"]
+        basis = config["parameter_basis"]["type_config"]
+
+        assert numeric["min_value"] is None
+        assert numeric["max_value"] is None
+        assert tuple(basis["options"]) == conformance.BASIS_OPTIONS
+        assert "assessed separately" in config[value_column]["help"]
+
+
+def test_fatigue_reuse_signature_recalculates_after_methodology_switch():
+    import fatigue_analysis
+    import fatigue_inputs
+
+    at = _fresh().run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+    at.selectbox(key="fatigue_edition").set_value(
+        fatigue_inputs.EC2_2_2005_AC
+    ).run()
+    at.selectbox(key="fatigue_concrete_method").set_value(
+        fatigue_analysis.CONCRETE_EQUIVALENT
+    ).run()
+
+    _calculate(at)
+    component_signature = at.session_state["result_fatigue_sig"]
+    assert at.session_state["results"]["fatigue"]["design_methodology"] == (
+        bridge.COMPONENT_METHODS
+    )
+
+    _goto_page(at, "Inputs")
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_BASE
+    ).run()
+    bridge_signature = at.session_state["_latest_inputs"]["fatigue_sig"]
+    assert bridge_signature != component_signature
+
+    _calculate(at)
+    assert not at.exception
+    assert at.session_state["result_fatigue_sig"] == bridge_signature
+    assert at.session_state["results"]["fatigue"]["design_methodology"] == (
+        bridge.EN1992_2_BASE
+    )
+    assert at.session_state["result_input_snapshot"]["design_methodology"] == (
+        bridge.EN1992_2_BASE
+    )
+    assert not any(
+        "design methodology conflicts with the calculation input snapshot"
+        in error.value
+        for error in at.error
+    )
+
+
+def test_fatigue_view_fails_closed_on_relabelled_or_malformed_payload(
+    monkeypatch,
+):
+    import fatigue_analysis
+    import fatigue_inputs
+    import sector_app
+
+    rendered = {"errors": [], "markdown": []}
+    fake_st = SimpleNamespace(
+        error=lambda message, **_kwargs: rendered["errors"].append(message),
+        warning=lambda *_args, **_kwargs: None,
+        success=lambda *_args, **_kwargs: None,
+        info=lambda *_args, **_kwargs: None,
+        markdown=lambda message, **_kwargs: rendered["markdown"].append(message),
+    )
+    monkeypatch.setattr(sector_app, "st", fake_st)
+    base = {
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "errors": (),
+        "edition": fatigue_inputs.EC2_2_2005_AC,
+        "design_methodology": bridge.EN1992_2_BASE,
+        "checks": {"reinforcement": False, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_EQUIVALENT,
+        "concrete_parameters": {
+            "c": 100.0,
+            "method": fatigue_analysis.CONCRETE_MINER,
+        },
+    }
+
+    for payload in (base, {**base, "errors": 7}):
+        rendered["errors"].clear()
+        rendered["markdown"].clear()
+        sector_app.fatigue_view(
+            {
+                "fatigue_on": True,
+                "design_methodology": bridge.EN1992_2_BASE,
+            },
+            {"fatigue": payload},
+        )
+        assert any(
+            message.startswith("INVALID -")
+            for message in rendered["errors"]
+        )
+        assert any(
+            "calculation parameters" in message
+            or "structured list of typed messages" in message
+            for message in rendered["markdown"]
+        )
+
+    rendered["errors"].clear()
+    rendered["markdown"].clear()
+    relabelled_basis = {
+        **base,
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+        "concrete_miner_source": "DB-FAT-21 / checker approval",
+        "concrete_parameters": {
+            "c": 14.0,
+            "method": fatigue_analysis.CONCRETE_MINER,
+        },
+    }
+    sector_app.fatigue_view(
+        {
+            "fatigue_on": True,
+            "design_methodology": bridge.COMPONENT_METHODS,
+        },
+        {"fatigue": relabelled_basis},
+    )
+    assert any(
+        message.startswith("INVALID -")
+        for message in rendered["errors"]
+    )
+    assert any(
+        "conformance" in message
+        for message in rendered["markdown"]
+    )
+
+
 def test_app_fatigue_factor_switches_and_approved_override_persist():
     import fatigue_inputs
+    import project_io
 
     at = _fresh()
     at.run()
@@ -1977,8 +2421,8 @@ def test_app_fatigue_factor_switches_and_approved_override_persist():
     assert at.number_input(key="fatigue_gamma_s").value is None
     assert at.number_input(key="fatigue_gamma_c").value is None
     assert at.text_input(key="fatigue_factor_approval").value == ""
-    at.number_input(key="fatigue_gamma_s").set_value(1.27).run()
-    at.number_input(key="fatigue_gamma_c").set_value(1.61).run()
+    at.number_input(key="fatigue_gamma_s").set_value(0.5).run()
+    at.number_input(key="fatigue_gamma_c").set_value(2.0).run()
     at.text_input(key="fatigue_factor_approval").set_value(
         "DB-FACT-09 / checker A"
     ).run()
@@ -1991,27 +2435,50 @@ def test_app_fatigue_factor_switches_and_approved_override_persist():
         fatigue_inputs.EC2_2023
     ).run()
 
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.27)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.61)
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(0.5)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(2.0)
     assert at.session_state["fatigue_factor_approval"] == (
         "DB-FACT-09 / checker A"
     )
     assert at.session_state[fatigue_inputs.BASIS_KEY][
         "approval_reference"
     ] == "TRAFFIC-09 / authority B"
+    assert any(
+        "approved custom input" in warning.value
+        for warning in at.warning
+    )
 
     at.selectbox(key="fatigue_factor_mode").set_value(
         fatigue_inputs.FACTOR_MODE_PRESET
     ).run()
-    assert at.number_input(key="fatigue_gamma_s").value != pytest.approx(1.27)
-    assert at.number_input(key="fatigue_gamma_c").value != pytest.approx(1.61)
+    assert at.number_input(key="fatigue_gamma_s").value != pytest.approx(0.5)
+    assert at.number_input(key="fatigue_gamma_c").value != pytest.approx(2.0)
     at.selectbox(key="fatigue_factor_mode").set_value(
         fatigue_inputs.FACTOR_MODE_OVERRIDE
     ).run()
 
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.27)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.61)
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(0.5)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(2.0)
     assert at.session_state["fatigue_factor_approval"] == (
+        "DB-FACT-09 / checker A"
+    )
+
+    saved = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    _tables, restored = project_io.parse_project(saved)
+    assert restored["fatigue_gamma_s"] == pytest.approx(0.5)
+    assert restored["fatigue_gamma_c"] == pytest.approx(2.0)
+    assert restored["fatigue_factor_approval"] == (
         "DB-FACT-09 / checker A"
     )
 
@@ -2499,6 +2966,18 @@ def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
     fatigue = at.session_state["results"]["fatigue"]
     assert fatigue["partial_factors"]["gamma_s"] == pytest.approx(1.33)
     assert fatigue["partial_factors"]["gamma_c"] == pytest.approx(1.60)
+    calculation_fatigue = at.session_state["calculation_record"][
+        "fatigue_conformance"
+    ]
+    assert calculation_fatigue["partial_factors"]["gamma_s"] == (
+        pytest.approx(1.33)
+    )
+    assert calculation_fatigue["partial_factors"]["gamma_c"] == (
+        pytest.approx(1.60)
+    )
+    assert calculation_fatigue["factor_basis"]["approval_reference"] == (
+        "DB-FACT-23 / checker H"
+    )
 
     _goto_input_tab(at, "Project & report")
     download = next(
@@ -2511,9 +2990,9 @@ def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
     at.run()
     saved = tmp_path / "autosave.json"
     assert saved.exists()
-    _, saved_scalars = project_io.parse_project(
-        saved.read_text(encoding="utf-8")
-    )
+    saved_text = saved.read_text(encoding="utf-8")
+    _, saved_scalars = project_io.parse_project(saved_text)
+    saved_provenance = project_io.project_provenance(saved_text)
     assert saved_scalars["fatigue_factor_mode"] == (
         fatigue_inputs.FACTOR_MODE_OVERRIDE
     )
@@ -2526,6 +3005,13 @@ def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
     assert saved_scalars["torsion_gamma_ct"] == pytest.approx(1.71)
     assert saved_scalars["torsion_factor_approval"] == (
         "DB-TOR-09 / checker H"
+    )
+    assert saved_provenance["calculation"]["fatigue_conformance"] == (
+        calculation_fatigue
+    )
+    assert saved_provenance["calculation"]["matches_saved_inputs"] is (
+        saved_provenance["calculation"]["input_sha256"]
+        == saved_provenance["input_sha256"]
     )
 
 
@@ -2689,11 +3175,21 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert not at.exception
     fatigue = at.session_state["results"]["fatigue"]
     assert fatigue["governing_spectrum"] == "Traffic"
+    assert fatigue["design_methodology"] == bridge.COMPONENT_METHODS
+    assert at.session_state["result_input_snapshot"]["design_methodology"] == (
+        bridge.COMPONENT_METHODS
+    )
     assert len(fatigue["spectra"]) == 1
     assert fatigue["partial_factors"]["gamma_s"] == pytest.approx(1.32)
     assert fatigue["factor_basis"]["gamma_s_derivation"] == (
         "1.20 x 1.10 x 1.000 x 1.000 = 1.320"
     )
+    fatigue_record = at.session_state["calculation_record"][
+        "fatigue_conformance"
+    ]
+    assert fatigue_record["design_methodology"] == bridge.COMPONENT_METHODS
+    assert fatigue_record["partial_factors"]["gamma_s"] == pytest.approx(1.32)
+    assert fatigue_record["evidence_sha256"]
     assert at.session_state["result_fatigue_sig"] == (
         at.session_state["_latest_inputs"]["fatigue_sig"]
     )
@@ -2783,6 +3279,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         if list(frame.value.columns) == ["Item", "Value"]
     )
     assert "Edition" in set(basis_table["Item"])
+    assert "Design methodology" in set(basis_table["Item"])
     assert "gamma_Ff" in set(basis_table["Item"])
     assert basis_table["Value"].map(type).eq(str).all()
 
@@ -4291,6 +4788,18 @@ def test_native_data_editor_state_is_not_replayed_through_session_state():
             "added_rows": [],
             "deleted_rows": [],
         },
+        "bridge_box_walls_base_editor": {
+            "edited_rows": {},
+            "added_rows": [{
+                "wall_id": "W1",
+                "cot_theta": 10.0,
+                "v_ed_kn": 100.0,
+                "v_rd_max_kn": 200.0,
+                "t_ed_equivalent_kn": 10.0,
+                "t_rd_max_equivalent_kn": 200.0,
+            }],
+            "deleted_rows": [],
+        },
     }
     at.run()
 
@@ -4302,6 +4811,7 @@ def test_native_data_editor_state_is_not_replayed_through_session_state():
 def test_native_editor_callback_commits_delta_before_interrupted_recovery(
     monkeypatch,
 ):
+    import bridge_inputs
     import fatigue_inputs
     import load_cases
     import sector_app
@@ -4352,6 +4862,33 @@ def test_native_editor_callback_commits_delta_before_interrupted_recovery(
         sector_app._commit_fatigue_editor_delta,
     )
     assert state[fatigue_key].loc[0, "cycles"] == pytest.approx(2500.0)
+    assert "_pending_input_events" not in state
+
+    bridge_key = bridge_inputs.BOX_WALL_TABLE_KEY
+    bridge_seed = bridge_inputs.empty_table(bridge_key)
+    state.update({
+        bridge_key: bridge_seed.copy(deep=True),
+        f"_{bridge_key}_editor_seed": bridge_seed.copy(deep=True),
+        "bridge_box_walls_base_editor": {
+            "edited_rows": {},
+            "deleted_rows": [],
+            "added_rows": [{
+                "wall_id": "W1",
+                "cot_theta": 10.0,
+                "v_ed_kn": 100.0,
+                "v_rd_max_kn": 200.0,
+                "t_ed_equivalent_kn": 10.0,
+                "t_rd_max_equivalent_kn": 200.0,
+            }],
+        },
+    })
+    sector_app._record_input_event(
+        "bridge_box_walls_base_editor",
+        sector_app._commit_bridge_editor_delta,
+        (bridge_key,),
+    )
+    assert state[bridge_key].loc[0, "wall_id"] == "W1"
+    assert state[bridge_key].loc[0, "cot_theta"] == pytest.approx(10.0)
     assert "_pending_input_events" not in state
 
 
@@ -4618,6 +5155,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Bridge methodology (DS/EN 1992-2 base)",
         "Bulk assignments",
     ]
     _goto_input_tab(at, "Project & report")
@@ -4627,6 +5165,7 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Bridge methodology (DS/EN 1992-2 base)",
         "Bulk assignments",
         "About",
         "Report",
@@ -5432,7 +5971,13 @@ def test_legacy_scalar_analysis_constructs_complete_explicit_mapping_scope(
         "sls_total_combination": sls.COMBINATION_CHARACTERISTIC,
     }
 
-    assert sector_app.run_analysis(inp) == {}
+    result = sector_app.run_analysis(inp)
+    assert set(result) == {"bridge_methodology"}
+    assert result["bridge_methodology"]["active"] is False
+    assert result["bridge_methodology"]["status"] == (
+        bridge.STATUS_NOT_APPLICABLE
+    )
+    assert result["bridge_methodology"]["checks"] == []
     scope = captured["sls_response_mapping_scope"]
 
     assert "sls_response_mapping_scope" not in inp
@@ -5894,6 +6439,589 @@ def _download_and_autosave_publications(
         "crack_control"
     ]["cases"][0]["assessment"]
     return (download, durable, saved), (download_text, captured["data"])
+
+
+def _bridge_bound_snapshot():
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id == "section_analysis"
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+    ))
+
+
+def _bridge_fatigue_publication_scalars(*, custom=False):
+    import fatigue_analysis
+    import fatigue_inputs
+
+    scalars = {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "fatigue_on": True,
+        "fatigue_check_steel": False,
+        "fatigue_check_concrete": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_gamma_ff": 1.0,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+    }
+    if custom:
+        scalars.update({
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "fatigue_factor_approval": (
+                "DB-FAT-OVERRIDE-02 / checker approval"
+            ),
+            "fatigue_gamma_c": 2.0,
+        })
+    return scalars
+
+
+def _bridge_concrete_fatigue_snapshot(scalars):
+    import fatigue_analysis
+    from sector import conformance
+
+    context = fatigue_analysis.bridge_publication_context(scalars)
+    assert context["errors"] == []
+    records = {
+        record["parameter_id"]: record
+        for record in context["parameter_conformance"]
+    }
+    concrete_records = (
+        records["fatigue.gamma_c"],
+        records["concrete_fatigue.miner_c"],
+    )
+    status = conformance.aggregate(
+        concrete_records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=context["edition"],
+    )["assessment_status"]
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id in {"section_analysis", "concrete_fatigue"}
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+        concrete_fatigue=bridge.ExternalEvidence(
+            status=status,
+            result="50.0 %",
+            criterion="<= 100 %",
+            source="DS/EN 1992-2:2005/AC:2008 Expression (6.106)",
+            reason="solver evidence retained",
+            utilisation=0.5,
+            evidence=({
+                "status": status,
+                "analytical_status": bridge.STATUS_PASS,
+                "methodology": bridge.EN1992_2_BASE,
+                "concrete_method": context["concrete_method"],
+                "concrete_miner_basis": context["concrete_miner_basis"],
+                "concrete_miner_source": context["concrete_miner_source"],
+                "miner_coefficient_c": records[
+                    "concrete_fatigue.miner_c"
+                ]["actual_value"],
+                "parameter_conformance": records[
+                    "concrete_fatigue.miner_c"
+                ],
+                "fatigue_parameter_conformance": concrete_records,
+                "fatigue_edition": context["edition"],
+                "fatigue_factor_mode": context["factor_mode"],
+                "fatigue_factor_approval": context["factor_approval"],
+                "fatigue_gamma_ff": context["gamma_ff"],
+            },),
+        ),
+    ))
+
+
+def _fatigue_bound_snapshot():
+    import fatigue_analysis
+    import fatigue_inputs
+    from sector import conformance
+
+    edition = fatigue_inputs.EC2_2023
+    gamma_s, gamma_c, factor_basis = (
+        fatigue_inputs.resolve_fatigue_factors(
+            edition,
+            mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            gamma_s=0.5,
+            gamma_c=2.0,
+            approval_reference="DB-FAT-21 / checker approval",
+        )
+    )
+    miner_source = "AUTH-SN-7 / checker approval"
+    miner_record = fatigue_analysis.concrete_miner_conformance(
+        edition=edition,
+        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        miner_source=miner_source,
+        coefficient_c=100.0,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+    records = [
+        factor_basis["parameter_conformance"]["gamma_s"],
+        factor_basis["parameter_conformance"]["gamma_c"],
+        miner_record,
+    ]
+    aggregate = conformance.aggregate(
+        records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=edition,
+    )
+    return fatigue_analysis.calculation_conformance_record(
+        {
+            "valid": True,
+            "converged": True,
+            "passed": True,
+            "errors": (),
+            "edition": edition,
+            "design_methodology": bridge.COMPONENT_METHODS,
+            "checks": {"reinforcement": True, "concrete": True},
+            "concrete_method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+            "concrete_miner_basis": (
+                fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+            ),
+            "concrete_miner_source": miner_source,
+            "partial_factors": {
+                "gamma_s": gamma_s,
+                "gamma_c": gamma_c,
+                "gamma_ff": 1.0,
+            },
+            "factor_basis": factor_basis,
+            "parameter_conformance": records,
+            "conformance": aggregate,
+            "assessment_status": aggregate["assessment_status"],
+            "qualified_verdict": aggregate["qualified_verdict"],
+            "standard_passed": False,
+            "concrete_parameters": {
+                "c": 100.0,
+                "method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+                "parameter_conformance": miner_record,
+            },
+        },
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+
+def test_download_session_and_autosave_reject_fatigue_evidence_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    import project_io
+    import sector_app
+
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    fatigue_record = _fatigue_bound_snapshot()
+    assert fatigue_record is not None
+    fatigue_record["partial_factors"]["gamma_s"] = 1.15
+    calculation = {
+        "input_sha256": project_io.input_sha256({}, scalars),
+        "fatigue_conformance": fatigue_record,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: ({}, scalars),
+    )
+
+    download = json.loads(sector_app._gather_project())["calculation"]
+    assert "fatigue_conformance" not in download
+    assert download["matches_saved_inputs"] is False
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: "current-input-hash",
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    assert "fatigue_conformance" not in state["calculation_record"]
+    assert state["calculation_record"]["matches_saved_inputs"] is False
+    saved = json.loads(captured["data"])["calculation"]
+    assert "fatigue_conformance" not in saved
+    assert saved["matches_saved_inputs"] is False
+    restored = project_io.project_provenance(
+        captured["data"]
+    )["calculation"]
+    assert restored["matches_saved_inputs"] is False
+
+
+def test_download_session_and_autosave_reject_bridge_binding_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    import sector_app
+
+    bridge_record = _bridge_bound_snapshot()
+    bridge_record["checks"][0]["result"] = "mutated stored result"
+    calculation = {
+        "input_sha256": "stale",
+        "bridge_methodology": bridge_record,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: (
+            {},
+            {"design_methodology": bridge.EN1992_2_BASE},
+        ),
+    )
+
+    download_text = sector_app._gather_project()
+    download = json.loads(download_text)["calculation"][
+        "bridge_methodology"
+    ]
+    assert download["status"] == bridge.STATUS_INVALID
+    assert any(
+        "fingerprint does not match" in error
+        for error in download["configuration_errors"]
+    )
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: "current-input-hash",
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]["bridge_methodology"]
+    saved = json.loads(captured["data"])["calculation"][
+        "bridge_methodology"
+    ]
+    assert durable["status"] == bridge.STATUS_INVALID
+    assert saved["status"] == bridge.STATUS_INVALID
+    assert durable == saved
+
+
+@pytest.mark.parametrize(
+    "attack",
+    ["stale_standard", "omitted_gamma_c", "stale_gamma_ff"],
+)
+def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
+    attack,
+    tmp_path,
+    monkeypatch,
+):
+    import project_io
+    import sector_app
+
+    scalars = _bridge_fatigue_publication_scalars(custom=True)
+    if attack == "stale_standard":
+        bridge_record = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_publication_scalars()
+        )
+    elif attack == "stale_gamma_ff":
+        scalars = _bridge_fatigue_publication_scalars()
+        scalars["fatigue_gamma_ff"] = 2.0
+        bridge_record = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_publication_scalars()
+        )
+    else:
+        bridge_record = _bridge_concrete_fatigue_snapshot(scalars)
+        concrete = next(
+            check for check in bridge_record["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = concrete["evidence"][0]
+        row["fatigue_parameter_conformance"] = [
+            record
+            for record in row["fatigue_parameter_conformance"]
+            if record["parameter_id"] != "fatigue.gamma_c"
+        ]
+        row["status"] = bridge.STATUS_PASS
+        concrete["status"] = bridge.STATUS_PASS
+        bridge_record["status"] = bridge.STATUS_PASS
+        bridge_record["evidence_fingerprint"] = (
+            bridge.bridge_evidence_fingerprint(
+                bridge_record["checks"],
+                bridge_record["configuration_errors"],
+            )
+        )
+    digest = project_io.input_sha256({}, scalars)
+    calculation = {
+        "input_sha256": digest,
+        "bridge_methodology": bridge_record,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: ({}, scalars),
+    )
+
+    download_text = sector_app._gather_project()
+    download_payload = json.loads(download_text)
+    download = download_payload["calculation"]
+    assert download["matches_saved_inputs"] is False
+    assert download["bridge_methodology"]["status"] == bridge.STATUS_INVALID
+    assert download["bridge_methodology"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
+    assert next(
+        check
+        for check in download["bridge_methodology"]["checks"]
+        if check["check_id"] == "concrete_fatigue"
+    )["status"] == bridge.STATUS_NOT_ASSESSED
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: digest,
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]
+    saved = json.loads(captured["data"])["calculation"]
+    loaded = project_io.project_provenance(
+        captured["data"]
+    )["calculation"]
+    for record in (durable, saved, loaded):
+        assert record["matches_saved_inputs"] is False
+        assert record["bridge_methodology"]["publication_validation"][
+            "status"
+        ] == "REJECTED"
+        assert next(
+            check
+            for check in record["bridge_methodology"]["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )["status"] == bridge.STATUS_NOT_ASSESSED
+
+
+def test_download_session_and_autosave_reject_bridge_methodology_mismatch(
+    tmp_path,
+    monkeypatch,
+):
+    import project_io
+    import sector_app
+
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    calculation = {
+        "input_sha256": project_io.input_sha256({}, scalars),
+        "bridge_methodology": _bridge_bound_snapshot(),
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: ({}, scalars),
+    )
+
+    download_payload = json.loads(sector_app._gather_project())
+    download = download_payload["calculation"]["bridge_methodology"]
+    assert download["status"] == bridge.STATUS_INVALID
+    assert download["publication_validation"]["status"] == "REJECTED"
+    assert download_payload["calculation"]["matches_saved_inputs"] is False
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: project_io.input_sha256({}, scalars),
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]["bridge_methodology"]
+    saved_payload = json.loads(captured["data"])
+    saved = saved_payload["calculation"]["bridge_methodology"]
+    assert durable == saved
+    assert durable["status"] == bridge.STATUS_INVALID
+    assert durable["publication_validation"]["status"] == "REJECTED"
+    assert saved_payload["calculation"]["matches_saved_inputs"] is False
 
 
 @pytest.mark.parametrize(

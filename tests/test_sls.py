@@ -2247,6 +2247,186 @@ def test_2023_appearance_and_durability_are_separate_qp_criteria():
     assert "Table 9.2" in result["criteria"][1]["criterion_source"]
 
 
+def _bridge_standard_inputs(**overrides):
+    values = _standard_inputs(
+        sls_edition=sls.EDITION_BRIDGE_2005_AC,
+        sls_code="DS/EN 1992-2:2005 + AC:2008",
+        sls_bridge_exposure_class=sls.BRIDGE_EXPOSURE_XC2_XC4,
+        sls_wk_limit=0.05,
+    )
+    values.update(overrides)
+    return values
+
+
+def _bridge_response_contexts():
+    return {
+        "QP": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "bridge-qp",
+            "provenance": "explicit bridge QP mapping",
+            "solver_provenance": {"state": "bridge-qp"},
+        },
+        "Frequent": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "short",
+            "response_id": "bridge-frequent",
+            "provenance": "explicit bridge frequent mapping",
+            "solver_provenance": {"state": "bridge-frequent"},
+        },
+    }
+
+
+def test_bridge_reinforced_width_routes_to_qp_and_ignores_unrelated_frequent():
+    contexts = _bridge_response_contexts()
+    result = sls.crack_assessment(
+        {
+            "QP": {"wk": 0.22, "element_id": "bar 1"},
+            "Frequent": {"wk": 0.31, "element_id": "bar 1"},
+        },
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_bridge_standard_inputs()),
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
+    )
+
+    assert result["status"] == "OK"
+    assert result["verdict"] == "PASS"
+    assert result["case"] == "QP"
+    assert result["value"] == pytest.approx(0.22)
+    assert result["limit"] == pytest.approx(0.30)
+    assert result["criteria"][0]["matched_responses"] == ["QP"]
+    assert "Table 7.101N" in result["criteria"][0]["criterion_source"]
+
+
+def test_bridge_bonded_x0_xc1_routes_width_to_frequent_only():
+    contexts = _bridge_response_contexts()
+    criteria = sls.crack_criteria_from_inputs(_bridge_standard_inputs(
+        sls_prestress_class=sls.PRESTRESS_BONDED,
+        sls_bridge_exposure_class=sls.BRIDGE_EXPOSURE_X0_XC1,
+    ))
+    result = sls.crack_assessment(
+        {
+            "QP": {"wk": 0.31, "element_id": "tendon 1"},
+            "Frequent": {"wk": 0.19, "element_id": "tendon 1"},
+        },
+        valid=True,
+        criteria=criteria,
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
+    )
+
+    assert [
+        (item["kind"], item["required_combination"], item["limit_mm"])
+        for item in criteria
+    ] == [(
+        sls.CRITERION_DURABILITY,
+        sls.COMBINATION_FREQUENT,
+        0.20,
+    )]
+    assert result["status"] == "OK"
+    assert result["case"] == "Frequent"
+
+
+def test_bridge_bonded_xc2_xc4_requires_frequent_width_and_qp_decompression():
+    contexts = _bridge_response_contexts()
+    result = sls.crack_assessment(
+        {
+            "QP": {
+                "wk": 0.50,
+                "element_id": "tendon 1",
+                "decompression": {
+                    "status": "OK",
+                    "value": -0.15,
+                    "governing": "concrete point 2",
+                    "solver_provenance": {"state": "bridge-qp"},
+                },
+            },
+            "Frequent": {"wk": 0.19, "element_id": "tendon 1"},
+        },
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_bridge_standard_inputs(
+            sls_prestress_class=sls.PRESTRESS_BONDED,
+        )),
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
+    )
+
+    assert result["status"] == "OK"
+    assert [
+        (item["kind"], item["required_combination"], item["status"])
+        for item in result["criteria"]
+    ] == [
+        (sls.CRITERION_DURABILITY, sls.COMBINATION_FREQUENT, "OK"),
+        (
+            sls.CRITERION_DECOMPRESSION,
+            sls.COMBINATION_QUASI_PERMANENT,
+            "OK",
+        ),
+    ]
+
+
+def test_bridge_bonded_xd_xs_routes_decompression_to_frequent_without_width():
+    contexts = _bridge_response_contexts()
+    result = sls.crack_assessment(
+        {
+            "QP": {"wk": 0.10, "element_id": "tendon 1"},
+            "Frequent": {
+                "wk": 0.40,
+                "element_id": "tendon 1",
+                "decompression": {
+                    "status": "OK",
+                    "value": -0.05,
+                    "governing": "concrete point 1",
+                    "solver_provenance": {"state": "bridge-frequent"},
+                },
+            },
+        },
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_bridge_standard_inputs(
+            sls_prestress_class=sls.PRESTRESS_BONDED,
+            sls_bridge_exposure_class=sls.BRIDGE_EXPOSURE_XD_XS,
+        )),
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
+    )
+
+    assert result["status"] == "OK"
+    assert len(result["criteria"]) == 1
+    assert result["criteria"][0]["kind"] == sls.CRITERION_DECOMPRESSION
+    assert (
+        result["criteria"][0]["required_combination"]
+        == sls.COMBINATION_FREQUENT
+    )
+    assert result["criteria"][0]["matched_responses"] == ["Frequent"]
+
+
+def test_bridge_missing_exposure_or_required_combination_blocks_assessment():
+    missing_exposure = sls.crack_criteria_from_inputs(
+        _bridge_standard_inputs(
+            sls_bridge_exposure_class=sls.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
+        )
+    )
+    contexts = {
+        "QP": _bridge_response_contexts()["QP"],
+    }
+    missing_response = sls.crack_assessment(
+        {"QP": {"wk": 0.10, "element_id": "tendon 1"}},
+        valid=True,
+        criteria=sls.crack_criteria_from_inputs(_bridge_standard_inputs(
+            sls_prestress_class=sls.PRESTRESS_BONDED,
+            sls_bridge_exposure_class=sls.BRIDGE_EXPOSURE_X0_XC1,
+        )),
+        response_contexts=contexts,
+        response_mapping_scope=_mapping_scope_from_contexts(contexts),
+    )
+
+    assert missing_exposure[0]["configuration_status"] == "NOT ASSESSED"
+    assert missing_exposure[0]["required_combination"] is None
+    assert missing_response["status"] == "NOT ASSESSED"
+    assert missing_response["verdict"] == "REVIEW"
+
+
 def test_2023_bonded_appearance_qp_is_separate_from_frequent_durability():
     criteria = sls.crack_criteria_from_inputs(_standard_inputs(
         sls_edition="2023",

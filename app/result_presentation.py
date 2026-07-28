@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import math
 
+import fatigue_analysis
 import fatigue_presentation
 
 import case_analysis
 import viz
-from sector import detailing, sls
+from sector import bridge, detailing, sls
 
 _MM = 1000.0
 _DEGREE = chr(0x00B0)
@@ -583,6 +584,84 @@ def fatigue_summary_rows(inp, results, *, stale=False):
     }]
 
 
+def bridge_summary_rows(inp, results, *, stale=False):
+    """Return every explicit EN 1992-2 base-methodology gate row."""
+
+    inp = inp or {}
+    results = results or {}
+    raw_selected = inp.get("design_methodology")
+    selected = str(raw_selected or bridge.COMPONENT_METHODS)
+    payload = bridge.publication_safe_record(
+        results.get("bridge_methodology"),
+        design_methodology=raw_selected,
+        fatigue_context=fatigue_analysis.bridge_publication_context(inp),
+    )
+    if selected != bridge.EN1992_2_BASE and payload is None:
+        return []
+    if payload is None:
+        return [{
+            "check": "Bridge methodology",
+            "family": "bridge",
+            "case": selected,
+            "case_type": "DS/EN 1992-2 base",
+            "source": "DS/EN 1992-2:2005 + AC:2008",
+            "status": "NOT RUN",
+            "result": "-",
+            "criterion": "Complete explicit bridge applicability gate",
+            "util": None,
+            "view": "Bridge Methodology",
+            "note": "Calculate to assess the bridge coverage matrix.",
+        }]
+
+    rows = []
+    for check in payload.get("checks") or ():
+        status = _map_assessment_status(check.get("status"))
+        if stale and status not in {"NOT APPLICABLE", "NOT RUN"}:
+            status = "STALE"
+        disposition = str(check.get("disposition") or "")
+        reason = str(check.get("reason") or "")
+        rows.append({
+            "check": f"Bridge - {check.get('title') or check.get('check_id')}",
+            "family": "bridge",
+            "case": selected,
+            "case_type": disposition,
+            "source": str(check.get("source") or payload.get("source") or "-"),
+            "status": status,
+            "result": str(check.get("result") or "-"),
+            "criterion": str(check.get("criterion") or "-"),
+            "util": check.get("utilisation"),
+            "view": "Bridge Methodology",
+            "note": "; ".join(
+                part for part in (disposition, reason) if part
+            ),
+        })
+    publication_errors = (
+        (payload.get("publication_validation") or {}).get("errors")
+        or ()
+    )
+    for error in (
+        *(payload.get("configuration_errors") or ()),
+        *publication_errors,
+    ):
+        rows.append({
+            "check": "Bridge methodology configuration",
+            "family": "bridge",
+            "case": selected,
+            "case_type": "coverage matrix",
+            "source": str(payload.get("source") or "-"),
+            "status": "STALE" if stale else "INVALID",
+            "result": "-",
+            "criterion": (
+                "One decision per required coverage row and one matching "
+                "whole-calculation methodology"
+            ),
+            "util": None,
+            "view": "Bridge Methodology",
+            "note": str(error),
+        })
+    return rows
+
+
 def result_summary_rows(inp, results, *, stale=False):
     """Build the shared UI/PDF overview without rerunning any solver."""
     inp = inp or {}
@@ -1123,6 +1202,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
         return (
             result_summary_rows(inp, results, stale=stale)
             + fatigue_summary_rows(inp, results, stale=stale)
+            + bridge_summary_rows(inp, results, stale=stale)
         )
 
     mode = str(inp.get("mode") or "")
@@ -1230,6 +1310,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             stale=stale,
         ))
     rows.extend(fatigue_summary_rows(inp, results, stale=stale))
+    rows.extend(bridge_summary_rows(inp, results, stale=stale))
     return rows
 
 

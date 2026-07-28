@@ -67,6 +67,18 @@ EXPOSURE_CLASSES_2023 = (
     EXPOSURE_XF,
 )
 
+EDITION_BRIDGE_2005_AC = "bridge-2005-ac2008"
+BRIDGE_EXPOSURE_NOT_ESTABLISHED = "Not established"
+BRIDGE_EXPOSURE_X0_XC1 = "X0 / XC1"
+BRIDGE_EXPOSURE_XC2_XC4 = "XC2 / XC3 / XC4"
+BRIDGE_EXPOSURE_XD_XS = "XD / XS"
+BRIDGE_EXPOSURE_CLASSES = (
+    BRIDGE_EXPOSURE_NOT_ESTABLISHED,
+    BRIDGE_EXPOSURE_X0_XC1,
+    BRIDGE_EXPOSURE_XC2_XC4,
+    BRIDGE_EXPOSURE_XD_XS,
+)
+
 DECOMPRESSION_NOT_ESTABLISHED = "Not established"
 DECOMPRESSION_REQUIRED = "Required"
 DECOMPRESSION_NOT_REQUIRED = "Not required"
@@ -1732,6 +1744,84 @@ def _accepted_item_outcome_conflicts(
     return tuple(conflicts)
 
 
+def validated_current_acceptance_evidence_binding(
+    item: Mapping,
+    responses: Mapping[str, Mapping | None],
+    *,
+    response_contexts: Mapping[str, Mapping | None] | None = None,
+    response_mapping_scope: Sequence[Mapping] = (),
+) -> tuple[dict | None, tuple[str, ...]]:
+    """Validate one accepted criterion against immutable and current evidence.
+
+    Raw bridge adapters and stored/publication boundaries use this same typed
+    correlation gate. A self-consistent stored fingerprint is insufficient:
+    the visible outcome and independently reconstructed current response binding
+    must also agree before the acceptance may be republished.
+    """
+
+    if not isinstance(item, Mapping):
+        return None, ("accepted criterion is not a mapping",)
+    if not isinstance(responses, Mapping):
+        return None, ("current crack responses are not a mapping",)
+    if (
+        response_contexts is not None
+        and not isinstance(response_contexts, Mapping)
+    ):
+        return None, ("current crack response contexts are not a mapping",)
+    if not isinstance(response_mapping_scope, (list, tuple)):
+        return None, (
+            "current crack response mapping scope is not a structured list",
+        )
+    stored_binding, stored_issues = _validated_acceptance_evidence_binding(
+        item.get("acceptance_evidence")
+    )
+    if stored_issues or stored_binding is None:
+        return None, (
+            "invalid immutable acceptance evidence: "
+            + (
+                "; ".join(stored_issues)
+                or "unknown stored-evidence error"
+            ),
+        )
+    outcome_conflicts = _accepted_item_outcome_conflicts(
+        item,
+        stored_binding,
+    )
+    if outcome_conflicts:
+        return None, (
+            "visible acceptance result does not match its immutable "
+            "evidence binding: "
+            + "; ".join(outcome_conflicts),
+        )
+    current_binding, _current_outcome, current_issues = (
+        _build_acceptance_evidence_binding(
+            item,
+            responses,
+            response_contexts=response_contexts,
+            response_mapping_scope=response_mapping_scope,
+        )
+    )
+    if current_issues or current_binding is None:
+        return None, (
+            "acceptance evidence cannot be reconstructed: "
+            + (
+                "; ".join(current_issues)
+                or "unknown current-evidence error"
+            ),
+        )
+    binding_conflicts = _acceptance_evidence_binding_conflicts(
+        stored_binding,
+        current_binding,
+    )
+    if binding_conflicts:
+        return None, (
+            "immutable acceptance evidence does not match the current "
+            "response binding: "
+            + "; ".join(binding_conflicts),
+        )
+    return current_binding, ()
+
+
 def _apply_acceptance_evidence_binding(
     item: dict,
     binding: Mapping,
@@ -2328,51 +2418,17 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     f"Stored {label} has no governing response identity.",
                     names,
                 )
-            stored_binding, stored_binding_issues = (
-                _validated_acceptance_evidence_binding(
-                    item.get("acceptance_evidence")
-                )
-            )
-            if stored_binding_issues:
-                return (
-                    f"Stored {label} has invalid immutable acceptance "
-                    f"evidence: {'; '.join(stored_binding_issues)}.",
-                    names,
-                )
-            outcome_conflicts = _accepted_item_outcome_conflicts(
-                item,
-                stored_binding,
-            )
-            if outcome_conflicts:
-                return (
-                    f"Stored {label} visible acceptance result does not "
-                    "match its immutable evidence binding: "
-                    f"{'; '.join(outcome_conflicts)}.",
-                    names,
-                )
-            current_binding, _current_outcome, current_binding_issues = (
-                _build_acceptance_evidence_binding(
+            current_binding, binding_issues = (
+                validated_current_acceptance_evidence_binding(
                     item,
                     current_responses,
                     response_mapping_scope=current_mapping_scope,
                 )
             )
-            if current_binding_issues or current_binding is None:
+            if binding_issues or current_binding is None:
                 return (
-                    f"Current {label} acceptance evidence cannot be "
-                    "reconstructed: "
-                    f"{'; '.join(current_binding_issues) or 'unknown evidence error'}.",
-                    names,
-                )
-            binding_conflicts = _acceptance_evidence_binding_conflicts(
-                stored_binding,
-                current_binding,
-            )
-            if binding_conflicts:
-                return (
-                    f"Stored {label} immutable acceptance evidence does not "
-                    "match the current response binding: "
-                    f"{'; '.join(binding_conflicts)}.",
+                    f"Stored {label} acceptance was rejected: "
+                    f"{'; '.join(binding_issues) or 'unknown evidence error'}.",
                     names,
                 )
             _apply_acceptance_evidence_binding(item, current_binding)
@@ -2490,6 +2546,11 @@ def _standard_reference(edition: str, kind: str, dk_na: bool) -> str:
     if edition == "2023":
         table = "Table 9.1" if kind == CRITERION_APPEARANCE else "Table 9.2"
         return f"DS/EN 1992-1-1:2023 section 9.2.1(6), {table}"
+    if edition == EDITION_BRIDGE_2005_AC:
+        return (
+            "DS/EN 1992-2:2005 section 7.3.1(105), Table 7.101N; "
+            "EN 1992-2:2005/AC:2008"
+        )
     base = "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
     if dk_na:
         return (
@@ -2559,6 +2620,10 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
     exposure_class = str(
         inp.get("sls_exposure_class") or EXPOSURE_NOT_ESTABLISHED
     ).strip()
+    bridge_exposure_class = str(
+        inp.get("sls_bridge_exposure_class")
+        or BRIDGE_EXPOSURE_NOT_ESTABLISHED
+    ).strip()
     prestress_class = str(inp.get("sls_prestress_class") or "").strip()
     protection_class = str(
         inp.get("sls_protection_class") or PROTECTION_NOT_ESTABLISHED
@@ -2571,6 +2636,7 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         "prestress_class": prestress_class or None,
         "exposure": exposure or None,
         "exposure_class": exposure_class,
+        "bridge_exposure_class": bridge_exposure_class,
         "protection_class": protection_class,
         "method": code or None,
     }
@@ -2706,7 +2772,7 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         )]
 
     base_reasons = []
-    if edition not in {"2004", "2023"}:
+    if edition not in {"2004", "2023", EDITION_BRIDGE_2005_AC}:
         base_reasons.append("The selected code edition is not supported.")
     if prestress_class not in PRESTRESS_CLASSES:
         base_reasons.append(
@@ -2715,6 +2781,13 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
     if edition == "2004" and not exposure:
         base_reasons.append(
             "State the exposure/application context used to establish applicability."
+        )
+    if (
+        edition == EDITION_BRIDGE_2005_AC
+        and bridge_exposure_class not in BRIDGE_EXPOSURE_CLASSES[1:]
+    ):
+        base_reasons.append(
+            "Select the governing DS/EN 1992-2 Table 7.101N exposure group."
         )
     base_reason = " ".join(base_reasons) or None
     criteria = []
@@ -2746,6 +2819,79 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         ))
 
     durability_selected = bool(inp.get("sls_check_durability"))
+    if durability_selected and edition == EDITION_BRIDGE_2005_AC:
+        reference = _criterion_source(
+            _standard_reference(
+                edition, CRITERION_DURABILITY, dk_na
+            ),
+            source,
+        )
+        if base_reason:
+            criteria.append(_criterion_record(
+                "bridge-standard-durability-routing",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=reference,
+                required_combination=None,
+                limit_mm=None,
+                applicability=applicability,
+                configuration_reason=base_reason,
+            ))
+        elif prestress_class == PRESTRESS_REINFORCED_UNBONDED:
+            criteria.append(_criterion_record(
+                "bridge-standard-durability",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=reference,
+                required_combination=COMBINATION_QUASI_PERMANENT,
+                limit_mm=0.30,
+                applicability=applicability,
+            ))
+        elif prestress_class == PRESTRESS_BONDED:
+            if bridge_exposure_class in {
+                BRIDGE_EXPOSURE_X0_XC1,
+                BRIDGE_EXPOSURE_XC2_XC4,
+            }:
+                criteria.append(_criterion_record(
+                    "bridge-standard-durability",
+                    CRITERION_DURABILITY,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=COMBINATION_FREQUENT,
+                    limit_mm=0.20,
+                    applicability=applicability,
+                ))
+            if bridge_exposure_class == BRIDGE_EXPOSURE_XC2_XC4:
+                criteria.append(_criterion_record(
+                    "bridge-standard-decompression",
+                    CRITERION_DECOMPRESSION,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=COMBINATION_QUASI_PERMANENT,
+                    limit_mm=None,
+                    applicability={
+                        **applicability,
+                        "decompression_applicability": (
+                            "Table 7.101N required"
+                        ),
+                    },
+                ))
+            elif bridge_exposure_class == BRIDGE_EXPOSURE_XD_XS:
+                criteria.append(_criterion_record(
+                    "bridge-standard-decompression",
+                    CRITERION_DECOMPRESSION,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=COMBINATION_FREQUENT,
+                    limit_mm=None,
+                    applicability={
+                        **applicability,
+                        "decompression_applicability": (
+                            "Table 7.101N required"
+                        ),
+                    },
+                ))
+
     if durability_selected and edition == "2023":
         route_reason = base_reason
         if exposure_class not in EXPOSURE_CLASSES_2023[1:]:

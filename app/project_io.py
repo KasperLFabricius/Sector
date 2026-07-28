@@ -4,8 +4,9 @@ A project file is JSON: the four point tables (concrete corners, voids, bars and
 tendons, all in millimetres), Plastic and Elastic load-case tables, an optional
 grouped fatigue spectrum, and the remaining material and analysis-setting inputs.
 The geometry and action tables are the source of truth. Live numerical results
-are recomputed on load; an optional compact crack-control result summary is kept
-only inside the input-hash-bound calculation-provenance record.
+are recomputed on load; optional compact crack-control, fatigue-conformance, and
+bridge-methodology evidence is kept only inside the input-hash-bound
+calculation-provenance record.
 
 The functions here are pure (no Streamlit), so the round trip is unit-tested
 directly; the app wires the download / upload widgets to them.
@@ -16,26 +17,30 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 import pandas as pd
 
+import bridge_inputs
+import fatigue_analysis
 import fatigue_inputs
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
-from sector import codes, detailing, geometry, sls
+from sector import bridge, codes, detailing, geometry, sls
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 18  # v18: structured 2023 Table 9.2 routing and strict crack numerics
+VERSION = 20  # v20: custom-input conformance and calculation provenance
 DEFAULT_SLS_TENDON_BOND = "Plain round (k1 = 1.6)"
 DEFAULT_SLS_TENDON_XI = 0.0
 DEFAULT_SLS_CRITERION_MODE = sls.CRITERION_MODE_LEGACY
 DEFAULT_SLS_PRESTRESS_CLASS = sls.PRESTRESS_REINFORCED_UNBONDED
 DEFAULT_SLS_PROTECTION_CLASS = sls.PROTECTION_NOT_ESTABLISHED
 DEFAULT_SLS_EXPOSURE_CLASS = sls.EXPOSURE_NOT_ESTABLISHED
+DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS = sls.BRIDGE_EXPOSURE_NOT_ESTABLISHED
 DEFAULT_SLS_DECOMPRESSION = sls.DECOMPRESSION_NOT_ESTABLISHED
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
@@ -60,7 +65,10 @@ TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
 REINFORCEMENT_TABLE_KEYS = {"bars_base": "bar", "tendons_base": "tendon"}
 CASE_TABLE_KEYS = list(load_cases.CASE_TABLE_KEYS)
 FATIGUE_TABLE_KEYS = [fatigue_inputs.SPECTRUM_TABLE_KEY]
-PROJECT_TABLE_KEYS = TABLE_KEYS + CASE_TABLE_KEYS + FATIGUE_TABLE_KEYS
+BRIDGE_TABLE_KEYS = list(bridge_inputs.TABLE_KEYS)
+PROJECT_TABLE_KEYS = (
+    TABLE_KEYS + CASE_TABLE_KEYS + FATIGUE_TABLE_KEYS + BRIDGE_TABLE_KEYS
+)
 _CASE_PAYLOAD_KEYS = {
     load_cases.PLASTIC_TABLE_KEY: "plastic",
     load_cases.ELASTIC_TABLE_KEY: "elastic",
@@ -161,6 +169,8 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_check_steel",
     "fatigue_check_concrete",
     "fatigue_concrete_method",
+    "fatigue_concrete_miner_basis",
+    "fatigue_concrete_miner_source",
     "fatigue_factor_mode",
     "fatigue_factor_approval",
     "fatigue_gamma0",
@@ -173,6 +183,15 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_concrete_k1",
     "fatigue_concrete_c",
     "fatigue_source",
+)
+
+BRIDGE_SCALAR_KEYS = (
+    "design_methodology",
+    "bridge_brittle_method",
+    "bridge_expected_box_walls",
+    "bridge_minimum_scope",
+    "bridge_shear_scope",
+    "bridge_exposure",
 )
 
 TORSION_FACTOR_SCALAR_KEYS = (
@@ -240,7 +259,8 @@ SCALAR_KEYS = [
     "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_tendon_bond", "sls_tendon_xi",
     "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
-    "sls_exposure_class", "sls_exposure_context",
+    "sls_exposure_class", "sls_bridge_exposure_class",
+    "sls_exposure_context",
     "sls_check_appearance", "sls_appearance_limit",
     "sls_check_durability", "sls_decompression_applicability",
     "sls_project_characteristic_limit", "sls_project_frequent_limit",
@@ -255,8 +275,11 @@ SCALAR_KEYS = [
     "fatigue_gamma0", "fatigue_gamma3",
     "fatigue_gamma_c", "fatigue_gamma_s",
     "fatigue_concrete_method",
+    "fatigue_concrete_miner_basis", "fatigue_concrete_miner_source",
     "fatigue_gamma_ff", "fatigue_beta_cc_t0", "fatigue_t0_days",
     "fatigue_concrete_k1", "fatigue_concrete_c", "fatigue_source",
+    # Whole-calculation methodology and DS/EN 1992-2 base evidence controls.
+    *BRIDGE_SCALAR_KEYS,
     # Modelled-direction reinforcement, shear/torsion links and clear spacing.
     "minimum_reinforcement_on", "transverse_detailing_on",
     "clear_spacing_on", "detailing_edition",
@@ -340,6 +363,140 @@ def _validate_crack_numeric_scalars(scalars: dict) -> None:
             )
 
 
+def _validate_bridge_scalars(scalars: dict) -> None:
+    """Reject unknown or falsely numeric bridge-methodology state."""
+
+    methodology = scalars.get("design_methodology")
+    if methodology is not None and methodology not in bridge.METHODOLOGIES:
+        raise ValueError("unknown design methodology")
+    option_fields = {
+        "bridge_brittle_method": bridge.BRITTLE_METHODS,
+        "bridge_minimum_scope": bridge.MINIMUM_SCOPES,
+        "bridge_shear_scope": bridge.SHEAR_SCOPES,
+        "bridge_exposure": bridge.BRIDGE_EXPOSURES,
+        "sls_bridge_exposure_class": sls.BRIDGE_EXPOSURE_CLASSES,
+    }
+    for key, options in option_fields.items():
+        if key in scalars and scalars[key] not in options:
+            raise ValueError(f"unknown bridge methodology option: {key}")
+    if "bridge_expected_box_walls" in scalars:
+        raw = scalars["bridge_expected_box_walls"]
+        if isinstance(raw, bool) or type(raw).__name__ == "bool_":
+            raise ValueError(
+                "bridge_expected_box_walls must be a non-negative integer"
+            )
+        try:
+            number = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "bridge_expected_box_walls must be a non-negative integer"
+            ) from exc
+        if (
+            not math.isfinite(number)
+            or number < 0.0
+            or not number.is_integer()
+        ):
+            raise ValueError(
+                "bridge_expected_box_walls must be a non-negative integer"
+            )
+
+
+def _default_fatigue_miner_basis(scalars: dict) -> str:
+    """Return the only unambiguous default for the selected Miner method."""
+
+    method = scalars.get(
+        "fatigue_concrete_method",
+        fatigue_analysis.CONCRETE_MINER,
+    )
+    if method == fatigue_analysis.CONCRETE_PROJECT_MINER:
+        return fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+    if method != fatigue_analysis.CONCRETE_MINER:
+        return fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+    edition = scalars.get("fatigue_edition")
+    if (
+        edition == fatigue_inputs.EC2_2_2005_AC
+        and scalars.get("design_methodology") == bridge.EN1992_2_BASE
+    ):
+        return fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    if edition == fatigue_inputs.EC2_2023:
+        return fatigue_inputs.MINER_BASIS_2023_STANDARD
+    return fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+
+
+def _normalise_fatigue_miner_basis(scalars: dict) -> None:
+    """Resolve only method/edition combinations that have one safe basis."""
+
+    expected = _default_fatigue_miner_basis(scalars)
+    if (
+        expected != fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+        and scalars.get("fatigue_concrete_miner_basis") in {
+            None,
+            "",
+            fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED,
+        }
+    ):
+        scalars["fatigue_concrete_miner_basis"] = expected
+
+
+def _validate_fatigue_miner_scalars(
+    scalars: dict,
+    *,
+    allow_missing: bool = False,
+) -> None:
+    """Reject only malformed or numerically unusable concrete Miner input."""
+
+    relevant = {
+        "fatigue_concrete_method",
+        "fatigue_concrete_c",
+        "fatigue_concrete_miner_basis",
+        "fatigue_concrete_miner_source",
+    }
+    if not relevant.intersection(scalars):
+        return
+    method = scalars.get(
+        "fatigue_concrete_method",
+        fatigue_analysis.CONCRETE_MINER,
+    )
+    if method not in fatigue_analysis.CONCRETE_METHODS:
+        raise ValueError("unknown concrete fatigue method")
+    if method not in fatigue_analysis.CONCRETE_MINER_METHODS:
+        return
+    if "fatigue_concrete_c" not in scalars and allow_missing:
+        return
+    coefficient = scalars.get(
+        "fatigue_concrete_c",
+        fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+    )
+    miner_basis = str(
+        scalars.get("fatigue_concrete_miner_basis") or ""
+    ).strip()
+    if (
+        allow_missing
+        and miner_basis
+        == fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+    ):
+        expected = _default_fatigue_miner_basis(scalars)
+        if expected != fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED:
+            miner_basis = expected
+    if allow_missing and not miner_basis:
+        return
+    errors = fatigue_analysis.concrete_miner_parameter_errors(
+        edition=str(scalars.get("fatigue_edition") or "").strip(),
+        concrete_method=method,
+        miner_basis=miner_basis,
+        miner_source=str(
+            scalars.get("fatigue_concrete_miner_source") or ""
+        ).strip(),
+        coefficient_c=coefficient,
+        design_methodology=str(
+            scalars.get("design_methodology")
+            or bridge.COMPONENT_METHODS
+        ),
+    )
+    if errors:
+        raise ValueError("invalid concrete fatigue Miner input: " + "; ".join(errors))
+
+
 def _cell(v):
     """A cell as a finite float, or ``None`` for a blank / non-numeric value.
 
@@ -398,6 +555,31 @@ def _obj_to_table(obj, table_key=None) -> pd.DataFrame:
     return df.astype("float64") if cols else df
 
 
+def _bridge_tables_from_payload(payload: dict | None) -> dict:
+    """Read and validate the dedicated text-preserving bridge table payload."""
+
+    if payload is None:
+        return {}
+    payload_version = payload.get("version")
+    if payload_version not in {1, bridge_inputs.VERSION}:
+        raise ValueError("unknown bridge evidence schema version")
+    raw_tables = payload.get("tables")
+    if not isinstance(raw_tables, dict):
+        raise ValueError("bridge tables must be an object")
+    output = {}
+    errors = []
+    for key in bridge_inputs.TABLE_KEYS:
+        frame = bridge_inputs.table_from_records(
+            raw_tables.get(key, []),
+            key,
+        )
+        output[key] = frame
+        errors.extend(bridge_inputs.table_errors(frame, key))
+    if errors:
+        raise ValueError("invalid bridge evidence: " + "; ".join(errors))
+    return output
+
+
 def _canonical_inputs(tables: dict, scalars: dict) -> dict:
     """Return the JSON-native input payload used by both save and hash checks."""
     has_load_inputs = (
@@ -430,6 +612,10 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
     )
     scalar_payload.setdefault(
         "sls_exposure_class", DEFAULT_SLS_EXPOSURE_CLASS
+    )
+    scalar_payload.setdefault(
+        "sls_bridge_exposure_class",
+        DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS,
     )
     scalar_payload.setdefault("sls_exposure_context", "")
     scalar_payload.setdefault("sls_check_appearance", False)
@@ -478,6 +664,29 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             "fatigue_factor_mode",
             default_fatigue_factor_mode,
         )
+        scalar_payload.setdefault(
+            "fatigue_concrete_method",
+            fatigue_analysis.CONCRETE_MINER,
+        )
+        if (
+            scalar_payload["fatigue_concrete_method"]
+            in fatigue_analysis.CONCRETE_MINER_METHODS
+        ):
+            scalar_payload.setdefault(
+                "fatigue_concrete_c",
+                fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+            )
+        scalar_payload.setdefault(
+            "fatigue_concrete_miner_basis",
+            _default_fatigue_miner_basis(scalar_payload),
+        )
+        _normalise_fatigue_miner_basis(scalar_payload)
+        scalar_payload.setdefault("fatigue_concrete_miner_source", "")
+        if (
+            scalar_payload["fatigue_concrete_miner_basis"]
+            not in fatigue_inputs.MINER_BASES
+        ):
+            raise ValueError("unknown concrete fatigue Miner applicability")
     if scalar_payload.get("torsion_on"):
         scalar_payload.setdefault(
             "torsion_factor_mode", codes.FACTOR_MODE_PRESET
@@ -529,6 +738,31 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         # ``fatigue_source`` was the pre-v10 one-line precursor to the structured
         # basis.  Current files have one canonical provenance representation.
         scalar_payload.pop("fatigue_source", None)
+    scalar_payload.setdefault(
+        "design_methodology",
+        bridge.COMPONENT_METHODS,
+    )
+    if scalar_payload["design_methodology"] not in bridge.METHODOLOGIES:
+        raise ValueError("unknown design methodology")
+    scalar_payload.setdefault(
+        "bridge_brittle_method",
+        bridge.BRITTLE_NOT_ESTABLISHED,
+    )
+    scalar_payload.setdefault("bridge_expected_box_walls", 0)
+    scalar_payload.setdefault(
+        "bridge_minimum_scope",
+        bridge.MINIMUM_SCOPE_NOT_ESTABLISHED,
+    )
+    scalar_payload.setdefault(
+        "bridge_shear_scope",
+        bridge.SHEAR_SCOPE_NOT_ESTABLISHED,
+    )
+    scalar_payload.setdefault(
+        "bridge_exposure",
+        bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
+    )
+    _validate_bridge_scalars(scalar_payload)
+    _validate_fatigue_miner_scalars(scalar_payload)
     content = {
         "tables": {k: _table_to_obj(tables.get(k), k) for k in TABLE_KEYS},
         "scalars": scalar_payload,
@@ -547,6 +781,13 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
                 tables[fatigue_inputs.SPECTRUM_TABLE_KEY]
             )
         }
+    content["bridge"] = {
+        "version": bridge_inputs.VERSION,
+        "tables": {
+            key: bridge_inputs.table_records(tables.get(key), key)
+            for key in bridge_inputs.TABLE_KEYS
+        },
+    }
     return content
 
 
@@ -558,6 +799,105 @@ def input_sha256(tables: dict, scalars: dict) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _bridge_publication_matches_inputs(record) -> bool:
+    """Return whether a safe bridge snapshot proved current-input correlation."""
+
+    if not isinstance(record, dict):
+        return False
+    validation = record.get("publication_validation")
+    return (
+        isinstance(validation, dict)
+        and validation.get("status") == "ACCEPTED"
+    )
+
+
+_CALCULATION_PROVENANCE_FIELDS = (
+    "performed_at_utc",
+    "sector_version",
+    "source_revision",
+    "input_sha256",
+    "crack_control",
+    "fatigue_conformance",
+    "bridge_methodology",
+)
+
+
+def publication_safe_calculation_record(
+    calculation,
+    *,
+    calculation_inputs,
+    input_digest,
+) -> dict | None:
+    """Return one canonical, fail-closed calculation-provenance record.
+
+    ``matches_saved_inputs`` is a durable rejection latch.  Once an earlier
+    publication boundary rejected evidence, loading or re-saving the sanitized
+    record must not infer a match merely because the rejected field is no longer
+    present and the input hash still agrees. ``calculation_inputs`` is the one
+    canonical scalar snapshot used to reconstruct both methodology and bridge
+    fatigue conformance, so callers cannot supply those contexts independently.
+    """
+
+    if not isinstance(calculation, Mapping):
+        return None
+    current_inputs = (
+        calculation_inputs
+        if isinstance(calculation_inputs, Mapping)
+        else {}
+    )
+    design_methodology = current_inputs.get("design_methodology")
+    fatigue_context = fatigue_analysis.bridge_publication_context(
+        current_inputs
+    )
+    publication_matches = True
+    if "matches_saved_inputs" in calculation:
+        publication_matches = calculation.get("matches_saved_inputs") is True
+    record = {
+        key: calculation.get(key)
+        for key in _CALCULATION_PROVENANCE_FIELDS
+        if calculation.get(key) not in (None, "")
+    }
+    if "crack_control" in calculation:
+        record["crack_control"] = sls.publication_safe_crack_control_record(
+            calculation.get("crack_control")
+        )
+        if record["crack_control"] is None:
+            record.pop("crack_control")
+            publication_matches = False
+    if "fatigue_conformance" in calculation:
+        record["fatigue_conformance"] = (
+            fatigue_analysis.publication_safe_conformance_record(
+                calculation.get("fatigue_conformance"),
+                design_methodology=design_methodology,
+            )
+        )
+        if record["fatigue_conformance"] is None:
+            record.pop("fatigue_conformance")
+            publication_matches = False
+    if "bridge_methodology" in calculation:
+        record["bridge_methodology"] = bridge.publication_safe_record(
+            calculation.get("bridge_methodology"),
+            design_methodology=design_methodology,
+            fatigue_context=fatigue_context,
+        )
+        if record["bridge_methodology"] is None:
+            record.pop("bridge_methodology")
+            publication_matches = False
+        else:
+            publication_matches = (
+                publication_matches
+                and _bridge_publication_matches_inputs(
+                    record["bridge_methodology"]
+                )
+            )
+    record["matches_saved_inputs"] = (
+        bool(record.get("input_sha256"))
+        and record.get("input_sha256") == input_digest
+        and publication_matches
+    )
+    return record
 
 
 def dump_project(tables: dict, scalars: dict, *, calculation=None,
@@ -585,26 +925,16 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
         },
     }
     if calculation:
-        record = {
-            key: calculation.get(key)
-            for key in (
-                "performed_at_utc", "sector_version", "source_revision",
-                "input_sha256", "crack_control",
-            )
-            if calculation.get(key) not in (None, "")
-        }
-        if "crack_control" in record:
-            record["crack_control"] = (
-                sls.publication_safe_crack_control_record(
-                    record.get("crack_control")
-                )
-            )
-            if record["crack_control"] is None:
-                record.pop("crack_control")
-        record["matches_saved_inputs"] = record.get("input_sha256") == digest
+        record = publication_safe_calculation_record(
+            calculation,
+            calculation_inputs=content["scalars"],
+            input_digest=digest,
+        )
         payload["calculation"] = record
         payload["provenance"]["results_included"] = bool(
             (record.get("crack_control") or {}).get("cases")
+            or record.get("fatigue_conformance")
+            or record.get("bridge_methodology")
         )
     return json.dumps(payload, indent=2)
 
@@ -623,6 +953,8 @@ def project_provenance(text: str) -> dict:
     _reject_unsupported_strut_settings(raw_scalars)
     _validate_factor_scalars(raw_scalars)
     _validate_crack_numeric_scalars(raw_scalars)
+    _validate_bridge_scalars(raw_scalars)
+    _validate_fatigue_miner_scalars(raw_scalars, allow_missing=True)
     provenance = data.get("provenance")
     if not isinstance(provenance, dict):
         return {
@@ -637,17 +969,23 @@ def project_provenance(text: str) -> dict:
     raw_tables = data.get("tables") or {}
     raw_load_cases = data.get("load_cases")
     raw_fatigue = data.get("fatigue")
+    raw_bridge = data.get("bridge")
     if not isinstance(raw_tables, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
         raise ValueError("malformed 'fatigue' section")
+    if raw_bridge is not None and not isinstance(raw_bridge, dict):
+        raise ValueError("malformed 'bridge' section")
+    _bridge_tables_from_payload(raw_bridge)
     canonical_inputs = {"tables": raw_tables, "scalars": raw_scalars}
     if raw_load_cases is not None:
         canonical_inputs["load_cases"] = raw_load_cases
     if raw_fatigue is not None:
         canonical_inputs["fatigue"] = raw_fatigue
+    if raw_bridge is not None:
+        canonical_inputs["bridge"] = raw_bridge
     canonical = json.dumps(
         canonical_inputs,
         sort_keys=True, separators=(",", ":"), ensure_ascii=True,
@@ -655,23 +993,11 @@ def project_provenance(text: str) -> dict:
     )
     actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     recorded = provenance.get("input_sha256")
-    calculation = (
-        dict(data["calculation"])
-        if isinstance(data.get("calculation"), dict) else None
+    calculation = publication_safe_calculation_record(
+        data.get("calculation"),
+        calculation_inputs=raw_scalars,
+        input_digest=actual,
     )
-    if calculation is not None:
-        if "crack_control" in calculation:
-            calculation["crack_control"] = (
-                sls.publication_safe_crack_control_record(
-                    calculation.get("crack_control")
-                )
-            )
-            if calculation["crack_control"] is None:
-                calculation.pop("crack_control")
-        calculation["matches_saved_inputs"] = (
-            bool(calculation.get("input_sha256"))
-            and calculation.get("input_sha256") == actual
-        )
     return {
         "sector_version": provenance.get("sector_version"),
         "source_revision": provenance.get("source_revision"),
@@ -683,6 +1009,8 @@ def project_provenance(text: str) -> dict:
                 (calculation or {}).get("crack_control")
                 or {}
             ).get("cases")
+            or (calculation or {}).get("fatigue_conformance")
+            or (calculation or {}).get("bridge_methodology")
         ),
         "calculation": calculation,
     }
@@ -703,16 +1031,21 @@ def parse_project(text: str):
     raw_tables = data.get("tables") or {}
     raw_load_cases = data.get("load_cases")
     raw_fatigue = data.get("fatigue")
+    raw_bridge = data.get("bridge")
     raw_scalars = data.get("scalars") or {}
     if not isinstance(raw_tables, dict) or not isinstance(raw_scalars, dict):
         raise ValueError("malformed 'tables' or 'scalars' section")
     _reject_unsupported_strut_settings(raw_scalars)
     _validate_factor_scalars(raw_scalars)
     _validate_crack_numeric_scalars(raw_scalars)
+    _validate_bridge_scalars(raw_scalars)
+    _validate_fatigue_miner_scalars(raw_scalars, allow_missing=True)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
         raise ValueError("malformed 'load_cases' section")
     if raw_fatigue is not None and not isinstance(raw_fatigue, dict):
         raise ValueError("malformed 'fatigue' section")
+    if raw_bridge is not None and not isinstance(raw_bridge, dict):
+        raise ValueError("malformed 'bridge' section")
     tables = {
         k: _obj_to_table(raw_tables[k], k)
         for k in TABLE_KEYS if k in raw_tables
@@ -743,6 +1076,7 @@ def parse_project(text: str):
                 raw_fatigue.get("spectrum", [])
             )
         )
+    tables.update(_bridge_tables_from_payload(raw_bridge))
     # Files saved before the explicit EN 1992-1-1:2023 applicability selector have
     # no k_tc field. Migrate those deterministically to the general/other-case value
     # instead of letting an unrelated preset value already in session state leak
@@ -937,6 +1271,10 @@ def parse_project(text: str):
         "sls_protection_class", DEFAULT_SLS_PROTECTION_CLASS
     )
     scalars.setdefault("sls_exposure_class", DEFAULT_SLS_EXPOSURE_CLASS)
+    scalars.setdefault(
+        "sls_bridge_exposure_class",
+        DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS,
+    )
     scalars.setdefault("sls_exposure_context", "")
     scalars.setdefault("sls_check_appearance", False)
     scalars.setdefault("sls_appearance_limit", 0.0)
@@ -947,6 +1285,33 @@ def parse_project(text: str):
     scalars.setdefault("sls_project_characteristic_limit", 0.0)
     scalars.setdefault("sls_project_frequent_limit", 0.0)
     scalars.setdefault("sls_project_quasi_permanent_limit", 0.0)
+    # v19 introduces a whole-calculation bridge methodology. Earlier projects
+    # remain independent component calculations; they are never silently
+    # relabelled as EN 1992-2. A selected current bridge method with absent table
+    # rows receives the canonical blocking defaults from the dedicated payload.
+    if (
+        data.get("version", 1) < 19
+        or "design_methodology" not in raw_scalars
+    ):
+        scalars["design_methodology"] = bridge.COMPONENT_METHODS
+    scalars.setdefault(
+        "bridge_brittle_method",
+        bridge.BRITTLE_NOT_ESTABLISHED,
+    )
+    scalars.setdefault("bridge_expected_box_walls", 0)
+    scalars.setdefault(
+        "bridge_minimum_scope",
+        bridge.MINIMUM_SCOPE_NOT_ESTABLISHED,
+    )
+    scalars.setdefault(
+        "bridge_shear_scope",
+        bridge.SHEAR_SCOPE_NOT_ESTABLISHED,
+    )
+    scalars.setdefault(
+        "bridge_exposure",
+        bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
+    )
+    _validate_bridge_scalars(scalars)
     # A current-version file may still be partial or hand-edited. Never let an
     # unknown routing token fall through the Streamlit selectbox to its fresh-
     # project default, because that could silently turn ambiguous legacy evidence
@@ -1005,6 +1370,29 @@ def parse_project(text: str):
         # Early v15 development files predate the dedicated factor-approval
         # field. Never promote the spectrum-method approval to this role.
         scalars.setdefault("fatigue_factor_approval", "")
+        scalars.setdefault(
+            "fatigue_concrete_method",
+            fatigue_analysis.CONCRETE_MINER,
+        )
+        if (
+            scalars["fatigue_concrete_method"]
+            in fatigue_analysis.CONCRETE_MINER_METHODS
+        ):
+            scalars.setdefault(
+                "fatigue_concrete_c",
+                fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+            )
+        scalars.setdefault(
+            "fatigue_concrete_miner_basis",
+            _default_fatigue_miner_basis(scalars),
+        )
+        _normalise_fatigue_miner_basis(scalars)
+        scalars.setdefault("fatigue_concrete_miner_source", "")
+        if (
+            scalars["fatigue_concrete_miner_basis"]
+            not in fatigue_inputs.MINER_BASES
+        ):
+            raise ValueError("unknown concrete fatigue Miner applicability")
     if (
         "torsion_factor_mode" in scalars
         and scalars["torsion_factor_mode"] not in codes.FACTOR_MODES
@@ -1015,6 +1403,22 @@ def parse_project(text: str):
         and scalars["fatigue_factor_mode"] not in fatigue_inputs.FACTOR_MODES
     ):
         raise ValueError("unknown fatigue material-factor source")
+    if (
+        "fatigue_concrete_miner_basis" in scalars
+        and scalars["fatigue_concrete_miner_basis"]
+        not in fatigue_inputs.MINER_BASES
+    ):
+        raise ValueError("unknown concrete fatigue Miner applicability")
+    if (
+        raw_scalars.get("fatigue_check_concrete") is True
+        or {
+            "fatigue_concrete_method",
+            "fatigue_concrete_c",
+            "fatigue_concrete_miner_basis",
+            "fatigue_concrete_miner_source",
+        }.intersection(raw_scalars)
+    ):
+        _validate_fatigue_miner_scalars(scalars)
     # The axial force N is now tension-positive; files written before that (version
     # < 2) stored it compression-positive, so negate their axial values to preserve
     # the physical loads. Moments are unchanged.

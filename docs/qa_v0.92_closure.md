@@ -12,14 +12,14 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 |---|---|---|---|---|---|---|---|---|---|
 | F-001 | PR-01 | Closed and merged | One winding-independent, scale-aware topology gate now blocks malformed, non-finite, degenerate, repeated, backtracking, self-contacting/crossing, outside/touching/crossing-hole, overlapping, and nested-hole geometry in UI, project I/O, API, raw helpers, and solver entries. | Frozen `G-VALID-CONCAVE`, `G-INVALID-BOWTIE`, `G-INVALID-COLLINEAR`, `G-INVALID-HOLE-OUTSIDE`, and `G-INVALID-HOLE-OVERLAP` cases; test-only exact-rational segment/containment oracle. | `tests/test_geometry_topology.py`; `tests/fixtures/geometry_topology_f001.json`; focused Streamlit pre-solver smoke test; project v14 mixed-winding round trip; existing geometry, solver, shear, torsion, fatigue, capacity, and hand-calculation regressions; full local suite 1,399 passed and 1 skipped. | Three actionable comments on `0ae7e0a7cb2f2c904f3c44c46853db6ef93ac50e` were fixed; Codex Review accepted exact head `f3d609499af0d7c8fc9520e6131e81fcf72b19ef`. | `QA CLOSURE ACCEPTED — f3d609499af0d7c8fc9520e6131e81fcf72b19ef` | [PR #204](https://github.com/KasperLFabricius/Sector/pull/204); squash `91b2470e463a29c70e6cc6b08b123bcee84aa78d` | Exact terminal closure markers and forward intermediate collinear vertices remain valid; raw winding/order is preserved, terminal markers are removed from analysis copies, and analysis rings are oriented canonically. |
 | F-002 | PR-02 | Closed and merged | Concrete compression and tension factors have distinct resolved values and provenance. `T_Rd,c` now uses `f_ctk,0.05 / gamma_ct`; the DK preset is `gamma_ct = 1.70 gamma0 gamma3`, while compressive `f_cd` continues to use the separately reported final concrete material input. Approved override values are retained separately from temporary preset values and restored after a mode transition. | Independent 300 x 600 mm C35 tube hand calculation: base EN `T_Rd,c = 29.96 kNm` (`gamma_ct = 1.50`) and DK/NA `T_Rd,c = 26.44 kNm` (`gamma_ct = 1.70`) at unity category factors; non-unity category and Eq. 6.31 governing-state transitions are also checked. | `tests/test_codes.py`; `tests/test_torsion.py::test_trd_c_hand_calculation_separates_base_en_and_dk_tension_factors`; category-factor, approved-override, method-switch, stale-state repair, report-derivation, project-round-trip, and Eq. 6.31 transition tests. | Eleven earlier actionable threads plus the later interrupted-project-load finding are resolved; Codex Review accepted exact head `c789ad9bfc94921f3383e9bce3c056b8e445cdcd`. | `QA CLOSURE ACCEPTED — c789ad9bfc94921f3383e9bce3c056b8e445cdcd` | [PR #205](https://github.com/KasperLFabricius/Sector/pull/205); squash `91bb63f9bd05050f508334202ca531367420062e` | No category is inferred. The selected edition remains a project design-basis decision. |
-| F-003 | PR-03 | Implemented on branch; review and closure pending | The 2023 crack-control core now distinguishes mild reinforcement and prestressing steel, derives each contributing tendon’s `xi1` from `xi`, the largest effective mild-bar diameter and its own tendon diameter, and uses `(As,eff + sum(xi1 Ap))/Ac,eff`. Missing or invalid `xi` is blocking when a tendon contributes. | Standalone `tools/pr03_crack_oracle.py`; frozen `SLS-2023-XI1` expected `rho_p,eff = 0.014285714285714294` for `As = Ap = 1000 mm2`, `xi1 = 0.5`, `Ac,eff = 0.105 m2`; independent scalar direct-tension formulas. | `tests/test_crack_control_pr03.py`; mixed/prestress-only, bond, diameter, invalid-input, decompression, independent-oracle and provenance cases; 316 affected tests, 210 Streamlit tests and 1,489 full-suite tests passed on the pre-F-043 head; fresh live-source browser, 41-page report and 32-page manual evidence inspected. | Review of `4d8c09a13854dead91a10ac39ca352042c8a5d65` raised a P1 locked-in-prestress double subtraction and P2 global-diameter provenance issue; both were fixed. Codex Review later accepted `ab488e80906166e8edf02abc4d4fa800121fe8fc`, but the newly assigned F-043 scope makes that review obsolete; current-head review is pending. | Pending original reviewer. | Pending | No `xi` or edition applicability is inferred; the selectable 2023 method remains subject to the project design basis. |
-| F-004 | PR-02 | Closed and merged | Danish fatigue presets resolve `gamma_s,fat = 1.20 x 1.10 x gamma0 x gamma3` and `gamma_c,fat = 1.45 x 1.10 x gamma0 x gamma3`; preset, approved-final override, and migrated legacy values have distinct persisted states and report derivations. Approved final overrides and their approval are retained outside preset widget state; rejected stale values remain blocked until an enabled edit or explicit confirmation repairs them. | At unity category factors, `gamma_s,fat = 1.32` and `gamma_c,fat = 1.595`; all three edition selections, non-unity categories, override persistence, and legacy blocking are independently asserted. | `tests/test_fatigue_inputs.py`; `tests/test_fatigue_analysis.py`; `tests/test_project_io.py`; Streamlit switching/reload and stale live/durable repair tests in `tests/test_app_smoke.py`; PDF evidence in `tests/test_report.py`. | Eleven earlier actionable threads plus the later interrupted-project-load finding are resolved; Codex Review accepted exact head `c789ad9bfc94921f3383e9bce3c056b8e445cdcd`. | `QA CLOSURE ACCEPTED — c789ad9bfc94921f3383e9bce3c056b8e445cdcd` | [PR #205](https://github.com/KasperLFabricius/Sector/pull/205); squash `91bb63f9bd05050f508334202ca531367420062e` | Old saved numeric factors are retained but require an explicit preset-or-approved-override decision before a fatigue verdict. |
-| F-005 | PR-04 | Planned | Add distinct DS/EN 1992-2:2005 + AC:2008 methodology with explicit inheritance, bridge overrides, applicability, and non-pass unsupported states. | To be established in owning PR from the four-layer standards comparison and independent bridge examples. | Pending | Pending | Pending | Pending | None accepted. |
+| F-003 | PR-03 | Closed and merged | The 2023 crack-control core distinguishes mild reinforcement and prestressing steel, derives per-tendon `xi1`, and fails closed on invalid contribution evidence. | `tools/pr03_crack_oracle.py`; frozen `SLS-2023-XI1` and independent scalar direct-tension formulas. | Mixed/prestress-only, bond, diameter, invalid-input, decompression, persistence/publication, report/manual and provenance regressions; consolidated exact-head evidence accepted. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`; all threads resolved. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | No `xi` or edition applicability is inferred; the selectable 2023 method remains subject to the project design basis. |
+| F-004 | PR-02 | Closed and merged | Danish fatigue presets resolve `gamma_s,fat = 1.20 x 1.10 x gamma0 x gamma3` and `gamma_c,fat = 1.45 x 1.10 x gamma0 x gamma3`; preset, approved-final override, and migrated legacy values have distinct persisted states and report derivations. Approved final overrides and their approval are retained outside preset widget state. PR-02 originally blocked unresolved legacy values; the authoritative PR-04 analysis-versus-conformance policy now retains and calculates positive finite values with a qualified conformance state without reopening F-004. | At unity category factors, `gamma_s,fat = 1.32` and `gamma_c,fat = 1.595`; all edition selections, non-unity categories and override persistence remain asserted. PR-04 adds values 0.5 and 2.0 plus missing/contradictory approval and legacy-review controls as cross-cutting F-005/F-010 evidence. | `tests/test_fatigue_inputs.py`; `tests/test_fatigue_analysis.py`; `tests/test_project_io.py`; Streamlit switching/reload and live/durable controls in `tests/test_app_smoke.py`; PDF evidence in `tests/test_report.py`. | Eleven earlier actionable threads plus the later interrupted-project-load finding were resolved; Codex Review accepted PR-02 exact head `c789ad9bfc94921f3383e9bce3c056b8e445cdcd`. | `QA CLOSURE ACCEPTED - c789ad9bfc94921f3383e9bce3c056b8e445cdcd` | [PR #205](https://github.com/KasperLFabricius/Sector/pull/205); squash `91bb63f9bd05050f508334202ca531367420062e` | Under the superseding cross-cutting policy, old saved positive finite factors remain actual calculation inputs. Without a dedicated approved custom basis they yield `REVIEW / NOT FULLY ASSESSED`, not a standard PASS. |
+| F-005 | PR-04 | Implemented on branch; exact-head external gates pending | A distinct `DS/EN 1992-2:2005 + AC:2008` method records inherited, overridden, added and not-assessed checks; calculates brittle Method b, separate box-wall torsion, bridge SLS stress/crack routing, separate web/flange minimum reinforcement and bridge concrete fatigue; mandatory unsupported states block overall PASS. One canonical conformance record now separates numerical validity from the selected-standard prescription: positive finite custom `cot(theta)`, `k`, Miner `C` and fatigue material factors are retained and calculated, while deviations produce visible `REVIEW / NOT FULLY ASSESSED` or a qualified `APPROVED CUSTOM` verdict and are never relabelled as a standard PASS. | Controlled local standard matrix plus independent `tools/pr04_bridge_oracle.py` examples for brittle reinforcement, common-angle wall torsion and both angle bounds, corrected concrete Miner life, bridge SLS limits and the web/flange `k` dimension rule. Frozen false-PASS examples `cot(theta)=10`, `k=0.01` and standard Miner `C=100` retain analytical results but cannot emit an unqualified standard PASS. | Canonical conformance, bridge/fatigue core, raw adapter, mutable publication evidence, Streamlit, project/autosave/download state, cache/signature, report and manual regressions; exact-head focused/full counts are recorded after the final implementation SHA. | Pending exact-head Codex Review after commit and CI. | Pending original reviewer. | Pending | Methods a/c, added bridge web/interface interaction, shear/torsion fatigue, deflection and opened segmental-joint checks remain explicit blocking `NOT ASSESSED` when applicable. F-020 remains excluded. |
 | F-006 | PR-05 | Planned | Add distinct DS/EN 1992-2 + DK/NA:2015 methodology and Danish bridge choices. | To be established in owning PR for road, footbridge, and railway cases. | Pending | Pending | Pending | Pending | None accepted. |
-| F-007 | PR-03 | Implemented on branch; review and closure pending | EN 1992-1-1:2023 uniform direct tension is calculated for a validated solid rectangle with reinforcement on opposed faces using the Figure 9.3 perimeter area, `kfl = 1`, `k1/r = 1`, and no bending cap. Every cracked unsupported or incomplete state now has an explicit blocking disposition; a partial numerical set cannot produce overall PASS. | Standalone rectangular perimeter-area, reinforcement-ratio, strain, spacing and crack-width oracle in `tools/pr03_crack_oracle.py`. | Pure tension, good/poor bond, zero/near-zero curvature, all-tension transition, unsupported geometry, 2005 direct-tension gate, zero reinforcement, decompression, SLS status precedence and app integration tests. | Pending current-head review. | Pending original reviewer. | Pending | 2005 direct tension and non-rectangular/combined all-tension inputs remain explicitly `NOT ASSESSED`; they cannot yield PASS. |
-| F-008 | PR-03 | Implemented on branch; review and closure pending | The engine records dominant direction/scope, while UI result panels, Results Overview, the saved design-basis limitation, manual, and report result/conclusion state that orthogonal or inclined crack systems are not assessed. | Rotation oracle compares an asymmetric section and reinforcement after rigid rotations while independently transforming loads and preserving crack width. | Rotated asymmetric engine cases plus app summary, report text/raster and manual content gates. | Pending current-head review. | Pending original reviewer. | Pending | Directional limitation remains explicit until PR-06 supplies an applicable opt-in multidirectional method. |
+| F-007 | PR-03 | Closed and merged | EN 1992-1-1:2023 uniform direct tension is calculated only for the validated solid-rectangle/opposed-face domain; unsupported or incomplete states are explicit blocking dispositions. | Standalone rectangular perimeter-area, reinforcement-ratio, strain, spacing and crack-width oracle in `tools/pr03_crack_oracle.py`. | Direct-tension, transition, unsupported-domain, decompression, SLS precedence and app integration regressions accepted on the exact head. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | 2005 direct tension and non-rectangular/combined all-tension inputs remain explicitly `NOT ASSESSED`; they cannot yield PASS. |
+| F-008 | PR-03 | Closed and merged | The engine records dominant direction/scope, while UI, overview, saved limitations, manual and report state that orthogonal or inclined crack systems are not assessed. | Rotation oracle compares an asymmetric section and reinforcement under rigid rotations with transformed loads. | Rotated engine cases plus app summary, report text/raster and manual content gates accepted on the exact head. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | Directional limitation remains explicit until PR-06 supplies an applicable opt-in multidirectional method. |
 | F-009 | PR-06 | Planned | Keep independent `Vx`/`Vy` results but prevent combined PASS without a selected applicable interaction method. | To be established in owning PR for uniaxial limits, balanced biaxial load, axis swap, rotation, and interaction boundary. | Pending | Pending | Pending | Pending | No universal interaction rule will be inferred. |
-| F-010 | PR-04 | Planned | Route bridge concrete-fatigue equations only through bridge methodology or explicit warned project-basis adoption. | To be established in owning PR from bridge provisions and independent examples. | Pending | Pending | Pending | Pending | None accepted. |
+| F-010 | PR-04 | Implemented on branch; exact-head external gates pending | The corrected DS/EN 1992-2 Expression (6.106) route prescribes `C = 14` under the bridge methodology. Any positive finite coefficient remains an analytical input, but a different value is recorded as a deviation and can never be labelled as the AC:2008 relation or an unqualified standard PASS. A separately named Miner/S-N methodology plus explicit source/approval can emit only a qualified custom verdict. Core, preparation, project/session, UI, bridge publication and report boundaries revalidate the actual coefficient, conformance record, method, applicability and typed whole-calculation methodology binding against the calculation snapshot. | Controlled local DS/EN 1992-2:2005 clause 6.8.7(101) with AC:2008 correction and DS/EN 1992-1-1:2023 E.8 applicability; independent `tools/pr04_bridge_oracle.py` standard `C = 14` life/damage plus standard-labelled and approved-project `C = 100` examples. | Included in the consolidated core/project/publication, report, manual, adjacent-fatigue, rendered, policy and Streamlit slices recorded for PR-04, including the exact `C = 100` false-PASS reproducer, mutable evidence and cache/signature controls. | Pending exact-head Codex Review after commit and CI. | Pending original reviewer. | Pending | Project-basis adoption outside the bridge method remains an explicit engineering-authority decision with a recorded approval source; another S-N relation remains a separately sourced project method and is never relabelled as Expression (6.106) or 2023 E.8. |
 | F-011 | PR-07 | Planned | Add report design scope, assumptions/exclusions, overall conclusion, and action register for every non-pass state. | To be established in owning PR through structural report assertions. | Pending | Pending | Pending | Pending | None accepted. |
 | F-012 | PR-13 | Planned | Add ratcheted coverage, selected Ruff, type, and dependency-security CI gates with owned waivers. | Controlled gate-failure demonstrations to be established in owning PR. | Pending | Pending | Pending | Pending | Temporary waivers must name owner and expiry/exit condition. |
 | F-013 | PR-13 | Planned | Type solver/result and standards-routing boundaries and replace broad engineering catches with narrow, traceable failures. | Fault-injection oracle to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
@@ -52,7 +52,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-040 | PR-10 | Planned | Remove literal caret markup and normalize scientific notation, subscripts, powers, degrees, and units through one notation layer. | Text extraction and raster notation checks to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-041 | PR-11 | Planned | Add section-based Figure/Table numbering, captions, references, repeated units, and grayscale-safe plots. | Caption/reference and grayscale visual checks to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-042 | PR-11 | Planned | Add a shared publication style system plus structural and raster PDF preflight. | Complete manual and representative report preflight/crop regression to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
-| F-043 | PR-03 core; PR-04/PR-05 inherit or override | Latest independent-QA and exact-review remediations implemented locally on the PR-03 branch; new exact-head gates pending | Response duration and SLS-combination class are independent. Standard-derived width, decompression and appearance criteria route only to the combination required for the selected edition and member/protection/exposure class. Missing, migrated, malformed or duplicate mappings remain `NOT ASSESSED / REVIEW`; unrelated valid responses are informational and crack history remains separate. Every non-null calculated response is validated before criterion routing. Raw decompression acceptance requires complete typed and mutually consistent status, finite concrete-stress value, usable governing location and solver provenance across every matched response label sharing the routed state; non-finite audit fields are rejected and publication repeats that completeness check. A definite `EXCEEDED` criterion governs the top-level `FAIL` over a separate incomplete criterion, while every `NOT ASSESSED` detail remains reported. Publication independently cross-checks current responses at calculation-record, project save/load/provenance, autosave and report boundaries. Every accepted criterion emits a schema-versioned immutable evidence binding and SHA-256 fingerprint covering criterion identity/source/applicability, required combination, full matched response label/ID set, duration, mapping and solver provenance, calculated value and governing evidence, plus the complete table-wide mapping scope. Publication independently reconstructs that binding from current evidence before replacing any stored context; missing, tampered, duplicated or mismatched bindings block as `NOT ASSESSED / REVIEW`. Width publication recomputes the maximum, utilization and margin across every matched response and correlates the governing case/element. Decompression publication correlates status, numeric value, governing location, response-context provenance and solver provenance for every matched response, not only the stored case. The report overlays current visible values on their canonical response identities, preserves matched DK fine/coarse responses as criterion inputs and uses MPa for decompression. A rejected, missing, changed or differently named response invalidates stale PASS/FAIL evidence, while legitimate solver `NOT APPLICABLE` nulls remain non-rejections. | Frozen 2004 ordinary-member reproducer: QP `w_k = 0.22 mm` versus characteristic total `0.31 mm` at `w_lim = 0.30 mm` gives QP PASS. Frozen 2023 bonded PL2/3 reproducer: QP `0.31 mm` versus unrelated Frequent `0.22 mm` at `0.30 mm` gives QP FAIL. Separate Table 9.1 appearance, Table 9.2 protection/exposure and decompression routes are covered. Adversarial evidence includes Boolean/scientific containers, one-shot iterables, malformed/non-mapping responses, scalar/mapping `matched_responses`, empty/malformed/duplicate table scopes, missing or mismatched response identities/combinations, changed or differently named governing responses, incomplete/missing/conflicting/non-finite matched decompression evidence, a known width failure beside unavailable decompression, interrupted event reconstruction, and intentionally inconsistent PASS snapshots through project/session/autosave/report/headless paths. The canonical mutation matrix changes response ID, duration, mapping provenance, solver provenance, criterion metadata, mapping scope, width/governing element and every decompression acceptance field independently through raw/publication, calculation/session, project save/load/provenance, download/autosave and report boundaries. Controlled local evidence: 2004 section 7.3.1(5)/Table 7.1N; DK NA:2024 section 7.3.1(5)/Table 7.1 NA; 2023 section 9.2.1(6)/Tables 9.1-9.2. | The refreshed bounded closure execution is green for 747 nodes spanning core SLS, routing/source policy, calculation record/session, project save/load/provenance, download/autosave, manual/report and rendered-artifact boundaries. New exact-head CI is still required. | Review of `855caff3c0355ba30c6b114ae909d53578087d0a` found all-matched-width and full-decompression gaps. Review of `5b9a8bc528af9b34818b6b06e5dd1d1bf22bda59` then found that acceptance could omit its required combination and that full decompression comparison still covered only one matched response. Review of `add0713c468d77ddfe38f6a022d2825ee3545d6d` found that raw decompression acceptance still selected the first matched label and that report publication unconditionally demoted matched coarse responses. Review of `c76677d0b5f18cf0baa99877cba91056ec41bfe4` found incomplete single-response decompression evidence and known-failure precedence gaps. Review of `2352d3bfc3316f10cce07e6850b91df1d7d65501` found non-finite governing/provenance evidence acceptance. Review of `fe5cf369127bd1f2ebdaa1b8da320f6e67d4fe88` found scalar matched-response evidence could reach aggregate rebuilding. Original independent QA then rejected exact head `96f60c75d6e9efbd6b6b94b3f1615c0eded0c96f` because a stored PASS/FAIL was not immutably correlated with current response identity, duration, mapping scope/provenance and solver provenance. The user-directed same-family stop condition triggered this canonical-model refactor; external gates were paused until its consolidated matrix was green. | Original reviewer rejected `ef9045071a49442e2f53fa1f7da81096aa9f3a18` because malformed current responses could coexist with a persisted or reported PASS, and rejected `96f60c75d6e9efbd6b6b94b3f1615c0eded0c96f` because changed response identity/duration/mapping/solver provenance still preserved PASS. Exact-head resubmission is pending after the consolidated refactor gates, CI and Codex Review. | Pending | PR-04 must add EN 1992-2 bridge-base routing and PR-05 the Danish bridge matrix, including the DK non-prestressed frequent-column route; neither may fall back to a generic maximum. Required decompression remains `NOT ASSESSED` unless complete concrete-stress evidence exists. |
+| F-043 | PR-03 core closed and merged; PR-04 bridge-base inheritance/override implemented; PR-05 Danish bridge override pending | PR-03 canonically separates response duration from SLS combination and binds every accepted criterion to immutable current response evidence across raw, project/session/autosave and report boundaries. PR-04 reuses that mechanism for DS/EN 1992-2 Table 7.101N rather than a generic maximum; missing, ambiguous, malformed or stale routing remains `NOT ASSESSED / REVIEW`. | Frozen ordinary 2004 QP `0.22 mm` versus unrelated `0.31 mm` at `0.30 mm`; 2023 appearance/durability/decompression routes; bridge base Table 7.101N member/prestress routes and missing-combination controls. | PR-03 independent closure included 33 routing/correlation and decompression probes plus 52 canonical-body/schema mutation probes. PR-04 adds bridge routing, alias, malformed-evidence, persistence, UI/report and headless regressions within its bounded 775-pass gate. | GitHub CI and Codex Review accepted PR-03 exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`; PR-04 exact-head review is pending. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` for PR-03 core; PR-04/PR-05 inheritance/override closure remains sequential. | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` for PR-03 core | PR-05 must add the Danish bridge matrix, especially the DK non-prestressed frequent-column route; required decompression remains `NOT ASSESSED` without complete concrete-stress evidence. |
 
 ## PR-01 evidence log
 
@@ -501,5 +501,354 @@ mandatory; this matrix does not self-certify PR closure.
   width and limit numerics, and the same adversarial binding is blocked through
   publication, project round-trip, report, download, session and autosave. All
   are locally remediated.
-  New exact-head Codex Review, GitHub CI, original independent QA closure and
-  merge remain pending; this implementation log does not self-certify closure.
+  Exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` then passed GitHub
+  CI and Codex Review with all threads resolved. The original reviewer returned
+  `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`
+  after 33 routing/correlation and decompression probes, 52 canonical-body/schema
+  mutation probes, independent engineering spot checks and the final ledger
+  inspection. [PR #206](https://github.com/KasperLFabricius/Sector/pull/206)
+  was squash merged as `760db72914f341b9d69a4033ef2676f75bf10ced`.
+
+## PR-04 evidence log
+
+- Scope: F-005, F-010, and the DS/EN 1992-2 bridge-base inheritance/override
+  portion of F-043 only.
+- Controlled local source: `DS/EN 1992-2:2005 + AC:2008`. The implementation
+  records each relationship to DS/EN 1992-1-1:2004 as inherited, overridden,
+  added, or not assessed; no normative internet source was used.
+- Implemented bridge checks include prestressed brittle-failure Method b per
+  tensile region, every box wall at one common strut angle, inherited member
+  shear with explicit bridge-interface applicability, inherited reinforcement
+  fatigue, the AC-corrected bridge concrete Miner route, characteristic concrete
+  stress, structured Table 7.101N crack/decompression routing, and separate web
+  and flange minimum reinforcement including the shrinkage floor.
+- Methods a/c, added bridge web/interface interaction, shear/torsion fatigue,
+  deflection, and opened segmental-joint checks are explicit blocking
+  `NOT ASSESSED` dispositions when applicable; unsupported scope cannot yield an
+  overall PASS.
+- `tools/pr04_bridge_oracle.py` is independent of Sector calculation code and
+  covers brittle minimum reinforcement, box-wall torsion, concrete fatigue,
+  bridge SLS stress/crack routing, and web/flange minimum reinforcement.
+- One canonical bridge record and evidence fingerprint now crosses calculation,
+  project save/load/provenance, session/autosave/download, UI, report, and manual
+  boundaries. Malformed Boolean/non-finite/duplicate/stale evidence fails closed.
+  Ordinary EN 1992-1-1 use can be qualified as an approved project adoption only
+  with an explicit source; without it, the positive finite analytical result is
+  retained as `REVIEW / NOT FULLY ASSESSED`.
+- Bounded local evidence is green: 387 bridge/SLS/fatigue core checks; 214
+  project/presentation/manual checks with one skip; 142 report checks; 3
+  rendered-artifact checks; 19 version/package/executable-free provenance
+  controls; and 10 focused Streamlit calculation/session/download/autosave
+  checks. These are 775 passing nodes and one intentional skip.
+- Fresh manual, ordinary-fatigue report, and representative bridge report
+  artifacts passed structural/raster preflight and visual inspection. The source
+  Streamlit server returned a healthy HTTP 200 response; the in-app browser
+  webview itself did not attach after two bounded attempts, so interaction
+  evidence remains the focused Streamlit AppTests rather than a claimed live
+  browser walkthrough.
+- Version remains exactly `0.91`. F-020, ignored `dist`, quarantine,
+  unrelated test-temp directories, and unsigned executables remain untouched.
+- External exact-head GitHub CI, Codex Review, and original independent QA
+  closure remain mandatory after the PR-04 commit; this implementation log does
+  not self-certify closure.
+- Codex Review of `72e0c25f677c88d8d8bcf2735213a9bb9aaaa264`
+  found five fail-open integration paths: inherited member shear was coupled to
+  added bridge detailing, hollow geometry could omit its wall matrix, the bridge
+  crack adapter trusted unbound or duplicated acceptance records, and selecting
+  the bridge fatigue edition could imply bridge authority outside the active
+  whole-calculation methodology. The remediation gives inherited shear its own
+  required check, makes hollow-section wall coverage physically mandatory,
+  shares the canonical immutable SLS binding validator between raw bridge
+  adaptation and publication, requires exactly one independently matched bridge
+  criterion, and invalidates bridge-owned Miner applicability when the whole
+  bridge method is inactive or exited.
+- Post-review evidence is green: 23 focused review-facing SLS/bridge/fatigue
+  cases; 395 affected core checks; 214 project/presentation/manual checks with
+  one intentional skip; 142 report checks; five focused Streamlit interactions
+  covering the changed Inputs-to-Analysis-to-Inputs route and adjacent fatigue
+  state; 3 rendered-artifact checks with the 32 known Kaleido warnings; 19
+  version/package/build controls; the independent bridge oracle; compilation;
+  and whitespace validation. The next commit is a new exact head, so CI, Codex
+  Review, and original independent QA must all be repeated before merge.
+- Exact-head CI run `30327436712` on
+  `ad7d191910e2b4ed9128eb6018a47cc53c370543` passed 1,926 tests with one skip
+  but exposed two stale UI-contract assertions: the workflow-order fixture
+  omitted the new bridge-methodology expander, and the legacy scalar adapter
+  still expected no inactive bridge publication record. Both expectations now
+  assert the intentional UI and `NOT APPLICABLE` publication contract. The two
+  exact regressions plus adjacent bridge UI and autosave/download publication
+  controls pass (4 checks); all exact-head external gates restart after this
+  test-only correction.
+- Exact head `7018dffb6702703595a76c59aa6f3a52377fe671` then passed CI run
+  `30328492185` and exact-head Codex Review, but original independent QA rejected
+  it on three bounded normative-parameter P1 findings. The bridge concrete Miner
+  route allowed arbitrary `C`, box walls allowed `cot(theta)` outside the inherited
+  6.2.3(2) domain, and bridge Expression (7.1) allowed `k` outside the image of
+  the 7.3.2(102) dimension rule.
+- The authoritative product requirement supersedes that overly strict
+  remediation. Sector is an analysis/design tool: a positive finite value can be
+  mathematically usable while deviating from the selected standard. The canonical
+  parameter-conformance record therefore carries the actual value, selected
+  standard, prescribed value/range, standard methodology/source, parameter basis,
+  custom methodology, approval/source, applicability and conformance state.
+  Boolean, non-finite, zero/non-positive divisors and malformed structures remain
+  hard errors; a standards deviation is never clamped or silently replaced.
+- The three independent examples are now closed without either false PASS or
+  prohibited analysis. `cot(theta)=10`, minimum-reinforcement `k=0.01`, and a
+  standard-labelled Miner `C=100` retain their analytical result and exact input,
+  but the selected-standard verdict is `REVIEW / NOT FULLY ASSESSED`. A complete
+  explicit custom methodology plus approval/source can produce a qualified
+  `APPROVED CUSTOM PASS/FAIL`; it is never labelled as the DS/EN 1992-2 check.
+  Standard `C=14`, in-range common-angle walls and dimension-derived `k` retain
+  ordinary standard PASS/FAIL behavior.
+- Stored evidence is independently recomputed at publication. Mutated values,
+  reordered/missing conformance records, contradictory basis/approval metadata,
+  changed methodology and stale aggregate verdicts invalidate UI/project/report
+  publication even if a bridge fingerprint was recomputed. Inputs and conformance
+  evidence participate in calculation signatures and are retained through live
+  state, durable mirror, project/autosave/download, solver evidence and report.
+  Exact-head focused/full counts, rendered artifacts, package-content verification,
+  CI and review evidence remain pending until the final implementation SHA.
+- Fresh Codex Review of exact head
+  `50d811c9d99a47b890f5a6172469cfcafdfc2d1a` identified two publication-boundary
+  defects before closure: a top-level method relabel could bypass the Miner
+  parameter check, and a malformed `errors` container could crash or discard
+  invalid evidence. The obsolete CI run was cancelled when those findings became
+  actionable.
+- The shared fatigue publication validator now binds
+  `concrete_parameters.method` to every enabled concrete method before
+  method-specific dispatch, and requires the error container to be a list or
+  tuple of non-blank typed messages. A mismatch or malformed container forces
+  `valid = converged = passed = False` before the Streamlit or PDF boundary.
+  Thirteen direct reproductions and boundary checks pass, followed by all 283
+  affected fatigue/report checks and two focused Streamlit controls. Exact-head
+  CI, Codex Review and original independent closure remain pending after commit.
+- Fresh Codex Review of exact head
+  `76b4cf65a6d7c9e392aaac988145b48b75994876` then found that bridge applicability
+  was still derived from the claimed Miner-basis label. Relabelling only a
+  component-method project adoption as the bridge-standard basis could therefore
+  suppress the project-source requirement at publication. The obsolete CI run
+  was cancelled immediately.
+- The correlation model now carries the typed whole-calculation design
+  methodology from validated preparation into the analysis signature and result
+  payload. One shared publication boundary compares that immutable result binding
+  with the calculation input snapshot before the overview, result view, bridge
+  methodology or report may use the verdict. Missing, changed or conflicting
+  methodology/basis evidence is invalid; the bridge basis is no longer trusted to
+  establish its own applicability. The method/basis/methodology matrix, headless
+  validation, bridge adapter, project, UI and report checks pass within a
+  385-check affected core/project/report slice, three focused Streamlit checks
+  and 149 manual/ASCII controls. Exact-head CI, Codex Review and original
+  independent closure remain pending after commit.
+- Codex Review of exact head
+  `918f3a00698010af2566abb764fe080dc0202ee0` found two remaining P1 correlation
+  gaps. The Streamlit split-cache key omitted design methodology, so switching
+  from component methods to the bridge method could reuse the old fatigue payload
+  and remain INVALID instead of recalculating. The PDF boundary also replaced a
+  missing methodology in a legacy/direct input snapshot with component methods,
+  allowing a component-method result to remain publishable without its current
+  correlation evidence. The obsolete CI run was cancelled immediately.
+
+| Methodology-correlation boundary | Required invariant | Missing or changed evidence |
+|---|---|---|
+| Validated preparation and solver signature | One typed methodology is carried into the prepared calculation, solver-facing signature and result payload. | Invalid input produces an explicit invalid fatigue result; it cannot acquire bridge authority from a Miner-basis label. |
+| Streamlit split-result reuse | The fatigue reuse key includes the same methodology in addition to every fatigue numerical/provenance input. | A methodology change makes the key unequal and forces a new fatigue calculation before the result snapshot is replaced. |
+| Calculation input snapshot, session and autosave | The result payload and the exact input snapshot retain the methodology that produced the calculation. | Legacy results without a matching snapshot remain hidden or publication-invalid rather than being correlated against live inputs. |
+| Overview, result view and bridge adapter | Each boundary passes the raw snapshot methodology to the shared publication validator. | Missing, malformed or conflicting methodology forces `valid = converged = passed = False`. |
+| PDF report | The report passes the raw calculation-input methodology without a default. | A missing direct/legacy report snapshot is explicit unavailable evidence and publishes `INVALID - fatigue not assessed`. |
+| Stored Miner basis and method | Method, basis, coefficient/source and whole-calculation methodology are jointly validated. | Relabelling any one field cannot establish its own standard applicability or preserve PASS. |
+
+- Exact reproductions now recalculate the fatigue payload and snapshot after a
+  component-to-bridge methodology switch, and fail closed when report input
+  omits methodology. The consolidated source audit found one fatigue reuse key
+  and four publication callers; all now use the same typed methodology binding
+  without a publication fallback. Six direct/adjacent reproductions, all 386
+  affected fatigue/bridge-adapter/project/report checks, five focused Streamlit
+  controls and 149 manual/ASCII checks are green. Compilation, whitespace,
+  version `0.91` and changed-file controls are green; no executable was touched
+  or launched. The new exact head must restart CI and Codex Review.
+- Codex Review of exact head
+  `53ff19ce6ac7bf3b6a99311538ad1e472cef17fb` found one further same-family P1:
+  the bridge record validated its stored methodology and fingerprint but did not
+  accept the current calculation-input methodology, so a bridge PASS could be
+  published or saved beside component-method inputs. The review also found a P2
+  governing-row defect: a supported positive-infinite fatigue failure was reduced
+  to a null utilisation before ordering and could yield its source/result position
+  to a finite passing row. The obsolete CI run was cancelled.
+
+| Bridge publication invariant | Canonical behavior |
+|---|---|
+| Immutable solver body | Check bodies, configuration errors and the evidence fingerprint are validated without importing mutable current-input context into that fingerprint. |
+| Current input correlation | Every bridge publication call must supply the raw whole-calculation methodology. Missing, malformed or non-bridge context emits a separate typed `REJECTED` publication-validation block and forces `INVALID`. |
+| Project hash meaning | A bridge snapshot with rejected methodology correlation cannot set `matches_saved_inputs = true`, even if its stored SHA-256 equals the current canonical input hash. |
+| Boundary consistency | Calculation record, overview, bridge view, project dump/load provenance, download, session/autosave and PDF use the same required-context validator; none may invent a default methodology. |
+| Unbounded fatigue evidence | Positive-infinite FAIL is represented by a finite-JSON-safe `unbounded_utilisation` marker, explicitly governs finite rows, and retains its result/source through the bridge check and report. |
+
+- The required-context signature makes an omitted bridge-publication argument a
+  programming error. Correlation errors are reconstructed for each boundary and
+  remain separate from the immutable solver fingerprint, so changing only the
+  current context cannot contaminate or permanently rewrite the stored evidence.
+  Direct, overview, report, project, calculation-record, download/session and
+  autosave controls cover accepted, component-method, missing, Boolean and unknown
+  contexts; an independent mixed infinite/finite fatigue pair covers governing
+  result/source preservation. Twenty direct cross-boundary cases, all 501 affected
+  bridge/fatigue/project/presentation/report checks, seven focused Streamlit
+  controls and 149 manual/ASCII checks are green. Compilation, whitespace,
+  version `0.91` and changed-file controls are green; no executable was touched
+  or launched. The next exact head must restart all external gates.
+- The final implementation audit found one remaining durability gap:
+  standalone fatigue conformance was present in live solver/report evidence but
+  was not retained in the input-hash-bound calculation record. The canonical
+  `sector.fatigue-conformance-evidence/v1` snapshot now carries the actual
+  material factors and Miner coefficient, selected standard and whole-calculation
+  methodology, standard/custom method, source/approval, parameter and aggregate
+  conformance, analytical verdict, qualified verdict and selected-standard
+  verdict. Its SHA-256 seal covers the exact JSON body; every project, load,
+  download and autosave boundary also reconstructs the parameter records and
+  aggregate verdict before retaining it.
+- Valid approved custom factors `0.5` and `2.0` plus project Miner `C=100`
+  round-trip through project provenance and are shown with their methodology and
+  sources in the loaded Save / Load audit summary. Value mutation, a recomputed
+  top-level verdict relabel, changed methodology, malformed validity/convergence
+  flags and stale aggregate evidence are rejected. A rejected record is removed
+  from durable/download/autosave output, while the canonical calculation-
+  provenance record retains a false-match latch through save and reload so the
+  discarded evidence cannot later acquire an input-match claim.
+- The issued-report render fixture now states its component-method calculation
+  context explicitly. This preserves the fail-closed rule for missing methodology
+  while restoring the intended 23-figure report contract; report and manual
+  raster gates pass with all four grouped-fatigue figures present. Final
+  exact-head full-suite, artifact, package, CI and review evidence is recorded
+  only after the implementation commit.
+- A real Streamlit browser edit found that the input-event journal treated the
+  four native bridge evidence editors differently from the existing load and
+  fatigue editors. Replaying the bridge editor's Streamlit-owned delta through
+  session state raised `StreamlitValueAssignmentNotAllowedError` on the next
+  cell commit. All native editor keys now share the same non-replayable policy;
+  their callbacks commit the cumulative delta directly to the canonical table.
+  The focused regression reconstructs the exact pending bridge event and commits
+  a passing box-wall row with `cot(theta)=10`. Fresh live-browser evidence shows
+  the value retained first as REVIEW / NOT FULLY ASSESSED and then as an approved
+  custom input after methodology and approval/source are entered, with no second
+  runtime exception.
+- Codex Review of exact head
+  `e844eeef5cc7d0e48a2736abbcdaa9025e5d1e46` found one same-family P1 at the
+  autosave boundary: autosave sanitized a mutated fatigue record in session
+  before project serialization, so the serializer could no longer observe the
+  rejection and recomputed `matches_saved_inputs = true`. Project dump, load and
+  autosave now share one canonical calculation-provenance sanitizer. An explicit
+  false match is a durable fail-closed latch, malformed crack/fatigue/bridge
+  fields clear the match, and both the sanitized session record and serialized
+  project remain false through provenance reload. The exact reproducer plus the
+  complete project/download/autosave slice pass (169 checks); full exact-head
+  CI and Codex Review restart after the remediation commit.
+- Exact head `139374089e24a0a728772b42142d87c9f16430dd` passed the complete
+  local suite (2,067 tests; 32 known Kaleido warnings), GitHub CI run
+  `30360491298`, reproducible Windows package-content verification without
+  launching the executable, and exact-head Codex Review with no major issue.
+  Fresh 42-page report and 35-page manual artifacts passed structural/raster
+  checks. Original independent QA nevertheless rejected that immutable head:
+  bridge fatigue publication accepted each nested conformance record in
+  isolation but did not prove an exact required parameter set or correlate its
+  values, factor mode, method, source and approval with the current canonical
+  calculation inputs. A valid fingerprint could therefore bind a stale body
+  containing standard `gamma_c = 1.50` beside a current approved
+  `gamma_c = 2.0`, or an attacker could omit `fatigue.gamma_c`, retain only the
+  Miner record, recompute the documented fingerprint and relabel a qualified
+  custom result as a standard PASS.
+- Bridge fatigue now has one caller-owned, schema-versioned publication context
+  reconstructed from the current calculation inputs. Each calculated
+  reinforcement row must contain exactly one `fatigue.gamma_s` record; each
+  calculated concrete row must contain exactly `fatigue.gamma_c` and
+  `concrete_fatigue.miner_c`, with no omission, duplicate or substitution.
+  Full record equality plus explicit edition, factor mode/approval, concrete
+  method, Miner basis and Miner source correlation is required. The same
+  context is supplied by raw/headless publication, calculation-record
+  sanitation, project dump/load/provenance, overview, live bridge UI,
+  durable session/autosave/download and report generation. Any mismatch forces
+  bridge `INVALID`, the affected check to `NOT ASSESSED`, publication
+  `REJECTED`, and a durable `matches_saved_inputs = false` through load and
+  resave. Stale-standard/current-custom and omitted/duplicate/substituted
+  matrices now exercise every affected boundary. Exact-head external gates and
+  original independent closure must be repeated after the remediation commit.
+- The frozen precommit source passed 544 affected bridge/fatigue/project/UI-
+  adapter/report/manual checks, the seven focused stale/omitted UI-report and
+  exact-correlation reproductions, compilation and whitespace checks, and 115
+  ASCII/version controls. An enabled calculated fatigue route cannot suppress
+  all parameter rows, while an explicitly sourced `NOT APPLICABLE` bridge
+  decision remains valid without invented fatigue evidence. The full Streamlit,
+  complete-suite, report/manual render, package-content, CI and review gates
+  remain exact-head work and are not inferred from these focused results.
+- Codex Review of exact head
+  `e798f38b09007eb63a7384125e8cd4c2f692e636` found one remaining P1 in the
+  same correlation family: the concrete fatigue row carried a whole-calculation
+  `methodology` field, but the canonical metadata comparison omitted it. Both
+  reinforcement and concrete rows now carry the calculated methodology, and
+  the shared row validator compares it exactly with the current canonical
+  context alongside edition, factor mode/approval and Miner method/basis/source.
+  Changed and omitted methodology matrices for both fatigue families fail
+  publication closed. The obsolete exact-head AppTest was stopped; all 109
+  direct bridge/adapter checks and all 548 affected checks pass before the next
+  immutable remediation head.
+- Exact head `b7502d14c7f32406b71434e2c840c6085b7a7f30` subsequently passed
+  the 548-check affected slice, 277 Streamlit checks, 115 ASCII/version checks,
+  complete GitHub CI (2,095 tests; one known skip), reproducible package-content
+  verification without launching the executable, and Codex Review with zero
+  unresolved threads. Independent QA nevertheless rejected that immutable head:
+  the later bridge-publication sanitizer correctly rejected stale factor
+  records, but the earlier raw/headless bridge-fatigue adapters compared only
+  methodology, edition, enablement and concrete Miner context. A self-consistent
+  standard payload with `gamma_c = 1.50` could therefore produce a direct
+  selected-standard PASS beside current approved `gamma_c = 2.0` inputs before
+  any publication wrapper was called.
+- Both fatigue adapters now reconstruct the same schema-versioned
+  `bridge_publication_context` used by durable publication and pass it through
+  the shared context validator. Before emitting a calculated row, one canonical
+  correlation gate requires the exact active check set, methodology, edition,
+  factor mode/approval, active factor values and records, concrete method, Miner
+  coefficient/basis/source and complete ordered parameter-record set. A stale,
+  omitted or substituted field returns adapter/check `INVALID` and makes the raw
+  bridge aggregate `INVALID`, so no assessed engineering PASS is emitted;
+  matching approved custom factors `0.5`/`2.0`, matching missing-approval
+  overrides, and a sourced project S-N relation with `C = 100` remain calculated
+  `REVIEW` evidence rather than being replaced or mislabeled as a standard PASS.
+- The focused adapter matrix passes 45 checks, including both fatigue families,
+  isolated value/mode/approval drift, omitted records, a stale custom Miner
+  source, matching custom controls and raw otherwise-full-PASS bridge
+  assessments. The bridge/fatigue/publication/project affected slice passes all
+  311 checks, and the complete affected bridge/fatigue/project/report/manual
+  slice passes all 564 checks. Nine focused Streamlit live/durable controls and
+  all 115 ASCII/version controls also pass. Exact-head external review, full CI,
+  complete Streamlit, artifact and package gates must be repeated after the
+  remediation commit.
+- Exact head `68fbdfab2ea8acfe656fa3edbc6bf8f87a2fc659` subsequently passed
+  complete GitHub CI run `30379028220` (2,110 passes and one known skip), all
+  277 Streamlit checks, all 115 ASCII/version controls, fresh report/manual
+  render inspection, reproducible package-content verification without
+  launching the unsigned executable, and Codex Review with zero unresolved
+  threads. Independent QA nevertheless rejected that immutable head because
+  the canonical bridge-fatigue context omitted the cyclic action factor
+  `gamma_Ff`. Solver preparation, the analysis signature and the result payload
+  all distinguished `gamma_Ff = 1.0` from `2.0`, but the raw adapter and durable
+  publication correlation did not. A stale result could therefore remain an
+  unqualified raw and saved bridge PASS beside the current factor and current
+  input digest.
+- The schema-versioned current context now carries one canonical positive finite
+  `gamma_Ff` value reconstructed from the calculation inputs. Both fatigue
+  adapters compare the calculated `partial_factors.gamma_ff` before emitting a
+  row; each row records the canonical calculated value; and the durable row
+  validator compares it with the same current context used for factor,
+  methodology and Miner correlation. Missing, Boolean, non-finite or mismatched
+  evidence makes the direct adapter and raw bridge aggregate `INVALID`; durable
+  publication becomes `REJECTED`, the affected check becomes `NOT ASSESSED`,
+  and `matches_saved_inputs = false` survives project load and resave. Matching
+  positive finite values `0.5` and `2.0`, including a float-coercible current
+  input, remain calculated without changing the existing standard/custom
+  qualification.
+- The frozen precommit source reproduces all 11 former false-PASS cases red and
+  passes the 17 focused direct/raw/project/UI/download/autosave/report boundary
+  checks, all 332 bridge/fatigue/project persistence checks, all 526 affected
+  bridge/fatigue/project/report/manual checks, and all 115 ASCII/version
+  controls. Compilation and whitespace validation also pass. Exact-head CI,
+  Codex Review, full Streamlit, fresh rendered-artifact and package-content
+  gates must restart after the remediation commit.

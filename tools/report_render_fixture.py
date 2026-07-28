@@ -33,7 +33,16 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
-from sector import capacity, codes, combined, detailing, shear, sls, torsion  # noqa: E402
+from sector import (  # noqa: E402
+    bridge,
+    capacity,
+    codes,
+    combined,
+    detailing,
+    shear,
+    sls,
+    torsion,
+)
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -199,6 +208,7 @@ def _inputs() -> dict:
     })
     return {
         "mode": "Both",
+        "design_methodology": bridge.COMPONENT_METHODS,
         "plastic_cases": plastic_cases,
         "elastic_cases": elastic_cases,
         "fatigue_on": True,
@@ -206,6 +216,10 @@ def _inputs() -> dict:
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+        ),
+        "fatigue_concrete_miner_source": "QA-DB-FAT-MINER-01",
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
         "fatigue_gamma0": 1.0,
         "fatigue_gamma3": 1.0,
@@ -1369,6 +1383,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Spectrum summary",
         "Reinforcement fatigue",
         "Concrete fatigue",
+        "Approved project-basis adoption",
+        "QA-DB-FAT-MINER-01",
         "Certified governing-fibre search",
         "Torsion and shear fatigue are not assessed",
         "Physical resistance components",

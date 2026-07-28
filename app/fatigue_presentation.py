@@ -22,12 +22,26 @@ def value(record, name, default=None):
 def items(record, name):
     """Return a result collection as a tuple."""
 
-    return tuple(value(record, name, ()) or ())
+    raw = value(record, name, ())
+    if raw is None or isinstance(raw, (str, bytes, bytearray, Mapping)):
+        return ()
+    try:
+        return tuple(raw)
+    except TypeError:
+        return ()
+
+
+def _typed_bool(raw):
+    if isinstance(raw, bool) or type(raw).__name__ == "bool_":
+        return bool(raw)
+    return None
 
 
 def finite_number(raw):
     """Return a finite float, otherwise ``None``."""
 
+    if _typed_bool(raw) is not None:
+        return None
     try:
         number = float(raw)
     except (TypeError, ValueError):
@@ -43,6 +57,8 @@ def evidence_number(raw):
     an infinite failure must remain visible in result tables and reports.
     """
 
+    if _typed_bool(raw) is not None:
+        return None
     try:
         number = float(raw)
     except (TypeError, ValueError):
@@ -53,9 +69,13 @@ def evidence_number(raw):
 def result_status(result):
     """Return the acceptance status of one computed spectrum/component."""
 
-    if result is None or not bool(value(result, "converged", False)):
+    if result is None:
         return "INVALID"
-    return "PASS" if bool(value(result, "passed", False)) else "FAIL"
+    converged = _typed_bool(value(result, "converged"))
+    passed = _typed_bool(value(result, "passed"))
+    if converged is not True or passed is None:
+        return "INVALID"
+    return "PASS" if passed else "FAIL"
 
 
 def overall_status(payload, *, stale=False):
@@ -64,7 +84,13 @@ def overall_status(payload, *, stale=False):
     if payload is None:
         return "NOT RUN"
     status = result_status(payload)
-    if status == "PASS" and items(payload, "warnings"):
+    conformance_status = value(payload, "assessment_status")
+    if (
+        status in {"PASS", "FAIL"}
+        and conformance_status in {"PASS", "FAIL", "REVIEW"}
+    ):
+        status = conformance_status
+    elif status == "PASS" and items(payload, "warnings"):
         status = "REVIEW"
     return "STALE" if stale else status
 
@@ -85,6 +111,9 @@ def overall_note(payload, *, stale=False):
         return "One or more grouped spectra did not converge"
     if status == "FAIL":
         return "Governing grouped spectrum"
+    if status == "REVIEW":
+        qualified = str(value(payload, "qualified_verdict", "")).strip()
+        return qualified or "Analytical result requires design-basis review"
     warnings = items(payload, "warnings")
     if warnings:
         suffix = "" if len(warnings) == 1 else "s"

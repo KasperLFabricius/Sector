@@ -43,8 +43,11 @@ EC2_2023 = "2023"
 MILD = "mild"
 PRESTRESS = "prestress"
 CONCRETE_MINER = "Explicit Palmgren-Miner spectrum"
+CONCRETE_PROJECT_MINER = "Project-approved Miner S-N relation"
 CONCRETE_EQUIVALENT = "Damage-equivalent stress amplitude"
-CONCRETE_METHODS = (CONCRETE_MINER, CONCRETE_EQUIVALENT)
+CONCRETE_MINER_METHODS = (CONCRETE_MINER, CONCRETE_PROJECT_MINER)
+CONCRETE_METHODS = (*CONCRETE_MINER_METHODS, CONCRETE_EQUIVALENT)
+STANDARD_CONCRETE_MINER_C = 14.0
 DAMAGE_LIMIT = 1.0
 _MPA_DIVISOR = 1000.0
 _LOG10_FLOAT_MAX = math.log10(np.finfo(float).max)
@@ -89,11 +92,13 @@ def _normalise_concrete_method(value: str) -> str:
     folded = text.casefold()
     if "equivalent" in folded:
         return CONCRETE_EQUIVALENT
+    if "project" in folded and ("miner" in folded or "s-n" in folded):
+        return CONCRETE_PROJECT_MINER
     if "miner" in folded or "explicit" in folded:
         return CONCRETE_MINER
     raise ValueError(
-        "concrete fatigue method must identify the explicit Palmgren-Miner "
-        "or damage-equivalent method"
+        "concrete fatigue method must identify the standard explicit "
+        "Palmgren-Miner, project-approved Miner S-N, or damage-equivalent method"
     )
 
 
@@ -220,6 +225,8 @@ class ConcreteFatigueProperties:
     def __post_init__(self) -> None:
         _normalise_edition(self.edition)
         _normalise_concrete_method(self.method)
+        if isinstance(self.c, bool) or type(self.c).__name__ == "bool_":
+            raise ValueError("concrete c must be a finite number")
         for field in (
             "fck_mpa",
             "gamma_c",
@@ -858,7 +865,7 @@ def _box_damage_upper_bound(
     sigma_max = np.maximum(long_high, total_high)
     active = (sigma_max > 0.0) & (range_high > 1.0e-12)
     if (
-        data.method == CONCRETE_MINER
+        data.method in CONCRETE_MINER_METHODS
         and np.any(active & (sigma_max >= data.strength_mpa))
     ):
         return math.inf
@@ -1787,7 +1794,7 @@ def assess_concrete_spectrum(
             sigma_min = min(sigma_long, sigma_total_design)
             sigma_max = max(sigma_long, sigma_total_design)
             equivalent_utilisation = None
-            if method == CONCRETE_MINER:
+            if method in CONCRETE_MINER_METHODS:
                 life = concrete_fatigue_life(
                     sigma_max,
                     sigma_min,

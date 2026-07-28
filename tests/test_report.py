@@ -17,9 +17,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report  # noqa: E402
+import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import detailing, sls  # noqa: E402
+from sector import bridge, conformance, detailing, sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -325,11 +326,16 @@ def _fatigue_report_fixture():
     inp = _inp()
     inp.update({
         "mode": "",
+        "design_methodology": bridge.COMPONENT_METHODS,
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_2023_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
         "fatigue_gamma0": 1.0,
         "fatigue_gamma3": 1.0,
@@ -497,10 +503,41 @@ def _fatigue_report_fixture():
         spectrum("Traffic A", "FAT-A1", 0.55),
         spectrum("Traffic B", "FAT-B1", 0.72),
     )
+    _gamma_s, _gamma_c, factor_basis = (
+        fatigue_inputs.resolve_fatigue_factors(
+            fatigue_inputs.EC2_2023,
+            mode=fatigue_inputs.FACTOR_MODE_PRESET,
+            gamma_s=1.15,
+            gamma_c=1.50,
+        )
+    )
+    miner_conformance = fatigue_analysis.concrete_miner_conformance(
+        edition=fatigue_inputs.EC2_2023,
+        concrete_method=fatigue_analysis.CONCRETE_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_2023_STANDARD,
+        miner_source="",
+        coefficient_c=14.0,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+    parameter_conformance = (
+        factor_basis["parameter_conformance"]["gamma_s"],
+        factor_basis["parameter_conformance"]["gamma_c"],
+        miner_conformance,
+    )
+    aggregate_conformance = conformance.aggregate(
+        parameter_conformance,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=fatigue_inputs.EC2_2023,
+    )
     payload = {
+        "errors": (),
+        "valid": True,
         "edition": fatigue_inputs.EC2_2023,
+        "design_methodology": bridge.COMPONENT_METHODS,
         "checks": {"reinforcement": True, "concrete": True},
         "concrete_method": "Explicit Palmgren-Miner spectrum",
+        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_2023_STANDARD,
+        "concrete_miner_source": "",
         "basis": inp[fatigue_inputs.BASIS_KEY],
         "authority_reference": "Project-defined grouped spectrum",
         "calculation_references": {
@@ -515,17 +552,12 @@ def _fatigue_report_fixture():
             "gamma_s": 1.15,
             "gamma_ff": 1.10,
         },
-        "factor_basis": {
-            "edition": fatigue_inputs.EC2_2023,
-            "mode": fatigue_inputs.FACTOR_MODE_PRESET,
-            "reference": "DS/EN 1992-1-1:2023, fatigue material factors",
-            "gamma0": 1.0,
-            "gamma3": 1.0,
-            "gamma_s": 1.15,
-            "gamma_c": 1.50,
-            "gamma_s_derivation": "1.150 (edition tabulated value)",
-            "gamma_c_derivation": "1.500 (edition tabulated value)",
-        },
+        "factor_basis": factor_basis,
+        "parameter_conformance": parameter_conformance,
+        "conformance": aggregate_conformance,
+        "assessment_status": aggregate_conformance["assessment_status"],
+        "qualified_verdict": aggregate_conformance["qualified_verdict"],
+        "standard_passed": True,
         "concrete_parameters": {
             "fck_mpa": 30.0,
             "beta_cc_t0": 0.92,
@@ -533,6 +565,7 @@ def _fatigue_report_fixture():
             "k1": 1.0,
             "c": 14.0,
             "method": "Explicit Palmgren-Miner spectrum",
+            "parameter_conformance": miner_conformance,
         },
         "reinforcement_properties": (
             NS(
@@ -572,6 +605,47 @@ def _fatigue_report_fixture():
     return inp, {"fatigue": payload}
 
 
+def _rebind_report_miner_conformance(payload):
+    miner = fatigue_analysis.concrete_miner_conformance(
+        edition=payload["edition"],
+        concrete_method=payload["concrete_method"],
+        miner_basis=payload["concrete_miner_basis"],
+        miner_source=payload["concrete_miner_source"],
+        coefficient_c=payload["concrete_parameters"]["c"],
+        design_methodology=payload["design_methodology"],
+    )
+    factor_records = payload["factor_basis"]["parameter_conformance"]
+    records = []
+    if payload["checks"]["reinforcement"]:
+        records.append(factor_records["gamma_s"])
+    if payload["checks"]["concrete"]:
+        records.append(factor_records["gamma_c"])
+        records.append(miner)
+    payload["concrete_parameters"]["parameter_conformance"] = miner
+    payload["parameter_conformance"] = tuple(records)
+    payload["conformance"] = conformance.aggregate(
+        payload["parameter_conformance"],
+        analytical_status=(
+            conformance.STATUS_PASS
+            if payload["passed"]
+            else conformance.STATUS_FAIL
+        ),
+        selected_standard=payload["edition"],
+    )
+    payload["assessment_status"] = payload["conformance"][
+        "assessment_status"
+    ]
+    payload["qualified_verdict"] = payload["conformance"][
+        "qualified_verdict"
+    ]
+    payload["standard_passed"] = bool(
+        payload["passed"]
+        and payload["conformance"]["state"]
+        == conformance.STATE_CONFORMS
+    )
+    return miner
+
+
 def test_report_includes_complete_grouped_fatigue_evidence():
     inp, out = _fatigue_report_fixture()
 
@@ -580,7 +654,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     )).split())
 
     assert "Grouped fatigue" in text
-    assert "REVIEW - Traffic B" in text
+    assert "PASS - STANDARD PASS | Traffic B" in text
     assert "Traffic A" in text and "Traffic B" in text
     assert "FAT-A1" in text and "FAT-B1" in text
     assert "Reinforcement fatigue" in text
@@ -612,22 +686,30 @@ def test_report_includes_complete_grouped_fatigue_evidence():
 def test_report_includes_dk_fatigue_factor_derivations():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]
-    payload["edition"] = fatigue_inputs.EC2_2005_DKNA
-    payload["partial_factors"].update(gamma_s=1.32, gamma_c=1.595)
-    payload["factor_basis"] = {
-        "edition": fatigue_inputs.EC2_2005_DKNA,
-        "mode": fatigue_inputs.FACTOR_MODE_PRESET,
-        "reference": (
-            "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01, "
-            "2.4.2.4(1), Table 2.1Na NA and fatigue paragraph"
+    inp.update({
+        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_gamma_s": 1.32,
+        "fatigue_gamma_c": 1.595,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
         ),
-        "gamma0": 1.0,
-        "gamma3": 1.0,
-        "gamma_s": 1.32,
-        "gamma_c": 1.595,
-        "gamma_s_derivation": "1.20 x 1.10 x 1.000 x 1.000 = 1.320",
-        "gamma_c_derivation": "1.45 x 1.10 x 1.000 x 1.000 = 1.595",
-    }
+        "fatigue_concrete_miner_source": "DB-FAT-DK / checker A",
+    })
+    payload["edition"] = fatigue_inputs.EC2_2005_DKNA
+    payload["concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    payload["concrete_miner_source"] = "DB-FAT-DK / checker A"
+    payload["partial_factors"].update(gamma_s=1.32, gamma_c=1.595)
+    _gamma_s, _gamma_c, payload["factor_basis"] = (
+        fatigue_inputs.resolve_fatigue_factors(
+            fatigue_inputs.EC2_2005_DKNA,
+            mode=fatigue_inputs.FACTOR_MODE_PRESET,
+            gamma_s=1.32,
+            gamma_c=1.595,
+        )
+    )
+    _rebind_report_miner_conformance(payload)
 
     text = " ".join(_pdf_text(sector_report.build_report(
         {}, inp, out, figures=False
@@ -642,13 +724,26 @@ def test_report_keeps_spectrum_and_factor_approvals_distinct():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]
     payload["basis"]["approval_reference"] = "VD-FLM5-AGREEMENT"
-    payload["factor_basis"].update({
-        "mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
-        "override": True,
-        "approval_reference": "DB-FACT-12 / checker D",
-        "gamma_s_derivation": "approved final override = 1.270",
-        "gamma_c_derivation": "approved final override = 1.610",
+    inp.update({
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        "fatigue_factor_approval": "DB-FACT-12 / checker D",
+        "fatigue_gamma_s": 1.27,
+        "fatigue_gamma_c": 1.61,
     })
+    gamma_s, gamma_c, payload["factor_basis"] = (
+        fatigue_inputs.resolve_fatigue_factors(
+            fatigue_inputs.EC2_2023,
+            mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            gamma_s=1.27,
+            gamma_c=1.61,
+            approval_reference="DB-FACT-12 / checker D",
+        )
+    )
+    payload["partial_factors"].update(
+        gamma_s=gamma_s,
+        gamma_c=gamma_c,
+    )
+    _rebind_report_miner_conformance(payload)
 
     text = " ".join(_pdf_text(sector_report.build_report(
         {}, inp, out, figures=False, qa_appendix=True
@@ -666,6 +761,183 @@ def test_report_keeps_spectrum_and_factor_approvals_distinct():
     )[1]
 
 
+def test_report_exposes_ordinary_miner_adoption_and_source():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    inp["fatigue_edition"] = fatigue_inputs.EC2_2005
+    inp["fatigue_concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    inp["fatigue_concrete_miner_source"] = "DB-FAT-21 / checker approval"
+    inp["fatigue_gamma_s"] = 1.15
+    inp["fatigue_gamma_c"] = 1.50
+    payload["edition"] = fatigue_inputs.EC2_2005
+    payload["concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    payload["concrete_miner_source"] = "DB-FAT-21 / checker approval"
+    payload["calculation_references"]["concrete"] = (
+        "Approved project-basis adoption of DS/EN 1992-2:2005/AC:2008 "
+        "corrected Expression (6.106); source: "
+        "DB-FAT-21 / checker approval"
+    )
+    _gamma_s, _gamma_c, payload["factor_basis"] = (
+        fatigue_inputs.resolve_fatigue_factors(
+            fatigue_inputs.EC2_2005,
+            mode=fatigue_inputs.FACTOR_MODE_PRESET,
+            gamma_s=1.15,
+            gamma_c=1.50,
+        )
+    )
+    _rebind_report_miner_conformance(payload)
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Concrete Miner applicability" in text
+    assert fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION in text
+    assert "Concrete Miner authority source" in text
+    assert "DB-FAT-21 / checker approval" in text
+    assert "corrected Expression (6.106)" in text
+    assert "APPROVED CUSTOM PASS" in text
+
+
+def test_report_fails_closed_if_standard_miner_c_is_mutated():
+    inp, out = _fatigue_report_fixture()
+    out["fatigue"]["concrete_parameters"]["c"] = 100.0
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "concrete Miner conformance is stale" in text
+    assert "C 100.000" not in text
+
+
+def test_report_publishes_consistent_standard_c100_as_analytical_review():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    inp["fatigue_concrete_c"] = 100.0
+    payload["concrete_parameters"]["c"] = 100.0
+    _rebind_report_miner_conformance(payload)
+    payload["calculation_references"]["concrete"] = (
+        "Custom/deviating concrete Miner analysis; this is not an "
+        "unqualified selected-standard Miner check; C = 100"
+    )
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=True
+    )).split())
+
+    assert "REVIEW - REVIEW - analytical PASS | Traffic B" in text
+    assert "C 100.000" in text
+    assert "REVIEW REQUIRED" in text
+    assert "actual value 100 does not conform to prescribed value = 14" in text
+    assert "STANDARD PASS" not in text
+
+
+def test_report_fails_closed_if_miner_payload_is_relabelled_equivalent():
+    inp, out = _fatigue_report_fixture()
+    out["fatigue"]["concrete_method"] = (
+        "Damage-equivalent stress amplitude"
+    )
+    out["fatigue"]["concrete_parameters"]["c"] = 100.0
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "method conflicts with its calculation parameters" in text
+    assert "C 100.000" not in text
+
+
+def test_report_rejects_bridge_basis_relabel_under_component_methodology():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "concrete Miner conformance is stale" in text
+    assert "C 14.000" not in text
+
+
+def test_report_rejects_missing_fatigue_methodology_snapshot():
+    inp, out = _fatigue_report_fixture()
+    del inp["design_methodology"]
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert (
+        "Current fatigue design methodology is unavailable for publication "
+        "correlation"
+    ) in text
+
+
+def test_report_fails_closed_on_malformed_fatigue_error_container():
+    inp, out = _fatigue_report_fixture()
+    out["fatigue"]["errors"] = 7
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "structured list of typed messages" in text
+
+
+def test_report_labels_nonstandard_c_as_sourced_project_sn_method():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    inp.update({
+        "fatigue_concrete_method": (
+            "Project-approved Miner S-N relation"
+        ),
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        "fatigue_concrete_miner_source": "AUTH-SN-7 / checker approval",
+        "fatigue_concrete_c": 100.0,
+    })
+    payload.update({
+        "concrete_method": "Project-approved Miner S-N relation",
+        "concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        "concrete_miner_source": "AUTH-SN-7 / checker approval",
+    })
+    payload["concrete_parameters"].update({
+        "c": 100.0,
+        "method": "Project-approved Miner S-N relation",
+    })
+    payload["calculation_references"]["concrete"] = (
+        "Approved project concrete fatigue S-N relation; source: "
+        "AUTH-SN-7 / checker approval"
+    )
+    _rebind_report_miner_conformance(payload)
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Approved project S-N relation" in text
+    assert "AUTH-SN-7 / checker approval" in text
+    assert "C 100.000" in text
+    assert "APPROVED CUSTOM PASS" in text
+    assert "corrected Expression (6.106)" not in text
+
+
 def test_report_includes_damage_equivalent_concrete_method_evidence():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]
@@ -676,6 +948,24 @@ def test_report_includes_damage_equivalent_concrete_method_evidence():
     payload["calculation_references"]["concrete"] = (
         "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2)"
     )
+    factor_records = payload["factor_basis"]["parameter_conformance"]
+    payload["concrete_parameters"].pop("parameter_conformance")
+    payload["parameter_conformance"] = (
+        factor_records["gamma_s"],
+        factor_records["gamma_c"],
+    )
+    payload["conformance"] = conformance.aggregate(
+        payload["parameter_conformance"],
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=payload["edition"],
+    )
+    payload["assessment_status"] = payload["conformance"][
+        "assessment_status"
+    ]
+    payload["qualified_verdict"] = payload["conformance"][
+        "qualified_verdict"
+    ]
+    payload["standard_passed"] = True
     for spectrum in payload["spectra"]:
         spectrum.concrete_method = method
         for result in spectrum.concrete:
@@ -714,12 +1004,24 @@ def test_report_fatigue_chapter_uses_the_engine_failure_state():
     payload["governing_spectrum"] = "Traffic B"
     payload["spectra"][1].passed = False
     payload["spectra"][1].utilisation = 1.20
+    payload["conformance"] = conformance.aggregate(
+        payload["parameter_conformance"],
+        analytical_status=conformance.STATUS_FAIL,
+        selected_standard=payload["edition"],
+    )
+    payload["assessment_status"] = payload["conformance"][
+        "assessment_status"
+    ]
+    payload["qualified_verdict"] = payload["conformance"][
+        "qualified_verdict"
+    ]
+    payload["standard_passed"] = False
 
     text = " ".join(_pdf_text(sector_report.build_report(
         {}, inp, out, figures=False
     )).split())
 
-    assert "FAIL - Traffic B" in text
+    assert "FAIL - STANDARD FAIL | Traffic B" in text
     assert "120.0 %" in text
 
 
@@ -3381,3 +3683,397 @@ def test_report_shared_longitudinal_note_states_the_common_angle():
         {}, _inp(), _combined_longitudinal("utilisation"), figures=False)).split())
     assert "ONE member strut angle shared" in txt
     assert "minimise the governing utilisation" in txt
+
+
+def _bridge_report_record():
+    check_ids = (
+        "section_analysis",
+        "prestress_brittle",
+        "member_shear",
+        "bridge_shear_detailing",
+        "box_wall_torsion",
+        "reinforcement_fatigue",
+        "concrete_fatigue",
+        "shear_torsion_fatigue",
+        "sls_stress",
+        "sls_crack",
+        "web_flange_minimum",
+        "deflection",
+        "segmental_joints",
+    )
+    record = {
+        "methodology": bridge.EN1992_2_BASE,
+        "active": True,
+        "status": bridge.STATUS_NOT_APPLICABLE,
+        "configuration_errors": [],
+        "checks": [
+            {
+                "check_id": check_id,
+                "status": bridge.STATUS_NOT_APPLICABLE,
+                "result": "-",
+                "criterion": "-",
+                "source": "DB-BRIDGE-01",
+                "reason": "Project applicability resolved as not applicable.",
+                "evidence": [],
+            }
+            for check_id in check_ids
+        ],
+    }
+    record["evidence_schema"] = bridge.BRIDGE_EVIDENCE_SCHEMA
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+    )
+    return record
+
+
+def _bridge_report_input(methodology=bridge.EN1992_2_BASE):
+    inp = _inp()
+    inp["design_methodology"] = methodology
+    return inp
+
+
+def _bridge_report_fatigue_input(*, custom=False):
+    inp = _bridge_report_input()
+    inp.update({
+        "fatigue_on": True,
+        "fatigue_check_steel": False,
+        "fatigue_check_concrete": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_gamma_ff": 1.0,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+    })
+    if custom:
+        inp.update({
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "fatigue_factor_approval": (
+                "DB-FAT-OVERRIDE-02 / checker approval"
+            ),
+            "fatigue_gamma_c": 2.0,
+        })
+    return inp
+
+
+def _bridge_report_concrete_fatigue_record(inp):
+    context = fatigue_analysis.bridge_publication_context(inp)
+    assert context["errors"] == []
+    records = {
+        record["parameter_id"]: record
+        for record in context["parameter_conformance"]
+    }
+    concrete_records = (
+        records["fatigue.gamma_c"],
+        records["concrete_fatigue.miner_c"],
+    )
+    status = conformance.aggregate(
+        concrete_records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=context["edition"],
+    )["assessment_status"]
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id,
+            (
+                bridge.REQUIRED
+                if check_id in {"section_analysis", "concrete_fatigue"}
+                else bridge.NOT_APPLICABLE
+            ),
+            f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+        concrete_fatigue=bridge.ExternalEvidence(
+            status=status,
+            result="50.0 %",
+            criterion="<= 100 %",
+            source="DS/EN 1992-2:2005/AC:2008 Expression (6.106)",
+            reason="solver evidence retained",
+            utilisation=0.5,
+            evidence=({
+                "status": status,
+                "analytical_status": bridge.STATUS_PASS,
+                "methodology": bridge.EN1992_2_BASE,
+                "concrete_method": context["concrete_method"],
+                "concrete_miner_basis": context["concrete_miner_basis"],
+                "concrete_miner_source": context["concrete_miner_source"],
+                "miner_coefficient_c": records[
+                    "concrete_fatigue.miner_c"
+                ]["actual_value"],
+                "parameter_conformance": records[
+                    "concrete_fatigue.miner_c"
+                ],
+                "fatigue_parameter_conformance": concrete_records,
+                "fatigue_edition": context["edition"],
+                "fatigue_factor_mode": context["factor_mode"],
+                "fatigue_factor_approval": context["factor_approval"],
+                "fatigue_gamma_ff": context["gamma_ff"],
+            },),
+        ),
+    ))
+
+
+def test_report_publishes_bridge_coverage_and_check_gate():
+    out = _out()
+    out["bridge_methodology"] = _bridge_report_record()
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _bridge_report_input(), out, figures=False
+    )).split())
+
+    assert "Bridge methodology" in text
+    assert "Coverage matrix" in text
+    assert "inherited" in text
+    assert "overridden" in text
+    assert "added" in text
+    assert "not assessed" in text
+    assert "DB-BRIDGE-01" in text
+
+
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [
+        ("stale_standard", "fatigue.gamma_c"),
+        ("omitted_gamma_c", "IDs/cardinality"),
+        ("stale_gamma_ff", "fatigue_gamma_ff"),
+    ],
+)
+def test_report_rejects_stale_or_omitted_bridge_fatigue_evidence(
+    attack,
+    expected,
+):
+    out = _out()
+    current_input = _bridge_report_fatigue_input(custom=True)
+    if attack == "stale_standard":
+        record = _bridge_report_concrete_fatigue_record(
+            _bridge_report_fatigue_input()
+        )
+    elif attack == "stale_gamma_ff":
+        current_input = _bridge_report_fatigue_input()
+        current_input["fatigue_gamma_ff"] = 2.0
+        record = _bridge_report_concrete_fatigue_record(
+            _bridge_report_fatigue_input()
+        )
+    else:
+        record = _bridge_report_concrete_fatigue_record(current_input)
+        concrete = next(
+            check for check in record["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = concrete["evidence"][0]
+        row["fatigue_parameter_conformance"] = [
+            parameter
+            for parameter in row["fatigue_parameter_conformance"]
+            if parameter["parameter_id"] != "fatigue.gamma_c"
+        ]
+        row["status"] = bridge.STATUS_PASS
+        concrete["status"] = bridge.STATUS_PASS
+        record["status"] = bridge.STATUS_PASS
+        record["evidence_fingerprint"] = (
+            bridge.bridge_evidence_fingerprint(
+                record["checks"],
+                record["configuration_errors"],
+            )
+        )
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {},
+        current_input,
+        out,
+        figures=False,
+    )).split())
+
+    assert "Bridge methodology" in text
+    assert "INVALID" in text
+    assert "Publication validation" in text
+    assert "REJECTED" in text
+    assert "Concrete fatigue" in text and "NOT ASSESSED" in text
+    assert expected in text
+
+
+def test_report_publishes_bound_bridge_calculation_evidence():
+    out = _out()
+    record = _bridge_report_record()
+    stress = next(
+        check
+        for check in record["checks"]
+        if check["check_id"] == "sls_stress"
+    )
+    stress.update(
+        status=bridge.STATUS_PASS,
+        result="20.000 MPa (SLS-CHAR:total)",
+        criterion="characteristic compression <= 24.000 MPa",
+        utilisation=20.0 / 24.0,
+        evidence=[{
+            "response_id": "SLS-CHAR:total",
+            "combination": "Characteristic",
+            "compression_mpa": 20.0,
+            "limit_mpa": 24.0,
+            "solver_provenance": {"solve": "elastic-v1"},
+        }],
+    )
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+    )
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _bridge_report_input(), out, figures=False
+    )).split())
+
+    assert "Bound calculation evidence" in text
+    assert "SLS-CHAR:total" in text
+    assert "compression_mpa" in text
+    assert "limit_mpa" in text
+    assert "elastic-v1" in text
+
+
+def test_report_keeps_custom_cot_theta_and_minimum_k_as_analytical_review():
+    out = _out()
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id,
+            (
+                bridge.REQUIRED
+                if check_id in {"box_wall_torsion", "web_flange_minimum"}
+                else bridge.NOT_APPLICABLE
+            ),
+            f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    record = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=True,
+        fck_mpa=40.0,
+        expected_box_walls=1,
+        box_walls=(
+            bridge.BoxWallEvidence(
+                "Wall",
+                10.0,
+                10.0,
+                100.0,
+                10.0,
+                100.0,
+            ),
+        ),
+        minimum_scope=bridge.MINIMUM_SCOPE_WEB,
+        minimum_components=(
+            bridge.MinimumCrackComponent(
+                "Web",
+                100_000.0,
+                0.4,
+                0.01,
+                3.0,
+                300.0,
+                5.0,
+            ),
+        ),
+    ))
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _bridge_report_input(), out, figures=False
+    )).split())
+
+    assert "REVIEW" in text
+    assert "analytical PASS" in text
+    assert "cot_theta" in text and "10.0" in text
+    assert "does not conform to 1 <= value <= 2.5" in text
+    assert "minimum-reinforcement k" in text
+    assert "does not conform to 0.65 <= value <= 1" in text
+    assert "NOT FULLY ASSESSED" in text
+
+
+def test_report_fails_closed_when_stored_bridge_check_is_missing():
+    out = _out()
+    record = _bridge_report_record()
+    record["checks"] = record["checks"][:-1]
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _bridge_report_input(), out, figures=False
+    )).split())
+
+    assert "Bridge methodology" in text
+    assert "INVALID" in text
+    assert "Publication validation" in text
+    assert "missing bridge check" in text
+
+
+def test_report_rejects_bridge_record_under_component_methodology():
+    out = _out()
+    out["bridge_methodology"] = _bridge_report_record()
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {},
+        _bridge_report_input(bridge.COMPONENT_METHODS),
+        out,
+        figures=False,
+    )).split())
+
+    assert "Bridge methodology" in text
+    assert "INVALID" in text
+    assert "Publication validation" in text
+    assert "conflicts with the calculation input snapshot" in text
+
+
+def test_report_preserves_unbounded_bridge_fatigue_governing_row():
+    out = _out()
+    record = _bridge_report_record()
+    concrete_fatigue = next(
+        check
+        for check in record["checks"]
+        if check["check_id"] == "concrete_fatigue"
+    )
+    concrete_fatigue.update(
+        status=bridge.STATUS_FAIL,
+        result="infinite Miner damage",
+        criterion="<= 100 %",
+        source="Unbounded concrete fibre",
+        reason="Spectrum A / fibre 4 governs.",
+        utilisation=None,
+        evidence=[{
+            "miner_coefficient_c": 14.0,
+            "methodology": bridge.EN1992_2_BASE,
+            "concrete_method": "Explicit Palmgren-Miner spectrum",
+            "unbounded_utilisation": True,
+        }],
+    )
+    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
+        record["checks"],
+        record["configuration_errors"],
+    )
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _bridge_report_input(), out, figures=False
+    )).split())
+
+    assert "infinite Miner damage" in text
+    assert "Unbounded concrete fibre" in text
+    assert "unbounded_utilisation" in text
