@@ -1744,6 +1744,84 @@ def _accepted_item_outcome_conflicts(
     return tuple(conflicts)
 
 
+def validated_current_acceptance_evidence_binding(
+    item: Mapping,
+    responses: Mapping[str, Mapping | None],
+    *,
+    response_contexts: Mapping[str, Mapping | None] | None = None,
+    response_mapping_scope: Sequence[Mapping] = (),
+) -> tuple[dict | None, tuple[str, ...]]:
+    """Validate one accepted criterion against immutable and current evidence.
+
+    Raw bridge adapters and stored/publication boundaries use this same typed
+    correlation gate. A self-consistent stored fingerprint is insufficient:
+    the visible outcome and independently reconstructed current response binding
+    must also agree before the acceptance may be republished.
+    """
+
+    if not isinstance(item, Mapping):
+        return None, ("accepted criterion is not a mapping",)
+    if not isinstance(responses, Mapping):
+        return None, ("current crack responses are not a mapping",)
+    if (
+        response_contexts is not None
+        and not isinstance(response_contexts, Mapping)
+    ):
+        return None, ("current crack response contexts are not a mapping",)
+    if not isinstance(response_mapping_scope, (list, tuple)):
+        return None, (
+            "current crack response mapping scope is not a structured list",
+        )
+    stored_binding, stored_issues = _validated_acceptance_evidence_binding(
+        item.get("acceptance_evidence")
+    )
+    if stored_issues or stored_binding is None:
+        return None, (
+            "invalid immutable acceptance evidence: "
+            + (
+                "; ".join(stored_issues)
+                or "unknown stored-evidence error"
+            ),
+        )
+    outcome_conflicts = _accepted_item_outcome_conflicts(
+        item,
+        stored_binding,
+    )
+    if outcome_conflicts:
+        return None, (
+            "visible acceptance result does not match its immutable "
+            "evidence binding: "
+            + "; ".join(outcome_conflicts),
+        )
+    current_binding, _current_outcome, current_issues = (
+        _build_acceptance_evidence_binding(
+            item,
+            responses,
+            response_contexts=response_contexts,
+            response_mapping_scope=response_mapping_scope,
+        )
+    )
+    if current_issues or current_binding is None:
+        return None, (
+            "acceptance evidence cannot be reconstructed: "
+            + (
+                "; ".join(current_issues)
+                or "unknown current-evidence error"
+            ),
+        )
+    binding_conflicts = _acceptance_evidence_binding_conflicts(
+        stored_binding,
+        current_binding,
+    )
+    if binding_conflicts:
+        return None, (
+            "immutable acceptance evidence does not match the current "
+            "response binding: "
+            + "; ".join(binding_conflicts),
+        )
+    return current_binding, ()
+
+
 def _apply_acceptance_evidence_binding(
     item: dict,
     binding: Mapping,
@@ -2340,51 +2418,17 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
                     f"Stored {label} has no governing response identity.",
                     names,
                 )
-            stored_binding, stored_binding_issues = (
-                _validated_acceptance_evidence_binding(
-                    item.get("acceptance_evidence")
-                )
-            )
-            if stored_binding_issues:
-                return (
-                    f"Stored {label} has invalid immutable acceptance "
-                    f"evidence: {'; '.join(stored_binding_issues)}.",
-                    names,
-                )
-            outcome_conflicts = _accepted_item_outcome_conflicts(
-                item,
-                stored_binding,
-            )
-            if outcome_conflicts:
-                return (
-                    f"Stored {label} visible acceptance result does not "
-                    "match its immutable evidence binding: "
-                    f"{'; '.join(outcome_conflicts)}.",
-                    names,
-                )
-            current_binding, _current_outcome, current_binding_issues = (
-                _build_acceptance_evidence_binding(
+            current_binding, binding_issues = (
+                validated_current_acceptance_evidence_binding(
                     item,
                     current_responses,
                     response_mapping_scope=current_mapping_scope,
                 )
             )
-            if current_binding_issues or current_binding is None:
+            if binding_issues or current_binding is None:
                 return (
-                    f"Current {label} acceptance evidence cannot be "
-                    "reconstructed: "
-                    f"{'; '.join(current_binding_issues) or 'unknown evidence error'}.",
-                    names,
-                )
-            binding_conflicts = _acceptance_evidence_binding_conflicts(
-                stored_binding,
-                current_binding,
-            )
-            if binding_conflicts:
-                return (
-                    f"Stored {label} immutable acceptance evidence does not "
-                    "match the current response binding: "
-                    f"{'; '.join(binding_conflicts)}.",
+                    f"Stored {label} acceptance was rejected: "
+                    f"{'; '.join(binding_issues) or 'unknown evidence error'}.",
                     names,
                 )
             _apply_acceptance_evidence_binding(item, current_binding)

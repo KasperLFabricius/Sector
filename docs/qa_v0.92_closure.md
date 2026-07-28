@@ -550,3 +550,22 @@ mandatory; this matrix does not self-certify PR closure.
 - External exact-head GitHub CI, Codex Review, and original independent QA
   closure remain mandatory after the PR-04 commit; this implementation log does
   not self-certify closure.
+- Codex Review of `72e0c25f677c88d8d8bcf2735213a9bb9aaaa264`
+  found five fail-open integration paths: inherited member shear was coupled to
+  added bridge detailing, hollow geometry could omit its wall matrix, the bridge
+  crack adapter trusted unbound or duplicated acceptance records, and selecting
+  the bridge fatigue edition could imply bridge authority outside the active
+  whole-calculation methodology. The remediation gives inherited shear its own
+  required check, makes hollow-section wall coverage physically mandatory,
+  shares the canonical immutable SLS binding validator between raw bridge
+  adaptation and publication, requires exactly one independently matched bridge
+  criterion, and invalidates bridge-owned Miner applicability when the whole
+  bridge method is inactive or exited.
+- Post-review evidence is green: 23 focused review-facing SLS/bridge/fatigue
+  cases; 395 affected core checks; 214 project/presentation/manual checks with
+  one intentional skip; 142 report checks; five focused Streamlit interactions
+  covering the changed Inputs-to-Analysis-to-Inputs route and adjacent fatigue
+  state; 3 rendered-artifact checks with the 32 known Kaleido warnings; 19
+  version/package/build controls; the independent bridge oracle; compilation;
+  and whitespace validation. The next commit is a new exact head, so CI, Codex
+  Review, and original independent QA must all be repeated before merge.

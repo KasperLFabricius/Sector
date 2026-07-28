@@ -35,7 +35,8 @@ def _complete_evidence(**changes):
         methodology=bridge.EN1992_2_BASE,
         decisions=_decisions(
             section_analysis=bridge.REQUIRED,
-            bridge_shear_detailing=bridge.REQUIRED,
+            member_shear=bridge.REQUIRED,
+            bridge_shear_detailing=bridge.NOT_APPLICABLE,
             reinforcement_fatigue=bridge.REQUIRED,
             concrete_fatigue=bridge.REQUIRED,
             sls_stress=bridge.REQUIRED,
@@ -112,6 +113,48 @@ def test_complete_explicit_bridge_gate_can_pass_without_hiding_not_applicable_ro
     } == {bridge.STATUS_PASS, bridge.STATUS_NOT_APPLICABLE}
 
 
+def test_inherited_member_shear_failure_is_independent_of_added_bridge_scope():
+    evidence = _complete_evidence(
+        shear=_external(bridge.STATUS_FAIL, 1.20),
+    )
+
+    result = bridge.assess_base_methodology(evidence)
+
+    assert result["status"] == bridge.STATUS_FAIL
+    assert _check(result, "member_shear")["status"] == bridge.STATUS_FAIL
+    assert (
+        _check(result, "bridge_shear_detailing")["status"]
+        == bridge.STATUS_NOT_APPLICABLE
+    )
+
+
+def test_hollow_section_cannot_bypass_box_wall_override_without_wall_rows():
+    evidence = _complete_evidence(
+        decisions=_decisions(
+            section_analysis=bridge.REQUIRED,
+            member_shear=bridge.REQUIRED,
+            bridge_shear_detailing=bridge.NOT_APPLICABLE,
+            box_wall_torsion=bridge.NOT_APPLICABLE,
+            reinforcement_fatigue=bridge.REQUIRED,
+            concrete_fatigue=bridge.REQUIRED,
+            sls_stress=bridge.REQUIRED,
+            sls_crack=bridge.REQUIRED,
+            web_flange_minimum=bridge.REQUIRED,
+        ),
+        has_hollow_section=True,
+        expected_box_walls=0,
+        box_walls=(),
+    )
+
+    check = _check(
+        bridge.assess_base_methodology(evidence),
+        "box_wall_torsion",
+    )
+
+    assert check["status"] == bridge.STATUS_NOT_ASSESSED
+    assert "physical evidence" in check["reason"]
+
+
 def test_absent_applicability_decisions_block_bridge_methodology():
     evidence = _complete_evidence(decisions=())
 
@@ -174,7 +217,7 @@ def test_box_wall_interaction_and_common_angle_match_oracle():
     evidence = _complete_evidence(
         decisions=_decisions(
             box_wall_torsion=bridge.REQUIRED,
-            bridge_shear_detailing=bridge.REQUIRED,
+            bridge_shear_detailing=bridge.NOT_APPLICABLE,
             concrete_fatigue=bridge.REQUIRED,
             sls_stress=bridge.REQUIRED,
             sls_crack=bridge.REQUIRED,
@@ -198,7 +241,7 @@ def test_box_wall_mismatched_angle_blocks_even_when_each_ratio_passes():
     evidence = _complete_evidence(
         decisions=_decisions(
             box_wall_torsion=bridge.REQUIRED,
-            bridge_shear_detailing=bridge.REQUIRED,
+            bridge_shear_detailing=bridge.NOT_APPLICABLE,
             concrete_fatigue=bridge.REQUIRED,
             sls_stress=bridge.REQUIRED,
             sls_crack=bridge.REQUIRED,
@@ -229,7 +272,7 @@ def test_box_wall_known_failure_governs_incomplete_sibling_wall():
     evidence = _complete_evidence(
         decisions=_decisions(
             box_wall_torsion=bridge.REQUIRED,
-            bridge_shear_detailing=bridge.REQUIRED,
+            bridge_shear_detailing=bridge.NOT_APPLICABLE,
             concrete_fatigue=bridge.REQUIRED,
             sls_stress=bridge.REQUIRED,
             sls_crack=bridge.REQUIRED,

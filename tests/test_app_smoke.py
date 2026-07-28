@@ -1981,6 +1981,16 @@ def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
         for warning in at.warning
     )
 
+    _goto_page(at, "Inputs")
+    at.selectbox(key="design_methodology").set_value(
+        bridge.COMPONENT_METHODS
+    ).run()
+
+    assert not at.exception
+    assert at.session_state["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
+    )
+
 
 def test_app_fatigue_factor_switches_and_approved_override_persist():
     import fatigue_inputs

@@ -22,6 +22,7 @@ import numpy as np
 import fatigue_inputs
 import load_cases
 import material_catalog as mat_catalog
+from sector import bridge
 from sector.fatigue import (
     CONCRETE_EQUIVALENT,
     CONCRETE_METHODS,
@@ -197,7 +198,11 @@ def calculation_references(
                 else "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)"
             ),
         }
-    bridge_edition = selected == fatigue_inputs.EC2_2_2005_AC
+    bridge_standard = (
+        selected == fatigue_inputs.EC2_2_2005_AC
+        and concrete_miner_basis
+        == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
     national = (
         " with DK NA:2024 resolved final factors"
         if selected == fatigue_inputs.EC2_2005_DKNA
@@ -216,7 +221,7 @@ def calculation_references(
             if equivalent
             else (
                 "DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)"
-                if bridge_edition
+                if bridge_standard
                 else (
                     "Approved project-basis adoption of DS/EN 1992-2:2005/"
                     "AC:2008 corrected Expression (6.106); source: "
@@ -528,7 +533,11 @@ def validation_errors(inp: Mapping) -> list[str]:
             miner_source = str(
                 inp.get("fatigue_concrete_miner_source") or ""
             ).strip()
-            if edition == fatigue_inputs.EC2_2_2005_AC:
+            bridge_standard_active = (
+                edition == fatigue_inputs.EC2_2_2005_AC
+                and inp.get("design_methodology") == bridge.EN1992_2_BASE
+            )
+            if bridge_standard_active:
                 if miner_basis not in {
                     "",
                     fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
@@ -760,10 +769,11 @@ def validation_warnings(inp: Mapping) -> list[str]:
             inp.get("fatigue_concrete_method") or CONCRETE_MINER
         ) == CONCRETE_MINER
         and edition
-        and edition not in {
-            fatigue_inputs.EC2_2_2005_AC,
-            fatigue_inputs.EC2_2023,
-        }
+        and edition != fatigue_inputs.EC2_2023
+        and not (
+            edition == fatigue_inputs.EC2_2_2005_AC
+            and inp.get("design_methodology") == bridge.EN1992_2_BASE
+        )
         and inp.get("fatigue_concrete_miner_basis")
         == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
     ):
@@ -1031,7 +1041,10 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
     concrete_miner_basis = None
     concrete_miner_source = ""
     if check_concrete and concrete_method == CONCRETE_MINER:
-        if edition == fatigue_inputs.EC2_2_2005_AC:
+        if (
+            edition == fatigue_inputs.EC2_2_2005_AC
+            and inp.get("design_methodology") == bridge.EN1992_2_BASE
+        ):
             concrete_miner_basis = fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
         elif edition == fatigue_inputs.EC2_2023:
             concrete_miner_basis = fatigue_inputs.MINER_BASIS_2023_STANDARD

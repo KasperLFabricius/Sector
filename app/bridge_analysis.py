@@ -815,6 +815,11 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
         assessment = elastic.get("crack_assessment")
         if not isinstance(assessment, Mapping):
             continue
+        current_responses = elastic.get("crack_responses")
+        current_contexts = elastic.get("crack_response_contexts")
+        current_mapping_scope = elastic.get(
+            "crack_response_mapping_scope"
+        )
         for criterion in _sequence(assessment.get("criteria")):
             if not isinstance(criterion, Mapping):
                 continue
@@ -826,6 +831,38 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
             if not criterion_id.startswith("bridge-standard-"):
                 continue
             record = dict(criterion)
+            if _status(record.get("status")) in {
+                bridge.STATUS_PASS,
+                bridge.STATUS_FAIL,
+            }:
+                binding, binding_issues = (
+                    sls.validated_current_acceptance_evidence_binding(
+                        record,
+                        current_responses,
+                        response_contexts=current_contexts,
+                        response_mapping_scope=current_mapping_scope,
+                    )
+                )
+                if binding_issues or binding is None:
+                    record.update(
+                        status=bridge.STATUS_NOT_ASSESSED,
+                        value=None,
+                        util=None,
+                        acceptance_evidence=None,
+                        reason=(
+                            "Canonical crack acceptance evidence is missing, "
+                            "malformed, stale, or conflicts with the current "
+                            "response binding: "
+                            + (
+                                "; ".join(binding_issues)
+                                or "unknown evidence error"
+                            )
+                            + "."
+                        ),
+                    )
+                else:
+                    record["acceptance_evidence"] = binding
+                    record["limit_mm"] = binding["criterion"]["limit_mm"]
             matched = record.get("matched_responses")
             matched_valid = (
                 isinstance(matched, (list, tuple))
@@ -873,6 +910,27 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
                 ),
             })
             continue
+        if len(matched) != 1:
+            sample = matched[0]
+            rows.append({
+                "status": bridge.STATUS_NOT_ASSESSED,
+                "result": "-",
+                "criterion": str(
+                    sample.get("criterion") or sample.get("kind") or "-"
+                ),
+                "util": None,
+                "source": sample.get("criterion_source"),
+                "note": (
+                    "The bridge criterion identity "
+                    f"{criterion_id!r} has {len(matched)} independently matched "
+                    "records. Exactly one canonically bound criterion is "
+                    "required before acceptance."
+                ),
+                "criterion_id": criterion_id,
+                "matched_responses": [],
+                "acceptance_evidence": None,
+            })
+            continue
         for record in matched:
             kind = record.get("kind")
             status = _status(record.get("status"))
@@ -904,6 +962,7 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
                     value is None
                     or not source_valid
                     or not solver_provenance_valid
+                    or not acceptance_evidence_valid
                     or (
                         kind != sls.CRITERION_DECOMPRESSION
                         and (limit is None or limit <= 0.0)

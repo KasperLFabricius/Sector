@@ -133,6 +133,7 @@ COVERAGE_RULES = (
         "DS/EN 1992-2:2005, 6.2 inherited and supplemented",
         "The base 2005 member-shear solver is inherited when the project records "
         "that no added bridge shear/interface provision applies.",
+        True,
     ),
     CoverageRule(
         "bridge_shear_detailing",
@@ -736,7 +737,7 @@ def _assess_box_walls(
     evidence: BridgeBaseEvidence,
     decision: ApplicabilityDecision,
 ) -> BridgeCheckResult:
-    physical = bool(evidence.has_hollow_section and evidence.box_walls)
+    physical = bool(evidence.has_hollow_section)
     gate = _decision_gate(
         "box_wall_torsion",
         decision,
@@ -1058,11 +1059,30 @@ def _external_result(
     )
 
 
+def _assess_member_shear(
+    evidence: BridgeBaseEvidence,
+    decision: ApplicabilityDecision,
+) -> BridgeCheckResult:
+    """Assess inherited member shear independently of added bridge provisions."""
+
+    return _external_result(
+        "member_shear",
+        evidence.shear,
+        decision,
+    )
+
+
 def _assess_shear(
     evidence: BridgeBaseEvidence,
     decision: ApplicabilityDecision,
 ) -> BridgeCheckResult:
-    gate = _decision_gate("bridge_shear_detailing", decision)
+    gate = _decision_gate(
+        "bridge_shear_detailing",
+        decision,
+        physically_required=(
+            evidence.shear_scope == SHEAR_SCOPE_INTERFACE
+        ),
+    )
     if gate is not None:
         return gate
     if evidence.shear_scope == SHEAR_SCOPE_INTERFACE:
@@ -1075,21 +1095,22 @@ def _assess_shear(
                 "Sector currently reports only inherited member shear."
             ),
         )
-    if evidence.shear_scope != SHEAR_SCOPE_MEMBER:
+    if evidence.shear_scope == SHEAR_SCOPE_MEMBER:
         return _result(
             "bridge_shear_detailing",
             STATUS_NOT_ASSESSED,
             source=decision.source,
-            reason="Bridge shear scope is not established.",
+            reason=(
+                "Bridge web/interface provisions are marked required, but the "
+                "selected scope states that inherited member shear alone is "
+                "sufficient. Resolve the applicability decision."
+            ),
         )
-    return _external_result(
+    return _result(
         "bridge_shear_detailing",
-        evidence.shear,
-        decision,
-        extra_reason=(
-            "Applicability records that the inherited member-shear provisions "
-            "are sufficient for this section."
-        ),
+        STATUS_NOT_ASSESSED,
+        source=decision.source,
+        reason="Bridge shear scope is not established.",
     )
 
 
@@ -1256,6 +1277,7 @@ def assess_base_methodology(evidence: BridgeBaseEvidence) -> dict[str, Any]:
             physically_required=True,
         ),
         _assess_brittle(evidence, decisions["prestress_brittle"]),
+        _assess_member_shear(evidence, decisions["member_shear"]),
         _assess_shear(evidence, decisions["bridge_shear_detailing"]),
         _assess_box_walls(evidence, decisions["box_wall_torsion"]),
         _external_result(
@@ -1347,6 +1369,7 @@ def publication_safe_record(record: Mapping | None) -> dict[str, Any] | None:
     expected = (
         "section_analysis",
         "prestress_brittle",
+        "member_shear",
         "bridge_shear_detailing",
         "box_wall_torsion",
         "reinforcement_fatigue",

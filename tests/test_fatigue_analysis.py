@@ -17,6 +17,7 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
+from sector import bridge  # noqa: E402
 from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -100,6 +101,7 @@ def _base(**overrides):
         "Es": 195.0,
     })
     value = {
+        "design_methodology": bridge.COMPONENT_METHODS,
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_check_steel": True,
@@ -749,6 +751,7 @@ def test_ordinary_2005_approved_concrete_miner_adoption_is_warned_and_sourced():
 
 def test_bridge_edition_owns_corrected_concrete_miner_expression():
     inp = _base(
+        design_methodology=bridge.EN1992_2_BASE,
         fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
         fatigue_check_steel=False,
         fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
@@ -767,6 +770,41 @@ def test_bridge_edition_owns_corrected_concrete_miner_expression():
     )
     assert "corrected Expression (6.106)" in references["concrete"]
     assert "project-basis adoption" not in references["concrete"]
+
+
+def test_bridge_edition_outside_bridge_method_requires_sourced_adoption():
+    inp = _base(
+        design_methodology=bridge.COMPONENT_METHODS,
+        fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+    )
+
+    errors = fatigue_analysis.validation_errors(inp)
+
+    assert any("project-basis adoption" in error for error in errors)
+    assert any("document/clause/approval source" in error for error in errors)
+
+    inp["fatigue_concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    inp["fatigue_concrete_miner_source"] = "DB-FAT-BRIDGE-02"
+    prepared = fatigue_analysis.prepare(inp)
+    references = fatigue_analysis.calculation_references(
+        prepared.edition,
+        prepared.concrete_method,
+        prepared.concrete_miner_basis,
+        prepared.concrete_miner_source,
+    )
+
+    assert prepared.concrete_miner_basis == (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+    assert "project-basis adoption" in references["concrete"]
+    assert "DB-FAT-BRIDGE-02" in references["concrete"]
 
 
 def test_2023_concrete_miner_records_standard_applicability():

@@ -4435,9 +4435,17 @@ def build_inputs(host=st):
     if (
         fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
         and fatigue_edition == fatigue_inputs.EC2_2_2005_AC
+        and bridge_method_active
     ):
         st.session_state["fatigue_concrete_miner_basis"] = (
             fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        )
+    elif (
+        st.session_state.get("fatigue_concrete_miner_basis")
+        == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    ):
+        st.session_state["fatigue_concrete_miner_basis"] = (
+            fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
         )
     elif "2023" in fatigue_edition:
         st.session_state["fatigue_concrete_miner_basis"] = (
@@ -4455,7 +4463,10 @@ def build_inputs(host=st):
                 and fatigue_check_concrete
                 and fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
             )
-            or fatigue_edition == fatigue_inputs.EC2_2_2005_AC
+            or (
+                fatigue_edition == fatigue_inputs.EC2_2_2005_AC
+                and bridge_method_active
+            )
             or "2023" in fatigue_edition
         ),
         help=(
@@ -4486,10 +4497,11 @@ def build_inputs(host=st):
         fatigue_on
         and fatigue_check_concrete
         and fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
-        and fatigue_edition not in {
-            fatigue_inputs.EC2_2_2005_AC,
-            fatigue_inputs.EC2_2023,
-        }
+        and "2023" not in fatigue_edition
+        and not (
+            fatigue_edition == fatigue_inputs.EC2_2_2005_AC
+            and bridge_method_active
+        )
         and (
             fatigue_concrete_miner_basis
             != fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION

@@ -84,6 +84,69 @@ def _elastic_results(long_combination, total_combination):
     }
 
 
+def _bridge_crack_elastic(
+    *,
+    label="QP",
+    combination=sls.COMBINATION_QUASI_PERMANENT,
+    response_id="bridge-qp",
+    width=0.22,
+):
+    context = {
+        "combination": combination,
+        "duration": "long",
+        "response_id": response_id,
+        "provenance": f"explicit mapping {response_id}",
+        "solver_provenance": {
+            "state": response_id,
+            "converged": True,
+        },
+    }
+    scope = [{
+        "combination": combination,
+        "duration": context["duration"],
+        "response": label,
+        "response_id": response_id,
+        "elastic_case": response_id,
+        "state": response_id,
+        "provenance": context["provenance"],
+    }]
+    responses = {
+        label: {
+            "wk": width,
+            "element_id": "bar 1",
+        },
+    }
+    criteria = sls.crack_criteria_from_inputs({
+        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
+        "sls_edition": sls.EDITION_BRIDGE_2005_AC,
+        "sls_code": "DS/EN 1992-2:2005 + AC:2008",
+        "sls_member": "Bridge member",
+        "sls_dk_na": False,
+        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
+        "sls_protection_class": sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
+        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
+        "sls_exposure_context": "bridge durability",
+        "sls_bridge_exposure_class": sls.BRIDGE_EXPOSURE_XC2_XC4,
+        "sls_check_appearance": False,
+        "sls_check_durability": True,
+        "sls_wk_limit": 0.30,
+        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
+    })
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=criteria,
+        response_contexts={label: context},
+        response_mapping_scope=scope,
+    )
+    return {
+        "crack_assessment": assessment,
+        "crack_responses": responses,
+        "crack_response_contexts": {label: context},
+        "crack_response_mapping_scope": assessment["response_mapping_scope"],
+    }
+
+
 def test_stress_adapter_keeps_duration_and_combination_independent():
     responses = bridge_analysis.stress_responses(_elastic_results(
         sls.COMBINATION_CHARACTERISTIC,
@@ -142,22 +205,8 @@ def test_boolean_characteristic_stress_cannot_publish_pass():
 
 
 def test_crack_adapter_ignores_unmatched_case_copy_after_one_exact_match():
-    source = "DS/EN 1992-2:2005 Table 7.101N"
-    criterion = {
-        "criterion_id": "bridge-standard-durability",
-        "kind": sls.CRITERION_DURABILITY,
-        "status": "OK",
-        "value": 0.22,
-        "limit_mm": 0.30,
-        "util": 0.22 / 0.30,
-        "matched_responses": ["QP"],
-        "criterion_source": source,
-        "reason": "Exact QP response",
-        "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-        "response_duration": "long",
-        "response_provenance": "map-v1",
-        "solver_provenance": {"solve": "v1", "converged": True},
-    }
+    exact = _bridge_crack_elastic()
+    criterion = exact["crack_assessment"]["criteria"][0]
     unmatched = {
         **criterion,
         "status": "NOT ASSESSED",
@@ -165,14 +214,13 @@ def test_crack_adapter_ignores_unmatched_case_copy_after_one_exact_match():
         "util": None,
         "matched_responses": [],
         "reason": "Required combination is in another case",
+        "acceptance_evidence": None,
     }
     results = {
         "elastic_cases": [
             {
                 "results": {
-                    "elastic": {
-                        "crack_assessment": {"criteria": [criterion]},
-                    },
+                    "elastic": exact,
                 },
             },
             {
@@ -189,9 +237,51 @@ def test_crack_adapter_ignores_unmatched_case_copy_after_one_exact_match():
 
     assert evidence.status == bridge.STATUS_PASS
     assert evidence.utilisation == pytest.approx(0.22 / 0.30)
-    assert evidence.source == source
+    assert "Table 7.101N" in evidence.source
     assert evidence.evidence[0]["matched_responses"] == ["QP"]
-    assert evidence.evidence[0]["solver_provenance"]["solve"] == "v1"
+    assert (
+        evidence.evidence[0]["solver_provenance"]["state"]
+        == "bridge-qp"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing", "arbitrary", "stale-response", "fingerprint"],
+)
+def test_bridge_crack_acceptance_requires_current_canonical_binding(mutation):
+    elastic = _bridge_crack_elastic()
+    criterion = elastic["crack_assessment"]["criteria"][0]
+    if mutation == "missing":
+        criterion.pop("acceptance_evidence")
+    elif mutation == "arbitrary":
+        criterion["acceptance_evidence"] = {"fingerprint": "0" * 64}
+    elif mutation == "stale-response":
+        elastic["crack_responses"]["QP"]["wk"] = 0.25
+    else:
+        criterion["acceptance_evidence"]["fingerprint"] = "0" * 64
+
+    evidence = bridge_analysis.crack_evidence({
+        "elastic_cases": [{"results": {"elastic": elastic}}],
+    })
+
+    assert evidence.status == bridge.STATUS_NOT_ASSESSED
+    assert "Canonical crack acceptance evidence" in evidence.reason
+
+
+def test_duplicate_matched_bridge_criterion_identity_is_not_assessed():
+    first = _bridge_crack_elastic(response_id="bridge-qp-a")
+    second = _bridge_crack_elastic(response_id="bridge-qp-b")
+
+    evidence = bridge_analysis.crack_evidence({
+        "elastic_cases": [
+            {"results": {"elastic": first}},
+            {"results": {"elastic": second}},
+        ],
+    })
+
+    assert evidence.status == bridge.STATUS_NOT_ASSESSED
+    assert "Exactly one canonically bound criterion" in evidence.reason
 
 
 def test_malformed_elastic_case_collection_blocks_without_raising():
@@ -258,7 +348,7 @@ def test_boolean_bridge_crack_value_cannot_pass():
 
     evidence = bridge_analysis.crack_evidence(results)
 
-    assert evidence.status == bridge.STATUS_INVALID
+    assert evidence.status == bridge.STATUS_NOT_ASSESSED
 
 
 @pytest.mark.parametrize(
