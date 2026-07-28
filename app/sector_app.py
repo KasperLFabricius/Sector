@@ -83,11 +83,11 @@ _DEG = chr(0x00B0)
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
 # Crack-width code edition -> the crack-spacing flags. edition: "2004" (EC2 7.3.4)
-# or "2023" (EC2 9.2.3 refined). dk_na: cover-dependent k3 and the (h-x)/3
-# effective-height term only for slabs/prestressed; the DK NA option reports BOTH
-# the fine and the coarse crack system (7.3.4(1)) -- the coarse effective area is
-# the band whose centroid matches the tension reinforcement (figure 7.100 NA) and
-# its wk is halved -- for both the sustained and total-response duration states.
+# or "2023" (EC2 9.2.3 refined). dk_na activates only the separate
+# DS/EN 1992-1-1 DK NA numerical model: cover-dependent k3, the conditional
+# (h-x)/3 effective-height term, and both fine and coarse crack systems. The
+# Danish bridge method keeps the inherited EN 1992-2 numerical model; its
+# distinct edition token routes only the Danish bridge acceptance criteria.
 _CRACK_CODES = {
     "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
     "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
@@ -97,7 +97,7 @@ _CRACK_CODES = {
         edition=sls_core.EDITION_BRIDGE_2005_AC,
     ),
     bridge.EN1992_2_DK_NA: dict(
-        dk_na=True,
+        dk_na=False,
         edition=sls_core.EDITION_BRIDGE_DK_2015,
     ),
 }

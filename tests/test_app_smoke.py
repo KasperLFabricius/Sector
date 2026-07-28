@@ -2058,6 +2058,10 @@ def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
 
     assert not at.exception
     assert at.selectbox(key="sls_code").value == bridge.EN1992_2_DK_NA
+    assert at.session_state["_latest_inputs"]["sls_dk_na"] is False
+    assert at.session_state["_latest_inputs"]["sls_edition"] == (
+        sls.EDITION_BRIDGE_DK_2015
+    )
     for key in (
         "bridge_asset_class",
         "bridge_infrastructure_manager",
@@ -2092,6 +2096,33 @@ def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
     )
     assert project_basis["status"] == bridge.STATUS_NOT_ASSESSED
     assert "Select the bridge class" in project_basis["reason"]
+
+
+def test_danish_bridge_keeps_inherited_bridge_crack_numerics():
+    def calculated_widths(methodology):
+        at = _fresh().run()
+        at.selectbox(key="design_methodology").set_value(methodology).run()
+        _set_and_click(
+            at,
+            "calculate",
+            ("radio", "mode", "Elastic"),
+            ("number_input", "el_long_Mx", 400.0),
+            ("number_input", "el_short_Mx", 150.0),
+            ("checkbox", "sls_cw", True),
+        )
+        assert not at.exception
+        current = at.session_state["result_input_snapshot"]
+        assert current["sls_dk_na"] is False
+        elastic = at.session_state["results"]["elastic"]
+        assert elastic["crack"] is not None
+        assert elastic["crack_short"] is not None
+        assert elastic.get("crack_coarse") is None
+        assert elastic.get("crack_short_coarse") is None
+        return elastic["crack"]["wk"], elastic["crack_short"]["wk"]
+
+    inherited = calculated_widths(bridge.EN1992_2_BASE)
+    danish = calculated_widths(bridge.EN1992_2_DK_NA)
+    assert danish == pytest.approx(inherited)
 
 
 def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):

@@ -913,13 +913,25 @@ mandatory; this matrix does not self-certify PR closure.
   non-finite, textual or non-positive current strength also fails publication
   closed and latches `matches_saved_inputs = false` through project load and
   resave.
+- Codex rereview of exact head
+  `da930c0904a22ad6a73bd5c43c22d07e7280e5eb` found one further P1:
+  selecting the Danish bridge edition also activated the separate
+  DS/EN 1992-1-1 DK NA cover/fine/coarse numerical crack model. The focused
+  AppTest reproduced `sls_dk_na = true` red. The Danish bridge mapping now keeps
+  `sls_dk_na = false` and the inherited EN 1992-2 numerical crack response while
+  retaining `bridge-2005-dkna2015` solely for the Danish bridge acceptance
+  matrix. Base and Danish bridge long/short crack widths are equal for identical
+  inputs, no coarse system is emitted for either bridge method, and the separate
+  DS/EN 1992-1-1 DK NA fine/coarse option remains active.
 - The independent fixture now includes five explicit departure dispositions in
   addition to the complete crack, cover, torsion and authority sets. The
   focused PR-05 and documentation-assertion slice passes all 98 checks. The
   consolidated bridge, SLS, capacity, fatigue, publication and project
   persistence regression slice passes all 741 checks. The complete report and
-  manual suites pass all 196 checks, and the focused headless app control passes
-  with the new non-inferred departure selector/source fields.
+  manual suites pass all 196 checks. Four focused headless app calculations
+  cover the inherited base/Danish crack response, the separate DS/EN 1992-1-1
+  DK fine/coarse route and the new non-inferred departure selector/source
+  fields.
 - The refreshed 29-page no-figure manual raster was inspected at the changed
   Danish-methodology continuation on pages 7–9 and the final pagination
   boundary on pages 28–29. The refreshed 15-page focused Danish report raster
