@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+import hashlib
+import json
 import math
 
 import numpy as np
@@ -22,7 +24,7 @@ import numpy as np
 import fatigue_inputs
 import load_cases
 import material_catalog as mat_catalog
-from sector import bridge
+from sector import bridge, conformance
 from sector.fatigue import (
     CONCRETE_EQUIVALENT,
     CONCRETE_METHODS,
@@ -40,10 +42,48 @@ from sector.section import Section
 
 
 STEEL_REFERENCE_MODULUS_MPA = 200_000.0
-_LEGACY_FACTOR_REVIEW_ERROR = (
-    "Legacy saved fatigue factors require review: select the "
-    "edition-derived preset or an approved final override"
+FATIGUE_CONFORMANCE_SCHEMA = "sector.fatigue-conformance-evidence/v1"
+_FATIGUE_CONFORMANCE_FIELDS = (
+    "valid",
+    "converged",
+    "passed",
+    "errors",
+    "edition",
+    "design_methodology",
+    "checks",
+    "concrete_method",
+    "concrete_miner_basis",
+    "concrete_miner_source",
+    "partial_factors",
+    "factor_basis",
+    "parameter_conformance",
+    "conformance",
+    "assessment_status",
+    "qualified_verdict",
+    "standard_passed",
+    "concrete_parameters",
 )
+
+
+def _json_equivalent(left, right) -> bool:
+    """Compare evidence by its canonical JSON representation."""
+
+    try:
+        return json.dumps(
+            left,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ) == json.dumps(
+            right,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -75,6 +115,7 @@ class PreparedFatigueAnalysis:
     concrete_method: str | None
     concrete_miner_basis: str | None
     concrete_miner_source: str
+    parameter_conformance: tuple[Mapping, ...]
 
 
 def _positive(value, label: str, errors: list[str]) -> float | None:
@@ -113,92 +154,164 @@ def concrete_miner_parameter_errors(
     coefficient_c,
     design_methodology: str,
 ) -> list[str]:
-    """Validate the authority binding for a concrete Miner life relation.
-
-    The corrected EN 1992-2 Expression (6.106), and the supported standard
-    EN 1992-1-1:2023 E.8 route, use ``C = 14``. A different coefficient is not
-    an editable standard parameter: it belongs to the separately selected and
-    explicitly sourced project S-N method.
-    """
+    """Return only malformed/numerically unusable Miner input errors."""
 
     if concrete_method not in CONCRETE_MINER_METHODS:
         return []
     errors: list[str] = []
     if isinstance(coefficient_c, bool) or type(coefficient_c).__name__ == "bool_":
-        c_value = None
         errors.append("Concrete fatigue C must be a finite number greater than zero")
     else:
-        c_value = _positive(coefficient_c, "Concrete fatigue C", errors)
+        _positive(coefficient_c, "Concrete fatigue C", errors)
     basis = str(miner_basis or "").strip()
-    source = str(miner_source or "").strip()
-
-    if concrete_method == CONCRETE_PROJECT_MINER:
-        if basis != fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION:
-            errors.append(
-                "A non-standard concrete Miner relation requires the separate "
-                "approved project S-N method applicability"
-            )
-        if not source:
-            errors.append(
-                "The approved project concrete S-N relation requires a "
-                "document/clause/approval source"
-            )
-        return list(dict.fromkeys(errors))
-
-    if (
-        c_value is not None
-        and not math.isclose(
-            c_value,
-            fatigue_inputs.STANDARD_CONCRETE_MINER_C,
-            rel_tol=0.0,
-            abs_tol=1.0e-12,
+    if basis not in fatigue_inputs.MINER_BASES:
+        errors.append("Select a valid concrete Miner method applicability")
+    try:
+        conformance.typed_text(
+            miner_source,
+            "Concrete Miner approval/source",
         )
-    ):
-        errors.append(
-            "The standard concrete Miner relation fixes C = 14; select the "
-            "separate approved project S-N method for any other relation"
-        )
-
-    if not edition:
-        return list(dict.fromkeys(errors))
-
-    if design_methodology == bridge.EN1992_2_BASE:
-        if edition != fatigue_inputs.EC2_2_2005_AC:
-            errors.append(
-                "The EN 1992-2 bridge Miner applicability requires the "
-                "DS/EN 1992-2:2005 + AC:2008 edition"
-            )
-        if basis not in {
-            "",
-            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
-        }:
-            errors.append(
-                "The EN 1992-2 edition uses its bridge-standard corrected "
-                "Expression (6.106) basis"
-            )
-    elif edition == fatigue_inputs.EC2_2023:
-        if basis not in {
-            "",
-            fatigue_inputs.MINER_BASIS_2023_STANDARD,
-        }:
-            errors.append(
-                "The 2023 standard Miner route requires its EN 1992-1-1:2023 "
-                "applicability; use the separate approved project S-N method "
-                "for another relation"
-            )
-    else:
-        if basis != fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION:
-            errors.append(
-                "Explicit 2005 concrete Miner fatigue is an EN 1992-2 method; "
-                "select an approved project-basis adoption or use the "
-                "EN 1992-1-1 Formula (6.72) equivalent method"
-            )
-        if not source:
-            errors.append(
-                "The project-basis adoption of bridge concrete Miner fatigue "
-                "requires a document/clause/approval source"
-            )
+    except ValueError as exc:
+        errors.append(str(exc))
     return list(dict.fromkeys(errors))
+
+
+def concrete_miner_conformance(
+    *,
+    edition: str,
+    concrete_method: str,
+    miner_basis: str,
+    miner_source: str,
+    coefficient_c,
+    design_methodology: str,
+) -> dict:
+    """Return the actual concrete-Miner coefficient's authority evidence."""
+
+    numerical_errors = concrete_miner_parameter_errors(
+        edition=edition,
+        concrete_method=concrete_method,
+        miner_basis=miner_basis,
+        miner_source=miner_source,
+        coefficient_c=coefficient_c,
+        design_methodology=design_methodology,
+    )
+    if numerical_errors:
+        raise ValueError("; ".join(numerical_errors))
+    basis = str(miner_basis or "").strip()
+    source = conformance.typed_text(
+        miner_source,
+        "Concrete Miner approval/source",
+    )
+    bridge_standard = bool(
+        concrete_method == CONCRETE_MINER
+        and edition == fatigue_inputs.EC2_2_2005_AC
+        and design_methodology == bridge.EN1992_2_BASE
+        and basis == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+    standard_2023 = bool(
+        concrete_method == CONCRETE_MINER
+        and edition == fatigue_inputs.EC2_2023
+        and design_methodology == bridge.COMPONENT_METHODS
+        and basis == fatigue_inputs.MINER_BASIS_2023_STANDARD
+    )
+    project_relation = bool(
+        concrete_method == CONCRETE_PROJECT_MINER
+        and basis == fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+    )
+    project_adoption = bool(
+        concrete_method == CONCRETE_MINER
+        and basis == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+        and design_methodology == bridge.COMPONENT_METHODS
+    )
+    if bridge_standard or standard_2023:
+        parameter_basis = conformance.STANDARD_BASIS
+        custom_methodology = ""
+        approval_reference = source
+        applicability_conforms = True
+        applicability_note = ""
+    elif project_relation:
+        parameter_basis = conformance.CUSTOM_BASIS
+        custom_methodology = CONCRETE_PROJECT_MINER
+        approval_reference = source
+        applicability_conforms = False
+        applicability_note = (
+            "A project S-N relation is not the selected-standard C = 14 route"
+        )
+    elif project_adoption:
+        parameter_basis = conformance.CUSTOM_BASIS
+        custom_methodology = (
+            "Project-basis adoption of the corrected bridge Miner relation"
+        )
+        approval_reference = source
+        applicability_conforms = False
+        applicability_note = (
+            "The bridge Miner relation is used outside its standard methodology"
+        )
+    else:
+        # Preserve a contradictory or incomplete selection as visible REVIEW
+        # evidence; do not reinterpret it as an approved custom method.
+        parameter_basis = conformance.STANDARD_BASIS
+        custom_methodology = (
+            concrete_method
+            if concrete_method == CONCRETE_PROJECT_MINER
+            else (
+                "Project-basis adoption"
+                if basis == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+                else ""
+            )
+        )
+        approval_reference = source
+        applicability_conforms = False
+        applicability_note = (
+            "Concrete Miner method, edition, whole-calculation methodology, "
+            "and applicability basis are missing or contradictory"
+        )
+    return conformance.assess_parameter(
+        coefficient_c,
+        parameter_id="concrete_fatigue.miner_c",
+        label="Concrete fatigue Miner coefficient C",
+        selected_standard=edition,
+        standard_methodology=(
+            "EN 1992-1-1:2023 concrete compression Miner relation"
+            if edition == fatigue_inputs.EC2_2023
+            else bridge.CONCRETE_MINER_STANDARD_METHOD
+        ),
+        normative_source=(
+            "DS/EN 1992-1-1:2023 E.5.3"
+            if edition == fatigue_inputs.EC2_2023
+            else bridge.CONCRETE_MINER_STANDARD_SOURCE
+        ),
+        basis=parameter_basis,
+        custom_methodology=custom_methodology,
+        approval_reference=approval_reference,
+        prescribed_value=fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+        applicability_conforms=applicability_conforms,
+        applicability_note=applicability_note,
+    )
+
+
+def _resolved_concrete_miner_basis(
+    inp: Mapping,
+    *,
+    edition: str,
+    design_methodology: str,
+    concrete_method: str,
+) -> str:
+    """Resolve only absent compatibility metadata; preserve explicit choices."""
+
+    raw_basis = inp.get("fatigue_concrete_miner_basis")
+    if raw_basis not in (None, ""):
+        return str(raw_basis).strip()
+    if concrete_method == CONCRETE_PROJECT_MINER:
+        return fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+    if (
+        edition == fatigue_inputs.EC2_2_2005_AC
+        and design_methodology == bridge.EN1992_2_BASE
+    ):
+        return fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    if edition == fatigue_inputs.EC2_2023:
+        return fatigue_inputs.MINER_BASIS_2023_STANDARD
+    return fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
 
 
 def _edition(value) -> str:
@@ -259,7 +372,10 @@ def _resolved_factor_basis(inp: Mapping, edition: str) -> tuple[float, float, di
     gamma3 = inp.get("fatigue_gamma3", 1.0)
     gamma_s = inp.get("fatigue_gamma_s")
     gamma_c = inp.get("fatigue_gamma_c")
-    if mode == fatigue_inputs.FACTOR_MODE_OVERRIDE:
+    if mode in {
+        fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_inputs.FACTOR_MODE_LEGACY,
+    }:
         # Single-check integrations only need the factor that is used. Supply
         # the inactive side from the edition preset so that compatibility path
         # remains valid after project serialization makes the mode explicit.
@@ -273,6 +389,11 @@ def _resolved_factor_basis(inp: Mapping, edition: str) -> tuple[float, float, di
             gamma_s = preset["gamma_s"]
         if gamma_c is None and not bool(inp.get("fatigue_check_concrete")):
             gamma_c = preset["gamma_c"]
+    approval_reference = (
+        inp.get("fatigue_factor_approval")
+        if mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
+        else ""
+    )
     gamma_s, gamma_c, basis = fatigue_inputs.resolve_fatigue_factors(
         edition,
         mode=mode,
@@ -280,13 +401,9 @@ def _resolved_factor_basis(inp: Mapping, edition: str) -> tuple[float, float, di
         gamma_c=gamma_c,
         gamma0=gamma0,
         gamma3=gamma3,
+        approval_reference=approval_reference,
     )
     basis["mode_explicit"] = explicit
-    basis["approval_reference"] = (
-        str(inp.get("fatigue_factor_approval") or "").strip()
-        if mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
-        else ""
-    )
     return gamma_s, gamma_c, basis
 
 
@@ -624,10 +741,6 @@ def validation_errors(inp: Mapping) -> list[str]:
             )
         except (TypeError, ValueError) as exc:
             errors.append(str(exc))
-    factor_mode, _ = _factor_mode(inp)
-    if factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
-        errors.append(_LEGACY_FACTOR_REVIEW_ERROR)
-
     check_reinforcement = bool(inp.get("fatigue_check_steel"))
     check_concrete = bool(inp.get("fatigue_check_concrete"))
     if not check_reinforcement and not check_concrete:
@@ -658,12 +771,13 @@ def validation_errors(inp: Mapping) -> list[str]:
         _positive(inp.get("fatigue_beta_cc_t0"), "beta_cc(t0)", errors)
         _positive(inp.get("fatigue_t0_days"), "Concrete age t0", errors)
         if concrete_method in CONCRETE_MINER_METHODS:
-            miner_basis = str(
-                inp.get("fatigue_concrete_miner_basis") or ""
-            ).strip()
-            miner_source = str(
-                inp.get("fatigue_concrete_miner_source") or ""
-            ).strip()
+            miner_basis = _resolved_concrete_miner_basis(
+                inp,
+                edition=edition,
+                design_methodology=design_methodology,
+                concrete_method=concrete_method,
+            )
+            miner_source = inp.get("fatigue_concrete_miner_source")
             errors.extend(concrete_miner_parameter_errors(
                 edition=edition,
                 concrete_method=concrete_method,
@@ -717,14 +831,6 @@ def validation_errors(inp: Mapping) -> list[str]:
     except (TypeError, ValueError) as exc:
         errors.append(str(exc))
         basis = fatigue_inputs.default_basis()
-    if (
-        factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
-        and not str(inp.get("fatigue_factor_approval") or "").strip()
-    ):
-        errors.append(
-            "Approved final fatigue-factor override requires a dedicated "
-            "approval/source"
-        )
     if fatigue_inputs.method_requires_single_bin(basis["method"]):
         for name, rows in groups.items():
             if len(rows) != 1:
@@ -883,7 +989,55 @@ def validation_warnings(inp: Mapping) -> list[str]:
     concrete_method = str(
         inp.get("fatigue_concrete_method") or CONCRETE_MINER
     )
+    try:
+        _gamma_s, _gamma_c, factor_basis = _resolved_factor_basis(
+            inp,
+            edition,
+        )
+        factor_records = factor_basis.get("parameter_conformance")
+        if isinstance(factor_records, Mapping):
+            active_factor_keys = []
+            if bool(inp.get("fatigue_check_steel")):
+                active_factor_keys.append("gamma_s")
+            if bool(inp.get("fatigue_check_concrete")):
+                active_factor_keys.append("gamma_c")
+            for key in active_factor_keys:
+                record = factor_records.get(key)
+                if (
+                    isinstance(record, Mapping)
+                    and record.get("state") != conformance.STATE_CONFORMS
+                ):
+                    warnings.append(str(record.get("message") or ""))
+    except (TypeError, ValueError):
+        # Numerical factor failures are blocking validation errors.
+        pass
     if bool(inp.get("fatigue_check_concrete")):
+        if concrete_method in CONCRETE_MINER_METHODS and edition:
+            miner_basis = _resolved_concrete_miner_basis(
+                inp,
+                edition=edition,
+                design_methodology=design_methodology,
+                concrete_method=concrete_method,
+            )
+            try:
+                miner_record = concrete_miner_conformance(
+                    edition=edition,
+                    concrete_method=concrete_method,
+                    miner_basis=miner_basis,
+                    miner_source=inp.get(
+                        "fatigue_concrete_miner_source"
+                    ),
+                    coefficient_c=inp.get("fatigue_concrete_c"),
+                    design_methodology=design_methodology,
+                )
+                if (
+                    miner_record["state"]
+                    != conformance.STATE_CONFORMS
+                ):
+                    warnings.append(miner_record["message"])
+            except ValueError:
+                # Numerical/malformed Miner failures are validation errors.
+                pass
         if concrete_method == CONCRETE_PROJECT_MINER:
             warnings.append(
                 "A separately approved project concrete fatigue S-N relation "
@@ -940,7 +1094,9 @@ def validation_warnings(inp: Mapping) -> list[str]:
                     f"{detail_id}: custom/imported fatigue resistance is used"
                     + (f" (source: {source})" if source else "")
                 )
-    return list(dict.fromkeys(warnings))
+    return list(dict.fromkeys(
+        warning for warning in warnings if str(warning).strip()
+    ))
 
 
 def invalid_result(
@@ -1070,6 +1226,12 @@ def publication_safe_result(
         errors.append(
             "Published fatigue errors are not a structured list of typed messages"
         )
+    raw_valid = payload.get("valid")
+    if not isinstance(raw_valid, bool):
+        errors.append("Published fatigue validity is not typed Boolean")
+    raw_converged = payload.get("converged")
+    if not isinstance(raw_converged, bool):
+        errors.append("Published fatigue convergence is not typed Boolean")
     try:
         stored_methodology = _design_methodology(
             payload.get("design_methodology"),
@@ -1104,8 +1266,17 @@ def publication_safe_result(
     checks = payload.get("checks")
     if not isinstance(checks, Mapping):
         errors.append("Published fatigue check selection is not structured")
+        reinforcement_checked = False
         concrete_checked = False
     else:
+        raw_reinforcement_checked = checks.get("reinforcement")
+        if not isinstance(raw_reinforcement_checked, bool):
+            errors.append(
+                "Published reinforcement fatigue enablement is not typed Boolean"
+            )
+            reinforcement_checked = False
+        else:
+            reinforcement_checked = raw_reinforcement_checked
         raw_concrete_checked = checks.get("concrete")
         if not isinstance(raw_concrete_checked, bool):
             errors.append(
@@ -1148,27 +1319,193 @@ def publication_safe_result(
             edition=edition,
             concrete_method=str(method),
             miner_basis=str(basis or ""),
-            miner_source=str(source or ""),
+            miner_source=source,
             coefficient_c=parameters.get("c"),
             design_methodology=stored_methodology,
         ))
-        if (
-            method == CONCRETE_MINER
-            and stored_methodology == bridge.EN1992_2_BASE
-            and basis != fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-        ):
-            errors.append(
-                "Published bridge concrete Miner evidence is missing its "
-                "whole-calculation methodology applicability binding"
+    expected_parameter_records: list[dict] = []
+    factor_basis = payload.get("factor_basis")
+    partial_factors = payload.get("partial_factors")
+    if not isinstance(factor_basis, Mapping):
+        errors.append("Published fatigue factor basis is not structured")
+    elif not isinstance(partial_factors, Mapping):
+        errors.append("Published fatigue partial factors are not structured")
+    else:
+        try:
+            factor_mode = factor_basis.get("mode")
+            expected_s, expected_c, expected_factor_basis = (
+                fatigue_inputs.resolve_fatigue_factors(
+                    str(payload.get("edition") or ""),
+                    mode=factor_mode,
+                    gamma_s=factor_basis.get("gamma_s"),
+                    gamma_c=factor_basis.get("gamma_c"),
+                    gamma0=factor_basis.get("gamma0", 1.0),
+                    gamma3=factor_basis.get("gamma3", 1.0),
+                    approval_reference=factor_basis.get(
+                        "approval_reference"
+                    ),
+                )
             )
-        if (
-            method == CONCRETE_MINER
-            and edition == fatigue_inputs.EC2_2023
-            and basis != fatigue_inputs.MINER_BASIS_2023_STANDARD
-        ):
+            for key, expected_value in (
+                ("gamma_s", expected_s),
+                ("gamma_c", expected_c),
+            ):
+                stored_value = factor_basis.get(key)
+                if (
+                    conformance.is_boolean(stored_value)
+                    or not math.isclose(
+                        float(stored_value),
+                        expected_value,
+                        rel_tol=0.0,
+                        abs_tol=1.0e-12,
+                    )
+                ):
+                    errors.append(
+                        f"Published fatigue {key} conflicts with its factor basis"
+                    )
+            stored_factor_records = factor_basis.get(
+                "parameter_conformance"
+            )
+            if not isinstance(stored_factor_records, Mapping):
+                errors.append(
+                    "Published fatigue factor conformance is missing or malformed"
+                )
+            else:
+                for key in ("gamma_s", "gamma_c"):
+                    expected_record = expected_factor_basis[
+                        "parameter_conformance"
+                    ][key]
+                    if stored_factor_records.get(key) != expected_record:
+                        errors.append(
+                            f"Published fatigue {key} conformance is stale, "
+                            "incomplete, or contradictory"
+                        )
+                if reinforcement_checked:
+                    expected_parameter_records.append(
+                        expected_factor_basis["parameter_conformance"]["gamma_s"]
+                    )
+                if concrete_checked:
+                    expected_parameter_records.append(
+                        expected_factor_basis["parameter_conformance"]["gamma_c"]
+                    )
+            for key, enabled, expected_value in (
+                ("gamma_s", reinforcement_checked, expected_s),
+                ("gamma_c", concrete_checked, expected_c),
+            ):
+                if enabled:
+                    actual = partial_factors.get(key)
+                    if (
+                        conformance.is_boolean(actual)
+                        or not math.isclose(
+                            float(actual),
+                            expected_value,
+                            rel_tol=0.0,
+                            abs_tol=1.0e-12,
+                        )
+                    ):
+                        errors.append(
+                            f"Published fatigue {key} conflicts with the "
+                            "calculated input"
+                        )
+        except (TypeError, ValueError, KeyError) as exc:
+            errors.append(f"Published fatigue factor evidence is invalid: {exc}")
+    if (
+        concrete_checked
+        and method in CONCRETE_MINER_METHODS
+        and isinstance(parameters, Mapping)
+    ):
+        try:
+            expected_miner_record = concrete_miner_conformance(
+                edition=str(payload.get("edition") or "").strip(),
+                concrete_method=str(method),
+                miner_basis=str(
+                    payload.get("concrete_miner_basis") or ""
+                ).strip(),
+                miner_source=payload.get("concrete_miner_source"),
+                coefficient_c=parameters.get("c"),
+                design_methodology=stored_methodology,
+            )
+            if (
+                parameters.get("parameter_conformance")
+                != expected_miner_record
+            ):
+                errors.append(
+                    "Published concrete Miner conformance is stale, "
+                    "incomplete, or contradictory"
+                )
+            expected_parameter_records.append(expected_miner_record)
+        except (TypeError, ValueError) as exc:
+            errors.append(f"Published concrete Miner evidence is invalid: {exc}")
+    stored_parameter_records = payload.get("parameter_conformance")
+    if not isinstance(stored_parameter_records, (list, tuple)):
+        errors.append(
+            "Published fatigue parameter conformance is not a structured list"
+        )
+    elif [dict(record) for record in stored_parameter_records
+          if isinstance(record, Mapping)] != expected_parameter_records or not all(
+              isinstance(record, Mapping)
+              for record in stored_parameter_records
+          ):
+        errors.append(
+            "Published fatigue parameter conformance is stale, incomplete, "
+            "or reordered"
+        )
+    raw_passed = payload.get("passed")
+    if not isinstance(raw_passed, bool):
+        errors.append("Published analytical fatigue verdict is not typed Boolean")
+        raw_passed = False
+    if raw_passed and raw_converged is not True:
+        errors.append(
+            "Published analytical fatigue PASS conflicts with convergence evidence"
+        )
+    if raw_valid is False and not errors:
+        errors.append(
+            "Published fatigue result is marked invalid without typed errors"
+        )
+    expected_conformance = None
+    if expected_parameter_records:
+        try:
+            expected_conformance = conformance.aggregate(
+                expected_parameter_records,
+                analytical_status=(
+                    conformance.STATUS_PASS
+                    if raw_passed
+                    else conformance.STATUS_FAIL
+                ),
+                selected_standard=str(payload.get("edition") or "").strip(),
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+    if (
+        expected_conformance is not None
+        and not _json_equivalent(
+            payload.get("conformance"),
+            expected_conformance,
+        )
+    ):
+        errors.append(
+            "Published fatigue aggregate conformance is stale or contradictory"
+        )
+    if expected_conformance is not None:
+        expected_assessment = expected_conformance["assessment_status"]
+        expected_qualified = expected_conformance["qualified_verdict"]
+        expected_standard_passed = bool(
+            raw_passed
+            and expected_conformance["state"]
+            == conformance.STATE_CONFORMS
+        )
+        if payload.get("assessment_status") != expected_assessment:
             errors.append(
-                "Published 2023 concrete Miner evidence is missing its "
-                "standard applicability binding"
+                "Published fatigue assessment status is stale or contradictory"
+            )
+        if payload.get("qualified_verdict") != expected_qualified:
+            errors.append(
+                "Published fatigue qualified verdict is stale or contradictory"
+            )
+        if payload.get("standard_passed") is not expected_standard_passed:
+            errors.append(
+                "Published fatigue selected-standard verdict is stale or "
+                "contradictory"
             )
     unique_errors = tuple(dict.fromkeys(errors))
     result["errors"] = unique_errors
@@ -1176,7 +1513,122 @@ def publication_safe_result(
         result["valid"] = False
         result["converged"] = False
         result["passed"] = False
+        result["standard_passed"] = False
+        result["assessment_status"] = "INVALID"
+        result["qualified_verdict"] = "INVALID - fatigue not assessed"
+    elif expected_conformance is not None:
+        result["conformance"] = expected_conformance
+        result["assessment_status"] = expected_conformance[
+            "assessment_status"
+        ]
+        result["qualified_verdict"] = expected_conformance[
+            "qualified_verdict"
+        ]
+        result["standard_passed"] = bool(
+            raw_passed
+            and expected_conformance["state"]
+            == conformance.STATE_CONFORMS
+        )
     return result
+
+
+def _canonical_fatigue_conformance_body(payload: Mapping) -> dict:
+    """Return the JSON-canonical compact fatigue evidence body."""
+
+    body = {
+        key: payload.get(key)
+        for key in _FATIGUE_CONFORMANCE_FIELDS
+    }
+    return json.loads(json.dumps(
+        body,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ))
+
+
+def _fatigue_conformance_digest(body: Mapping) -> str:
+    canonical = json.dumps(
+        {
+            "schema": FATIGUE_CONFORMANCE_SCHEMA,
+            **dict(body),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def calculation_conformance_record(
+    payload: Mapping | None,
+    *,
+    design_methodology: str | None,
+) -> dict | None:
+    """Build immutable, compact fatigue conformance evidence for a project."""
+
+    safe = publication_safe_result(
+        payload,
+        design_methodology=design_methodology,
+    )
+    if (
+        not isinstance(safe, Mapping)
+        or safe.get("valid") is not True
+        or safe.get("errors")
+    ):
+        return None
+    try:
+        body = _canonical_fatigue_conformance_body(safe)
+        digest = _fatigue_conformance_digest(body)
+    except (TypeError, ValueError):
+        return None
+    return {
+        "schema": FATIGUE_CONFORMANCE_SCHEMA,
+        **body,
+        "evidence_sha256": digest,
+    }
+
+
+def publication_safe_conformance_record(
+    record: Mapping | None,
+    *,
+    design_methodology: str | None,
+) -> dict | None:
+    """Revalidate saved fatigue evidence and reject mutation or relabelling."""
+
+    if not isinstance(record, Mapping):
+        return None
+    expected_keys = {
+        "schema",
+        "evidence_sha256",
+        *_FATIGUE_CONFORMANCE_FIELDS,
+    }
+    if set(record) != expected_keys:
+        return None
+    if record.get("schema") != FATIGUE_CONFORMANCE_SCHEMA:
+        return None
+    try:
+        body = _canonical_fatigue_conformance_body(record)
+        if record.get("evidence_sha256") != _fatigue_conformance_digest(body):
+            return None
+        rebuilt = calculation_conformance_record(
+            body,
+            design_methodology=design_methodology,
+        )
+    except (TypeError, ValueError):
+        return None
+    if rebuilt is None:
+        return None
+    canonical_record = json.loads(json.dumps(
+        dict(record),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ))
+    return rebuilt if rebuilt == canonical_record else None
 
 
 def _reinforcement_properties(
@@ -1252,10 +1704,6 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
 
     if not bool(inp.get("fatigue_on")):
         raise ValueError("fatigue analysis is not enabled")
-    if _factor_mode(inp)[0] == fatigue_inputs.FACTOR_MODE_LEGACY:
-        # Keep the public preparation boundary fail-closed even if a custom
-        # integration bypasses presentation-layer validation.
-        raise ValueError(_LEGACY_FACTOR_REVIEW_ERROR)
     errors = validation_errors(inp)
     if errors:
         raise ValueError("; ".join(errors))
@@ -1308,26 +1756,18 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
     edition = _edition(inp.get("fatigue_edition"))
     concrete_miner_basis = None
     concrete_miner_source = ""
+    concrete_miner_record = None
     if check_concrete and concrete_method in CONCRETE_MINER_METHODS:
-        if concrete_method == CONCRETE_PROJECT_MINER:
-            concrete_miner_basis = (
-                fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
-            )
-        elif (
-            edition == fatigue_inputs.EC2_2_2005_AC
-            and design_methodology == bridge.EN1992_2_BASE
-        ):
-            concrete_miner_basis = fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-        elif edition == fatigue_inputs.EC2_2023:
-            concrete_miner_basis = fatigue_inputs.MINER_BASIS_2023_STANDARD
-        else:
-            concrete_miner_basis = str(
-                inp.get("fatigue_concrete_miner_basis")
-                or fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
-            )
-        concrete_miner_source = str(
-            inp.get("fatigue_concrete_miner_source") or ""
-        ).strip()
+        concrete_miner_basis = _resolved_concrete_miner_basis(
+            inp,
+            edition=edition,
+            design_methodology=design_methodology,
+            concrete_method=concrete_method,
+        )
+        concrete_miner_source = conformance.typed_text(
+            inp.get("fatigue_concrete_miner_source"),
+            "Concrete Miner approval/source",
+        )
     resolved_gamma_s, resolved_gamma_c, factor_basis = (
         _resolved_factor_basis(inp, edition)
     )
@@ -1370,16 +1810,40 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             k1=(
                 1.0 if is_2023 else float(inp["fatigue_concrete_k1"])
             ),
-            c=(
-                float(inp["fatigue_concrete_c"])
-                if concrete_method == CONCRETE_PROJECT_MINER
-                else fatigue_inputs.STANDARD_CONCRETE_MINER_C
-            ),
+            c=float(inp["fatigue_concrete_c"]),
             method=concrete_method,
         )
         if check_concrete
         else None
     )
+    if (
+        concrete is not None
+        and concrete_method in CONCRETE_MINER_METHODS
+        and concrete_miner_basis is not None
+    ):
+        concrete_miner_record = concrete_miner_conformance(
+            edition=edition,
+            concrete_method=concrete_method,
+            miner_basis=concrete_miner_basis,
+            miner_source=concrete_miner_source,
+            coefficient_c=concrete.c,
+            design_methodology=design_methodology,
+        )
+    factor_records = factor_basis.get("parameter_conformance")
+    parameter_records = []
+    if isinstance(factor_records, Mapping):
+        if check_reinforcement and isinstance(
+            factor_records.get("gamma_s"),
+            Mapping,
+        ):
+            parameter_records.append(factor_records["gamma_s"])
+        if check_concrete and isinstance(
+            factor_records.get("gamma_c"),
+            Mapping,
+        ):
+            parameter_records.append(factor_records["gamma_c"])
+    if concrete_miner_record is not None:
+        parameter_records.append(concrete_miner_record)
 
     all_materials = bar_materials + tendon_materials
     n_mult = (
@@ -1436,6 +1900,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         concrete_method=concrete_method,
         concrete_miner_basis=concrete_miner_basis,
         concrete_miner_source=concrete_miner_source,
+        parameter_conformance=tuple(parameter_records),
     )
 
 
@@ -1562,6 +2027,13 @@ def analysis_signature(inp: Mapping) -> tuple:
         prepared.concrete_method,
         prepared.concrete_miner_basis,
         prepared.concrete_miner_source,
+        json.dumps(
+            prepared.parameter_conformance,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ),
     )
 
 
@@ -1607,7 +2079,48 @@ def run_analysis(
             "; assigned custom/imported S-N resistance sources are listed "
             "separately"
         )
+    analytical_passed = all(result.passed for result in results)
+    conformance_assessment = conformance.aggregate(
+        list(prepared.parameter_conformance),
+        analytical_status=(
+            conformance.STATUS_PASS
+            if analytical_passed
+            else conformance.STATUS_FAIL
+        ),
+        selected_standard=prepared.edition,
+    )
+    miner_record = next(
+        (
+            record
+            for record in prepared.parameter_conformance
+            if record.get("parameter_id") == "concrete_fatigue.miner_c"
+        ),
+        None,
+    )
+    if (
+        prepared.check_concrete
+        and isinstance(miner_record, Mapping)
+        and miner_record.get("state") != conformance.STATE_CONFORMS
+    ):
+        if (
+            miner_record.get("state")
+            == conformance.STATE_APPROVED_CUSTOM
+        ):
+            references["concrete"] = (
+                "Approved custom concrete Miner/S-N methodology; "
+                f"C = {miner_record['actual_value']:g}; "
+                "approval/source: "
+                f"{miner_record.get('approval_reference') or '-'}"
+            )
+        else:
+            references["concrete"] = (
+                "Custom/deviating concrete Miner analysis; this is not an "
+                "unqualified selected-standard Miner check; "
+                f"C = {miner_record['actual_value']:g}; "
+                f"{miner_record.get('message') or ''}"
+            )
     return {
+        "valid": True,
         "edition": prepared.edition,
         "design_methodology": prepared.design_methodology,
         "checks": {
@@ -1636,6 +2149,17 @@ def run_analysis(
             "gamma_ff": prepared.gamma_ff,
         },
         "factor_basis": dict(prepared.factor_basis),
+        "parameter_conformance": tuple(
+            dict(record) for record in prepared.parameter_conformance
+        ),
+        "conformance": conformance_assessment,
+        "assessment_status": conformance_assessment["assessment_status"],
+        "qualified_verdict": conformance_assessment["qualified_verdict"],
+        "standard_passed": bool(
+            analytical_passed
+            and conformance_assessment["state"]
+            == conformance.STATE_CONFORMS
+        ),
         "concrete_parameters": (
             {
                 "fck_mpa": prepared.concrete.fck_mpa,
@@ -1644,6 +2168,11 @@ def run_analysis(
                 "k1": prepared.concrete.k1,
                 "c": prepared.concrete.c,
                 "method": prepared.concrete.method,
+                "parameter_conformance": (
+                    dict(miner_record)
+                    if isinstance(miner_record, Mapping)
+                    else None
+                ),
             }
             if prepared.concrete is not None
             else None
@@ -1656,5 +2185,5 @@ def run_analysis(
         "governing_spectrum": governing.spectrum_name,
         "utilisation": governing.utilisation,
         "converged": all(result.converged for result in results),
-        "passed": all(result.passed for result in results),
+        "passed": analytical_passed,
     }

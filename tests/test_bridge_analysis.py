@@ -11,7 +11,9 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
-from sector import bridge, sls  # noqa: E402
+import fatigue_analysis  # noqa: E402
+import fatigue_inputs  # noqa: E402
+from sector import bridge, conformance, sls  # noqa: E402
 
 
 def _coverage(**states):
@@ -63,6 +65,79 @@ def _base_input(**changes):
     }
     value.update(changes)
     return value
+
+
+def _bridge_miner_payload(*, coefficient=14.0):
+    edition = fatigue_inputs.EC2_2_2005_AC
+    gamma_s, gamma_c, factor_basis = (
+        fatigue_inputs.resolve_fatigue_factors(
+            edition,
+            mode=fatigue_inputs.FACTOR_MODE_PRESET,
+            gamma_s=1.15,
+            gamma_c=1.50,
+        )
+    )
+    miner = fatigue_analysis.concrete_miner_conformance(
+        edition=edition,
+        concrete_method=fatigue_analysis.CONCRETE_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
+        miner_source="",
+        coefficient_c=coefficient,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
+    records = (
+        factor_basis["parameter_conformance"]["gamma_c"],
+        miner,
+    )
+    aggregate = conformance.aggregate(
+        records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=edition,
+    )
+    return {
+        "errors": (),
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "edition": edition,
+        "design_methodology": bridge.EN1992_2_BASE,
+        "checks": {"reinforcement": False, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "concrete_miner_source": "",
+        "partial_factors": {
+            "gamma_s": gamma_s,
+            "gamma_c": gamma_c,
+            "gamma_ff": 1.0,
+        },
+        "factor_basis": factor_basis,
+        "parameter_conformance": records,
+        "conformance": aggregate,
+        "assessment_status": aggregate["assessment_status"],
+        "qualified_verdict": aggregate["qualified_verdict"],
+        "standard_passed": (
+            aggregate["state"] == conformance.STATE_CONFORMS
+        ),
+        "concrete_parameters": {
+            "c": coefficient,
+            "method": fatigue_analysis.CONCRETE_MINER,
+            "parameter_conformance": miner,
+        },
+        "calculation_references": {
+            "concrete": "EN 1992-2 corrected Expression (6.106)",
+        },
+        "spectra": [{
+            "spectrum_name": "Traffic",
+            "concrete": [{
+                "fibre_index": 0,
+                "converged": True,
+                "passed": True,
+                "utilisation": 0.5,
+            }],
+        }],
+    }
 
 
 def _elastic_results(long_combination, total_combination):
@@ -438,14 +513,6 @@ def test_unbounded_fatigue_failure_governs_finite_passing_row():
             "calculated fatigue edition",
         ),
         (
-            {
-                "concrete_miner_basis": (
-                    "Approved project-basis adoption"
-                ),
-            },
-            "Miner applicability",
-        ),
-        (
             {"design_methodology": bridge.COMPONENT_METHODS},
             "whole-calculation methodology",
         ),
@@ -463,21 +530,7 @@ def test_bridge_concrete_fatigue_rejects_mismatched_result_context(
         fatigue_concrete_miner_basis="EN 1992-2 bridge methodology",
         fatigue_concrete_c=14.0,
     )
-    payload = {
-        "edition": "DS/EN 1992-2:2005 + AC:2008",
-        "design_methodology": bridge.EN1992_2_BASE,
-        "checks": {"concrete": True},
-        "concrete_method": "Explicit Palmgren-Miner spectrum",
-        "concrete_miner_basis": "EN 1992-2 bridge methodology",
-        "concrete_parameters": {
-            "c": 14.0,
-            "method": "Explicit Palmgren-Miner spectrum",
-        },
-        "calculation_references": {
-            "concrete": "EN 1992-2 corrected Expression (6.106)",
-        },
-        "spectra": [],
-    }
+    payload = _bridge_miner_payload()
     payload.update(payload_change)
 
     evidence = bridge_analysis.concrete_fatigue_evidence(
@@ -490,16 +543,15 @@ def test_bridge_concrete_fatigue_rejects_mismatched_result_context(
 
 
 @pytest.mark.parametrize(
-    ("input_c", "result_c", "reason"),
+    ("input_c", "result_c"),
     [
-        (100.0, 14.0, "current bridge concrete Miner input"),
-        (14.0, 100.0, "calculated bridge concrete Miner evidence"),
+        (100.0, 14.0),
+        (14.0, 100.0),
     ],
 )
-def test_bridge_concrete_fatigue_requires_c14_in_input_and_result(
+def test_bridge_concrete_fatigue_requires_exact_input_result_correlation(
     input_c,
     result_c,
-    reason,
 ):
     inp = _base_input(
         fatigue_on=True,
@@ -509,21 +561,7 @@ def test_bridge_concrete_fatigue_requires_c14_in_input_and_result(
         fatigue_concrete_miner_basis="EN 1992-2 bridge methodology",
         fatigue_concrete_c=input_c,
     )
-    payload = {
-        "edition": "DS/EN 1992-2:2005 + AC:2008",
-        "design_methodology": bridge.EN1992_2_BASE,
-        "checks": {"concrete": True},
-        "concrete_method": "Explicit Palmgren-Miner spectrum",
-        "concrete_miner_basis": "EN 1992-2 bridge methodology",
-        "concrete_parameters": {
-            "c": result_c,
-            "method": "Explicit Palmgren-Miner spectrum",
-        },
-        "calculation_references": {
-            "concrete": "EN 1992-2 corrected Expression (6.106)",
-        },
-        "spectra": [],
-    }
+    payload = _bridge_miner_payload(coefficient=result_c)
 
     evidence = bridge_analysis.concrete_fatigue_evidence(
         {"fatigue": payload},
@@ -531,7 +569,59 @@ def test_bridge_concrete_fatigue_requires_c14_in_input_and_result(
     )
 
     assert evidence.status == bridge.STATUS_INVALID
-    assert reason in evidence.reason
+    assert "current and calculated concrete Miner coefficients conflict" in (
+        evidence.reason
+    )
+
+
+def test_bridge_concrete_fatigue_c100_is_analytical_review_not_standard_pass():
+    inp = _base_input(
+        fatigue_on=True,
+        fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
+        fatigue_check_concrete=True,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        fatigue_concrete_c=100.0,
+    )
+    evidence = bridge_analysis.concrete_fatigue_evidence(
+        {"fatigue": _bridge_miner_payload(coefficient=100.0)},
+        inp,
+    )
+
+    assert evidence.status == bridge.STATUS_REVIEW
+    assert evidence.evidence[0]["analytical_status"] == bridge.STATUS_PASS
+    assert evidence.evidence[0]["miner_coefficient_c"] == 100.0
+    assert (
+        evidence.evidence[0]["parameter_conformance"]["state"]
+        == conformance.STATE_REVIEW
+    )
+
+
+def test_bridge_concrete_fatigue_rejects_stale_miner_basis_evidence():
+    inp = _base_input(
+        fatigue_on=True,
+        fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
+        fatigue_check_concrete=True,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        fatigue_concrete_c=14.0,
+    )
+    payload = _bridge_miner_payload()
+    payload["concrete_miner_basis"] = (
+        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+    )
+
+    evidence = bridge_analysis.concrete_fatigue_evidence(
+        {"fatigue": payload},
+        inp,
+    )
+
+    assert evidence.status == bridge.STATUS_INVALID
+    assert "conformance" in evidence.reason
 
 
 def test_malformed_headless_bridge_boundaries_return_invalid_record():

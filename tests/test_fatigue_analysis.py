@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 from decimal import Decimal
+import json
 import pathlib
 from types import SimpleNamespace
 import sys
@@ -17,7 +19,7 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
-from sector import bridge, fatigue as fatigue_core  # noqa: E402
+from sector import bridge, conformance, fatigue as fatigue_core  # noqa: E402
 from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 from sector.section import Section  # noqa: E402
 from tools import pr04_bridge_oracle as bridge_oracle  # noqa: E402
@@ -190,6 +192,17 @@ def _base(**overrides):
     return value
 
 
+def _passing_engine(*_args, **_kwargs):
+    return (
+        SimpleNamespace(
+            spectrum_name="Traffic A",
+            utilisation=0.5,
+            converged=True,
+            passed=True,
+        ),
+    )
+
+
 def _use_2005_fatigue_details(inp):
     catalogue = inp[fatigue_inputs.DETAIL_CATALOG_KEY]
     converted = []
@@ -259,29 +272,38 @@ def test_prepare_preserves_float_coercible_non_factor_inputs():
     assert prepared.concrete.c == pytest.approx(14.0)
 
 
-def test_prepare_resolves_dk_fatigue_preset_from_edition_and_categories():
+def test_prepare_preserves_deviating_dk_factor_values_for_review():
     inp = _use_2005_fatigue_details(_base(
         fatigue_edition=fatigue_inputs.EC2_2005_DKNA,
         fatigue_concrete_method=fatigue_analysis.CONCRETE_EQUIVALENT,
         fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_PRESET,
         fatigue_gamma0=0.95,
         fatigue_gamma3=1.10,
-        # Stale widget values must not override an explicit preset selection.
+        # The headless API values are the actual calculation inputs. The
+        # edition/category derivation remains the conformance prescription.
         fatigue_gamma_s=1.15,
         fatigue_gamma_c=1.50,
     ))
 
     prepared = fatigue_analysis.prepare(inp)
 
-    assert prepared.gamma_s == pytest.approx(1.20 * 1.10 * 0.95 * 1.10)
-    assert prepared.concrete.gamma_c == pytest.approx(
+    assert prepared.gamma_s == pytest.approx(1.15)
+    assert prepared.concrete.gamma_c == pytest.approx(1.50)
+    assert prepared.factor_basis["preset_gamma_s"] == pytest.approx(
+        1.20 * 1.10 * 0.95 * 1.10
+    )
+    assert prepared.factor_basis["preset_gamma_c"] == pytest.approx(
         1.45 * 1.10 * 0.95 * 1.10
     )
     assert prepared.factor_basis["mode"] == (
         fatigue_inputs.FACTOR_MODE_PRESET
     )
     assert prepared.factor_basis["gamma_s_derivation"].startswith(
-        "1.20 x 1.10 x 0.950 x 1.100"
+        "actual retained value = 1.150"
+    )
+    assert (
+        prepared.factor_basis["conformance"]["state"]
+        == conformance.STATE_REVIEW
     )
 
 
@@ -307,11 +329,11 @@ def test_prepare_retains_explicit_approved_fatigue_override():
     )
     assert prepared.basis["approval_reference"] == "TRAFFIC-09 / authority B"
     assert prepared.factor_basis["gamma_c_derivation"] == (
-        "approved final override = 1.610"
+        "approved custom final override = 1.610"
     )
 
 
-def test_explicit_override_requires_approval_and_legacy_values_require_review():
+def test_unapproved_override_and_legacy_values_calculate_with_review_warnings():
     override = _base(
         fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
         fatigue_factor_approval="",
@@ -323,19 +345,19 @@ def test_explicit_override_requires_approval_and_legacy_values_require_review():
         fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_LEGACY
     )
 
-    assert (
-        "Approved final fatigue-factor override requires a dedicated "
-        "approval/source"
-        in fatigue_analysis.validation_errors(override)
+    assert fatigue_analysis.validation_errors(override) == []
+    assert any(
+        "custom approval/source is missing" in warning
+        for warning in fatigue_analysis.validation_warnings(override)
     )
     override["fatigue_factor_approval"] = "DB-FACT-10 / checker C"
-    assert not any(
-        "fatigue-factor override requires" in error
-        for error in fatigue_analysis.validation_errors(override)
+    assert all(
+        "custom approval/source is missing" not in warning
+        for warning in fatigue_analysis.validation_warnings(override)
     )
     assert any(
-        "Legacy saved fatigue factors require review" in error
-        for error in fatigue_analysis.validation_errors(legacy)
+        "custom approval/source is missing" in warning
+        for warning in fatigue_analysis.validation_warnings(legacy)
     )
 
 
@@ -381,7 +403,7 @@ def test_approved_api_can_omit_inactive_factor_before_and_after_save():
         fatigue_analysis.prepare(missing_active_factor)
 
 
-def test_implicit_headless_factors_without_dedicated_approval_are_legacy():
+def test_implicit_headless_factors_without_dedicated_approval_are_reviewed():
     inp = _base()
     inp.pop("fatigue_factor_mode")
     inp.pop("fatigue_factor_approval")
@@ -389,21 +411,24 @@ def test_implicit_headless_factors_without_dedicated_approval_are_legacy():
         approval_reference="VD-FLM5-AGREEMENT"
     )
 
-    errors = fatigue_analysis.validation_errors(inp)
-    invalid = fatigue_analysis.invalid_result(inp, errors)
+    prepared = fatigue_analysis.prepare(inp)
 
-    assert any(
-        "Legacy saved fatigue factors require review" in error
-        for error in errors
-    )
-    assert invalid["valid"] is False
-    assert invalid["factor_basis"]["mode"] == (
+    assert fatigue_analysis.validation_errors(inp) == []
+    assert prepared.factor_basis["mode"] == (
         fatigue_inputs.FACTOR_MODE_LEGACY
     )
-    assert invalid["factor_basis"]["approval_reference"] == ""
+    assert prepared.factor_basis["approval_reference"] == ""
+    assert (
+        prepared.factor_basis["conformance"]["state"]
+        == conformance.STATE_REVIEW
+    )
+    assert any(
+        "custom approval/source is missing" in warning
+        for warning in prepared.warnings
+    )
 
 
-def test_run_rejects_implicit_legacy_factors_before_invoking_solver():
+def test_run_calculates_implicit_legacy_factors_with_qualified_review():
     inp = _base()
     inp.pop("fatigue_factor_mode")
     inp.pop("fatigue_factor_approval")
@@ -412,18 +437,19 @@ def test_run_rejects_implicit_legacy_factors_before_invoking_solver():
     )
     solver_called = False
 
-    def forbidden_engine(*_args, **_kwargs):
+    def recording_engine(*_args, **_kwargs):
         nonlocal solver_called
         solver_called = True
-        raise AssertionError("legacy factors reached the fatigue solver")
+        return _passing_engine()
 
-    with pytest.raises(
-        ValueError,
-        match="Legacy saved fatigue factors require review",
-    ):
-        fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
+    result = fatigue_analysis.run_analysis(inp, engine=recording_engine)
 
-    assert solver_called is False
+    assert solver_called is True
+    assert result["valid"] is True
+    assert result["passed"] is True
+    assert result["standard_passed"] is False
+    assert result["assessment_status"] == conformance.STATUS_REVIEW
+    assert result["qualified_verdict"] == "REVIEW - analytical PASS"
 
 
 @pytest.mark.parametrize(
@@ -449,6 +475,33 @@ def test_run_rejects_boolean_factors_before_invoking_solver(
         raise AssertionError("Boolean material factor reached fatigue solver")
 
     with pytest.raises(ValueError, match="positive real number"):
+        fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
+
+    assert solver_called is False
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"fatigue_factor_approval": True},
+        {"fatigue_concrete_miner_source": True},
+    ],
+)
+def test_run_rejects_malformed_conformance_metadata_before_solver(
+    change,
+):
+    inp = _base(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        **change,
+    )
+    solver_called = False
+
+    def forbidden_engine(*_args, **_kwargs):
+        nonlocal solver_called
+        solver_called = True
+        raise AssertionError("Malformed metadata reached fatigue solver")
+
+    with pytest.raises(ValueError, match="must be typed text"):
         fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
 
     assert solver_called is False
@@ -712,17 +765,27 @@ def test_equivalent_concrete_method_is_mapped_and_referenced_explicitly():
     assert "Formula (E.2)" in references["concrete"]
 
 
-def test_ordinary_2005_concrete_miner_requires_explicit_bridge_method_adoption():
+def test_ordinary_2005_concrete_miner_without_adoption_calculates_for_review():
     inp = _base(
         fatigue_edition=fatigue_inputs.EC2_2005,
         fatigue_check_steel=False,
         fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
     )
 
-    errors = fatigue_analysis.validation_errors(inp)
+    prepared = fatigue_analysis.prepare(inp)
+    miner = next(
+        record
+        for record in prepared.parameter_conformance
+        if record["parameter_id"] == "concrete_fatigue.miner_c"
+    )
 
-    assert any("project-basis adoption" in error for error in errors)
-    assert any("document/clause/approval source" in error for error in errors)
+    assert fatigue_analysis.validation_errors(inp) == []
+    assert miner["actual_value"] == 14.0
+    assert miner["state"] == conformance.STATE_REVIEW
+    assert any(
+        "missing or contradictory" in warning
+        for warning in prepared.warnings
+    )
 
 
 def test_ordinary_2005_approved_concrete_miner_adoption_is_warned_and_sourced():
@@ -743,12 +806,19 @@ def test_ordinary_2005_approved_concrete_miner_adoption_is_warned_and_sourced():
         prepared.concrete_miner_basis,
         prepared.concrete_miner_source,
     )
+    miner = next(
+        record
+        for record in prepared.parameter_conformance
+        if record["parameter_id"] == "concrete_fatigue.miner_c"
+    )
 
     assert prepared.concrete_miner_basis == (
         fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
     )
     assert "DB-FAT-21" in references["concrete"]
     assert any("project-basis adoption" in item for item in prepared.warnings)
+    assert "corrected Expression (6.106)" in miner["normative_source"]
+    assert "2023" not in miner["normative_source"]
 
 
 def test_bridge_edition_owns_corrected_concrete_miner_expression():
@@ -789,7 +859,7 @@ def test_unknown_whole_calculation_methodology_blocks_headless_fatigue():
         fatigue_analysis.prepare(inp)
 
 
-def test_bridge_standard_c100_false_pass_is_blocked_and_c14_governs():
+def test_bridge_standard_c100_is_analysed_but_never_published_as_standard_pass():
     inp = _base(
         design_methodology=bridge.EN1992_2_BASE,
         fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
@@ -798,28 +868,45 @@ def test_bridge_standard_c100_false_pass_is_blocked_and_c14_governs():
         fatigue_concrete_c=100.0,
     )
 
-    errors = fatigue_analysis.validation_errors(inp)
-
-    assert any("fixes C = 14" in error for error in errors)
-    with pytest.raises(ValueError, match="fixes C = 14"):
-        fatigue_analysis.prepare(inp)
-
-    inp["fatigue_concrete_c"] = 14.0
     prepared = fatigue_analysis.prepare(inp)
-    life = fatigue_core.concrete_fatigue_life(
+    result = fatigue_analysis.run_analysis(inp, engine=_passing_engine)
+    safe = fatigue_analysis.publication_safe_result(
+        result,
+        design_methodology=bridge.EN1992_2_BASE,
+    )
+    custom_life = fatigue_core.concrete_fatigue_life(
         8.0,
         0.0,
         fcd_fat_mpa=10.0,
         c=prepared.concrete.c,
     )
-    damage = 1_000.0 / life.cycles
+    standard_life = fatigue_core.concrete_fatigue_life(
+        8.0,
+        0.0,
+        fcd_fat_mpa=10.0,
+        c=14.0,
+    )
+    standard_damage = 1_000.0 / standard_life.cycles
 
-    assert prepared.concrete.c == 14.0
-    assert life.log10_cycles == pytest.approx(
+    assert fatigue_analysis.validation_errors(inp) == []
+    assert prepared.concrete.c == 100.0
+    assert custom_life.log10_cycles > standard_life.log10_cycles
+    assert result["valid"] is True
+    assert result["passed"] is True
+    assert result["standard_passed"] is False
+    assert result["assessment_status"] == conformance.STATUS_REVIEW
+    assert result["qualified_verdict"] == "REVIEW - analytical PASS"
+    assert "not an unqualified selected-standard" in (
+        result["calculation_references"]["concrete"]
+    )
+    assert safe["valid"] is True
+    assert safe["standard_passed"] is False
+    assert safe["assessment_status"] == conformance.STATUS_REVIEW
+    assert standard_life.log10_cycles == pytest.approx(
         bridge_oracle.corrected_concrete_log10_life(8.0, 0.0, 10.0)
     )
-    assert damage == pytest.approx(1.584893192, rel=1.0e-8)
-    assert damage > 1.0
+    assert standard_damage == pytest.approx(1.584893192, rel=1.0e-8)
+    assert standard_damage > 1.0
 
 
 def test_nonstandard_concrete_c_requires_separate_sourced_project_method():
@@ -853,66 +940,71 @@ def test_nonstandard_concrete_c_requires_separate_sourced_project_method():
     assert "Expression (6.106)" not in references["concrete"]
 
     inp["fatigue_concrete_miner_source"] = ""
+    unapproved = fatigue_analysis.prepare(inp)
+    miner = next(
+        record
+        for record in unapproved.parameter_conformance
+        if record["parameter_id"] == "concrete_fatigue.miner_c"
+    )
+    assert fatigue_analysis.validation_errors(inp) == []
+    assert miner["actual_value"] == 100.0
+    assert miner["state"] == conformance.STATE_REVIEW
     assert any(
-        "document/clause/approval source" in error
-        for error in fatigue_analysis.validation_errors(inp)
+        "custom approval/source is missing" in warning
+        for warning in unapproved.warnings
     )
 
 
 @pytest.mark.parametrize(
-    ("edition", "methodology", "basis", "coefficient", "expected"),
+    ("edition", "methodology", "basis", "coefficient"),
     [
         (
             fatigue_inputs.EC2_2023,
             bridge.COMPONENT_METHODS,
             fatigue_inputs.MINER_BASIS_2023_STANDARD,
             100.0,
-            "fixes C = 14",
         ),
         (
             fatigue_inputs.EC2_2023,
             bridge.EN1992_2_BASE,
             fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
             14.0,
-            "requires the DS/EN 1992-2",
         ),
         (
             fatigue_inputs.EC2_2023,
             bridge.COMPONENT_METHODS,
-            "",
+            fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED,
             14.0,
-            "missing its standard applicability binding",
         ),
     ],
 )
-def test_fatigue_publication_revalidates_standard_c_and_applicability(
+def test_fatigue_publication_preserves_nonconforming_analysis_as_review(
     edition,
     methodology,
     basis,
     coefficient,
-    expected,
 ):
-    payload = {
-        "errors": (),
-        "edition": edition,
-        "design_methodology": methodology,
-        "checks": {"reinforcement": False, "concrete": True},
-        "concrete_method": fatigue_analysis.CONCRETE_MINER,
-        "concrete_miner_basis": basis,
-        "concrete_miner_source": "",
-        "concrete_parameters": {
-            "c": coefficient,
-            "method": fatigue_analysis.CONCRETE_MINER,
-        },
-    }
+    inp = _base(
+        fatigue_check_steel=False,
+        fatigue_edition=edition,
+        design_methodology=methodology,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+        fatigue_concrete_miner_basis=basis,
+        fatigue_concrete_c=coefficient,
+    )
+    payload = fatigue_analysis.run_analysis(inp, engine=_passing_engine)
 
     safe = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=methodology,
     )
 
-    assert safe["valid"] is False
-    assert any(expected in error for error in safe["errors"])
+    assert safe["errors"] == ()
+    assert safe["valid"] is True
+    assert safe["passed"] is True
+    assert safe["standard_passed"] is False
+    assert safe["assessment_status"] == conformance.STATUS_REVIEW
+    assert safe["conformance"]["state"] == conformance.STATE_REVIEW
 
 
 def test_fatigue_publication_rejects_top_level_method_relabel():
@@ -989,7 +1081,7 @@ def test_fatigue_publication_rejects_malformed_error_container(raw_errors):
     [
         (
             {"concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD},
-            "project-basis adoption",
+            "concrete Miner conformance is stale",
         ),
         (
             {"design_methodology": bridge.EN1992_2_BASE},
@@ -1005,22 +1097,17 @@ def test_fatigue_publication_binds_miner_basis_to_calculation_methodology(
     mutation,
     expected,
 ):
-    payload = {
-        "errors": (),
-        "valid": True,
-        "converged": True,
-        "passed": True,
-        "edition": fatigue_inputs.EC2_2_2005_AC,
-        "design_methodology": bridge.COMPONENT_METHODS,
-        "checks": {"reinforcement": False, "concrete": True},
-        "concrete_method": fatigue_analysis.CONCRETE_MINER,
-        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION,
-        "concrete_miner_source": "DB-FAT-21 / checker approval",
-        "concrete_parameters": {
-            "c": 14.0,
-            "method": fatigue_analysis.CONCRETE_MINER,
-        },
-    }
+    inp = _base(
+        fatigue_check_steel=False,
+        fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
+        design_methodology=bridge.COMPONENT_METHODS,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
+        ),
+        fatigue_concrete_miner_source="DB-FAT-21 / checker approval",
+    )
+    payload = fatigue_analysis.run_analysis(inp, engine=_passing_engine)
     unchanged = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
@@ -1028,6 +1115,7 @@ def test_fatigue_publication_binds_miner_basis_to_calculation_methodology(
     assert unchanged["errors"] == ()
     assert unchanged["passed"] is True
 
+    payload = copy.deepcopy(payload)
     payload.update(mutation)
     safe = fatigue_analysis.publication_safe_result(
         payload,
@@ -1041,22 +1129,17 @@ def test_fatigue_publication_binds_miner_basis_to_calculation_methodology(
 
 
 def test_fatigue_publication_accepts_bound_bridge_methodology_control():
-    payload = {
-        "errors": (),
-        "valid": True,
-        "converged": True,
-        "passed": True,
-        "edition": fatigue_inputs.EC2_2_2005_AC,
-        "design_methodology": bridge.EN1992_2_BASE,
-        "checks": {"reinforcement": False, "concrete": True},
-        "concrete_method": fatigue_analysis.CONCRETE_MINER,
-        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
-        "concrete_miner_source": "",
-        "concrete_parameters": {
-            "c": 14.0,
-            "method": fatigue_analysis.CONCRETE_MINER,
-        },
-    }
+    inp = _base(
+        fatigue_check_steel=False,
+        fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_MINER,
+        fatigue_concrete_c=14.0,
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_PRESET,
+        fatigue_gamma_s=1.15,
+        fatigue_gamma_c=1.50,
+    )
+    payload = fatigue_analysis.run_analysis(inp, engine=_passing_engine)
 
     safe = fatigue_analysis.publication_safe_result(
         payload,
@@ -1067,9 +1150,145 @@ def test_fatigue_publication_accepts_bound_bridge_methodology_control():
     assert safe["valid"] is True
     assert safe["converged"] is True
     assert safe["passed"] is True
+    assert safe["standard_passed"] is True
+    assert safe["assessment_status"] == conformance.STATUS_PASS
 
 
-def test_bridge_edition_outside_bridge_method_requires_sourced_adoption():
+def test_custom_fatigue_conformance_record_preserves_values_and_approval():
+    inp = _base(
+        design_methodology=bridge.COMPONENT_METHODS,
+        fatigue_edition=fatigue_inputs.EC2_2023,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        fatigue_concrete_miner_source="AUTH-SN-7 / checker approval",
+        fatigue_concrete_c=100.0,
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_factor_approval="DB-FAT-21 / checker approval",
+        fatigue_gamma_s=0.5,
+        fatigue_gamma_c=2.0,
+    )
+    payload = fatigue_analysis.run_analysis(inp, engine=_passing_engine)
+
+    record = fatigue_analysis.calculation_conformance_record(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+    loaded = fatigue_analysis.publication_safe_conformance_record(
+        json.loads(json.dumps(record)),
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+    assert record is not None
+    assert loaded == record
+    assert record["partial_factors"]["gamma_s"] == pytest.approx(0.5)
+    assert record["partial_factors"]["gamma_c"] == pytest.approx(2.0)
+    assert record["factor_basis"]["approval_reference"] == (
+        "DB-FAT-21 / checker approval"
+    )
+    assert record["concrete_parameters"]["c"] == pytest.approx(100.0)
+    assert record["concrete_miner_source"] == (
+        "AUTH-SN-7 / checker approval"
+    )
+    assert record["conformance"]["state"] == (
+        conformance.STATE_APPROVED_CUSTOM
+    )
+    assert record["qualified_verdict"] == "APPROVED CUSTOM PASS"
+    assert record["assessment_status"] == conformance.STATUS_REVIEW
+    assert record["standard_passed"] is False
+
+
+def test_fatigue_conformance_record_rejects_mutation_and_rehashed_relabel():
+    payload = fatigue_analysis.run_analysis(
+        _base(),
+        engine=_passing_engine,
+    )
+    record = fatigue_analysis.calculation_conformance_record(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+    assert record is not None
+
+    mutated = copy.deepcopy(record)
+    mutated["partial_factors"]["gamma_s"] = 0.5
+    assert fatigue_analysis.publication_safe_conformance_record(
+        mutated,
+        design_methodology=bridge.COMPONENT_METHODS,
+    ) is None
+
+    relabelled = copy.deepcopy(record)
+    relabelled["qualified_verdict"] = "STANDARD PASS"
+    body = {
+        key: relabelled[key]
+        for key in fatigue_analysis._FATIGUE_CONFORMANCE_FIELDS
+    }
+    relabelled["evidence_sha256"] = (
+        fatigue_analysis._fatigue_conformance_digest(body)
+    )
+    assert fatigue_analysis.publication_safe_conformance_record(
+        relabelled,
+        design_methodology=bridge.COMPONENT_METHODS,
+    ) is None
+    assert fatigue_analysis.publication_safe_conformance_record(
+        record,
+        design_methodology=bridge.EN1992_2_BASE,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "qualified_verdict",
+            "STANDARD PASS",
+            "qualified verdict is stale or contradictory",
+        ),
+        (
+            "assessment_status",
+            conformance.STATUS_PASS,
+            "assessment status is stale or contradictory",
+        ),
+        (
+            "standard_passed",
+            True,
+            "selected-standard verdict is stale or contradictory",
+        ),
+        (
+            "valid",
+            False,
+            "marked invalid without typed errors",
+        ),
+        (
+            "converged",
+            "yes",
+            "convergence is not typed Boolean",
+        ),
+    ],
+)
+def test_fatigue_publication_rejects_top_level_conformance_relabel(
+    field,
+    value,
+    message,
+):
+    payload = fatigue_analysis.run_analysis(
+        _base(),
+        engine=_passing_engine,
+    )
+    payload[field] = value
+
+    safe = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+    assert safe["valid"] is False
+    assert safe["passed"] is False
+    assert safe["qualified_verdict"] == "INVALID - fatigue not assessed"
+    assert any(message in error for error in safe["errors"])
+
+
+def test_bridge_edition_outside_bridge_method_is_review_until_adopted():
     inp = _base(
         design_methodology=bridge.COMPONENT_METHODS,
         fatigue_edition=fatigue_inputs.EC2_2_2005_AC,
@@ -1080,10 +1299,16 @@ def test_bridge_edition_outside_bridge_method_requires_sourced_adoption():
         ),
     )
 
-    errors = fatigue_analysis.validation_errors(inp)
+    prepared = fatigue_analysis.prepare(inp)
+    miner = next(
+        record
+        for record in prepared.parameter_conformance
+        if record["parameter_id"] == "concrete_fatigue.miner_c"
+    )
 
-    assert any("project-basis adoption" in error for error in errors)
-    assert any("document/clause/approval source" in error for error in errors)
+    assert fatigue_analysis.validation_errors(inp) == []
+    assert miner["state"] == conformance.STATE_REVIEW
+    assert miner["actual_value"] == 14.0
 
     inp["fatigue_concrete_miner_basis"] = (
         fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
@@ -1100,6 +1325,12 @@ def test_bridge_edition_outside_bridge_method_requires_sourced_adoption():
     assert prepared.concrete_miner_basis == (
         fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
     )
+    miner = next(
+        record
+        for record in prepared.parameter_conformance
+        if record["parameter_id"] == "concrete_fatigue.miner_c"
+    )
+    assert miner["state"] == conformance.STATE_APPROVED_CUSTOM
     assert "project-basis adoption" in references["concrete"]
     assert "DB-FAT-BRIDGE-02" in references["concrete"]
 
@@ -1186,7 +1417,7 @@ def test_invalid_result_preserves_missing_assignments_without_running_fatigue():
     assert inp["tendon_elements"][0]["fatigue_detail_id"] == ""
 
 
-def test_analysis_signature_changes_with_spectrum_basis_and_material_modulus():
+def test_analysis_signature_covers_numerics_and_conformance_provenance():
     base = _base()
     signature = fatigue_analysis.analysis_signature(base)
 
@@ -1213,6 +1444,18 @@ def test_analysis_signature_changes_with_spectrum_basis_and_material_modulus():
     changed_source[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0][
         "source"
     ] = "Revised source"
+    changed_factor = _base(fatigue_gamma_s=0.5)
+    changed_factor_approval = _base(
+        fatigue_factor_approval="DB-FACT-CHANGED / checker B"
+    )
+    changed_c = _base(fatigue_concrete_c=100.0)
+    changed_miner_basis = _base(
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        fatigue_concrete_miner_source="AUTH-SN-CHANGED / checker C",
+    )
 
     assert fatigue_analysis.analysis_signature(changed_spectrum) != signature
     assert fatigue_analysis.analysis_signature(changed_basis) != signature
@@ -1220,3 +1463,13 @@ def test_analysis_signature_changes_with_spectrum_basis_and_material_modulus():
     assert fatigue_analysis.analysis_signature(changed_assignment) != signature
     assert fatigue_analysis.analysis_signature(changed_warning) != signature
     assert fatigue_analysis.analysis_signature(changed_source) != signature
+    assert fatigue_analysis.analysis_signature(changed_factor) != signature
+    assert (
+        fatigue_analysis.analysis_signature(changed_factor_approval)
+        != signature
+    )
+    assert fatigue_analysis.analysis_signature(changed_c) != signature
+    assert (
+        fatigue_analysis.analysis_signature(changed_miner_basis)
+        != signature
+    )

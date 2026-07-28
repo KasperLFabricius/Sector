@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from app import fatigue_inputs as fi
+from sector import conformance
 
 
 @pytest.mark.parametrize(
@@ -55,13 +56,14 @@ def test_approved_fatigue_override_survives_edition_switches_unchanged():
             gamma_c=1.61,
             gamma0=0.95,
             gamma3=1.10,
+            approval_reference="DB-FACT-01 / checker A",
         )
         finals.append((gamma_s, gamma_c))
         assert basis["gamma_s_derivation"] == (
-            "approved final override = 1.270"
+            "approved custom final override = 1.270"
         )
         assert basis["gamma_c_derivation"] == (
-            "approved final override = 1.610"
+            "approved custom final override = 1.610"
         )
 
     assert all(
@@ -69,6 +71,66 @@ def test_approved_fatigue_override_survives_edition_switches_unchanged():
         and gamma_c == pytest.approx(1.61)
         for gamma_s, gamma_c in finals
     )
+
+
+@pytest.mark.parametrize("value", [0.5, 2.0])
+def test_positive_custom_material_factors_are_preserved_without_clamping(value):
+    gamma_s, gamma_c, review_basis = fi.resolve_fatigue_factors(
+        fi.EC2_2_2005_AC,
+        mode=fi.FACTOR_MODE_PRESET,
+        gamma_s=value,
+        gamma_c=value,
+    )
+    approved_s, approved_c, approved_basis = fi.resolve_fatigue_factors(
+        fi.EC2_2_2005_AC,
+        mode=fi.FACTOR_MODE_OVERRIDE,
+        gamma_s=value,
+        gamma_c=value,
+        approval_reference="DB-FACT-02 / checker B",
+    )
+
+    assert (gamma_s, gamma_c) == pytest.approx((value, value))
+    assert (
+        review_basis["conformance"]["state"]
+        == conformance.STATE_REVIEW
+    )
+    assert (approved_s, approved_c) == pytest.approx((value, value))
+    assert (
+        approved_basis["conformance"]["state"]
+        == conformance.STATE_APPROVED_CUSTOM
+    )
+    assert (
+        approved_basis["parameter_conformance"]["gamma_s"]["actual_value"]
+        == value
+    )
+
+
+def test_custom_factor_without_approval_calculates_but_requires_review():
+    gamma_s, gamma_c, basis = fi.resolve_fatigue_factors(
+        fi.EC2_2_2005_AC,
+        mode=fi.FACTOR_MODE_OVERRIDE,
+        gamma_s=0.5,
+        gamma_c=2.0,
+        approval_reference="",
+    )
+
+    assert (gamma_s, gamma_c) == pytest.approx((0.5, 2.0))
+    assert basis["conformance"]["state"] == conformance.STATE_REVIEW
+    assert all(
+        record["state"] == conformance.STATE_REVIEW
+        for record in basis["parameter_conformance"].values()
+    )
+
+
+def test_factor_approval_metadata_must_be_typed_text():
+    with pytest.raises(ValueError, match="must be typed text"):
+        fi.resolve_fatigue_factors(
+            fi.EC2_2_2005_AC,
+            mode=fi.FACTOR_MODE_OVERRIDE,
+            gamma_s=0.5,
+            gamma_c=2.0,
+            approval_reference=True,
+        )
 
 
 def test_legacy_fatigue_values_are_retained_but_identified_for_review():

@@ -1872,6 +1872,53 @@ def test_save_load_round_trip_through_the_app():
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
+def test_loaded_fatigue_conformance_snapshot_is_retained_and_visible():
+    import project_io
+
+    at = _fresh()
+    at.run()
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in at.session_state
+    }
+    scalars["design_methodology"] = bridge.COMPONENT_METHODS
+    fatigue_record = _fatigue_bound_snapshot()
+    assert fatigue_record is not None
+    digest = project_io.input_sha256(tables, scalars)
+    source = project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "fatigue_conformance": fatigue_record,
+        },
+    )
+
+    at.session_state["_pending_project"] = source
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["calculation_record"][
+        "fatigue_conformance"
+    ] == fatigue_record
+    _goto_input_tab(at, "Project & report")
+    captions = " | ".join(item.value for item in at.caption)
+    assert "Recorded fatigue conformance" in captions
+    assert "APPROVED CUSTOM PASS" in captions
+    assert "gamma_s=0.5" in captions
+    assert "gamma_c,fat=2" in captions
+    assert "Miner C=100" in captions
+    assert bridge.COMPONENT_METHODS in captions
+    assert "DB-FAT-21 / checker approval" in captions
+    assert "AUTH-SN-7 / checker approval" in captions
+
+
 def test_app_restores_fatigue_inputs_into_the_ui():
     import fatigue_inputs
     import project_io
@@ -2032,7 +2079,7 @@ def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
     assert rendered["info"] == []
 
 
-def test_standard_miner_c14_is_locked_and_project_sn_method_round_trips():
+def test_standard_miner_custom_c_is_editable_warned_and_round_trips():
     import fatigue_analysis
     import fatigue_inputs
     import project_io
@@ -2045,15 +2092,36 @@ def test_standard_miner_c14_is_locked_and_project_sn_method_round_trips():
 
     standard_c = at.number_input(key="fatigue_concrete_c")
     assert standard_c.value == pytest.approx(14.0)
-    assert standard_c.disabled is True
+    assert standard_c.disabled is False
     assert at.session_state["fatigue_concrete_miner_basis"] == (
         fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     )
 
-    at.session_state["fatigue_concrete_c"] = 100.0
-    at.run()
+    at.number_input(key="fatigue_concrete_c").set_value(100.0).run()
     assert at.number_input(key="fatigue_concrete_c").value == pytest.approx(
-        14.0
+        100.0
+    )
+    assert any(
+        "does not conform to prescribed value = 14" in warning.value
+        for warning in at.warning
+    )
+
+    standard_saved = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    _tables, standard_restored = project_io.parse_project(standard_saved)
+    assert standard_restored["fatigue_concrete_c"] == 100.0
+    assert standard_restored["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     )
 
     at.selectbox(key="fatigue_concrete_method").set_value(
@@ -2094,9 +2162,28 @@ def test_standard_miner_c14_is_locked_and_project_sn_method_round_trips():
         fatigue_analysis.CONCRETE_MINER
     ).run()
     assert at.number_input(key="fatigue_concrete_c").value == pytest.approx(
-        14.0
+        100.0
     )
-    assert at.number_input(key="fatigue_concrete_c").disabled is True
+    assert at.number_input(key="fatigue_concrete_c").disabled is False
+
+
+def test_bridge_parameter_editor_columns_have_no_normative_numeric_clamp():
+    import bridge_inputs
+    import sector_app
+    from sector import conformance
+
+    for table_key, value_column in (
+        (bridge_inputs.BOX_WALL_TABLE_KEY, "cot_theta"),
+        (bridge_inputs.MINIMUM_TABLE_KEY, "k"),
+    ):
+        config = sector_app._bridge_column_config(table_key)
+        numeric = config[value_column]["type_config"]
+        basis = config["parameter_basis"]["type_config"]
+
+        assert numeric["min_value"] is None
+        assert numeric["max_value"] is None
+        assert tuple(basis["options"]) == conformance.BASIS_OPTIONS
+        assert "assessed separately" in config[value_column]["help"]
 
 
 def test_fatigue_reuse_signature_recalculates_after_methodology_switch():
@@ -2217,13 +2304,14 @@ def test_fatigue_view_fails_closed_on_relabelled_or_malformed_payload(
         for message in rendered["errors"]
     )
     assert any(
-        "project-basis adoption" in message
+        "conformance" in message
         for message in rendered["markdown"]
     )
 
 
 def test_app_fatigue_factor_switches_and_approved_override_persist():
     import fatigue_inputs
+    import project_io
 
     at = _fresh()
     at.run()
@@ -2256,8 +2344,8 @@ def test_app_fatigue_factor_switches_and_approved_override_persist():
     assert at.number_input(key="fatigue_gamma_s").value is None
     assert at.number_input(key="fatigue_gamma_c").value is None
     assert at.text_input(key="fatigue_factor_approval").value == ""
-    at.number_input(key="fatigue_gamma_s").set_value(1.27).run()
-    at.number_input(key="fatigue_gamma_c").set_value(1.61).run()
+    at.number_input(key="fatigue_gamma_s").set_value(0.5).run()
+    at.number_input(key="fatigue_gamma_c").set_value(2.0).run()
     at.text_input(key="fatigue_factor_approval").set_value(
         "DB-FACT-09 / checker A"
     ).run()
@@ -2270,27 +2358,50 @@ def test_app_fatigue_factor_switches_and_approved_override_persist():
         fatigue_inputs.EC2_2023
     ).run()
 
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.27)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.61)
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(0.5)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(2.0)
     assert at.session_state["fatigue_factor_approval"] == (
         "DB-FACT-09 / checker A"
     )
     assert at.session_state[fatigue_inputs.BASIS_KEY][
         "approval_reference"
     ] == "TRAFFIC-09 / authority B"
+    assert any(
+        "approved custom input" in warning.value
+        for warning in at.warning
+    )
 
     at.selectbox(key="fatigue_factor_mode").set_value(
         fatigue_inputs.FACTOR_MODE_PRESET
     ).run()
-    assert at.number_input(key="fatigue_gamma_s").value != pytest.approx(1.27)
-    assert at.number_input(key="fatigue_gamma_c").value != pytest.approx(1.61)
+    assert at.number_input(key="fatigue_gamma_s").value != pytest.approx(0.5)
+    assert at.number_input(key="fatigue_gamma_c").value != pytest.approx(2.0)
     at.selectbox(key="fatigue_factor_mode").set_value(
         fatigue_inputs.FACTOR_MODE_OVERRIDE
     ).run()
 
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.27)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.61)
+    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(0.5)
+    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(2.0)
     assert at.session_state["fatigue_factor_approval"] == (
+        "DB-FACT-09 / checker A"
+    )
+
+    saved = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+    _tables, restored = project_io.parse_project(saved)
+    assert restored["fatigue_gamma_s"] == pytest.approx(0.5)
+    assert restored["fatigue_gamma_c"] == pytest.approx(2.0)
+    assert restored["fatigue_factor_approval"] == (
         "DB-FACT-09 / checker A"
     )
 
@@ -2778,6 +2889,18 @@ def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
     fatigue = at.session_state["results"]["fatigue"]
     assert fatigue["partial_factors"]["gamma_s"] == pytest.approx(1.33)
     assert fatigue["partial_factors"]["gamma_c"] == pytest.approx(1.60)
+    calculation_fatigue = at.session_state["calculation_record"][
+        "fatigue_conformance"
+    ]
+    assert calculation_fatigue["partial_factors"]["gamma_s"] == (
+        pytest.approx(1.33)
+    )
+    assert calculation_fatigue["partial_factors"]["gamma_c"] == (
+        pytest.approx(1.60)
+    )
+    assert calculation_fatigue["factor_basis"]["approval_reference"] == (
+        "DB-FACT-23 / checker H"
+    )
 
     _goto_input_tab(at, "Project & report")
     download = next(
@@ -2790,9 +2913,9 @@ def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
     at.run()
     saved = tmp_path / "autosave.json"
     assert saved.exists()
-    _, saved_scalars = project_io.parse_project(
-        saved.read_text(encoding="utf-8")
-    )
+    saved_text = saved.read_text(encoding="utf-8")
+    _, saved_scalars = project_io.parse_project(saved_text)
+    saved_provenance = project_io.project_provenance(saved_text)
     assert saved_scalars["fatigue_factor_mode"] == (
         fatigue_inputs.FACTOR_MODE_OVERRIDE
     )
@@ -2805,6 +2928,13 @@ def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
     assert saved_scalars["torsion_gamma_ct"] == pytest.approx(1.71)
     assert saved_scalars["torsion_factor_approval"] == (
         "DB-TOR-09 / checker H"
+    )
+    assert saved_provenance["calculation"]["fatigue_conformance"] == (
+        calculation_fatigue
+    )
+    assert saved_provenance["calculation"]["matches_saved_inputs"] is (
+        saved_provenance["calculation"]["input_sha256"]
+        == saved_provenance["input_sha256"]
     )
 
 
@@ -2977,6 +3107,12 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert fatigue["factor_basis"]["gamma_s_derivation"] == (
         "1.20 x 1.10 x 1.000 x 1.000 = 1.320"
     )
+    fatigue_record = at.session_state["calculation_record"][
+        "fatigue_conformance"
+    ]
+    assert fatigue_record["design_methodology"] == bridge.COMPONENT_METHODS
+    assert fatigue_record["partial_factors"]["gamma_s"] == pytest.approx(1.32)
+    assert fatigue_record["evidence_sha256"]
     assert at.session_state["result_fatigue_sig"] == (
         at.session_state["_latest_inputs"]["fatigue_sig"]
     )
@@ -6215,6 +6351,152 @@ def _bridge_bound_snapshot():
             reason="Elastic SLS-1 converged",
         ),
     ))
+
+
+def _fatigue_bound_snapshot():
+    import fatigue_analysis
+    import fatigue_inputs
+    from sector import conformance
+
+    edition = fatigue_inputs.EC2_2023
+    gamma_s, gamma_c, factor_basis = (
+        fatigue_inputs.resolve_fatigue_factors(
+            edition,
+            mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            gamma_s=0.5,
+            gamma_c=2.0,
+            approval_reference="DB-FAT-21 / checker approval",
+        )
+    )
+    miner_source = "AUTH-SN-7 / checker approval"
+    miner_record = fatigue_analysis.concrete_miner_conformance(
+        edition=edition,
+        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        miner_source=miner_source,
+        coefficient_c=100.0,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+    records = [
+        factor_basis["parameter_conformance"]["gamma_s"],
+        factor_basis["parameter_conformance"]["gamma_c"],
+        miner_record,
+    ]
+    aggregate = conformance.aggregate(
+        records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=edition,
+    )
+    return fatigue_analysis.calculation_conformance_record(
+        {
+            "valid": True,
+            "converged": True,
+            "passed": True,
+            "errors": (),
+            "edition": edition,
+            "design_methodology": bridge.COMPONENT_METHODS,
+            "checks": {"reinforcement": True, "concrete": True},
+            "concrete_method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+            "concrete_miner_basis": (
+                fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+            ),
+            "concrete_miner_source": miner_source,
+            "partial_factors": {
+                "gamma_s": gamma_s,
+                "gamma_c": gamma_c,
+                "gamma_ff": 1.0,
+            },
+            "factor_basis": factor_basis,
+            "parameter_conformance": records,
+            "conformance": aggregate,
+            "assessment_status": aggregate["assessment_status"],
+            "qualified_verdict": aggregate["qualified_verdict"],
+            "standard_passed": False,
+            "concrete_parameters": {
+                "c": 100.0,
+                "method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+                "parameter_conformance": miner_record,
+            },
+        },
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+
+def test_download_session_and_autosave_reject_fatigue_evidence_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    import project_io
+    import sector_app
+
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    fatigue_record = _fatigue_bound_snapshot()
+    assert fatigue_record is not None
+    fatigue_record["partial_factors"]["gamma_s"] = 1.15
+    calculation = {
+        "input_sha256": project_io.input_sha256({}, scalars),
+        "fatigue_conformance": fatigue_record,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: ({}, scalars),
+    )
+
+    download = json.loads(sector_app._gather_project())["calculation"]
+    assert "fatigue_conformance" not in download
+    assert download["matches_saved_inputs"] is False
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: "current-input-hash",
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    assert "fatigue_conformance" not in state["calculation_record"]
+    saved = json.loads(captured["data"])["calculation"]
+    assert "fatigue_conformance" not in saved
+    assert saved["matches_saved_inputs"] is True
 
 
 def test_download_session_and_autosave_reject_bridge_binding_mutation(

@@ -261,6 +261,9 @@ def test_manual_documents_project_recovery_and_ownership():
         "Project files and autosave",
         "five-minute interval",
         "autosave is recovery",
+        "actual material factors and Miner coefficient",
+        "selected-standard verdict",
+        "Save / Load panel",
     ):
         assert expected in text
     import pypdf
@@ -338,7 +341,11 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "gamma_3",
         "Approved final override",
         "Fatigue-factor approval / source",
-        "legacy values requiring review",
+        "migrated legacy value",
+        "0.5 or 2.0",
+        "APPROVED CUSTOM",
+        "different positive finite coefficient",
+        "NOT FULLY ASSESSED",
         "gamma_{Ff}",
         r"\\Delta\\sigma_{Ed,i}",
         "N_{R,i}",
@@ -351,6 +358,7 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "Shear and torsion fatigue are not included",
     ):
         assert expected in text
+    assert "A different coefficient requires" not in text
     assert "termination reason" not in text
 
 
@@ -366,6 +374,10 @@ def test_manual_documents_bridge_methodology_routing_and_limitations():
         "Method-b tensile region",
         "one common",
         "web/flange",
+        "Numerical validity and standards conformity are separate",
+        "Custom design basis",
+        "actual value",
+        "non-positive values remain hard input errors",
         "Table 7.101N",
         "Response duration and SLS combination class are separate",
         "quasi-permanent response",

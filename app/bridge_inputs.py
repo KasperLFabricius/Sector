@@ -7,10 +7,10 @@ from collections.abc import Mapping, Sequence
 
 import pandas as pd
 
-from sector import bridge
+from sector import bridge, conformance
 
 
-VERSION = 1
+VERSION = 2
 
 COVERAGE_TABLE_KEY = "bridge_coverage_base"
 BRITTLE_TABLE_KEY = "bridge_brittle_regions_base"
@@ -38,6 +38,9 @@ BOX_WALL_COLUMNS = (
     "v_rd_max_kn",
     "t_ed_equivalent_kn",
     "t_rd_max_equivalent_kn",
+    "parameter_basis",
+    "custom_methodology",
+    "approval_reference",
 )
 MINIMUM_COLUMNS = (
     "component",
@@ -48,6 +51,9 @@ MINIMUM_COLUMNS = (
     "sigma_s_mpa",
     "as_provided_mm2",
     "restrained_shrinkage",
+    "parameter_basis",
+    "custom_methodology",
+    "approval_reference",
 )
 
 TABLE_COLUMNS = {
@@ -60,15 +66,38 @@ TABLE_COLUMNS = {
 TEXT_COLUMNS = {
     COVERAGE_TABLE_KEY: COVERAGE_COLUMNS,
     BRITTLE_TABLE_KEY: ("region_id",),
-    BOX_WALL_TABLE_KEY: ("wall_id",),
-    MINIMUM_TABLE_KEY: ("component",),
+    BOX_WALL_TABLE_KEY: (
+        "wall_id",
+        "parameter_basis",
+        "custom_methodology",
+        "approval_reference",
+    ),
+    MINIMUM_TABLE_KEY: (
+        "component",
+        "parameter_basis",
+        "custom_methodology",
+        "approval_reference",
+    ),
 }
 
 NUMERIC_COLUMNS = {
     COVERAGE_TABLE_KEY: (),
     BRITTLE_TABLE_KEY: BRITTLE_COLUMNS[1:],
-    BOX_WALL_TABLE_KEY: BOX_WALL_COLUMNS[1:],
-    MINIMUM_TABLE_KEY: MINIMUM_COLUMNS[1:7],
+    BOX_WALL_TABLE_KEY: (
+        "cot_theta",
+        "v_ed_kn",
+        "v_rd_max_kn",
+        "t_ed_equivalent_kn",
+        "t_rd_max_equivalent_kn",
+    ),
+    MINIMUM_TABLE_KEY: (
+        "act_mm2",
+        "k_c",
+        "k",
+        "fct_eff_mpa",
+        "sigma_s_mpa",
+        "as_provided_mm2",
+    ),
 }
 
 BOOLEAN_COLUMNS = {
@@ -174,11 +203,18 @@ def normalise_table(value, key: str) -> pd.DataFrame:
 
     result = pd.DataFrame(index=frame.index)
     for column in TABLE_COLUMNS[key]:
-        series = (
-            frame[column]
-            if column in frame
-            else pd.Series([None] * len(frame), index=frame.index)
-        )
+        if column in frame:
+            series = frame[column]
+        else:
+            default = (
+                conformance.STANDARD_BASIS
+                if column == "parameter_basis"
+                else None
+            )
+            series = pd.Series(
+                [default] * len(frame),
+                index=frame.index,
+            )
         if column in BOOLEAN_COLUMNS[key]:
             result[column] = [_flag(value) for value in series]
         elif column in NUMERIC_COLUMNS[key]:
@@ -319,37 +355,33 @@ def table_errors(value, key: str) -> list[str]:
                 errors.append(
                     f"{key} row {row_number}: {column} must be finite"
                 )
+        parameter_basis = _text(row.get("parameter_basis"))
+        if (
+            key in {BOX_WALL_TABLE_KEY, MINIMUM_TABLE_KEY}
+            and parameter_basis not in conformance.BASIS_OPTIONS
+        ):
+            errors.append(
+                f"{key} row {row_number}: unknown parameter_basis"
+            )
         cot_theta = row.get("cot_theta")
         if (
             key == BOX_WALL_TABLE_KEY
             and not pd.isna(cot_theta)
             and math.isfinite(float(cot_theta))
-            and not (
-                bridge.BOX_WALL_COT_THETA_MIN
-                <= float(cot_theta)
-                <= bridge.BOX_WALL_COT_THETA_MAX
-            )
+            and float(cot_theta) <= 0.0
         ):
             errors.append(
-                f"{key} row {row_number}: cot_theta must be between "
-                f"{bridge.BOX_WALL_COT_THETA_MIN:.1f} and "
-                f"{bridge.BOX_WALL_COT_THETA_MAX:.1f}"
+                f"{key} row {row_number}: cot_theta must be greater than zero"
             )
         minimum_k = row.get("k")
         if (
             key == MINIMUM_TABLE_KEY
             and not pd.isna(minimum_k)
             and math.isfinite(float(minimum_k))
-            and not (
-                bridge.MINIMUM_CRACK_K_MIN
-                <= float(minimum_k)
-                <= bridge.MINIMUM_CRACK_K_MAX
-            )
+            and float(minimum_k) <= 0.0
         ):
             errors.append(
-                f"{key} row {row_number}: k must be between "
-                f"{bridge.MINIMUM_CRACK_K_MIN:.2f} and "
-                f"{bridge.MINIMUM_CRACK_K_MAX:.2f}"
+                f"{key} row {row_number}: k must be greater than zero"
             )
         for column in BOOLEAN_COLUMNS[key]:
             if not isinstance(row.get(column), bool):
@@ -364,6 +396,80 @@ def all_table_errors(tables: Mapping) -> list[str]:
     for key in TABLE_KEYS:
         errors.extend(table_errors(tables.get(key), key))
     return errors
+
+
+def conformance_warnings(tables: Mapping) -> list[str]:
+    """Return visible standards-deviation warnings without blocking analysis."""
+
+    warnings: list[str] = []
+    specifications = (
+        (
+            BOX_WALL_TABLE_KEY,
+            "cot_theta",
+            "wall_id",
+            "box_wall",
+            "cot(theta)",
+            bridge.BOX_WALL_COT_THETA_METHOD,
+            bridge.BOX_WALL_COT_THETA_SOURCE,
+            bridge.BOX_WALL_COT_THETA_MIN,
+            bridge.BOX_WALL_COT_THETA_MAX,
+        ),
+        (
+            MINIMUM_TABLE_KEY,
+            "k",
+            "component",
+            "minimum_crack",
+            "minimum-reinforcement k",
+            bridge.MINIMUM_CRACK_K_METHOD,
+            bridge.MINIMUM_CRACK_K_SOURCE,
+            bridge.MINIMUM_CRACK_K_MIN,
+            bridge.MINIMUM_CRACK_K_MAX,
+        ),
+    )
+    for (
+        key,
+        value_column,
+        id_column,
+        parameter_prefix,
+        label,
+        methodology,
+        source,
+        minimum,
+        maximum,
+    ) in specifications:
+        frame = normalise_table(tables.get(key), key)
+        for row_number, row in enumerate(frame.to_dict("records"), start=1):
+            row_id = _text(row.get(id_column))
+            value = row.get(value_column)
+            if not row_id and _blank_numeric_row(row, key):
+                continue
+            try:
+                record = conformance.assess_parameter(
+                    value,
+                    parameter_id=(
+                        f"{parameter_prefix}.{row_id or row_number}."
+                        f"{value_column}"
+                    ),
+                    label=f"{row_id or f'row {row_number}'}: {label}",
+                    selected_standard=bridge.EN1992_2_BASE,
+                    standard_methodology=methodology,
+                    normative_source=source,
+                    basis=_text(row.get("parameter_basis")),
+                    custom_methodology=_text(
+                        row.get("custom_methodology")
+                    ),
+                    approval_reference=_text(
+                        row.get("approval_reference")
+                    ),
+                    minimum=minimum,
+                    maximum=maximum,
+                )
+            except ValueError:
+                # Numerical/malformed input is reported by ``table_errors``.
+                continue
+            if record["state"] != conformance.STATE_CONFORMS:
+                warnings.append(record["message"])
+    return list(dict.fromkeys(warnings))
 
 
 def decisions(value) -> tuple[bridge.ApplicabilityDecision, ...]:
@@ -404,6 +510,9 @@ def box_walls(value) -> tuple[bridge.BoxWallEvidence, ...]:
             v_rd_max_kn=row["v_rd_max_kn"],
             t_ed_equivalent_kn=row["t_ed_equivalent_kn"],
             t_rd_max_equivalent_kn=row["t_rd_max_equivalent_kn"],
+            parameter_basis=_text(row["parameter_basis"]),
+            custom_methodology=_text(row["custom_methodology"]),
+            approval_reference=_text(row["approval_reference"]),
         )
         for row in frame.to_dict("records")
         if _text(row["wall_id"]) or not _blank_numeric_row(row, BOX_WALL_TABLE_KEY)
@@ -422,6 +531,9 @@ def minimum_components(value) -> tuple[bridge.MinimumCrackComponent, ...]:
             sigma_s_mpa=row["sigma_s_mpa"],
             as_provided_mm2=row["as_provided_mm2"],
             restrained_shrinkage=row["restrained_shrinkage"],
+            parameter_basis=_text(row["parameter_basis"]),
+            custom_methodology=_text(row["custom_methodology"]),
+            approval_reference=_text(row["approval_reference"]),
         )
         for row in frame.to_dict("records")
         if _text(row["component"]) or not _blank_numeric_row(row, MINIMUM_TABLE_KEY)

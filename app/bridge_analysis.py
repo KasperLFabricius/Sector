@@ -16,7 +16,7 @@ import fatigue_analysis
 import fatigue_inputs
 import fatigue_presentation
 import result_presentation as presentation
-from sector import bridge
+from sector import bridge, conformance
 from sector import sls
 
 
@@ -614,65 +614,57 @@ def _bridge_fatigue_context_errors(
                 "current fatigue edition is not the EN 1992-2 bridge edition"
             )
     if check_key == "concrete":
-        if inp is not None and (
-            inp.get("fatigue_concrete_method")
-            != fatigue_analysis.CONCRETE_MINER
-        ):
+        calculated_method = payload.get("concrete_method")
+        if calculated_method not in fatigue_analysis.CONCRETE_MINER_METHODS:
             errors.append(
-                "current concrete fatigue method is not the bridge Miner method"
+                "calculated concrete fatigue method is not a Miner/S-N method"
             )
         if (
-            payload.get("concrete_method")
-            != fatigue_analysis.CONCRETE_MINER
+            inp is not None
+            and inp.get("fatigue_concrete_method") != calculated_method
         ):
             errors.append(
-                "calculated concrete fatigue method is not the bridge Miner method"
+                "current and calculated concrete fatigue methods conflict"
             )
-        if (
-            payload.get("concrete_miner_basis")
-            != fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-        ):
-            errors.append(
-                "calculated concrete Miner applicability is not bound to "
-                "the EN 1992-2 bridge methodology"
-            )
-        if inp is not None:
-            input_c = inp.get("fatigue_concrete_c")
-            if (
-                isinstance(input_c, bool)
-                or type(input_c).__name__ == "bool_"
-                or not isinstance(input_c, (int, float))
-                or not math.isfinite(float(input_c))
-                or not math.isclose(
-                    float(input_c),
-                    fatigue_inputs.STANDARD_CONCRETE_MINER_C,
-                    rel_tol=0.0,
-                    abs_tol=1.0e-12,
-                )
-            ):
-                errors.append(
-                    "current bridge concrete Miner input is not bound to C = 14"
-                )
         concrete_parameters = payload.get("concrete_parameters")
         calculated_c = (
             concrete_parameters.get("c")
             if isinstance(concrete_parameters, Mapping)
             else None
         )
+        if inp is not None:
+            input_c = inp.get("fatigue_concrete_c")
+            if (
+                isinstance(input_c, bool)
+                or type(input_c).__name__ == "bool_"
+                or _finite(input_c) is None
+                or float(input_c) <= 0.0
+            ):
+                errors.append(
+                    "current bridge concrete Miner coefficient is numerically "
+                    "invalid"
+                )
+            elif (
+                _finite(calculated_c) is not None
+                and not math.isclose(
+                    float(input_c),
+                    float(calculated_c),
+                    rel_tol=0.0,
+                    abs_tol=1.0e-12,
+                )
+            ):
+                errors.append(
+                    "current and calculated concrete Miner coefficients conflict"
+                )
         if (
             isinstance(calculated_c, bool)
             or type(calculated_c).__name__ == "bool_"
-            or not isinstance(calculated_c, (int, float))
-            or not math.isfinite(float(calculated_c))
-            or not math.isclose(
-                float(calculated_c),
-                fatigue_inputs.STANDARD_CONCRETE_MINER_C,
-                rel_tol=0.0,
-                abs_tol=1.0e-12,
-            )
+            or _finite(calculated_c) is None
+            or float(calculated_c) <= 0.0
         ):
             errors.append(
-                "calculated bridge concrete Miner evidence is not bound to C = 14"
+                "calculated bridge concrete Miner coefficient is numerically "
+                "invalid"
             )
     return tuple(errors)
 
@@ -729,10 +721,28 @@ def reinforcement_fatigue_evidence(
             reason="; ".join(context_errors),
         )
     rows = []
+    reinforcement_parameter_records = [
+        dict(record)
+        for record in (payload.get("parameter_conformance") or ())
+        if (
+            isinstance(record, Mapping)
+            and record.get("parameter_id") == "fatigue.gamma_s"
+        )
+    ]
+    reinforcement_requires_review = any(
+        record.get("state") != conformance.STATE_CONFORMS
+        for record in reinforcement_parameter_records
+    )
     for spectrum in fatigue_presentation.items(payload, "spectra"):
         for row in fatigue_presentation.reinforcement_rows(spectrum):
+            analytical_status = _status(row.get("status"))
             rows.append({
-                "status": row.get("status"),
+                "status": (
+                    bridge.STATUS_REVIEW
+                    if reinforcement_requires_review
+                    else analytical_status
+                ),
+                "analytical_status": analytical_status,
                 "result": _utilisation_text(row.get("utilisation")),
                 "criterion": "<= 100 %",
                 "util": row.get("utilisation"),
@@ -749,7 +759,11 @@ def reinforcement_fatigue_evidence(
                 ),
                 "note": (
                     f"spectrum {fatigue_presentation.value(spectrum, 'spectrum_name', '-')}; "
-                    f"element {row.get('element_id', '-')}"
+                    f"element {row.get('element_id', '-')}; "
+                    f"{payload.get('qualified_verdict') or ''}"
+                ),
+                "fatigue_parameter_conformance": (
+                    reinforcement_parameter_records
                 ),
             })
     warnings = _messages(payload.get("warnings"))
@@ -830,11 +844,54 @@ def concrete_fatigue_evidence(
             source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
             reason="; ".join(context_errors),
         )
+    concrete_parameters = payload.get("concrete_parameters")
+    if not isinstance(concrete_parameters, Mapping):
+        return bridge.ExternalEvidence(
+            status=bridge.STATUS_INVALID,
+            source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
+            reason="Concrete fatigue parameter evidence is malformed.",
+        )
+    miner_record = concrete_parameters.get("parameter_conformance")
+    if not isinstance(miner_record, Mapping):
+        return bridge.ExternalEvidence(
+            status=bridge.STATUS_INVALID,
+            source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
+            reason="Concrete Miner conformance evidence is missing.",
+        )
+    concrete_parameter_records = [
+        dict(record)
+        for record in (payload.get("parameter_conformance") or ())
+        if (
+            isinstance(record, Mapping)
+            and record.get("parameter_id") in {
+                "fatigue.gamma_c",
+                "concrete_fatigue.miner_c",
+            }
+        )
+    ]
+    concrete_requires_review = any(
+        record.get("state") != conformance.STATE_CONFORMS
+        for record in concrete_parameter_records
+    )
+    assessment_status = (
+        bridge.STATUS_REVIEW
+        if concrete_requires_review
+        else ""
+    )
+    qualified_verdict = str(
+        payload.get("qualified_verdict") or ""
+    ).strip()
     rows = []
     for spectrum in fatigue_presentation.items(payload, "spectra"):
         for row in fatigue_presentation.concrete_rows(spectrum):
+            analytical_status = _status(row.get("status"))
             rows.append({
-                "status": row.get("status"),
+                "status": (
+                    bridge.STATUS_REVIEW
+                    if assessment_status == bridge.STATUS_REVIEW
+                    else analytical_status
+                ),
+                "analytical_status": analytical_status,
                 "result": _utilisation_text(row.get("utilisation")),
                 "criterion": "<= 100 %",
                 "util": row.get("utilisation"),
@@ -848,13 +905,14 @@ def concrete_fatigue_evidence(
                     else ""
                 ),
                 "methodology": bridge.EN1992_2_BASE,
-                "concrete_method": fatigue_analysis.CONCRETE_MINER,
-                "miner_coefficient_c": (
-                    fatigue_inputs.STANDARD_CONCRETE_MINER_C
-                ),
+                "concrete_method": payload.get("concrete_method"),
+                "miner_coefficient_c": concrete_parameters.get("c"),
+                "parameter_conformance": dict(miner_record),
+                "fatigue_parameter_conformance": concrete_parameter_records,
                 "note": (
                     f"spectrum {fatigue_presentation.value(spectrum, 'spectrum_name', '-')}; "
-                    f"concrete fibre {row.get('fibre_index', '-')}"
+                    f"concrete fibre {row.get('fibre_index', '-')}; "
+                    f"{qualified_verdict or assessment_status}"
                 ),
             })
     errors = _messages(payload.get("errors"))

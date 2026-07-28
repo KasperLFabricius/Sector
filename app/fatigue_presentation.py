@@ -84,7 +84,13 @@ def overall_status(payload, *, stale=False):
     if payload is None:
         return "NOT RUN"
     status = result_status(payload)
-    if status == "PASS" and items(payload, "warnings"):
+    conformance_status = value(payload, "assessment_status")
+    if (
+        status in {"PASS", "FAIL"}
+        and conformance_status in {"PASS", "FAIL", "REVIEW"}
+    ):
+        status = conformance_status
+    elif status == "PASS" and items(payload, "warnings"):
         status = "REVIEW"
     return "STALE" if stale else status
 
@@ -105,6 +111,9 @@ def overall_note(payload, *, stale=False):
         return "One or more grouped spectra did not converge"
     if status == "FAIL":
         return "Governing grouped spectrum"
+    if status == "REVIEW":
+        qualified = str(value(payload, "qualified_verdict", "")).strip()
+        return qualified or "Analytical result requires design-basis review"
     warnings = items(payload, "warnings")
     if warnings:
         suffix = "" if len(warnings) == 1 else "s"

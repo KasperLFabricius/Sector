@@ -26,7 +26,7 @@ from collections.abc import Iterable, Mapping, Sequence
 
 import pandas as pd
 
-from sector import codes
+from sector import codes, conformance
 from sector.fatigue import STANDARD_CONCRETE_MINER_C
 
 
@@ -177,14 +177,34 @@ def resolve_fatigue_factors(
     gamma_c: float | None = None,
     gamma0: float = 1.0,
     gamma3: float = 1.0,
+    approval_reference: str = "",
 ) -> tuple[float, float, dict]:
-    """Resolve final steel/concrete factors without hiding preset multipliers."""
+    """Resolve actual factors and their independent conformance evidence."""
     preset = fatigue_factor_preset(edition, gamma0=gamma0, gamma3=gamma3)
     preset_s, preset_c = preset["gamma_s"], preset["gamma_c"]
+    approval = conformance.typed_text(
+        approval_reference,
+        "fatigue-factor approval reference",
+    )
     if mode == FACTOR_MODE_PRESET:
-        final_s, final_c = preset_s, preset_c
-        derivation_s = preset["gamma_s_derivation"]
-        derivation_c = preset["gamma_c_derivation"]
+        final_s = (
+            preset_s
+            if gamma_s is None
+            else codes.strict_positive_real(
+                gamma_s,
+                "the final reinforcement fatigue material factor",
+            )
+        )
+        final_c = (
+            preset_c
+            if gamma_c is None
+            else codes.strict_positive_real(
+                gamma_c,
+                "the final concrete fatigue material factor",
+            )
+        )
+        parameter_basis = conformance.STANDARD_BASIS
+        custom_methodology = ""
     elif mode in (FACTOR_MODE_OVERRIDE, FACTOR_MODE_LEGACY):
         if gamma_s is None or gamma_c is None:
             raise ValueError("final fatigue material factors are required")
@@ -196,15 +216,80 @@ def resolve_fatigue_factors(
             gamma_c,
             "the final concrete fatigue material factor",
         )
-        qualifier = (
-            "approved final override"
+        parameter_basis = conformance.CUSTOM_BASIS
+        custom_methodology = (
+            "Project material-factor override"
             if mode == FACTOR_MODE_OVERRIDE
-            else "legacy saved final value - review required"
+            else "Migrated legacy material-factor value"
+        )
+        if mode == FACTOR_MODE_LEGACY:
+            approval = ""
+    else:
+        raise ValueError(f"unknown fatigue factor mode: {mode}")
+    records = {
+        "gamma_s": conformance.assess_parameter(
+            final_s,
+            parameter_id="fatigue.gamma_s",
+            label="Reinforcement fatigue material factor gamma_s",
+            selected_standard=edition,
+            standard_methodology=(
+                "Edition-derived fatigue material-factor preset"
+            ),
+            normative_source=str(preset["reference"]),
+            basis=parameter_basis,
+            custom_methodology=custom_methodology,
+            approval_reference=approval,
+            prescribed_value=preset_s,
+        ),
+        "gamma_c": conformance.assess_parameter(
+            final_c,
+            parameter_id="fatigue.gamma_c",
+            label="Concrete fatigue material factor gamma_c,fat",
+            selected_standard=edition,
+            standard_methodology=(
+                "Edition-derived fatigue material-factor preset"
+            ),
+            normative_source=str(preset["reference"]),
+            basis=parameter_basis,
+            custom_methodology=custom_methodology,
+            approval_reference=approval,
+            prescribed_value=preset_c,
+        ),
+    }
+    aggregate = conformance.aggregate(
+        list(records.values()),
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=edition,
+    )
+    if mode == FACTOR_MODE_PRESET:
+        derivation_s = (
+            preset["gamma_s_derivation"]
+            if math.isclose(final_s, preset_s, rel_tol=0.0, abs_tol=1.0e-12)
+            else (
+                f"actual retained value = {final_s:.3f}; edition preset "
+                f"= {preset_s:.3f}"
+            )
+        )
+        derivation_c = (
+            preset["gamma_c_derivation"]
+            if math.isclose(final_c, preset_c, rel_tol=0.0, abs_tol=1.0e-12)
+            else (
+                f"actual retained value = {final_c:.3f}; edition preset "
+                f"= {preset_c:.3f}"
+            )
+        )
+    else:
+        qualifier = (
+            "approved custom final override"
+            if aggregate["state"] == conformance.STATE_APPROVED_CUSTOM
+            else (
+                "custom final override - review required"
+                if mode == FACTOR_MODE_OVERRIDE
+                else "legacy saved final value - review required"
+            )
         )
         derivation_s = f"{qualifier} = {final_s:.3f}"
         derivation_c = f"{qualifier} = {final_c:.3f}"
-    else:
-        raise ValueError(f"unknown fatigue factor mode: {mode}")
     return final_s, final_c, {
         **preset,
         "mode": mode,
@@ -212,10 +297,13 @@ def resolve_fatigue_factors(
         "preset_gamma_c": preset_c,
         "gamma_s": final_s,
         "gamma_c": final_c,
+        "approval_reference": approval,
         "gamma_s_derivation": derivation_s,
         "gamma_c_derivation": derivation_c,
         "override": mode == FACTOR_MODE_OVERRIDE,
         "legacy_review_required": mode == FACTOR_MODE_LEGACY,
+        "parameter_conformance": records,
+        "conformance": aggregate,
     }
 
 

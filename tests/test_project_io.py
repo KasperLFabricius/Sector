@@ -22,7 +22,7 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from sector import bridge, codes, detailing, sls  # noqa: E402
+from sector import bridge, codes, conformance, detailing, sls  # noqa: E402
 
 
 def _v17_crack_defaults():
@@ -484,7 +484,7 @@ def test_current_round_trip_preserves_fatigue_details_basis_and_grouped_spectrum
     )
 
 
-def test_v19_round_trip_preserves_typed_bridge_tables_and_methodology():
+def test_v20_round_trip_preserves_typed_bridge_tables_and_methodology():
     tables = _tables()
     coverage = bridge_inputs.default_coverage_records()
     for row in coverage:
@@ -530,7 +530,7 @@ def test_v19_round_trip_preserves_typed_bridge_tables_and_methodology():
     payload = json.loads(text)
     restored, restored_scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 19
+    assert payload["version"] == 20
     assert payload["bridge"]["version"] == bridge_inputs.VERSION
     assert restored_scalars["design_methodology"] == bridge.EN1992_2_BASE
     assert restored_scalars["bridge_minimum_scope"] == bridge.MINIMUM_SCOPE_WEB
@@ -558,7 +558,7 @@ def test_v19_round_trip_preserves_typed_bridge_tables_and_methodology():
 
 
 @pytest.mark.parametrize(
-    ("table_key", "record", "message"),
+    ("table_key", "record"),
     [
         (
             bridge_inputs.BOX_WALL_TABLE_KEY,
@@ -570,7 +570,6 @@ def test_v19_round_trip_preserves_typed_bridge_tables_and_methodology():
                 "t_ed_equivalent_kn": 10.0,
                 "t_rd_max_equivalent_kn": 100.0,
             },
-            "cot_theta must be between",
         ),
         (
             bridge_inputs.MINIMUM_TABLE_KEY,
@@ -584,38 +583,39 @@ def test_v19_round_trip_preserves_typed_bridge_tables_and_methodology():
                 "as_provided_mm2": 5.0,
                 "restrained_shrinkage": False,
             },
-            "k must be between",
         ),
     ],
 )
-def test_project_rejects_out_of_domain_bridge_parameter_on_save_and_load(
+def test_project_round_trips_positive_custom_bridge_parameter_and_provenance(
     table_key,
     record,
-    message,
 ):
+    record.update({
+        "parameter_basis": conformance.CUSTOM_BASIS,
+        "custom_methodology": "Project bridge analysis method",
+        "approval_reference": "DB-BRIDGE-01 / checker A",
+    })
     tables = _tables()
     tables[table_key] = bridge_inputs.normalise_table([record], table_key)
 
-    with pytest.raises(ValueError, match=message):
-        project_io.dump_project(tables, {})
-
-    valid_record = dict(record)
-    valid_record[
-        "cot_theta" if table_key == bridge_inputs.BOX_WALL_TABLE_KEY else "k"
-    ] = (
-        bridge.BOX_WALL_COT_THETA_MIN
-        if table_key == bridge_inputs.BOX_WALL_TABLE_KEY
-        else bridge.MINIMUM_CRACK_K_MIN
-    )
-    tables[table_key] = bridge_inputs.normalise_table(
-        [valid_record],
+    text = project_io.dump_project(tables, {})
+    restored, _scalars = project_io.parse_project(text)
+    restored_record = bridge_inputs.table_records(
+        restored[table_key],
         table_key,
-    )
-    payload = json.loads(project_io.dump_project(tables, {}))
-    payload["bridge"]["tables"][table_key][0] = record
+    )[0]
 
-    with pytest.raises(ValueError, match=message):
-        project_io.parse_project(json.dumps(payload))
+    assert restored_record == bridge_inputs.table_records(
+        tables[table_key],
+        table_key,
+    )[0]
+    assert restored_record["parameter_basis"] == conformance.CUSTOM_BASIS
+    assert restored_record["custom_methodology"] == (
+        "Project bridge analysis method"
+    )
+    assert restored_record["approval_reference"] == (
+        "DB-BRIDGE-01 / checker A"
+    )
 
 
 def _bridge_miner_scalars(*, coefficient=14.0):
@@ -643,20 +643,19 @@ def test_project_round_trip_binds_bridge_standard_miner_c14():
     )
 
 
-def test_project_rejects_bridge_standard_miner_c100_on_all_read_write_boundaries():
-    with pytest.raises(ValueError, match="fixes C = 14"):
-        project_io.dump_project({}, _bridge_miner_scalars(coefficient=100.0))
-
-    payload = json.loads(
-        project_io.dump_project({}, _bridge_miner_scalars())
+def test_project_preserves_bridge_standard_miner_c100_for_review():
+    text = project_io.dump_project(
+        {},
+        _bridge_miner_scalars(coefficient=100.0),
     )
-    payload["scalars"]["fatigue_concrete_c"] = 100.0
-    mutated = json.dumps(payload)
+    _tables_out, scalars = project_io.parse_project(text)
+    provenance = project_io.project_provenance(text)
 
-    with pytest.raises(ValueError, match="fixes C = 14"):
-        project_io.parse_project(mutated)
-    with pytest.raises(ValueError, match="fixes C = 14"):
-        project_io.project_provenance(mutated)
+    assert scalars["fatigue_concrete_c"] == 100.0
+    assert scalars["fatigue_concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+    assert provenance["input_hash_valid"] is True
 
 
 def test_project_round_trip_keeps_nonstandard_c_only_under_sourced_project_method():
@@ -683,8 +682,11 @@ def test_project_round_trip_keeps_nonstandard_c_only_under_sourced_project_metho
     )
 
     scalars["fatigue_concrete_miner_source"] = ""
-    with pytest.raises(ValueError, match="document/clause/approval source"):
-        project_io.dump_project({}, scalars)
+    text = project_io.dump_project({}, scalars)
+    _tables_out, restored = project_io.parse_project(text)
+
+    assert restored["fatigue_concrete_c"] == 100.0
+    assert restored["fatigue_concrete_miner_source"] == ""
 
 
 def test_pre_v19_project_cannot_inherit_bridge_methodology_from_session():
@@ -1599,6 +1601,127 @@ def test_project_records_whether_calculation_matches_saved_inputs():
 
     assert matching["calculation"]["matches_saved_inputs"] is True
     assert changed["calculation"]["matches_saved_inputs"] is False
+
+
+def _approved_custom_fatigue_conformance_record():
+    edition = fatigue_inputs.EC2_2023
+    gamma_s, gamma_c, factor_basis = (
+        fatigue_inputs.resolve_fatigue_factors(
+            edition,
+            mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            gamma_s=0.5,
+            gamma_c=2.0,
+            approval_reference="DB-FAT-21 / checker approval",
+        )
+    )
+    miner_source = "AUTH-SN-7 / checker approval"
+    miner_record = fatigue_analysis.concrete_miner_conformance(
+        edition=edition,
+        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
+        miner_source=miner_source,
+        coefficient_c=100.0,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+    parameter_records = [
+        factor_basis["parameter_conformance"]["gamma_s"],
+        factor_basis["parameter_conformance"]["gamma_c"],
+        miner_record,
+    ]
+    aggregate = conformance.aggregate(
+        parameter_records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=edition,
+    )
+    payload = {
+        "valid": True,
+        "converged": True,
+        "passed": True,
+        "errors": (),
+        "edition": edition,
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "checks": {"reinforcement": True, "concrete": True},
+        "concrete_method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+        "concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        "concrete_miner_source": miner_source,
+        "partial_factors": {
+            "gamma_s": gamma_s,
+            "gamma_c": gamma_c,
+            "gamma_ff": 1.0,
+        },
+        "factor_basis": factor_basis,
+        "parameter_conformance": parameter_records,
+        "conformance": aggregate,
+        "assessment_status": aggregate["assessment_status"],
+        "qualified_verdict": aggregate["qualified_verdict"],
+        "standard_passed": False,
+        "concrete_parameters": {
+            "c": 100.0,
+            "method": fatigue_analysis.CONCRETE_PROJECT_MINER,
+            "parameter_conformance": miner_record,
+        },
+    }
+    return fatigue_analysis.calculation_conformance_record(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+
+def test_project_round_trip_retains_bound_fatigue_conformance_evidence():
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    digest = project_io.input_sha256({}, scalars)
+    fatigue_record = _approved_custom_fatigue_conformance_record()
+    assert fatigue_record is not None
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "fatigue_conformance": fatigue_record,
+        },
+    )
+    saved = json.loads(text)
+    provenance = project_io.project_provenance(text)
+
+    assert saved["calculation"]["fatigue_conformance"] == fatigue_record
+    assert saved["calculation"]["matches_saved_inputs"] is True
+    assert saved["provenance"]["results_included"] is True
+    assert provenance["calculation"]["fatigue_conformance"] == fatigue_record
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+    assert provenance["results_included"] is True
+    assert fatigue_record["partial_factors"]["gamma_s"] == pytest.approx(0.5)
+    assert fatigue_record["partial_factors"]["gamma_c"] == pytest.approx(2.0)
+    assert fatigue_record["concrete_parameters"]["c"] == pytest.approx(100.0)
+    assert fatigue_record["concrete_miner_source"] == (
+        "AUTH-SN-7 / checker approval"
+    )
+    assert fatigue_record["conformance"]["state"] == (
+        conformance.STATE_APPROVED_CUSTOM
+    )
+
+
+def test_project_drops_mutated_fatigue_conformance_evidence_fail_closed():
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    digest = project_io.input_sha256({}, scalars)
+    fatigue_record = _approved_custom_fatigue_conformance_record()
+    assert fatigue_record is not None
+    fatigue_record["partial_factors"]["gamma_s"] = 1.15
+
+    saved = json.loads(project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "fatigue_conformance": fatigue_record,
+        },
+    ))
+
+    assert "fatigue_conformance" not in saved["calculation"]
+    assert saved["calculation"]["matches_saved_inputs"] is False
+    assert saved["provenance"]["results_included"] is False
 
 
 def _project_width_crack_control():

@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from sector import bridge
+from sector import bridge, conformance
 from tools import pr04_bridge_oracle as oracle
 
 
@@ -20,6 +20,33 @@ def _decisions(**states):
 
 
 def _external(status=bridge.STATUS_PASS, utilisation=0.5):
+    gamma_s = conformance.assess_parameter(
+        1.15,
+        parameter_id="fatigue.gamma_s",
+        label="Reinforcement fatigue material factor gamma_s",
+        selected_standard=bridge.EN1992_2_BASE,
+        standard_methodology="Edition-derived fatigue material-factor preset",
+        normative_source="DS/EN 1992-2 inherited fatigue factors",
+        prescribed_value=1.15,
+    )
+    gamma_c = conformance.assess_parameter(
+        1.50,
+        parameter_id="fatigue.gamma_c",
+        label="Concrete fatigue material factor gamma_c,fat",
+        selected_standard=bridge.EN1992_2_BASE,
+        standard_methodology="Edition-derived fatigue material-factor preset",
+        normative_source="DS/EN 1992-2 inherited fatigue factors",
+        prescribed_value=1.50,
+    )
+    miner = conformance.assess_parameter(
+        bridge.STANDARD_CONCRETE_MINER_C,
+        parameter_id="concrete_fatigue.miner_c",
+        label="Concrete fatigue Miner coefficient C",
+        selected_standard=bridge.EN1992_2_BASE,
+        standard_methodology=bridge.CONCRETE_MINER_STANDARD_METHOD,
+        normative_source=bridge.CONCRETE_MINER_STANDARD_SOURCE,
+        prescribed_value=bridge.STANDARD_CONCRETE_MINER_C,
+    )
     return bridge.ExternalEvidence(
         status=status,
         result=f"{utilisation * 100:.1f} %",
@@ -28,9 +55,17 @@ def _external(status=bridge.STATUS_PASS, utilisation=0.5):
         reason="solver evidence retained",
         utilisation=utilisation,
         evidence=({
+            "status": status,
+            "analytical_status": status,
             "methodology": bridge.EN1992_2_BASE,
             "concrete_method": bridge.CONCRETE_MINER,
             "miner_coefficient_c": bridge.STANDARD_CONCRETE_MINER_C,
+            "parameter_conformance": miner,
+            "fatigue_parameter_conformance": (
+                gamma_s,
+                gamma_c,
+                miner,
+            ),
         },),
     )
 
@@ -269,8 +304,9 @@ def test_box_wall_mismatched_angle_blocks_even_when_each_ratio_passes():
         "box_wall_torsion",
     )
 
-    assert check["status"] == bridge.STATUS_NOT_ASSESSED
-    assert "same compression-field" in check["reason"]
+    assert check["status"] == bridge.STATUS_REVIEW
+    assert "common compression-field" in check["reason"]
+    assert check["evidence"][0]["analytical_status"] == bridge.STATUS_PASS
 
 
 @pytest.mark.parametrize("cot_theta", [1.0, 2.5])
@@ -295,20 +331,47 @@ def test_box_wall_normative_strut_angle_bounds_are_inclusive(cot_theta):
     assert check["status"] == bridge.STATUS_PASS
 
 
-@pytest.mark.parametrize(
-    "cot_theta",
-    [
-        math.nextafter(1.0, 0.0),
-        math.nextafter(2.5, math.inf),
-        0.999,
-        2.501,
-        10.0,
-        True,
-        float("nan"),
-        float("inf"),
-    ],
-)
-def test_box_wall_out_of_domain_or_false_numeric_angle_cannot_pass(cot_theta):
+@pytest.mark.parametrize("cot_theta", [
+    math.nextafter(1.0, 0.0),
+    math.nextafter(2.5, math.inf),
+    0.999,
+    2.501,
+    10.0,
+])
+def test_box_wall_positive_out_of_domain_angle_calculates_as_review(cot_theta):
+    evidence = _complete_evidence(
+        decisions=_decisions(box_wall_torsion=bridge.REQUIRED),
+        has_hollow_section=True,
+        expected_box_walls=1,
+        box_walls=(
+            bridge.BoxWallEvidence(
+                "Wall", cot_theta, 10.0, 100.0, 10.0, 100.0
+            ),
+        ),
+    )
+
+    check = _check(
+        bridge.assess_base_methodology(evidence),
+        "box_wall_torsion",
+    )
+
+    assert check["status"] == bridge.STATUS_REVIEW
+    assert check["evidence"][0]["cot_theta"] == cot_theta
+    assert (
+        check["evidence"][0]["parameter_conformance"]["state"]
+        == conformance.STATE_REVIEW
+    )
+    assert "analytical PASS" in check["result"]
+
+
+@pytest.mark.parametrize("cot_theta", [
+    True,
+    float("nan"),
+    float("inf"),
+    0.0,
+    -1.0,
+])
+def test_box_wall_numerically_invalid_angle_cannot_calculate(cot_theta):
     evidence = _complete_evidence(
         decisions=_decisions(box_wall_torsion=bridge.REQUIRED),
         has_hollow_section=True,
@@ -326,9 +389,6 @@ def test_box_wall_out_of_domain_or_false_numeric_angle_cannot_pass(cot_theta):
     )
 
     assert check["status"] == bridge.STATUS_NOT_ASSESSED
-    assert bridge.assess_base_methodology(evidence)["status"] != (
-        bridge.STATUS_PASS
-    )
 
 
 def test_box_wall_known_failure_governs_incomplete_sibling_wall():
@@ -465,21 +525,34 @@ def test_bridge_minimum_k_normative_bounds_are_inclusive(factor):
     )
 
 
-@pytest.mark.parametrize(
-    "factor",
-    [
-        math.nextafter(0.65, 0.0),
-        math.nextafter(1.0, math.inf),
-        0.649,
-        1.001,
-        0.01,
-        True,
-        float("nan"),
-        float("inf"),
-    ],
-)
-def test_bridge_minimum_k_out_of_domain_or_false_numeric_is_rejected(factor):
-    with pytest.raises(ValueError, match="k|real|finite"):
+@pytest.mark.parametrize("factor", [
+    math.nextafter(0.65, 0.0),
+    math.nextafter(1.0, math.inf),
+    0.649,
+    1.001,
+    0.01,
+])
+def test_bridge_minimum_positive_custom_k_remains_calculable(factor):
+    required, _ = bridge.minimum_crack_reinforcement_area(
+        100_000.0,
+        0.4,
+        factor,
+        3.0,
+        300.0,
+    )
+
+    assert required == pytest.approx(400.0 * factor)
+
+
+@pytest.mark.parametrize("factor", [
+    True,
+    float("nan"),
+    float("inf"),
+    0.0,
+    -0.01,
+])
+def test_bridge_minimum_numerically_invalid_k_is_rejected(factor):
+    with pytest.raises(ValueError, match="k|real|finite|zero"):
         bridge.minimum_crack_reinforcement_area(
             100_000.0,
             0.4,
@@ -516,11 +589,68 @@ def test_bridge_minimum_k_false_pass_pair_fails_closed():
         "web_flange_minimum",
     )
 
-    assert unsafe_check["status"] == bridge.STATUS_NOT_ASSESSED
-    assert normative_check["status"] == bridge.STATUS_FAIL
-    assert normative_check["result"].startswith(
-        "governing As,min / As,provided"
+    assert unsafe_check["status"] == bridge.STATUS_REVIEW
+    assert (
+        unsafe_check["evidence"][0]["analytical_status"]
+        == bridge.STATUS_PASS
     )
+    assert "analytical PASS" in unsafe_check["result"]
+    assert normative_check["status"] == bridge.STATUS_FAIL
+    assert "governing As,min / As,provided" in normative_check["result"]
+
+
+def test_approved_custom_bridge_parameters_are_qualified_not_standard_pass():
+    custom = {
+        "parameter_basis": conformance.CUSTOM_BASIS,
+        "custom_methodology": "Project bridge analysis method",
+        "approval_reference": "DB-BRIDGE-03 / checker C",
+    }
+    evidence = _complete_evidence(
+        decisions=_decisions(
+            box_wall_torsion=bridge.REQUIRED,
+            web_flange_minimum=bridge.REQUIRED,
+        ),
+        has_hollow_section=True,
+        expected_box_walls=1,
+        box_walls=(
+            bridge.BoxWallEvidence(
+                "Wall",
+                10.0,
+                10.0,
+                100.0,
+                10.0,
+                100.0,
+                **custom,
+            ),
+        ),
+        minimum_scope=bridge.MINIMUM_SCOPE_WEB,
+        minimum_components=(
+            bridge.MinimumCrackComponent(
+                "Web",
+                100_000.0,
+                0.4,
+                0.01,
+                3.0,
+                300.0,
+                5.0,
+                **custom,
+            ),
+        ),
+    )
+
+    result = bridge.assess_base_methodology(evidence)
+    box = _check(result, "box_wall_torsion")
+    minimum = _check(result, "web_flange_minimum")
+
+    assert result["status"] == bridge.STATUS_REVIEW
+    for check in (box, minimum):
+        assert check["status"] == bridge.STATUS_REVIEW
+        assert "APPROVED CUSTOM PASS" in check["result"]
+        assert "NOT FULLY ASSESSED" in check["result"]
+        assert (
+            check["evidence"][0]["parameter_conformance"]["state"]
+            == conformance.STATE_APPROVED_CUSTOM
+        )
 
 
 def test_minimum_known_failure_governs_incomplete_sibling_component():
@@ -737,7 +867,7 @@ def test_publication_boundary_revalidates_stored_box_wall_cot_theta():
     assert safe["status"] == bridge.STATUS_INVALID
     assert safe_check["status"] == bridge.STATUS_NOT_ASSESSED
     assert any(
-        "cot(theta) is outside" in error
+        "cot(theta) conformance evidence is stale" in error
         for error in safe["configuration_errors"]
     )
 
@@ -757,7 +887,7 @@ def test_publication_boundary_revalidates_stored_minimum_k():
     assert safe["status"] == bridge.STATUS_INVALID
     assert safe_check["status"] == bridge.STATUS_NOT_ASSESSED
     assert any(
-        "minimum-reinforcement row 1 k is outside" in error
+        "minimum-reinforcement k conformance evidence is stale" in error
         for error in safe["configuration_errors"]
     )
 
@@ -777,7 +907,8 @@ def test_publication_boundary_revalidates_stored_bridge_miner_c():
     assert safe["status"] == bridge.STATUS_INVALID
     assert safe_check["status"] == bridge.STATUS_NOT_ASSESSED
     assert any(
-        "not bound to C = 14" in error
+        "Concrete fatigue Miner coefficient C conformance evidence is stale"
+        in error
         for error in safe["configuration_errors"]
     )
 

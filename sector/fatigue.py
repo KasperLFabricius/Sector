@@ -224,7 +224,7 @@ class ConcreteFatigueProperties:
 
     def __post_init__(self) -> None:
         _normalise_edition(self.edition)
-        method = _normalise_concrete_method(self.method)
+        _normalise_concrete_method(self.method)
         if isinstance(self.c, bool) or type(self.c).__name__ == "bool_":
             raise ValueError("concrete c must be a finite number")
         for field in (
@@ -236,19 +236,6 @@ class ConcreteFatigueProperties:
             "c",
         ):
             _positive(getattr(self, field), f"concrete {field}")
-        if (
-            method == CONCRETE_MINER
-            and not math.isclose(
-                float(self.c),
-                STANDARD_CONCRETE_MINER_C,
-                rel_tol=0.0,
-                abs_tol=1.0e-12,
-            )
-        ):
-            raise ValueError(
-                "the standard concrete Miner relation fixes C = 14; use the "
-                "project-approved Miner S-N method for another coefficient"
-            )
 
 
 @dataclass(frozen=True)

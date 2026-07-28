@@ -4,8 +4,9 @@ A project file is JSON: the four point tables (concrete corners, voids, bars and
 tendons, all in millimetres), Plastic and Elastic load-case tables, an optional
 grouped fatigue spectrum, and the remaining material and analysis-setting inputs.
 The geometry and action tables are the source of truth. Live numerical results
-are recomputed on load; an optional compact crack-control result summary is kept
-only inside the input-hash-bound calculation-provenance record.
+are recomputed on load; optional compact crack-control, fatigue-conformance, and
+bridge-methodology evidence is kept only inside the input-hash-bound
+calculation-provenance record.
 
 The functions here are pure (no Streamlit), so the round trip is unit-tested
 directly; the app wires the download / upload widgets to them.
@@ -31,7 +32,7 @@ from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 19  # v19: typed DS/EN 1992-2 base methodology and bridge evidence
+VERSION = 20  # v20: custom-input conformance and calculation provenance
 DEFAULT_SLS_TENDON_BOND = "Plain round (k1 = 1.6)"
 DEFAULT_SLS_TENDON_XI = 0.0
 DEFAULT_SLS_CRITERION_MODE = sls.CRITERION_MODE_LEGACY
@@ -441,7 +442,7 @@ def _validate_fatigue_miner_scalars(
     *,
     allow_missing: bool = False,
 ) -> None:
-    """Reject an unbound or falsely labelled concrete Miner coefficient."""
+    """Reject only malformed or numerically unusable concrete Miner input."""
 
     relevant = {
         "fatigue_concrete_method",
@@ -465,42 +466,6 @@ def _validate_fatigue_miner_scalars(
         "fatigue_concrete_c",
         fatigue_inputs.STANDARD_CONCRETE_MINER_C,
     )
-    if method == fatigue_analysis.CONCRETE_MINER:
-        if (
-            isinstance(coefficient, bool)
-            or type(coefficient).__name__ == "bool_"
-        ):
-            raise ValueError(
-                "invalid concrete fatigue Miner input: Concrete fatigue C "
-                "must be a finite number greater than zero"
-            )
-        try:
-            coefficient_number = float(coefficient)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "invalid concrete fatigue Miner input: Concrete fatigue C "
-                "must be a finite number greater than zero"
-            ) from exc
-        if (
-            not math.isfinite(coefficient_number)
-            or coefficient_number <= 0.0
-        ):
-            raise ValueError(
-                "invalid concrete fatigue Miner input: Concrete fatigue C "
-                "must be a finite number greater than zero"
-            )
-        if not math.isclose(
-            coefficient_number,
-            fatigue_inputs.STANDARD_CONCRETE_MINER_C,
-            rel_tol=0.0,
-            abs_tol=1.0e-12,
-        ):
-            raise ValueError(
-                "invalid concrete fatigue Miner input: The standard concrete "
-                "Miner relation fixes C = 14; select the separate approved "
-                "project S-N method for any other relation"
-            )
-        return
     miner_basis = str(
         scalars.get("fatigue_concrete_miner_basis") or ""
     ).strip()
@@ -512,6 +477,8 @@ def _validate_fatigue_miner_scalars(
         expected = _default_fatigue_miner_basis(scalars)
         if expected != fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED:
             miner_basis = expected
+    if allow_missing and not miner_basis:
+        return
     errors = fatigue_analysis.concrete_miner_parameter_errors(
         edition=str(scalars.get("fatigue_edition") or "").strip(),
         concrete_method=method,
@@ -592,7 +559,8 @@ def _bridge_tables_from_payload(payload: dict | None) -> dict:
 
     if payload is None:
         return {}
-    if payload.get("version") != bridge_inputs.VERSION:
+    payload_version = payload.get("version")
+    if payload_version not in {1, bridge_inputs.VERSION}:
         raise ValueError("unknown bridge evidence schema version")
     raw_tables = payload.get("tables")
     if not isinstance(raw_tables, dict):
@@ -869,12 +837,13 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
         },
     }
     if calculation:
-        bridge_publication_matches = True
+        calculation_publication_matches = True
         record = {
             key: calculation.get(key)
             for key in (
                 "performed_at_utc", "sector_version", "source_revision",
-                "input_sha256", "crack_control", "bridge_methodology",
+                "input_sha256", "crack_control", "fatigue_conformance",
+                "bridge_methodology",
             )
             if calculation.get(key) not in (None, "")
         }
@@ -886,6 +855,16 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
             )
             if record["crack_control"] is None:
                 record.pop("crack_control")
+        if "fatigue_conformance" in record:
+            record["fatigue_conformance"] = (
+                fatigue_analysis.publication_safe_conformance_record(
+                    record.get("fatigue_conformance"),
+                    design_methodology=scalars.get("design_methodology"),
+                )
+            )
+            if record["fatigue_conformance"] is None:
+                record.pop("fatigue_conformance")
+                calculation_publication_matches = False
         if "bridge_methodology" in record:
             record["bridge_methodology"] = bridge.publication_safe_record(
                 record.get("bridge_methodology"),
@@ -893,20 +872,22 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
             )
             if record["bridge_methodology"] is None:
                 record.pop("bridge_methodology")
-                bridge_publication_matches = False
+                calculation_publication_matches = False
             else:
-                bridge_publication_matches = (
-                    _bridge_publication_matches_inputs(
+                calculation_publication_matches = (
+                    calculation_publication_matches
+                    and _bridge_publication_matches_inputs(
                         record["bridge_methodology"]
                     )
                 )
         record["matches_saved_inputs"] = (
             record.get("input_sha256") == digest
-            and bridge_publication_matches
+            and calculation_publication_matches
         )
         payload["calculation"] = record
         payload["provenance"]["results_included"] = bool(
             (record.get("crack_control") or {}).get("cases")
+            or record.get("fatigue_conformance")
             or record.get("bridge_methodology")
         )
     return json.dumps(payload, indent=2)
@@ -971,7 +952,7 @@ def project_provenance(text: str) -> dict:
         if isinstance(data.get("calculation"), dict) else None
     )
     if calculation is not None:
-        bridge_publication_matches = True
+        calculation_publication_matches = True
         if "crack_control" in calculation:
             calculation["crack_control"] = (
                 sls.publication_safe_crack_control_record(
@@ -980,6 +961,18 @@ def project_provenance(text: str) -> dict:
             )
             if calculation["crack_control"] is None:
                 calculation.pop("crack_control")
+        if "fatigue_conformance" in calculation:
+            calculation["fatigue_conformance"] = (
+                fatigue_analysis.publication_safe_conformance_record(
+                    calculation.get("fatigue_conformance"),
+                    design_methodology=raw_scalars.get(
+                        "design_methodology"
+                    ),
+                )
+            )
+            if calculation["fatigue_conformance"] is None:
+                calculation.pop("fatigue_conformance")
+                calculation_publication_matches = False
         if "bridge_methodology" in calculation:
             calculation["bridge_methodology"] = (
                 bridge.publication_safe_record(
@@ -991,17 +984,18 @@ def project_provenance(text: str) -> dict:
             )
             if calculation["bridge_methodology"] is None:
                 calculation.pop("bridge_methodology")
-                bridge_publication_matches = False
+                calculation_publication_matches = False
             else:
-                bridge_publication_matches = (
-                    _bridge_publication_matches_inputs(
+                calculation_publication_matches = (
+                    calculation_publication_matches
+                    and _bridge_publication_matches_inputs(
                         calculation["bridge_methodology"]
                     )
                 )
         calculation["matches_saved_inputs"] = (
             bool(calculation.get("input_sha256"))
             and calculation.get("input_sha256") == actual
-            and bridge_publication_matches
+            and calculation_publication_matches
         )
     return {
         "sector_version": provenance.get("sector_version"),
@@ -1014,6 +1008,7 @@ def project_provenance(text: str) -> dict:
                 (calculation or {}).get("crack_control")
                 or {}
             ).get("cases")
+            or (calculation or {}).get("fatigue_conformance")
             or (calculation or {}).get("bridge_methodology")
         ),
         "calculation": calculation,

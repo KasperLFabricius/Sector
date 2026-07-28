@@ -204,17 +204,15 @@ def test_concrete_fatigue_strength_matches_2005_and_2023_expressions():
     )
 
 
-def test_standard_concrete_miner_properties_fix_c14_and_project_method_is_distinct():
-    with pytest.raises(ValueError, match="fixes C = 14"):
-        fatigue.ConcreteFatigueProperties(
-            edition="DS/EN 1992-2:2005 + AC:2008",
-            fck_mpa=40.0,
-            gamma_c=1.5,
-            beta_cc_t0=1.0,
-            c=100.0,
-            method=fatigue.CONCRETE_MINER,
-        )
-
+def test_concrete_miner_properties_preserve_positive_c_and_method_label():
+    deviating_standard = fatigue.ConcreteFatigueProperties(
+        edition="DS/EN 1992-2:2005 + AC:2008",
+        fck_mpa=40.0,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+        c=100.0,
+        method=fatigue.CONCRETE_MINER,
+    )
     project = fatigue.ConcreteFatigueProperties(
         edition="DS/EN 1992-2:2005 + AC:2008",
         fck_mpa=40.0,
@@ -224,6 +222,8 @@ def test_standard_concrete_miner_properties_fix_c14_and_project_method_is_distin
         method=fatigue.CONCRETE_PROJECT_MINER,
     )
 
+    assert deviating_standard.c == 100.0
+    assert deviating_standard.method == fatigue.CONCRETE_MINER
     assert project.c == 100.0
     assert project.method == fatigue.CONCRETE_PROJECT_MINER
 

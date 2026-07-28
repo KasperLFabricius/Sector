@@ -20,6 +20,7 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
+from . import conformance
 from .fatigue import CONCRETE_MINER, STANDARD_CONCRETE_MINER_C
 
 
@@ -89,12 +90,19 @@ STATUS_NOT_APPLICABLE = "NOT APPLICABLE"
 STATUS_NOT_RUN = "NOT RUN"
 STATUS_REVIEW = "REVIEW"
 
-BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v1"
+BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v2"
 
 # DS/EN 1992-2:2005 6.3.2(102) makes the inherited 6.2.3(2)
 # compression-field angle limits fully applicable to box walls.
 BOX_WALL_COT_THETA_MIN = 1.0
 BOX_WALL_COT_THETA_MAX = 2.5
+BOX_WALL_COT_THETA_METHOD = (
+    "Inherited variable-angle compression-field method"
+)
+BOX_WALL_COT_THETA_SOURCE = (
+    "DS/EN 1992-2:2005 6.3.2(102) and inherited "
+    "DS/EN 1992-1-1:2004 6.2.3(2)"
+)
 
 # DS/EN 1992-2:2005 7.3.2(102) defines k from the relevant web height or
 # flange width: 1.0 at <= 300 mm, 0.65 at >= 800 mm, with interpolation.
@@ -102,6 +110,16 @@ BOX_WALL_COT_THETA_MAX = 2.5
 # within the complete normative image of that piecewise rule.
 MINIMUM_CRACK_K_MIN = 0.65
 MINIMUM_CRACK_K_MAX = 1.0
+MINIMUM_CRACK_K_METHOD = (
+    "Bridge Expression (7.1) with dimension-derived coefficient k"
+)
+MINIMUM_CRACK_K_SOURCE = "DS/EN 1992-2:2005 7.3.2(102)"
+CONCRETE_MINER_STANDARD_METHOD = (
+    "AC:2008-corrected concrete compression Miner relation"
+)
+CONCRETE_MINER_STANDARD_SOURCE = (
+    "DS/EN 1992-2:2005/AC:2008 corrected Expression (6.106)"
+)
 
 _TOL = 1.0e-9
 
@@ -276,6 +294,9 @@ class BoxWallEvidence:
     v_rd_max_kn: Any
     t_ed_equivalent_kn: Any
     t_rd_max_equivalent_kn: Any
+    parameter_basis: str = conformance.STANDARD_BASIS
+    custom_methodology: str = ""
+    approval_reference: str = ""
 
 
 @dataclass(frozen=True)
@@ -288,6 +309,9 @@ class MinimumCrackComponent:
     sigma_s_mpa: Any
     as_provided_mm2: Any
     restrained_shrinkage: Any = False
+    parameter_basis: str = conformance.STANDARD_BASIS
+    custom_methodology: str = ""
+    approval_reference: str = ""
 
 
 @dataclass(frozen=True)
@@ -790,6 +814,7 @@ def _assess_box_walls(
     invalid: list[str] = []
     seen: set[str] = set()
     cots: list[float] = []
+    parameter_records: list[dict[str, Any]] = []
     any_failure = False
     governing = 0.0
     for index, wall in enumerate(evidence.box_walls, start=1):
@@ -808,17 +833,19 @@ def _assess_box_walls(
                 f"{wall_id}: cot(theta)",
                 positive=True,
             )
-            if not (
-                BOX_WALL_COT_THETA_MIN
-                <= cot
-                <= BOX_WALL_COT_THETA_MAX
-            ):
-                raise ValueError(
-                    f"{wall_id}: cot(theta) must be between "
-                    f"{BOX_WALL_COT_THETA_MIN:.1f} and "
-                    f"{BOX_WALL_COT_THETA_MAX:.1f} for the inherited "
-                    "DS/EN 1992-1-1 6.2.3(2) strut-angle domain"
-                )
+            parameter_record = conformance.assess_parameter(
+                cot,
+                parameter_id=f"box_wall.{wall_id}.cot_theta",
+                label=f"{wall_id}: cot(theta)",
+                selected_standard=EN1992_2_BASE,
+                standard_methodology=BOX_WALL_COT_THETA_METHOD,
+                normative_source=BOX_WALL_COT_THETA_SOURCE,
+                basis=wall.parameter_basis,
+                custom_methodology=wall.custom_methodology,
+                approval_reference=wall.approval_reference,
+                minimum=BOX_WALL_COT_THETA_MIN,
+                maximum=BOX_WALL_COT_THETA_MAX,
+            )
             utilisation = box_wall_interaction(
                 wall.v_ed_kn,
                 wall.v_rd_max_kn,
@@ -829,6 +856,7 @@ def _assess_box_walls(
             invalid.append(str(exc))
             continue
         cots.append(cot)
+        parameter_records.append(parameter_record)
         governing = max(governing, utilisation)
         passed = utilisation <= 1.0 + _TOL
         any_failure = any_failure or not passed
@@ -842,33 +870,60 @@ def _assess_box_walls(
                 wall.t_rd_max_equivalent_kn
             ),
             "utilisation": utilisation,
-            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "analytical_status": STATUS_PASS if passed else STATUS_FAIL,
+            "status": (
+                conformance.aggregate(
+                    [parameter_record],
+                    analytical_status=(
+                        STATUS_PASS if passed else STATUS_FAIL
+                    ),
+                    selected_standard=EN1992_2_BASE,
+                )["assessment_status"]
+            ),
+            "parameter_conformance": parameter_record,
         })
-    if cots and not all(
+    common_angle = not cots or all(
         math.isclose(cot, cots[0], rel_tol=0.0, abs_tol=1.0e-9)
         for cot in cots[1:]
-    ):
-        invalid.append(
-            "Every box wall must use the same compression-field cot(theta)."
-        )
+    )
+    if not common_angle:
+        parameter_records = []
+        for row in rows:
+            stored = row["parameter_conformance"]
+            updated = conformance.assess_parameter(
+                row["cot_theta"],
+                parameter_id=stored["parameter_id"],
+                label=stored["label"],
+                selected_standard=EN1992_2_BASE,
+                standard_methodology=BOX_WALL_COT_THETA_METHOD,
+                normative_source=BOX_WALL_COT_THETA_SOURCE,
+                basis=stored["basis"],
+                custom_methodology=stored["custom_methodology"],
+                approval_reference=stored["approval_reference"],
+                minimum=BOX_WALL_COT_THETA_MIN,
+                maximum=BOX_WALL_COT_THETA_MAX,
+                applicability_conforms=False,
+                applicability_note=(
+                    "Every declared box wall must use one common "
+                    "compression-field cot(theta)"
+                ),
+            )
+            row["parameter_conformance"] = updated
+            row["status"] = STATUS_REVIEW
+            parameter_records.append(updated)
     if any_failure:
-        reason = "One or more box walls exceed the shear-plus-torsion limit."
-        if invalid:
-            reason += " Other wall evidence is incomplete: " + "; ".join(invalid)
-        return _result(
-            "box_wall_torsion",
-            STATUS_FAIL,
-            result=f"governing wall interaction = {governing:.3f}",
-            criterion=(
-                "VEd/VRd,max + TEd,wall/TRd,max,wall <= 1.0; "
-                "1.0 <= cot(theta) <= 2.5"
-            ),
-            source=decision.source,
-            reason=reason,
-            utilisation=governing,
-            evidence=rows,
+        analytical_status = STATUS_FAIL
+        analytical_reason = (
+            "One or more box walls exceed the shear-plus-torsion limit."
         )
-    if invalid:
+        if invalid:
+            analytical_reason += (
+                " Other wall evidence is incomplete: " + "; ".join(invalid)
+            )
+    else:
+        analytical_status = STATUS_PASS
+        analytical_reason = "Every declared box wall was calculated separately."
+    if invalid and not any_failure:
         return _result(
             "box_wall_torsion",
             STATUS_NOT_ASSESSED,
@@ -876,18 +931,33 @@ def _assess_box_walls(
             reason="; ".join(invalid),
             evidence=rows,
         )
+    assessment = conformance.aggregate(
+        parameter_records,
+        analytical_status=analytical_status,
+        selected_standard=EN1992_2_BASE,
+    )
+    conformance_reason = "; ".join(assessment["messages"])
     return _result(
         "box_wall_torsion",
-        STATUS_PASS,
-        result=f"governing wall interaction = {governing:.3f}",
+        assessment["assessment_status"],
+        result=(
+            f"{assessment['qualified_verdict']}; governing wall interaction "
+            f"= {governing:.3f}; selected-standard verdict = "
+            f"{assessment['standard_verdict']}"
+        ),
         criterion=(
             "VEd/VRd,max + TEd,wall/TRd,max,wall <= 1.0; "
-            "1.0 <= cot(theta) <= 2.5"
+            "standard applicability 1.0 <= cot(theta) <= 2.5 with one "
+            "common angle"
         ),
         source=decision.source,
-        reason=(
-            "Every declared box wall uses one common strut angle within the "
-            "inherited 6.2.3(2) domain."
+        reason="; ".join(
+            part
+            for part in (
+                analytical_reason,
+                conformance_reason,
+            )
+            if part
         ),
         utilisation=governing,
         evidence=rows,
@@ -908,17 +978,6 @@ def minimum_crack_reinforcement_area(
     act = _real(act_mm2, "Act", positive=True)
     kc = _real(k_c, "kc", positive=True)
     factor = _real(k, "k", positive=True)
-    if not (
-        MINIMUM_CRACK_K_MIN
-        <= factor
-        <= MINIMUM_CRACK_K_MAX
-    ):
-        raise ValueError(
-            "k must be between "
-            f"{MINIMUM_CRACK_K_MIN:.2f} and "
-            f"{MINIMUM_CRACK_K_MAX:.2f}; derive it from the relevant web "
-            "height or flange width per DS/EN 1992-2:2005 7.3.2(102)"
-        )
     fct = _real(fct_eff_mpa, "fct,eff", positive=True)
     sigma = _real(sigma_s_mpa, "sigma_s", positive=True)
     if not isinstance(restrained_shrinkage, bool):
@@ -956,6 +1015,7 @@ def _assess_minimum_components(
     rows: list[dict[str, Any]] = []
     invalid: list[str] = []
     seen: set[str] = set()
+    parameter_records: list[dict[str, Any]] = []
     any_failure = False
     governing = 0.0
     for index, component in enumerate(
@@ -979,6 +1039,24 @@ def _assess_minimum_components(
                 component.sigma_s_mpa,
                 restrained_shrinkage=component.restrained_shrinkage,
             )
+            factor = _real(
+                component.k,
+                f"{name}: k",
+                positive=True,
+            )
+            parameter_record = conformance.assess_parameter(
+                factor,
+                parameter_id=f"minimum_crack.{name}.k",
+                label=f"{name}: minimum-reinforcement k",
+                selected_standard=EN1992_2_BASE,
+                standard_methodology=MINIMUM_CRACK_K_METHOD,
+                normative_source=MINIMUM_CRACK_K_SOURCE,
+                basis=component.parameter_basis,
+                custom_methodology=component.custom_methodology,
+                approval_reference=component.approval_reference,
+                minimum=MINIMUM_CRACK_K_MIN,
+                maximum=MINIMUM_CRACK_K_MAX,
+            )
             provided = _real(
                 component.as_provided_mm2,
                 f"{name}: As,provided",
@@ -988,6 +1066,7 @@ def _assess_minimum_components(
             invalid.append(str(exc))
             continue
         utilisation = required_area / provided
+        parameter_records.append(parameter_record)
         governing = max(governing, utilisation)
         passed = provided + _TOL >= required_area
         any_failure = any_failure or not passed
@@ -1003,7 +1082,17 @@ def _assess_minimum_components(
             "as_provided_mm2": provided,
             "restrained_shrinkage": component.restrained_shrinkage,
             "utilisation": utilisation,
-            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "analytical_status": STATUS_PASS if passed else STATUS_FAIL,
+            "status": (
+                conformance.aggregate(
+                    [parameter_record],
+                    analytical_status=(
+                        STATUS_PASS if passed else STATUS_FAIL
+                    ),
+                    selected_standard=EN1992_2_BASE,
+                )["assessment_status"]
+            ),
+            "parameter_conformance": parameter_record,
         })
     missing = [name for name in required if name not in seen]
     if missing:
@@ -1015,25 +1104,22 @@ def _assess_minimum_components(
             + ", ".join(extra)
         )
     if any_failure:
-        reason = "One or more bridge components have insufficient crack steel."
-        if invalid:
-            reason += " Other component evidence is incomplete: " + "; ".join(
-                invalid
-            )
-        return _result(
-            "web_flange_minimum",
-            STATUS_FAIL,
-            result=f"governing As,min / As,provided = {governing:.3f}",
-            criterion=(
-                "As,provided >= kc k fct,eff Act / sigma_s separately; "
-                "0.65 <= k <= 1.00 per 7.3.2(102)"
-            ),
-            source=decision.source,
-            reason=reason,
-            utilisation=governing,
-            evidence=rows,
+        analytical_status = STATUS_FAIL
+        analytical_reason = (
+            "One or more bridge components have insufficient crack steel."
         )
-    if invalid:
+        if invalid:
+            analytical_reason += (
+                " Other component evidence is incomplete: " + "; ".join(
+                    invalid
+                )
+            )
+    else:
+        analytical_status = STATUS_PASS
+        analytical_reason = (
+            "Every selected web/flange component was calculated separately."
+        )
+    if invalid and not any_failure:
         return _result(
             "web_flange_minimum",
             STATUS_NOT_ASSESSED,
@@ -1041,16 +1127,33 @@ def _assess_minimum_components(
             reason="; ".join(invalid),
             evidence=rows,
         )
+    assessment = conformance.aggregate(
+        parameter_records,
+        analytical_status=analytical_status,
+        selected_standard=EN1992_2_BASE,
+    )
     return _result(
         "web_flange_minimum",
-        STATUS_PASS,
-        result=f"governing As,min / As,provided = {governing:.3f}",
+        assessment["assessment_status"],
+        result=(
+            f"{assessment['qualified_verdict']}; governing "
+            f"As,min / As,provided = {governing:.3f}; "
+            "selected-standard verdict = "
+            f"{assessment['standard_verdict']}"
+        ),
         criterion=(
             "As,provided >= kc k fct,eff Act / sigma_s separately; "
-            "0.65 <= k <= 1.00 per 7.3.2(102)"
+            "standard applicability 0.65 <= k <= 1.00 per 7.3.2(102)"
         ),
         source=decision.source,
-        reason="Every selected web/flange component is evaluated separately.",
+        reason="; ".join(
+            part
+            for part in (
+                analytical_reason,
+                "; ".join(assessment["messages"]),
+            )
+            if part
+        ),
         utilisation=governing,
         evidence=rows,
     )
@@ -1082,7 +1185,7 @@ def _external_result(
         STATUS_REVIEW,
     }:
         status = STATUS_NOT_ASSESSED
-    if status in {STATUS_NOT_RUN, STATUS_REVIEW}:
+    if status == STATUS_NOT_RUN:
         status = STATUS_NOT_ASSESSED
     utilisation = None
     if evidence.utilisation is not None:
@@ -1385,10 +1488,11 @@ def assess_base_methodology(evidence: BridgeBaseEvidence) -> dict[str, Any]:
 def _publication_parameter_evidence_errors(
     check_id: str,
     evidence: Sequence[Mapping],
-) -> list[str]:
-    """Revalidate normative parameters in stored PASS/FAIL evidence rows."""
+) -> tuple[list[str], list[Mapping[str, Any]]]:
+    """Recompute stored numerical-versus-conformance parameter evidence."""
 
     errors: list[str] = []
+    records: list[Mapping[str, Any]] = []
     if check_id == "box_wall_torsion":
         cots = []
         for index, row in enumerate(evidence, start=1):
@@ -1400,24 +1504,42 @@ def _publication_parameter_evidence_errors(
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
-            if not (
-                BOX_WALL_COT_THETA_MIN
-                <= cot
-                <= BOX_WALL_COT_THETA_MAX
-            ):
-                errors.append(
-                    f"stored box-wall row {index} cot(theta) is outside "
-                    f"{BOX_WALL_COT_THETA_MIN:.1f} to "
-                    f"{BOX_WALL_COT_THETA_MAX:.1f}"
-                )
             cots.append(cot)
-        if cots and not all(
+        common_angle = not cots or all(
             math.isclose(cot, cots[0], rel_tol=0.0, abs_tol=1.0e-9)
             for cot in cots[1:]
-        ):
-            errors.append("stored box-wall rows do not use one common cot(theta)")
+        )
+        for index, row in enumerate(evidence, start=1):
+            if "cot_theta" not in row:
+                continue
+            wall_id = str(row.get("wall_id") or "").strip() or f"row {index}"
+            record, record_errors = conformance.verify_parameter(
+                row.get("parameter_conformance"),
+                value=row.get("cot_theta"),
+                parameter_id=f"box_wall.{wall_id}.cot_theta",
+                label=f"{wall_id}: cot(theta)",
+                selected_standard=EN1992_2_BASE,
+                standard_methodology=BOX_WALL_COT_THETA_METHOD,
+                normative_source=BOX_WALL_COT_THETA_SOURCE,
+                minimum=BOX_WALL_COT_THETA_MIN,
+                maximum=BOX_WALL_COT_THETA_MAX,
+                applicability_conforms=common_angle,
+                applicability_note=(
+                    ""
+                    if common_angle
+                    else (
+                        "Every declared box wall must use one common "
+                        "compression-field cot(theta)"
+                    )
+                ),
+            )
+            errors.extend(record_errors)
+            if record is not None:
+                records.append(record)
     elif check_id == "web_flange_minimum":
         for index, row in enumerate(evidence, start=1):
+            if "k" not in row:
+                continue
             try:
                 factor = _real(
                     row.get("k"),
@@ -1426,18 +1548,28 @@ def _publication_parameter_evidence_errors(
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
-            if not (
-                MINIMUM_CRACK_K_MIN
-                <= factor
-                <= MINIMUM_CRACK_K_MAX
-            ):
-                errors.append(
-                    f"stored minimum-reinforcement row {index} k is outside "
-                    f"{MINIMUM_CRACK_K_MIN:.2f} to "
-                    f"{MINIMUM_CRACK_K_MAX:.2f}"
-                )
+            component = (
+                str(row.get("component") or "").strip().casefold()
+                or f"row-{index}"
+            )
+            record, record_errors = conformance.verify_parameter(
+                row.get("parameter_conformance"),
+                value=factor,
+                parameter_id=f"minimum_crack.{component}.k",
+                label=f"{component}: minimum-reinforcement k",
+                selected_standard=EN1992_2_BASE,
+                standard_methodology=MINIMUM_CRACK_K_METHOD,
+                normative_source=MINIMUM_CRACK_K_SOURCE,
+                minimum=MINIMUM_CRACK_K_MIN,
+                maximum=MINIMUM_CRACK_K_MAX,
+            )
+            errors.extend(record_errors)
+            if record is not None:
+                records.append(record)
     elif check_id == "concrete_fatigue":
         for index, row in enumerate(evidence, start=1):
+            if "miner_coefficient_c" not in row:
+                continue
             try:
                 coefficient = _real(
                     row.get("miner_coefficient_c"),
@@ -1446,25 +1578,85 @@ def _publication_parameter_evidence_errors(
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
-            if not math.isclose(
-                coefficient,
-                STANDARD_CONCRETE_MINER_C,
-                rel_tol=0.0,
-                abs_tol=1.0e-12,
-            ):
+            standard_applicability = bool(
+                row.get("methodology") == EN1992_2_BASE
+                and row.get("concrete_method") == CONCRETE_MINER
+            )
+            record, record_errors = conformance.verify_parameter(
+                row.get("parameter_conformance"),
+                value=coefficient,
+                parameter_id="concrete_fatigue.miner_c",
+                label="Concrete fatigue Miner coefficient C",
+                selected_standard=EN1992_2_BASE,
+                standard_methodology=CONCRETE_MINER_STANDARD_METHOD,
+                normative_source=CONCRETE_MINER_STANDARD_SOURCE,
+                prescribed_value=STANDARD_CONCRETE_MINER_C,
+                applicability_conforms=standard_applicability,
+                applicability_note=(
+                    ""
+                    if standard_applicability
+                    else (
+                        "The stored methodology/method is not the selected "
+                        "EN 1992-2 bridge Miner route"
+                    )
+                ),
+            )
+            errors.extend(record_errors)
+            if record is not None:
+                records.append(record)
+            nested = row.get("fatigue_parameter_conformance")
+            if not isinstance(nested, (list, tuple)):
                 errors.append(
-                    f"stored concrete-fatigue row {index} is not bound to C = 14"
+                    f"stored concrete-fatigue row {index} is missing its "
+                    "fatigue parameter conformance"
                 )
-            if row.get("methodology") != EN1992_2_BASE:
+                continue
+            for nested_index, nested_record in enumerate(nested, start=1):
+                verified, nested_errors = (
+                    conformance.verify_self_contained(nested_record)
+                )
+                errors.extend(
+                    f"stored concrete-fatigue row {index} parameter "
+                    f"{nested_index}: {error}"
+                    for error in nested_errors
+                )
+                if (
+                    verified is not None
+                    and not any(
+                        existing.get("parameter_id")
+                        == verified.get("parameter_id")
+                        for existing in records
+                    )
+                ):
+                    records.append(verified)
+    elif check_id == "reinforcement_fatigue":
+        for index, row in enumerate(evidence, start=1):
+            nested = row.get("fatigue_parameter_conformance")
+            if not isinstance(nested, (list, tuple)):
                 errors.append(
-                    f"stored concrete-fatigue row {index} methodology is unbound"
+                    f"stored reinforcement-fatigue row {index} is missing "
+                    "its parameter conformance"
                 )
-            if row.get("concrete_method") != CONCRETE_MINER:
-                errors.append(
-                    f"stored concrete-fatigue row {index} method is not the "
-                    "bridge Miner method"
+                continue
+            for nested_index, nested_record in enumerate(nested, start=1):
+                verified, nested_errors = (
+                    conformance.verify_self_contained(nested_record)
                 )
-    return errors
+                errors.extend(
+                    f"stored reinforcement-fatigue row {index} parameter "
+                    f"{nested_index}: {error}"
+                    for error in nested_errors
+                )
+                if (
+                    verified is not None
+                    and not any(
+                        existing.get("parameter_id")
+                        == verified.get("parameter_id")
+                        for existing in records
+                    )
+                ):
+                    records.append(verified)
+    return errors, records
 
 
 def publication_safe_record(
@@ -1621,10 +1813,11 @@ def publication_safe_record(
                 raw_evidence = ()
                 status = STATUS_NOT_ASSESSED
         if (
-            status in {STATUS_PASS, STATUS_FAIL}
+            status in {STATUS_PASS, STATUS_FAIL, STATUS_REVIEW}
             and check_id in {
                 "prestress_brittle",
                 "box_wall_torsion",
+                "reinforcement_fatigue",
                 "concrete_fatigue",
                 "sls_stress",
                 "web_flange_minimum",
@@ -1632,17 +1825,58 @@ def publication_safe_record(
             and not raw_evidence
         ):
             local_errors.append(
-                "stored PASS/FAIL lacks its calculated evidence rows"
+                "stored calculated verdict lacks its evidence rows"
             )
             status = STATUS_NOT_ASSESSED
-        if status in {STATUS_PASS, STATUS_FAIL}:
-            parameter_errors = _publication_parameter_evidence_errors(
-                check_id,
-                raw_evidence,
+        if status in {STATUS_PASS, STATUS_FAIL, STATUS_REVIEW}:
+            parameter_errors, parameter_records = (
+                _publication_parameter_evidence_errors(
+                    check_id,
+                    raw_evidence,
+                )
             )
             if parameter_errors:
                 local_errors.extend(parameter_errors)
                 status = STATUS_NOT_ASSESSED
+            elif parameter_records:
+                row_statuses = {
+                    str(row.get("analytical_status") or row.get("status"))
+                    .strip()
+                    .upper()
+                    for row in raw_evidence
+                    if isinstance(row, Mapping)
+                    and (
+                        row.get("parameter_conformance") is not None
+                        or row.get("fatigue_parameter_conformance") is not None
+                    )
+                }
+                if not row_statuses or not row_statuses.issubset(
+                    {STATUS_PASS, STATUS_FAIL}
+                ):
+                    local_errors.append(
+                        "stored analytical parameter verdict is malformed"
+                    )
+                    status = STATUS_NOT_ASSESSED
+                else:
+                    analytical_status = (
+                        STATUS_FAIL
+                        if STATUS_FAIL in row_statuses
+                        else STATUS_PASS
+                    )
+                    expected_assessment = conformance.aggregate(
+                        parameter_records,
+                        analytical_status=analytical_status,
+                        selected_standard=EN1992_2_BASE,
+                    )["assessment_status"]
+                    if (
+                        status in {STATUS_PASS, STATUS_FAIL}
+                        and status != expected_assessment
+                    ):
+                        local_errors.append(
+                            "stored check status mislabels its standards "
+                            "conformance"
+                        )
+                        status = STATUS_NOT_ASSESSED
 
         text_fields = {}
         for key in ("result", "criterion", "source", "reason"):
@@ -1654,11 +1888,11 @@ def publication_safe_record(
         if not text_fields["source"].strip():
             local_errors.append("stored source is missing")
             status = STATUS_NOT_ASSESSED
-        if status in {STATUS_PASS, STATUS_FAIL}:
+        if status in {STATUS_PASS, STATUS_FAIL, STATUS_REVIEW}:
             for key in ("result", "criterion"):
                 if text_fields[key].strip() in {"", "-"}:
                     local_errors.append(
-                        f"stored {key} is missing for PASS/FAIL"
+                        f"stored {key} is missing for a calculated verdict"
                     )
                     status = STATUS_NOT_ASSESSED
 

@@ -45,8 +45,9 @@ from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import (bridge, capacity, codes, combined, detailing, geometry,  # noqa: E402
-                    kernels, material_presets as mp, shear, templates, torsion)
+from sector import (bridge, capacity, codes, combined, conformance, detailing,  # noqa: E402
+                    geometry, kernels, material_presets as mp, shear, templates,
+                    torsion)
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector import sls as sls_core  # noqa: E402
@@ -2057,6 +2058,30 @@ def _bridge_column_config(key):
             min_value=min_value,
             max_value=max_value,
         )
+    basis_config = st.column_config.SelectboxColumn(
+        "Parameter basis *",
+        options=list(conformance.BASIS_OPTIONS),
+        default=conformance.STANDARD_BASIS,
+        required=True,
+        width="medium",
+        help=(
+            "Selected-standard prescription assesses the value against the "
+            "normative range. Custom design basis preserves the value and "
+            "requires its methodology and approval/source for a qualified "
+            "custom verdict."
+        ),
+    )
+    provenance_config = {
+        "parameter_basis": basis_config,
+        "custom_methodology": text(
+            "Custom methodology",
+            "Alternative calculation or design-basis methodology.",
+        ),
+        "approval_reference": text(
+            "Approval / source",
+            "Design-basis clause, authority source, or checker approval.",
+        ),
+    }
     if key == bridge_inputs.COVERAGE_TABLE_KEY:
         return {
             "check_id": text(
@@ -2097,10 +2122,9 @@ def _bridge_column_config(key):
             "wall_id": text("Wall *", "Unique box-wall ID.", True),
             "cot_theta": number(
                 "cot(theta)",
-                "Common strut angle for all walls; DS/EN 1992-1-1 "
-                "6.2.3(2) limits apply through DS/EN 1992-2 6.3.2(102).",
-                min_value=bridge.BOX_WALL_COT_THETA_MIN,
-                max_value=bridge.BOX_WALL_COT_THETA_MAX,
+                "Positive analytical input. DS/EN 1992-1-1 6.2.3(2) "
+                "conformance is assessed separately against 1.0 to 2.5 and "
+                "the common-angle rule.",
             ),
             "v_ed_kn": number("VEd [kN]", "Wall shear action."),
             "v_rd_max_kn": number("VRd,max [kN]", "Wall shear resistance."),
@@ -2112,6 +2136,7 @@ def _bridge_column_config(key):
                 "TRd,max,eq [kN]",
                 "Torsion-equivalent wall resistance.",
             ),
+            **provenance_config,
         }
     return {
         "component": st.column_config.SelectboxColumn(
@@ -2124,10 +2149,9 @@ def _bridge_column_config(key):
         "k_c": number("kc", "Stress-distribution coefficient."),
         "k": number(
             "k",
-            "Coefficient derived from web height or flange width per "
-            "DS/EN 1992-2 7.3.2(102).",
-            min_value=bridge.MINIMUM_CRACK_K_MIN,
-            max_value=bridge.MINIMUM_CRACK_K_MAX,
+            "Positive analytical coefficient. Conformance to the "
+            "dimension-derived 0.65 to 1.00 range in DS/EN 1992-2 "
+            "7.3.2(102) is assessed separately.",
         ),
         "fct_eff_mpa": number("fct,eff [MPa]", "Effective tensile strength."),
         "sigma_s_mpa": number("sigma_s [MPa]", "Permitted steel stress."),
@@ -2141,6 +2165,7 @@ def _bridge_column_config(key):
             default=False,
             width="small",
         ),
+        **provenance_config,
     }
 
 
@@ -2648,6 +2673,30 @@ def _restore_factor_override_state(domain: str) -> None:
     _journal_current_input_values(*spec["value_keys"], approval_key)
 
 
+def _apply_fatigue_preset_state() -> None:
+    """Apply a preset only after an explicit preset-driver widget event."""
+
+    if (
+        st.session_state.get("fatigue_factor_mode")
+        != fatigue_inputs.FACTOR_MODE_PRESET
+    ):
+        return
+    try:
+        preset = fatigue_inputs.fatigue_factor_preset(
+            st.session_state.get(
+                "fatigue_edition",
+                fatigue_inputs.EC2_2005_DKNA,
+            ),
+            gamma0=st.session_state.get("fatigue_gamma0", 1.0),
+            gamma3=st.session_state.get("fatigue_gamma3", 1.0),
+        )
+    except ValueError:
+        return
+    st.session_state["fatigue_gamma_s"] = preset["gamma_s"]
+    st.session_state["fatigue_gamma_c"] = preset["gamma_c"]
+    _journal_current_input_values("fatigue_gamma_s", "fatigue_gamma_c")
+
+
 def _factor_mode_changed(domain: str) -> None:
     """Keep preset-derived values separate from approved override values."""
 
@@ -2666,6 +2715,12 @@ def _factor_mode_changed(domain: str) -> None:
         and previous_mode != current_mode
     ):
         _restore_factor_override_state(domain)
+    if (
+        domain == "fatigue"
+        and current_mode == fatigue_inputs.FACTOR_MODE_PRESET
+        and previous_mode != current_mode
+    ):
+        _apply_fatigue_preset_state()
     st.session_state[previous_key] = current_mode
 
 
@@ -3072,6 +3127,18 @@ def _perform_autosave() -> bool:
                 safe_calculation.pop("crack_control", None)
             else:
                 safe_calculation["crack_control"] = safe_crack_control
+        if "fatigue_conformance" in calculation:
+            current_fatigue = calculation.get("fatigue_conformance")
+            safe_fatigue = (
+                fatigue_analysis.publication_safe_conformance_record(
+                    current_fatigue,
+                    design_methodology=current_design_methodology,
+                )
+            )
+            if safe_fatigue is None:
+                safe_calculation.pop("fatigue_conformance", None)
+            else:
+                safe_calculation["fatigue_conformance"] = safe_fatigue
         if "bridge_methodology" in calculation:
             current_bridge = calculation.get("bridge_methodology")
             safe_bridge = bridge.publication_safe_record(
@@ -3386,8 +3453,9 @@ def _save_load_panel() -> None:
         box.error(f"Project download blocked: {project_error}.")
     box.caption(
         f"Saved with Sector {APP_VERSION}, source {short_revision()}; "
-        "structured crack-control result summaries are retained as hash-bound "
-        "provenance, while live results are recalculated on load."
+        "structured crack-control, fatigue-conformance, and bridge-methodology "
+        "evidence is retained as hash-bound provenance, while live results are "
+        "recalculated on load."
     )
     loaded = st.session_state.get("_loaded_project_provenance")
     if loaded:
@@ -3427,6 +3495,65 @@ def _save_load_panel() -> None:
                         "Recorded crack-control snapshot (audit only): "
                         + summary
                     )
+                fatigue_record = calculation.get("fatigue_conformance")
+                if isinstance(fatigue_record, Mapping):
+                    factors = fatigue_record.get("partial_factors") or {}
+                    factor_summary = ", ".join(
+                        f"{label}={float(factors[key]):g}"
+                        for key, label in (
+                            ("gamma_s", "gamma_s"),
+                            ("gamma_c", "gamma_c,fat"),
+                        )
+                        if factors.get(key) is not None
+                    )
+                    concrete = (
+                        fatigue_record.get("concrete_parameters") or {}
+                    )
+                    miner_summary = (
+                        f", Miner C={float(concrete['c']):g}"
+                        if concrete.get("c") is not None
+                        else ""
+                    )
+                    box.caption(
+                        "Recorded fatigue conformance (audit only): "
+                        f"{fatigue_record.get('qualified_verdict') or 'REVIEW'}"
+                        f" | selected standard "
+                        f"{fatigue_record.get('edition') or '-'}"
+                        f" | methodology "
+                        f"{fatigue_record.get('design_methodology') or '-'}"
+                        + (
+                            f" | {factor_summary}{miner_summary}"
+                            if factor_summary or miner_summary
+                            else ""
+                        )
+                    )
+                    factor_approval = str(
+                        (
+                            fatigue_record.get("factor_basis") or {}
+                        ).get("approval_reference")
+                        or ""
+                    ).strip()
+                    miner_source = str(
+                        fatigue_record.get("concrete_miner_source") or ""
+                    ).strip()
+                    sources = "; ".join(
+                        item
+                        for item in (
+                            (
+                                f"factor approval/source: {factor_approval}"
+                                if factor_approval
+                                else ""
+                            ),
+                            (
+                                f"Miner approval/source: {miner_source}"
+                                if miner_source
+                                else ""
+                            ),
+                        )
+                        if item
+                    )
+                    if sources:
+                        box.caption("Recorded fatigue sources: " + sources)
         else:
             box.caption("Loaded: legacy project | provenance unavailable")
     _autosave_panel(box)
@@ -4326,6 +4453,14 @@ def build_inputs(host=st):
             + "; ".join(bridge_table_errors)
             + "."
         )
+    if bridge_method_active:
+        for warning in bridge_inputs.conformance_warnings(bridge_tables):
+            brg.warning(
+                warning
+                + " The analytical result is retained, but the selected-standard "
+                "verdict remains REVIEW / NOT FULLY ASSESSED unless a complete "
+                "custom methodology and approval/source are recorded."
+            )
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
     fatigue_on = _seeded_toggle(
@@ -4342,6 +4477,7 @@ def build_inputs(host=st):
         fatigue_inputs.EC2_2005_DKNA,
         "fatigue_edition",
         disabled=not fatigue_on or bridge_method_active,
+        on_change=_apply_fatigue_preset_state,
         help="Selects the Eurocode fatigue-resistance expressions and preset values.",
     )
     _prepare_factor_mode_state(
@@ -4372,11 +4508,12 @@ def build_inputs(host=st):
     fatigue_gamma0 = _seeded_number(
         fg1,
         r"$\gamma_0$",
-        0.1,
-        10.0,
+        None,
+        None,
         1.0,
         0.05,
         "fatigue_gamma0",
+        on_change=_apply_fatigue_preset_state,
         disabled=(
             not (
                 fatigue_on
@@ -4393,11 +4530,12 @@ def build_inputs(host=st):
     fatigue_gamma3 = _seeded_number(
         fg2,
         r"$\gamma_3$",
-        0.1,
-        10.0,
+        None,
+        None,
         1.0,
         0.05,
         "fatigue_gamma3",
+        on_change=_apply_fatigue_preset_state,
         disabled=(
             not (
                 fatigue_on
@@ -4423,9 +4561,6 @@ def build_inputs(host=st):
         fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
             fatigue_edition
         )
-    if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET:
-        st.session_state["fatigue_gamma_s"] = fatigue_factor_preset["gamma_s"]
-        st.session_state["fatigue_gamma_c"] = fatigue_factor_preset["gamma_c"]
     fatigue_check_steel = _seeded_toggle(
         fat,
         "Reinforcement",
@@ -4573,13 +4708,14 @@ def build_inputs(host=st):
     ):
         fat.warning(
             "The project concrete S-N relation needs a document/clause/approval "
-            "source before a fatigue verdict can be issued."
+            "source before an APPROVED CUSTOM verdict can be issued. Without it, "
+            "the analytical result remains REVIEW."
         )
     if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
-        fat.error(
-            "Legacy saved fatigue factors are retained but not approved. Select "
-            "the edition-derived preset or explicitly approve the final override "
-            "before calculation."
+        fat.warning(
+            "Legacy saved fatigue factors are retained and calculated as custom "
+            "review-required values. Select the edition preset or record an "
+            "approved override to establish a qualified basis."
         )
     fat.caption(
         "No category is inferred. Edition-derived values use only the displayed "
@@ -4589,8 +4725,8 @@ def build_inputs(host=st):
     fatigue_gamma_ff = _seeded_number(
         ff1,
         r"$\gamma_{Ff}$",
-        0.1,
-        10.0,
+        None,
+        None,
         1.0,
         0.05,
         "fatigue_gamma_ff",
@@ -4601,8 +4737,8 @@ def build_inputs(host=st):
     fatigue_gamma_s = _seeded_number(
         ff2,
         r"$\gamma_s$",
-        0.1,
-        10.0,
+        None,
+        None,
         (
             None
             if (
@@ -4627,8 +4763,8 @@ def build_inputs(host=st):
     fatigue_gamma_c = _seeded_number(
         ff3,
         r"$\gamma_{c,\mathrm{fat}}$",
-        0.1,
-        10.0,
+        None,
+        None,
         (
             None
             if (
@@ -4669,6 +4805,17 @@ def build_inputs(host=st):
                 gamma_c=fatigue_display_gamma_c,
                 gamma0=fatigue_gamma0,
                 gamma3=fatigue_gamma3,
+                approval_reference=(
+                    str(
+                        st.session_state.get(
+                            "fatigue_factor_approval"
+                        )
+                        or ""
+                    ).strip()
+                    if fatigue_factor_mode
+                    == fatigue_inputs.FACTOR_MODE_OVERRIDE
+                    else ""
+                ),
             )
         )
     except ValueError as exc:
@@ -4700,6 +4847,15 @@ def build_inputs(host=st):
             f"{fatigue_factor_display['gamma_c_derivation']}. "
             f"Edition provision: {fatigue_factor_display['reference']}."
         )
+        for record in fatigue_factor_display[
+            "parameter_conformance"
+        ].values():
+            if record["state"] != conformance.STATE_CONFORMS:
+                fat.warning(
+                    record["message"]
+                    + " The analytical fatigue result is retained; the "
+                    "selected-standard verdict is not an unqualified PASS."
+                )
     fatigue_factor_approval = _seeded_text(
         fat,
         "Fatigue-factor approval / source",
@@ -4760,31 +4916,51 @@ def build_inputs(host=st):
         help=r"Coefficient in the 2005 design strength $f_{cd,\mathrm{fat}}$; "
              "not used by the 2023 expression.",
     )
-    if fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER:
-        st.session_state["fatigue_concrete_c"] = (
-            fatigue_inputs.STANDARD_CONCRETE_MINER_C
-        )
     fatigue_concrete_c = _seeded_number(
         fc2,
         r"Concrete fatigue $C$",
-        0.1,
-        100.0,
+        None,
+        None,
         fatigue_inputs.STANDARD_CONCRETE_MINER_C,
         0.5,
         "fatigue_concrete_c",
-        disabled=(
-            not (fatigue_on and fatigue_check_concrete)
-            or (
-                fatigue_concrete_method
-                != fatigue_analysis.CONCRETE_PROJECT_MINER
-            )
+        disabled=not (
+            fatigue_on
+            and fatigue_check_concrete
+            and concrete_miner_enabled
         ),
         help=(
-            r"The standard-derived relations fix $C = 14$. This field is "
-            "editable only for the separate, explicitly sourced project S-N "
-            "method."
+            r"Any positive finite coefficient is calculated. The selected "
+            r"standard prescribes $C = 14$; another value is custom and needs "
+            "a clearly stated Miner/S-N methodology and approval/source for a "
+            "qualified custom verdict."
         ),
     )
+    if (
+        fatigue_on
+        and fatigue_check_concrete
+        and concrete_miner_enabled
+    ):
+        try:
+            miner_record = fatigue_analysis.concrete_miner_conformance(
+                edition=fatigue_edition,
+                concrete_method=fatigue_concrete_method,
+                miner_basis=fatigue_concrete_miner_basis,
+                miner_source=str(
+                    fatigue_concrete_miner_source or ""
+                ).strip(),
+                coefficient_c=fatigue_concrete_c,
+                design_methodology=design_methodology,
+            )
+            if miner_record["state"] != conformance.STATE_CONFORMS:
+                fat.warning(
+                    miner_record["message"]
+                    + " The result is analytical/custom evidence, not an "
+                    "unqualified AC:2008 or EC2 standard check."
+                )
+        except ValueError:
+            # The ordinary validation message covers a malformed/non-positive C.
+            pass
     fat.markdown("**Spectrum basis**")
     fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
     if (
@@ -4794,8 +4970,9 @@ def build_inputs(host=st):
     ):
         fat.warning(
             "An approved final-factor override needs a dedicated fatigue-factor "
-            "approval/source before a fatigue verdict can be issued. The spectrum-"
-            "method approval/reference does not authorize material-factor changes."
+            "approval/source before an APPROVED CUSTOM verdict can be issued. "
+            "Without it, the analytical result remains REVIEW. The spectrum-method "
+            "approval/reference does not authorize material-factor changes."
         )
 
     # Load tables are rendered before the acceptance controls so their per-case
@@ -10807,11 +10984,24 @@ def _fatigue_result_basis_panel(payload):
     factor_basis = payload.get("factor_basis") or {}
     checks = payload.get("checks") or {}
     parameters = payload.get("concrete_parameters") or {}
+    aggregate_conformance = payload.get("conformance") or {}
     rows = [
         ("Edition", payload.get("edition") or "-"),
         (
             "Design methodology",
             payload.get("design_methodology") or "-",
+        ),
+        (
+            "Standards conformance",
+            aggregate_conformance.get("state") or "-",
+        ),
+        (
+            "Qualified verdict",
+            payload.get("qualified_verdict") or "-",
+        ),
+        (
+            "Selected-standard verdict",
+            aggregate_conformance.get("standard_verdict") or "-",
         ),
         (
             "Checks",
@@ -10872,6 +11062,22 @@ def _fatigue_result_basis_panel(payload):
         ("Concrete fatigue C", parameters.get("c")),
         ("Notes", basis.get("notes") or "-"),
     ]
+    for record in payload.get("parameter_conformance") or ():
+        if isinstance(record, Mapping):
+            rows.extend([
+                (
+                    f"{record.get('label') or 'Parameter'} conformance",
+                    record.get("state") or "-",
+                ),
+                (
+                    f"{record.get('label') or 'Parameter'} basis/source",
+                    (
+                        f"{record.get('basis') or '-'}; "
+                        f"{record.get('custom_methodology') or '-'}; "
+                        f"{record.get('approval_reference') or '-'}"
+                    ),
+                ),
+            ])
     _fatigue_result_table([
         # A presentation column must have one Arrow-compatible type.  Mixing the
         # textual provenance rows above with numeric factors made Streamlit coerce
@@ -10879,7 +11085,7 @@ def _fatigue_result_basis_panel(payload):
         {"Item": label, "Value": str(value)}
         for label, value in rows
         if value is not None
-    ], height=760)
+    ], height=920)
     references = payload.get("calculation_references") or {}
     if references:
         st.markdown("**Calculation references**")
@@ -10936,7 +11142,10 @@ def fatigue_view(inp, results, *, stale=False):
     )
     _fatigue_status_callout(
         status,
-        f"{governing_name} | utilisation {viz.pct(utilisation)}",
+        (
+            f"{payload.get('qualified_verdict') or status} | "
+            f"{governing_name} | utilisation {viz.pct(utilisation)}"
+        ),
     )
     warnings = tuple(payload.get("warnings") or ())
     if warnings:
@@ -12493,6 +12702,12 @@ def _analysis_workspace(inp):
             )
             if crack_control_record is not None:
                 calculation_record["crack_control"] = crack_control_record
+            fatigue_record = fatigue_analysis.calculation_conformance_record(
+                st.session_state["results"].get("fatigue"),
+                design_methodology=inp.get("design_methodology"),
+            )
+            if fatigue_record is not None:
+                calculation_record["fatigue_conformance"] = fatigue_record
             bridge_record = bridge.publication_safe_record(
                 st.session_state["results"].get("bridge_methodology"),
                 design_methodology=inp.get("design_methodology"),

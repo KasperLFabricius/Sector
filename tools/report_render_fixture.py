@@ -33,7 +33,16 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
-from sector import capacity, codes, combined, detailing, shear, sls, torsion  # noqa: E402
+from sector import (  # noqa: E402
+    bridge,
+    capacity,
+    codes,
+    combined,
+    detailing,
+    shear,
+    sls,
+    torsion,
+)
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -199,6 +208,7 @@ def _inputs() -> dict:
     })
     return {
         "mode": "Both",
+        "design_methodology": bridge.COMPONENT_METHODS,
         "plastic_cases": plastic_cases,
         "elastic_cases": elastic_cases,
         "fatigue_on": True,

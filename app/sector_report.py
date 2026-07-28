@@ -48,6 +48,7 @@ import viz
 import result_presentation as presentation
 from sector import bridge as bridge_core
 from sector import codes as ec2_codes
+from sector import conformance
 from sector import detailing
 from sector import sls as sls_core
 from sector import __licensee__ as SECTOR_LICENSEE
@@ -5073,7 +5074,9 @@ class ReportBuilder:
                 "other requested analyses were calculated"
                 if errors
                 else (
-                    f"{status} - {_html_escape(governing_name)} | utilisation "
+                    f"{status} - {_html_escape(str(
+                        payload.get('qualified_verdict') or status
+                    ))} | {_html_escape(governing_name)} | utilisation "
                     f"{_pct(fatigue_presentation.evidence_number(
                         payload.get('utilisation')
                     ))}"
@@ -5113,12 +5116,31 @@ class ReportBuilder:
         factors = payload.get("partial_factors") or {}
         factor_basis = payload.get("factor_basis") or {}
         concrete_parameters = payload.get("concrete_parameters") or {}
+        aggregate_conformance = payload.get("conformance") or {}
         basis_rows = [
             ["Item", "Value"],
             [
                 "Design methodology",
                 _html_escape(str(
                     payload.get("design_methodology") or "-"
+                )),
+            ],
+            [
+                "Standards conformance",
+                _html_escape(str(
+                    aggregate_conformance.get("state") or "-"
+                )),
+            ],
+            [
+                "Qualified verdict",
+                _html_escape(str(
+                    payload.get("qualified_verdict") or "-"
+                )),
+            ],
+            [
+                "Selected-standard verdict",
+                _html_escape(str(
+                    aggregate_conformance.get("standard_verdict") or "-"
                 )),
             ],
             ["Authority", _html_escape(str(basis.get("authority") or "-"))],
@@ -5202,6 +5224,40 @@ class ReportBuilder:
             basis_rows.append([
                 "Notes", _html_escape(str(basis.get("notes")))
             ])
+        for record in payload.get("parameter_conformance") or ():
+            if not isinstance(record, Mapping):
+                continue
+            label = _html_escape(str(
+                record.get("label") or "Parameter"
+            ))
+            basis_rows.extend([
+                [
+                    f"{label} conformance",
+                    _html_escape(str(record.get("state") or "-")),
+                ],
+                [
+                    f"{label} actual / prescription",
+                    _html_escape(
+                        f"{record.get('actual_value')} / "
+                        f"{record.get('normative_requirement') or '-'}"
+                    ),
+                ],
+                [
+                    f"{label} custom methodology / approval",
+                    _html_escape(
+                        f"{record.get('custom_methodology') or '-'} / "
+                        f"{record.get('approval_reference') or '-'}"
+                    ),
+                ],
+            ])
+            if (
+                record.get("message")
+                and record.get("state") != conformance.STATE_CONFORMS
+            ):
+                basis_rows.append([
+                    f"{label} conformance note",
+                    _html_escape(str(record["message"])),
+                ])
         self._table(basis_rows, [52 * mm, 113 * mm], keep=False)
 
         references = payload.get("calculation_references") or {}
