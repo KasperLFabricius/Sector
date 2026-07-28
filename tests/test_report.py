@@ -3733,6 +3733,104 @@ def _bridge_report_input(methodology=bridge.EN1992_2_BASE):
     return inp
 
 
+def _bridge_report_fatigue_input(*, custom=False):
+    inp = _bridge_report_input()
+    inp.update({
+        "fatigue_on": True,
+        "fatigue_check_steel": False,
+        "fatigue_check_concrete": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+    })
+    if custom:
+        inp.update({
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "fatigue_factor_approval": (
+                "DB-FAT-OVERRIDE-02 / checker approval"
+            ),
+            "fatigue_gamma_c": 2.0,
+        })
+    return inp
+
+
+def _bridge_report_concrete_fatigue_record(inp):
+    context = fatigue_analysis.bridge_publication_context(inp)
+    assert context["errors"] == []
+    records = {
+        record["parameter_id"]: record
+        for record in context["parameter_conformance"]
+    }
+    concrete_records = (
+        records["fatigue.gamma_c"],
+        records["concrete_fatigue.miner_c"],
+    )
+    status = conformance.aggregate(
+        concrete_records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=context["edition"],
+    )["assessment_status"]
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id,
+            (
+                bridge.REQUIRED
+                if check_id in {"section_analysis", "concrete_fatigue"}
+                else bridge.NOT_APPLICABLE
+            ),
+            f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+        concrete_fatigue=bridge.ExternalEvidence(
+            status=status,
+            result="50.0 %",
+            criterion="<= 100 %",
+            source="DS/EN 1992-2:2005/AC:2008 Expression (6.106)",
+            reason="solver evidence retained",
+            utilisation=0.5,
+            evidence=({
+                "status": status,
+                "analytical_status": bridge.STATUS_PASS,
+                "methodology": bridge.EN1992_2_BASE,
+                "concrete_method": context["concrete_method"],
+                "concrete_miner_basis": context["concrete_miner_basis"],
+                "concrete_miner_source": context["concrete_miner_source"],
+                "miner_coefficient_c": records[
+                    "concrete_fatigue.miner_c"
+                ]["actual_value"],
+                "parameter_conformance": records[
+                    "concrete_fatigue.miner_c"
+                ],
+                "fatigue_parameter_conformance": concrete_records,
+                "fatigue_edition": context["edition"],
+                "fatigue_factor_mode": context["factor_mode"],
+                "fatigue_factor_approval": context["factor_approval"],
+            },),
+        ),
+    ))
+
+
 def test_report_publishes_bridge_coverage_and_check_gate():
     out = _out()
     out["bridge_methodology"] = _bridge_report_record()
@@ -3748,6 +3846,61 @@ def test_report_publishes_bridge_coverage_and_check_gate():
     assert "added" in text
     assert "not assessed" in text
     assert "DB-BRIDGE-01" in text
+
+
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [
+        ("stale_standard", "fatigue.gamma_c"),
+        ("omitted_gamma_c", "IDs/cardinality"),
+    ],
+)
+def test_report_rejects_stale_or_omitted_bridge_fatigue_evidence(
+    attack,
+    expected,
+):
+    out = _out()
+    current_input = _bridge_report_fatigue_input(custom=True)
+    if attack == "stale_standard":
+        record = _bridge_report_concrete_fatigue_record(
+            _bridge_report_fatigue_input()
+        )
+    else:
+        record = _bridge_report_concrete_fatigue_record(current_input)
+        concrete = next(
+            check for check in record["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = concrete["evidence"][0]
+        row["fatigue_parameter_conformance"] = [
+            parameter
+            for parameter in row["fatigue_parameter_conformance"]
+            if parameter["parameter_id"] != "fatigue.gamma_c"
+        ]
+        row["status"] = bridge.STATUS_PASS
+        concrete["status"] = bridge.STATUS_PASS
+        record["status"] = bridge.STATUS_PASS
+        record["evidence_fingerprint"] = (
+            bridge.bridge_evidence_fingerprint(
+                record["checks"],
+                record["configuration_errors"],
+            )
+        )
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {},
+        current_input,
+        out,
+        figures=False,
+    )).split())
+
+    assert "Bridge methodology" in text
+    assert "INVALID" in text
+    assert "Publication validation" in text
+    assert "REJECTED" in text
+    assert "Concrete fatigue" in text and "NOT ASSESSED" in text
+    assert expected in text
 
 
 def test_report_publishes_bound_bridge_calculation_evidence():

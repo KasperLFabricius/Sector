@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 
+import fatigue_analysis
 import fatigue_presentation
 
 import case_analysis
@@ -593,6 +594,7 @@ def bridge_summary_rows(inp, results, *, stale=False):
     payload = bridge.publication_safe_record(
         results.get("bridge_methodology"),
         design_methodology=raw_selected,
+        fatigue_context=fatigue_analysis.bridge_publication_context(inp),
     )
     if selected != bridge.EN1992_2_BASE and payload is None:
         return []

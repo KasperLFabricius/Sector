@@ -166,6 +166,11 @@ def test_manual_separates_crack_history_duration_and_acceptance_combination():
     assert "response IDs, values and governing evidence" in text
     assert "Every publication boundary validates and reconstructs it" in text
     assert "NOT ASSESSED / REVIEW" in text
+    assert "Reinforcement rows require exactly" in text
+    assert "`fatigue.gamma_s`" in text
+    assert "`fatigue.gamma_c` and `concrete_fatigue.miner_c`" in text
+    assert "stale standard factors cannot publish beside a current custom" in text
+    assert "omitted factor record cannot turn a qualified custom result" in text
 
 
 def test_manual_uses_solver_clear_view_names_and_symbol_glossary():

@@ -782,7 +782,13 @@ def manual_blocks() -> list:
        "evidence fingerprint is valid **and** the calculation-input snapshot still "
        "selects the bridge whole-calculation methodology. A missing or component-"
        "method snapshot makes the project, overview, session/autosave and report "
-       "record **INVALID**; its input-hash match flag cannot remain true.")
+       "record **INVALID**; its input-hash match flag cannot remain true. Bridge "
+       "fatigue publication reconstructs the current factor and Miner conformance "
+       "from that same input snapshot. Reinforcement rows require exactly "
+       "`fatigue.gamma_s`; concrete rows require exactly `fatigue.gamma_c` and "
+       "`concrete_fatigue.miner_c`. A missing, duplicate, substituted or stale "
+       "record, or changed factor mode, method, source or approval, is rejected "
+       "even when the stored result body has a valid fingerprint.")
     h2("Crack width")
     md("Tick **Crack width** on each Elastic table row that requires acceptance. "
        "If any row is ticked, the global crack settings apply to every ticked row. "
@@ -836,12 +842,14 @@ def manual_blocks() -> list:
        "project S-N method and state its document/clause/approval source for a "
        "qualified approved-custom verdict; without that complete source it remains "
        "REVIEW. Calculated fatigue evidence also stores the actual $C$, its "
-       "prescription, conformance state and the "
-       "whole-calculation design methodology; UI and report publication compare "
-       "that binding with the calculation input snapshot and reject a relabelled "
-       "bridge applicability. An unbounded Miner damage remains the governing "
-       "failing row and is reported as infinite; it is not replaced by a finite "
-       "passing component for display.")
+       "prescription, conformance state, factor mode and approval/source, and the "
+       "whole-calculation design methodology. UI, project, autosave/download and "
+       "report publication reconstruct and compare those bindings with the current "
+       "calculation input snapshot; stale standard factors cannot publish beside a "
+       "current custom override, and an omitted factor record cannot turn a "
+       "qualified custom result into a standard PASS. An unbounded Miner damage "
+       "remains the governing failing row and is reported as infinite; it is not "
+       "replaced by a finite passing component for display.")
     table(["Input", "Use"],
           [["$\\gamma_{Ff}$", "Factors the cyclic action increment before the elastic solve"],
            ["$\\gamma_s$", "Reduces the reinforcement S-N resistance and yield/proof limit"],

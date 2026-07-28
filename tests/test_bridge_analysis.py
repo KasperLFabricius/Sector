@@ -593,6 +593,23 @@ def test_bridge_concrete_fatigue_c100_is_analytical_review_not_standard_pass():
     assert evidence.status == bridge.STATUS_REVIEW
     assert evidence.evidence[0]["analytical_status"] == bridge.STATUS_PASS
     assert evidence.evidence[0]["miner_coefficient_c"] == 100.0
+    assert evidence.evidence[0]["fatigue_edition"] == (
+        fatigue_inputs.EC2_2_2005_AC
+    )
+    assert evidence.evidence[0]["fatigue_factor_mode"] == (
+        fatigue_inputs.FACTOR_MODE_PRESET
+    )
+    assert evidence.evidence[0]["fatigue_factor_approval"] == ""
+    assert evidence.evidence[0]["concrete_miner_basis"] == (
+        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+    )
+    assert evidence.evidence[0]["concrete_miner_source"] == ""
+    assert [
+        record["parameter_id"]
+        for record in evidence.evidence[0][
+            "fatigue_parameter_conformance"
+        ]
+    ] == ["fatigue.gamma_c", "concrete_fatigue.miner_c"]
     assert (
         evidence.evidence[0]["parameter_conformance"]["state"]
         == conformance.STATE_REVIEW

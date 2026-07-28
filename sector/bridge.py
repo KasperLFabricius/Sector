@@ -20,8 +20,12 @@ import json
 import math
 from typing import Any, Mapping, Sequence
 
-from . import conformance
-from .fatigue import CONCRETE_MINER, STANDARD_CONCRETE_MINER_C
+from . import codes, conformance
+from .fatigue import (
+    CONCRETE_MINER,
+    CONCRETE_PROJECT_MINER,
+    STANDARD_CONCRETE_MINER_C,
+)
 
 
 COMPONENT_METHODS = "Independent component methods"
@@ -91,6 +95,18 @@ STATUS_NOT_RUN = "NOT RUN"
 STATUS_REVIEW = "REVIEW"
 
 BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v2"
+FATIGUE_PUBLICATION_CONTEXT_SCHEMA = (
+    "sector.bridge-fatigue-publication-context/v1"
+)
+FATIGUE_FACTOR_MODES = (
+    codes.FACTOR_MODE_PRESET,
+    codes.FACTOR_MODE_OVERRIDE,
+    "Legacy saved factors - review required",
+)
+FATIGUE_CONCRETE_METHODS = (
+    CONCRETE_MINER,
+    CONCRETE_PROJECT_MINER,
+)
 
 # DS/EN 1992-2:2005 6.3.2(102) makes the inherited 6.2.3(2)
 # compression-field angle limits fully applicable to box walls.
@@ -1485,14 +1501,332 @@ def assess_base_methodology(evidence: BridgeBaseEvidence) -> dict[str, Any]:
     })
 
 
+def _validated_fatigue_publication_context(
+    context: Mapping | None,
+    *,
+    design_methodology: str | None,
+) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """Validate the caller-owned current fatigue input/conformance context."""
+
+    if not isinstance(context, Mapping):
+        return None, (
+            "current fatigue publication context is missing or malformed",
+        )
+    expected_keys = {
+        "schema",
+        "design_methodology",
+        "edition",
+        "checks",
+        "factor_mode",
+        "factor_approval",
+        "concrete_method",
+        "concrete_miner_basis",
+        "concrete_miner_source",
+        "parameter_conformance",
+        "errors",
+    }
+    errors: list[str] = []
+    if set(context) != expected_keys:
+        errors.append(
+            "current fatigue publication context fields are incomplete or unknown"
+        )
+    if context.get("schema") != FATIGUE_PUBLICATION_CONTEXT_SCHEMA:
+        errors.append(
+            "current fatigue publication context schema is missing or unknown"
+        )
+    context_methodology = context.get("design_methodology")
+    if not isinstance(context_methodology, str):
+        errors.append(
+            "current fatigue publication methodology is not typed text"
+        )
+        context_methodology = ""
+    elif context_methodology != design_methodology:
+        errors.append(
+            "current fatigue publication methodology conflicts with the "
+            "bridge calculation inputs"
+        )
+    checks = context.get("checks")
+    if (
+        not isinstance(checks, Mapping)
+        or set(checks) != {"reinforcement", "concrete"}
+        or not all(isinstance(checks.get(key), bool) for key in checks)
+    ):
+        errors.append(
+            "current fatigue publication check selection is malformed"
+        )
+        checks = {"reinforcement": False, "concrete": False}
+    else:
+        checks = dict(checks)
+    context_errors = context.get("errors")
+    if not isinstance(context_errors, (list, tuple)):
+        errors.append(
+            "current fatigue publication errors are not a structured list"
+        )
+    else:
+        for index, item in enumerate(context_errors, start=1):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(
+                    "current fatigue publication error "
+                    f"{index} is not typed text"
+                )
+            else:
+                errors.append(
+                    f"current fatigue publication context: {item.strip()}"
+                )
+
+    text_values: dict[str, str] = {}
+    for key in (
+        "edition",
+        "factor_mode",
+        "factor_approval",
+        "concrete_method",
+        "concrete_miner_basis",
+        "concrete_miner_source",
+    ):
+        value = context.get(key)
+        if not isinstance(value, str):
+            errors.append(
+                f"current fatigue publication {key} is not typed text"
+            )
+            value = ""
+        text_values[key] = value
+    if any(checks.values()):
+        if not text_values["edition"].strip():
+            errors.append("current fatigue publication edition is missing")
+        elif text_values["edition"] != EN1992_2_BASE:
+            errors.append(
+                "current fatigue publication edition is not the selected "
+                "EN 1992-2 bridge edition"
+            )
+        if text_values["factor_mode"] not in FATIGUE_FACTOR_MODES:
+            errors.append(
+                "current fatigue publication factor mode is missing or unknown"
+            )
+        elif (
+            text_values["factor_mode"] != codes.FACTOR_MODE_OVERRIDE
+            and text_values["factor_approval"]
+        ):
+            errors.append(
+                "current fatigue publication factor approval conflicts with "
+                "the selected factor mode"
+            )
+    if checks["concrete"]:
+        if text_values["concrete_method"] not in FATIGUE_CONCRETE_METHODS:
+            errors.append(
+                "current concrete-fatigue publication method is missing or "
+                "unknown"
+            )
+        if not text_values["concrete_miner_basis"].strip():
+            errors.append(
+                "current concrete-fatigue Miner basis is missing"
+            )
+
+    required_ids = []
+    if checks["reinforcement"]:
+        required_ids.append("fatigue.gamma_s")
+    if checks["concrete"]:
+        required_ids.extend((
+            "fatigue.gamma_c",
+            "concrete_fatigue.miner_c",
+        ))
+    raw_records = context.get("parameter_conformance")
+    records_by_id: dict[str, Mapping[str, Any]] = {}
+    if not isinstance(raw_records, (list, tuple)):
+        errors.append(
+            "current fatigue parameter conformance is not a structured list"
+        )
+        raw_records = ()
+    for index, raw_record in enumerate(raw_records, start=1):
+        verified, record_errors = conformance.verify_self_contained(raw_record)
+        errors.extend(
+            f"current fatigue parameter {index}: {error}"
+            for error in record_errors
+        )
+        if verified is None:
+            continue
+        parameter_id = verified.get("parameter_id")
+        if parameter_id in records_by_id:
+            errors.append(
+                f"current fatigue parameter {parameter_id!r} is duplicated"
+            )
+            continue
+        records_by_id[str(parameter_id)] = verified
+    if (
+        len(raw_records) != len(required_ids)
+        or set(records_by_id) != set(required_ids)
+    ):
+        errors.append(
+            "current fatigue parameter IDs/cardinality do not match the "
+            f"required set {required_ids}"
+        )
+    if errors:
+        return None, tuple(dict.fromkeys(errors))
+    return {
+        "design_methodology": context_methodology,
+        **text_values,
+        "checks": checks,
+        "records_by_id": records_by_id,
+    }, ()
+
+
+def _publication_fatigue_row_records(
+    check_id: str,
+    row: Mapping,
+    *,
+    row_index: int,
+    fatigue_context: Mapping[str, Any] | None,
+    fatigue_context_errors: Sequence[str],
+) -> tuple[list[Mapping[str, Any]], list[str]]:
+    """Correlate one stored bridge-fatigue row with current canonical inputs."""
+
+    label = (
+        "reinforcement-fatigue"
+        if check_id == "reinforcement_fatigue"
+        else "concrete-fatigue"
+    )
+    errors = [
+        f"stored {label} row {row_index}: {error}"
+        for error in fatigue_context_errors
+    ]
+    if fatigue_context is None:
+        return [], errors
+    context_check = (
+        "reinforcement"
+        if check_id == "reinforcement_fatigue"
+        else "concrete"
+    )
+    if fatigue_context["checks"].get(context_check) is not True:
+        errors.append(
+            f"stored {label} row {row_index} conflicts with the current "
+            "fatigue check selection"
+        )
+
+    required_ids = (
+        ("fatigue.gamma_s",)
+        if check_id == "reinforcement_fatigue"
+        else ("fatigue.gamma_c", "concrete_fatigue.miner_c")
+    )
+    nested = row.get("fatigue_parameter_conformance")
+    if not isinstance(nested, (list, tuple)):
+        errors.append(
+            f"stored {label} row {row_index} is missing its fatigue "
+            "parameter conformance"
+        )
+        return [], errors
+    verified_records: list[Mapping[str, Any]] = []
+    records_by_id: dict[str, Mapping[str, Any]] = {}
+    for nested_index, nested_record in enumerate(nested, start=1):
+        verified, nested_errors = conformance.verify_self_contained(
+            nested_record
+        )
+        errors.extend(
+            f"stored {label} row {row_index} parameter "
+            f"{nested_index}: {error}"
+            for error in nested_errors
+        )
+        if verified is None:
+            continue
+        parameter_id = str(verified.get("parameter_id") or "")
+        if parameter_id in records_by_id:
+            errors.append(
+                f"stored {label} row {row_index} parameter "
+                f"{parameter_id!r} is duplicated"
+            )
+            continue
+        records_by_id[parameter_id] = verified
+        verified_records.append(verified)
+    if (
+        len(nested) != len(required_ids)
+        or set(records_by_id) != set(required_ids)
+    ):
+        errors.append(
+            f"stored {label} row {row_index} parameter IDs/cardinality do "
+            f"not match the required set {list(required_ids)}"
+        )
+    for parameter_id in required_ids:
+        stored = records_by_id.get(parameter_id)
+        expected = fatigue_context["records_by_id"].get(parameter_id)
+        if stored is not None and stored != expected:
+            errors.append(
+                f"stored {label} row {row_index} parameter "
+                f"{parameter_id!r} conflicts with current fatigue inputs"
+            )
+
+    metadata_fields = (
+        ("fatigue_edition", "edition"),
+        ("fatigue_factor_mode", "factor_mode"),
+        ("fatigue_factor_approval", "factor_approval"),
+    )
+    if check_id == "concrete_fatigue":
+        metadata_fields += (
+            ("concrete_method", "concrete_method"),
+            ("concrete_miner_basis", "concrete_miner_basis"),
+            ("concrete_miner_source", "concrete_miner_source"),
+        )
+        expected_miner = fatigue_context["records_by_id"].get(
+            "concrete_fatigue.miner_c"
+        )
+        if row.get("parameter_conformance") != expected_miner:
+            errors.append(
+                f"stored {label} row {row_index} Miner conformance "
+                "conflicts with current fatigue inputs"
+            )
+    for row_key, context_key in metadata_fields:
+        if row.get(row_key) != fatigue_context.get(context_key):
+            errors.append(
+                f"stored {label} row {row_index} {row_key} conflicts with "
+                "current fatigue inputs"
+            )
+    return verified_records, list(dict.fromkeys(errors))
+
+
 def _publication_parameter_evidence_errors(
     check_id: str,
     evidence: Sequence[Mapping],
+    *,
+    fatigue_context: Mapping[str, Any] | None,
+    fatigue_context_errors: Sequence[str],
 ) -> tuple[list[str], list[Mapping[str, Any]]]:
     """Recompute stored numerical-versus-conformance parameter evidence."""
 
     errors: list[str] = []
     records: list[Mapping[str, Any]] = []
+
+    def fatigue_row_is_calculated(
+        row: Mapping,
+        *,
+        row_index: int,
+        label: str,
+    ) -> bool:
+        marker_fields = {
+            "analytical_status",
+            "fatigue_parameter_conformance",
+            "fatigue_edition",
+            "fatigue_factor_mode",
+            "fatigue_factor_approval",
+        }
+        if label == "concrete-fatigue":
+            marker_fields.update({
+                "miner_coefficient_c",
+                "parameter_conformance",
+                "concrete_method",
+                "concrete_miner_basis",
+                "concrete_miner_source",
+            })
+        if not marker_fields.intersection(row):
+            return False
+        analytical_status = row.get("analytical_status")
+        if (
+            not isinstance(analytical_status, str)
+            or analytical_status.strip().upper()
+            not in {STATUS_PASS, STATUS_FAIL}
+        ):
+            errors.append(
+                f"stored {label} row {row_index} analytical status is "
+                "missing or malformed"
+            )
+        return True
+
     if check_id == "box_wall_torsion":
         cots = []
         for index, row in enumerate(evidence, start=1):
@@ -1567,8 +1901,20 @@ def _publication_parameter_evidence_errors(
             if record is not None:
                 records.append(record)
     elif check_id == "concrete_fatigue":
+        calculated_rows = 0
         for index, row in enumerate(evidence, start=1):
+            if not fatigue_row_is_calculated(
+                row,
+                row_index=index,
+                label="concrete-fatigue",
+            ):
+                continue
+            calculated_rows += 1
             if "miner_coefficient_c" not in row:
+                errors.append(
+                    f"stored concrete-fatigue row {index} is missing its "
+                    "Miner coefficient C"
+                )
                 continue
             try:
                 coefficient = _real(
@@ -1578,84 +1924,74 @@ def _publication_parameter_evidence_errors(
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
-            standard_applicability = bool(
-                row.get("methodology") == EN1992_2_BASE
-                and row.get("concrete_method") == CONCRETE_MINER
+            expected_miner = (
+                fatigue_context["records_by_id"].get(
+                    "concrete_fatigue.miner_c"
+                )
+                if fatigue_context is not None
+                else None
             )
-            record, record_errors = conformance.verify_parameter(
-                row.get("parameter_conformance"),
-                value=coefficient,
-                parameter_id="concrete_fatigue.miner_c",
-                label="Concrete fatigue Miner coefficient C",
-                selected_standard=EN1992_2_BASE,
-                standard_methodology=CONCRETE_MINER_STANDARD_METHOD,
-                normative_source=CONCRETE_MINER_STANDARD_SOURCE,
-                prescribed_value=STANDARD_CONCRETE_MINER_C,
-                applicability_conforms=standard_applicability,
-                applicability_note=(
-                    ""
-                    if standard_applicability
-                    else (
-                        "The stored methodology/method is not the selected "
-                        "EN 1992-2 bridge Miner route"
-                    )
-                ),
-            )
-            errors.extend(record_errors)
-            if record is not None:
-                records.append(record)
-            nested = row.get("fatigue_parameter_conformance")
-            if not isinstance(nested, (list, tuple)):
+            if (
+                isinstance(expected_miner, Mapping)
+                and coefficient
+                != float(expected_miner.get("actual_value"))
+            ):
                 errors.append(
-                    f"stored concrete-fatigue row {index} is missing its "
-                    "fatigue parameter conformance"
+                    f"stored concrete-fatigue row {index} Miner coefficient "
+                    "C conflicts with current fatigue inputs"
                 )
-                continue
-            for nested_index, nested_record in enumerate(nested, start=1):
-                verified, nested_errors = (
-                    conformance.verify_self_contained(nested_record)
+            nested_records, nested_errors = (
+                _publication_fatigue_row_records(
+                    check_id,
+                    row,
+                    row_index=index,
+                    fatigue_context=fatigue_context,
+                    fatigue_context_errors=fatigue_context_errors,
                 )
-                errors.extend(
-                    f"stored concrete-fatigue row {index} parameter "
-                    f"{nested_index}: {error}"
-                    for error in nested_errors
-                )
-                if (
-                    verified is not None
-                    and not any(
-                        existing.get("parameter_id")
-                        == verified.get("parameter_id")
-                        for existing in records
-                    )
+            )
+            errors.extend(nested_errors)
+            for nested_record in nested_records:
+                if not any(
+                    existing.get("parameter_id")
+                    == nested_record.get("parameter_id")
+                    for existing in records
                 ):
-                    records.append(verified)
+                    records.append(nested_record)
+        if not calculated_rows:
+            errors.append(
+                "stored concrete-fatigue evidence has no calculated rows"
+            )
     elif check_id == "reinforcement_fatigue":
+        calculated_rows = 0
         for index, row in enumerate(evidence, start=1):
-            nested = row.get("fatigue_parameter_conformance")
-            if not isinstance(nested, (list, tuple)):
-                errors.append(
-                    f"stored reinforcement-fatigue row {index} is missing "
-                    "its parameter conformance"
-                )
+            if not fatigue_row_is_calculated(
+                row,
+                row_index=index,
+                label="reinforcement-fatigue",
+            ):
                 continue
-            for nested_index, nested_record in enumerate(nested, start=1):
-                verified, nested_errors = (
-                    conformance.verify_self_contained(nested_record)
+            calculated_rows += 1
+            nested_records, nested_errors = (
+                _publication_fatigue_row_records(
+                    check_id,
+                    row,
+                    row_index=index,
+                    fatigue_context=fatigue_context,
+                    fatigue_context_errors=fatigue_context_errors,
                 )
-                errors.extend(
-                    f"stored reinforcement-fatigue row {index} parameter "
-                    f"{nested_index}: {error}"
-                    for error in nested_errors
-                )
-                if (
-                    verified is not None
-                    and not any(
-                        existing.get("parameter_id")
-                        == verified.get("parameter_id")
-                        for existing in records
-                    )
+            )
+            errors.extend(nested_errors)
+            for nested_record in nested_records:
+                if not any(
+                    existing.get("parameter_id")
+                    == nested_record.get("parameter_id")
+                    for existing in records
                 ):
-                    records.append(verified)
+                    records.append(nested_record)
+        if not calculated_rows:
+            errors.append(
+                "stored reinforcement-fatigue evidence has no calculated rows"
+            )
     return errors, records
 
 
@@ -1663,6 +1999,7 @@ def publication_safe_record(
     record: Mapping | None,
     *,
     design_methodology: Any,
+    fatigue_context: Mapping | None,
 ) -> dict[str, Any] | None:
     """Return a canonical fail-closed bridge calculation snapshot.
 
@@ -1697,7 +2034,17 @@ def publication_safe_record(
                 "stored bridge methodology conflicts with the calculation "
                 "input snapshot"
             )
-    errors: list[str] = []
+    (
+        validated_fatigue_context,
+        fatigue_context_errors,
+    ) = _validated_fatigue_publication_context(
+        fatigue_context,
+        design_methodology=EN1992_2_BASE,
+    )
+    # The current input context is an independent publication authority.  It
+    # must remain valid even when a stale body omits every fatigue row and would
+    # otherwise avoid row-level correlation entirely.
+    errors: list[str] = list(fatigue_context_errors)
     raw_configuration = record.get("configuration_errors", ())
     if not isinstance(raw_configuration, (list, tuple)):
         errors.append(
@@ -1714,6 +2061,70 @@ def publication_safe_record(
                 )
             elif item:
                 raw_configuration_errors.append(item)
+    prior_body_publication_errors: list[str] = []
+    raw_publication = record.get("publication_validation")
+    if raw_publication is not None:
+        if not isinstance(raw_publication, Mapping):
+            errors.append(
+                "stored bridge publication validation is malformed"
+            )
+        else:
+            if set(raw_publication) != {
+                "status",
+                "design_methodology",
+                "errors",
+            }:
+                errors.append(
+                    "stored bridge publication-validation fields are "
+                    "incomplete or unknown"
+                )
+            raw_publication_status = raw_publication.get("status")
+            raw_publication_errors = raw_publication.get("errors")
+            raw_publication_methodology = raw_publication.get(
+                "design_methodology"
+            )
+            if (
+                raw_publication_methodology is not None
+                and not isinstance(raw_publication_methodology, str)
+            ):
+                errors.append(
+                    "stored bridge publication-validation methodology is "
+                    "not typed text"
+                )
+            if raw_publication_status not in {"ACCEPTED", "REJECTED"}:
+                errors.append(
+                    "stored bridge publication-validation status is unknown"
+                )
+            if not isinstance(raw_publication_errors, (list, tuple)):
+                errors.append(
+                    "stored bridge publication-validation errors are malformed"
+                )
+            else:
+                typed_publication_errors = []
+                for index, item in enumerate(
+                    raw_publication_errors,
+                    start=1,
+                ):
+                    if not isinstance(item, str) or not item.strip():
+                        errors.append(
+                            "stored bridge publication-validation error "
+                            f"{index} is not typed text"
+                        )
+                    else:
+                        typed_publication_errors.append(item.strip())
+                if (
+                    raw_publication_status == "ACCEPTED"
+                    and typed_publication_errors
+                ):
+                    errors.append(
+                        "stored accepted bridge publication contains errors"
+                    )
+                if raw_publication_status == "REJECTED":
+                    prior_body_publication_errors = [
+                        item
+                        for item in typed_publication_errors
+                        if item in raw_configuration_errors
+                    ]
 
     raw_checks = record.get("checks")
     if not isinstance(raw_checks, (list, tuple)):
@@ -1828,11 +2239,55 @@ def publication_safe_record(
                 "stored calculated verdict lacks its evidence rows"
             )
             status = STATUS_NOT_ASSESSED
-        if status in {STATUS_PASS, STATUS_FAIL, STATUS_REVIEW}:
+        has_calculated_fatigue_evidence = (
+            check_id in {
+                "reinforcement_fatigue",
+                "concrete_fatigue",
+            }
+            and any(
+                isinstance(row, Mapping)
+                and {
+                    "analytical_status",
+                    "fatigue_parameter_conformance",
+                    "fatigue_edition",
+                    "fatigue_factor_mode",
+                    "fatigue_factor_approval",
+                }.intersection(row)
+                for row in raw_evidence
+            )
+        )
+        if (
+            validated_fatigue_context is not None
+            and check_id in {
+                "reinforcement_fatigue",
+                "concrete_fatigue",
+            }
+        ):
+            context_check = (
+                "reinforcement"
+                if check_id == "reinforcement_fatigue"
+                else "concrete"
+            )
+            if (
+                validated_fatigue_context["checks"].get(context_check) is True
+                and not has_calculated_fatigue_evidence
+                and status != STATUS_NOT_APPLICABLE
+            ):
+                local_errors.append(
+                    f"current {context_check} fatigue check is enabled but "
+                    "stored evidence has no calculated parameter row"
+                )
+                status = STATUS_NOT_ASSESSED
+        if (
+            status in {STATUS_PASS, STATUS_FAIL, STATUS_REVIEW}
+            or has_calculated_fatigue_evidence
+        ):
             parameter_errors, parameter_records = (
                 _publication_parameter_evidence_errors(
                     check_id,
                     raw_evidence,
+                    fatigue_context=validated_fatigue_context,
+                    fatigue_context_errors=fatigue_context_errors,
                 )
             )
             if parameter_errors:
@@ -1898,7 +2353,16 @@ def publication_safe_record(
 
         reason = text_fields["reason"].strip()
         if local_errors:
-            reason = "; ".join((*local_errors, reason) if reason else local_errors)
+            new_reason_errors = [
+                item for item in local_errors
+                if item not in reason
+            ]
+            reason = "; ".join(
+                (
+                    *new_reason_errors,
+                    *((reason,) if reason else ()),
+                )
+            )
             errors.extend(f"{check_id}: {item}" for item in local_errors)
         checks.append(_result(
             check_id,
@@ -1935,9 +2399,16 @@ def publication_safe_record(
     configuration_errors = list(dict.fromkeys(
         (*raw_configuration_errors, *errors)
     ))
+    publication_errors = list(dict.fromkeys(
+        (
+            *correlation_errors,
+            *errors,
+            *prior_body_publication_errors,
+        )
+    ))
     safe_status = (
         STATUS_INVALID
-        if configuration_errors or correlation_errors
+        if correlation_errors or configuration_errors
         else _overall_status(checks)
     )
     return _with_evidence_binding({
@@ -1953,10 +2424,10 @@ def publication_safe_record(
         "configuration_errors": configuration_errors,
         "publication_validation": {
             "status": (
-                "REJECTED" if correlation_errors else "ACCEPTED"
+                "REJECTED" if publication_errors else "ACCEPTED"
             ),
             "design_methodology": current_methodology,
-            "errors": list(correlation_errors),
+            "errors": publication_errors,
         },
         "limitations": [
             rule.implementation

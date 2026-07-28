@@ -3107,18 +3107,19 @@ def _perform_autosave() -> bool:
     except Exception:
         return False
     try:
-        _current_tables, current_scalars = _project_state()
-        current_design_methodology = current_scalars.get(
-            "design_methodology"
-        )
+        current_tables, current_scalars = _project_state()
+        publication_scalars = project_io._canonical_inputs(
+            current_tables,
+            current_scalars,
+        )["scalars"]
     except Exception:
-        current_design_methodology = None
+        publication_scalars = {}
     record_changed_by_validation = False
     calculation = st.session_state.get("calculation_record")
     if isinstance(calculation, Mapping):
         safe_calculation = project_io.publication_safe_calculation_record(
             calculation,
-            design_methodology=current_design_methodology,
+            calculation_inputs=publication_scalars,
             input_digest=digest,
         )
         if safe_calculation != calculation:
@@ -9248,6 +9249,7 @@ def bridge_methodology_view(inp, results, *, stale=False):
     payload = bridge.publication_safe_record(
         (results or {}).get("bridge_methodology"),
         design_methodology=selected_methodology,
+        fatigue_context=fatigue_analysis.bridge_publication_context(inp),
     )
     if (
         selected_methodology != bridge.EN1992_2_BASE
@@ -12683,6 +12685,9 @@ def _analysis_workspace(inp):
             bridge_record = bridge.publication_safe_record(
                 st.session_state["results"].get("bridge_methodology"),
                 design_methodology=inp.get("design_methodology"),
+                fatigue_context=(
+                    fatigue_analysis.bridge_publication_context(inp)
+                ),
             )
             if bridge_record is not None:
                 calculation_record["bridge_methodology"] = bridge_record

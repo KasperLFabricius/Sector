@@ -721,6 +721,13 @@ def reinforcement_fatigue_evidence(
             reason="; ".join(context_errors),
         )
     rows = []
+    factor_basis = payload.get("factor_basis")
+    if not isinstance(factor_basis, Mapping):
+        return bridge.ExternalEvidence(
+            status=bridge.STATUS_INVALID,
+            source="DS/EN 1992-1-1:2004 clauses 6.8.4-6.8.6, inherited",
+            reason="Fatigue factor-basis evidence is malformed.",
+        )
     reinforcement_parameter_records = [
         dict(record)
         for record in (payload.get("parameter_conformance") or ())
@@ -764,6 +771,11 @@ def reinforcement_fatigue_evidence(
                 ),
                 "fatigue_parameter_conformance": (
                     reinforcement_parameter_records
+                ),
+                "fatigue_edition": payload.get("edition"),
+                "fatigue_factor_mode": factor_basis.get("mode"),
+                "fatigue_factor_approval": (
+                    factor_basis.get("approval_reference") or ""
                 ),
             })
     warnings = _messages(payload.get("warnings"))
@@ -858,6 +870,13 @@ def concrete_fatigue_evidence(
             source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
             reason="Concrete Miner conformance evidence is missing.",
         )
+    factor_basis = payload.get("factor_basis")
+    if not isinstance(factor_basis, Mapping):
+        return bridge.ExternalEvidence(
+            status=bridge.STATUS_INVALID,
+            source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
+            reason="Fatigue factor-basis evidence is malformed.",
+        )
     concrete_parameter_records = [
         dict(record)
         for record in (payload.get("parameter_conformance") or ())
@@ -906,9 +925,20 @@ def concrete_fatigue_evidence(
                 ),
                 "methodology": bridge.EN1992_2_BASE,
                 "concrete_method": payload.get("concrete_method"),
+                "concrete_miner_basis": payload.get(
+                    "concrete_miner_basis"
+                ),
+                "concrete_miner_source": (
+                    payload.get("concrete_miner_source") or ""
+                ),
                 "miner_coefficient_c": concrete_parameters.get("c"),
                 "parameter_conformance": dict(miner_record),
                 "fatigue_parameter_conformance": concrete_parameter_records,
+                "fatigue_edition": payload.get("edition"),
+                "fatigue_factor_mode": factor_basis.get("mode"),
+                "fatigue_factor_approval": (
+                    factor_basis.get("approval_reference") or ""
+                ),
                 "note": (
                     f"spectrum {fatigue_presentation.value(spectrum, 'spectrum_name', '-')}; "
                     f"concrete fibre {row.get('fibre_index', '-')}; "

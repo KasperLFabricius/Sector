@@ -407,6 +407,122 @@ def _resolved_factor_basis(inp: Mapping, edition: str) -> tuple[float, float, di
     return gamma_s, gamma_c, basis
 
 
+def bridge_publication_context(inp: Mapping | None) -> dict:
+    """Reconstruct the bridge-fatigue authority context from current inputs.
+
+    Bridge result evidence is stored separately from the live calculation input
+    snapshot.  Publication compares its nested records with this canonical
+    reconstruction so a self-consistent stale body cannot establish current
+    factor, method, source, or approval authority.
+    """
+
+    errors: list[str] = []
+    source = inp if isinstance(inp, Mapping) else {}
+    if not isinstance(inp, Mapping):
+        errors.append("current calculation inputs are missing or malformed")
+
+    def current_bool(key: str, *, default: bool = False) -> bool:
+        value = source.get(key, default)
+        if not isinstance(value, bool):
+            errors.append(f"current fatigue input {key} is not typed Boolean")
+            return False
+        return value
+
+    fatigue_on = current_bool("fatigue_on")
+    reinforcement_on = current_bool("fatigue_check_steel")
+    concrete_on = current_bool("fatigue_check_concrete")
+    checks = {
+        "reinforcement": fatigue_on and reinforcement_on,
+        "concrete": fatigue_on and concrete_on,
+    }
+    try:
+        design_methodology = _design_methodology(
+            source.get("design_methodology"),
+            allow_default=False,
+        )
+    except ValueError as exc:
+        design_methodology = ""
+        errors.append(str(exc))
+
+    edition = ""
+    factor_mode = ""
+    factor_approval = ""
+    concrete_method = ""
+    concrete_miner_basis = ""
+    concrete_miner_source = ""
+    parameter_records: list[Mapping] = []
+    if any(checks.values()):
+        try:
+            edition = _edition(source.get("fatigue_edition"))
+            _gamma_s, _gamma_c, factor_basis = _resolved_factor_basis(
+                source,
+                edition,
+            )
+            factor_mode = str(factor_basis.get("mode") or "")
+            factor_approval = str(
+                factor_basis.get("approval_reference") or ""
+            )
+            factor_records = factor_basis.get("parameter_conformance")
+            if not isinstance(factor_records, Mapping):
+                raise ValueError(
+                    "current fatigue factor conformance is malformed"
+                )
+            if checks["reinforcement"]:
+                parameter_records.append(factor_records["gamma_s"])
+            if checks["concrete"]:
+                parameter_records.append(factor_records["gamma_c"])
+        except (KeyError, TypeError, ValueError) as exc:
+            errors.append(f"current fatigue factor context is invalid: {exc}")
+    if checks["concrete"]:
+        concrete_method = str(
+            source.get("fatigue_concrete_method") or CONCRETE_MINER
+        ).strip()
+        concrete_miner_source = (
+            source.get("fatigue_concrete_miner_source")
+        )
+        try:
+            concrete_miner_source = conformance.typed_text(
+                concrete_miner_source,
+                "Concrete Miner approval/source",
+            )
+            concrete_miner_basis = _resolved_concrete_miner_basis(
+                source,
+                edition=edition,
+                design_methodology=design_methodology,
+                concrete_method=concrete_method,
+            )
+            if concrete_method not in CONCRETE_MINER_METHODS:
+                raise ValueError(
+                    "bridge concrete fatigue requires an explicit Miner/S-N "
+                    "method"
+                )
+            parameter_records.append(concrete_miner_conformance(
+                edition=edition,
+                concrete_method=concrete_method,
+                miner_basis=concrete_miner_basis,
+                miner_source=concrete_miner_source,
+                coefficient_c=source.get("fatigue_concrete_c"),
+                design_methodology=design_methodology,
+            ))
+        except (TypeError, ValueError) as exc:
+            errors.append(
+                f"current concrete-fatigue context is invalid: {exc}"
+            )
+    return {
+        "schema": bridge.FATIGUE_PUBLICATION_CONTEXT_SCHEMA,
+        "design_methodology": design_methodology,
+        "edition": edition,
+        "checks": checks,
+        "factor_mode": factor_mode,
+        "factor_approval": factor_approval,
+        "concrete_method": concrete_method,
+        "concrete_miner_basis": concrete_miner_basis,
+        "concrete_miner_source": concrete_miner_source,
+        "parameter_conformance": list(parameter_records),
+        "errors": list(dict.fromkeys(errors)),
+    }
+
+
 def calculation_references(
     edition: str,
     concrete_method: str = CONCRETE_MINER,

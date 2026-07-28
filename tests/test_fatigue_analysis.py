@@ -1417,6 +1417,25 @@ def test_invalid_result_preserves_missing_assignments_without_running_fatigue():
     assert inp["tendon_elements"][0]["fatigue_detail_id"] == ""
 
 
+def test_bridge_publication_context_validates_inactive_check_booleans():
+    context = fatigue_analysis.bridge_publication_context({
+        "design_methodology": bridge.EN1992_2_BASE,
+        "fatigue_on": False,
+        "fatigue_check_steel": "false",
+        "fatigue_check_concrete": 0,
+    })
+
+    assert context["checks"] == {
+        "reinforcement": False,
+        "concrete": False,
+    }
+    assert context["parameter_conformance"] == []
+    assert context["errors"] == [
+        "current fatigue input fatigue_check_steel is not typed Boolean",
+        "current fatigue input fatigue_check_concrete is not typed Boolean",
+    ]
+
+
 def test_analysis_signature_covers_numerics_and_conformance_provenance():
     base = _base()
     signature = fatigue_analysis.analysis_signature(base)

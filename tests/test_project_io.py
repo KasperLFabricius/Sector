@@ -751,6 +751,104 @@ def _bridge_calculation_snapshot():
     ))
 
 
+def _bridge_concrete_fatigue_snapshot(scalars):
+    context = fatigue_analysis.bridge_publication_context(scalars)
+    assert context["errors"] == []
+    records = {
+        record["parameter_id"]: record
+        for record in context["parameter_conformance"]
+    }
+    concrete_records = (
+        records["fatigue.gamma_c"],
+        records["concrete_fatigue.miner_c"],
+    )
+    assessment_status = conformance.aggregate(
+        concrete_records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=context["edition"],
+    )["assessment_status"]
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id in {"section_analysis", "concrete_fatigue"}
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="one inherited section solve converged",
+            criterion="requested section solver converges",
+            source="DS/EN 1992-2 inherited section analysis",
+            reason="Elastic case SLS-1 converged",
+        ),
+        concrete_fatigue=bridge.ExternalEvidence(
+            status=assessment_status,
+            result="50.0 %",
+            criterion="<= 100 %",
+            source="DS/EN 1992-2:2005/AC:2008 Expression (6.106)",
+            reason="solver evidence retained",
+            utilisation=0.5,
+            evidence=({
+                "status": assessment_status,
+                "analytical_status": bridge.STATUS_PASS,
+                "methodology": bridge.EN1992_2_BASE,
+                "concrete_method": context["concrete_method"],
+                "concrete_miner_basis": context["concrete_miner_basis"],
+                "concrete_miner_source": context["concrete_miner_source"],
+                "miner_coefficient_c": records[
+                    "concrete_fatigue.miner_c"
+                ]["actual_value"],
+                "parameter_conformance": records[
+                    "concrete_fatigue.miner_c"
+                ],
+                "fatigue_parameter_conformance": concrete_records,
+                "fatigue_edition": context["edition"],
+                "fatigue_factor_mode": context["factor_mode"],
+                "fatigue_factor_approval": context["factor_approval"],
+            },),
+        ),
+    ))
+
+
+def _bridge_fatigue_scalars(*, custom=False):
+    scalars = {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "fatigue_on": True,
+        "fatigue_check_steel": False,
+        "fatigue_check_concrete": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+    }
+    if custom:
+        scalars.update({
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "fatigue_factor_approval": (
+                "DB-FAT-OVERRIDE-02 / checker approval"
+            ),
+            "fatigue_gamma_c": 2.0,
+        })
+    return scalars
+
+
 def test_project_roundtrips_bound_bridge_calculation_snapshot():
     scalars = {"design_methodology": bridge.EN1992_2_BASE}
     calculation = {
@@ -774,6 +872,89 @@ def test_project_roundtrips_bound_bridge_calculation_snapshot():
     assert saved["publication_validation"]["status"] == "ACCEPTED"
     assert payload["calculation"]["matches_saved_inputs"] is True
     assert payload["provenance"]["results_included"] is True
+
+
+@pytest.mark.parametrize("attack", ["stale_standard", "omitted_gamma_c"])
+def test_bridge_fatigue_rejection_latch_survives_save_load_and_resave(attack):
+    current_scalars = _bridge_fatigue_scalars(custom=True)
+    if attack == "stale_standard":
+        attacked = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_scalars()
+        )
+        stored_concrete = next(
+            check for check in attacked["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        assert current_scalars["fatigue_gamma_c"] == 2.0
+        assert stored_concrete["evidence"][0][
+            "fatigue_parameter_conformance"
+        ][0]["actual_value"] == 1.5
+    else:
+        attacked = _bridge_concrete_fatigue_snapshot(current_scalars)
+        stored_concrete = next(
+            check for check in attacked["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = stored_concrete["evidence"][0]
+        row["fatigue_parameter_conformance"] = [
+            record
+            for record in row["fatigue_parameter_conformance"]
+            if record["parameter_id"] != "fatigue.gamma_c"
+        ]
+        row["status"] = bridge.STATUS_PASS
+        stored_concrete["status"] = bridge.STATUS_PASS
+        attacked["status"] = bridge.STATUS_PASS
+        attacked["evidence_fingerprint"] = (
+            bridge.bridge_evidence_fingerprint(
+                attacked["checks"],
+                attacked["configuration_errors"],
+            )
+        )
+    digest = project_io.input_sha256({}, current_scalars)
+    text = project_io.dump_project(
+        {},
+        current_scalars,
+        calculation={
+            "input_sha256": digest,
+            "bridge_methodology": attacked,
+        },
+    )
+    saved_payload = json.loads(text)
+    loaded = project_io.project_provenance(text)
+
+    for calculation in (
+        saved_payload["calculation"],
+        loaded["calculation"],
+    ):
+        saved_bridge = calculation["bridge_methodology"]
+        saved_concrete = next(
+            check for check in saved_bridge["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        assert calculation["matches_saved_inputs"] is False
+        assert saved_bridge["status"] == bridge.STATUS_INVALID
+        assert saved_bridge["publication_validation"]["status"] == "REJECTED"
+        assert saved_concrete["status"] == bridge.STATUS_NOT_ASSESSED
+    assert loaded["input_hash_valid"] is True
+    assert loaded["results_included"] is True
+
+    loaded_tables, loaded_scalars = project_io.parse_project(text)
+    resaved_text = project_io.dump_project(
+        loaded_tables,
+        loaded_scalars,
+        calculation=loaded["calculation"],
+    )
+    resaved = project_io.project_provenance(resaved_text)
+    assert resaved["input_hash_valid"] is True
+    assert resaved["calculation"]["matches_saved_inputs"] is False
+    assert resaved["calculation"]["bridge_methodology"][
+        "publication_validation"
+    ]["status"] == "REJECTED"
+    assert next(
+        check
+        for check in resaved["calculation"]["bridge_methodology"]["checks"]
+        if check["check_id"] == "concrete_fatigue"
+    )["status"] == bridge.STATUS_NOT_ASSESSED
 
 
 def test_project_rejects_bridge_snapshot_under_component_methodology():

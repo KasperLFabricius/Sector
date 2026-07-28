@@ -1,7 +1,14 @@
 import math
+import pathlib
+import sys
 
 import pytest
 
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "app"))
+
+import fatigue_analysis  # noqa: E402
+import fatigue_inputs  # noqa: E402
 from sector import bridge, conformance
 from tools import pr04_bridge_oracle as oracle
 
@@ -19,58 +26,94 @@ def _decisions(**states):
     return tuple(records)
 
 
-def _external(status=bridge.STATUS_PASS, utilisation=0.5):
-    gamma_s = conformance.assess_parameter(
-        1.15,
-        parameter_id="fatigue.gamma_s",
-        label="Reinforcement fatigue material factor gamma_s",
-        selected_standard=bridge.EN1992_2_BASE,
-        standard_methodology="Edition-derived fatigue material-factor preset",
-        normative_source="DS/EN 1992-2 inherited fatigue factors",
-        prescribed_value=1.15,
+def _standard_fatigue_inputs(**changes):
+    inp = {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "fatigue_on": True,
+        "fatigue_check_steel": True,
+        "fatigue_check_concrete": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+    }
+    inp.update(changes)
+    return inp
+
+
+def _fatigue_context(inp=None):
+    context = fatigue_analysis.bridge_publication_context(
+        inp or _standard_fatigue_inputs()
     )
-    gamma_c = conformance.assess_parameter(
-        1.50,
-        parameter_id="fatigue.gamma_c",
-        label="Concrete fatigue material factor gamma_c,fat",
-        selected_standard=bridge.EN1992_2_BASE,
-        standard_methodology="Edition-derived fatigue material-factor preset",
-        normative_source="DS/EN 1992-2 inherited fatigue factors",
-        prescribed_value=1.50,
-    )
-    miner = conformance.assess_parameter(
-        bridge.STANDARD_CONCRETE_MINER_C,
-        parameter_id="concrete_fatigue.miner_c",
-        label="Concrete fatigue Miner coefficient C",
-        selected_standard=bridge.EN1992_2_BASE,
-        standard_methodology=bridge.CONCRETE_MINER_STANDARD_METHOD,
-        normative_source=bridge.CONCRETE_MINER_STANDARD_SOURCE,
-        prescribed_value=bridge.STANDARD_CONCRETE_MINER_C,
-    )
+    assert context["errors"] == []
+    return context
+
+
+def _external(
+    status=bridge.STATUS_PASS,
+    utilisation=0.5,
+    *,
+    fatigue_kind=None,
+    fatigue_context=None,
+):
+    row_status = status
+    row = {
+        "status": status,
+        "analytical_status": status,
+    }
+    if fatigue_kind is not None:
+        context = fatigue_context or _fatigue_context()
+        records = {
+            record["parameter_id"]: record
+            for record in context["parameter_conformance"]
+        }
+        required_ids = (
+            ("fatigue.gamma_s",)
+            if fatigue_kind == "reinforcement"
+            else ("fatigue.gamma_c", "concrete_fatigue.miner_c")
+        )
+        nested = tuple(records[parameter_id] for parameter_id in required_ids)
+        row_status = conformance.aggregate(
+            nested,
+            analytical_status=status,
+            selected_standard=context["edition"],
+        )["assessment_status"]
+        row.update({
+            "status": row_status,
+            "fatigue_edition": context["edition"],
+            "fatigue_factor_mode": context["factor_mode"],
+            "fatigue_factor_approval": context["factor_approval"],
+            "fatigue_parameter_conformance": nested,
+        })
+        if fatigue_kind == "concrete":
+            miner = records["concrete_fatigue.miner_c"]
+            row.update({
+                "methodology": bridge.EN1992_2_BASE,
+                "concrete_method": context["concrete_method"],
+                "concrete_miner_basis": context["concrete_miner_basis"],
+                "concrete_miner_source": context["concrete_miner_source"],
+                "miner_coefficient_c": miner["actual_value"],
+                "parameter_conformance": miner,
+            })
     return bridge.ExternalEvidence(
-        status=status,
+        status=row_status,
         result=f"{utilisation * 100:.1f} %",
         criterion="<= 100 %",
         source="calculated exact response",
         reason="solver evidence retained",
         utilisation=utilisation,
-        evidence=({
-            "status": status,
-            "analytical_status": status,
-            "methodology": bridge.EN1992_2_BASE,
-            "concrete_method": bridge.CONCRETE_MINER,
-            "miner_coefficient_c": bridge.STANDARD_CONCRETE_MINER_C,
-            "parameter_conformance": miner,
-            "fatigue_parameter_conformance": (
-                gamma_s,
-                gamma_c,
-                miner,
-            ),
-        },),
+        evidence=(row,),
     )
 
 
-def _complete_evidence(**changes):
+def _complete_evidence(*, fatigue_input=None, **changes):
+    context = _fatigue_context(fatigue_input)
     evidence = bridge.BridgeBaseEvidence(
         methodology=bridge.EN1992_2_BASE,
         decisions=_decisions(
@@ -108,8 +151,14 @@ def _complete_evidence(**changes):
         ),
         section_analysis=_external(),
         shear=_external(),
-        reinforcement_fatigue=_external(),
-        concrete_fatigue=_external(),
+        reinforcement_fatigue=_external(
+            fatigue_kind="reinforcement",
+            fatigue_context=context,
+        ),
+        concrete_fatigue=_external(
+            fatigue_kind="concrete",
+            fatigue_context=context,
+        ),
         sls_crack=_external(),
     )
     return bridge.BridgeBaseEvidence(**{
@@ -726,6 +775,7 @@ def test_publication_boundary_correlates_current_design_methodology(
     rejected = bridge.publication_safe_record(
         raw,
         design_methodology=current_methodology,
+        fatigue_context=_fatigue_context(),
     )
 
     assert rejected["status"] == bridge.STATUS_INVALID
@@ -742,6 +792,7 @@ def test_publication_boundary_correlates_current_design_methodology(
     accepted = bridge.publication_safe_record(
         rejected,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
     assert accepted["status"] == bridge.STATUS_PASS
     assert accepted["publication_validation"] == {
@@ -751,6 +802,55 @@ def test_publication_boundary_correlates_current_design_methodology(
     }
 
 
+def test_publication_boundary_requires_current_fatigue_context():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+
+    with pytest.raises(TypeError, match="fatigue_context"):
+        bridge.publication_safe_record(
+            raw,
+            design_methodology=bridge.EN1992_2_BASE,
+        )
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context={"schema": "self-asserted"},
+    )
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert _check(safe, "reinforcement_fatigue")["status"] == (
+        bridge.STATUS_NOT_ASSESSED
+    )
+    assert _check(safe, "concrete_fatigue")["status"] == (
+        bridge.STATUS_NOT_ASSESSED
+    )
+
+
+def test_publication_rejects_nonbridge_fatigue_edition_context():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    current_inputs = _standard_fatigue_inputs(
+        fatigue_edition=fatigue_inputs.EC2_2023,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_2023_STANDARD
+        ),
+    )
+    context = fatigue_analysis.bridge_publication_context(current_inputs)
+    assert context["errors"] == []
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=context,
+    )
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "edition is not the selected EN 1992-2 bridge edition" in error
+        for error in safe["configuration_errors"]
+    )
+
+
 def test_publication_boundary_recomputes_status_and_rejects_missing_check():
     raw = bridge.assess_base_methodology(_complete_evidence())
     raw["status"] = bridge.STATUS_FAIL
@@ -758,6 +858,7 @@ def test_publication_boundary_recomputes_status_and_rejects_missing_check():
     safe = bridge.publication_safe_record(
         raw,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
 
     assert safe["status"] == bridge.STATUS_PASS
@@ -768,6 +869,7 @@ def test_publication_boundary_recomputes_status_and_rejects_missing_check():
     safe = bridge.publication_safe_record(
         raw,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
 
     assert safe["status"] == bridge.STATUS_INVALID
@@ -786,6 +888,7 @@ def test_publication_boundary_rejects_boolean_utilisation_and_duplicate_check():
     safe = bridge.publication_safe_record(
         raw,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
 
     assert safe["status"] == bridge.STATUS_INVALID
@@ -816,6 +919,7 @@ def test_publication_boundary_rejects_mutated_bound_check_body(mutation):
     safe = bridge.publication_safe_record(
         raw,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
 
     assert safe["status"] == bridge.STATUS_INVALID
@@ -861,6 +965,7 @@ def test_publication_boundary_revalidates_stored_box_wall_cot_theta():
     safe = bridge.publication_safe_record(
         raw,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
     safe_check = _check(safe, "box_wall_torsion")
 
@@ -881,6 +986,7 @@ def test_publication_boundary_revalidates_stored_minimum_k():
     safe = bridge.publication_safe_record(
         raw,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
     safe_check = _check(safe, "web_flange_minimum")
 
@@ -901,15 +1007,376 @@ def test_publication_boundary_revalidates_stored_bridge_miner_c():
     safe = bridge.publication_safe_record(
         raw,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
     safe_check = _check(safe, "concrete_fatigue")
 
     assert safe["status"] == bridge.STATUS_INVALID
     assert safe_check["status"] == bridge.STATUS_NOT_ASSESSED
     assert any(
-        "Concrete fatigue Miner coefficient C conformance evidence is stale"
+        "Miner coefficient C conflicts with current fatigue inputs" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_rejects_adjacent_stale_miner_value_exactly():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    check = _check(raw, "concrete_fatigue")
+    check["evidence"][0]["miner_coefficient_c"] = math.nextafter(
+        bridge.STANDARD_CONCRETE_MINER_C,
+        math.inf,
+    )
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
+    )
+
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert _check(safe, "concrete_fatigue")["status"] == (
+        bridge.STATUS_NOT_ASSESSED
+    )
+    assert any(
+        "Miner coefficient C conflicts with current fatigue inputs" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_rejects_stale_standard_fatigue_against_current_override():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    current_inputs = _standard_fatigue_inputs(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_factor_approval="DB-FAT-OVERRIDE-02 / checker approval",
+        fatigue_gamma_c=2.0,
+    )
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(current_inputs),
+    )
+    concrete = _check(safe, "concrete_fatigue")
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert concrete["status"] == bridge.STATUS_NOT_ASSESSED
+    assert any(
+        "fatigue.gamma_c" in error
+        and "conflicts with current fatigue inputs" in error
+        for error in safe["configuration_errors"]
+    )
+    assert any(
+        "fatigue_factor_mode conflicts with current fatigue inputs" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_accepts_explicit_approved_custom_miner_as_review():
+    current_inputs = _standard_fatigue_inputs(
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+        fatigue_concrete_miner_basis=(
+            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
+        ),
+        fatigue_concrete_miner_source="AUTH-SN-7 / checker approval",
+        fatigue_concrete_c=100.0,
+    )
+    context = _fatigue_context(current_inputs)
+    raw = bridge.assess_base_methodology(_complete_evidence(
+        fatigue_input=current_inputs
+    ))
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=context,
+    )
+    concrete = _check(safe, "concrete_fatigue")
+
+    assert safe["status"] == bridge.STATUS_REVIEW
+    assert safe["publication_validation"]["status"] == "ACCEPTED"
+    assert concrete["status"] == bridge.STATUS_REVIEW
+    assert concrete["status"] != bridge.STATUS_PASS
+    assert concrete["evidence"][0]["parameter_conformance"]["state"] == (
+        conformance.STATE_APPROVED_CUSTOM
+    )
+
+
+def test_publication_keeps_matching_unapproved_override_as_review():
+    current_inputs = _standard_fatigue_inputs(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_factor_approval="",
+        fatigue_gamma_c=2.0,
+    )
+    context = _fatigue_context(current_inputs)
+    raw = bridge.assess_base_methodology(_complete_evidence(
+        fatigue_input=current_inputs
+    ))
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=context,
+    )
+
+    assert safe["status"] == bridge.STATUS_REVIEW
+    assert safe["publication_validation"]["status"] == "ACCEPTED"
+    assert _check(safe, "concrete_fatigue")["status"] == bridge.STATUS_REVIEW
+
+
+def test_publication_rejects_changed_custom_factor_approval():
+    calculated_inputs = _standard_fatigue_inputs(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_factor_approval="DB-FAT-OVERRIDE-02 / checker A",
+        fatigue_gamma_c=2.0,
+    )
+    current_inputs = {
+        **calculated_inputs,
+        "fatigue_factor_approval": "DB-FAT-OVERRIDE-02 / checker B",
+    }
+    raw = bridge.assess_base_methodology(_complete_evidence(
+        fatigue_input=calculated_inputs
+    ))
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(current_inputs),
+    )
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert _check(safe, "concrete_fatigue")["status"] == (
+        bridge.STATUS_NOT_ASSESSED
+    )
+    assert any(
+        "fatigue_factor_approval conflicts with current fatigue inputs"
         in error
         for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_allows_noncalculated_fatigue_warning_row():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    concrete = _check(raw, "concrete_fatigue")
+    concrete["evidence"].append({
+        "status": bridge.STATUS_REVIEW,
+        "result": "-",
+        "criterion": "Complete fatigue basis",
+        "note": "Project traffic note requires review.",
+    })
+    concrete["status"] = bridge.STATUS_REVIEW
+    raw["status"] = bridge.STATUS_REVIEW
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
+    )
+
+    assert safe["status"] == bridge.STATUS_REVIEW
+    assert safe["publication_validation"]["status"] == "ACCEPTED"
+    assert _check(safe, "concrete_fatigue")["status"] == bridge.STATUS_REVIEW
+
+
+def test_publication_rejects_fatigue_pass_without_calculated_row():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    concrete = _check(raw, "concrete_fatigue")
+    concrete["evidence"] = [{"status": bridge.STATUS_PASS}]
+    concrete["status"] = bridge.STATUS_PASS
+    raw["status"] = bridge.STATUS_PASS
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
+    )
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert _check(safe, "concrete_fatigue")["status"] == (
+        bridge.STATUS_NOT_ASSESSED
+    )
+    assert any(
+        "no calculated parameter row" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_rejects_enabled_fatigue_check_with_omitted_rows():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    concrete = _check(raw, "concrete_fatigue")
+    concrete["evidence"] = []
+    concrete["status"] = bridge.STATUS_NOT_RUN
+    concrete["result"] = "-"
+    concrete["criterion"] = "-"
+    concrete["reason"] = "No stored concrete-fatigue result was calculated."
+    raw["status"] = bridge.STATUS_NOT_RUN
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
+    )
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert _check(safe, "concrete_fatigue")["status"] == (
+        bridge.STATUS_NOT_ASSESSED
+    )
+    assert any(
+        "current concrete fatigue check is enabled" in error
+        and "no calculated parameter row" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_keeps_explicit_not_applicable_fatigue_without_rows():
+    evidence = _complete_evidence()
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=decision.check_id,
+            applicability=(
+                bridge.NOT_APPLICABLE
+                if decision.check_id == "concrete_fatigue"
+                else decision.applicability
+            ),
+            source=decision.source,
+            notes=decision.notes,
+        )
+        for decision in evidence.decisions
+    )
+    raw = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(**{
+        **evidence.__dict__,
+        "decisions": decisions,
+    }))
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
+    )
+
+    assert safe["status"] == bridge.STATUS_PASS
+    assert safe["publication_validation"]["status"] == "ACCEPTED"
+    assert _check(safe, "concrete_fatigue")["status"] == (
+        bridge.STATUS_NOT_APPLICABLE
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("omit_gamma_c", "IDs/cardinality"),
+        ("duplicate_miner", "duplicated"),
+        ("substitute_gamma_s", "IDs/cardinality"),
+    ],
+)
+def test_publication_rejects_missing_duplicate_or_substituted_fatigue_record(
+    mutation,
+    expected,
+):
+    current_inputs = _standard_fatigue_inputs(
+        fatigue_factor_mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
+        fatigue_factor_approval="DB-FAT-OVERRIDE-02 / checker approval",
+        fatigue_gamma_c=2.0,
+    )
+    context = _fatigue_context(current_inputs)
+    raw = bridge.assess_base_methodology(_complete_evidence(
+        fatigue_input=current_inputs
+    ))
+    concrete = _check(raw, "concrete_fatigue")
+    row = concrete["evidence"][0]
+    records = {
+        record["parameter_id"]: record
+        for record in context["parameter_conformance"]
+    }
+    if mutation == "omit_gamma_c":
+        row["fatigue_parameter_conformance"] = [
+            records["concrete_fatigue.miner_c"]
+        ]
+    elif mutation == "duplicate_miner":
+        row["fatigue_parameter_conformance"] = [
+            records["fatigue.gamma_c"],
+            records["concrete_fatigue.miner_c"],
+            records["concrete_fatigue.miner_c"],
+        ]
+    else:
+        row["fatigue_parameter_conformance"] = [
+            records["fatigue.gamma_s"],
+            records["concrete_fatigue.miner_c"],
+        ]
+    row["status"] = bridge.STATUS_PASS
+    concrete["status"] = bridge.STATUS_PASS
+    raw["status"] = bridge.STATUS_PASS
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=context,
+    )
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert _check(safe, "concrete_fatigue")["status"] == (
+        bridge.STATUS_NOT_ASSESSED
+    )
+    assert any(
+        expected in error for error in safe["configuration_errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("omit_gamma_s", "IDs/cardinality"),
+        ("duplicate_gamma_s", "duplicated"),
+        ("substitute_gamma_c", "IDs/cardinality"),
+    ],
+)
+def test_publication_rejects_invalid_reinforcement_parameter_set(
+    mutation,
+    expected,
+):
+    context = _fatigue_context()
+    records = {
+        record["parameter_id"]: record
+        for record in context["parameter_conformance"]
+    }
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    reinforcement = _check(raw, "reinforcement_fatigue")
+    row = reinforcement["evidence"][0]
+    if mutation == "omit_gamma_s":
+        row["fatigue_parameter_conformance"] = []
+    elif mutation == "duplicate_gamma_s":
+        row["fatigue_parameter_conformance"] = [
+            records["fatigue.gamma_s"],
+            records["fatigue.gamma_s"],
+        ]
+    else:
+        row["fatigue_parameter_conformance"] = [
+            records["fatigue.gamma_c"],
+        ]
+    _rebind_mutated_record(raw)
+
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=context,
+    )
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert _check(safe, "reinforcement_fatigue")["status"] == (
+        bridge.STATUS_NOT_ASSESSED
+    )
+    assert any(
+        expected in error for error in safe["configuration_errors"]
     )
 
 
@@ -921,10 +1388,12 @@ def test_publication_boundary_is_idempotent_and_retains_configuration_errors():
     first = bridge.publication_safe_record(
         raw,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
     second = bridge.publication_safe_record(
         first,
         design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(),
     )
 
     assert first == second
@@ -932,5 +1401,6 @@ def test_publication_boundary_is_idempotent_and_retains_configuration_errors():
     assert second["configuration_errors"] == [
         "bridge table evidence is malformed"
     ]
+    assert second["publication_validation"]["status"] == "ACCEPTED"
     assert second["evidence_schema"] == bridge.BRIDGE_EVIDENCE_SCHEMA
     assert len(second["evidence_fingerprint"]) == 64

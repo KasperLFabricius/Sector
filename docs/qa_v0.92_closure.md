@@ -742,3 +742,40 @@ mandatory; this matrix does not self-certify PR closure.
   project remain false through provenance reload. The exact reproducer plus the
   complete project/download/autosave slice pass (169 checks); full exact-head
   CI and Codex Review restart after the remediation commit.
+- Exact head `139374089e24a0a728772b42142d87c9f16430dd` passed the complete
+  local suite (2,067 tests; 32 known Kaleido warnings), GitHub CI run
+  `30360491298`, reproducible Windows package-content verification without
+  launching the executable, and exact-head Codex Review with no major issue.
+  Fresh 42-page report and 35-page manual artifacts passed structural/raster
+  checks. Original independent QA nevertheless rejected that immutable head:
+  bridge fatigue publication accepted each nested conformance record in
+  isolation but did not prove an exact required parameter set or correlate its
+  values, factor mode, method, source and approval with the current canonical
+  calculation inputs. A valid fingerprint could therefore bind a stale body
+  containing standard `gamma_c = 1.50` beside a current approved
+  `gamma_c = 2.0`, or an attacker could omit `fatigue.gamma_c`, retain only the
+  Miner record, recompute the documented fingerprint and relabel a qualified
+  custom result as a standard PASS.
+- Bridge fatigue now has one caller-owned, schema-versioned publication context
+  reconstructed from the current calculation inputs. Each calculated
+  reinforcement row must contain exactly one `fatigue.gamma_s` record; each
+  calculated concrete row must contain exactly `fatigue.gamma_c` and
+  `concrete_fatigue.miner_c`, with no omission, duplicate or substitution.
+  Full record equality plus explicit edition, factor mode/approval, concrete
+  method, Miner basis and Miner source correlation is required. The same
+  context is supplied by raw/headless publication, calculation-record
+  sanitation, project dump/load/provenance, overview, live bridge UI,
+  durable session/autosave/download and report generation. Any mismatch forces
+  bridge `INVALID`, the affected check to `NOT ASSESSED`, publication
+  `REJECTED`, and a durable `matches_saved_inputs = false` through load and
+  resave. Stale-standard/current-custom and omitted/duplicate/substituted
+  matrices now exercise every affected boundary. Exact-head external gates and
+  original independent closure must be repeated after the remediation commit.
+- The frozen precommit source passed 544 affected bridge/fatigue/project/UI-
+  adapter/report/manual checks, the seven focused stale/omitted UI-report and
+  exact-correlation reproductions, compilation and whitespace checks, and 115
+  ASCII/version controls. An enabled calculated fatigue route cannot suppress
+  all parameter rows, while an explicitly sourced `NOT APPLICABLE` bridge
+  decision remains valid without invented fatigue evidence. The full Streamlit,
+  complete-suite, report/manual render, package-content, CI and review gates
+  remain exact-head work and are not inferred from these focused results.

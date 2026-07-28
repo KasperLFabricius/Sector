@@ -2079,6 +2079,76 @@ def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
     assert rendered["info"] == []
 
 
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    [
+        ("stale_standard", "fatigue.gamma_c"),
+        ("omitted_gamma_c", "IDs/cardinality"),
+    ],
+)
+def test_bridge_view_surfaces_fatigue_correlation_rejection(
+    attack,
+    expected,
+    monkeypatch,
+):
+    import contextlib
+    import sector_app
+
+    rendered = {"errors": [], "info": []}
+    fake_st = SimpleNamespace(
+        info=lambda message, **_kwargs: rendered["info"].append(message),
+        error=lambda message, **_kwargs: rendered["errors"].append(message),
+        success=lambda *_args, **_kwargs: None,
+        warning=lambda *_args, **_kwargs: None,
+        caption=lambda *_args, **_kwargs: None,
+        markdown=lambda *_args, **_kwargs: None,
+        dataframe=lambda *_args, **_kwargs: None,
+        expander=lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(sector_app, "st", fake_st)
+
+    current_scalars = _bridge_fatigue_publication_scalars(custom=True)
+    if attack == "stale_standard":
+        record = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_publication_scalars()
+        )
+    else:
+        record = _bridge_concrete_fatigue_snapshot(current_scalars)
+        concrete = next(
+            check for check in record["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = concrete["evidence"][0]
+        row["fatigue_parameter_conformance"] = [
+            parameter
+            for parameter in row["fatigue_parameter_conformance"]
+            if parameter["parameter_id"] != "fatigue.gamma_c"
+        ]
+        row["status"] = bridge.STATUS_PASS
+        concrete["status"] = bridge.STATUS_PASS
+        record["status"] = bridge.STATUS_PASS
+        record["evidence_fingerprint"] = (
+            bridge.bridge_evidence_fingerprint(
+                record["checks"],
+                record["configuration_errors"],
+            )
+        )
+    sector_app.bridge_methodology_view(
+        current_scalars,
+        {"bridge_methodology": record},
+    )
+
+    assert any(
+        message.startswith("INVALID -")
+        for message in rendered["errors"]
+    )
+    assert any(
+        expected in message
+        for message in rendered["errors"]
+    )
+    assert rendered["info"] == []
+
+
 def test_standard_miner_custom_c_is_editable_warned_and_round_trips():
     import fatigue_analysis
     import fatigue_inputs
@@ -6393,6 +6463,110 @@ def _bridge_bound_snapshot():
     ))
 
 
+def _bridge_fatigue_publication_scalars(*, custom=False):
+    import fatigue_analysis
+    import fatigue_inputs
+
+    scalars = {
+        "design_methodology": bridge.EN1992_2_BASE,
+        "fatigue_on": True,
+        "fatigue_check_steel": False,
+        "fatigue_check_concrete": True,
+        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
+        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
+        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
+        "fatigue_concrete_miner_basis": (
+            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
+        ),
+        "fatigue_concrete_miner_source": "",
+        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+    }
+    if custom:
+        scalars.update({
+            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
+            "fatigue_factor_approval": (
+                "DB-FAT-OVERRIDE-02 / checker approval"
+            ),
+            "fatigue_gamma_c": 2.0,
+        })
+    return scalars
+
+
+def _bridge_concrete_fatigue_snapshot(scalars):
+    import fatigue_analysis
+    from sector import conformance
+
+    context = fatigue_analysis.bridge_publication_context(scalars)
+    assert context["errors"] == []
+    records = {
+        record["parameter_id"]: record
+        for record in context["parameter_conformance"]
+    }
+    concrete_records = (
+        records["fatigue.gamma_c"],
+        records["concrete_fatigue.miner_c"],
+    )
+    status = conformance.aggregate(
+        concrete_records,
+        analytical_status=conformance.STATUS_PASS,
+        selected_standard=context["edition"],
+    )["assessment_status"]
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id=check_id,
+            applicability=(
+                bridge.REQUIRED
+                if check_id in {"section_analysis", "concrete_fatigue"}
+                else bridge.NOT_APPLICABLE
+            ),
+            source=f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_BASE,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+        concrete_fatigue=bridge.ExternalEvidence(
+            status=status,
+            result="50.0 %",
+            criterion="<= 100 %",
+            source="DS/EN 1992-2:2005/AC:2008 Expression (6.106)",
+            reason="solver evidence retained",
+            utilisation=0.5,
+            evidence=({
+                "status": status,
+                "analytical_status": bridge.STATUS_PASS,
+                "methodology": bridge.EN1992_2_BASE,
+                "concrete_method": context["concrete_method"],
+                "concrete_miner_basis": context["concrete_miner_basis"],
+                "concrete_miner_source": context["concrete_miner_source"],
+                "miner_coefficient_c": records[
+                    "concrete_fatigue.miner_c"
+                ]["actual_value"],
+                "parameter_conformance": records[
+                    "concrete_fatigue.miner_c"
+                ],
+                "fatigue_parameter_conformance": concrete_records,
+                "fatigue_edition": context["edition"],
+                "fatigue_factor_mode": context["factor_mode"],
+                "fatigue_factor_approval": context["factor_approval"],
+            },),
+        ),
+    ))
+
+
 def _fatigue_bound_snapshot():
     import fatigue_analysis
     import fatigue_inputs
@@ -6628,6 +6802,129 @@ def test_download_session_and_autosave_reject_bridge_binding_mutation(
     assert durable["status"] == bridge.STATUS_INVALID
     assert saved["status"] == bridge.STATUS_INVALID
     assert durable == saved
+
+
+@pytest.mark.parametrize("attack", ["stale_standard", "omitted_gamma_c"])
+def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
+    attack,
+    tmp_path,
+    monkeypatch,
+):
+    import project_io
+    import sector_app
+
+    scalars = _bridge_fatigue_publication_scalars(custom=True)
+    if attack == "stale_standard":
+        bridge_record = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_publication_scalars()
+        )
+    else:
+        bridge_record = _bridge_concrete_fatigue_snapshot(scalars)
+        concrete = next(
+            check for check in bridge_record["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = concrete["evidence"][0]
+        row["fatigue_parameter_conformance"] = [
+            record
+            for record in row["fatigue_parameter_conformance"]
+            if record["parameter_id"] != "fatigue.gamma_c"
+        ]
+        row["status"] = bridge.STATUS_PASS
+        concrete["status"] = bridge.STATUS_PASS
+        bridge_record["status"] = bridge.STATUS_PASS
+        bridge_record["evidence_fingerprint"] = (
+            bridge.bridge_evidence_fingerprint(
+                bridge_record["checks"],
+                bridge_record["configuration_errors"],
+            )
+        )
+    digest = project_io.input_sha256({}, scalars)
+    calculation = {
+        "input_sha256": digest,
+        "bridge_methodology": bridge_record,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: ({}, scalars),
+    )
+
+    download_text = sector_app._gather_project()
+    download_payload = json.loads(download_text)
+    download = download_payload["calculation"]
+    assert download["matches_saved_inputs"] is False
+    assert download["bridge_methodology"]["status"] == bridge.STATUS_INVALID
+    assert download["bridge_methodology"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
+    assert next(
+        check
+        for check in download["bridge_methodology"]["checks"]
+        if check["check_id"] == "concrete_fatigue"
+    )["status"] == bridge.STATUS_NOT_ASSESSED
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: digest,
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"]
+    saved = json.loads(captured["data"])["calculation"]
+    loaded = project_io.project_provenance(
+        captured["data"]
+    )["calculation"]
+    for record in (durable, saved, loaded):
+        assert record["matches_saved_inputs"] is False
+        assert record["bridge_methodology"]["publication_validation"][
+            "status"
+        ] == "REJECTED"
+        assert next(
+            check
+            for check in record["bridge_methodology"]["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )["status"] == bridge.STATUS_NOT_ASSESSED
 
 
 def test_download_session_and_autosave_reject_bridge_methodology_mismatch(

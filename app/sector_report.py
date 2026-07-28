@@ -823,6 +823,9 @@ class ReportBuilder:
         bridge_record = bridge_core.publication_safe_record(
             self._base_out.get("bridge_methodology"),
             design_methodology=self._base_inp.get("design_methodology"),
+            fatigue_context=fatigue_analysis.bridge_publication_context(
+                self._base_inp
+            ),
         )
         if bridge_record is not None:
             self._tick(0.28, "Bridge methodology...")
@@ -1045,6 +1048,14 @@ class ReportBuilder:
             "<b>Method basis:</b> "
             + _html_escape(str(record.get("source") or "-"))
         )
+        publication_validation = record.get("publication_validation")
+        if isinstance(publication_validation, Mapping):
+            self._small(
+                "<b>Publication validation status:</b> "
+                + _html_escape(str(
+                    publication_validation.get("status") or "-"
+                ))
+            )
         self._small(
             "A PASS means every declared applicability row is resolved and each "
             "required implemented check passed. It is not a complete bridge-design "

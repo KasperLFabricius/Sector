@@ -827,7 +827,7 @@ _CALCULATION_PROVENANCE_FIELDS = (
 def publication_safe_calculation_record(
     calculation,
     *,
-    design_methodology,
+    calculation_inputs,
     input_digest,
 ) -> dict | None:
     """Return one canonical, fail-closed calculation-provenance record.
@@ -835,11 +835,22 @@ def publication_safe_calculation_record(
     ``matches_saved_inputs`` is a durable rejection latch.  Once an earlier
     publication boundary rejected evidence, loading or re-saving the sanitized
     record must not infer a match merely because the rejected field is no longer
-    present and the input hash still agrees.
+    present and the input hash still agrees. ``calculation_inputs`` is the one
+    canonical scalar snapshot used to reconstruct both methodology and bridge
+    fatigue conformance, so callers cannot supply those contexts independently.
     """
 
     if not isinstance(calculation, Mapping):
         return None
+    current_inputs = (
+        calculation_inputs
+        if isinstance(calculation_inputs, Mapping)
+        else {}
+    )
+    design_methodology = current_inputs.get("design_methodology")
+    fatigue_context = fatigue_analysis.bridge_publication_context(
+        current_inputs
+    )
     publication_matches = True
     if "matches_saved_inputs" in calculation:
         publication_matches = calculation.get("matches_saved_inputs") is True
@@ -869,6 +880,7 @@ def publication_safe_calculation_record(
         record["bridge_methodology"] = bridge.publication_safe_record(
             calculation.get("bridge_methodology"),
             design_methodology=design_methodology,
+            fatigue_context=fatigue_context,
         )
         if record["bridge_methodology"] is None:
             record.pop("bridge_methodology")
@@ -915,7 +927,7 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
     if calculation:
         record = publication_safe_calculation_record(
             calculation,
-            design_methodology=scalars.get("design_methodology"),
+            calculation_inputs=content["scalars"],
             input_digest=digest,
         )
         payload["calculation"] = record
@@ -983,7 +995,7 @@ def project_provenance(text: str) -> dict:
     recorded = provenance.get("input_sha256")
     calculation = publication_safe_calculation_record(
         data.get("calculation"),
-        design_methodology=raw_scalars.get("design_methodology"),
+        calculation_inputs=raw_scalars,
         input_digest=actual,
     )
     return {
