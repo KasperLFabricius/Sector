@@ -36,6 +36,7 @@ def _standard_fatigue_inputs(**changes):
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
         "fatigue_gamma_s": 1.15,
         "fatigue_gamma_c": 1.50,
+        "fatigue_gamma_ff": 1.0,
         "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
         "fatigue_concrete_miner_basis": (
             fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
@@ -90,6 +91,7 @@ def _external(
             "fatigue_edition": context["edition"],
             "fatigue_factor_mode": context["factor_mode"],
             "fatigue_factor_approval": context["factor_approval"],
+            "fatigue_gamma_ff": context["gamma_ff"],
             "fatigue_parameter_conformance": nested,
         })
         if fatigue_kind == "concrete":

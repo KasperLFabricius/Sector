@@ -651,6 +651,14 @@ def reinforcement_fatigue_evidence(
             source="DS/EN 1992-1-1:2004 clauses 6.8.4-6.8.6, inherited",
             reason="Fatigue factor-basis evidence is malformed.",
         )
+    partial_factors = payload.get("partial_factors")
+    if not isinstance(partial_factors, Mapping):
+        return bridge.ExternalEvidence(
+            status=bridge.STATUS_INVALID,
+            source="DS/EN 1992-1-1:2004 clauses 6.8.4-6.8.6, inherited",
+            reason="Fatigue partial-factor evidence is malformed.",
+        )
+    gamma_ff = float(partial_factors["gamma_ff"])
     reinforcement_parameter_records = [
         dict(record)
         for record in (payload.get("parameter_conformance") or ())
@@ -701,6 +709,7 @@ def reinforcement_fatigue_evidence(
                 "fatigue_factor_approval": (
                     factor_basis.get("approval_reference") or ""
                 ),
+                "fatigue_gamma_ff": gamma_ff,
             })
     warnings = _messages(payload.get("warnings"))
     errors = _messages(payload.get("errors"))
@@ -801,6 +810,14 @@ def concrete_fatigue_evidence(
             source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
             reason="Fatigue factor-basis evidence is malformed.",
         )
+    partial_factors = payload.get("partial_factors")
+    if not isinstance(partial_factors, Mapping):
+        return bridge.ExternalEvidence(
+            status=bridge.STATUS_INVALID,
+            source="DS/EN 1992-2:2005/AC:2008, corrected Expression (6.106)",
+            reason="Fatigue partial-factor evidence is malformed.",
+        )
+    gamma_ff = float(partial_factors["gamma_ff"])
     concrete_parameter_records = [
         dict(record)
         for record in (payload.get("parameter_conformance") or ())
@@ -863,6 +880,7 @@ def concrete_fatigue_evidence(
                 "fatigue_factor_approval": (
                     factor_basis.get("approval_reference") or ""
                 ),
+                "fatigue_gamma_ff": gamma_ff,
                 "note": (
                     f"spectrum {fatigue_presentation.value(spectrum, 'spectrum_name', '-')}; "
                     f"concrete fibre {row.get('fibre_index', '-')}; "

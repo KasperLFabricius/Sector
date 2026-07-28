@@ -472,8 +472,23 @@ def bridge_publication_context(inp: Mapping | None) -> dict:
     concrete_method = ""
     concrete_miner_basis = ""
     concrete_miner_source = ""
+    gamma_ff = None
     parameter_records: list[Mapping] = []
     if any(checks.values()):
+        raw_gamma_ff = source.get("fatigue_gamma_ff")
+        if conformance.is_boolean(raw_gamma_ff):
+            errors.append(
+                "current fatigue action factor gamma_Ff must be a finite "
+                "number greater than zero"
+            )
+        else:
+            gamma_ff_errors: list[str] = []
+            gamma_ff = _positive(
+                raw_gamma_ff,
+                "current fatigue action factor gamma_Ff",
+                gamma_ff_errors,
+            )
+            errors.extend(gamma_ff_errors)
         try:
             edition = _edition(source.get("fatigue_edition"))
             _gamma_s, _gamma_c, factor_basis = _resolved_factor_basis(
@@ -537,6 +552,7 @@ def bridge_publication_context(inp: Mapping | None) -> dict:
         "checks": checks,
         "factor_mode": factor_mode,
         "factor_approval": factor_approval,
+        "gamma_ff": gamma_ff,
         "concrete_method": concrete_method,
         "concrete_miner_basis": concrete_miner_basis,
         "concrete_miner_source": concrete_miner_source,
@@ -642,6 +658,14 @@ def bridge_result_context_errors(
         errors.append("calculated fatigue factor basis is malformed")
     if not isinstance(partial_factors, Mapping):
         errors.append("calculated fatigue partial factors are malformed")
+    elif not _numeric_equivalent(
+        partial_factors.get("gamma_ff"),
+        current["gamma_ff"],
+    ):
+        errors.append(
+            "calculated fatigue action factor gamma_Ff conflicts with current "
+            "fatigue inputs"
+        )
     if isinstance(factor_basis, Mapping):
         if factor_basis.get("mode") != current["factor_mode"]:
             errors.append(

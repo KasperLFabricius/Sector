@@ -816,6 +816,7 @@ def _bridge_concrete_fatigue_snapshot(scalars):
                 "fatigue_edition": context["edition"],
                 "fatigue_factor_mode": context["factor_mode"],
                 "fatigue_factor_approval": context["factor_approval"],
+                "fatigue_gamma_ff": context["gamma_ff"],
             },),
         ),
     ))
@@ -831,6 +832,7 @@ def _bridge_fatigue_scalars(*, custom=False):
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
         "fatigue_gamma_s": 1.15,
         "fatigue_gamma_c": 1.50,
+        "fatigue_gamma_ff": 1.0,
         "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
         "fatigue_concrete_miner_basis": (
             fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
@@ -874,7 +876,17 @@ def test_project_roundtrips_bound_bridge_calculation_snapshot():
     assert payload["provenance"]["results_included"] is True
 
 
-@pytest.mark.parametrize("attack", ["stale_standard", "omitted_gamma_c"])
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "stale_standard",
+        "omitted_gamma_c",
+        "stale_gamma_ff",
+        "missing_gamma_ff",
+        "boolean_gamma_ff",
+        "non_finite_gamma_ff",
+    ],
+)
 def test_bridge_fatigue_rejection_latch_survives_save_load_and_resave(attack):
     current_scalars = _bridge_fatigue_scalars(custom=True)
     if attack == "stale_standard":
@@ -889,6 +901,43 @@ def test_bridge_fatigue_rejection_latch_survives_save_load_and_resave(attack):
         assert stored_concrete["evidence"][0][
             "fatigue_parameter_conformance"
         ][0]["actual_value"] == 1.5
+    elif attack == "stale_gamma_ff":
+        current_scalars = _bridge_fatigue_scalars()
+        current_scalars["fatigue_gamma_ff"] = 2.0
+        attacked = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_scalars()
+        )
+        stored_concrete = next(
+            check for check in attacked["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        assert current_scalars["fatigue_gamma_ff"] == 2.0
+        assert stored_concrete["evidence"][0]["fatigue_gamma_ff"] == 1.0
+    elif attack in {
+        "missing_gamma_ff",
+        "boolean_gamma_ff",
+        "non_finite_gamma_ff",
+    }:
+        current_scalars = _bridge_fatigue_scalars()
+        attacked = _bridge_concrete_fatigue_snapshot(current_scalars)
+        stored_concrete = next(
+            check for check in attacked["checks"]
+            if check["check_id"] == "concrete_fatigue"
+        )
+        row = stored_concrete["evidence"][0]
+        if attack == "missing_gamma_ff":
+            del row["fatigue_gamma_ff"]
+        elif attack == "boolean_gamma_ff":
+            row["fatigue_gamma_ff"] = True
+        else:
+            row["fatigue_gamma_ff"] = float("inf")
+        if attack != "non_finite_gamma_ff":
+            attacked["evidence_fingerprint"] = (
+                bridge.bridge_evidence_fingerprint(
+                    attacked["checks"],
+                    attacked["configuration_errors"],
+                )
+            )
     else:
         attacked = _bridge_concrete_fatigue_snapshot(current_scalars)
         stored_concrete = next(

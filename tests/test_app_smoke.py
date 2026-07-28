@@ -2084,6 +2084,7 @@ def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
     [
         ("stale_standard", "fatigue.gamma_c"),
         ("omitted_gamma_c", "IDs/cardinality"),
+        ("stale_gamma_ff", "fatigue_gamma_ff"),
     ],
 )
 def test_bridge_view_surfaces_fatigue_correlation_rejection(
@@ -2109,6 +2110,12 @@ def test_bridge_view_surfaces_fatigue_correlation_rejection(
 
     current_scalars = _bridge_fatigue_publication_scalars(custom=True)
     if attack == "stale_standard":
+        record = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_publication_scalars()
+        )
+    elif attack == "stale_gamma_ff":
+        current_scalars = _bridge_fatigue_publication_scalars()
+        current_scalars["fatigue_gamma_ff"] = 2.0
         record = _bridge_concrete_fatigue_snapshot(
             _bridge_fatigue_publication_scalars()
         )
@@ -6476,6 +6483,7 @@ def _bridge_fatigue_publication_scalars(*, custom=False):
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
         "fatigue_gamma_s": 1.15,
         "fatigue_gamma_c": 1.50,
+        "fatigue_gamma_ff": 1.0,
         "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
         "fatigue_concrete_miner_basis": (
             fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
@@ -6562,6 +6570,7 @@ def _bridge_concrete_fatigue_snapshot(scalars):
                 "fatigue_edition": context["edition"],
                 "fatigue_factor_mode": context["factor_mode"],
                 "fatigue_factor_approval": context["factor_approval"],
+                "fatigue_gamma_ff": context["gamma_ff"],
             },),
         ),
     ))
@@ -6804,7 +6813,10 @@ def test_download_session_and_autosave_reject_bridge_binding_mutation(
     assert durable == saved
 
 
-@pytest.mark.parametrize("attack", ["stale_standard", "omitted_gamma_c"])
+@pytest.mark.parametrize(
+    "attack",
+    ["stale_standard", "omitted_gamma_c", "stale_gamma_ff"],
+)
 def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
     attack,
     tmp_path,
@@ -6815,6 +6827,12 @@ def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
 
     scalars = _bridge_fatigue_publication_scalars(custom=True)
     if attack == "stale_standard":
+        bridge_record = _bridge_concrete_fatigue_snapshot(
+            _bridge_fatigue_publication_scalars()
+        )
+    elif attack == "stale_gamma_ff":
+        scalars = _bridge_fatigue_publication_scalars()
+        scalars["fatigue_gamma_ff"] = 2.0
         bridge_record = _bridge_concrete_fatigue_snapshot(
             _bridge_fatigue_publication_scalars()
         )

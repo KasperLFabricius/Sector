@@ -3743,6 +3743,7 @@ def _bridge_report_fatigue_input(*, custom=False):
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
         "fatigue_gamma_s": 1.15,
         "fatigue_gamma_c": 1.50,
+        "fatigue_gamma_ff": 1.0,
         "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
         "fatigue_concrete_miner_basis": (
             fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
@@ -3826,6 +3827,7 @@ def _bridge_report_concrete_fatigue_record(inp):
                 "fatigue_edition": context["edition"],
                 "fatigue_factor_mode": context["factor_mode"],
                 "fatigue_factor_approval": context["factor_approval"],
+                "fatigue_gamma_ff": context["gamma_ff"],
             },),
         ),
     ))
@@ -3853,6 +3855,7 @@ def test_report_publishes_bridge_coverage_and_check_gate():
     [
         ("stale_standard", "fatigue.gamma_c"),
         ("omitted_gamma_c", "IDs/cardinality"),
+        ("stale_gamma_ff", "fatigue_gamma_ff"),
     ],
 )
 def test_report_rejects_stale_or_omitted_bridge_fatigue_evidence(
@@ -3862,6 +3865,12 @@ def test_report_rejects_stale_or_omitted_bridge_fatigue_evidence(
     out = _out()
     current_input = _bridge_report_fatigue_input(custom=True)
     if attack == "stale_standard":
+        record = _bridge_report_concrete_fatigue_record(
+            _bridge_report_fatigue_input()
+        )
+    elif attack == "stale_gamma_ff":
+        current_input = _bridge_report_fatigue_input()
+        current_input["fatigue_gamma_ff"] = 2.0
         record = _bridge_report_concrete_fatigue_record(
             _bridge_report_fatigue_input()
         )

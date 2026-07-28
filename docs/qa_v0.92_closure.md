@@ -821,3 +821,34 @@ mandatory; this matrix does not self-certify PR closure.
   all 115 ASCII/version controls also pass. Exact-head external review, full CI,
   complete Streamlit, artifact and package gates must be repeated after the
   remediation commit.
+- Exact head `68fbdfab2ea8acfe656fa3edbc6bf8f87a2fc659` subsequently passed
+  complete GitHub CI run `30379028220` (2,110 passes and one known skip), all
+  277 Streamlit checks, all 115 ASCII/version controls, fresh report/manual
+  render inspection, reproducible package-content verification without
+  launching the unsigned executable, and Codex Review with zero unresolved
+  threads. Independent QA nevertheless rejected that immutable head because
+  the canonical bridge-fatigue context omitted the cyclic action factor
+  `gamma_Ff`. Solver preparation, the analysis signature and the result payload
+  all distinguished `gamma_Ff = 1.0` from `2.0`, but the raw adapter and durable
+  publication correlation did not. A stale result could therefore remain an
+  unqualified raw and saved bridge PASS beside the current factor and current
+  input digest.
+- The schema-versioned current context now carries one canonical positive finite
+  `gamma_Ff` value reconstructed from the calculation inputs. Both fatigue
+  adapters compare the calculated `partial_factors.gamma_ff` before emitting a
+  row; each row records the canonical calculated value; and the durable row
+  validator compares it with the same current context used for factor,
+  methodology and Miner correlation. Missing, Boolean, non-finite or mismatched
+  evidence makes the direct adapter and raw bridge aggregate `INVALID`; durable
+  publication becomes `REJECTED`, the affected check becomes `NOT ASSESSED`,
+  and `matches_saved_inputs = false` survives project load and resave. Matching
+  positive finite values `0.5` and `2.0`, including a float-coercible current
+  input, remain calculated without changing the existing standard/custom
+  qualification.
+- The frozen precommit source reproduces all 11 former false-PASS cases red and
+  passes the 17 focused direct/raw/project/UI/download/autosave/report boundary
+  checks, all 332 bridge/fatigue/project persistence checks, all 526 affected
+  bridge/fatigue/project/report/manual checks, and all 115 ASCII/version
+  controls. Compilation and whitespace validation also pass. Exact-head CI,
+  Codex Review, full Streamlit, fresh rendered-artifact and package-content
+  gates must restart after the remediation commit.

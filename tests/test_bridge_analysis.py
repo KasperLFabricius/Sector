@@ -62,6 +62,7 @@ def _base_input(**changes):
         "mode": "Elastic",
         "shear_on": False,
         "fatigue_on": False,
+        "fatigue_gamma_ff": 1.0,
     }
     value.update(changes)
     return value
@@ -76,6 +77,7 @@ def _bridge_fatigue_payload(
     factor_approval="",
     gamma_s=1.15,
     gamma_c=1.50,
+    gamma_ff=1.0,
     concrete_method=fatigue_analysis.CONCRETE_MINER,
     miner_basis=fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
     miner_source="",
@@ -134,7 +136,7 @@ def _bridge_fatigue_payload(
         "partial_factors": {
             "gamma_s": gamma_s,
             "gamma_c": gamma_c,
-            "gamma_ff": 1.0,
+            "gamma_ff": gamma_ff,
         },
         "factor_basis": factor_basis,
         "parameter_conformance": records,
@@ -207,6 +209,7 @@ def _bridge_fatigue_input(
     factor_approval="",
     gamma_s=1.15,
     gamma_c=1.50,
+    gamma_ff=1.0,
     coefficient=14.0,
     concrete_method=fatigue_analysis.CONCRETE_MINER,
     miner_basis=fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
@@ -222,6 +225,7 @@ def _bridge_fatigue_input(
         fatigue_factor_approval=factor_approval,
         fatigue_gamma_s=gamma_s,
         fatigue_gamma_c=gamma_c,
+        fatigue_gamma_ff=gamma_ff,
         fatigue_concrete_method=concrete_method,
         fatigue_concrete_miner_basis=miner_basis,
         fatigue_concrete_miner_source=miner_source,
@@ -705,6 +709,143 @@ def test_bridge_fatigue_adapters_bind_current_custom_factor_context(
 
 
 @pytest.mark.parametrize(
+    ("adapter", "payload_options", "current_gamma_ff", "expected_gamma_ff"),
+    [
+        (
+            bridge_analysis.reinforcement_fatigue_evidence,
+            {"reinforcement": True, "concrete": False},
+            0.5,
+            0.5,
+        ),
+        (
+            bridge_analysis.concrete_fatigue_evidence,
+            {"reinforcement": False, "concrete": True},
+            "2.0",
+            2.0,
+        ),
+    ],
+)
+def test_bridge_fatigue_adapters_bind_current_gamma_ff(
+    adapter,
+    payload_options,
+    current_gamma_ff,
+    expected_gamma_ff,
+):
+    current = _bridge_fatigue_input(
+        **payload_options,
+        gamma_ff=current_gamma_ff,
+    )
+    stale = _bridge_fatigue_payload(
+        **payload_options,
+        gamma_ff=1.0,
+    )
+
+    rejected = adapter({"fatigue": stale}, current)
+
+    assert rejected.status == bridge.STATUS_INVALID
+    assert "gamma_Ff" in rejected.reason
+    assert "current fatigue" in rejected.reason
+
+    matching = _bridge_fatigue_payload(
+        **payload_options,
+        gamma_ff=expected_gamma_ff,
+    )
+    accepted = adapter({"fatigue": matching}, current)
+
+    assert accepted.status == bridge.STATUS_PASS
+    assert accepted.evidence[0]["fatigue_gamma_ff"] == pytest.approx(
+        expected_gamma_ff
+    )
+    assert "STANDARD PASS" in accepted.reason
+
+
+@pytest.mark.parametrize(
+    ("adapter", "payload_options", "check_id"),
+    [
+        (
+            bridge_analysis.reinforcement_fatigue_evidence,
+            {"reinforcement": True, "concrete": False},
+            "reinforcement_fatigue",
+        ),
+        (
+            bridge_analysis.concrete_fatigue_evidence,
+            {"reinforcement": False, "concrete": True},
+            "concrete_fatigue",
+        ),
+    ],
+)
+@pytest.mark.parametrize("malformed", ["missing", "boolean", "non_finite"])
+def test_bridge_fatigue_adapters_reject_malformed_gamma_ff_evidence(
+    adapter,
+    payload_options,
+    check_id,
+    malformed,
+):
+    current = _bridge_fatigue_input(
+        **payload_options,
+        gamma_ff=2.0,
+        **{
+            bridge_inputs.COVERAGE_TABLE_KEY: _coverage(
+                section_analysis=bridge.REQUIRED,
+                **{check_id: bridge.REQUIRED},
+            ),
+        },
+    )
+    payload = _bridge_fatigue_payload(**payload_options, gamma_ff=2.0)
+    if malformed == "missing":
+        del payload["partial_factors"]["gamma_ff"]
+    elif malformed == "boolean":
+        payload["partial_factors"]["gamma_ff"] = True
+    else:
+        payload["partial_factors"]["gamma_ff"] = float("inf")
+
+    evidence = adapter({"fatigue": payload}, current)
+
+    assert evidence.status == bridge.STATUS_INVALID
+    assert "gamma_Ff" in evidence.reason
+
+    results = _elastic_results(
+        sls.COMBINATION_CHARACTERISTIC,
+        sls.COMBINATION_QUASI_PERMANENT,
+    )
+    results["fatigue"] = payload
+    record = bridge_analysis.assess(current, results)
+    check = next(
+        item for item in record["checks"]
+        if item["check_id"] == check_id
+    )
+    assert record["status"] == bridge.STATUS_INVALID
+    assert check["status"] == bridge.STATUS_INVALID
+    assert "gamma_Ff" in check["reason"]
+
+
+@pytest.mark.parametrize(
+    ("malformed", "value"),
+    [
+        ("missing", None),
+        ("boolean", True),
+        ("non_finite", float("inf")),
+        ("non_positive", 0.0),
+    ],
+)
+def test_bridge_fatigue_adapter_rejects_invalid_current_gamma_ff(
+    malformed,
+    value,
+):
+    current = _bridge_fatigue_input(gamma_ff=value)
+    if malformed == "missing":
+        del current["fatigue_gamma_ff"]
+
+    evidence = bridge_analysis.concrete_fatigue_evidence(
+        {"fatigue": _bridge_fatigue_payload()},
+        current,
+    )
+
+    assert evidence.status == bridge.STATUS_INVALID
+    assert "gamma_Ff" in evidence.reason
+
+
+@pytest.mark.parametrize(
     ("adapter", "payload_options", "custom_factors"),
     [
         (
@@ -916,6 +1057,63 @@ def test_raw_bridge_assess_never_passes_stale_standard_fatigue_factors(
     assert custom_check["status"] == bridge.STATUS_REVIEW
     assert custom_check["evidence"][0]["analytical_status"] == (
         bridge.STATUS_PASS
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload_options", "check_id"),
+    [
+        (
+            {"reinforcement": True, "concrete": False},
+            "reinforcement_fatigue",
+        ),
+        (
+            {"reinforcement": False, "concrete": True},
+            "concrete_fatigue",
+        ),
+    ],
+)
+def test_raw_bridge_assess_never_passes_stale_gamma_ff(
+    payload_options,
+    check_id,
+):
+    coverage = _coverage(
+        section_analysis=bridge.REQUIRED,
+        **{check_id: bridge.REQUIRED},
+    )
+    current = _bridge_fatigue_input(
+        **payload_options,
+        gamma_ff=2.0,
+        **{bridge_inputs.COVERAGE_TABLE_KEY: coverage},
+    )
+
+    def assess(payload):
+        results = _elastic_results(
+            sls.COMBINATION_CHARACTERISTIC,
+            sls.COMBINATION_QUASI_PERMANENT,
+        )
+        results["fatigue"] = payload
+        record = bridge_analysis.assess(current, results)
+        check = next(
+            item for item in record["checks"]
+            if item["check_id"] == check_id
+        )
+        return record, check
+
+    stale_record, stale_check = assess(
+        _bridge_fatigue_payload(**payload_options, gamma_ff=1.0)
+    )
+    assert stale_record["status"] == bridge.STATUS_INVALID
+    assert stale_check["status"] == bridge.STATUS_INVALID
+    assert "gamma_Ff" in stale_check["reason"]
+
+    matching_record, matching_check = assess(
+        _bridge_fatigue_payload(**payload_options, gamma_ff=2.0)
+    )
+    assert matching_record["status"] == bridge.STATUS_PASS
+    assert matching_check["status"] == bridge.STATUS_PASS
+    assert matching_check["evidence"][0]["fatigue_gamma_ff"] == pytest.approx(
+        2.0
     )
 
 

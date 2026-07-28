@@ -96,7 +96,7 @@ STATUS_REVIEW = "REVIEW"
 
 BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v2"
 FATIGUE_PUBLICATION_CONTEXT_SCHEMA = (
-    "sector.bridge-fatigue-publication-context/v1"
+    "sector.bridge-fatigue-publication-context/v2"
 )
 FATIGUE_FACTOR_MODES = (
     codes.FACTOR_MODE_PRESET,
@@ -1519,6 +1519,7 @@ def validate_fatigue_publication_context(
         "checks",
         "factor_mode",
         "factor_approval",
+        "gamma_ff",
         "concrete_method",
         "concrete_miner_basis",
         "concrete_miner_source",
@@ -1610,6 +1611,22 @@ def validate_fatigue_publication_context(
                 "current fatigue publication factor approval conflicts with "
                 "the selected factor mode"
             )
+        try:
+            gamma_ff = _real(
+                context.get("gamma_ff"),
+                "current fatigue publication gamma_Ff",
+                positive=True,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            gamma_ff = None
+    else:
+        gamma_ff = None
+        if context.get("gamma_ff") is not None:
+            errors.append(
+                "current fatigue publication gamma_Ff conflicts with disabled "
+                "fatigue checks"
+            )
     if checks["concrete"]:
         if text_values["concrete_method"] not in FATIGUE_CONCRETE_METHODS:
             errors.append(
@@ -1664,6 +1681,7 @@ def validate_fatigue_publication_context(
     return {
         "design_methodology": context_methodology,
         **text_values,
+        "gamma_ff": gamma_ff,
         "checks": checks,
         "records_by_id": records_by_id,
     }, ()
@@ -1778,6 +1796,31 @@ def _publication_fatigue_row_records(
                 f"stored {label} row {row_index} {row_key} conflicts with "
                 "current fatigue inputs"
             )
+    try:
+        stored_gamma_ff = _real(
+            row.get("fatigue_gamma_ff"),
+            f"stored {label} row {row_index} fatigue_gamma_ff",
+            positive=True,
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+    else:
+        current_gamma_ff = fatigue_context.get("gamma_ff")
+        if current_gamma_ff is None:
+            errors.append(
+                f"stored {label} row {row_index} fatigue_gamma_ff conflicts "
+                "with disabled current fatigue checks"
+            )
+        elif not math.isclose(
+            stored_gamma_ff,
+            current_gamma_ff,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            errors.append(
+                f"stored {label} row {row_index} fatigue_gamma_ff conflicts "
+                "with current fatigue inputs"
+            )
     return verified_records, list(dict.fromkeys(errors))
 
 
@@ -1806,6 +1849,7 @@ def _publication_parameter_evidence_errors(
             "fatigue_edition",
             "fatigue_factor_mode",
             "fatigue_factor_approval",
+            "fatigue_gamma_ff",
         }
         if label == "concrete-fatigue":
             marker_fields.update({
@@ -2254,6 +2298,7 @@ def publication_safe_record(
                     "fatigue_edition",
                     "fatigue_factor_mode",
                     "fatigue_factor_approval",
+                    "fatigue_gamma_ff",
                 }.intersection(row)
                 for row in raw_evidence
             )
