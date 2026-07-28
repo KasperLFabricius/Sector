@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -812,6 +813,81 @@ def _bridge_publication_matches_inputs(record) -> bool:
     )
 
 
+_CALCULATION_PROVENANCE_FIELDS = (
+    "performed_at_utc",
+    "sector_version",
+    "source_revision",
+    "input_sha256",
+    "crack_control",
+    "fatigue_conformance",
+    "bridge_methodology",
+)
+
+
+def publication_safe_calculation_record(
+    calculation,
+    *,
+    design_methodology,
+    input_digest,
+) -> dict | None:
+    """Return one canonical, fail-closed calculation-provenance record.
+
+    ``matches_saved_inputs`` is a durable rejection latch.  Once an earlier
+    publication boundary rejected evidence, loading or re-saving the sanitized
+    record must not infer a match merely because the rejected field is no longer
+    present and the input hash still agrees.
+    """
+
+    if not isinstance(calculation, Mapping):
+        return None
+    publication_matches = True
+    if "matches_saved_inputs" in calculation:
+        publication_matches = calculation.get("matches_saved_inputs") is True
+    record = {
+        key: calculation.get(key)
+        for key in _CALCULATION_PROVENANCE_FIELDS
+        if calculation.get(key) not in (None, "")
+    }
+    if "crack_control" in calculation:
+        record["crack_control"] = sls.publication_safe_crack_control_record(
+            calculation.get("crack_control")
+        )
+        if record["crack_control"] is None:
+            record.pop("crack_control")
+            publication_matches = False
+    if "fatigue_conformance" in calculation:
+        record["fatigue_conformance"] = (
+            fatigue_analysis.publication_safe_conformance_record(
+                calculation.get("fatigue_conformance"),
+                design_methodology=design_methodology,
+            )
+        )
+        if record["fatigue_conformance"] is None:
+            record.pop("fatigue_conformance")
+            publication_matches = False
+    if "bridge_methodology" in calculation:
+        record["bridge_methodology"] = bridge.publication_safe_record(
+            calculation.get("bridge_methodology"),
+            design_methodology=design_methodology,
+        )
+        if record["bridge_methodology"] is None:
+            record.pop("bridge_methodology")
+            publication_matches = False
+        else:
+            publication_matches = (
+                publication_matches
+                and _bridge_publication_matches_inputs(
+                    record["bridge_methodology"]
+                )
+            )
+    record["matches_saved_inputs"] = (
+        bool(record.get("input_sha256"))
+        and record.get("input_sha256") == input_digest
+        and publication_matches
+    )
+    return record
+
+
 def dump_project(tables: dict, scalars: dict, *, calculation=None,
                  app_version=None, revision=None) -> str:
     """Serialise the point tables and scalar inputs to a JSON project string.
@@ -837,52 +913,10 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
         },
     }
     if calculation:
-        calculation_publication_matches = True
-        record = {
-            key: calculation.get(key)
-            for key in (
-                "performed_at_utc", "sector_version", "source_revision",
-                "input_sha256", "crack_control", "fatigue_conformance",
-                "bridge_methodology",
-            )
-            if calculation.get(key) not in (None, "")
-        }
-        if "crack_control" in record:
-            record["crack_control"] = (
-                sls.publication_safe_crack_control_record(
-                    record.get("crack_control")
-                )
-            )
-            if record["crack_control"] is None:
-                record.pop("crack_control")
-        if "fatigue_conformance" in record:
-            record["fatigue_conformance"] = (
-                fatigue_analysis.publication_safe_conformance_record(
-                    record.get("fatigue_conformance"),
-                    design_methodology=scalars.get("design_methodology"),
-                )
-            )
-            if record["fatigue_conformance"] is None:
-                record.pop("fatigue_conformance")
-                calculation_publication_matches = False
-        if "bridge_methodology" in record:
-            record["bridge_methodology"] = bridge.publication_safe_record(
-                record.get("bridge_methodology"),
-                design_methodology=scalars.get("design_methodology"),
-            )
-            if record["bridge_methodology"] is None:
-                record.pop("bridge_methodology")
-                calculation_publication_matches = False
-            else:
-                calculation_publication_matches = (
-                    calculation_publication_matches
-                    and _bridge_publication_matches_inputs(
-                        record["bridge_methodology"]
-                    )
-                )
-        record["matches_saved_inputs"] = (
-            record.get("input_sha256") == digest
-            and calculation_publication_matches
+        record = publication_safe_calculation_record(
+            calculation,
+            design_methodology=scalars.get("design_methodology"),
+            input_digest=digest,
         )
         payload["calculation"] = record
         payload["provenance"]["results_included"] = bool(
@@ -947,56 +981,11 @@ def project_provenance(text: str) -> dict:
     )
     actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     recorded = provenance.get("input_sha256")
-    calculation = (
-        dict(data["calculation"])
-        if isinstance(data.get("calculation"), dict) else None
+    calculation = publication_safe_calculation_record(
+        data.get("calculation"),
+        design_methodology=raw_scalars.get("design_methodology"),
+        input_digest=actual,
     )
-    if calculation is not None:
-        calculation_publication_matches = True
-        if "crack_control" in calculation:
-            calculation["crack_control"] = (
-                sls.publication_safe_crack_control_record(
-                    calculation.get("crack_control")
-                )
-            )
-            if calculation["crack_control"] is None:
-                calculation.pop("crack_control")
-        if "fatigue_conformance" in calculation:
-            calculation["fatigue_conformance"] = (
-                fatigue_analysis.publication_safe_conformance_record(
-                    calculation.get("fatigue_conformance"),
-                    design_methodology=raw_scalars.get(
-                        "design_methodology"
-                    ),
-                )
-            )
-            if calculation["fatigue_conformance"] is None:
-                calculation.pop("fatigue_conformance")
-                calculation_publication_matches = False
-        if "bridge_methodology" in calculation:
-            calculation["bridge_methodology"] = (
-                bridge.publication_safe_record(
-                    calculation.get("bridge_methodology"),
-                    design_methodology=raw_scalars.get(
-                        "design_methodology"
-                    ),
-                )
-            )
-            if calculation["bridge_methodology"] is None:
-                calculation.pop("bridge_methodology")
-                calculation_publication_matches = False
-            else:
-                calculation_publication_matches = (
-                    calculation_publication_matches
-                    and _bridge_publication_matches_inputs(
-                        calculation["bridge_methodology"]
-                    )
-                )
-        calculation["matches_saved_inputs"] = (
-            bool(calculation.get("input_sha256"))
-            and calculation.get("input_sha256") == actual
-            and calculation_publication_matches
-        )
     return {
         "sector_version": provenance.get("sector_version"),
         "source_revision": provenance.get("source_revision"),

@@ -3116,40 +3116,11 @@ def _perform_autosave() -> bool:
     record_changed_by_validation = False
     calculation = st.session_state.get("calculation_record")
     if isinstance(calculation, Mapping):
-        safe_calculation = copy.deepcopy(dict(calculation))
-        if "crack_control" in calculation:
-            current_crack_control = calculation.get("crack_control")
-            safe_crack_control = (
-                sls_core.publication_safe_crack_control_record(
-                    current_crack_control
-                )
-            )
-            if safe_crack_control is None:
-                safe_calculation.pop("crack_control", None)
-            else:
-                safe_calculation["crack_control"] = safe_crack_control
-        if "fatigue_conformance" in calculation:
-            current_fatigue = calculation.get("fatigue_conformance")
-            safe_fatigue = (
-                fatigue_analysis.publication_safe_conformance_record(
-                    current_fatigue,
-                    design_methodology=current_design_methodology,
-                )
-            )
-            if safe_fatigue is None:
-                safe_calculation.pop("fatigue_conformance", None)
-            else:
-                safe_calculation["fatigue_conformance"] = safe_fatigue
-        if "bridge_methodology" in calculation:
-            current_bridge = calculation.get("bridge_methodology")
-            safe_bridge = bridge.publication_safe_record(
-                current_bridge,
-                design_methodology=current_design_methodology,
-            )
-            if safe_bridge is None:
-                safe_calculation.pop("bridge_methodology", None)
-            else:
-                safe_calculation["bridge_methodology"] = safe_bridge
+        safe_calculation = project_io.publication_safe_calculation_record(
+            calculation,
+            design_methodology=current_design_methodology,
+            input_digest=digest,
+        )
         if safe_calculation != calculation:
             st.session_state["calculation_record"] = safe_calculation
             record_changed_by_validation = True

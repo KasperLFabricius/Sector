@@ -6534,9 +6534,14 @@ def test_download_session_and_autosave_reject_fatigue_evidence_mutation(
 
     assert sector_app._perform_autosave() is True
     assert "fatigue_conformance" not in state["calculation_record"]
+    assert state["calculation_record"]["matches_saved_inputs"] is False
     saved = json.loads(captured["data"])["calculation"]
     assert "fatigue_conformance" not in saved
-    assert saved["matches_saved_inputs"] is True
+    assert saved["matches_saved_inputs"] is False
+    restored = project_io.project_provenance(
+        captured["data"]
+    )["calculation"]
+    assert restored["matches_saved_inputs"] is False
 
 
 def test_download_session_and_autosave_reject_bridge_binding_mutation(

@@ -711,7 +711,9 @@ mandatory; this matrix does not self-certify PR closure.
   sources in the loaded Save / Load audit summary. Value mutation, a recomputed
   top-level verdict relabel, changed methodology, malformed validity/convergence
   flags and stale aggregate evidence are rejected. A rejected record is removed
-  from durable/download/autosave output and cannot preserve an input-match claim.
+  from durable/download/autosave output, while the canonical calculation-
+  provenance record retains a false-match latch through save and reload so the
+  discarded evidence cannot later acquire an input-match claim.
 - The issued-report render fixture now states its component-method calculation
   context explicitly. This preserves the fail-closed rule for missing methodology
   while restoring the intended 23-figure report contract; report and manual
@@ -729,3 +731,14 @@ mandatory; this matrix does not self-certify PR closure.
   the value retained first as REVIEW / NOT FULLY ASSESSED and then as an approved
   custom input after methodology and approval/source are entered, with no second
   runtime exception.
+- Codex Review of exact head
+  `e844eeef5cc7d0e48a2736abbcdaa9025e5d1e46` found one same-family P1 at the
+  autosave boundary: autosave sanitized a mutated fatigue record in session
+  before project serialization, so the serializer could no longer observe the
+  rejection and recomputed `matches_saved_inputs = true`. Project dump, load and
+  autosave now share one canonical calculation-provenance sanitizer. An explicit
+  false match is a durable fail-closed latch, malformed crack/fatigue/bridge
+  fields clear the match, and both the sanitized session record and serialized
+  project remain false through provenance reload. The exact reproducer plus the
+  complete project/download/autosave slice pass (169 checks); full exact-head
+  CI and Codex Review restart after the remediation commit.

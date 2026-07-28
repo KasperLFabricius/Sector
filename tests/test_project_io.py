@@ -1722,6 +1722,27 @@ def test_project_drops_mutated_fatigue_conformance_evidence_fail_closed():
     assert "fatigue_conformance" not in saved["calculation"]
     assert saved["calculation"]["matches_saved_inputs"] is False
     assert saved["provenance"]["results_included"] is False
+    restored = project_io.project_provenance(json.dumps(saved))
+    assert restored["calculation"]["matches_saved_inputs"] is False
+
+
+def test_project_preserves_explicit_false_publication_match_latch():
+    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    digest = project_io.input_sha256({}, scalars)
+
+    text = project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "matches_saved_inputs": False,
+        },
+    )
+    saved = json.loads(text)
+    restored = project_io.project_provenance(text)
+
+    assert saved["calculation"]["matches_saved_inputs"] is False
+    assert restored["calculation"]["matches_saved_inputs"] is False
 
 
 def _project_width_crack_control():
