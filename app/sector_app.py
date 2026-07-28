@@ -8518,7 +8518,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                 t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
                 fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
                 alpha_cw=tors_ctx["alpha_cw"], fctk_005=tors_ctx["fctk_005"],
-                fctd=tors_ctx["fctd"],
+                fctd=tors_ctx["fctd"], alpha_ct=tors_ctx["alpha_ct"],
                 gamma_c=tors_ctx["gamma_c"], gamma_ct=tors_ctx["gamma_ct"],
                 gamma_s=tors_ctx["gamma_s"],
                 material_factor_basis=tors_ctx["material_factor_basis"],
@@ -12140,7 +12140,7 @@ def _render_chord_off(och, *, assessment_complete=True):
 
 def _torsion_material_factor_caption(t):
     factor_basis = t.get("material_factor_basis") or {}
-    alpha_ct = t.get("alpha_ct", 1.0)
+    alpha_ct = t["alpha_ct"]
     return (
         "Concrete material factors: compression "
         f"gamma_c = {t['gamma_c']:.3f} (final concrete material input); "

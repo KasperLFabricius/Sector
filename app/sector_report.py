@@ -4204,7 +4204,7 @@ class ReportBuilder:
                 ["Concrete tension factor", "gamma<sub>ct</sub>",
                  _fmt(t.get("gamma_ct"), 3)],
                 ["Concrete tension coefficient", "alpha<sub>ct</sub>",
-                 _fmt(t.get("alpha_ct", 1.0), 3)],
+                 _fmt(t["alpha_ct"], 3)],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
@@ -4273,7 +4273,7 @@ class ReportBuilder:
             "alpha<sub>ct</sub> 0.7 f<sub>ctm</sub> / "
             "gamma<sub>ct</sub>",
             ref=_html_escape(str(factor_basis.get("reference") or "-")),
-            subst=f"{_fmt(t.get('alpha_ct', 1.0), 3)} &#183; "
+            subst=f"{_fmt(t['alpha_ct'], 3)} &#183; "
                   f"{_fmt(t.get('fctk_005'), 3)} / "
                   f"{_fmt(t.get('gamma_ct'), 3)}",
             result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")

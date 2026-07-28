@@ -2132,23 +2132,33 @@ def test_danish_bridge_keeps_inherited_bridge_crack_numerics():
 
 
 def test_torsion_live_caption_prints_actual_danish_alpha_ct():
-    import sector_app
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "bridge_alpha_ct", 0.8),
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 20.0),
+    )
 
-    caption = sector_app._torsion_material_factor_caption({
-        "gamma_c": 1.45,
-        "gamma_ct": 1.70,
-        "alpha_ct": 0.8,
-        "fctk_005": 2.248,
-        "fctd": 0.8 * 2.248 / 1.70,
-        "material_factor_basis": {
-            "mode": "Edition-derived preset",
-            "reference": "DS/EN 1992-2 DK NA:2015, 3.1.6",
-        },
-    })
+    assert not at.exception
+    torsion = at.session_state["results"]["torsion"]
+    assert torsion["fctd"] == pytest.approx(
+        0.8 * torsion["fctk_005"] / torsion["gamma_ct"]
+    )
+    assert torsion["alpha_ct"] == pytest.approx(0.8)
 
-    assert "alpha_ct = 0.800" in caption
-    assert "0.800 x 2.248 / 1.700 = 1.058 MPa" in caption
-    assert "DS/EN 1992-2 DK NA:2015, 3.1.6" in caption
+    _select_view(at, "Torsion")
+    captions = " | ".join(item.value for item in at.caption)
+    assert "alpha_ct = 0.800" in captions
+    assert (
+        f"0.800 x {torsion['fctk_005']:.3f} / "
+        f"{torsion['gamma_ct']:.3f} = {torsion['fctd']:.3f} MPa"
+    ) in captions
+    assert torsion["material_factor_basis"]["reference"] in captions
 
 
 def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):

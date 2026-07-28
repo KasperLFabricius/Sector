@@ -636,7 +636,6 @@ def build_torsion_context(inp, n_ed_comp):
         "cot_max": cot_max,
         "nu_detail": nu_detail,
         "fctd": fctd,
-        "alpha_ct": alpha_ct,
         "fyd_long": fyd_long,
     }
 

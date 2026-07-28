@@ -985,3 +985,17 @@ mandatory; this matrix does not self-certify PR closure.
   source; the focused Danish torsion, live-caption and report slice passes all
   16 checks. The provisional full-suite run was canceled before completion so
   it is not counted as the single exact-head CI gate.
+- Codex rereview of exact head
+  `790546b3702cc61751b8974ce04adb073800f903` identified that the live torsion
+  result omitted `alpha_ct`, so the new caption and report trace could still
+  display the inherited fallback beside a calculation that used the custom
+  coefficient. Replacing the formatter-only fixture with an actual Danish
+  calculate-and-render AppTest also exposed a related crash: the context passed
+  `alpha_ct` into the tube-resistance helper even though that helper consumes the
+  already resolved `fctd` and has no such argument. The calculation context no
+  longer crosses that invalid contract boundary; the actual coefficient is
+  copied explicitly to the top-level torsion result; and live/report
+  presentation no longer defaults missing coefficient evidence to `1.0`.
+  Thirty-three focused capacity, Danish coefficient and report checks plus three
+  inherited/Danish live AppTests pass. Run `30404055147` was canceled before
+  completion and is not counted as the single exact-head CI gate.
