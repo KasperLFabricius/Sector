@@ -169,6 +169,10 @@ class DanishBridgeBasis:
     traffic_fatigue_applicability: str = NOT_ESTABLISHED
     traffic_fatigue_model: str = ""
     traffic_fatigue_source: str = ""
+    calculated_fatigue_authority: str = ""
+    calculated_fatigue_method: str = ""
+    calculated_fatigue_spectrum_source: str = ""
+    calculated_fatigue_cycle_count_source: str = ""
     reinforcement_fatigue_applicability: str = NOT_ESTABLISHED
     concrete_fatigue_applicability: str = NOT_ESTABLISHED
     reinforcement_fatigue_on: Any = False
@@ -499,6 +503,38 @@ def assess_project_basis(basis: DanishBridgeBasis) -> dict[str, Any]:
             missing.append("traffic/fatigue model")
         if not basis.traffic_fatigue_source:
             missing.append("traffic/fatigue source")
+        if not basis.calculated_fatigue_authority:
+            missing.append("calculated fatigue authority")
+        if not basis.calculated_fatigue_method:
+            missing.append("calculated fatigue method")
+        if not basis.calculated_fatigue_spectrum_source:
+            missing.append("calculated fatigue spectrum source")
+        if not basis.calculated_fatigue_cycle_count_source:
+            missing.append("calculated fatigue cycle-count source")
+        if (
+            basis.traffic_fatigue_model
+            and basis.calculated_fatigue_method
+            and basis.traffic_fatigue_model
+            != basis.calculated_fatigue_method
+        ):
+            missing.append(
+                "declared traffic/fatigue model does not match the "
+                "calculated fatigue method"
+            )
+        if (
+            basis.traffic_fatigue_source
+            and basis.calculated_fatigue_spectrum_source
+            and basis.calculated_fatigue_cycle_count_source
+            and basis.traffic_fatigue_source
+            not in {
+                basis.calculated_fatigue_spectrum_source,
+                basis.calculated_fatigue_cycle_count_source,
+            }
+        ):
+            missing.append(
+                "declared traffic/fatigue source does not match the "
+                "calculated spectrum or cycle-count source"
+            )
         for label, applicability, _enabled in fatigue_routes:
             if applicability == NOT_ESTABLISHED:
                 missing.append(f"{label} applicability")

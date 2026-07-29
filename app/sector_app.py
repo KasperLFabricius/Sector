@@ -4536,6 +4536,12 @@ def build_inputs(host=st):
         "bridge_traffic_fatigue_source",
         disabled=not dk_bridge_method_active,
     )
+    dk2.caption(
+        "When Required, the declared model must exactly match Fatigue > "
+        "Spectrum basis > Method. The declared source must exactly match the "
+        "calculated spectrum source or cycle-count source, and both calculated "
+        "sources must be stated."
+    )
     bridge_high_strength_approval = _seeded_selectbox(
         dk2,
         "Infrastructure-manager approval for fck > 50 MPa",

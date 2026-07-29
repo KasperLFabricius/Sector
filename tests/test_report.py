@@ -3924,6 +3924,7 @@ def _bridge_report_concrete_fatigue_record(inp):
                 "fatigue_factor_mode": context["factor_mode"],
                 "fatigue_factor_approval": context["factor_approval"],
                 "fatigue_gamma_ff": context["gamma_ff"],
+                "fatigue_basis": context["basis"],
             },),
         ),
     ))

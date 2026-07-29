@@ -31,7 +31,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-019 | PR-10 | Planned | Improve continuation titles/status context and page-break/keep-together behavior for long tables. | Controlled small/default/dense PDF layouts to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-020 | Excluded | Excluded — non-code local build hygiene; user-directed exclusion | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | F-021 | PR-14 | Planned | Implement a defensible reproducibility model and controlled-build timestamp/hash behavior. | Two controlled Windows-build comparison to be established in owning PR. | Pending | Pending | Pending | Pending | Byte identity will not be claimed unless demonstrated. |
-| F-022 | PR-05 | Implemented on branch; exact-head external gates pending | Typed, non-inferred bridge class, infrastructure manager, authority/project sources and approvals, environmental/surface/de-icing applicability, control/consequence class, fatigue applicability, cover and coefficient provenance are bound through input, calculation signature/cache, immutable result fingerprint, project/session/autosave/download publication, UI and report. Required traffic fatigue now correlates the global analysis switch, canonical coverage-table applicability, each selected reinforcement/concrete fatigue check and its calculated evidence; disabled, unselected, conflicting or missing routes cannot produce a Danish project-basis PASS. Evidenced mappings change only cover, de-icing evidence, Danish crack routing and `alpha_ct` torsional cracking resistance; other authority choices qualify the conclusion without silently changing inputs. | The PR-05 decision map distinguishes Eurocode, DK NA, Road Directorate, Banedanmark and project authority. The independent fixture covers mapped road/foot/rail choices, conflicts, unmapped authorities, Danish cover/de-icing routes, five traffic-fatigue correlation boundaries, static-annex qualification and calculation-changing/custom-only effects. | Save-load-resave, malformed/Boolean/non-finite inputs, method/edition switches, basis mutation, stale result/cache, required-fatigue routing and missing/duplicate correlation regressions are included in the focused PR-05 tests. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Unmapped, project-defined or conflicting authority choices warn and cannot silently alter calculations or produce an unqualified selected-standard PASS. |
+| F-022 | PR-05 | Implemented on branch; exact-head external gates pending | Typed, non-inferred bridge class, infrastructure manager, authority/project sources and approvals, environmental/surface/de-icing applicability, control/consequence class, fatigue applicability, cover and coefficient provenance are bound through input, calculation signature/cache, immutable result fingerprint, project/session/autosave/download publication, UI and report. Required traffic fatigue now correlates the global analysis switch, canonical coverage-table applicability, each selected reinforcement/concrete fatigue check and its calculated evidence, and the declared Danish traffic model/source with the exact current calculated fatigue authority/method/spectrum/cycle-count basis; disabled, unselected, conflicting, stale or missing routes cannot produce a Danish project-basis PASS. Evidenced mappings change only cover, de-icing evidence, Danish crack routing and `alpha_ct` torsional cracking resistance; other authority choices qualify the conclusion without silently changing inputs. | The PR-05 decision map distinguishes Eurocode, DK NA, Road Directorate, Banedanmark and project authority. The independent fixture covers mapped road/foot/rail choices, conflicts, unmapped authorities, Danish cover/de-icing routes, eight traffic-fatigue correlation boundaries, static-annex qualification and calculation-changing/custom-only effects. | Save-load-resave, malformed/Boolean/non-finite inputs, method/edition switches, basis mutation, stale result/cache, required-fatigue routing and missing/duplicate correlation regressions are included in the focused PR-05 tests. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Unmapped, project-defined or conflicting authority choices warn and cannot silently alter calculations or produce an unqualified selected-standard PASS. |
 | F-023 | PR-06 | Planned | Add separate opt-in, sourced biaxial crack/shear interaction options with domain and fallback state. | Independent limiting, symmetry, rotation, and unsupported-domain benchmarks to be established in owning PR. | Pending | Pending | Pending | Pending | No universal interaction rule will be invented. |
 | F-024 | PR-07 | Planned | Add amendment history, sign-off, action ownership, and closure state to reports. | Blank/partial/full governance report fixtures to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-025 | PR-12 | Planned | Prevent whole Inputs-workspace rebuild/stall on ordinary pane changes. | Browser rerun/time-to-idle telemetry to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
@@ -868,8 +868,9 @@ mandatory; this matrix does not self-certify PR closure.
 - `tools/pr05_dk_bridge_oracle.py` is independent of production rule helpers.
   Its frozen fixture covers the complete Danish crack matrix, nominal-cover
   routes, road/foot/rail de-icing distances, the calculation-changing
-  `alpha_ct` torsional scalar, manager/class mapping outcomes, five
-  traffic-fatigue correlation boundaries and the static-annex limitation. It
+  `alpha_ct` torsional scalar, manager/class mapping outcomes, eight
+  traffic-fatigue correlation boundaries (including declared-versus-calculated
+  model drift) and the static-annex limitation. It
   includes cases whose correct effect is qualification/warning only.
 - The distinct Danish method retains the merged bridge-base behavior unless an
   exact DK NA route applies. Danish coefficients, high-strength approval,
@@ -892,7 +893,9 @@ mandatory; this matrix does not self-certify PR closure.
   additionally correlates the global analysis switch, canonical coverage-table
   applicability and each selected reinforcement/concrete fatigue route;
   complete calculated evidence remains required by the corresponding canonical
-  check.
+  check. The declared model must exactly match the current canonical fatigue
+  method, and the declared source must exactly match its spectrum or
+  cycle-count source.
 - The Danish crack router requires the exact Frequent response for every width
   criterion. Non-prestressed road, foot and railway bridges use 0.30 mm in
   aggressive and 0.20 mm in extra-aggressive environments. Prestressed road and
@@ -909,7 +912,8 @@ mandatory; this matrix does not self-certify PR closure.
   applicability decision, so a project departure could coexist with an
   unqualified selected-standard PASS. Six focused red tests reproduced the
   failures before remediation.
-- Danish publication evidence is now schema v3. Publication reconstructs the
+- Danish publication evidence was advanced to schema v3 at that head.
+  Publication reconstructs the
   current typed basis and positive finite concrete strength, independently
   recomputes the four derived Danish checks, and requires exact check-body
   equality before accepting a stored fingerprint. Manager, custom coefficient,
@@ -1047,7 +1051,8 @@ mandatory; this matrix does not self-certify PR closure.
   table itself emitted PASS without typed project applicability or any Annex
   J/KK/NN/OO analysis evidence. Three focused red cases reproduced those false
   positive paths.
-- Danish bridge evidence schema v3 now binds the global fatigue setting, the
+- Danish bridge evidence schema v3 at that head bound the global fatigue
+  setting, the
   canonical reinforcement/concrete coverage applicability and each existing
   per-check calculation toggle into the immutable basis context. Required
   traffic fatigue needs a model/source, enabled global analysis, at least one
@@ -1063,9 +1068,10 @@ mandatory; this matrix does not self-certify PR closure.
   complete external analysis-evidence route for applicable Annex J/KK/NN/OO
   work. It is independently reconstructed during publication, so changing it
   to PASS and recomputing the public fingerprint is rejected. The independent
-  oracle adds five traffic-fatigue correlation boundaries and the static-annex
-  outcome without importing production rule helpers.
-- Current pre-commit evidence is green: all 118 PR-05 rule/oracle/adversarial
+  oracle at that head added five traffic-fatigue correlation boundaries and the
+  static-annex outcome without importing production rule helpers.
+- Evidence at that remediation head was green: all 118 PR-05
+  rule/oracle/adversarial
   tests; 205 focused bridge core, adapter and project tests; 68 focused
   report/manual/live-app tests; the standalone independent oracle; and five
   final persistence/manual/render checks including both rendered-report
@@ -1076,3 +1082,36 @@ mandatory; this matrix does not self-certify PR closure.
   `30407749086` was canceled after these review findings and is not counted as
   the single exact-head CI gate. Exact remediation SHA, exact-head rereview and
   the one completed GitHub full-suite gate remain pending.
+- Codex rereview of exact head
+  `a8409b7e0958f8a42a5692a51c0bfe4b2654a17f` identified one further P1
+  correlation gap: required Danish traffic fatigue accepted any nonempty
+  declared model/source without comparing them with the calculation's
+  canonical fatigue basis. A project could therefore declare FLM3 while
+  calculating a user-defined grouped spectrum and retain both a Danish
+  project-basis PASS and a canonical fatigue PASS. A focused red regression
+  reproduced that mismatch before remediation. Run `30410066460` was canceled
+  immediately after the finding and is not counted as the single exact-head CI
+  gate.
+- The current Danish evidence schema v4 derives the calculated fatigue
+  authority, method, spectrum source and cycle-count source from the existing
+  canonical fatigue basis. A required Danish declaration must match that
+  calculated method exactly and its source must match either calculated source
+  exactly. The bridge fatigue publication context is now schema v3 and binds
+  the complete 11-field canonical basis into every calculated reinforcement or
+  concrete row; raw adapters, current-input publication and durable
+  save-load-resave validation reject missing, malformed, changed or
+  re-fingerprinted basis evidence. No parallel selector or silent calculation
+  change was introduced: a mismatch remains calculation-preserving but blocks
+  Danish conformity.
+- Current pre-commit evidence is green: all 122 PR-05
+  rule/oracle/adversarial tests, including eight independent traffic-fatigue
+  outcomes; 79 focused bridge publication/adapter checks; the 58-check complete
+  fatigue-analysis suite plus the canonical schema-alignment regression; nine
+  live/durable/download/autosave controls; seven save-load-resave attacks; and
+  all four canonical report/manual render gates. The standalone independent
+  oracle also passes. The exact current-code Danish report has 16 pages;
+  methodology pages 7-15 and the 15-16 boundary were visually inspected
+  without clipping, overlap, missing repeated headers or missing document
+  control. The issued 37-page manual was inspected on affected pages 11-13 and
+  boundary pages 36-37 with the same result. Exact remediation SHA, exact-head
+  rereview and the one completed GitHub full-suite gate remain pending.

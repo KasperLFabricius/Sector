@@ -81,6 +81,7 @@ def _bridge_fatigue_payload(
     concrete_method=fatigue_analysis.CONCRETE_MINER,
     miner_basis=fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
     miner_source="",
+    basis=None,
 ):
     edition = fatigue_inputs.EC2_2_2005_AC
     gamma_s, gamma_c, factor_basis = (
@@ -126,6 +127,7 @@ def _bridge_fatigue_payload(
         "passed": True,
         "edition": edition,
         "design_methodology": bridge.EN1992_2_BASE,
+        "basis": fatigue_inputs.normalise_basis(basis),
         "checks": {
             "reinforcement": reinforcement,
             "concrete": concrete,
@@ -757,6 +759,61 @@ def test_bridge_fatigue_adapters_bind_current_gamma_ff(
         expected_gamma_ff
     )
     assert "STANDARD PASS" in accepted.reason
+
+
+@pytest.mark.parametrize(
+    ("adapter", "payload_options"),
+    [
+        (
+            bridge_analysis.reinforcement_fatigue_evidence,
+            {"reinforcement": True, "concrete": False},
+        ),
+        (
+            bridge_analysis.concrete_fatigue_evidence,
+            {"reinforcement": False, "concrete": True},
+        ),
+    ],
+)
+def test_bridge_fatigue_adapters_bind_current_calculation_basis(
+    adapter,
+    payload_options,
+):
+    current_basis = {
+        **fatigue_inputs.default_basis(),
+        "authority": fatigue_inputs.AUTHORITY_VD,
+        "method": fatigue_inputs.METHOD_VD_FLM4,
+        "spectrum_source": "VD project basis section 6.8",
+        "cycle_count_source": "Traffic register T-04",
+    }
+    stale_basis = {
+        **current_basis,
+        "authority": fatigue_inputs.AUTHORITY_USER,
+        "method": fatigue_inputs.METHOD_USER_GROUPED,
+    }
+    current = _bridge_fatigue_input(
+        **payload_options,
+        fatigue_basis=current_basis,
+    )
+
+    rejected = adapter(
+        {"fatigue": _bridge_fatigue_payload(
+            **payload_options,
+            basis=stale_basis,
+        )},
+        current,
+    )
+    assert rejected.status == bridge.STATUS_INVALID
+    assert "calculated fatigue basis conflicts" in rejected.reason
+
+    accepted = adapter(
+        {"fatigue": _bridge_fatigue_payload(
+            **payload_options,
+            basis=current_basis,
+        )},
+        current,
+    )
+    assert accepted.status == bridge.STATUS_PASS
+    assert accepted.evidence[0]["fatigue_basis"] == current_basis
 
 
 @pytest.mark.parametrize(

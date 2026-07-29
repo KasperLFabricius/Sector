@@ -806,9 +806,13 @@ def manual_blocks() -> list:
     md("When traffic/fatigue is **Required**, its model and source must correlate "
        "with an enabled global fatigue analysis, the existing reinforcement/concrete "
        "applicability rows, the corresponding calculation toggles, and the resulting "
-       "calculated check evidence. A disabled analysis, a required-but-disabled "
-       "route, or an enabled route declared not applicable remains fail-closed and "
-       "cannot support a Danish project-basis PASS.")
+       "calculated check evidence. The declared model must exactly match the Fatigue "
+       "panel's calculated **Method**; both calculated spectrum and cycle-count "
+       "sources must be stated, and the declared source must exactly match one of "
+       "them. The complete current fatigue basis is bound into the calculation and "
+       "bridge-publication evidence. A disabled analysis, a required-but-disabled "
+       "route, a model/source mismatch, or an enabled route declared not applicable "
+       "remains fail-closed and cannot support a Danish project-basis PASS.")
     table(["Explicit Danish choice", "Mapped Sector effect"],
           [["Road Directorate / local road + road or footbridge",
             "Mapped manager/class evidence; project source remains mandatory"],

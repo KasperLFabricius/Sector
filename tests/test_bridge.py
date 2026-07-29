@@ -43,6 +43,7 @@ def _standard_fatigue_inputs(**changes):
         ),
         "fatigue_concrete_miner_source": "",
         "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
     }
     inp.update(changes)
     return inp
@@ -92,6 +93,7 @@ def _external(
             "fatigue_factor_mode": context["factor_mode"],
             "fatigue_factor_approval": context["factor_approval"],
             "fatigue_gamma_ff": context["gamma_ff"],
+            "fatigue_basis": context["basis"],
             "fatigue_parameter_conformance": nested,
         })
         if fatigue_kind == "concrete":
@@ -849,6 +851,31 @@ def test_publication_rejects_nonbridge_fatigue_edition_context():
     assert safe["publication_validation"]["status"] == "REJECTED"
     assert any(
         "edition is not the selected EN 1992-2 bridge edition" in error
+        for error in safe["configuration_errors"]
+    )
+
+
+def test_publication_rejects_changed_fatigue_calculation_basis():
+    raw = bridge.assess_base_methodology(_complete_evidence())
+    changed_basis = {
+        **fatigue_inputs.default_basis(),
+        "authority": fatigue_inputs.AUTHORITY_VD,
+        "method": fatigue_inputs.METHOD_VD_FLM4,
+        "spectrum_source": "VD project basis section 6.8",
+        "cycle_count_source": "Traffic register T-04",
+    }
+    safe = bridge.publication_safe_record(
+        raw,
+        design_methodology=bridge.EN1992_2_BASE,
+        fatigue_context=_fatigue_context(_standard_fatigue_inputs(
+            **{fatigue_inputs.BASIS_KEY: changed_basis}
+        )),
+    )
+
+    assert safe["status"] == bridge.STATUS_INVALID
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "fatigue basis conflicts with current fatigue inputs" in error
         for error in safe["configuration_errors"]
     )
 

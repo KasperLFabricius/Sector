@@ -399,6 +399,8 @@ def test_manual_documents_bridge_methodology_routing_and_limitations():
         "departure applicability",
         "existing reinforcement/concrete applicability rows",
         "required-but-disabled route",
+        "exactly match the Fatigue panel's calculated",
+        "model/source mismatch",
         "national routing information, not analysis evidence",
         "Annex J, KK, NN or OO",
         "Bridge Methodology",

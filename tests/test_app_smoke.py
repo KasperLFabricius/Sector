@@ -2082,6 +2082,10 @@ def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
     ):
         assert at.text_input(key=key).value == ""
     assert at.number_input(key="bridge_alpha_ct").value == 1.0
+    assert any(
+        "declared model must exactly match" in caption.value
+        for caption in at.caption
+    )
 
     _calculate(at)
     payload = at.session_state["results"]["bridge_methodology"]
@@ -2198,6 +2202,7 @@ def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
         ("stale_standard", "fatigue.gamma_c"),
         ("omitted_gamma_c", "IDs/cardinality"),
         ("stale_gamma_ff", "fatigue_gamma_ff"),
+        ("stale_basis", "fatigue basis"),
     ],
 )
 def test_bridge_view_surfaces_fatigue_correlation_rejection(
@@ -2206,6 +2211,7 @@ def test_bridge_view_surfaces_fatigue_correlation_rejection(
     monkeypatch,
 ):
     import contextlib
+    import fatigue_inputs
     import sector_app
 
     rendered = {"errors": [], "info": []}
@@ -2232,6 +2238,15 @@ def test_bridge_view_surfaces_fatigue_correlation_rejection(
         record = _bridge_concrete_fatigue_snapshot(
             _bridge_fatigue_publication_scalars()
         )
+    elif attack == "stale_basis":
+        record = _bridge_concrete_fatigue_snapshot(current_scalars)
+        current_scalars[fatigue_inputs.BASIS_KEY] = {
+            **fatigue_inputs.default_basis(),
+            "authority": fatigue_inputs.AUTHORITY_VD,
+            "method": fatigue_inputs.METHOD_VD_FLM4,
+            "spectrum_source": "VD project basis section 6.8",
+            "cycle_count_source": "Traffic register T-04",
+        }
     else:
         record = _bridge_concrete_fatigue_snapshot(current_scalars)
         concrete = next(
@@ -6603,6 +6618,7 @@ def _bridge_fatigue_publication_scalars(*, custom=False):
         ),
         "fatigue_concrete_miner_source": "",
         "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
     }
     if custom:
         scalars.update({
@@ -6684,6 +6700,7 @@ def _bridge_concrete_fatigue_snapshot(scalars):
                 "fatigue_factor_mode": context["factor_mode"],
                 "fatigue_factor_approval": context["factor_approval"],
                 "fatigue_gamma_ff": context["gamma_ff"],
+                "fatigue_basis": context["basis"],
             },),
         ),
     ))
@@ -6928,13 +6945,19 @@ def test_download_session_and_autosave_reject_bridge_binding_mutation(
 
 @pytest.mark.parametrize(
     "attack",
-    ["stale_standard", "omitted_gamma_c", "stale_gamma_ff"],
+    [
+        "stale_standard",
+        "omitted_gamma_c",
+        "stale_gamma_ff",
+        "stale_basis",
+    ],
 )
 def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
     attack,
     tmp_path,
     monkeypatch,
 ):
+    import fatigue_inputs
     import project_io
     import sector_app
 
@@ -6949,6 +6972,15 @@ def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
         bridge_record = _bridge_concrete_fatigue_snapshot(
             _bridge_fatigue_publication_scalars()
         )
+    elif attack == "stale_basis":
+        bridge_record = _bridge_concrete_fatigue_snapshot(scalars)
+        scalars[fatigue_inputs.BASIS_KEY] = {
+            **fatigue_inputs.default_basis(),
+            "authority": fatigue_inputs.AUTHORITY_VD,
+            "method": fatigue_inputs.METHOD_VD_FLM4,
+            "spectrum_source": "VD project basis section 6.8",
+            "cycle_count_source": "Traffic register T-04",
+        }
     else:
         bridge_record = _bridge_concrete_fatigue_snapshot(scalars)
         concrete = next(

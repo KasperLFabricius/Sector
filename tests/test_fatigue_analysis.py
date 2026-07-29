@@ -1429,11 +1429,16 @@ def test_bridge_publication_context_validates_inactive_check_booleans():
         "reinforcement": False,
         "concrete": False,
     }
+    assert context["basis"] == fatigue_inputs.default_basis()
     assert context["parameter_conformance"] == []
     assert context["errors"] == [
         "current fatigue input fatigue_check_steel is not typed Boolean",
         "current fatigue input fatigue_check_concrete is not typed Boolean",
     ]
+
+
+def test_bridge_publication_basis_schema_matches_canonical_fatigue_basis():
+    assert bridge.FATIGUE_BASIS_FIELDS == fatigue_inputs.BASIS_FIELDS
 
 
 def test_analysis_signature_covers_numerics_and_conformance_provenance():

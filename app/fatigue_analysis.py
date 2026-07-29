@@ -458,6 +458,13 @@ def bridge_publication_context(inp: Mapping | None) -> dict:
         "concrete": fatigue_on and concrete_on,
     }
     try:
+        basis = fatigue_inputs.normalise_basis(
+            source.get(fatigue_inputs.BASIS_KEY)
+        )
+    except (TypeError, ValueError) as exc:
+        basis = fatigue_inputs.default_basis()
+        errors.append(f"current fatigue calculation basis is invalid: {exc}")
+    try:
         design_methodology = _design_methodology(
             source.get("design_methodology"),
             allow_default=False,
@@ -557,6 +564,7 @@ def bridge_publication_context(inp: Mapping | None) -> dict:
         "concrete_miner_basis": concrete_miner_basis,
         "concrete_miner_source": concrete_miner_source,
         "parameter_conformance": list(parameter_records),
+        "basis": dict(basis),
         "errors": list(dict.fromkeys(errors)),
     }
 
@@ -633,6 +641,21 @@ def bridge_result_context_errors(
     if payload.get("edition") != current["edition"]:
         errors.append(
             "calculated fatigue edition conflicts with current fatigue inputs"
+        )
+    payload_basis = payload.get("basis")
+    if (
+        not isinstance(payload_basis, Mapping)
+        or set(payload_basis) != set(fatigue_inputs.BASIS_FIELDS)
+    ):
+        errors.append(
+            "calculated fatigue basis is missing, malformed, or incomplete"
+        )
+    elif not _json_equivalent(
+        dict(payload_basis),
+        current["basis"],
+    ):
+        errors.append(
+            "calculated fatigue basis conflicts with current fatigue inputs"
         )
 
     expected_ids = []

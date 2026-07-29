@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import bridge_inputs  # noqa: E402
 import bridge_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
+import fatigue_inputs  # noqa: E402
 import project_io  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "pr05_dk_bridge_decisions.json"
@@ -201,6 +202,12 @@ def _basis(**changes):
         "traffic_fatigue_applicability": (
             danish_bridge.FATIGUE_NOT_APPLICABLE
         ),
+        "calculated_fatigue_authority": fatigue_inputs.AUTHORITY_VD,
+        "calculated_fatigue_method": fatigue_inputs.METHOD_VD_FLM4,
+        "calculated_fatigue_spectrum_source": (
+            "VD project basis section 6.8"
+        ),
+        "calculated_fatigue_cycle_count_source": "Traffic register T-04",
         "environment_class": danish_bridge.ENVIRONMENT_AGGRESSIVE,
         "environment_source": "DB-05 section 4.2",
         "departure_applicability": (
@@ -409,8 +416,16 @@ def test_danish_traffic_fatigue_correlation_matches_independent_oracle(case):
     }
     result = danish_bridge.assess_project_basis(_basis(
         traffic_fatigue_applicability=applicability[case["applicability"]],
-        traffic_fatigue_model="FLM3",
-        traffic_fatigue_source="VD basis section 6.8",
+        traffic_fatigue_model=case["declared_model"],
+        traffic_fatigue_source=case["declared_source"],
+        calculated_fatigue_authority=case["calculated_authority"],
+        calculated_fatigue_method=case["calculated_method"],
+        calculated_fatigue_spectrum_source=case[
+            "calculated_spectrum_source"
+        ],
+        calculated_fatigue_cycle_count_source=case[
+            "calculated_cycle_count_source"
+        ],
         reinforcement_fatigue_applicability=applicability[
             case["reinforcement_applicability"]
         ],
@@ -712,8 +727,8 @@ def test_manager_mapping_is_explicit_and_unmapped_choice_is_warning_only():
 def test_required_traffic_fatigue_cannot_pass_with_analysis_disabled():
     result = danish_bridge.assess_project_basis(_basis(
         traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
-        traffic_fatigue_model="FLM3",
-        traffic_fatigue_source="VD basis section 6.8",
+        traffic_fatigue_model=fatigue_inputs.METHOD_VD_FLM4,
+        traffic_fatigue_source="VD project basis section 6.8",
         reinforcement_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
         concrete_fatigue_applicability=danish_bridge.FATIGUE_NOT_APPLICABLE,
         reinforcement_fatigue_on=True,
@@ -728,8 +743,8 @@ def test_required_traffic_fatigue_cannot_pass_with_analysis_disabled():
 def test_required_traffic_fatigue_cannot_use_not_applicable_calculation_checks():
     basis = _basis(
         traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
-        traffic_fatigue_model="FLM3",
-        traffic_fatigue_source="VD basis section 6.8",
+        traffic_fatigue_model=fatigue_inputs.METHOD_VD_FLM4,
+        traffic_fatigue_source="VD project basis section 6.8",
         reinforcement_fatigue_applicability=(
             danish_bridge.FATIGUE_NOT_APPLICABLE
         ),
@@ -778,8 +793,8 @@ def test_required_traffic_fatigue_passes_basis_only_with_matching_calculated_rou
     )
     basis = _basis(
         traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
-        traffic_fatigue_model="FLM3",
-        traffic_fatigue_source="VD basis section 6.8",
+        traffic_fatigue_model=fatigue_inputs.METHOD_VD_FLM4,
+        traffic_fatigue_source="VD project basis section 6.8",
         reinforcement_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
         concrete_fatigue_applicability=danish_bridge.FATIGUE_NOT_APPLICABLE,
         reinforcement_fatigue_on=True,
@@ -816,6 +831,32 @@ def test_required_traffic_fatigue_passes_basis_only_with_matching_calculated_rou
     assert result["status"] == bridge.STATUS_NOT_ASSESSED
 
 
+def test_required_traffic_fatigue_rejects_declared_model_calculation_drift():
+    result = danish_bridge.assess_project_basis(_basis(
+        traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
+        traffic_fatigue_model="FLM3",
+        traffic_fatigue_source="VD project basis section 6.8",
+        reinforcement_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
+        concrete_fatigue_applicability=danish_bridge.FATIGUE_NOT_APPLICABLE,
+        reinforcement_fatigue_on=True,
+        concrete_fatigue_on=False,
+        fatigue_on=True,
+        calculated_fatigue_authority=(
+            fatigue_inputs.AUTHORITY_USER
+        ),
+        calculated_fatigue_method=(
+            fatigue_inputs.METHOD_USER_GROUPED
+        ),
+        calculated_fatigue_spectrum_source=(
+            "VD project basis section 6.8"
+        ),
+        calculated_fatigue_cycle_count_source="Traffic register T-04",
+    ))
+
+    assert result["status"] == danish_bridge.STATUS_NOT_ASSESSED
+    assert "does not match the calculated fatigue method" in result["reason"]
+
+
 def test_danish_basis_derives_fatigue_routes_from_canonical_inputs():
     decisions = tuple(
         replace(
@@ -832,8 +873,17 @@ def test_danish_basis_derives_fatigue_routes_from_canonical_inputs():
             bridge_traffic_fatigue_applicability=(
                 danish_bridge.FATIGUE_REQUIRED
             ),
-            bridge_traffic_fatigue_model="FLM3",
-            bridge_traffic_fatigue_source="VD basis section 6.8",
+            bridge_traffic_fatigue_model=fatigue_inputs.METHOD_VD_FLM4,
+            bridge_traffic_fatigue_source=(
+                "VD project basis section 6.8"
+            ),
+            fatigue_basis={
+                **fatigue_inputs.default_basis(),
+                "authority": fatigue_inputs.AUTHORITY_VD,
+                "method": fatigue_inputs.METHOD_VD_FLM4,
+                "spectrum_source": "VD project basis section 6.8",
+                "cycle_count_source": "Traffic register T-04",
+            },
             fatigue_on=True,
             fatigue_check_steel=True,
             fatigue_check_concrete=False,
@@ -848,6 +898,9 @@ def test_danish_basis_derives_fatigue_routes_from_canonical_inputs():
     assert context["fatigue_on"] is True
     assert context["reinforcement_fatigue_on"] is True
     assert context["concrete_fatigue_on"] is False
+    assert context["calculated_fatigue_method"] == (
+        fatigue_inputs.METHOD_VD_FLM4
+    )
 
 
 def test_danish_method_rejects_conflicting_fatigue_applicability_snapshots():
@@ -1326,8 +1379,15 @@ def test_required_fatigue_route_survives_project_save_load_resave():
     )
     scalars = _project_scalars(
         bridge_traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
-        bridge_traffic_fatigue_model="FLM3",
-        bridge_traffic_fatigue_source="VD basis section 6.8",
+        bridge_traffic_fatigue_model=fatigue_inputs.METHOD_VD_FLM4,
+        bridge_traffic_fatigue_source="VD project basis section 6.8",
+        fatigue_basis={
+            **fatigue_inputs.default_basis(),
+            "authority": fatigue_inputs.AUTHORITY_VD,
+            "method": fatigue_inputs.METHOD_VD_FLM4,
+            "spectrum_source": "VD project basis section 6.8",
+            "cycle_count_source": "Traffic register T-04",
+        },
         fatigue_on=True,
         fatigue_check_steel=True,
         fatigue_check_concrete=False,

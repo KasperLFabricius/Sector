@@ -860,6 +860,7 @@ def _bridge_concrete_fatigue_snapshot(scalars):
                 "fatigue_factor_mode": context["factor_mode"],
                 "fatigue_factor_approval": context["factor_approval"],
                 "fatigue_gamma_ff": context["gamma_ff"],
+                "fatigue_basis": context["basis"],
             },),
         ),
     ))
@@ -882,6 +883,7 @@ def _bridge_fatigue_scalars(*, custom=False):
         ),
         "fatigue_concrete_miner_source": "",
         "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
     }
     if custom:
         scalars.update({
@@ -925,6 +927,7 @@ def test_project_roundtrips_bound_bridge_calculation_snapshot():
         "stale_standard",
         "omitted_gamma_c",
         "stale_gamma_ff",
+        "stale_basis",
         "missing_gamma_ff",
         "boolean_gamma_ff",
         "non_finite_gamma_ff",
@@ -956,6 +959,15 @@ def test_bridge_fatigue_rejection_latch_survives_save_load_and_resave(attack):
         )
         assert current_scalars["fatigue_gamma_ff"] == 2.0
         assert stored_concrete["evidence"][0]["fatigue_gamma_ff"] == 1.0
+    elif attack == "stale_basis":
+        attacked = _bridge_concrete_fatigue_snapshot(current_scalars)
+        current_scalars[fatigue_inputs.BASIS_KEY] = {
+            **fatigue_inputs.default_basis(),
+            "authority": fatigue_inputs.AUTHORITY_VD,
+            "method": fatigue_inputs.METHOD_VD_FLM4,
+            "spectrum_source": "VD project basis section 6.8",
+            "cycle_count_source": "Traffic register T-04",
+        }
     elif attack in {
         "missing_gamma_ff",
         "boolean_gamma_ff",

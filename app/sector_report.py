@@ -1099,6 +1099,22 @@ class ReportBuilder:
                 ("Traffic / fatigue applicability", "traffic_fatigue_applicability"),
                 ("Traffic / fatigue model", "traffic_fatigue_model"),
                 ("Traffic / fatigue source", "traffic_fatigue_source"),
+                (
+                    "Calculated fatigue authority",
+                    "calculated_fatigue_authority",
+                ),
+                (
+                    "Calculated fatigue method",
+                    "calculated_fatigue_method",
+                ),
+                (
+                    "Calculated fatigue spectrum source",
+                    "calculated_fatigue_spectrum_source",
+                ),
+                (
+                    "Calculated fatigue cycle-count source",
+                    "calculated_fatigue_cycle_count_source",
+                ),
                 ("Global fatigue analysis enabled", "fatigue_on"),
                 (
                     "Reinforcement fatigue applicability",

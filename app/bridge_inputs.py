@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 
 import pandas as pd
 
+import fatigue_inputs
 from sector import bridge, conformance, danish_bridge
 
 
@@ -550,6 +551,12 @@ def danish_basis_from_inputs(value: Mapping) -> danish_bridge.DanishBridgeBasis:
         }
     except (TypeError, ValueError):
         coverage_decisions = {}
+    try:
+        calculated_fatigue_basis = fatigue_inputs.normalise_basis(
+            value.get(fatigue_inputs.BASIS_KEY)
+        )
+    except (TypeError, ValueError):
+        calculated_fatigue_basis = {}
 
     def fatigue_applicability(check_id: str) -> str:
         decision = coverage_decisions.get(check_id)
@@ -578,6 +585,16 @@ def danish_basis_from_inputs(value: Mapping) -> danish_bridge.DanishBridgeBasis:
         ),
         traffic_fatigue_model=value.get("bridge_traffic_fatigue_model", ""),
         traffic_fatigue_source=value.get("bridge_traffic_fatigue_source", ""),
+        calculated_fatigue_authority=calculated_fatigue_basis.get(
+            "authority", ""
+        ),
+        calculated_fatigue_method=calculated_fatigue_basis.get("method", ""),
+        calculated_fatigue_spectrum_source=calculated_fatigue_basis.get(
+            "spectrum_source", ""
+        ),
+        calculated_fatigue_cycle_count_source=calculated_fatigue_basis.get(
+            "cycle_count_source", ""
+        ),
         reinforcement_fatigue_applicability=fatigue_applicability(
             "reinforcement_fatigue"
         ),

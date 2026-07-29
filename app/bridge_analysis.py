@@ -710,6 +710,7 @@ def reinforcement_fatigue_evidence(
                     factor_basis.get("approval_reference") or ""
                 ),
                 "fatigue_gamma_ff": gamma_ff,
+                "fatigue_basis": dict(payload["basis"]),
             })
     warnings = _messages(payload.get("warnings"))
     errors = _messages(payload.get("errors"))
@@ -881,6 +882,7 @@ def concrete_fatigue_evidence(
                     factor_basis.get("approval_reference") or ""
                 ),
                 "fatigue_gamma_ff": gamma_ff,
+                "fatigue_basis": dict(payload["basis"]),
                 "note": (
                     f"spectrum {fatigue_presentation.value(spectrum, 'spectrum_name', '-')}; "
                     f"concrete fibre {row.get('fibre_index', '-')}; "

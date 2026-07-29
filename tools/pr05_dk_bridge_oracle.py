@@ -151,6 +151,12 @@ def traffic_fatigue_outcome(
     reinforcement_enabled: bool,
     concrete_applicability: str,
     concrete_enabled: bool,
+    declared_model: str,
+    declared_source: str,
+    calculated_authority: str,
+    calculated_method: str,
+    calculated_spectrum_source: str,
+    calculated_cycle_count_source: str,
 ) -> str:
     """Return the independent required-analysis correlation outcome."""
 
@@ -167,6 +173,22 @@ def traffic_fatigue_outcome(
         return "NOT_ASSESSED"
     if applicability == "not_applicable":
         return "MAPPED"
+    if not all((
+        declared_model,
+        declared_source,
+        calculated_authority,
+        calculated_method,
+        calculated_spectrum_source,
+        calculated_cycle_count_source,
+    )):
+        return "NOT_ASSESSED"
+    if declared_model != calculated_method:
+        return "NOT_ASSESSED"
+    if declared_source not in {
+        calculated_spectrum_source,
+        calculated_cycle_count_source,
+    }:
+        return "NOT_ASSESSED"
     required = [
         enabled for route, enabled in routes if route == "required"
     ]
@@ -242,6 +264,16 @@ def evaluate_fixture(path: str | Path) -> dict:
                 reinforcement_enabled=case["reinforcement_enabled"],
                 concrete_applicability=case["concrete_applicability"],
                 concrete_enabled=case["concrete_enabled"],
+                declared_model=case["declared_model"],
+                declared_source=case["declared_source"],
+                calculated_authority=case["calculated_authority"],
+                calculated_method=case["calculated_method"],
+                calculated_spectrum_source=case[
+                    "calculated_spectrum_source"
+                ],
+                calculated_cycle_count_source=case[
+                    "calculated_cycle_count_source"
+                ],
             )
             for case in data["traffic_fatigue_cases"]
         },

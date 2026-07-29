@@ -106,12 +106,25 @@ STATUS_NOT_RUN = "NOT RUN"
 STATUS_REVIEW = "REVIEW"
 
 BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v2"
-DANISH_BRIDGE_EVIDENCE_SCHEMA = "sector.dk-bridge-methodology-evidence/v3"
+DANISH_BRIDGE_EVIDENCE_SCHEMA = "sector.dk-bridge-methodology-evidence/v4"
 DANISH_CRACK_PUBLICATION_CONTEXT_SCHEMA = (
     "sector.dk-bridge-crack-publication-context/v1"
 )
 FATIGUE_PUBLICATION_CONTEXT_SCHEMA = (
-    "sector.bridge-fatigue-publication-context/v2"
+    "sector.bridge-fatigue-publication-context/v3"
+)
+FATIGUE_BASIS_FIELDS = (
+    "authority",
+    "method",
+    "spectrum_source",
+    "cycle_count_source",
+    "dynamic_effects",
+    "cycle_counting",
+    "concurrence_basis",
+    "atypical_traffic",
+    "approval_reference",
+    "authority_adjustments",
+    "notes",
 )
 FATIGUE_FACTOR_MODES = (
     codes.FACTOR_MODE_PRESET,
@@ -2183,6 +2196,7 @@ def validate_fatigue_publication_context(
         "concrete_miner_basis",
         "concrete_miner_source",
         "parameter_conformance",
+        "basis",
         "errors",
     }
     errors: list[str] = []
@@ -2233,6 +2247,30 @@ def validate_fatigue_publication_context(
                 errors.append(
                     f"current fatigue publication context: {item.strip()}"
                 )
+
+    raw_basis = context.get("basis")
+    basis: dict[str, str] = {}
+    if (
+        not isinstance(raw_basis, Mapping)
+        or set(raw_basis) != set(FATIGUE_BASIS_FIELDS)
+    ):
+        errors.append(
+            "current fatigue publication basis fields are incomplete or unknown"
+        )
+        raw_basis = {}
+    for key in FATIGUE_BASIS_FIELDS:
+        value = raw_basis.get(key)
+        if not isinstance(value, str):
+            errors.append(
+                f"current fatigue publication basis {key} is not typed text"
+            )
+            value = ""
+        elif value != value.strip():
+            errors.append(
+                f"current fatigue publication basis {key} is not canonical text"
+            )
+            value = value.strip()
+        basis[key] = value
 
     text_values: dict[str, str] = {}
     for key in (
@@ -2342,6 +2380,7 @@ def validate_fatigue_publication_context(
         **text_values,
         "gamma_ff": gamma_ff,
         "checks": checks,
+        "basis": basis,
         "records_by_id": records_by_id,
     }, ()
 
@@ -2455,6 +2494,17 @@ def _publication_fatigue_row_records(
                 f"stored {label} row {row_index} {row_key} conflicts with "
                 "current fatigue inputs"
             )
+    stored_basis = row.get("fatigue_basis")
+    if not isinstance(stored_basis, Mapping):
+        errors.append(
+            f"stored {label} row {row_index} fatigue basis is missing or "
+            "malformed"
+        )
+    elif dict(stored_basis) != fatigue_context.get("basis"):
+        errors.append(
+            f"stored {label} row {row_index} fatigue basis conflicts with "
+            "current fatigue inputs"
+        )
     try:
         stored_gamma_ff = _real(
             row.get("fatigue_gamma_ff"),
@@ -2509,6 +2559,7 @@ def _publication_parameter_evidence_errors(
             "fatigue_factor_mode",
             "fatigue_factor_approval",
             "fatigue_gamma_ff",
+            "fatigue_basis",
         }
         if label == "concrete-fatigue":
             marker_fields.update({
