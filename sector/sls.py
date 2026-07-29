@@ -2368,24 +2368,18 @@ def danish_bridge_crack_result_issues(
             *issues,
             "Danish bridge crack responses are not a structured mapping.",
         ]))
-    has_numeric_width = any(
-        isinstance(response, Mapping)
-        and crack_width_numeric_value(response.get("wk")) is not None
-        for response in responses.values()
-    )
-    if has_numeric_width:
-        required = {
-            "Long-term (fine)",
-            "Total (fine)",
-            "Long-term (coarse)",
-            "Total (coarse)",
-        }
-        missing = sorted(required.difference(responses))
-        if missing:
-            issues.append(
-                "Danish bridge calculated crack evidence omits required "
-                f"fine/coarse responses: {', '.join(missing)}."
-            )
+    required = {
+        "Long-term (fine)",
+        "Total (fine)",
+        "Long-term (coarse)",
+        "Total (coarse)",
+    }
+    missing = sorted(required.difference(responses))
+    if missing:
+        issues.append(
+            "Danish bridge calculated crack evidence omits required "
+            f"fine/coarse responses: {', '.join(missing)}."
+        )
     return tuple(dict.fromkeys(issues))
 
 
@@ -2851,15 +2845,6 @@ def publication_safe_crack_control_record(
             response_rows = (
                 responses if isinstance(responses, list) else ()
             )
-            has_numeric_width = any(
-                isinstance(response, Mapping)
-                and crack_width_numeric_value(
-                    response.get("wk_mm")
-                ) is not None
-                for response in response_rows
-            )
-            if not has_numeric_width:
-                continue
             names = {
                 str(response.get("name") or "").strip()
                 for response in response_rows

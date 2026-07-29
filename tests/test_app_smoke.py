@@ -2161,6 +2161,52 @@ def test_danish_bridge_applies_related_dk_na_crack_numerics():
     ] == danish["crack_numerical_method"]
 
 
+def test_danish_bridge_uncracked_keeps_four_not_applicable_responses():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 1.0),
+        ("number_input", "el_short_Mx", 0.0),
+        ("checkbox", "sls_cw", True),
+    )
+
+    assert not at.exception
+    elastic = at.session_state["results"]["elastic"]
+    assert elastic["cracked"] is False
+    required = {
+        "Long-term (fine)",
+        "Total (fine)",
+        "Long-term (coarse)",
+        "Total (coarse)",
+    }
+    assert set(elastic["crack_responses"]) == required
+    assert all(
+        elastic["crack_responses"][name] is None
+        for name in required
+    )
+    assert set(elastic["crack_dispositions"]) == required
+    assert all(
+        elastic["crack_dispositions"][name]["status"]
+        == "NOT APPLICABLE"
+        for name in required
+    )
+    crack_record = at.session_state["calculation_record"][
+        "crack_control"
+    ]
+    assert crack_record["numerical_method"]["schema"] == (
+        sls.CRACK_NUMERICAL_METHOD_SCHEMA
+    )
+    assert {
+        response["name"]
+        for response in crack_record["cases"][0]["responses"]
+    } == required
+
+
 def test_danish_bridge_stale_base_crack_session_fails_closed_in_ui():
     at = _fresh().run()
     at.selectbox(key="design_methodology").set_value(

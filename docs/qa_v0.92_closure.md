@@ -1294,3 +1294,19 @@ mandatory; this matrix does not self-certify PR closure.
   36-37 ending boundary were inspected with the same result. Exact remediation
   SHA, current-head Codex Review, the replacement one-run GitHub full-suite
   gate and independent closure remain pending.
+- Codex Review of exact head
+  `226dd741a66689673cc5edc5c767e9510e1e1184` identified one P2
+  completeness gap in the uncracked Danish branch. It emitted the two inherited
+  response identities with `NOT APPLICABLE` dispositions, so raw, durable and
+  PDF validators could skip the four-name fine/coarse contract when no response
+  was numeric.
+- The Danish uncracked branch now emits all four fine/coarse response
+  identities with explicit `NOT APPLICABLE` dispositions. Raw bridge and
+  durable/report publication validation require all four identities regardless
+  of whether a width is numeric; deleting one converts the evidence to
+  `NOT ASSESSED`. The two direct red/green controls pass, the bounded PR-05 plus
+  changed-module gate is green at 548 checks (133 PR-05 and 415
+  SLS/bridge-adapter/project checks), all six focused Streamlit/cache/autosave
+  controls pass, and the valid-versus-legacy-two-response PDF controls are
+  green. Exact corrective SHA, rereview and the replacement one-run GitHub
+  full-suite gate remain pending.

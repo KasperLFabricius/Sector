@@ -7788,18 +7788,30 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     "Total (coarse)": _disposition(crack_short_coarse),
                 }
         elif inp["sls_cw"]:
-            out["elastic"]["crack_dispositions"] = {
-                "Long-term": {
-                    "status": "NOT APPLICABLE",
-                    "reason": "The section remained uncracked.",
-                    "scope": None,
-                },
-                "Total (long + short)": {
-                    "status": "NOT APPLICABLE",
-                    "reason": "The section remained uncracked.",
-                    "scope": None,
-                },
+            not_applicable = {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+                "scope": None,
             }
+            if dk_na:
+                out["elastic"].update(
+                    crack_coarse=None,
+                    crack_short_coarse=None,
+                    crack_dispositions={
+                        name: dict(not_applicable)
+                        for name in (
+                            "Long-term (fine)",
+                            "Total (fine)",
+                            "Long-term (coarse)",
+                            "Total (coarse)",
+                        )
+                    },
+                )
+            else:
+                out["elastic"]["crack_dispositions"] = {
+                    "Long-term": dict(not_applicable),
+                    "Total (long + short)": dict(not_applicable),
+                }
         eout = out["elastic"]
         if (
             "crack_coarse" in eout

@@ -813,6 +813,42 @@ def test_danish_crack_publication_requires_fine_coarse_method_provenance():
     assert evidence.status == bridge.STATUS_FAIL
 
 
+def test_uncracked_danish_publication_requires_all_four_response_identities():
+    expected = sls.expected_danish_bridge_crack_numerical_method(
+        _dk_numerical_method_inputs()
+    )
+    record = _dk_numerical_crack_control_record()
+    case = record["cases"][0]
+    case["assessment"] = {
+        "status": "NOT ASSESSED",
+        "verdict": "REVIEW",
+        "reason": "The section remained uncracked.",
+        "criteria": [],
+    }
+    for response in case["responses"]:
+        response["wk_mm"] = None
+        response["solver_status"] = "NOT APPLICABLE"
+        response["solver_reason"] = "The section remained uncracked."
+
+    accepted = sls.publication_safe_crack_control_record(
+        record,
+        expected_numerical_method=expected,
+    )
+    assert accepted["publication_validation"]["status"] == "ACCEPTED"
+
+    incomplete = copy.deepcopy(record)
+    incomplete["cases"][0]["responses"].pop()
+    rejected = sls.publication_safe_crack_control_record(
+        incomplete,
+        expected_numerical_method=expected,
+    )
+    assert rejected["publication_validation"]["status"] == "REJECTED"
+    assert "omits required fine/coarse responses" in (
+        rejected["publication_validation"]["reason"]
+    )
+    assert rejected["cases"][0]["assessment"]["status"] == "NOT ASSESSED"
+
+
 def test_danish_crack_route_fails_closed_on_missing_conflicting_or_moderate_class():
     base = {
         "asset_class": "road",

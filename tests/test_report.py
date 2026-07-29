@@ -2636,6 +2636,59 @@ def test_report_rejects_rehashed_danish_crack_result_after_check_disabled():
     assert "PASS - Crack width" not in compact
 
 
+def test_report_rejects_uncracked_danish_legacy_two_response_snapshot():
+    out = _out()
+    elastic = out["elastic"]
+    elastic.update({
+        "cracked": False,
+        "crack": None,
+        "crack_short": None,
+        "crack_responses": {
+            "Long-term": None,
+            "Total (long + short)": None,
+        },
+        "crack_dispositions": {
+            "Long-term": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+            },
+            "Total (long + short)": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+            },
+        },
+        "crack_code": bridge.EN1992_2_DK_NA,
+        "crack_edition": sls.EDITION_BRIDGE_DK_2015,
+        "crack_member": "Beam",
+    })
+    elastic.pop("crack_coarse", None)
+    elastic.pop("crack_short_coarse", None)
+    inp = {
+        **_inp(),
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "sls_has_tendons": False,
+    }
+    elastic["crack_numerical_method"] = (
+        sls.expected_danish_bridge_crack_numerical_method(inp)
+    )
+
+    text = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "omits required fine/coarse responses" in compact
+    assert "PASS - Crack width" not in compact
+
+
 def test_report_shows_coarse_only_results():
     # DK NA edge case: the fine (h-x)/3 band has no tension bar but the coarse
     # centroid-matched band does. The report must still show the coarse widths, not
