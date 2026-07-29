@@ -6782,6 +6782,115 @@ def _fatigue_bound_snapshot():
     )
 
 
+def test_autosave_validation_receives_canonical_bridge_tables(
+    tmp_path,
+    monkeypatch,
+):
+    import bridge_inputs
+    import project_io
+    import sector_app
+
+    coverage = bridge_inputs.table_from_records(
+        [
+            {
+                "check_id": check_id,
+                "applicability": (
+                    bridge.REQUIRED
+                    if check_id == "reinforcement_fatigue"
+                    else bridge.NOT_APPLICABLE
+                ),
+                "source": f"DB-{check_id}",
+                "notes": "",
+            }
+            for check_id in bridge.APPLICABILITY_CHECK_IDS
+        ],
+        bridge_inputs.COVERAGE_TABLE_KEY,
+    )
+    tables = {bridge_inputs.COVERAGE_TABLE_KEY: coverage}
+    scalars = {"design_methodology": bridge.EN1992_2_DK_NA}
+    digest = project_io.input_sha256(tables, scalars)
+    calculation = {
+        "input_sha256": digest,
+        "matches_saved_inputs": True,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: (tables, scalars),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: digest,
+    )
+    publication_calls = []
+
+    def capture_publication(
+        raw_calculation,
+        *,
+        calculation_inputs,
+        input_digest,
+    ):
+        publication_calls.append(calculation_inputs)
+        assert input_digest == digest
+        return raw_calculation
+
+    monkeypatch.setattr(
+        project_io,
+        "publication_safe_calculation_record",
+        capture_publication,
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_write_autosave",
+        lambda _data, _path: True,
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    assert len(publication_calls) == 2
+    autosave_inputs = publication_calls[0]
+    assert bridge_inputs.COVERAGE_TABLE_KEY in autosave_inputs
+    applicability = {
+        decision.check_id: decision.applicability
+        for decision in bridge_inputs.decisions(
+            autosave_inputs[bridge_inputs.COVERAGE_TABLE_KEY]
+        )
+    }
+    assert applicability["reinforcement_fatigue"] == bridge.REQUIRED
+    assert applicability["concrete_fatigue"] == bridge.NOT_APPLICABLE
+
+
 def test_live_fatigue_view_rejects_missing_basis_on_bound_payload(monkeypatch):
     import sector_app
 

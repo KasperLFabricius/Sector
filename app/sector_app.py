@@ -3112,18 +3112,26 @@ def _perform_autosave() -> bool:
         return False
     try:
         current_tables, current_scalars = _project_state()
-        publication_scalars = project_io._canonical_inputs(
+        canonical_inputs = project_io._canonical_inputs(
             current_tables,
             current_scalars,
-        )["scalars"]
+        )
+        publication_inputs = dict(canonical_inputs["scalars"])
+        # Danish fatigue applicability is owned by the bridge coverage table;
+        # autosave must validate against the same complete map as project save.
+        publication_inputs.update(
+            project_io._bridge_tables_from_payload(
+                canonical_inputs.get("bridge")
+            )
+        )
     except Exception:
-        publication_scalars = {}
+        publication_inputs = {}
     record_changed_by_validation = False
     calculation = st.session_state.get("calculation_record")
     if isinstance(calculation, Mapping):
         safe_calculation = project_io.publication_safe_calculation_record(
             calculation,
-            calculation_inputs=publication_scalars,
+            calculation_inputs=publication_inputs,
             input_digest=digest,
         )
         if safe_calculation != calculation:

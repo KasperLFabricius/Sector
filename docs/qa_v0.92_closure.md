@@ -1178,3 +1178,23 @@ mandatory; this matrix does not self-certify PR closure.
   affected-page/boundary evidence remains applicable. Exact remediation SHA,
   exact-head rereview and the one completed GitHub full-suite gate remain
   pending.
+- Codex rereview of exact head
+  `7f953a9d0da8d1010b3731cc34a80b15d4746fe2` identified one P1
+  autosave-correlation gap. The routine autosave pre-publication call supplied
+  only canonical scalars even though Danish reinforcement/concrete fatigue
+  applicability is owned by the canonical bridge coverage table. A valid
+  result could therefore be revalidated against `NOT ESTABLISHED`
+  applicability and have its durable calculation record rejected during
+  autosave. One focused red control captured the first autosave publication
+  call and proved the bridge table was absent. Provisional run `30415287050`
+  was canceled before completion while rereview was pending and is not counted
+  as the single exact-head CI gate.
+- Autosave now builds the same complete publication input mapping as project
+  download/save: canonical scalars plus independently rehydrated canonical
+  bridge tables. The strict Danish publication validator is unchanged and
+  therefore continues to reject stale or contradictory evidence while
+  preserving a valid result whose coverage applicability matches its
+  calculation snapshot. The direct red/green control passes, and the focused
+  12-check autosave/download/session provenance slice is green. Exact
+  remediation SHA, exact-head rereview and the one completed GitHub full-suite
+  gate remain pending.
