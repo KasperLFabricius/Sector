@@ -1543,10 +1543,37 @@ mandatory; this matrix does not self-certify PR closure.
   suites are green at 252 checks, and the production-independent
   boundary/symmetry oracle remains green. No report/manual content changed in
   this remediation.
+- The current-schema correction was committed as
+  `fb1261ad16aa6547462139151801d378d9f25193` (tree
+  `18aed0528ae6c84a1b56289c57d772d5f4197c8d`). Exact-head Codex Review found
+  no P1 and one publication-overlay P2, `3674461270`: rejection changed the
+  conclusion but left rejected utilisation, formula, parameters, terms and
+  copied aggregate components available to the PDF renderer.
+- A rejected interaction overlay is now rebuilt from minimal immutable
+  rejection metadata rather than copied from the unusable aggregate. It carries
+  no calculation, source/authority, domain/axis or copied component fields;
+  current crack responses and directional `Vx`/`Vy` results remain outside that
+  overlay and are preserved. Current crack input selects the report case, so
+  removing rejected aggregate criterion/configuration data does not hide the
+  rejection at a multi-case report boundary.
+- The updated raw/publication/report control injects uniquely identifiable
+  hostile aggregate formula, parameter, term, source, approval and component
+  data and proves none survives publication, while both independent passing
+  shear directions remain. A separate multi-case control proves the rejected
+  crack overlay is routed from current input to only its selected Elastic case
+  while both current crack assessments survive. The focused
+  interaction/project matrix is green at 254 checks, ten affected crack/shear
+  report checks and two Streamlit/session/autosave/download checks pass, and
+  the independent boundary/symmetry oracle remains green. The issued rejection
+  fixture contains no aggregate formula or utilisation. Visual inspection of
+  affected pages 7 and 11 plus pagination neighbors 6, 8, 10 and 12 found clear
+  rejection wording, retained component calculations, legible
+  equations/tables, and no clipping or overlap.
 - Exact final corrective SHA, current-head Codex rereview, the replacement
   exact-head GitHub full-suite gate, independent exact-SHA closure and merge
   remain pending. All automatically started superseded-head CI runs, including
   the runs for rejected heads
-  `4c788df95bc1edb095ba7012bb3919c095bc552c` and
-  `3f8aa13392b7ec74c9a2ac1dc6478dd663eeb2d3`, are not counted as the required
+  `4c788df95bc1edb095ba7012bb3919c095bc552c`,
+  `3f8aa13392b7ec74c9a2ac1dc6478dd663eeb2d3` and
+  `fb1261ad16aa6547462139151801d378d9f25193`, are not counted as the required
   final exact-head gate.

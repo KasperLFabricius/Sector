@@ -1862,6 +1862,110 @@ def test_publication_safe_results_retains_components_on_rejection():
     assert safe["shear"]["interaction"]["status"] == "NOT ASSESSED"
 
 
+def test_rejected_publication_overlay_strips_untrusted_aggregate_calculation():
+    results = _shear_case(0.2, 1.0, 0.3, 1.0)
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(),
+    }
+    multidirectional.apply_to_results(inputs, results)
+
+    forged = copy.deepcopy(results["shear"]["interaction"])
+    forged.update({
+        "utilisation": 0.000123456789,
+        "formula": "UNTRUSTED AGGREGATE FORMULA QA-06",
+        "parameters": {"untrusted_parameter": 123456.0},
+        "terms": [{"id": "untrusted-term", "value": 987654.0}],
+        "source": "UNTRUSTED AGGREGATE SOURCE QA-06",
+        "approval": "UNTRUSTED AGGREGATE APPROVAL QA-06",
+    })
+    forged["components"][0]["axis"] = (
+        "UNTRUSTED AGGREGATE COMPONENT QA-06"
+    )
+    forged = _reseal_result(forged)
+    results["shear"]["interaction"] = copy.deepcopy(forged)
+    results["shear_interactions"][0]["interaction"] = copy.deepcopy(forged)
+
+    safe = multidirectional.publication_safe_results(
+        results,
+        current_inputs=inputs,
+    )
+    aggregate = safe["shear"]["interaction"]
+
+    assert aggregate["status"] == "NOT ASSESSED"
+    assert aggregate["qualification"] == "PUBLICATION REJECTED"
+    assert aggregate["components"] == []
+    assert {
+        "utilisation",
+        "formula",
+        "parameters",
+        "terms",
+        "axes",
+        "domain",
+        "source",
+        "resistance_source",
+        "approval",
+        "authority",
+        "calculation_saturated",
+        "rotationally_invariant",
+    }.isdisjoint(aggregate)
+    assert set(safe["shear"]["directions"]) == {"vx", "vy"}
+    assert all(
+        item["status"] == "PASS"
+        for item in safe["shear"]["directions"].values()
+    )
+    assert "UNTRUSTED AGGREGATE" not in json.dumps(safe, sort_keys=True)
+
+
+def test_rejected_crack_overlay_uses_current_case_without_aggregate_binding():
+    inputs = {
+        **multidirectional.shear_configuration({}),
+        **_crack_input(multidirectional.CRACK_METHOD_PROJECT),
+        "crack_interaction_domain_confirmed": True,
+        "crack_interaction_component_x_mm": 0.1,
+        "crack_interaction_component_y_mm": 0.1,
+        "crack_interaction_limit_x_mm": 0.3,
+        "crack_interaction_limit_y_mm": 0.3,
+        "crack_interaction_source": "CR-06",
+        "crack_interaction_approval": "AC-06",
+    }
+    results = _crack_results()
+    multidirectional.apply_to_results(inputs, results)
+    selected = results.pop("elastic")
+    other = copy.deepcopy(selected)
+    other.pop("crack_interaction", None)
+    results["elastic_cases"] = [
+        {
+            "name": "SLS-01",
+            "results": {"elastic": selected},
+        },
+        {
+            "name": "SLS-OTHER",
+            "results": {"elastic": other},
+        },
+    ]
+    results["crack_interaction"]["utilisation"] = 0.0
+
+    safe = multidirectional.publication_safe_results(
+        results,
+        current_inputs=inputs,
+    )
+    by_case = {
+        item["name"]: item["results"]["elastic"]
+        for item in safe["elastic_cases"]
+    }
+    rejected = by_case["SLS-01"]["crack_interaction"]
+
+    assert rejected["qualification"] == "PUBLICATION REJECTED"
+    assert rejected["components"] == []
+    assert "configuration" not in rejected
+    assert "criterion" not in rejected
+    assert "formula" not in rejected
+    assert "crack_interaction" not in by_case["SLS-OTHER"]
+    assert by_case["SLS-01"]["crack_assessment"]["status"] == "OK"
+    assert by_case["SLS-OTHER"]["crack_assessment"]["status"] == "OK"
+
+
 def test_publication_reassesses_sealed_evidence_against_current_solver_results():
     shear_inputs = {
         **multidirectional.crack_configuration({}),

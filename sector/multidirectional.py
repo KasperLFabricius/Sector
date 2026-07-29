@@ -3265,23 +3265,37 @@ def _rejected_publication_result(
     raw: Mapping,
     issues: Sequence[str],
 ) -> dict:
-    safe = copy.deepcopy(dict(raw))
-    safe.update(
-        interaction_assessed=False,
-        status="NOT ASSESSED",
-        verdict="REVIEW",
-        qualification="PUBLICATION REJECTED",
-        reason=(
+    unique_issues = list(dict.fromkeys(
+        str(issue)
+        for issue in issues
+        if str(issue).strip()
+    ))
+    raw_kind = raw.get("kind")
+    kind = raw_kind if raw_kind in {"crack", "shear"} else "interaction"
+    safe = {
+        "schema": INTERACTION_RESULT_SCHEMA,
+        "kind": kind,
+        "method_name": "Rejected aggregate interaction evidence",
+        "interaction_assessed": False,
+        "status": "NOT ASSESSED",
+        "verdict": "REVIEW",
+        "qualification": "PUBLICATION REJECTED",
+        # This is deliberately empty. The interaction's copied components are
+        # part of the rejected aggregate evidence, not the independently
+        # verified crack responses or directional shear results retained by
+        # publication_safe_results.
+        "components": [],
+        "issues": [],
+        "reason": (
             "Stored multidirectional evidence was rejected; recalculate before "
             "publishing a combined conclusion. "
-            + "; ".join(dict.fromkeys(issues))
+            + "; ".join(unique_issues)
         ),
-        publication_validation={
+        "publication_validation": {
             "status": "REJECTED",
-            "issues": list(dict.fromkeys(issues)),
+            "issues": unique_issues,
         },
-    )
-    safe.pop("evidence_fingerprint", None)
+    }
     return _seal_result(safe)
 
 
@@ -4007,7 +4021,13 @@ def publication_safe_results(
         if isinstance(crack, Mapping)
         else None
     )
-    selected_case = _crack_case_identity(crack)
+    selected_case = ""
+    if current_inputs.get("crack_interaction_on") is True:
+        configured_case = current_inputs.get("crack_interaction_case_id")
+        if isinstance(configured_case, str):
+            selected_case = configured_case.strip()
+    if not selected_case:
+        selected_case = _crack_case_identity(crack)
     elastic_entries = safe_results.get("elastic_cases")
     if isinstance(elastic_entries, list):
         for entry in elastic_entries:

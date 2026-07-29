@@ -3181,6 +3181,9 @@ def test_report_rejects_conflicting_interaction_representations_but_keeps_vx_vy(
     assert "PUBLICATION REJECTED" in txt
     assert "top-level and current-case shear interaction evidence conflict" in txt
     assert "APPROVED CUSTOM PASS" not in txt
+    assert "eta = (abs(Vx)/VRd,x)^p + (abs(Vy)/VRd,y)^p" not in txt
+    assert "utilisation 0.0000" not in txt
+    assert "Project DB clause INT-06" not in txt
 
 
 def test_report_rejects_jointly_resealed_directional_truncation():
