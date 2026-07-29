@@ -891,10 +891,9 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
                 scalar_payload[fatigue_inputs.BASIS_KEY]
             )
         )
-    elif (
-        scalar_payload.get("fatigue_on")
-        or "fatigue_source" in scalar_payload
-    ):
+    elif scalar_payload.get("fatigue_on"):
+        raise ValueError("fatigue basis is required when fatigue is enabled")
+    elif "fatigue_source" in scalar_payload:
         basis = fatigue_inputs.default_basis()
         basis["spectrum_source"] = str(
             scalar_payload.get("fatigue_source") or ""
@@ -1039,6 +1038,7 @@ def publication_safe_calculation_record(
             fatigue_analysis.publication_safe_conformance_record(
                 calculation.get("fatigue_conformance"),
                 design_methodology=design_methodology,
+                current_basis=current_inputs.get(fatigue_inputs.BASIS_KEY),
             )
         )
         if record["fatigue_conformance"] is None:
@@ -1315,6 +1315,11 @@ def parse_project(text: str):
         scalars[fatigue_inputs.BASIS_KEY] = normalise_current_basis(
             scalars[fatigue_inputs.BASIS_KEY]
         )
+    elif (
+        data.get("version", 1) >= VERSION
+        and bool(scalars.get("fatigue_on"))
+    ):
+        raise ValueError("fatigue basis is required when fatigue is enabled")
     elif (
         bool(scalars.get("fatigue_on"))
         or "fatigue_source" in raw_scalars

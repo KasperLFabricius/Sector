@@ -1146,3 +1146,35 @@ mandatory; this matrix does not self-certify PR closure.
   37-page manual page evidence remains applicable. Exact remediation SHA,
   exact-head rereview and the one completed GitHub full-suite gate remain
   pending.
+- Codex rereview of exact head
+  `67f7e421872fa7948e7160e759e1007bea368724` identified two further P1
+  correlation gaps. First, a complete internally consistent fatigue result
+  could carry an earlier canonical basis while the current live or report input
+  carried a different complete basis; the shared publication boundary did not
+  compare those two snapshots. Second, a current v21 project with active
+  fatigue could omit the entire basis mapping and reach the legacy neutral-basis
+  seeding path. Six focused controls were added before remediation: five
+  reproduced the stale live/PDF/durable or missing-current-project failures,
+  while the pre-v21 neutral migration control remained green. Provisional run
+  `30413736456` was canceled after the findings and is not counted as the
+  single exact-head CI gate.
+- The shared fatigue publication API now requires the caller's current
+  canonical basis and exact equality with the result-bound basis. Bridge
+  adapters, live results, report generation, calculation-record creation and
+  durable project revalidation all pass the basis from their own immutable
+  current input snapshot; a missing, malformed, Boolean, incomplete or stale
+  value fails publication closed. Current v21 active-fatigue save and load
+  reject an omitted basis mapping, while pre-v21 migration alone may seed the
+  explicit neutral incomplete basis. No calculation coefficient or inherited
+  PR-04 numerical route changes.
+- Pre-commit compatibility evidence after this remediation is green: the six
+  direct red/green controls, all 65 fatigue-analysis tests, all 142 project-I/O
+  tests, 27 focused fatigue Streamlit tests, 14 focused fatigue-report tests,
+  and all 123 PR-05 rule/oracle/adversarial tests. The standalone independent
+  oracle and all four canonical report/manual rendered-artifact boundaries also
+  pass. The report change only supplies current correlation evidence to the
+  existing sanitizer, so the valid canonical output and pagination are
+  unchanged; the previously inspected 16-page report and 37-page manual
+  affected-page/boundary evidence remains applicable. Exact remediation SHA,
+  exact-head rereview and the one completed GitHub full-suite gate remain
+  pending.

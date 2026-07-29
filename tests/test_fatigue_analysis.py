@@ -873,6 +873,7 @@ def test_bridge_standard_c100_is_analysed_but_never_published_as_standard_pass()
     safe = fatigue_analysis.publication_safe_result(
         result,
         design_methodology=bridge.EN1992_2_BASE,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
     custom_life = fatigue_core.concrete_fatigue_life(
         8.0,
@@ -997,6 +998,7 @@ def test_fatigue_publication_preserves_nonconforming_analysis_as_review(
     safe = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=methodology,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
 
     assert safe["errors"] == ()
@@ -1028,6 +1030,7 @@ def test_fatigue_publication_rejects_top_level_method_relabel():
     safe = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=bridge.EN1992_2_BASE,
+        current_basis=_basis(),
     )
 
     assert safe["valid"] is False
@@ -1065,6 +1068,7 @@ def test_fatigue_publication_rejects_malformed_error_container(raw_errors):
     safe = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=_basis(),
     )
 
     assert safe["valid"] is False
@@ -1111,6 +1115,7 @@ def test_fatigue_publication_binds_miner_basis_to_calculation_methodology(
     unchanged = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
     assert unchanged["errors"] == ()
     assert unchanged["passed"] is True
@@ -1120,6 +1125,7 @@ def test_fatigue_publication_binds_miner_basis_to_calculation_methodology(
     safe = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
 
     assert safe["valid"] is False
@@ -1144,6 +1150,7 @@ def test_fatigue_publication_accepts_bound_bridge_methodology_control():
     safe = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=bridge.EN1992_2_BASE,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
 
     assert safe["errors"] == ()
@@ -1159,8 +1166,9 @@ def test_fatigue_publication_accepts_bound_bridge_methodology_control():
     ["missing", "incomplete", "unknown", "boolean"],
 )
 def test_common_fatigue_publication_rejects_malformed_basis(attack):
+    inp = _base()
     payload = fatigue_analysis.run_analysis(
-        _base(),
+        inp,
         engine=_passing_engine,
     )
     if attack == "missing":
@@ -1175,6 +1183,7 @@ def test_common_fatigue_publication_rejects_malformed_basis(attack):
     safe = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
 
     assert safe["valid"] is False
@@ -1184,6 +1193,38 @@ def test_common_fatigue_publication_rejects_malformed_basis(attack):
     assert fatigue_analysis.calculation_conformance_record(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
+    ) is None
+
+
+def test_common_fatigue_publication_correlates_basis_with_current_inputs():
+    inp = _base()
+    payload = fatigue_analysis.run_analysis(
+        inp,
+        engine=_passing_engine,
+    )
+    current_basis = {
+        **inp[fatigue_inputs.BASIS_KEY],
+        "notes": "Current edited basis",
+    }
+
+    safe = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=current_basis,
+    )
+
+    assert safe["valid"] is False
+    assert safe["passed"] is False
+    assert safe["standard_passed"] is False
+    assert any(
+        "basis conflicts with the calculation input snapshot" in error
+        for error in safe["errors"]
+    )
+    assert fatigue_analysis.calculation_conformance_record(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=current_basis,
     ) is None
 
 
@@ -1207,10 +1248,12 @@ def test_custom_fatigue_conformance_record_preserves_values_and_approval():
     record = fatigue_analysis.calculation_conformance_record(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
     loaded = fatigue_analysis.publication_safe_conformance_record(
         json.loads(json.dumps(record)),
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
 
     assert record is not None
@@ -1233,13 +1276,15 @@ def test_custom_fatigue_conformance_record_preserves_values_and_approval():
 
 
 def test_fatigue_conformance_record_binds_canonical_basis():
+    inp = _base()
     payload = fatigue_analysis.run_analysis(
-        _base(),
+        inp,
         engine=_passing_engine,
     )
     record = fatigue_analysis.calculation_conformance_record(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
 
     assert record is not None
@@ -1250,6 +1295,7 @@ def test_fatigue_conformance_record_binds_canonical_basis():
     assert fatigue_analysis.publication_safe_conformance_record(
         mutated,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     ) is None
 
     incomplete = copy.deepcopy(record)
@@ -1264,17 +1310,20 @@ def test_fatigue_conformance_record_binds_canonical_basis():
     assert fatigue_analysis.publication_safe_conformance_record(
         incomplete,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     ) is None
 
 
 def test_fatigue_conformance_record_rejects_mutation_and_rehashed_relabel():
+    inp = _base()
     payload = fatigue_analysis.run_analysis(
-        _base(),
+        inp,
         engine=_passing_engine,
     )
     record = fatigue_analysis.calculation_conformance_record(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
     assert record is not None
 
@@ -1283,6 +1332,7 @@ def test_fatigue_conformance_record_rejects_mutation_and_rehashed_relabel():
     assert fatigue_analysis.publication_safe_conformance_record(
         mutated,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     ) is None
 
     relabelled = copy.deepcopy(record)
@@ -1297,10 +1347,12 @@ def test_fatigue_conformance_record_rejects_mutation_and_rehashed_relabel():
     assert fatigue_analysis.publication_safe_conformance_record(
         relabelled,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     ) is None
     assert fatigue_analysis.publication_safe_conformance_record(
         record,
         design_methodology=bridge.EN1992_2_BASE,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     ) is None
 
 
@@ -1339,8 +1391,9 @@ def test_fatigue_publication_rejects_top_level_conformance_relabel(
     value,
     message,
 ):
+    inp = _base()
     payload = fatigue_analysis.run_analysis(
-        _base(),
+        inp,
         engine=_passing_engine,
     )
     payload[field] = value
@@ -1348,6 +1401,7 @@ def test_fatigue_publication_rejects_top_level_conformance_relabel(
     safe = fatigue_analysis.publication_safe_result(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=inp[fatigue_inputs.BASIS_KEY],
     )
 
     assert safe["valid"] is False

@@ -470,6 +470,7 @@ class ReportBuilder:
                 # snapshot. A missing legacy/direct-caller field is unavailable
                 # evidence, not permission to invent component-method authority.
                 design_methodology=inp.get("design_methodology"),
+                current_basis=inp.get(fatigue_inputs.BASIS_KEY),
             )
         self.out = canonical_out
         # Keep the complete table-level payload available while the existing

@@ -605,6 +605,11 @@ def reinforcement_fatigue_evidence(
             if isinstance(inp, Mapping)
             else None
         ),
+        current_basis=(
+            inp.get(fatigue_inputs.BASIS_KEY)
+            if isinstance(inp, Mapping)
+            else None
+        ),
     )
     if not isinstance(payload, Mapping):
         return bridge.ExternalEvidence(
@@ -749,6 +754,11 @@ def concrete_fatigue_evidence(
         results.get("fatigue"),
         design_methodology=(
             inp.get("design_methodology")
+            if isinstance(inp, Mapping)
+            else None
+        ),
+        current_basis=(
+            inp.get(fatigue_inputs.BASIS_KEY)
             if isinstance(inp, Mapping)
             else None
         ),

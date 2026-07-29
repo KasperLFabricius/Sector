@@ -1935,6 +1935,8 @@ def test_app_restores_fatigue_inputs_into_the_ui():
         {
             fatigue_inputs.DETAIL_CATALOG_KEY:
                 fatigue_inputs.default_catalog(),
+            fatigue_inputs.BASIS_KEY:
+                fatigue_inputs.default_basis(),
             "fatigue_on": True,
             "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
             "fatigue_gamma0": 1.0,
@@ -2625,6 +2627,7 @@ def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
     }
     common = {
         "fatigue_on": True,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
         "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
         "fatigue_factor_approval": "DB-FACT-21 / checker F",
@@ -3194,6 +3197,8 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
         {
             fatigue_inputs.DETAIL_CATALOG_KEY:
                 fatigue_inputs.default_catalog(),
+            fatigue_inputs.BASIS_KEY:
+                fatigue_inputs.default_basis(),
             "fatigue_on": True,
             "fatigue_gamma_c": 1.595,
             "fatigue_source": "Previous project",
@@ -6773,6 +6778,7 @@ def _fatigue_bound_snapshot():
             },
         },
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=fatigue_inputs.default_basis(),
     )
 
 
@@ -6809,6 +6815,35 @@ def test_live_fatigue_view_rejects_missing_basis_on_bound_payload(monkeypatch):
     assert any(
         "fatigue basis" in message.lower()
         for message in rendered["markdown"]
+    )
+
+
+def test_live_fatigue_helper_rejects_stale_complete_basis():
+    import fatigue_inputs
+    import sector_app
+
+    payload = _fatigue_bound_snapshot()
+    assert payload is not None
+    current_basis = {
+        **fatigue_inputs.default_basis(),
+        "notes": "Current edited basis",
+    }
+
+    safe = sector_app._publication_safe_fatigue_result(
+        {
+            "fatigue_on": True,
+            "design_methodology": bridge.COMPONENT_METHODS,
+            fatigue_inputs.BASIS_KEY: current_basis,
+        },
+        {"fatigue": payload},
+    )
+
+    assert safe["valid"] is False
+    assert safe["passed"] is False
+    assert safe["standard_passed"] is False
+    assert any(
+        "basis conflicts with the calculation input snapshot" in error
+        for error in safe["errors"]
     )
 
 

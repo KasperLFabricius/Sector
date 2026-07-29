@@ -700,6 +700,25 @@ def test_report_rejects_missing_fatigue_basis_at_common_boundary():
     assert "PASS - STANDARD PASS | Traffic B" not in text
 
 
+def test_report_rejects_stale_complete_fatigue_basis_against_current_inputs():
+    inp, out = _fatigue_report_fixture()
+    inp[fatigue_inputs.BASIS_KEY] = {
+        **inp[fatigue_inputs.BASIS_KEY],
+        "notes": "Current edited basis",
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {"proj_no": "FAT-BASIS-STALE"},
+        inp,
+        out,
+        figures=False,
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "basis conflicts with the calculation input snapshot" in text
+    assert "PASS - STANDARD PASS | Traffic B" not in text
+
+
 def test_report_includes_dk_fatigue_factor_derivations():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]

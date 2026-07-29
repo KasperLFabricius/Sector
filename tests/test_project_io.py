@@ -665,6 +665,7 @@ def _bridge_miner_scalars(*, coefficient=14.0):
     return {
         "design_methodology": bridge.EN1992_2_BASE,
         "fatigue_on": True,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
         "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
@@ -1134,6 +1135,7 @@ def test_project_rejects_duplicate_bridge_coverage_rows_and_future_schema():
 def test_implicit_fatigue_factor_mode_round_trips_by_dedicated_approval():
     approved = {
         "fatigue_on": True,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": False,
@@ -1174,6 +1176,7 @@ def test_implicit_fatigue_factor_mode_round_trips_by_dedicated_approval():
 def test_missing_optional_factor_values_are_canonical_absences():
     absent = {
         "fatigue_on": True,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
         "fatigue_factor_approval": "DB-FACT-21 / checker F",
         "torsion_on": True,
@@ -1422,6 +1425,20 @@ def test_current_project_rejects_boolean_fatigue_basis_field():
         )
 
 
+def test_current_project_rejects_missing_basis_when_fatigue_is_active():
+    project = {
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": {"fatigue_on": True},
+    }
+
+    with pytest.raises(ValueError, match="fatigue basis is required"):
+        project_io.parse_project(json.dumps(project))
+    with pytest.raises(ValueError, match="fatigue basis is required"):
+        project_io.dump_project({}, {"fatigue_on": True})
+
+
 def test_legacy_project_migrates_incomplete_fatigue_basis_without_inference():
     partial = {
         "authority": fatigue_inputs.AUTHORITY_USER,
@@ -1441,6 +1458,19 @@ def test_legacy_project_migrates_incomplete_fatigue_basis_without_inference():
         **fatigue_inputs.default_basis(),
         "spectrum_source": "Legacy spectrum register",
     }
+
+
+def test_legacy_active_project_migrates_missing_fatigue_basis_neutrally():
+    project = {
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION - 1,
+        "tables": {},
+        "scalars": {"fatigue_on": True},
+    }
+
+    _tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars[fatigue_inputs.BASIS_KEY] == fatigue_inputs.default_basis()
 
 
 def test_v9_rejects_malformed_fatigue_section_and_spectrum_rows():
@@ -2013,11 +2043,16 @@ def _approved_custom_fatigue_conformance_record():
     return fatigue_analysis.calculation_conformance_record(
         payload,
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=fatigue_inputs.default_basis(),
     )
 
 
 def test_project_round_trip_retains_bound_fatigue_conformance_evidence():
-    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    scalars = {
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "fatigue_on": True,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
+    }
     digest = project_io.input_sha256({}, scalars)
     fatigue_record = _approved_custom_fatigue_conformance_record()
     assert fatigue_record is not None
@@ -2055,7 +2090,11 @@ def test_project_round_trip_retains_bound_fatigue_conformance_evidence():
 
 
 def test_project_drops_mutated_fatigue_conformance_evidence_fail_closed():
-    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
+    scalars = {
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "fatigue_on": True,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
+    }
     digest = project_io.input_sha256({}, scalars)
     fatigue_record = _approved_custom_fatigue_conformance_record()
     assert fatigue_record is not None
@@ -2075,6 +2114,33 @@ def test_project_drops_mutated_fatigue_conformance_evidence_fail_closed():
     assert saved["provenance"]["results_included"] is False
     restored = project_io.project_provenance(json.dumps(saved))
     assert restored["calculation"]["matches_saved_inputs"] is False
+
+
+def test_project_drops_fatigue_conformance_with_stale_complete_basis():
+    fatigue_record = _approved_custom_fatigue_conformance_record()
+    assert fatigue_record is not None
+    scalars = {
+        "design_methodology": bridge.COMPONENT_METHODS,
+        "fatigue_on": True,
+        fatigue_inputs.BASIS_KEY: {
+            **fatigue_inputs.default_basis(),
+            "notes": "Current edited basis",
+        },
+    }
+    digest = project_io.input_sha256({}, scalars)
+
+    saved = json.loads(project_io.dump_project(
+        {},
+        scalars,
+        calculation={
+            "input_sha256": digest,
+            "fatigue_conformance": fatigue_record,
+        },
+    ))
+
+    assert "fatigue_conformance" not in saved["calculation"]
+    assert saved["calculation"]["matches_saved_inputs"] is False
+    assert saved["provenance"]["results_included"] is False
 
 
 def test_project_preserves_explicit_false_publication_match_latch():

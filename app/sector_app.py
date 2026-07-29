@@ -9438,6 +9438,7 @@ def _publication_safe_fatigue_result(inp, results):
     return fatigue_analysis.publication_safe_result(
         (results or {}).get("fatigue"),
         design_methodology=(inp or {}).get("design_methodology"),
+        current_basis=(inp or {}).get(fatigue_inputs.BASIS_KEY),
     )
 
 
@@ -13052,6 +13053,7 @@ def _analysis_workspace(inp):
             fatigue_record = fatigue_analysis.calculation_conformance_record(
                 st.session_state["results"].get("fatigue"),
                 design_methodology=inp.get("design_methodology"),
+                current_basis=inp.get(fatigue_inputs.BASIS_KEY),
             )
             if fatigue_record is not None:
                 calculation_record["fatigue_conformance"] = fatigue_record

@@ -1609,8 +1609,9 @@ def publication_safe_result(
     payload: Mapping | None,
     *,
     design_methodology: str | None,
+    current_basis: Mapping | None,
 ) -> dict | None:
-    """Return a fail-closed fatigue payload for UI/report publication."""
+    """Return fatigue evidence correlated with the current input snapshot."""
 
     if not isinstance(payload, Mapping):
         return None
@@ -1677,6 +1678,21 @@ def publication_safe_result(
         errors.append(f"Published fatigue basis is invalid: {exc}")
     else:
         result["basis"] = dict(published_basis)
+    try:
+        correlated_basis = fatigue_inputs.canonical_basis(current_basis)
+    except (TypeError, ValueError) as exc:
+        correlated_basis = None
+        errors.append(
+            f"Current fatigue basis is invalid for publication correlation: {exc}"
+        )
+    if (
+        published_basis is not None
+        and correlated_basis is not None
+        and published_basis != correlated_basis
+    ):
+        errors.append(
+            "Published fatigue basis conflicts with the calculation input snapshot"
+        )
     checks = payload.get("checks")
     if not isinstance(checks, Mapping):
         errors.append("Published fatigue check selection is not structured")
@@ -1980,12 +1996,14 @@ def calculation_conformance_record(
     payload: Mapping | None,
     *,
     design_methodology: str | None,
+    current_basis: Mapping | None,
 ) -> dict | None:
     """Build immutable, compact fatigue conformance evidence for a project."""
 
     safe = publication_safe_result(
         payload,
         design_methodology=design_methodology,
+        current_basis=current_basis,
     )
     if (
         not isinstance(safe, Mapping)
@@ -2009,6 +2027,7 @@ def publication_safe_conformance_record(
     record: Mapping | None,
     *,
     design_methodology: str | None,
+    current_basis: Mapping | None,
 ) -> dict | None:
     """Revalidate saved fatigue evidence and reject mutation or relabelling."""
 
@@ -2030,6 +2049,7 @@ def publication_safe_conformance_record(
         rebuilt = calculation_conformance_record(
             body,
             design_methodology=design_methodology,
+            current_basis=current_basis,
         )
     except (TypeError, ValueError):
         return None
