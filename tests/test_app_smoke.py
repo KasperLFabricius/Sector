@@ -2268,6 +2268,60 @@ def test_bridge_method_switch_invalidates_base_crack_cache():
     assert elastic["crack_numerical_method"]["dk_na_applied"] is True
 
 
+def test_danish_crack_toggle_invalidates_elastic_context_cache_both_ways():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+    )
+
+    assert not at.exception
+    enabled_sig = at.session_state[
+        "result_elastic_case_context_sig"
+    ]
+    enabled = at.session_state["results"]["elastic"]
+    assert enabled["show_cw"] is True
+    assert enabled["crack_numerical_method"]["dk_na_applied"] is True
+
+    _set(at, ("checkbox", "sls_cw", False))
+    _calculate(at)
+
+    assert not at.exception
+    disabled_sig = at.session_state[
+        "result_elastic_case_context_sig"
+    ]
+    assert disabled_sig != enabled_sig
+    disabled = at.session_state["results"]["elastic"]
+    assert disabled["show_cw"] is False
+    assert disabled["crack_numerical_method"] is None
+    assert disabled["crack_code"] is None
+
+    _set(at, ("checkbox", "sls_cw", True))
+    _calculate(at)
+
+    assert not at.exception
+    reenabled_sig = at.session_state[
+        "result_elastic_case_context_sig"
+    ]
+    assert reenabled_sig != disabled_sig
+    reenabled = at.session_state["results"]["elastic"]
+    assert reenabled["show_cw"] is True
+    assert reenabled["crack_numerical_method"]["dk_na_applied"] is True
+    assert set(reenabled["crack_responses"]) == {
+        "Long-term (fine)",
+        "Total (fine)",
+        "Long-term (coarse)",
+        "Total (coarse)",
+    }
+
+
 def test_torsion_live_caption_prints_actual_danish_alpha_ct():
     at = _fresh().run()
     at.selectbox(key="design_methodology").set_value(

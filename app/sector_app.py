@@ -4186,7 +4186,7 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
-    "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_tendon_bond", "sls_tendon_xi",
     "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
     "sls_exposure_class", "sls_bridge_exposure_class",
@@ -6913,7 +6913,18 @@ def build_inputs(host=st):
     # Table actions live in their canonical frames, while the shared calculation
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.
-    _get = lambda keys: tuple(st.session_state.get(k) for k in keys)
+    def _signature_context_value(key):
+        # Crack applicability is owned by the canonical Elastic case table,
+        # not a standalone widget/session value. Bind its derived aggregate
+        # explicitly so enabling or disabling the last crack-width row also
+        # invalidates row-cache reuse.
+        if key == "sls_cw":
+            return bool(sls_cw)
+        return st.session_state.get(key)
+
+    _get = lambda keys: tuple(
+        _signature_context_value(key) for key in keys
+    )
 
     def _factor_signature_value(value):
         if value is None:

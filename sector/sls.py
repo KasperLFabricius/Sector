@@ -2380,6 +2380,46 @@ def danish_bridge_crack_result_issues(
             "Danish bridge calculated crack evidence omits required "
             f"fine/coarse responses: {', '.join(missing)}."
         )
+    non_numeric = [
+        name
+        for name in required.intersection(responses)
+        if (
+            not isinstance(responses.get(name), Mapping)
+            or crack_width_numeric_value(
+                responses[name].get("wk")
+            ) is None
+        )
+    ]
+    if non_numeric:
+        dispositions = elastic.get("crack_dispositions")
+        if not isinstance(dispositions, Mapping):
+            issues.append(
+                "Danish bridge non-numeric crack responses have no "
+                "structured solver disposition mapping."
+            )
+        else:
+            for name in sorted(non_numeric):
+                disposition = dispositions.get(name)
+                if not isinstance(disposition, Mapping):
+                    issues.append(
+                        "Danish bridge crack response "
+                        f"{name!r} has no structured solver disposition."
+                    )
+                    continue
+                if (
+                    _upper_text(disposition.get("status"))
+                    != "NOT APPLICABLE"
+                ):
+                    issues.append(
+                        "Danish bridge crack response "
+                        f"{name!r} has no matching NOT APPLICABLE solver "
+                        "disposition."
+                    )
+                elif not _optional_text(disposition.get("reason")):
+                    issues.append(
+                        "Danish bridge crack response "
+                        f"{name!r} has no solver disposition reason."
+                    )
     return tuple(dict.fromkeys(issues))
 
 

@@ -1310,3 +1310,20 @@ mandatory; this matrix does not self-certify PR closure.
   controls pass, and the valid-versus-legacy-two-response PDF controls are
   green. Exact corrective SHA, rereview and the replacement one-run GitHub
   full-suite gate remain pending.
+- Codex Review of corrective head
+  `b9a883b956f525adefc23096c5d17789c7726674` identified two further P2
+  provenance boundaries. The canonical Elastic case-table crack-width
+  applicability was absent from the shared row-cache context, and raw Danish
+  results could supply four non-numeric response identities without matching
+  solver dispositions.
+- The table-derived crack-width applicability is now part of the elastic
+  context signature, so enabled-to-disabled and disabled-to-enabled changes
+  rerun the row and respectively clear or rebuild the numerical method and
+  response evidence. Every non-numeric Danish fine/coarse response now requires
+  a matching structured `NOT APPLICABLE` disposition with a non-empty solver
+  reason; missing, malformed or conflicting disposition evidence makes the raw
+  bridge criterion `NOT ASSESSED`. Both red/green controls pass. The bounded
+  post-fix compatibility slice is green at 556 checks: 134 PR-05, 415
+  SLS/bridge-adapter/project checks and seven focused cache/UI controls. Exact
+  corrective SHA, rereview and the one-run GitHub full-suite gate remain
+  pending.

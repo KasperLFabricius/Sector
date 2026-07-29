@@ -849,6 +849,101 @@ def test_uncracked_danish_publication_requires_all_four_response_identities():
     assert rejected["cases"][0]["assessment"]["status"] == "NOT ASSESSED"
 
 
+def test_raw_uncracked_danish_requires_matching_solver_dispositions():
+    inp = _dk_numerical_method_inputs()
+    expected = sls.expected_danish_bridge_crack_numerical_method(inp)
+    required = (
+        "Long-term (fine)",
+        "Total (fine)",
+        "Long-term (coarse)",
+        "Total (coarse)",
+    )
+    elastic = {
+        "crack_numerical_method": expected,
+        "crack_responses": {name: None for name in required},
+        "crack_dispositions": {
+            name: {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+                "scope": None,
+            }
+            for name in required
+        },
+        "crack_assessment": {
+            "criteria": [{
+                "criterion_id": "bridge-dk-standard-width",
+                "kind": bridge.DANISH_DIRECT_CRACK_KIND,
+                "status": bridge.STATUS_NOT_APPLICABLE,
+                "matched_responses": [
+                    "Total (fine)",
+                    "Total (coarse)",
+                ],
+                "required_combination": sls.COMBINATION_FREQUENT,
+                "reason": "The section remained uncracked.",
+            }],
+        },
+    }
+
+    assert not sls.danish_bridge_crack_result_issues(elastic, inp)
+
+    attacks = (
+        ("missing collection", None),
+        ("malformed collection", []),
+        (
+            "missing response disposition",
+            {
+                name: disposition
+                for name, disposition in elastic[
+                    "crack_dispositions"
+                ].items()
+                if name != "Total (coarse)"
+            },
+        ),
+        (
+            "conflicting response disposition",
+            {
+                **elastic["crack_dispositions"],
+                "Total (coarse)": {
+                    "status": "CALCULATED",
+                    "reason": "Conflicts with the absent width.",
+                },
+            },
+        ),
+        (
+            "missing response disposition reason",
+            {
+                **elastic["crack_dispositions"],
+                "Total (coarse)": {
+                    "status": "NOT APPLICABLE",
+                    "reason": "",
+                },
+            },
+        ),
+    )
+    for _label, dispositions in attacks:
+        attacked = copy.deepcopy(elastic)
+        if dispositions is None:
+            attacked.pop("crack_dispositions")
+        else:
+            attacked["crack_dispositions"] = dispositions
+        issues = sls.danish_bridge_crack_result_issues(attacked, inp)
+        assert any("disposition" in issue for issue in issues)
+
+    attacked = copy.deepcopy(elastic)
+    attacked["crack_dispositions"].pop("Total (coarse)")
+    evidence = bridge_analysis.crack_evidence(
+        {
+            "elastic_cases": [{
+                "name": "DK uncracked",
+                "results": {"elastic": attacked},
+            }],
+        },
+        inp=inp,
+    )
+    assert evidence.status == bridge.STATUS_NOT_ASSESSED
+    assert "numerical crack-method evidence" in evidence.reason
+
+
 def test_danish_crack_route_fails_closed_on_missing_conflicting_or_moderate_class():
     base = {
         "asset_class": "road",
