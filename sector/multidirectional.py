@@ -2168,10 +2168,107 @@ def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
             )
         if not str(record.get("verdict") or "").upper().endswith(status):
             issues.append(f"{label} verdict contradicts its status")
-    elif assessed is True and status != "NOT APPLICABLE":
-        issues.append(
-            f"{label} is marked assessed without a PASS/FAIL conclusion"
-        )
+    else:
+        expected_nonpass_state = {
+            "NOT ASSESSED": (False, "REVIEW"),
+            "INVALID": (False, "REVIEW"),
+            "NOT APPLICABLE": (True, "NOT APPLICABLE"),
+        }.get(status)
+        if expected_nonpass_state is None:
+            issues.append(f"{label} has an unsupported conclusion status")
+        else:
+            expected_assessed, expected_verdict = expected_nonpass_state
+            if (
+                assessed is not expected_assessed
+                or str(record.get("verdict") or "").upper()
+                != expected_verdict
+            ):
+                issues.append(
+                    f"{label} non-pass assessment state or verdict is "
+                    "contradictory"
+                )
+        if record.get("utilisation") is not None:
+            issues.append(
+                f"{label} appears downgraded while retaining a calculated "
+                "utilisation"
+            )
+        if terms:
+            issues.append(
+                f"{label} appears downgraded while retaining interaction terms"
+            )
+        retained_conclusion_fields = [
+            key
+            for key in (
+                "angle",
+                "approval",
+                "authority",
+                "calculation_saturated",
+                "demand_resultant_rotationally_invariant",
+                "formula",
+                "parameters",
+                "resistance_source",
+                "rotation_scope",
+                "rotationally_invariant",
+                "source",
+            )
+            if record.get(key) not in (None, "", [], {})
+        ]
+        if record.get("qualification") not in (None, ""):
+            retained_conclusion_fields.append("qualification")
+        if retained_conclusion_fields:
+            issues.append(
+                f"{label} appears downgraded while retaining calculated "
+                "conclusion fields: "
+                + ", ".join(retained_conclusion_fields)
+            )
+        domain = record.get("domain")
+        if domain is not None and (
+            not isinstance(domain, Mapping)
+            or not isinstance(domain.get("checks"), Mapping)
+            or domain.get("satisfied") is not False
+        ):
+            issues.append(
+                f"{label} non-pass domain evidence is malformed or claims "
+                "a satisfied calculation domain"
+            )
+        raw_issues = record.get("issues")
+        if (
+            not isinstance(raw_issues, list)
+            or any(not isinstance(issue, str) for issue in raw_issues)
+            or not isinstance(record.get("reason"), str)
+            or not record.get("reason").strip()
+        ):
+            issues.append(
+                f"{label} non-pass reason or issue evidence is malformed"
+            )
+        if kind == "crack" and (
+            components
+            or any(
+                record.get(key) not in (None, "", [], {})
+                for key in (
+                    "axes",
+                    "criterion",
+                    "selected_crack_code",
+                    "selected_crack_edition",
+                )
+            )
+        ):
+            issues.append(
+                f"{label} appears downgraded while retaining crack "
+                "calculation evidence"
+            )
+        if (
+            kind == "shear"
+            and record.get("axes") is not None
+            and record.get("axes")
+            != {
+                "x": config.get("shear_interaction_axis_x"),
+                "y": config.get("shear_interaction_axis_y"),
+            }
+        ):
+            issues.append(
+                f"{label} retained shear axes contradict its configuration"
+            )
 
     if kind == "shear" and components:
         issues.extend(_shear_component_semantic_issues(components, label))
@@ -2895,6 +2992,95 @@ def _rejected_publication_result(
     return _seal_result(safe)
 
 
+def _active_method_cannot_be_not_assessed(
+    kind: str,
+    current_inputs: Mapping,
+    record: Mapping,
+) -> bool:
+    """Identify active, in-domain selections that require a real conclusion.
+
+    A malformed calculation may legitimately be ``INVALID`` and a uniaxial
+    shear state may be ``NOT APPLICABLE``.  Once the explicit method/domain
+    gates below are satisfied, however, production cannot emit the softer
+    ``NOT ASSESSED`` state.  This prevents a re-sealed PASS/FAIL from being
+    downgraded after its calculation evidence is removed.
+    """
+
+    if kind == "crack":
+        config = crack_configuration(current_inputs)
+        if config.get("crack_interaction_on") is not True:
+            return False
+        method = config.get("crack_interaction_method")
+        if method == CRACK_METHOD_PROJECT:
+            return config.get("crack_interaction_domain_confirmed") is True
+        edition_matches, _reason = _crack_selected_edition_matches(
+            str(method or ""),
+            current_inputs,
+        )
+        angle = _semantic_number(
+            config.get("crack_interaction_angle_deg")
+        )
+        if method == CRACK_METHOD_DK_2004:
+            return bool(
+                edition_matches
+                and config.get("crack_interaction_orthogonal") is True
+                and config.get("crack_interaction_plane_stress") is True
+                and config.get("crack_interaction_no_discontinuity") is True
+                and angle is not None
+                and 15.0 < angle < 90.0
+            )
+        if method == CRACK_METHOD_EN_2023:
+            return bool(
+                edition_matches
+                and config.get("crack_interaction_orthogonal") is True
+                and config.get("crack_interaction_membrane") is True
+                and config.get("crack_interaction_no_discontinuity") is True
+                and angle is not None
+                and 15.0 < angle < 75.0
+            )
+        return False
+
+    config = shear_configuration(current_inputs)
+    if config.get("shear_interaction_on") is not True:
+        return False
+    method = config.get("shear_interaction_method")
+    if method == SHEAR_METHOD_PROJECT:
+        return config.get("shear_interaction_domain_confirmed") is True
+    if method != SHEAR_METHOD_EN_2023:
+        return False
+    if not all(
+        config.get(key) is True
+        for key in (
+            "shear_interaction_planar_member",
+            "shear_interaction_same_control_point",
+            "shear_interaction_per_unit_width",
+            "shear_interaction_out_of_plane",
+        )
+    ):
+        return False
+    selected_shear_method = str(
+        current_inputs.get("shear_method") or ""
+    )
+    if selected_shear_method:
+        return selected_shear_method == SHEAR_CODE_EN_2023
+    components = record.get("components")
+    if not isinstance(components, list) or not components:
+        return False
+    component_methods = [
+        component.get("method")
+        for component in components
+        if isinstance(component, Mapping)
+    ]
+    return bool(
+        len(component_methods) == len(components)
+        and all(
+            isinstance(component_method, str)
+            for component_method in component_methods
+        )
+        and set(component_methods) == {SHEAR_CODE_EN_2023}
+    )
+
+
 def publication_safe_interaction_record(
     record: Mapping | None,
     *,
@@ -2960,6 +3146,18 @@ def publication_safe_interaction_record(
                 "stored crack-interaction configuration does not match "
                 "current inputs"
             )
+        if (
+            str(crack.get("status") or "").upper() == "NOT ASSESSED"
+            and _active_method_cannot_be_not_assessed(
+                "crack",
+                current_inputs,
+                crack,
+            )
+        ):
+            issues.append(
+                "stored active crack-interaction conclusion is downgraded or "
+                "omits the required current assessment"
+            )
         if str(crack.get("status") or "").upper() in {"PASS", "FAIL"}:
             if crack.get("selected_crack_code") != str(
                 current_inputs.get("sls_code") or ""
@@ -3018,6 +3216,21 @@ def publication_safe_interaction_record(
             issues.append(
                 f"stored shear-interaction case {case_name or index + 1} "
                 "does not match current inputs"
+            )
+        if (
+            isinstance(interaction, Mapping)
+            and str(interaction.get("status") or "").upper()
+            == "NOT ASSESSED"
+            and _active_method_cannot_be_not_assessed(
+                "shear",
+                current_inputs,
+                interaction,
+            )
+        ):
+            issues.append(
+                f"stored active shear-interaction case "
+                f"{case_name or index + 1} conclusion is downgraded or omits "
+                "the required current assessment"
             )
         current_shear_method = str(current_inputs.get("shear_method") or "")
         raw_components = (

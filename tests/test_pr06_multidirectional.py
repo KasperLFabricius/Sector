@@ -1071,6 +1071,112 @@ def test_publication_rejects_unhashable_interaction_term_identity():
     )
 
 
+@pytest.mark.parametrize("kind", ["crack", "shear"])
+@pytest.mark.parametrize(
+    "strip_calculation_evidence",
+    [False, True],
+    ids=["retained-calculation", "stripped-calculation"],
+)
+def test_publication_rejects_downgraded_active_conclusions(
+    kind,
+    strip_calculation_evidence,
+):
+    if kind == "crack":
+        inputs = {
+            **multidirectional.shear_configuration({}),
+            **_crack_input(multidirectional.CRACK_METHOD_PROJECT),
+            "crack_interaction_domain_confirmed": True,
+            "crack_interaction_component_x_mm": 0.3,
+            "crack_interaction_component_y_mm": 0.3,
+            "crack_interaction_limit_x_mm": 0.3,
+            "crack_interaction_limit_y_mm": 0.3,
+            "crack_interaction_exponent": 2.0,
+            "crack_interaction_source": "Project DB clause CR-06",
+            "crack_interaction_approval": "Checker approval CR-06",
+        }
+        interaction = multidirectional.assess_crack_interaction(
+            inputs,
+            _crack_results(),
+        )
+        bundle = {
+            "schema": multidirectional.INTERACTION_BUNDLE_SCHEMA,
+            "crack": interaction,
+            "shear_cases": [],
+        }
+    else:
+        inputs = {
+            **multidirectional.crack_configuration({}),
+            **_shear_input(),
+            "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        }
+        interaction = multidirectional.assess_shear_interaction(
+            inputs,
+            _shear_case(0.9, 1.0, 0.9, 1.0),
+            case_id="ULS-DOWNGRADE",
+        )
+        bundle = {
+            "schema": multidirectional.INTERACTION_BUNDLE_SCHEMA,
+            "crack": None,
+            "shear_cases": [{
+                "case": "ULS-DOWNGRADE",
+                "interaction": interaction,
+            }],
+        }
+    assert interaction["status"] == "FAIL"
+
+    downgraded = copy.deepcopy(interaction)
+    downgraded.update(
+        interaction_assessed=False,
+        status="NOT ASSESSED",
+        verdict="REVIEW",
+        reason="Forged downgraded conclusion.",
+        issues=[],
+    )
+    if strip_calculation_evidence:
+        downgraded.update(
+            qualification=None,
+            utilisation=None,
+            components=[],
+            terms=[],
+        )
+        for key in (
+            "angle",
+            "approval",
+            "authority",
+            "axes",
+            "calculation_saturated",
+            "criterion",
+            "demand_resultant_rotationally_invariant",
+            "domain",
+            "formula",
+            "parameters",
+            "resistance_source",
+            "rotation_scope",
+            "rotationally_invariant",
+            "selected_crack_code",
+            "selected_crack_edition",
+            "source",
+        ):
+            downgraded.pop(key, None)
+    downgraded = _reseal_result(downgraded)
+    if kind == "crack":
+        bundle["crack"] = downgraded
+    else:
+        bundle["shear_cases"][0]["interaction"] = downgraded
+    bundle = _reseal_bundle(bundle)
+
+    safe = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs,
+    )
+
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "downgraded" in issue or "active" in issue
+        for issue in safe["publication_validation"]["issues"]
+    )
+
+
 def test_publication_rejects_tampered_stale_duplicate_and_durable_evidence():
     results = _crack_results()
     inputs = {
