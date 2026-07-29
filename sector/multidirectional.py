@@ -2187,6 +2187,11 @@ def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
                     f"{label} non-pass assessment state or verdict is "
                     "contradictory"
                 )
+        if kind == "crack" and status == "NOT APPLICABLE":
+            issues.append(
+                f"{label} uses NOT APPLICABLE, which is not a valid crack-"
+                "interaction disposition"
+            )
         if record.get("utilisation") is not None:
             issues.append(
                 f"{label} appears downgraded while retaining a calculated "

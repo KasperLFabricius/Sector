@@ -1071,7 +1071,15 @@ def test_publication_rejects_unhashable_interaction_term_identity():
     )
 
 
-@pytest.mark.parametrize("kind", ["crack", "shear"])
+@pytest.mark.parametrize(
+    ("kind", "downgraded_status"),
+    [
+        ("crack", "NOT ASSESSED"),
+        ("shear", "NOT ASSESSED"),
+        ("crack", "NOT APPLICABLE"),
+    ],
+    ids=["crack-review", "shear-review", "crack-not-applicable"],
+)
 @pytest.mark.parametrize(
     "strip_calculation_evidence",
     [False, True],
@@ -1079,6 +1087,7 @@ def test_publication_rejects_unhashable_interaction_term_identity():
 )
 def test_publication_rejects_downgraded_active_conclusions(
     kind,
+    downgraded_status,
     strip_calculation_evidence,
 ):
     if kind == "crack":
@@ -1126,9 +1135,13 @@ def test_publication_rejects_downgraded_active_conclusions(
 
     downgraded = copy.deepcopy(interaction)
     downgraded.update(
-        interaction_assessed=False,
-        status="NOT ASSESSED",
-        verdict="REVIEW",
+        interaction_assessed=downgraded_status == "NOT APPLICABLE",
+        status=downgraded_status,
+        verdict=(
+            "NOT APPLICABLE"
+            if downgraded_status == "NOT APPLICABLE"
+            else "REVIEW"
+        ),
         reason="Forged downgraded conclusion.",
         issues=[],
     )
@@ -1172,7 +1185,9 @@ def test_publication_rejects_downgraded_active_conclusions(
 
     assert safe["publication_validation"]["status"] == "REJECTED"
     assert any(
-        "downgraded" in issue or "active" in issue
+        "downgraded" in issue
+        or "active" in issue
+        or "NOT APPLICABLE" in issue
         for issue in safe["publication_validation"]["issues"]
     )
 
