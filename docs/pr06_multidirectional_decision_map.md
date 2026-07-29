@@ -73,9 +73,15 @@ numbers are named separately where material.
   interactions explicitly off and no synthesized source, approval, or authority.
 - Live results, durable session results, project save/load/resave,
   autosave/download, report, and manual use one publication-safe interaction
-  record and one current-input fingerprint. Sealed crack and shear evidence is
-  also re-assessed against the current canonical crack result and directional
-  shear results before publication; deleting every aggregate representation
+  boundary. A live session validates the aggregate against current calculation
+  inputs and the independent current crack/directional solver results. A saved
+  project deliberately does not restore solver results: assessed crack
+  `PASS/FAIL` and biaxial shear `PASS/FAIL` therefore become durable
+  `NOT ASSESSED / REVIEW` publication overlays until recalculation. Current
+  Plastic actions may still prove zero-component `INVALID`, genuine uniaxial
+  shear `NOT APPLICABLE`, or an inactive/out-of-domain `NOT ASSESSED`
+  disposition, but stored crack bindings or shear resistances never
+  authenticate themselves. Deleting every aggregate representation likewise
   produces a durable rejection. Rejection remains latched until a new
   calculation on valid current inputs.
 

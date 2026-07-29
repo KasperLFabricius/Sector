@@ -197,6 +197,32 @@ def _crack_results(
     return {"elastic": elastic}
 
 
+def _crack_control_record_from_results(results):
+    elastic = results["elastic"]
+    responses = [
+        {
+            "name": name,
+            "wk_mm": response.get("wk"),
+            "element_id": response.get("element_id"),
+            "context": copy.deepcopy(
+                elastic["crack_response_contexts"].get(name) or {}
+            ),
+            "acceptance_role": "criterion input",
+        }
+        for name, response in elastic["crack_responses"].items()
+    ]
+    return sls.publication_safe_crack_control_record({
+        "cases": [{
+            "case": elastic["elastic_case"]["id"],
+            "assessment": copy.deepcopy(elastic["crack_assessment"]),
+            "response_mapping_scope": copy.deepcopy(
+                elastic["crack_response_mapping_scope"]
+            ),
+            "responses": responses,
+        }],
+    })
+
+
 def _crack_input(method):
     values = multidirectional.crack_configuration({})
     values.update({
@@ -2069,7 +2095,7 @@ def test_publication_rejects_missing_active_shear_and_method_switch():
     )
 
 
-def test_project_save_load_resave_preserves_current_interaction_evidence():
+def test_project_save_load_resave_requires_current_result_recalculation():
     scalars = {
         **multidirectional.crack_configuration({}),
         **_shear_input(),
@@ -2095,13 +2121,27 @@ def test_project_save_load_resave_preserves_current_interaction_evidence():
         },
     )
     restored_tables, restored = project_io.parse_project(text)
+    saved_record = json.loads(text)["calculation"][
+        "multidirectional_interaction"
+    ]
+    assert any(
+        "current solver component/resistance authority" in issue
+        for issue in saved_record["publication_validation"]["issues"]
+    )
     provenance = project_io.project_provenance(text)
-    assert provenance["calculation"]["matches_saved_inputs"] is True
+    assert provenance["calculation"]["matches_saved_inputs"] is False
     assert (
         provenance["calculation"]["multidirectional_interaction"][
             "publication_validation"
         ]["status"]
-        == "ACCEPTED"
+        == "REJECTED"
+    )
+    assert any(
+        "prior publication boundary" in issue
+        or "durable publication rejection" in issue
+        for issue in provenance["calculation"][
+            "multidirectional_interaction"
+        ]["publication_validation"]["issues"]
     )
     assert multidirectional.shear_configuration(restored) == (
         multidirectional.shear_configuration(scalars)
@@ -2113,12 +2153,19 @@ def test_project_save_load_resave_preserves_current_interaction_evidence():
         calculation=provenance["calculation"],
     )
     resaved_provenance = project_io.project_provenance(resaved)
-    assert resaved_provenance["calculation"]["matches_saved_inputs"] is True
+    assert resaved_provenance["calculation"]["matches_saved_inputs"] is False
     assert (
         resaved_provenance["calculation"]["multidirectional_interaction"][
             "publication_validation"
         ]["status"]
-        == "ACCEPTED"
+        == "REJECTED"
+    )
+    assert any(
+        "prior publication boundary" in issue
+        or "durable publication rejection" in issue
+        for issue in resaved_provenance["calculation"][
+            "multidirectional_interaction"
+        ]["publication_validation"]["issues"]
     )
 
 
@@ -2183,6 +2230,216 @@ def test_project_save_load_resave_rejects_joint_directional_truncation():
         or "durable publication rejection" in issue
         for issue in resaved_record["publication_validation"]["issues"]
     )
+
+
+def test_project_rejects_jointly_resealed_standard_crack_false_pass():
+    inputs = {
+        **multidirectional.shear_configuration({}),
+        **_crack_input(multidirectional.CRACK_METHOD_DK_2004),
+        "sls_code": multidirectional.CRACK_CODE_DK_2004,
+        "sls_edition": "2004",
+        "crack_interaction_orthogonal": True,
+        "crack_interaction_plane_stress": True,
+        "crack_interaction_no_discontinuity": True,
+        "crack_interaction_angle_deg": 40.0,
+        "crack_interaction_spacing_x_mm": 120.0,
+        "crack_interaction_spacing_y_mm": 180.0,
+        "crack_interaction_strain_x": 0.0004,
+        "crack_interaction_strain_y": 0.0005,
+    }
+    current_results = _crack_results(limit_mm=0.05, width_mm=0.04)
+    multidirectional.apply_to_results(inputs, current_results)
+    assert current_results["crack_interaction"]["status"] == "FAIL"
+
+    forged_results = _crack_results(limit_mm=0.30, width_mm=0.04)
+    multidirectional.apply_to_results(inputs, forged_results)
+    forged_interaction = forged_results["crack_interaction"]
+    assert forged_interaction["status"] == "PASS"
+    forged_bundle = _reseal_bundle({
+        "schema": multidirectional.INTERACTION_BUNDLE_SCHEMA,
+        "crack": forged_interaction,
+        "shear_cases": [],
+    })
+    forged_crack_control = _crack_control_record_from_results(
+        forged_results
+    )
+    assert forged_crack_control["cases"][0]["assessment"]["status"] == "OK"
+
+    live_rejected = multidirectional.publication_safe_interaction_record(
+        forged_bundle,
+        current_inputs=inputs,
+        current_results=current_results,
+    )
+    assert live_rejected["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "canonical assessment reconstructed from current inputs and crack "
+        "results" in issue
+        for issue in live_rejected["publication_validation"]["issues"]
+    )
+
+    tables = _project_case_tables("ULS-CRACK-AUDIT", 0.0, 0.0)
+    digest = project_io.input_sha256(tables, inputs)
+    text = project_io.dump_project(
+        tables,
+        inputs,
+        calculation={
+            "input_sha256": digest,
+            "crack_control": forged_crack_control,
+            "multidirectional_interaction": forged_bundle,
+        },
+    )
+    raw_saved = json.loads(text)["calculation"][
+        "multidirectional_interaction"
+    ]
+    assert any(
+        "without independent current crack-result authority" in issue
+        for issue in raw_saved["publication_validation"]["issues"]
+    )
+    provenance = project_io.project_provenance(text)
+    saved = provenance["calculation"]["multidirectional_interaction"]
+    assert provenance["calculation"]["matches_saved_inputs"] is False
+    assert saved["publication_validation"]["status"] == "REJECTED"
+    assert saved["crack"]["status"] == "NOT ASSESSED"
+    assert any(
+        "prior publication boundary" in issue
+        or "durable publication rejection" in issue
+        for issue in saved["publication_validation"]["issues"]
+    )
+
+
+def test_project_rejects_jointly_resealed_shear_resistance_false_pass():
+    case_id = "ULS-RESISTANCE-AUDIT"
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(),
+        "shear_on": True,
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        "plastic_case": {"id": case_id},
+    }
+    current_results = _shear_case(0.8, 1.0, 0.8, 1.0)
+    multidirectional.apply_to_results(inputs, current_results)
+    assert current_results["shear"]["interaction"]["status"] == "FAIL"
+
+    forged_results = _shear_case(0.8, 10.0, 0.8, 10.0)
+    multidirectional.apply_to_results(inputs, forged_results)
+    forged_bundle = multidirectional.interaction_calculation_record(
+        forged_results
+    )
+    assert forged_bundle["shear_cases"][0]["interaction"]["status"] == "PASS"
+
+    live_rejected = multidirectional.publication_safe_interaction_record(
+        forged_bundle,
+        current_inputs=inputs,
+        current_results=current_results,
+    )
+    assert live_rejected["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "canonical assessment reconstructed from current inputs and "
+        "directional case evidence" in issue
+        for issue in live_rejected["publication_validation"]["issues"]
+    )
+
+    tables = _project_case_tables(case_id, 0.8, 0.8)
+    digest = project_io.input_sha256(tables, inputs)
+    text = project_io.dump_project(
+        tables,
+        inputs,
+        calculation={
+            "input_sha256": digest,
+            "multidirectional_interaction": forged_bundle,
+        },
+    )
+    raw_saved = json.loads(text)["calculation"][
+        "multidirectional_interaction"
+    ]
+    assert any(
+        "current solver component/resistance authority" in issue
+        for issue in raw_saved["publication_validation"]["issues"]
+    )
+    provenance = project_io.project_provenance(text)
+    saved = provenance["calculation"]["multidirectional_interaction"]
+    assert provenance["calculation"]["matches_saved_inputs"] is False
+    assert saved["publication_validation"]["status"] == "REJECTED"
+    assert saved["shear_cases"][0]["interaction"]["status"] == "NOT ASSESSED"
+    assert any(
+        "prior publication boundary" in issue
+        or "durable publication rejection" in issue
+        for issue in saved["publication_validation"]["issues"]
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "component_ids",
+        "interaction_enabled",
+        "resistance",
+        "expected_status",
+        "expected_validation",
+    ),
+    [
+        ((), True, 1.0, "INVALID", "ACCEPTED"),
+        (("vx",), True, 1.0, "NOT APPLICABLE", "ACCEPTED"),
+        (("vx", "vy"), False, 1.0, "NOT ASSESSED", "ACCEPTED"),
+        (("vx", "vy"), True, 1.0, "PASS", "REJECTED"),
+        (("vx", "vy"), True, 0.1, "FAIL", "REJECTED"),
+    ],
+    ids=[
+        "zero-invalid",
+        "one-not-applicable",
+        "two-disabled-not-assessed",
+        "two-active-pass-needs-resistance-authority",
+        "two-active-fail-needs-resistance-authority",
+    ],
+)
+def test_input_only_directional_disposition_matrix(
+    component_ids,
+    interaction_enabled,
+    resistance,
+    expected_status,
+    expected_validation,
+):
+    case_id = "ULS-INPUT-ONLY"
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(),
+        "shear_interaction_on": interaction_enabled,
+        "shear_on": True,
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        "plastic_case": {"id": case_id},
+        "shear_components": {
+            "vx": {"signed_v_ed": 0.2 if "vx" in component_ids else 0.0},
+            "vy": {"signed_v_ed": 0.3 if "vy" in component_ids else 0.0},
+        },
+    }
+    results = _shear_case(0.2, resistance, 0.3, resistance)
+    for component_id in {"vx", "vy"}.difference(component_ids):
+        results["shear"]["directions"].pop(component_id)
+    multidirectional.apply_to_results(inputs, results)
+    bundle = multidirectional.interaction_calculation_record(results)
+    raw_interaction = bundle["shear_cases"][0]["interaction"]
+    assert raw_interaction["status"] == expected_status
+
+    safe = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs,
+    )
+    assert safe["publication_validation"]["status"] == expected_validation
+    if expected_validation == "ACCEPTED":
+        assert safe["shear_cases"][0]["interaction"]["status"] == (
+            expected_status
+        )
+        assert [
+            component["id"]
+            for component in safe["shear_cases"][0]["interaction"]["components"]
+        ] == list(component_ids)
+    else:
+        assert safe["shear_cases"][0]["interaction"]["status"] == (
+            "NOT ASSESSED"
+        )
+        assert any(
+            "current solver component/resistance authority" in issue
+            for issue in safe["publication_validation"]["issues"]
+        )
 
 
 @pytest.mark.parametrize(

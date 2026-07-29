@@ -3301,6 +3301,7 @@ def _perform_autosave() -> bool:
             calculation,
             calculation_inputs=publication_inputs,
             input_digest=digest,
+            calculation_results=st.session_state.get("results"),
         )
         if safe_calculation != calculation:
             st.session_state["calculation_record"] = safe_calculation

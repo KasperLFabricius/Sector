@@ -1315,12 +1315,13 @@ def directional_shear_case_authority(
     *,
     current_inputs: Mapping | None = None,
 ) -> list[dict] | None:
-    """Reconstruct case/demand identity from current live solver results.
+    """Reconstruct full component authority from current live solver results.
 
     The returned authority is deliberately outside the persisted interaction
     bundle and never reads an interaction result. Publication compares the
-    editable stored evidence with this current source so two jointly re-sealed
-    bundle copies cannot authenticate each other.
+    editable stored evidence with this current source, while canonical actions
+    independently correlate case and signed-demand identity. Two jointly
+    re-sealed stored bundle copies therefore cannot authenticate each other.
     """
 
     if not isinstance(results, Mapping):
@@ -2358,6 +2359,205 @@ def _current_directional_shear_case_issues(
             )
         )
     return issues
+
+
+def _directional_basis_index(
+    records,
+    label: str,
+) -> tuple[dict[str, list[Mapping]], list[str]]:
+    """Validate and index one non-persisted directional-case authority."""
+
+    if not isinstance(records, list):
+        return {}, [f"{label} is missing or malformed"]
+    issues = []
+    by_case: dict[str, list[Mapping]] = {}
+    for index, record in enumerate(records):
+        record_label = f"{label} case {index + 1}"
+        issues.extend(
+            _current_directional_shear_case_issues(record, record_label)
+        )
+        if not isinstance(record, Mapping):
+            continue
+        case_id = record.get("case")
+        if isinstance(case_id, str) and case_id.strip():
+            by_case.setdefault(case_id, []).append(record)
+    if any(len(matches) != 1 for matches in by_case.values()):
+        issues.append(f"{label} case identities are duplicated")
+    return by_case, issues
+
+
+def _canonical_directional_case_basis(
+    current_inputs: Mapping,
+    current_results: Mapping | None,
+) -> tuple[list[dict] | None, list[str], bool]:
+    """Return one current directional basis without reading stored aggregates.
+
+    Live solver directions are the only authority for component resistances.
+    Canonical action inputs remain an independent case/demand correlation
+    source.  When both exist they must describe exactly the same cases and
+    signed demands before the solver basis may be used.
+    """
+
+    issues = []
+    action_keys_present = any(
+        key in current_inputs
+        for key in (
+            "load_cases",
+            "plastic_cases",
+            "shear_components",
+            "shear_Vx",
+            "shear_Vy",
+        )
+    )
+    input_basis = directional_shear_input_authority(current_inputs)
+    solver_basis = (
+        directional_shear_case_authority(
+            current_results,
+            current_inputs=current_inputs,
+        )
+        if current_results is not None
+        else None
+    )
+
+    input_by_case = {}
+    if isinstance(input_basis, list):
+        input_by_case, input_issues = _directional_basis_index(
+            input_basis,
+            "current input-action directional authority",
+        )
+        issues.extend(input_issues)
+    elif action_keys_present:
+        issues.append(
+            "current directional shear case authority is missing because the "
+            "current input-action authority is malformed"
+        )
+
+    solver_by_case = {}
+    if isinstance(solver_basis, list):
+        solver_by_case, solver_issues = _directional_basis_index(
+            solver_basis,
+            "current solver directional authority",
+        )
+        issues.extend(solver_issues)
+
+    if isinstance(input_basis, list) and isinstance(solver_basis, list):
+        if (
+            len(input_basis) != len(solver_basis)
+            or set(input_by_case) != set(solver_by_case)
+        ):
+            issues.append(
+                "current solver directional authority does not cover exactly "
+                "the current input-action cases"
+            )
+        for case_id in set(input_by_case).intersection(solver_by_case):
+            input_matches = input_by_case[case_id]
+            solver_matches = solver_by_case[case_id]
+            if len(input_matches) != 1 or len(solver_matches) != 1:
+                continue
+            input_case = input_matches[0]
+            solver_case = solver_matches[0]
+            if (
+                input_case.get("assessment_case_id")
+                != solver_case.get("assessment_case_id")
+            ):
+                issues.append(
+                    f"current solver directional case {case_id} assessment "
+                    "identity does not match current action inputs"
+                )
+            input_identity, input_identity_issues = (
+                _directional_demand_identity(
+                    input_case.get("components"),
+                    f"current input-action directional case {case_id}",
+                )
+            )
+            solver_identity, solver_identity_issues = (
+                _directional_demand_identity(
+                    solver_case.get("components"),
+                    f"current solver directional case {case_id}",
+                )
+            )
+            issues.extend(input_identity_issues)
+            issues.extend(solver_identity_issues)
+            if (
+                input_identity is not None
+                and solver_identity is not None
+                and input_identity != solver_identity
+            ):
+                issues.append(
+                    f"current solver directional case {case_id} demands do "
+                    "not match current action inputs"
+                )
+
+    if isinstance(solver_basis, list):
+        return copy.deepcopy(solver_basis), issues, True
+    if isinstance(input_basis, list):
+        return copy.deepcopy(input_basis), issues, False
+    return None, issues, False
+
+
+def _input_only_shear_disposition_issues(
+    current_inputs: Mapping,
+    interaction: Mapping,
+    current_case: Mapping,
+    label: str,
+) -> list[str]:
+    """Validate only dispositions derivable without solver resistances."""
+
+    components = current_case.get("components")
+    if not isinstance(components, list):
+        return [f"{label} current action components are malformed"]
+    component_count = len(components)
+    status = str(interaction.get("status") or "").upper()
+
+    if component_count == 0:
+        expected = "INVALID"
+    elif component_count == 1:
+        expected = "NOT APPLICABLE"
+    elif component_count == 2:
+        config = shear_configuration(current_inputs)
+        method = config.get("shear_interaction_method")
+        requires_solver = False
+        if (
+            config.get("shear_interaction_on") is True
+            and method == SHEAR_METHOD_PROJECT
+            and config.get("shear_interaction_domain_confirmed") is True
+        ):
+            requires_solver = True
+        elif (
+            config.get("shear_interaction_on") is True
+            and method == SHEAR_METHOD_EN_2023
+            and all(
+                config.get(key) is True
+                for key in (
+                    "shear_interaction_planar_member",
+                    "shear_interaction_same_control_point",
+                    "shear_interaction_per_unit_width",
+                    "shear_interaction_out_of_plane",
+                )
+            )
+            and str(current_inputs.get("shear_method") or "")
+            in {"", SHEAR_CODE_EN_2023}
+        ):
+            requires_solver = True
+        if requires_solver:
+            return [
+                f"{label} requires current solver component/resistance "
+                "authority before its interaction disposition can be "
+                "published"
+            ]
+        expected = "NOT ASSESSED"
+    else:
+        return [
+            f"{label} current action authority contains an unsupported "
+            "directional component count"
+        ]
+
+    if status != expected:
+        return [
+            f"{label} disposition {status or 'missing'} does not match the "
+            f"canonical current-action disposition {expected}"
+        ]
+    return []
 
 
 def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
@@ -3580,6 +3780,22 @@ def publication_safe_interaction_record(
                     "stored crack-interaction edition does not match "
                     "current inputs"
                 )
+        if current_results is not None:
+            canonical_crack = assess_crack_interaction(
+                current_inputs,
+                current_results,
+            )
+            if dict(canonical_crack) != dict(crack):
+                issues.append(
+                    "stored crack-interaction disposition does not match the "
+                    "canonical assessment reconstructed from current inputs "
+                    "and crack results"
+                )
+        elif str(crack.get("status") or "").upper() != "NOT ASSESSED":
+            issues.append(
+                "stored crack-interaction disposition cannot be published "
+                "without independent current crack-result authority"
+            )
     elif crack is not None:
         issues.append("stored crack interaction is malformed")
     elif current_inputs.get("crack_interaction_on") is True:
@@ -3594,46 +3810,23 @@ def publication_safe_interaction_record(
             "inputs/results"
         )
 
-    has_current_action_basis = any(
-        key in current_inputs
-        for key in (
-            "load_cases",
-            "plastic_cases",
-            "shear_components",
-            "shear_Vx",
-            "shear_Vy",
-        )
+    (
+        current_directional_basis,
+        directional_basis_issues,
+        has_solver_directional_authority,
+    ) = _canonical_directional_case_basis(
+        current_inputs,
+        current_results,
     )
-    current_directional_basis = directional_shear_input_authority(
-        current_inputs
-    )
-    if (
-        current_directional_basis is None
-        and current_results is not None
-        and not has_current_action_basis
-    ):
-        current_directional_basis = directional_shear_case_authority(
-            current_results,
-            current_inputs=current_inputs,
-        )
+    issues.extend(directional_basis_issues)
     current_directional_cases = (
         current_directional_basis
         if isinstance(current_directional_basis, list)
         else []
     )
     current_directional_by_case: dict[str, list[Mapping]] = {}
-    if (
-        current_directional_basis is not None
-        and not isinstance(current_directional_basis, list)
-    ):
-        issues.append(
-            "current directional shear case authority is malformed"
-        )
     for index, current_case in enumerate(current_directional_cases):
         label = f"current directional shear case {index + 1}"
-        issues.extend(
-            _current_directional_shear_case_issues(current_case, label)
-        )
         if not isinstance(current_case, Mapping):
             continue
         case_id = current_case.get("case")
@@ -3736,6 +3929,15 @@ def publication_safe_interaction_record(
         issues.append(
             "current directional shear case authority is missing"
         )
+    if (
+        cases
+        and current_results is not None
+        and not has_solver_directional_authority
+    ):
+        issues.append(
+            "current solver directional component/resistance authority is "
+            "missing"
+        )
     if isinstance(current_directional_basis, list) and (
         len(current_directional_cases) != len(cases)
         or set(current_directional_by_case) != set(case_names)
@@ -3784,32 +3986,41 @@ def publication_safe_interaction_record(
                 "current case authority"
             )
             continue
-        canonical_components = (
-            current_matches[0].get("components")
-            if current_matches[0].get("basis_kind")
+        if (
+            has_solver_directional_authority
+            and current_matches[0].get("basis_kind")
             == "current-solver-directions"
-            else interaction.get("components")
-        )
-        try:
-            reassessed = assess_shear_interaction(
-                current_inputs,
-                _case_results_from_canonical_shear_components(
-                    canonical_components
-                ),
-                case_id=assessment_case_id,
-            )
-        except (InteractionInputError, TypeError, ValueError) as exc:
-            issues.append(
-                f"stored shear-interaction case {case_name} cannot be "
-                f"reassessed from its canonical component evidence: {exc}"
-            )
-        else:
-            if dict(reassessed) != dict(interaction):
-                issues.append(
-                    f"stored shear-interaction case {case_name} disposition "
-                    "does not match the canonical assessment reconstructed "
-                    "from current inputs and directional case evidence"
+        ):
+            try:
+                reassessed = assess_shear_interaction(
+                    current_inputs,
+                    _case_results_from_canonical_shear_components(
+                        current_matches[0].get("components")
+                    ),
+                    case_id=assessment_case_id,
                 )
+            except (InteractionInputError, TypeError, ValueError) as exc:
+                issues.append(
+                    f"stored shear-interaction case {case_name} cannot be "
+                    f"reassessed from its canonical component evidence: {exc}"
+                )
+            else:
+                if dict(reassessed) != dict(interaction):
+                    issues.append(
+                        f"stored shear-interaction case {case_name} "
+                        "disposition does not match the canonical assessment "
+                        "reconstructed from current inputs and directional "
+                        "case evidence"
+                    )
+        else:
+            issues.extend(
+                _input_only_shear_disposition_issues(
+                    current_inputs,
+                    interaction,
+                    current_matches[0],
+                    f"stored shear-interaction case {case_name}",
+                )
+            )
     if current_inputs.get("shear_interaction_on") is True and not cases:
         issues.append("active shear-interaction evidence is missing")
 

@@ -7044,9 +7044,11 @@ def test_autosave_validation_receives_canonical_bridge_tables(
         *,
         calculation_inputs,
         input_digest,
+        calculation_results=None,
     ):
         publication_calls.append(calculation_inputs)
         assert input_digest == digest
+        assert calculation_results is None
         return raw_calculation
 
     monkeypatch.setattr(
@@ -9126,3 +9128,157 @@ def test_pr06_download_durable_autosave_and_resave_reject_mutated_evidence(
         "multidirectional_interaction"
     ]
     assert resaved["publication_validation"]["status"] == "REJECTED"
+
+
+def test_pr06_live_autosave_uses_current_solver_authority_but_file_recalculates(
+    tmp_path,
+    monkeypatch,
+):
+    import load_cases
+    import project_io
+    import sector_app
+
+    case_id = "ULS-LIVE-AUTOSAVE"
+
+    def direction(component, demand):
+        return {
+            "component": component,
+            "axis": "y" if component == "vx" else "x",
+            "v_ed": demand,
+            "signed_v_ed": demand,
+            "bw": 1000.0,
+            "d": 500.0,
+            "method": multidirectional.SHEAR_CODE_EN_2023,
+            "status": "PASS",
+            "util": demand,
+            "res": {"valid": True, "vrd_c": 1.0},
+        }
+
+    scalars = {
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+        "shear_interaction_on": True,
+        "shear_interaction_method": multidirectional.SHEAR_METHOD_PROJECT,
+        "shear_interaction_axis_x": "global x / Vx",
+        "shear_interaction_axis_y": "global y / Vy",
+        "shear_interaction_domain_confirmed": True,
+        "shear_interaction_exponent": 2.0,
+        "shear_interaction_source": "Project DB clause INT-06",
+        "shear_interaction_approval": "Checker approval QA-06",
+        "shear_on": True,
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        "plastic_case": {"id": case_id},
+    }
+    case_results = {
+        "shear": {
+            "directions": {
+                "vx": direction("vx", 0.2),
+                "vy": direction("vy", 0.3),
+            },
+            "biaxial": True,
+            "status": "REVIEW",
+        },
+    }
+    results = {
+        "plastic_cases": [{
+            "name": case_id,
+            "results": case_results,
+        }],
+    }
+    multidirectional.apply_to_results(scalars, results)
+    tables = {
+        load_cases.PLASTIC_TABLE_KEY: load_cases.table_from_records(
+            [{
+                "name": case_id,
+                "description": "PR-06 live autosave authority fixture",
+                "n_ed_kn": 0.0,
+                "mx_ed_knm": 0.0,
+                "my_ed_knm": 0.0,
+                "vx_ed_kn": 0.2,
+                "vy_ed_kn": 0.3,
+                "vx_face": load_cases.FACE_AUTO,
+                "vy_face": load_cases.FACE_AUTO,
+                "t_ed_knm": 0.0,
+                "check_minimum_reinforcement": False,
+            }],
+            load_cases.PLASTIC_TABLE_KEY,
+        ),
+        load_cases.ELASTIC_TABLE_KEY: load_cases.empty_table(
+            load_cases.ELASTIC_TABLE_KEY
+        ),
+    }
+    digest = project_io.input_sha256(tables, scalars)
+    state = {
+        "results": results,
+        "calculation_record": {
+            "input_sha256": digest,
+            "multidirectional_interaction": (
+                multidirectional.interaction_calculation_record(results)
+            ),
+        },
+    }
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app, "_invalid_factor_input_keys", lambda: ()
+    )
+    monkeypatch.setattr(
+        sector_app, "_invalid_crack_input_keys", lambda: ()
+    )
+    monkeypatch.setattr(
+        sector_app, "_invalid_interaction_input_keys", lambda: ()
+    )
+    monkeypatch.setattr(
+        sector_app, "_project_state", lambda: (tables, scalars)
+    )
+    monkeypatch.setattr(
+        sector_app, "_current_table", lambda *_args, **_kwargs: object()
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app, "_project_input_hash", lambda: digest
+    )
+    captured = {}
+
+    def capture_autosave(data, _path):
+        captured["data"] = data
+        return True
+
+    monkeypatch.setattr(
+        sector_app, "_write_autosave", capture_autosave
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    live_calculation = state["calculation_record"]
+    live_interaction = live_calculation["multidirectional_interaction"]
+    assert live_calculation["matches_saved_inputs"] is True
+    assert live_interaction["publication_validation"]["status"] == "ACCEPTED"
+    assert [
+        component["id"]
+        for component in live_interaction["shear_cases"][0][
+            "interaction"
+        ]["components"]
+    ] == ["vx", "vy"]
+    assert set(
+        state["results"]["plastic_cases"][0]["results"]["shear"][
+            "directions"
+        ]
+    ) == {"vx", "vy"}
+
+    saved = json.loads(captured["data"])["calculation"]
+    assert saved["matches_saved_inputs"] is False
+    assert saved["multidirectional_interaction"][
+        "publication_validation"
+    ]["status"] == "REJECTED"

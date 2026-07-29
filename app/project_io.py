@@ -1198,6 +1198,7 @@ def publication_safe_calculation_record(
     *,
     calculation_inputs,
     input_digest,
+    calculation_results=None,
 ) -> dict | None:
     """Return one canonical, fail-closed calculation-provenance record.
 
@@ -1207,7 +1208,9 @@ def publication_safe_calculation_record(
     present and the input hash still agrees. ``calculation_inputs`` is the one
     canonical input snapshot used to reconstruct methodology, bridge fatigue
     conformance, and Danish crack applicability, so callers cannot supply those
-    contexts independently.
+    contexts independently. ``calculation_results`` is accepted only for a live
+    session boundary; saved projects do not restore it and therefore cannot
+    authenticate assessed interaction conclusions without recalculation.
     """
 
     if not isinstance(calculation, Mapping):
@@ -1243,6 +1246,11 @@ def publication_safe_calculation_record(
             multidirectional.publication_safe_interaction_record(
                 calculation.get("multidirectional_interaction"),
                 current_inputs=current_inputs,
+                current_results=(
+                    calculation_results
+                    if isinstance(calculation_results, Mapping)
+                    else None
+                ),
             )
         )
         interaction_validation = (
