@@ -1028,6 +1028,46 @@ def normalise_basis(value) -> dict:
     }
 
 
+def canonical_basis(value) -> dict:
+    """Return complete, typed current fatigue-basis evidence.
+
+    ``normalise_basis`` remains the migration/UI-seeding helper. Publication,
+    calculation and current-project boundaries must not use it to manufacture
+    omitted evidence, so they call this strict wrapper instead.
+    """
+
+    if not isinstance(value, Mapping):
+        raise ValueError("fatigue basis must be an object")
+    actual_fields = set(value)
+    expected_fields = set(BASIS_FIELDS)
+    if actual_fields != expected_fields:
+        missing = sorted(expected_fields - actual_fields)
+        unknown = sorted(str(field) for field in actual_fields - expected_fields)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unknown:
+            details.append("unknown " + ", ".join(unknown))
+        raise ValueError(
+            "fatigue basis fields are incomplete or unknown"
+            + (": " + "; ".join(details) if details else "")
+        )
+    raw = {}
+    for field in BASIS_FIELDS:
+        item = value.get(field)
+        if not isinstance(item, str):
+            raise ValueError(f"fatigue basis {field} must be typed text")
+        if item != item.strip():
+            raise ValueError(
+                f"fatigue basis {field} must be canonical trimmed text"
+            )
+        raw[field] = item
+    canonical = normalise_basis(raw)
+    if canonical != raw:
+        raise ValueError("fatigue basis values are not canonical")
+    return canonical
+
+
 def basis_warnings(value) -> list[str]:
     """Return concise QA gaps in the selected authority provenance."""
 
@@ -1098,7 +1138,7 @@ def method_requires_single_bin(method: str) -> bool:
 
 
 def basis_signature(value) -> tuple:
-    basis = normalise_basis(value)
+    basis = canonical_basis(value)
     return tuple(basis[field] for field in BASIS_FIELDS)
 
 

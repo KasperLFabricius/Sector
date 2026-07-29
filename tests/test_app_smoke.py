@@ -1935,6 +1935,8 @@ def test_app_restores_fatigue_inputs_into_the_ui():
         {
             fatigue_inputs.DETAIL_CATALOG_KEY:
                 fatigue_inputs.default_catalog(),
+            fatigue_inputs.BASIS_KEY:
+                fatigue_inputs.default_basis(),
             "fatigue_on": True,
             "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
             "fatigue_gamma0": 1.0,
@@ -2048,6 +2050,308 @@ def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
     )
 
 
+def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
+    from sector import danish_bridge
+
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+
+    assert not at.exception
+    assert at.selectbox(key="sls_code").value == bridge.EN1992_2_DK_NA
+    assert at.session_state["_latest_inputs"]["sls_dk_na"] is True
+    assert at.session_state["_latest_inputs"]["sls_edition"] == (
+        sls.EDITION_BRIDGE_DK_2015
+    )
+    for key in (
+        "bridge_asset_class",
+        "bridge_infrastructure_manager",
+        "bridge_environment_class",
+        "bridge_departure_applicability",
+        "bridge_control_class",
+        "bridge_consequence_class",
+        "bridge_deicing_applicability",
+    ):
+        assert at.selectbox(key=key).value == danish_bridge.NOT_ESTABLISHED
+    for key in (
+        "bridge_manager_source",
+        "bridge_project_basis_source",
+        "bridge_departure_source",
+        "bridge_authority_approval_reference",
+        "bridge_environment_source",
+        "bridge_deicing_source",
+    ):
+        assert at.text_input(key=key).value == ""
+    assert at.number_input(key="bridge_alpha_ct").value == 1.0
+    assert any(
+        "declared model must exactly match" in caption.value
+        for caption in at.caption
+    )
+
+    _calculate(at)
+    payload = at.session_state["results"]["bridge_methodology"]
+    project_basis = next(
+        row for row in payload["checks"]
+        if row["check_id"] == "dk_project_basis"
+    )
+    assert payload["methodology"] == bridge.EN1992_2_DK_NA
+    assert payload["evidence_schema"] == bridge.DANISH_BRIDGE_EVIDENCE_SCHEMA
+    assert payload["danish_basis"]["asset_class"] == (
+        danish_bridge.NOT_ESTABLISHED
+    )
+    assert project_basis["status"] == bridge.STATUS_NOT_ASSESSED
+    assert "Select the bridge class" in project_basis["reason"]
+    calculation_bridge = at.session_state["calculation_record"][
+        "bridge_methodology"
+    ]
+    assert calculation_bridge["publication_validation"]["status"] == (
+        "ACCEPTED"
+    )
+
+
+def test_danish_bridge_applies_related_dk_na_crack_numerics():
+    def calculated(methodology):
+        at = _fresh().run()
+        at.selectbox(key="design_methodology").set_value(methodology).run()
+        _set_and_click(
+            at,
+            "calculate",
+            ("radio", "mode", "Elastic"),
+            ("number_input", "el_long_Mx", 400.0),
+            ("number_input", "el_short_Mx", 150.0),
+            ("checkbox", "sls_cw", True),
+        )
+        assert not at.exception
+        current = at.session_state["result_input_snapshot"]
+        elastic = at.session_state["results"]["elastic"]
+        assert elastic["crack"] is not None
+        assert elastic["crack_short"] is not None
+        return current, elastic, at.session_state["calculation_record"]
+
+    base_inputs, inherited, _base_record = calculated(
+        bridge.EN1992_2_BASE
+    )
+    dk_inputs, danish, calculation_record = calculated(
+        bridge.EN1992_2_DK_NA
+    )
+
+    assert base_inputs["sls_dk_na"] is False
+    assert inherited.get("crack_coarse") is None
+    assert inherited.get("crack_short_coarse") is None
+    assert dk_inputs["sls_dk_na"] is True
+    assert danish["crack_coarse"] is not None
+    assert danish["crack_short_coarse"] is not None
+    assert danish["crack"]["wk"] != pytest.approx(
+        inherited["crack"]["wk"]
+    )
+    assert danish["crack_short"]["wk"] != pytest.approx(
+        inherited["crack_short"]["wk"]
+    )
+    assert danish["crack_numerical_method"][
+        "schema"
+    ] == sls.CRACK_NUMERICAL_METHOD_SCHEMA
+    assert danish["crack_numerical_method"]["dk_na_applied"] is True
+    assert danish["crack_numerical_method"]["systems"] == [
+        "fine",
+        "coarse",
+    ]
+    assert calculation_record["crack_control"][
+        "numerical_method"
+    ] == danish["crack_numerical_method"]
+
+
+def test_danish_bridge_uncracked_keeps_four_not_applicable_responses():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 1.0),
+        ("number_input", "el_short_Mx", 0.0),
+        ("checkbox", "sls_cw", True),
+    )
+
+    assert not at.exception
+    elastic = at.session_state["results"]["elastic"]
+    assert elastic["cracked"] is False
+    required = {
+        "Long-term (fine)",
+        "Total (fine)",
+        "Long-term (coarse)",
+        "Total (coarse)",
+    }
+    assert set(elastic["crack_responses"]) == required
+    assert all(
+        elastic["crack_responses"][name] is None
+        for name in required
+    )
+    assert set(elastic["crack_dispositions"]) == required
+    assert all(
+        elastic["crack_dispositions"][name]["status"]
+        == "NOT APPLICABLE"
+        for name in required
+    )
+    crack_record = at.session_state["calculation_record"][
+        "crack_control"
+    ]
+    assert crack_record["numerical_method"]["schema"] == (
+        sls.CRACK_NUMERICAL_METHOD_SCHEMA
+    )
+    assert {
+        response["name"]
+        for response in crack_record["cases"][0]["responses"]
+    } == required
+
+
+def test_danish_bridge_stale_base_crack_session_fails_closed_in_ui():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+    )
+    assert not at.exception
+    stale = copy.deepcopy(at.session_state["results"])
+    stale["elastic"].pop("crack_numerical_method")
+    at.session_state["results"] = stale
+
+    _select_view(at, "Elastic Results")
+
+    assert not at.exception
+    assert any(
+        "Numerical crack-method evidence rejected" in warning.value
+        for warning in at.warning
+    )
+    assert not any(
+        "PASS - Crack width" in success.value
+        for success in at.success
+    )
+
+
+def test_bridge_method_switch_invalidates_base_crack_cache():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_BASE
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+    )
+    base_sig = at.session_state["result_elastic_sig"]
+    base_width = at.session_state["results"]["elastic"]["crack"]["wk"]
+
+    _goto_page(at, "Inputs")
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _calculate(at)
+
+    assert not at.exception
+    assert at.session_state["result_elastic_sig"] != base_sig
+    elastic = at.session_state["results"]["elastic"]
+    assert elastic["crack"]["wk"] != pytest.approx(base_width)
+    assert elastic["crack_coarse"] is not None
+    assert elastic["crack_numerical_method"]["dk_na_applied"] is True
+
+
+def test_danish_crack_toggle_invalidates_elastic_context_cache_both_ways():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+    )
+
+    assert not at.exception
+    enabled_sig = at.session_state[
+        "result_elastic_case_context_sig"
+    ]
+    enabled = at.session_state["results"]["elastic"]
+    assert enabled["show_cw"] is True
+    assert enabled["crack_numerical_method"]["dk_na_applied"] is True
+
+    _set(at, ("checkbox", "sls_cw", False))
+    _calculate(at)
+
+    assert not at.exception
+    disabled_sig = at.session_state[
+        "result_elastic_case_context_sig"
+    ]
+    assert disabled_sig != enabled_sig
+    disabled = at.session_state["results"]["elastic"]
+    assert disabled["show_cw"] is False
+    assert disabled["crack_numerical_method"] is None
+    assert disabled["crack_code"] is None
+
+    _set(at, ("checkbox", "sls_cw", True))
+    _calculate(at)
+
+    assert not at.exception
+    reenabled_sig = at.session_state[
+        "result_elastic_case_context_sig"
+    ]
+    assert reenabled_sig != disabled_sig
+    reenabled = at.session_state["results"]["elastic"]
+    assert reenabled["show_cw"] is True
+    assert reenabled["crack_numerical_method"]["dk_na_applied"] is True
+    assert set(reenabled["crack_responses"]) == {
+        "Long-term (fine)",
+        "Total (fine)",
+        "Long-term (coarse)",
+        "Total (coarse)",
+    }
+
+
+def test_torsion_live_caption_prints_actual_danish_alpha_ct():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "bridge_alpha_ct", 0.8),
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 20.0),
+    )
+
+    assert not at.exception
+    torsion = at.session_state["results"]["torsion"]
+    assert torsion["fctd"] == pytest.approx(
+        0.8 * torsion["fctk_005"] / torsion["gamma_ct"]
+    )
+    assert torsion["alpha_ct"] == pytest.approx(0.8)
+
+    _select_view(at, "Torsion")
+    captions = " | ".join(item.value for item in at.caption)
+    assert "alpha_ct = 0.800" in captions
+    assert (
+        f"0.800 x {torsion['fctk_005']:.3f} / "
+        f"{torsion['gamma_ct']:.3f} = {torsion['fctd']:.3f} MPa"
+    ) in captions
+    assert torsion["material_factor_basis"]["reference"] in captions
+
+
 def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
     import sector_app
 
@@ -2085,6 +2389,7 @@ def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
         ("stale_standard", "fatigue.gamma_c"),
         ("omitted_gamma_c", "IDs/cardinality"),
         ("stale_gamma_ff", "fatigue_gamma_ff"),
+        ("stale_basis", "fatigue basis"),
     ],
 )
 def test_bridge_view_surfaces_fatigue_correlation_rejection(
@@ -2093,6 +2398,7 @@ def test_bridge_view_surfaces_fatigue_correlation_rejection(
     monkeypatch,
 ):
     import contextlib
+    import fatigue_inputs
     import sector_app
 
     rendered = {"errors": [], "info": []}
@@ -2119,6 +2425,15 @@ def test_bridge_view_surfaces_fatigue_correlation_rejection(
         record = _bridge_concrete_fatigue_snapshot(
             _bridge_fatigue_publication_scalars()
         )
+    elif attack == "stale_basis":
+        record = _bridge_concrete_fatigue_snapshot(current_scalars)
+        current_scalars[fatigue_inputs.BASIS_KEY] = {
+            **fatigue_inputs.default_basis(),
+            "authority": fatigue_inputs.AUTHORITY_VD,
+            "method": fatigue_inputs.METHOD_VD_FLM4,
+            "spectrum_source": "VD project basis section 6.8",
+            "cycle_count_source": "Traffic register T-04",
+        }
     else:
         record = _bridge_concrete_fatigue_snapshot(current_scalars)
         concrete = next(
@@ -2497,6 +2812,7 @@ def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
     }
     common = {
         "fatigue_on": True,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
         "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
         "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
         "fatigue_factor_approval": "DB-FACT-21 / checker F",
@@ -3066,6 +3382,8 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
         {
             fatigue_inputs.DETAIL_CATALOG_KEY:
                 fatigue_inputs.default_catalog(),
+            fatigue_inputs.BASIS_KEY:
+                fatigue_inputs.default_basis(),
             "fatigue_on": True,
             "fatigue_gamma_c": 1.595,
             "fatigue_source": "Previous project",
@@ -5155,7 +5473,8 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
-        "Bridge methodology (DS/EN 1992-2 base)",
+        "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
+        "Danish infrastructure-manager and project design basis",
         "Bulk assignments",
     ]
     _goto_input_tab(at, "Project & report")
@@ -5165,7 +5484,8 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
-        "Bridge methodology (DS/EN 1992-2 base)",
+        "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
+        "Danish infrastructure-manager and project design basis",
         "Bulk assignments",
         "About",
         "Report",
@@ -6490,6 +6810,7 @@ def _bridge_fatigue_publication_scalars(*, custom=False):
         ),
         "fatigue_concrete_miner_source": "",
         "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
     }
     if custom:
         scalars.update({
@@ -6571,6 +6892,7 @@ def _bridge_concrete_fatigue_snapshot(scalars):
                 "fatigue_factor_mode": context["factor_mode"],
                 "fatigue_factor_approval": context["factor_approval"],
                 "fatigue_gamma_ff": context["gamma_ff"],
+                "fatigue_basis": context["basis"],
             },),
         ),
     ))
@@ -6624,6 +6946,7 @@ def _fatigue_bound_snapshot():
                 fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
             ),
             "concrete_miner_source": miner_source,
+            "basis": fatigue_inputs.default_basis(),
             "partial_factors": {
                 "gamma_s": gamma_s,
                 "gamma_c": gamma_c,
@@ -6642,20 +6965,216 @@ def _fatigue_bound_snapshot():
             },
         },
         design_methodology=bridge.COMPONENT_METHODS,
+        current_basis=fatigue_inputs.default_basis(),
     )
 
 
-def test_download_session_and_autosave_reject_fatigue_evidence_mutation(
+def test_autosave_validation_receives_canonical_bridge_tables(
     tmp_path,
     monkeypatch,
 ):
+    import bridge_inputs
+    import project_io
+    import sector_app
+
+    coverage = bridge_inputs.table_from_records(
+        [
+            {
+                "check_id": check_id,
+                "applicability": (
+                    bridge.REQUIRED
+                    if check_id == "reinforcement_fatigue"
+                    else bridge.NOT_APPLICABLE
+                ),
+                "source": f"DB-{check_id}",
+                "notes": "",
+            }
+            for check_id in bridge.APPLICABILITY_CHECK_IDS
+        ],
+        bridge_inputs.COVERAGE_TABLE_KEY,
+    )
+    tables = {bridge_inputs.COVERAGE_TABLE_KEY: coverage}
+    scalars = {"design_methodology": bridge.EN1992_2_DK_NA}
+    digest = project_io.input_sha256(tables, scalars)
+    calculation = {
+        "input_sha256": digest,
+        "matches_saved_inputs": True,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_factor_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_invalid_crack_input_keys",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_state",
+        lambda: (tables, scalars),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_current_table",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_project_input_hash",
+        lambda: digest,
+    )
+    publication_calls = []
+
+    def capture_publication(
+        raw_calculation,
+        *,
+        calculation_inputs,
+        input_digest,
+    ):
+        publication_calls.append(calculation_inputs)
+        assert input_digest == digest
+        return raw_calculation
+
+    monkeypatch.setattr(
+        project_io,
+        "publication_safe_calculation_record",
+        capture_publication,
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_write_autosave",
+        lambda _data, _path: True,
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+
+    assert sector_app._perform_autosave() is True
+    assert len(publication_calls) == 2
+    autosave_inputs = publication_calls[0]
+    assert bridge_inputs.COVERAGE_TABLE_KEY in autosave_inputs
+    applicability = {
+        decision.check_id: decision.applicability
+        for decision in bridge_inputs.decisions(
+            autosave_inputs[bridge_inputs.COVERAGE_TABLE_KEY]
+        )
+    }
+    assert applicability["reinforcement_fatigue"] == bridge.REQUIRED
+    assert applicability["concrete_fatigue"] == bridge.NOT_APPLICABLE
+
+
+def test_live_fatigue_view_rejects_missing_basis_on_bound_payload(monkeypatch):
+    import sector_app
+
+    payload = _fatigue_bound_snapshot()
+    assert payload is not None
+    del payload["basis"]
+    rendered = {"errors": [], "markdown": []}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(
+            error=lambda message, **_kwargs: rendered["errors"].append(message),
+            warning=lambda *_args, **_kwargs: None,
+            success=lambda *_args, **_kwargs: None,
+            info=lambda *_args, **_kwargs: None,
+            markdown=lambda message, **_kwargs: rendered["markdown"].append(
+                message
+            ),
+        ),
+    )
+
+    sector_app.fatigue_view(
+        {
+            "fatigue_on": True,
+            "design_methodology": bridge.COMPONENT_METHODS,
+        },
+        {"fatigue": payload},
+    )
+
+    assert any(message.startswith("INVALID -") for message in rendered["errors"])
+    assert any(
+        "fatigue basis" in message.lower()
+        for message in rendered["markdown"]
+    )
+
+
+def test_live_fatigue_helper_rejects_stale_complete_basis():
+    import fatigue_inputs
+    import sector_app
+
+    payload = _fatigue_bound_snapshot()
+    assert payload is not None
+    current_basis = {
+        **fatigue_inputs.default_basis(),
+        "notes": "Current edited basis",
+    }
+
+    safe = sector_app._publication_safe_fatigue_result(
+        {
+            "fatigue_on": True,
+            "design_methodology": bridge.COMPONENT_METHODS,
+            fatigue_inputs.BASIS_KEY: current_basis,
+        },
+        {"fatigue": payload},
+    )
+
+    assert safe["valid"] is False
+    assert safe["passed"] is False
+    assert safe["standard_passed"] is False
+    assert any(
+        "basis conflicts with the calculation input snapshot" in error
+        for error in safe["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "attack",
+    ["partial_factor", "missing_basis", "incomplete_basis", "boolean_basis"],
+)
+def test_download_session_and_autosave_reject_fatigue_evidence_mutation(
+    attack,
+    tmp_path,
+    monkeypatch,
+):
+    import fatigue_analysis
     import project_io
     import sector_app
 
     scalars = {"design_methodology": bridge.COMPONENT_METHODS}
     fatigue_record = _fatigue_bound_snapshot()
     assert fatigue_record is not None
-    fatigue_record["partial_factors"]["gamma_s"] = 1.15
+    if attack == "partial_factor":
+        fatigue_record["partial_factors"]["gamma_s"] = 1.15
+    elif attack == "missing_basis":
+        del fatigue_record["basis"]
+    else:
+        if attack == "incomplete_basis":
+            del fatigue_record["basis"]["notes"]
+        else:
+            fatigue_record["basis"]["notes"] = True
+        body = {
+            key: fatigue_record[key]
+            for key in fatigue_analysis._FATIGUE_CONFORMANCE_FIELDS
+        }
+        fatigue_record["evidence_sha256"] = (
+            fatigue_analysis._fatigue_conformance_digest(body)
+        )
     calculation = {
         "input_sha256": project_io.input_sha256({}, scalars),
         "fatigue_conformance": fatigue_record,
@@ -6815,13 +7334,19 @@ def test_download_session_and_autosave_reject_bridge_binding_mutation(
 
 @pytest.mark.parametrize(
     "attack",
-    ["stale_standard", "omitted_gamma_c", "stale_gamma_ff"],
+    [
+        "stale_standard",
+        "omitted_gamma_c",
+        "stale_gamma_ff",
+        "stale_basis",
+    ],
 )
 def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
     attack,
     tmp_path,
     monkeypatch,
 ):
+    import fatigue_inputs
     import project_io
     import sector_app
 
@@ -6836,6 +7361,15 @@ def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
         bridge_record = _bridge_concrete_fatigue_snapshot(
             _bridge_fatigue_publication_scalars()
         )
+    elif attack == "stale_basis":
+        bridge_record = _bridge_concrete_fatigue_snapshot(scalars)
+        scalars[fatigue_inputs.BASIS_KEY] = {
+            **fatigue_inputs.default_basis(),
+            "authority": fatigue_inputs.AUTHORITY_VD,
+            "method": fatigue_inputs.METHOD_VD_FLM4,
+            "spectrum_source": "VD project basis section 6.8",
+            "cycle_count_source": "Traffic register T-04",
+        }
     else:
         bridge_record = _bridge_concrete_fatigue_snapshot(scalars)
         concrete = next(

@@ -743,12 +743,14 @@ def manual_blocks() -> list:
          "reviews. Ordinary bars are assumed anchored to develop the entered "
          "$f_{yk}$; reduce it where the force cannot be developed.")
     h2("Bridge methodology")
-    md("Select **DS/EN 1992-2:2005 + AC:2008** under the whole-calculation "
-       "methodology to activate the bridge-base gate. Every mandatory coverage row "
-       "must be set to **Required** or **Not applicable**; a not-applicable decision "
-       "requires a project-basis source. Missing decisions, unsupported required "
-       "topics, incompatible component editions, or incomplete evidence produce "
-       "**NOT ASSESSED / REVIEW** rather than an inferred pass.")
+    md("Select either **DS/EN 1992-2:2005 + AC:2008** or the distinct "
+       "**DS/EN 1992-2:2005 + DK/NA:2015** whole-calculation methodology. The "
+       "first activates the bridge-base gate; the second inherits that base and "
+       "adds only the evidenced Danish choices and overrides. Every mandatory "
+       "coverage row must be set to **Required** or **Not applicable**; a "
+       "not-applicable decision requires a project-basis source. Missing decisions, "
+       "unsupported required topics, incompatible component editions, or incomplete "
+       "evidence produce **NOT ASSESSED / REVIEW** rather than an inferred pass.")
     table(["Relationship", "Bridge-base treatment"],
           [["Inherited", "2005-family cross-section/material analysis, ordinary member shear and reinforcement fatigue, with explicit compatibility/provenance"],
            ["Overridden", "Box-wall shear plus torsion, bridge SLS stress and crack/decompression routing, and separate web/flange minimum crack reinforcement"],
@@ -789,6 +791,61 @@ def manual_blocks() -> list:
        "`concrete_fatigue.miner_c`. A missing, duplicate, substituted or stale "
        "record, or changed factor mode, method, source or approval, is rejected "
        "even when the stored result body has a valid fingerprint.")
+    md("For the Danish method, select the bridge class and infrastructure manager "
+       "independently and cite both the manager requirement and the project design "
+       "basis. Also record the environmental class and source, surface/de-icing "
+       "applicability and source, construction/control and consequence classes with "
+       "sources, traffic/fatigue applicability, high-strength approval where "
+       "$f_{ck}>50$ MPa, special project rules, and an explicit departure/"
+       "dispensation applicability decision. An applicable departure requires its "
+       "description, methodology/source clause, and authority approval; even when "
+       "approved it remains a qualified project variation rather than a Danish "
+       "selected-standard PASS. Sector never infers road, footbridge or railway "
+       "class, manager, control class, consequence class, departure applicability, "
+       "or authority from geometry, free text, loads, or another selection.")
+    md("When traffic/fatigue is **Required**, its model and source must correlate "
+       "with an enabled global fatigue analysis, the existing reinforcement/concrete "
+       "applicability rows, the corresponding calculation toggles, and the resulting "
+       "calculated check evidence. The declared model must exactly match the Fatigue "
+       "panel's calculated **Method**; both calculated spectrum and cycle-count "
+       "sources must be stated, and the declared source must exactly match one of "
+       "them. The complete current fatigue basis is bound into the calculation and "
+       "bridge-publication evidence. A disabled analysis, a required-but-disabled "
+       "route, a model/source mismatch, or an enabled route declared not applicable "
+       "remains fail-closed and cannot support a Danish project-basis PASS.")
+    table(["Explicit Danish choice", "Mapped Sector effect"],
+          [["Road Directorate / local road + road or footbridge",
+            "Mapped manager/class evidence; project source remains mandatory"],
+           ["Banedanmark / regional rail + railway bridge",
+            "Mapped manager/class evidence; Banedanmark normal/strict gamma3 values are checked as conformance metadata and never replace the actual positive input"],
+           ["Other or conflicting manager/class",
+            "No silent transfer of authority rules; warning and qualified/not-assessed methodology conclusion"],
+           ["Road/foot de-icing applicable",
+            "Records x = 3 m, y = 3 m in evidence; no geometry or exposure class is inferred"],
+           ["Rail de-icing applicable",
+            "Records x = 5 m, y = 3 m in evidence; no geometry or exposure class is inferred"],
+           ["Thin wearing course, direct de-icing or rail edge beam",
+            "Requires the extra-aggressive environmental route; a conflicting selected class is retained and reported for review"]])
+    md("The Danish concrete coefficients are "
+       "$\\alpha_{cc}=\\alpha_{ct}=1.0$. A positive finite custom value remains the "
+       "actual calculation input. A complete custom method/source and approval can "
+       "produce only a qualified approved-custom verdict, never an unqualified "
+       "Danish-standard PASS; malformed, Boolean, non-finite or non-positive values "
+       "are hard errors. $\\alpha_{ct}$ changes the torsional cracking resistance through "
+       "$f_{ctd}=\\alpha_{ct}f_{ctk,0.05}/\\gamma_{ct}$. The routed nominal-cover "
+       "check uses 40/50 mm for non-prestressed/prestressed reinforcement in "
+       "aggressive/extra-aggressive environments, 50/60 mm for post-tensioning "
+       "ducts, plus 5 mm execution deviation; the explicit railway collision-risk "
+       "route requires 75 mm.")
+    call("limit", "DK NA Method A is mandatory for prestressed brittle-failure "
+          "avoidance and Method B is not permitted. Sector does not implement the "
+          "independent Method A structural analysis, so a required Method A check "
+          "remains **NOT ASSESSED** and is never replaced by Method B.")
+    call("limit", "The printed DK NA Annex A/B/E/F/G/H/I/J/KK/LL/MM/NN/OO/PP/QQ "
+         "table is national routing information, not analysis evidence. Sector has "
+         "no typed project applicability and complete external analysis evidence "
+         "for applicable Annex J, KK, NN or OO routes in PR-05, so the annex check "
+         "remains **NOT ASSESSED** and can never be promoted by the static table.")
     h2("Crack width")
     md("Tick **Crack width** on each Elastic table row that requires acceptance. "
        "If any row is ticked, the global crack settings apply to every ticked row. "
@@ -798,11 +855,13 @@ def manual_blocks() -> list:
        "and -- for the DK NA -- the member type are the inputs.")
     table(["Crack-width code", "What it changes"],
           [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
-           ["DS/EN 1992-2:2005", "The base 2005 crack model with bridge member/exposure acceptance routed by Table 7.101N"],
+           ["DS/EN 1992-2:2005 + AC:2008", "The base 2005 crack model with bridge member/exposure acceptance routed by Table 7.101N"],
+           ["DS/EN 1992-2:2005 + DK/NA:2015", "The related DS/EN 1992-1-1 DK NA:2013 numerical method (cover-dependent $k_3$, conditional effective height, and fine/coarse systems) with the Danish road/foot/rail acceptance matrix"],
            ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
-    call("standard", "The DK NA reports the fine and the coarse crack system side "
-         "by side, each for the sustained and total (long + short) response "
+    call("standard", "Both Danish crack-width options, including the Danish "
+         "bridge method, report the fine and the coarse crack system side by "
+         "side, each for the sustained and total (long + short) response "
          "(four crack widths). "
          "Part C derives every model in full with the worked crack width.")
     call("standard", "Response duration and SLS combination class are separate. "
@@ -813,6 +872,19 @@ def manual_blocks() -> list:
          "remains informational and cannot govern that criterion. Missing, duplicate "
          "or non-unique required-combination evidence blocks the verdict; crack-history "
          "selection remains separate from acceptance routing.")
+    table(["Danish bridge member", "Required acceptance route"],
+          [["Non-prestressed road, foot or railway bridge",
+            "Frequent-combination crack width: 0.30 mm in aggressive and 0.20 mm in extra-aggressive environment"],
+           ["Prestressed road or footbridge",
+            "Frequent width: 0.20/0.10 mm for aggressive/extra-aggressive, plus quasi-permanent decompression"],
+           ["Prestressed railway bridge",
+            "Frequent width: 0.10 mm for both Danish environments, plus quasi-permanent decompression"]])
+    call("limit", "The frequent non-prestressed route is not replaced by the "
+         "quasi-permanent response or by a generic maximum. Prestressed width and "
+         "decompression are separate criteria. Decompression remains **NOT "
+         "ASSESSED** unless a unique, current quasi-permanent concrete-stress "
+         "response with matching case identity and provenance exists; a passing "
+         "crack width cannot substitute for that evidence.")
     h2("Grouped fatigue")
     md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
        "**Reinforcement** and/or **Concrete**. The edition-derived factor source "
@@ -1447,10 +1519,13 @@ def manual_blocks() -> list:
        "reinforcement's centroid (figure 7.100 NA; for a rectangle the $2(h-d)$ "
        "band), and **halves** the crack width. **Worked:** the band is $0.100$ m "
        "high and $w_k=0.077$ mm.")
-    call("tip", "The single *DS/EN 1992-1-1 + DK NA* option reports the fine and the "
-         "coarse system side by side, each for the sustained and total "
-         "(long + short) response -- four crack widths -- so you can read both "
-         "without re-running.")
+    call("tip", "The *DS/EN 1992-1-1 + DK NA* and *DS/EN 1992-2:2005 + "
+         "DK/NA:2015* options report the fine and coarse systems side by side, "
+         "each for the sustained and total (long + short) response -- four "
+         "crack widths -- so you can read both without re-running. For the "
+         "bridge option, EN 1992-2 Section 7 and 7.3.4(101), the bridge NA "
+         "routing, and the contemporaneous related 2013 concrete NA form the "
+         "recorded rule chain.")
     h2("EN 1992-1-1:2023 refined model")
     md("The 2023 edition uses a refined model (9.2.3):\n\n"
        "$$w_k = k_w\\,\\frac{k_1}{r}\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-"
@@ -1847,11 +1922,15 @@ def manual_blocks() -> list:
            ["Reinforcement law", "DS/EN 1992-1-1 3.2.7"],
            ["Prestressing steel law", "DS/EN 1992-1-1 3.3.6"],
            ["Cracking and crack width (2005)", "DS/EN 1992-1-1 7.3"],
-           ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
+           ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA:2013 7.3.2(3), 7.3.4(1) and 7.3.4(3)"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
            ["Reinforcement fatigue (2005)", "DS/EN 1992-1-1:2005+A1:2014 6.8.2, 6.8.4 and Tables 6.3N/6.4N"],
            ["Concrete fatigue (2005)", "DS/EN 1992-1-1:2005 6.8.7 / Formula (6.72); DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
             ["Bridge methodology relationship", "DS/EN 1992-2:2005 1.1.2 and clause-by-clause inheritance from DS/EN 1992-1-1:2004"],
+            ["Danish bridge national choices", "DS/EN 1992-2 DK NA:2015, including 3.1.2, 3.1.6, 4.2, 4.4.1.2, 5.10.1, Table 7.101N and Annex applicability"],
+            ["Danish bridge numerical crack chain", "DS/EN 1992-2:2005 Section 7 and 7.3.4(101); DS/EN 1992-2 DK NA:2015 PDF pages 1 and 7; related DS/EN 1992-1-1 DK NA:2013 7.3.2(3), 7.3.4(1) and 7.3.4(3)"],
+            ["Danish road/footbridge authority basis", "Vejdirektoratet, Projekteringsgrundlag for broer, March 2023 with corrections through 30 June 2026"],
+            ["Danish railway authority basis", "Banedanmark BN1-59-5, 2024"],
             ["Bridge prestress brittle failure", "DS/EN 1992-2:2005 5.10.1(106) and 6.1(109)-(110)"],
             ["Bridge box-wall shear/torsion", "DS/EN 1992-2:2005 6.3.2(101)-(104); AC:2008"],
             ["Bridge SLS stress/crack criteria", "DS/EN 1992-2:2005 7.2(102), 7.3.1(105) and Table 7.101N"],
@@ -1894,7 +1973,8 @@ def manual_blocks() -> list:
        "- **Detailing scope.** The modelled-direction check does not credit tendons and "
        "does not verify the DK NA high-web side-face rule. The clear-spacing check "
        "uses the entered section-plane geometry; anchorage, lap length, bundle "
-       "equivalence, cover and congestion remain separate reviews. Beam torsion-link "
+       "equivalence, congestion and cover outside the explicit Danish bridge "
+       "nominal-cover route remain separate reviews. Beam torsion-link "
        "detailing provisions are not applied to slabs.")
     call("limit", "The crack-width models are one-directional: the effective "
          "tension area and the crack spacing are defined for a single bending "

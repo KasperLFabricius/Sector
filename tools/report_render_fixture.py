@@ -426,7 +426,8 @@ def _results(inp: dict | None = None) -> dict:
         inp["torsion_factor_approval"]
     )
     fctk_005 = 0.7 * codes.fctm(inp["concrete"].fck)
-    fctd = fctk_005 / gamma_ct
+    alpha_ct = 1.0
+    fctd = alpha_ct * fctk_005 / gamma_ct
     shear_z_mm = 243.0
     link_asw = link_legs * math.pi * link_dia ** 2 / 4.0
     link_asw_over_s = link_asw / link_spacing
@@ -743,6 +744,7 @@ def _results(inp: dict | None = None) -> dict:
         "alpha_cw": 1.0,
         "fctk_005": fctk_005,
         "fctd": fctd,
+        "alpha_ct": alpha_ct,
         "gamma_c": inp["concrete"].gamma_c,
         "gamma_ct": gamma_ct,
         "gamma_s": 1.15,
@@ -1029,10 +1031,16 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         torsion.trd_c(torsion_out["fctd"], tube["Ak"], tube["tef"]),
     )
     close("torsion gamma_ct", torsion_out["gamma_ct"], 1.70)
+    close("torsion alpha_ct", torsion_out["alpha_ct"], 1.0)
     close(
         "torsion fctd",
         torsion_out["fctd"],
-        0.7 * codes.fctm(inp["concrete"].fck) / 1.70,
+        (
+            torsion_out["alpha_ct"]
+            * 0.7
+            * codes.fctm(inp["concrete"].fck)
+            / 1.70
+        ),
     )
     close(
         "torsion longitudinal area",
@@ -1330,6 +1338,30 @@ def validate_pdf_content(pdf: bytes) -> str:
     )
     if "Sweep start" not in settings_page:
         raise AssertionError("the analysis-settings heading is separated from its table")
+    torsion_factor_page = next(
+        (page.extract_text() or "" for page in reader.pages
+         if "Concrete tension coefficient" in (page.extract_text() or "")),
+        "",
+    )
+    if not all(value in torsion_factor_page for value in (
+        "Material-factor basis", "1.000", "fctd = 1.193 MPa",
+    )):
+        raise AssertionError(
+            "the torsion alpha_ct/fctd provenance trace is split across pages"
+        )
+    torsion_minimum_page = next(
+        (page.extract_text() or "" for page in reader.pages
+         if "Minimum-reinforcement screen (6.3.2(5), Eq 6.31)"
+         in (page.extract_text() or "")),
+        "",
+    )
+    if not all(value in torsion_minimum_page for value in (
+        "6.020 (designed reinforcement required)",
+        "If \u2264 1, only minimum shear + torsion reinforcement is required",
+    )):
+        raise AssertionError(
+            "the torsion minimum-reinforcement result is split across pages"
+        )
     for heading, first_case in (
         ("Plastic / capacity cases", "PL-QA-1"),
         ("Elastic cases", "EL-QA-1"),

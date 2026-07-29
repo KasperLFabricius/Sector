@@ -28,12 +28,12 @@ import fatigue_inputs
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
-from sector import bridge, codes, detailing, geometry, sls
+from sector import bridge, codes, conformance, danish_bridge, detailing, geometry, sls
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 20  # v20: custom-input conformance and calculation provenance
+VERSION = 21  # v21: Danish bridge methodology and authority provenance
 DEFAULT_SLS_TENDON_BOND = "Plain round (k1 = 1.6)"
 DEFAULT_SLS_TENDON_XI = 0.0
 DEFAULT_SLS_CRITERION_MODE = sls.CRITERION_MODE_LEGACY
@@ -41,6 +41,7 @@ DEFAULT_SLS_PRESTRESS_CLASS = sls.PRESTRESS_REINFORCED_UNBONDED
 DEFAULT_SLS_PROTECTION_CLASS = sls.PROTECTION_NOT_ESTABLISHED
 DEFAULT_SLS_EXPOSURE_CLASS = sls.EXPOSURE_NOT_ESTABLISHED
 DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS = sls.BRIDGE_EXPOSURE_NOT_ESTABLISHED
+DEFAULT_SLS_DK_MEMBER_CLASS = danish_bridge.NOT_ESTABLISHED
 DEFAULT_SLS_DECOMPRESSION = sls.DECOMPRESSION_NOT_ESTABLISHED
 
 _UNSUPPORTED_SEPARATE_STRUT_KEYS = frozenset({
@@ -192,6 +193,41 @@ BRIDGE_SCALAR_KEYS = (
     "bridge_minimum_scope",
     "bridge_shear_scope",
     "bridge_exposure",
+    "bridge_asset_class",
+    "bridge_infrastructure_manager",
+    "bridge_manager_source",
+    "bridge_project_basis_source",
+    "bridge_authority_approval_reference",
+    "bridge_traffic_fatigue_applicability",
+    "bridge_traffic_fatigue_model",
+    "bridge_traffic_fatigue_source",
+    "bridge_environment_class",
+    "bridge_environment_source",
+    "bridge_special_rules",
+    "bridge_departure_applicability",
+    "bridge_departure_source",
+    "bridge_deviations",
+    "bridge_control_class",
+    "bridge_control_source",
+    "bridge_consequence_class",
+    "bridge_consequence_source",
+    "bridge_high_strength_approval",
+    "bridge_high_strength_approval_reference",
+    "bridge_execution_conditions_source",
+    "bridge_surface_condition",
+    "bridge_deicing_applicability",
+    "bridge_deicing_source",
+    "bridge_cover_category",
+    "bridge_nominal_cover_mm",
+    "bridge_cover_source",
+    "bridge_collision_risk_applicability",
+    "bridge_alpha_cc_basis",
+    "bridge_alpha_cc_custom_methodology",
+    "bridge_alpha_cc_approval_reference",
+    "bridge_alpha_ct",
+    "bridge_alpha_ct_basis",
+    "bridge_alpha_ct_custom_methodology",
+    "bridge_alpha_ct_approval_reference",
 )
 
 TORSION_FACTOR_SCALAR_KEYS = (
@@ -260,6 +296,7 @@ SCALAR_KEYS = [
     "sls_tendon_bond", "sls_tendon_xi",
     "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
     "sls_exposure_class", "sls_bridge_exposure_class",
+    "sls_dk_member_class",
     "sls_exposure_context",
     "sls_check_appearance", "sls_appearance_limit",
     "sls_check_durability", "sls_decompression_applicability",
@@ -375,13 +412,38 @@ def _validate_bridge_scalars(scalars: dict) -> None:
         "bridge_shear_scope": bridge.SHEAR_SCOPES,
         "bridge_exposure": bridge.BRIDGE_EXPOSURES,
         "sls_bridge_exposure_class": sls.BRIDGE_EXPOSURE_CLASSES,
+        "sls_dk_member_class": danish_bridge.MEMBER_CLASSES,
+        "bridge_asset_class": danish_bridge.ASSET_CLASSES,
+        "bridge_infrastructure_manager": (
+            danish_bridge.INFRASTRUCTURE_MANAGERS
+        ),
+        "bridge_traffic_fatigue_applicability": (
+            danish_bridge.FATIGUE_APPLICABILITY
+        ),
+        "bridge_environment_class": danish_bridge.ENVIRONMENT_CLASSES,
+        "bridge_departure_applicability": (
+            danish_bridge.APPLICABILITY_OPTIONS
+        ),
+        "bridge_control_class": danish_bridge.CONTROL_CLASSES,
+        "bridge_consequence_class": danish_bridge.CONSEQUENCE_CLASSES,
+        "bridge_high_strength_approval": danish_bridge.APPROVAL_STATES,
+        "bridge_surface_condition": danish_bridge.SURFACE_CONDITIONS,
+        "bridge_deicing_applicability": (
+            danish_bridge.APPLICABILITY_OPTIONS
+        ),
+        "bridge_cover_category": danish_bridge.COVER_CATEGORIES,
+        "bridge_collision_risk_applicability": (
+            danish_bridge.APPLICABILITY_OPTIONS
+        ),
+        "bridge_alpha_cc_basis": conformance.BASIS_OPTIONS,
+        "bridge_alpha_ct_basis": conformance.BASIS_OPTIONS,
     }
     for key, options in option_fields.items():
         if key in scalars and scalars[key] not in options:
             raise ValueError(f"unknown bridge methodology option: {key}")
     if "bridge_expected_box_walls" in scalars:
         raw = scalars["bridge_expected_box_walls"]
-        if isinstance(raw, bool) or type(raw).__name__ == "bool_":
+        if conformance.is_boolean(raw) or isinstance(raw, str):
             raise ValueError(
                 "bridge_expected_box_walls must be a non-negative integer"
             )
@@ -399,6 +461,109 @@ def _validate_bridge_scalars(scalars: dict) -> None:
             raise ValueError(
                 "bridge_expected_box_walls must be a non-negative integer"
             )
+    if "bridge_nominal_cover_mm" in scalars:
+        raw = scalars["bridge_nominal_cover_mm"]
+        if raw is not None:
+            if conformance.is_boolean(raw) or isinstance(raw, str):
+                raise ValueError(
+                    "bridge_nominal_cover_mm must be a finite non-negative number"
+                )
+            try:
+                number = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "bridge_nominal_cover_mm must be a finite non-negative number"
+                ) from exc
+            if not math.isfinite(number) or number < 0.0:
+                raise ValueError(
+                    "bridge_nominal_cover_mm must be a finite non-negative number"
+                )
+    if "bridge_alpha_ct" in scalars:
+        try:
+            codes.strict_positive_real(
+                scalars["bridge_alpha_ct"],
+                "bridge_alpha_ct",
+            )
+        except ValueError as exc:
+            raise ValueError(f"invalid Danish bridge coefficient: {exc}") from exc
+    typed_text_fields = (
+        "bridge_manager_source",
+        "bridge_project_basis_source",
+        "bridge_authority_approval_reference",
+        "bridge_traffic_fatigue_model",
+        "bridge_traffic_fatigue_source",
+        "bridge_environment_source",
+        "bridge_special_rules",
+        "bridge_departure_source",
+        "bridge_deviations",
+        "bridge_control_source",
+        "bridge_consequence_source",
+        "bridge_high_strength_approval_reference",
+        "bridge_execution_conditions_source",
+        "bridge_deicing_source",
+        "bridge_cover_source",
+        "bridge_alpha_cc_custom_methodology",
+        "bridge_alpha_cc_approval_reference",
+        "bridge_alpha_ct_custom_methodology",
+        "bridge_alpha_ct_approval_reference",
+    )
+    for key in typed_text_fields:
+        if key in scalars:
+            try:
+                conformance.typed_text(scalars[key], key)
+            except ValueError as exc:
+                raise ValueError(
+                    f"invalid Danish bridge provenance: {exc}"
+                ) from exc
+
+
+def _setdefault_danish_bridge_scalars(scalars: dict) -> None:
+    """Install blocking, non-inferred defaults for every PR-05 field."""
+
+    defaults = {
+        "bridge_asset_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_infrastructure_manager": danish_bridge.NOT_ESTABLISHED,
+        "bridge_manager_source": "",
+        "bridge_project_basis_source": "",
+        "bridge_authority_approval_reference": "",
+        "bridge_traffic_fatigue_applicability": (
+            danish_bridge.NOT_ESTABLISHED
+        ),
+        "bridge_traffic_fatigue_model": "",
+        "bridge_traffic_fatigue_source": "",
+        "bridge_environment_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_environment_source": "",
+        "bridge_special_rules": "",
+        "bridge_departure_applicability": danish_bridge.NOT_ESTABLISHED,
+        "bridge_departure_source": "",
+        "bridge_deviations": "",
+        "bridge_control_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_control_source": "",
+        "bridge_consequence_class": danish_bridge.NOT_ESTABLISHED,
+        "bridge_consequence_source": "",
+        "bridge_high_strength_approval": danish_bridge.NOT_ESTABLISHED,
+        "bridge_high_strength_approval_reference": "",
+        "bridge_execution_conditions_source": "",
+        "bridge_surface_condition": danish_bridge.NOT_ESTABLISHED,
+        "bridge_deicing_applicability": danish_bridge.NOT_ESTABLISHED,
+        "bridge_deicing_source": "",
+        "bridge_cover_category": danish_bridge.NOT_ESTABLISHED,
+        "bridge_nominal_cover_mm": None,
+        "bridge_cover_source": "",
+        "bridge_collision_risk_applicability": (
+            danish_bridge.NOT_ESTABLISHED
+        ),
+        "bridge_alpha_cc_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_cc_custom_methodology": "",
+        "bridge_alpha_cc_approval_reference": "",
+        "bridge_alpha_ct": 1.0,
+        "bridge_alpha_ct_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_ct_custom_methodology": "",
+        "bridge_alpha_ct_approval_reference": "",
+        "sls_dk_member_class": DEFAULT_SLS_DK_MEMBER_CLASS,
+    }
+    for key, value in defaults.items():
+        scalars.setdefault(key, value)
 
 
 def _default_fatigue_miner_basis(scalars: dict) -> str:
@@ -415,7 +580,8 @@ def _default_fatigue_miner_basis(scalars: dict) -> str:
     edition = scalars.get("fatigue_edition")
     if (
         edition == fatigue_inputs.EC2_2_2005_AC
-        and scalars.get("design_methodology") == bridge.EN1992_2_BASE
+        and scalars.get("design_methodology")
+        in bridge.BRIDGE_METHODOLOGIES
     ):
         return fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     if edition == fatigue_inputs.EC2_2023:
@@ -721,14 +887,13 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         )
     if fatigue_inputs.BASIS_KEY in scalar_payload:
         scalar_payload[fatigue_inputs.BASIS_KEY] = (
-            fatigue_inputs.normalise_basis(
+            fatigue_inputs.canonical_basis(
                 scalar_payload[fatigue_inputs.BASIS_KEY]
             )
         )
-    elif (
-        scalar_payload.get("fatigue_on")
-        or "fatigue_source" in scalar_payload
-    ):
+    elif scalar_payload.get("fatigue_on"):
+        raise ValueError("fatigue basis is required when fatigue is enabled")
+    elif "fatigue_source" in scalar_payload:
         basis = fatigue_inputs.default_basis()
         basis["spectrum_source"] = str(
             scalar_payload.get("fatigue_source") or ""
@@ -761,6 +926,7 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         "bridge_exposure",
         bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
     )
+    _setdefault_danish_bridge_scalars(scalar_payload)
     _validate_bridge_scalars(scalar_payload)
     _validate_fatigue_miner_scalars(scalar_payload)
     content = {
@@ -836,8 +1002,9 @@ def publication_safe_calculation_record(
     publication boundary rejected evidence, loading or re-saving the sanitized
     record must not infer a match merely because the rejected field is no longer
     present and the input hash still agrees. ``calculation_inputs`` is the one
-    canonical scalar snapshot used to reconstruct both methodology and bridge
-    fatigue conformance, so callers cannot supply those contexts independently.
+    canonical input snapshot used to reconstruct methodology, bridge fatigue
+    conformance, and Danish crack applicability, so callers cannot supply those
+    contexts independently.
     """
 
     if not isinstance(calculation, Mapping):
@@ -851,6 +1018,11 @@ def publication_safe_calculation_record(
     fatigue_context = fatigue_analysis.bridge_publication_context(
         current_inputs
     )
+    expected_crack_numerical_method = (
+        sls.expected_danish_bridge_crack_numerical_method(
+            current_inputs
+        )
+    )
     publication_matches = True
     if "matches_saved_inputs" in calculation:
         publication_matches = calculation.get("matches_saved_inputs") is True
@@ -860,27 +1032,73 @@ def publication_safe_calculation_record(
         if calculation.get(key) not in (None, "")
     }
     if "crack_control" in calculation:
+        raw_crack_control = calculation.get("crack_control")
+        unexpected_crack_issues = []
+        if expected_crack_numerical_method is None:
+            if sls.danish_bridge_crack_route_selected(current_inputs):
+                unexpected_crack_issues.append(
+                    "Stored Danish bridge crack evidence exists although "
+                    "current inputs do not request crack-width calculation."
+                )
+            elif (
+                isinstance(raw_crack_control, Mapping)
+                and raw_crack_control.get("numerical_method") is not None
+            ):
+                unexpected_crack_issues.append(
+                    "Stored Danish bridge crack numerical-method evidence is "
+                    "not applicable to the current methodology, code, and "
+                    "edition."
+                )
         record["crack_control"] = sls.publication_safe_crack_control_record(
-            calculation.get("crack_control")
+            raw_crack_control,
+            expected_numerical_method=(
+                expected_crack_numerical_method
+            ),
+            additional_validation_issues=unexpected_crack_issues,
         )
         if record["crack_control"] is None:
             record.pop("crack_control")
             publication_matches = False
+        elif (
+            expected_crack_numerical_method is not None
+            or unexpected_crack_issues
+        ):
+            crack_validation = record["crack_control"].get(
+                "publication_validation"
+            )
+            publication_matches = (
+                publication_matches
+                and isinstance(crack_validation, Mapping)
+                and crack_validation.get("status") == "ACCEPTED"
+            )
     if "fatigue_conformance" in calculation:
         record["fatigue_conformance"] = (
             fatigue_analysis.publication_safe_conformance_record(
                 calculation.get("fatigue_conformance"),
                 design_methodology=design_methodology,
+                current_basis=current_inputs.get(fatigue_inputs.BASIS_KEY),
             )
         )
         if record["fatigue_conformance"] is None:
             record.pop("fatigue_conformance")
             publication_matches = False
     if "bridge_methodology" in calculation:
+        import bridge_analysis
+
         record["bridge_methodology"] = bridge.publication_safe_record(
             calculation.get("bridge_methodology"),
             design_methodology=design_methodology,
             fatigue_context=fatigue_context,
+            danish_basis_context=bridge_inputs.danish_basis_context(
+                current_inputs
+            ),
+            danish_fck_mpa=bridge_inputs.danish_fck_mpa(current_inputs),
+            danish_crack_context=(
+                bridge_analysis.danish_crack_publication_context(
+                    current_inputs,
+                    crack_control_record=record.get("crack_control"),
+                )
+            ),
         )
         if record["bridge_methodology"] is None:
             record.pop("bridge_methodology")
@@ -925,9 +1143,17 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
         },
     }
     if calculation:
+        publication_inputs = dict(content["scalars"])
+        publication_inputs.update(content.get("tables") or {})
+        publication_inputs["load_cases"] = (
+            content.get("load_cases") or {}
+        )
+        publication_inputs.update(
+            _bridge_tables_from_payload(content.get("bridge"))
+        )
         record = publication_safe_calculation_record(
             calculation,
-            calculation_inputs=content["scalars"],
+            calculation_inputs=publication_inputs,
             input_digest=digest,
         )
         payload["calculation"] = record
@@ -978,7 +1204,7 @@ def project_provenance(text: str) -> dict:
         raise ValueError("malformed 'fatigue' section")
     if raw_bridge is not None and not isinstance(raw_bridge, dict):
         raise ValueError("malformed 'bridge' section")
-    _bridge_tables_from_payload(raw_bridge)
+    bridge_tables = _bridge_tables_from_payload(raw_bridge)
     canonical_inputs = {"tables": raw_tables, "scalars": raw_scalars}
     if raw_load_cases is not None:
         canonical_inputs["load_cases"] = raw_load_cases
@@ -995,7 +1221,12 @@ def project_provenance(text: str) -> dict:
     recorded = provenance.get("input_sha256")
     calculation = publication_safe_calculation_record(
         data.get("calculation"),
-        calculation_inputs=raw_scalars,
+        calculation_inputs={
+            **raw_scalars,
+            **raw_tables,
+            "load_cases": raw_load_cases or {},
+            **bridge_tables,
+        },
         input_digest=actual,
     )
     return {
@@ -1123,9 +1354,19 @@ def parse_project(text: str):
     if fatigue_inputs.BASIS_KEY in scalars:
         if not isinstance(scalars[fatigue_inputs.BASIS_KEY], dict):
             raise ValueError("fatigue basis must be an object")
-        scalars[fatigue_inputs.BASIS_KEY] = fatigue_inputs.normalise_basis(
+        normalise_current_basis = (
+            fatigue_inputs.canonical_basis
+            if data.get("version", 1) >= VERSION
+            else fatigue_inputs.normalise_basis
+        )
+        scalars[fatigue_inputs.BASIS_KEY] = normalise_current_basis(
             scalars[fatigue_inputs.BASIS_KEY]
         )
+    elif (
+        data.get("version", 1) >= VERSION
+        and bool(scalars.get("fatigue_on"))
+    ):
+        raise ValueError("fatigue basis is required when fatigue is enabled")
     elif (
         bool(scalars.get("fatigue_on"))
         or "fatigue_source" in raw_scalars
@@ -1311,6 +1552,7 @@ def parse_project(text: str):
         "bridge_exposure",
         bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
     )
+    _setdefault_danish_bridge_scalars(scalars)
     _validate_bridge_scalars(scalars)
     # A current-version file may still be partial or hand-edited. Never let an
     # unknown routing token fall through the Streamlit selectbox to its fresh-

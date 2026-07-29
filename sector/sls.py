@@ -15,6 +15,8 @@ from collections.abc import Iterable as IterableCollection
 from collections.abc import Set as SetCollection
 from typing import Iterable, Mapping, Sequence
 
+from . import danish_bridge
+
 
 COMBINATION_UNSPECIFIED = "Not designated"
 COMBINATION_CHARACTERISTIC = "Characteristic"
@@ -68,6 +70,27 @@ EXPOSURE_CLASSES_2023 = (
 )
 
 EDITION_BRIDGE_2005_AC = "bridge-2005-ac2008"
+EDITION_BRIDGE_DK_2015 = "bridge-2005-dkna2015"
+CRACK_NUMERICAL_METHOD_SCHEMA = (
+    "sector.crack-numerical-method/dk-bridge-v1"
+)
+CRACK_NUMERICAL_METHOD_DK_BRIDGE = (
+    "DS/EN 1992-2:2005 + DK/NA:2015 with related "
+    "DS/EN 1992-1-1 DK NA:2013"
+)
+_DK_BRIDGE_CRACK_EFFECTIVE_HEIGHT_RULE = (
+    "(h-x)/3 applies only to slabs and prestressed members"
+)
+_DK_BRIDGE_CRACK_COARSE_AREA_RULE = (
+    "centroid-matched effective tension area, Figure 7.100 NA"
+)
+_DK_BRIDGE_CRACK_SOURCES = [
+    "DS/EN 1992-2:2005 Section 7 application of EN 1992-1-1 "
+    "7.3.2(3), 7.3.4(3)/(4), and 7.3.4(101)",
+    "DS/EN 1992-2 DK NA:2015 PDF pages 1 and 7 "
+    "(no competing 7.3.4(101) choice)",
+    "DS/EN 1992-1-1 DK NA:2013 7.3.2(3), 7.3.4(1), 7.3.4(3)",
+]
 BRIDGE_EXPOSURE_NOT_ESTABLISHED = "Not established"
 BRIDGE_EXPOSURE_X0_XC1 = "X0 / XC1"
 BRIDGE_EXPOSURE_XC2_XC4 = "XC2 / XC3 / XC4"
@@ -2102,16 +2125,357 @@ def publication_safe_crack_assessment(
     return safe
 
 
-def publication_safe_crack_control_record(record: Mapping | None) -> dict | None:
+def _resolved_crack_has_tendons(inp: Mapping) -> bool | None:
+    """Resolve tendon presence from calculation or canonical project inputs."""
+
+    explicit = inp.get("sls_has_tendons")
+    if isinstance(explicit, bool):
+        return explicit
+    for key in ("tendons", "tendon_elements"):
+        value = inp.get(key)
+        if isinstance(value, (list, tuple)):
+            return bool(value)
+    table = inp.get("tendons_base")
+    if isinstance(table, Mapping):
+        rows = table.get("rows")
+        if isinstance(rows, list):
+            return bool(rows)
+    if table is not None and hasattr(table, "empty"):
+        try:
+            return not bool(table.empty)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _crack_width_requested(inp: Mapping) -> bool:
+    if inp.get("sls_cw") is True:
+        return True
+    load_cases = inp.get("load_cases")
+    elastic_rows = (
+        load_cases.get("elastic")
+        if isinstance(load_cases, Mapping)
+        else None
+    )
+    return (
+        isinstance(elastic_rows, list)
+        and any(
+            isinstance(row, Mapping)
+            and row.get("check_crack_width") is True
+            for row in elastic_rows
+        )
+    )
+
+
+def danish_bridge_crack_route_selected(inp: Mapping) -> bool:
+    """Return whether current inputs select any canonical Danish bridge route."""
+
+    if not isinstance(inp, Mapping):
+        return False
+    selected = str(inp.get("design_methodology") or "").strip()
+    code = str(inp.get("sls_code") or "").strip()
+    edition = str(inp.get("sls_edition") or "").strip()
+    return (
+        selected == danish_bridge.METHODOLOGY
+        or code == danish_bridge.METHODOLOGY
+        or edition == EDITION_BRIDGE_DK_2015
+    )
+
+
+def expected_danish_bridge_crack_numerical_method(
+    inp: Mapping,
+) -> dict | None:
+    """Return the exact source-backed numerical method required by PR-05."""
+
+    if not isinstance(inp, Mapping) or not _crack_width_requested(inp):
+        return None
+    if not danish_bridge_crack_route_selected(inp):
+        return None
+    member = str(inp.get("sls_member") or "").strip()
+    member = member if member in {"Beam", "Slab"} else None
+    has_tendons = _resolved_crack_has_tendons(inp)
+    include_hx = (
+        member == "Slab" or has_tendons
+        if member is not None and has_tendons is not None
+        else None
+    )
+    return {
+        "schema": CRACK_NUMERICAL_METHOD_SCHEMA,
+        "method": CRACK_NUMERICAL_METHOD_DK_BRIDGE,
+        "selected_methodology": danish_bridge.METHODOLOGY,
+        "code": danish_bridge.METHODOLOGY,
+        "edition": EDITION_BRIDGE_DK_2015,
+        "dk_na_applied": True,
+        "k3_cover_dependent": True,
+        "effective_height_rule": (
+            _DK_BRIDGE_CRACK_EFFECTIVE_HEIGHT_RULE
+        ),
+        "member_type": member,
+        "has_tendons": has_tendons,
+        "include_hx_term": include_hx,
+        "systems": ["fine", "coarse"],
+        "coarse_effective_area_rule": (
+            _DK_BRIDGE_CRACK_COARSE_AREA_RULE
+        ),
+        "coarse_width_factor": 0.5,
+        "source_clauses": list(_DK_BRIDGE_CRACK_SOURCES),
+    }
+
+
+def calculated_danish_bridge_crack_numerical_method(
+    inp: Mapping,
+    *,
+    dk_na_applied: bool,
+    include_hx_term: bool,
+) -> dict | None:
+    """Record the flags actually used by the Danish bridge crack solver."""
+
+    expected = expected_danish_bridge_crack_numerical_method(inp)
+    if expected is None:
+        return None
+    applied = dk_na_applied is True
+    record = dict(expected)
+    record.update(
+        selected_methodology=str(
+            inp.get("design_methodology") or ""
+        ).strip(),
+        code=str(inp.get("sls_code") or "").strip(),
+        edition=str(inp.get("sls_edition") or "").strip(),
+        dk_na_applied=applied,
+        k3_cover_dependent=applied,
+        include_hx_term=(
+            include_hx_term if isinstance(include_hx_term, bool) else None
+        ),
+        systems=["fine", "coarse"] if applied else ["fine"],
+        coarse_effective_area_rule=(
+            _DK_BRIDGE_CRACK_COARSE_AREA_RULE if applied else None
+        ),
+        coarse_width_factor=0.5 if applied else None,
+    )
+    return record
+
+
+def danish_bridge_crack_numerical_method_issues(
+    raw: Mapping | None,
+    *,
+    expected: Mapping | None = None,
+) -> tuple[str, ...]:
+    """Validate numerical-method provenance independently of crack verdicts."""
+
+    if not isinstance(raw, Mapping):
+        return ("Danish bridge crack numerical-method provenance is missing.",)
+    record = dict(raw)
+    issues = []
+    fixed = {
+        "schema": CRACK_NUMERICAL_METHOD_SCHEMA,
+        "method": CRACK_NUMERICAL_METHOD_DK_BRIDGE,
+        "selected_methodology": danish_bridge.METHODOLOGY,
+        "code": danish_bridge.METHODOLOGY,
+        "edition": EDITION_BRIDGE_DK_2015,
+        "dk_na_applied": True,
+        "k3_cover_dependent": True,
+        "effective_height_rule": (
+            _DK_BRIDGE_CRACK_EFFECTIVE_HEIGHT_RULE
+        ),
+        "systems": ["fine", "coarse"],
+        "coarse_effective_area_rule": (
+            _DK_BRIDGE_CRACK_COARSE_AREA_RULE
+        ),
+        "coarse_width_factor": 0.5,
+        "source_clauses": list(_DK_BRIDGE_CRACK_SOURCES),
+    }
+    for key, value in fixed.items():
+        if not _evidence_values_equal(record.get(key), value):
+            issues.append(
+                f"Danish bridge crack numerical-method field {key!r} "
+                "does not match the controlled rule map."
+            )
+    member = record.get("member_type")
+    has_tendons = record.get("has_tendons")
+    include_hx = record.get("include_hx_term")
+    if member not in {"Beam", "Slab"}:
+        issues.append(
+            "Danish bridge crack numerical method has no valid member type."
+        )
+    if not isinstance(has_tendons, bool):
+        issues.append(
+            "Danish bridge crack numerical method has no Boolean tendon "
+            "presence evidence."
+        )
+    if not isinstance(include_hx, bool):
+        issues.append(
+            "Danish bridge crack numerical method has no Boolean effective-"
+            "height routing evidence."
+        )
+    elif member in {"Beam", "Slab"} and isinstance(has_tendons, bool):
+        if include_hx != (member == "Slab" or has_tendons):
+            issues.append(
+                "Danish bridge crack effective-height routing conflicts with "
+                "the member/tendon evidence."
+            )
+    if expected is not None:
+        expected_record = dict(expected)
+        if set(record) != set(expected_record):
+            issues.append(
+                "Danish bridge crack numerical-method schema fields do not "
+                "exactly match the current calculation basis."
+            )
+        for key, value in expected_record.items():
+            if not _evidence_values_equal(record.get(key), value):
+                issues.append(
+                    f"Danish bridge crack numerical-method field {key!r} "
+                    "is stale or conflicts with current inputs."
+                )
+    return tuple(dict.fromkeys(issues))
+
+
+def danish_bridge_crack_result_issues(
+    elastic: Mapping | None,
+    inp: Mapping,
+) -> tuple[str, ...]:
+    """Check raw Danish numerical routing before bridge acceptance."""
+
+    expected = expected_danish_bridge_crack_numerical_method(inp)
+    if expected is None:
+        raw_method = (
+            elastic.get("crack_numerical_method")
+            if isinstance(elastic, Mapping)
+            else None
+        )
+        if (
+            danish_bridge_crack_route_selected(inp)
+            and not _crack_width_requested(inp)
+        ):
+            return (
+                "Danish bridge crack evidence exists although current inputs "
+                "do not request crack-width calculation.",
+            )
+        if raw_method is not None:
+            return (
+                "Stored Danish bridge crack numerical-method evidence is not "
+                "applicable to the current methodology, code, and edition.",
+            )
+        return ()
+    if not isinstance(elastic, Mapping):
+        return ("Danish bridge crack result is not structured evidence.",)
+    issues = list(danish_bridge_crack_numerical_method_issues(
+        elastic.get("crack_numerical_method"),
+        expected=expected,
+    ))
+    responses = elastic.get("crack_responses")
+    if not isinstance(responses, Mapping):
+        return tuple(dict.fromkeys([
+            *issues,
+            "Danish bridge crack responses are not a structured mapping.",
+        ]))
+    required = {
+        "Long-term (fine)",
+        "Total (fine)",
+        "Long-term (coarse)",
+        "Total (coarse)",
+    }
+    missing = sorted(required.difference(responses))
+    if missing:
+        issues.append(
+            "Danish bridge calculated crack evidence omits required "
+            f"fine/coarse responses: {', '.join(missing)}."
+        )
+    non_numeric = [
+        name
+        for name in required.intersection(responses)
+        if (
+            not isinstance(responses.get(name), Mapping)
+            or crack_width_numeric_value(
+                responses[name].get("wk")
+            ) is None
+        )
+    ]
+    if non_numeric:
+        dispositions = elastic.get("crack_dispositions")
+        if not isinstance(dispositions, Mapping):
+            issues.append(
+                "Danish bridge non-numeric crack responses have no "
+                "structured solver disposition mapping."
+            )
+        else:
+            for name in sorted(non_numeric):
+                disposition = dispositions.get(name)
+                if not isinstance(disposition, Mapping):
+                    issues.append(
+                        "Danish bridge crack response "
+                        f"{name!r} has no structured solver disposition."
+                    )
+                    continue
+                if (
+                    _upper_text(disposition.get("status"))
+                    != "NOT APPLICABLE"
+                ):
+                    issues.append(
+                        "Danish bridge crack response "
+                        f"{name!r} has no matching NOT APPLICABLE solver "
+                        "disposition."
+                    )
+                elif not _optional_text(disposition.get("reason")):
+                    issues.append(
+                        "Danish bridge crack response "
+                        f"{name!r} has no solver disposition reason."
+                    )
+    return tuple(dict.fromkeys(issues))
+
+
+def publication_safe_crack_control_record(
+    record: Mapping | None,
+    *,
+    expected_numerical_method: Mapping | None = None,
+    additional_validation_issues: Iterable[str] = (),
+) -> dict | None:
     """Cross-check a stored crack snapshot before save, load or display."""
     if record is None:
         return None
     if not isinstance(record, Mapping):
         return None
     safe = copy.deepcopy(dict(record))
+    raw_numerical_method = safe.get("numerical_method")
+    if isinstance(additional_validation_issues, str):
+        additional_validation_issues = (additional_validation_issues,)
+    numerical_method_issues = [
+        str(issue).strip()
+        for issue in additional_validation_issues
+        if str(issue).strip()
+    ]
+    if expected_numerical_method is not None:
+        numerical_method_issues.extend(
+            danish_bridge_crack_numerical_method_issues(
+                raw_numerical_method,
+                expected=expected_numerical_method,
+            )
+        )
+    elif raw_numerical_method is not None:
+        numerical_method_issues.extend(
+            danish_bridge_crack_numerical_method_issues(
+                raw_numerical_method
+            )
+        )
+    if isinstance(raw_numerical_method, Mapping):
+        safe["numerical_method"] = copy.deepcopy(
+            dict(raw_numerical_method)
+        )
+    else:
+        safe.pop("numerical_method", None)
     raw_cases = safe.get("cases")
     if not isinstance(raw_cases, list):
         safe["cases"] = []
+        if expected_numerical_method is not None:
+            numerical_method_issues.append(
+                "Stored Danish bridge crack-control cases are missing or "
+                "malformed."
+            )
+        if numerical_method_issues:
+            safe["publication_validation"] = {
+                "status": "REJECTED",
+                "reason": " ".join(numerical_method_issues),
+                "issues": list(dict.fromkeys(numerical_method_issues)),
+            }
         return safe
 
     cases = []
@@ -2509,6 +2873,57 @@ def publication_safe_crack_control_record(record: Mapping | None) -> dict | None
         )
         case["responses"] = responses
         cases.append(case)
+    if expected_numerical_method is not None:
+        required_names = {
+            "Long-term (fine)",
+            "Total (fine)",
+            "Long-term (coarse)",
+            "Total (coarse)",
+        }
+        for case in cases:
+            responses = case.get("responses")
+            response_rows = (
+                responses if isinstance(responses, list) else ()
+            )
+            names = {
+                str(response.get("name") or "").strip()
+                for response in response_rows
+                if isinstance(response, Mapping)
+            }
+            missing = sorted(required_names.difference(names))
+            if missing:
+                numerical_method_issues.append(
+                    "Stored Danish bridge crack evidence omits required "
+                    f"fine/coarse responses: {', '.join(missing)}."
+                )
+    numerical_method_issues = list(
+        dict.fromkeys(numerical_method_issues)
+    )
+    if numerical_method_issues:
+        reason = " ".join(numerical_method_issues)
+        rejection = [{
+            "response": "Danish bridge numerical crack method",
+            "reason": reason,
+            "solver_provenance": None,
+        }]
+        for case in cases:
+            case["assessment"] = publication_safe_crack_assessment(
+                case.get("assessment"),
+                rejection,
+            )
+        safe["publication_validation"] = {
+            "status": "REJECTED",
+            "reason": reason,
+            "issues": numerical_method_issues,
+        }
+    elif expected_numerical_method is not None:
+        safe["publication_validation"] = {
+            "status": "ACCEPTED",
+            "reason": (
+                "Danish bridge numerical crack method matches the current "
+                "source-backed calculation basis."
+            ),
+        }
     safe["cases"] = cases
     return safe
 
@@ -2550,6 +2965,12 @@ def _standard_reference(edition: str, kind: str, dk_na: bool) -> str:
         return (
             "DS/EN 1992-2:2005 section 7.3.1(105), Table 7.101N; "
             "EN 1992-2:2005/AC:2008"
+        )
+    if edition == EDITION_BRIDGE_DK_2015:
+        return (
+            "DS/EN 1992-2:2005 section 7.3.1(105), Table 7.101N; "
+            "EN 1992-2:2005/AC:2008; DS/EN 1992-2 DK NA:2015, "
+            "Table 7.101N DK NA, PDF page 4"
         )
     base = "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
     if dk_na:
@@ -2624,6 +3045,18 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         inp.get("sls_bridge_exposure_class")
         or BRIDGE_EXPOSURE_NOT_ESTABLISHED
     ).strip()
+    dk_bridge_class = str(
+        inp.get("bridge_asset_class")
+        or danish_bridge.NOT_ESTABLISHED
+    ).strip()
+    dk_environment_class = str(
+        inp.get("bridge_environment_class")
+        or danish_bridge.NOT_ESTABLISHED
+    ).strip()
+    dk_member_class = str(
+        inp.get("sls_dk_member_class")
+        or danish_bridge.NOT_ESTABLISHED
+    ).strip()
     prestress_class = str(inp.get("sls_prestress_class") or "").strip()
     protection_class = str(
         inp.get("sls_protection_class") or PROTECTION_NOT_ESTABLISHED
@@ -2637,6 +3070,9 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         "exposure": exposure or None,
         "exposure_class": exposure_class,
         "bridge_exposure_class": bridge_exposure_class,
+        "dk_bridge_class": dk_bridge_class,
+        "dk_environment_class": dk_environment_class,
+        "dk_member_class": dk_member_class,
         "protection_class": protection_class,
         "method": code or None,
     }
@@ -2772,7 +3208,12 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         )]
 
     base_reasons = []
-    if edition not in {"2004", "2023", EDITION_BRIDGE_2005_AC}:
+    if edition not in {
+        "2004",
+        "2023",
+        EDITION_BRIDGE_2005_AC,
+        EDITION_BRIDGE_DK_2015,
+    }:
         base_reasons.append("The selected code edition is not supported.")
     if prestress_class not in PRESTRESS_CLASSES:
         base_reasons.append(
@@ -2789,6 +3230,52 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
         base_reasons.append(
             "Select the governing DS/EN 1992-2 Table 7.101N exposure group."
         )
+    if edition == EDITION_BRIDGE_DK_2015:
+        if dk_bridge_class not in {
+            danish_bridge.ASSET_ROAD,
+            danish_bridge.ASSET_FOOT,
+            danish_bridge.ASSET_RAIL,
+        }:
+            base_reasons.append(
+                "Select road bridge, footbridge, or railway bridge explicitly "
+                "for Table 7.101N DK NA."
+            )
+        if dk_environment_class not in {
+            danish_bridge.ENVIRONMENT_AGGRESSIVE,
+            danish_bridge.ENVIRONMENT_EXTRA_AGGRESSIVE,
+        }:
+            base_reasons.append(
+                "Select Aggressive or Extra aggressive Danish bridge "
+                "environment; Moderate is not used for bridges."
+            )
+        if dk_member_class not in danish_bridge.MEMBER_CLASSES[1:]:
+            base_reasons.append(
+                "Select non-prestressed or pre/post-tensioned Danish member "
+                "class explicitly."
+            )
+        has_tendons = inp.get("sls_has_tendons")
+        if not is_boolean_value(has_tendons):
+            base_reasons.append(
+                "Danish member routing requires explicit Boolean tendon-"
+                "presence evidence from the calculation snapshot."
+            )
+        else:
+            if (
+                dk_member_class == danish_bridge.MEMBER_NONPRESTRESSED
+                and bool(has_tendons)
+            ):
+                base_reasons.append(
+                    "The non-prestressed route conflicts with tendons in the "
+                    "calculation snapshot."
+                )
+            if (
+                dk_member_class == danish_bridge.MEMBER_PRESTRESSED
+                and not bool(has_tendons)
+            ):
+                base_reasons.append(
+                    "The prestressed route conflicts with a calculation "
+                    "snapshot containing no tendons."
+                )
     base_reason = " ".join(base_reasons) or None
     criteria = []
 
@@ -2888,6 +3375,60 @@ def crack_criteria_from_inputs(inp: Mapping) -> list[dict]:
                         **applicability,
                         "decompression_applicability": (
                             "Table 7.101N required"
+                        ),
+                    },
+                ))
+
+    if durability_selected and edition == EDITION_BRIDGE_DK_2015:
+        reference = _criterion_source(
+            _standard_reference(
+                edition, CRITERION_DURABILITY, True
+            ),
+            source,
+        )
+        if base_reason:
+            criteria.append(_criterion_record(
+                "bridge-dk-standard-durability-routing",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=reference,
+                required_combination=None,
+                limit_mm=None,
+                applicability=applicability,
+                configuration_reason=base_reason,
+            ))
+        else:
+            extra_aggressive = (
+                dk_environment_class
+                == danish_bridge.ENVIRONMENT_EXTRA_AGGRESSIVE
+            )
+            if dk_member_class == danish_bridge.MEMBER_NONPRESTRESSED:
+                crack_limit = 0.20 if extra_aggressive else 0.30
+            elif dk_bridge_class == danish_bridge.ASSET_RAIL:
+                crack_limit = 0.10
+            else:
+                crack_limit = 0.10 if extra_aggressive else 0.20
+            criteria.append(_criterion_record(
+                "bridge-dk-standard-durability",
+                CRITERION_DURABILITY,
+                source_type=CRITERION_MODE_STANDARD,
+                source=reference,
+                required_combination=COMBINATION_FREQUENT,
+                limit_mm=crack_limit,
+                applicability=applicability,
+            ))
+            if dk_member_class == danish_bridge.MEMBER_PRESTRESSED:
+                criteria.append(_criterion_record(
+                    "bridge-dk-standard-decompression",
+                    CRITERION_DECOMPRESSION,
+                    source_type=CRITERION_MODE_STANDARD,
+                    source=reference,
+                    required_combination=COMBINATION_QUASI_PERMANENT,
+                    limit_mm=None,
+                    applicability={
+                        **applicability,
+                        "decompression_applicability": (
+                            "Table 7.101N DK NA required"
                         ),
                     },
                 ))

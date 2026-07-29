@@ -45,9 +45,9 @@ from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import (bridge, capacity, codes, combined, conformance, detailing,  # noqa: E402
-                    geometry, kernels, material_presets as mp, shear, templates,
-                    torsion)
+from sector import (bridge, capacity, codes, combined, conformance,  # noqa: E402
+                    danish_bridge, detailing, geometry, kernels,
+                    material_presets as mp, shear, templates, torsion)
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector import sls as sls_core  # noqa: E402
@@ -83,18 +83,22 @@ _DEG = chr(0x00B0)
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
 # Crack-width code edition -> the crack-spacing flags. edition: "2004" (EC2 7.3.4)
-# or "2023" (EC2 9.2.3 refined). dk_na: cover-dependent k3 and the (h-x)/3
-# effective-height term only for slabs/prestressed; the DK NA option reports BOTH
-# the fine and the coarse crack system (7.3.4(1)) -- the coarse effective area is
-# the band whose centroid matches the tension reinforcement (figure 7.100 NA) and
-# its wk is halved -- for both the sustained and total-response duration states.
+# or "2023" (EC2 9.2.3 refined). dk_na activates the related
+# DS/EN 1992-1-1 DK NA numerical model: cover-dependent k3, the conditional
+# (h-x)/3 effective-height term, and both fine and coarse crack systems.
+# DS/EN 1992-2:2005 section 7 imports/recommends that method; the 2015 bridge
+# NA makes the related national annex part of Danish bridge practice.
 _CRACK_CODES = {
     "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
     "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
     "EN 1992-1-1:2023": dict(dk_na=False, edition="2023"),
-    "DS/EN 1992-2:2005 + AC:2008": dict(
+    bridge.EN1992_2_BASE: dict(
         dk_na=False,
         edition=sls_core.EDITION_BRIDGE_2005_AC,
+    ),
+    bridge.EN1992_2_DK_NA: dict(
+        dk_na=True,
+        edition=sls_core.EDITION_BRIDGE_DK_2015,
     ),
 }
 # Old saved values for the (now merged) fine/coarse DK NA options.
@@ -3108,18 +3112,32 @@ def _perform_autosave() -> bool:
         return False
     try:
         current_tables, current_scalars = _project_state()
-        publication_scalars = project_io._canonical_inputs(
+        canonical_inputs = project_io._canonical_inputs(
             current_tables,
             current_scalars,
-        )["scalars"]
+        )
+        publication_inputs = dict(canonical_inputs["scalars"])
+        publication_inputs.update(
+            canonical_inputs.get("tables") or {}
+        )
+        publication_inputs["load_cases"] = (
+            canonical_inputs.get("load_cases") or {}
+        )
+        # Danish fatigue applicability is owned by the bridge coverage table;
+        # autosave must validate against the same complete map as project save.
+        publication_inputs.update(
+            project_io._bridge_tables_from_payload(
+                canonical_inputs.get("bridge")
+            )
+        )
     except Exception:
-        publication_scalars = {}
+        publication_inputs = {}
     record_changed_by_validation = False
     calculation = st.session_state.get("calculation_record")
     if isinstance(calculation, Mapping):
         safe_calculation = project_io.publication_safe_calculation_record(
             calculation,
-            calculation_inputs=publication_scalars,
+            calculation_inputs=publication_inputs,
             input_digest=digest,
         )
         if safe_calculation != calculation:
@@ -4168,10 +4186,12 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
-    "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
     "sls_tendon_bond", "sls_tendon_xi",
     "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
     "sls_exposure_class", "sls_bridge_exposure_class",
+    "sls_dk_member_class", "bridge_asset_class",
+    "bridge_environment_class", "design_methodology",
     "sls_exposure_context",
     "sls_check_appearance", "sls_appearance_limit",
     "sls_check_durability", "sls_decompression_applicability",
@@ -4206,6 +4226,7 @@ _SHEAR_SIG_KEYS = (
 _CAPACITY_CONTEXT_SIG_KEYS = tuple(
     key for key in _SHEAR_SIG_KEYS if key not in {"shear_V", "torsion_T"}
 ) + (
+    "design_methodology", "bridge_alpha_ct",
     "minimum_reinforcement_on", "clear_spacing_on",
     "transverse_detailing_on", "detailing_edition",
     "detailing_member_type", "detailing_cut_direction",
@@ -4274,7 +4295,7 @@ def build_inputs(host=st):
     fat = aset.expander("Fatigue", expanded=False)
     sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
     brg = aset.expander(
-        "Bridge methodology (DS/EN 1992-2 base)",
+        "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
         expanded=False,
     )
     about_slot = project.container()
@@ -4304,18 +4325,22 @@ def build_inputs(host=st):
         "design_methodology",
         help=(
             "Independent component methods preserves Sector's normal expert "
-            "method selection. The DS/EN 1992-2 base option activates a separate "
-            "coverage/applicability gate and never treats an ordinary 1-1 result "
-            "as a complete bridge-method verdict."
+            "method selection. The base and Danish bridge options remain "
+            "distinct whole-calculation methods with separate immutable "
+            "coverage/applicability evidence."
         ),
     )
-    bridge_method_active = design_methodology == bridge.EN1992_2_BASE
+    bridge_method_active = bridge.is_bridge_methodology(design_methodology)
+    base_bridge_method_active = design_methodology == bridge.EN1992_2_BASE
+    dk_bridge_method_active = bridge.is_danish_bridge_methodology(
+        design_methodology
+    )
     if bridge_method_active:
         # These methods are owned by the bridge base selection. The numerical
         # crack-spacing model still inherits the 2004-family calculation, while
         # acceptance is routed by the bridge edition token.
         st.session_state["fatigue_edition"] = fatigue_inputs.EC2_2_2005_AC
-        st.session_state["sls_code"] = "DS/EN 1992-2:2005 + AC:2008"
+        st.session_state["sls_code"] = design_methodology
         st.session_state["sls_criterion_mode"] = (
             sls_core.CRITERION_MODE_STANDARD
         )
@@ -4326,7 +4351,7 @@ def build_inputs(host=st):
         "A required gap blocks the whole methodology verdict."
     )
     brg.dataframe(
-        pd.DataFrame(bridge.coverage_matrix())[
+        pd.DataFrame(bridge.coverage_matrix(design_methodology))[
             ["check_id", "title", "disposition", "bridge_reference"]
         ],
         hide_index=True,
@@ -4347,8 +4372,9 @@ def build_inputs(host=st):
         "bridge_brittle_method",
         disabled=not bridge_method_active,
         help=(
-            "Sector calculates Method b. Methods a/c remain recorded but "
-            "explicitly NOT ASSESSED."
+            "Sector calculates Method b only under the base bridge method. "
+            "The Danish NA requires Method a, which remains explicitly "
+            "NOT ASSESSED until independent evidence is supplied."
         ),
     )
     bridge_expected_box_walls = _seeded_number(
@@ -4395,11 +4421,296 @@ def build_inputs(host=st):
             "not-applicable decision and source."
         ),
     )
+    dkbox = brg.expander(
+        "Danish infrastructure-manager and project design basis",
+        expanded=dk_bridge_method_active,
+    )
+    dk1, dk2 = dkbox.columns(2)
+    bridge_asset_class = _seeded_selectbox(
+        dk1,
+        "Bridge / infrastructure class",
+        list(danish_bridge.ASSET_CLASSES),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_asset_class",
+        disabled=not dk_bridge_method_active,
+        help="Never inferred from the manager, loads, or model geometry.",
+    )
+    bridge_infrastructure_manager = _seeded_selectbox(
+        dk2,
+        "Infrastructure manager",
+        list(danish_bridge.INFRASTRUCTURE_MANAGERS),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_infrastructure_manager",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_manager_source = _seeded_text(
+        dk1,
+        "Manager requirement document and edition",
+        "",
+        "bridge_manager_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_project_basis_source = _seeded_text(
+        dk2,
+        "Project design-basis document / clause",
+        "",
+        "bridge_project_basis_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_authority_approval_reference = _seeded_text(
+        dk1,
+        "Departure authority approval / dispensation reference",
+        "",
+        "bridge_authority_approval_reference",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_departure_applicability = _seeded_selectbox(
+        dk2,
+        "Project departure / dispensation applicability",
+        list(danish_bridge.APPLICABILITY_OPTIONS),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_departure_applicability",
+        disabled=not dk_bridge_method_active,
+        help=(
+            "Select explicitly. Sector never infers a departure from free-text "
+            "notes or an authority reference."
+        ),
+    )
+    bridge_departure_source = _seeded_text(
+        dk1,
+        "Departure methodology / source clause",
+        "",
+        "bridge_departure_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_environment_class = _seeded_selectbox(
+        dk2,
+        "Danish bridge environmental class",
+        list(danish_bridge.ENVIRONMENT_CLASSES),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_environment_class",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_environment_source = _seeded_text(
+        dk1,
+        "Environmental-class project source",
+        "",
+        "bridge_environment_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_control_class = _seeded_selectbox(
+        dk2,
+        "Construction / control class",
+        list(danish_bridge.CONTROL_CLASSES),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_control_class",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_control_source = _seeded_text(
+        dk2,
+        "Control-class source",
+        "",
+        "bridge_control_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_consequence_class = _seeded_selectbox(
+        dk1,
+        "Consequence class",
+        list(danish_bridge.CONSEQUENCE_CLASSES),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_consequence_class",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_consequence_source = _seeded_text(
+        dk2,
+        "Consequence-class source",
+        "",
+        "bridge_consequence_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_traffic_fatigue_applicability = _seeded_selectbox(
+        dk1,
+        "Traffic / fatigue-model applicability",
+        list(danish_bridge.FATIGUE_APPLICABILITY),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_traffic_fatigue_applicability",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_traffic_fatigue_model = _seeded_text(
+        dk2,
+        "Selected traffic / fatigue model",
+        "",
+        "bridge_traffic_fatigue_model",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_traffic_fatigue_source = _seeded_text(
+        dk1,
+        "Traffic / fatigue model source",
+        "",
+        "bridge_traffic_fatigue_source",
+        disabled=not dk_bridge_method_active,
+    )
+    dk2.caption(
+        "When Required, the declared model must exactly match Fatigue > "
+        "Spectrum basis > Method. The declared source must exactly match the "
+        "calculated spectrum source or cycle-count source, and both calculated "
+        "sources must be stated."
+    )
+    bridge_high_strength_approval = _seeded_selectbox(
+        dk2,
+        "Infrastructure-manager approval for fck > 50 MPa",
+        list(danish_bridge.APPROVAL_STATES),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_high_strength_approval",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_high_strength_approval_reference = _seeded_text(
+        dk1,
+        "High-strength approval reference",
+        "",
+        "bridge_high_strength_approval_reference",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_execution_conditions_source = _seeded_text(
+        dk2,
+        "Project-specific execution-conditions source",
+        "",
+        "bridge_execution_conditions_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_surface_condition = _seeded_selectbox(
+        dk1,
+        "Bridge surface condition",
+        list(danish_bridge.SURFACE_CONDITIONS),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_surface_condition",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_deicing_applicability = _seeded_selectbox(
+        dk2,
+        "De-icing-distance rule applicability",
+        list(danish_bridge.APPLICABILITY_OPTIONS),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_deicing_applicability",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_deicing_source = _seeded_text(
+        dk1,
+        "De-icing applicability / geometry source",
+        "",
+        "bridge_deicing_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_cover_category = _seeded_selectbox(
+        dk2,
+        "Cover reinforcement / duct category",
+        list(danish_bridge.COVER_CATEGORIES),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_cover_category",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_nominal_cover_mm = _seeded_number(
+        dk2,
+        "Actual nominal cover cnom (mm)",
+        0.0,
+        500.0,
+        None,
+        1.0,
+        "bridge_nominal_cover_mm",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_cover_source = _seeded_text(
+        dk1,
+        "Nominal-cover model / drawing source",
+        "",
+        "bridge_cover_source",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_collision_risk_applicability = _seeded_selectbox(
+        dk2,
+        "Rail prestressing collision-risk 75 mm route",
+        list(danish_bridge.APPLICABILITY_OPTIONS),
+        danish_bridge.NOT_ESTABLISHED,
+        "bridge_collision_risk_applicability",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_alpha_cc_basis = _seeded_selectbox(
+        dk1,
+        "alpha_cc basis",
+        list(conformance.BASIS_OPTIONS),
+        conformance.STANDARD_BASIS,
+        "bridge_alpha_cc_basis",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_alpha_cc_custom_methodology = _seeded_text(
+        dk2,
+        "alpha_cc custom methodology",
+        "",
+        "bridge_alpha_cc_custom_methodology",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_alpha_cc_approval_reference = _seeded_text(
+        dk1,
+        "alpha_cc custom approval / source",
+        "",
+        "bridge_alpha_cc_approval_reference",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_alpha_ct = _seeded_number(
+        dk2,
+        "Danish bridge alpha_ct (actual calculation input)",
+        0.01,
+        2.0,
+        1.0,
+        0.01,
+        "bridge_alpha_ct",
+        disabled=not dk_bridge_method_active,
+        help=(
+            "Used directly in torsional fctd when the Danish bridge method is "
+            "selected. A positive custom value is retained and qualified."
+        ),
+    )
+    bridge_alpha_ct_basis = _seeded_selectbox(
+        dk1,
+        "alpha_ct basis",
+        list(conformance.BASIS_OPTIONS),
+        conformance.STANDARD_BASIS,
+        "bridge_alpha_ct_basis",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_alpha_ct_custom_methodology = _seeded_text(
+        dk2,
+        "alpha_ct custom methodology",
+        "",
+        "bridge_alpha_ct_custom_methodology",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_alpha_ct_approval_reference = _seeded_text(
+        dk1,
+        "alpha_ct custom approval / source",
+        "",
+        "bridge_alpha_ct_approval_reference",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_special_rules = _seeded_text_area(
+        dkbox,
+        "Mapped special project rules",
+        "",
+        "bridge_special_rules",
+        disabled=not dk_bridge_method_active,
+    )
+    bridge_deviations = _seeded_text_area(
+        dkbox,
+        "Project departure / dispensation description",
+        "",
+        "bridge_deviations",
+        disabled=not dk_bridge_method_active,
+    )
     brg.markdown("**Prestressed Method-b tensile regions**")
     bridge_brittle_table = _bridge_table_editor(
         brg,
         bridge_inputs.BRITTLE_TABLE_KEY,
-        disabled=not bridge_method_active,
+        disabled=not base_bridge_method_active,
     )
     brg.markdown("**Box-wall shear/torsion evidence**")
     bridge_box_wall_table = _bridge_table_editor(
@@ -5183,6 +5494,24 @@ def build_inputs(host=st):
             "Sector does not parse or infer it from free text."
         ),
     )
+    sls_dk_member_class = _seeded_selectbox(
+        scw,
+        "DK NA Table 7.101N member class",
+        list(danish_bridge.MEMBER_CLASSES),
+        project_io.DEFAULT_SLS_DK_MEMBER_CLASS,
+        "sls_dk_member_class",
+        disabled=not (
+            elastic_on
+            and sls_cw
+            and standard_criteria
+            and sls_edition == sls_core.EDITION_BRIDGE_DK_2015
+        ),
+        help=(
+            "Separate from bond class: explicitly selects the Danish "
+            "non-prestressed or pre/post-tensioned acceptance row. Sector also "
+            "checks it against the calculation snapshot's tendon presence."
+        ),
+    )
     sls_bridge_exposure_class = _seeded_selectbox(
         scw,
         "EN 1992-2 Table 7.101N governing exposure group",
@@ -5255,6 +5584,8 @@ def build_inputs(host=st):
             + (
                 "(Table 9.2)"
                 if sls_edition == "2023"
+                else "(Table 7.101N DK NA)"
+                if sls_edition == sls_core.EDITION_BRIDGE_DK_2015
                 else "(Table 7.101N)"
                 if sls_edition == sls_core.EDITION_BRIDGE_2005_AC
                 else "(Table 7.1N)"
@@ -5281,7 +5612,10 @@ def build_inputs(host=st):
             and sls_cw
             and standard_criteria
             and sls_check_durability
-        ) or sls_edition == sls_core.EDITION_BRIDGE_2005_AC,
+        ) or sls_edition in {
+            sls_core.EDITION_BRIDGE_2005_AC,
+            sls_core.EDITION_BRIDGE_DK_2015,
+        },
         help=(
             "Limit selected from the applicable standard table. Only a response "
             "explicitly tagged with the required SLS combination can govern. "
@@ -5299,6 +5633,19 @@ def build_inputs(host=st):
             "Table 7.101N owns the standard value: 0.30 mm QP for reinforced/"
             "unbonded, 0.20 mm frequent for the applicable bonded rows, or "
             "decompression only for XD/XS."
+        )
+    if (
+        elastic_on
+        and sls_cw
+        and standard_criteria
+        and sls_edition == sls_core.EDITION_BRIDGE_DK_2015
+    ):
+        scw.caption(
+            "Table 7.101N DK NA routes every final-state width check to the "
+            "Frequent combination: non-prestressed 0.30/0.20 mm, road or "
+            "footbridge prestressed 0.20/0.10 mm, and railway prestressed "
+            "0.10/0.10 mm for Aggressive/Extra aggressive. Prestressed rows "
+            "also require a separate Quasi-permanent decompression response."
         )
     sls_decompression_applicability = _seeded_selectbox(
         scw,
@@ -6566,7 +6913,18 @@ def build_inputs(host=st):
     # Table actions live in their canonical frames, while the shared calculation
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.
-    _get = lambda keys: tuple(st.session_state.get(k) for k in keys)
+    def _signature_context_value(key):
+        # Crack applicability is owned by the canonical Elastic case table,
+        # not a standalone widget/session value. Bind its derived aggregate
+        # explicitly so enabling or disabling the last crack-width row also
+        # invalidates row-cache reuse.
+        if key == "sls_cw":
+            return bool(sls_cw)
+        return st.session_state.get(key)
+
+    _get = lambda keys: tuple(
+        _signature_context_value(key) for key in keys
+    )
 
     def _factor_signature_value(value):
         if value is None:
@@ -6664,6 +7022,19 @@ def build_inputs(host=st):
         bridge_shear_scope,
         bridge_exposure,
         tuple(
+            (key, st.session_state.get(key))
+            for key in project_io.BRIDGE_SCALAR_KEYS
+            if key not in {
+                "design_methodology",
+                "bridge_brittle_method",
+                "bridge_expected_box_walls",
+                "bridge_minimum_scope",
+                "bridge_shear_scope",
+                "bridge_exposure",
+            }
+        ),
+        ("sls_dk_member_class", sls_dk_member_class),
+        tuple(
             (
                 key,
                 _bridge_table_signature(bridge_tables[key], key),
@@ -6721,6 +7092,18 @@ def build_inputs(host=st):
                 bridge_minimum_scope=bridge_minimum_scope,
                 bridge_shear_scope=bridge_shear_scope,
                 bridge_exposure=bridge_exposure,
+                **{
+                    key: st.session_state.get(key)
+                    for key in project_io.BRIDGE_SCALAR_KEYS
+                    if key not in {
+                        "design_methodology",
+                        "bridge_brittle_method",
+                        "bridge_expected_box_walls",
+                        "bridge_minimum_scope",
+                        "bridge_shear_scope",
+                        "bridge_exposure",
+                    }
+                },
                 bridge_coverage_base=bridge_tables[
                     bridge_inputs.COVERAGE_TABLE_KEY
                 ],
@@ -6777,6 +7160,8 @@ def build_inputs(host=st):
                 sls_protection_class=sls_protection_class,
                 sls_exposure_class=sls_exposure_class,
                 sls_bridge_exposure_class=sls_bridge_exposure_class,
+                sls_dk_member_class=sls_dk_member_class,
+                sls_has_tendons=bool(tendon_elements),
                 sls_exposure_context=sls_exposure_context,
                 sls_invalid_numeric_inputs=_invalid_crack_input_keys(),
                 sls_check_appearance=sls_check_appearance,
@@ -7239,6 +7624,13 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # (not a slab or a prestressed member) -- dropping the (h-x)/3 hc,ef term.
         dk_na = inp["sls_dk_na"]
         include_hx = (not dk_na) or inp["sls_member"] == "Slab" or bool(inp["tendons"])
+        crack_numerical_method = (
+            sls_core.calculated_danish_bridge_crack_numerical_method(
+                inp,
+                dk_na_applied=dk_na,
+                include_hx_term=include_hx,
+            )
+        )
         # Cracking is irreversible and is triggered by the maximum load the section
         # ever sees, so the section is cracked if EITHER the sustained (long-term) or
         # the peak (total) action exceeds the cracking stress. The peak check uses
@@ -7307,6 +7699,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             crack_scope_note=CRACK_DIRECTIONAL_LIMITATION,
             crack_code=(inp["sls_code"] if inp["sls_cw"] else None),
             crack_edition=(inp["sls_edition"] if inp["sls_cw"] else None),
+            crack_numerical_method=(
+                crack_numerical_method if inp["sls_cw"] else None
+            ),
             crack_member=(
                 inp["sls_member"]
                 if inp["sls_cw"] and dk_na
@@ -7404,18 +7799,30 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                     "Total (coarse)": _disposition(crack_short_coarse),
                 }
         elif inp["sls_cw"]:
-            out["elastic"]["crack_dispositions"] = {
-                "Long-term": {
-                    "status": "NOT APPLICABLE",
-                    "reason": "The section remained uncracked.",
-                    "scope": None,
-                },
-                "Total (long + short)": {
-                    "status": "NOT APPLICABLE",
-                    "reason": "The section remained uncracked.",
-                    "scope": None,
-                },
+            not_applicable = {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+                "scope": None,
             }
+            if dk_na:
+                out["elastic"].update(
+                    crack_coarse=None,
+                    crack_short_coarse=None,
+                    crack_dispositions={
+                        name: dict(not_applicable)
+                        for name in (
+                            "Long-term (fine)",
+                            "Total (fine)",
+                            "Long-term (coarse)",
+                            "Total (coarse)",
+                        )
+                    },
+                )
+            else:
+                out["elastic"]["crack_dispositions"] = {
+                    "Long-term": dict(not_applicable),
+                    "Total (long + short)": dict(not_applicable),
+                }
         eout = out["elastic"]
         if (
             "crack_coarse" in eout
@@ -7768,6 +8175,7 @@ def crack_control_calculation_record(results):
             "results": {"elastic": results.get("elastic")},
         }]
     cases = []
+    numerical_methods = []
     for entry in entries:
         elastic = (entry.get("results") or {}).get("elastic") or {}
         if not elastic.get("show_cw"):
@@ -7775,6 +8183,9 @@ def crack_control_calculation_record(results):
         raw_assessment = elastic.get("crack_assessment")
         if not raw_assessment:
             continue
+        numerical_methods.append(
+            copy.deepcopy(elastic.get("crack_numerical_method"))
+        )
         assessment = (
             raw_assessment
             if isinstance(raw_assessment, Mapping)
@@ -7852,9 +8263,19 @@ def crack_control_calculation_record(results):
             ),
             "responses": responses,
         })
-    return sls_core.publication_safe_crack_control_record(
-        {"cases": cases} if cases else None
-    )
+    if not cases:
+        return None
+    record = {"cases": cases}
+    if (
+        numerical_methods
+        and all(
+            isinstance(method, Mapping)
+            and method == numerical_methods[0]
+            for method in numerical_methods
+        )
+    ):
+        record["numerical_method"] = numerical_methods[0]
+    return sls_core.publication_safe_crack_control_record(record)
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -8164,7 +8585,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                 t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
                 fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
                 alpha_cw=tors_ctx["alpha_cw"], fctk_005=tors_ctx["fctk_005"],
-                fctd=tors_ctx["fctd"],
+                fctd=tors_ctx["fctd"], alpha_ct=tors_ctx["alpha_ct"],
                 gamma_c=tors_ctx["gamma_c"], gamma_ct=tors_ctx["gamma_ct"],
                 gamma_s=tors_ctx["gamma_s"],
                 material_factor_basis=tors_ctx["material_factor_basis"],
@@ -9078,6 +9499,7 @@ def _publication_safe_fatigue_result(inp, results):
     return fatigue_analysis.publication_safe_result(
         (results or {}).get("fatigue"),
         design_methodology=(inp or {}).get("design_methodology"),
+        current_basis=(inp or {}).get(fatigue_inputs.BASIS_KEY),
     )
 
 
@@ -9243,20 +9665,25 @@ def results_overview_view(inp, results, *, stale=False):
 
 
 def bridge_methodology_view(inp, results, *, stale=False):
-    """Render the complete EN 1992-2 coverage matrix and typed check evidence."""
+    """Render the selected EN 1992-2 coverage and typed check evidence."""
 
     selected_methodology = inp.get("design_methodology")
     payload = bridge.publication_safe_record(
         (results or {}).get("bridge_methodology"),
         design_methodology=selected_methodology,
         fatigue_context=fatigue_analysis.bridge_publication_context(inp),
+        danish_basis_context=bridge_inputs.danish_basis_context(inp),
+        danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
+        danish_crack_context=(
+            bridge_analysis.danish_crack_publication_context(inp, results)
+        ),
     )
     if (
-        selected_methodology != bridge.EN1992_2_BASE
+        not bridge.is_bridge_methodology(selected_methodology)
         and payload is None
     ):
         st.info(
-            "Select the DS/EN 1992-2 base whole-calculation methodology in "
+            "Select a DS/EN 1992-2 whole-calculation methodology in "
             "Analysis settings to activate this gate."
         )
         return
@@ -9264,7 +9691,7 @@ def bridge_methodology_view(inp, results, *, stale=False):
         st.info("Press Calculate to assess the bridge methodology.")
         return
     status = "STALE" if stale else payload["status"]
-    message = f"{status} - DS/EN 1992-2 base methodology"
+    message = f"{status} - {payload.get('methodology') or selected_methodology}"
     if status == "PASS":
         st.success(message)
     elif status in {"FAIL", "INVALID"}:
@@ -10223,6 +10650,21 @@ def _crack_width_panel(e):
     st.markdown(f"**Crack control** ({e.get('crack_code', 'EC2 7.3.4')})")
     no_results = cl is None and cs is None and clc is None and csc is None
     assessment = e.get("crack_assessment", {})
+    numerical_method_issues = ()
+    if e.get("crack_code") == bridge.EN1992_2_DK_NA:
+        numerical_method_issues = (
+            sls_core.danish_bridge_crack_numerical_method_issues(
+                e.get("crack_numerical_method")
+            )
+        )
+        if numerical_method_issues:
+            assessment = sls_core.publication_safe_crack_assessment(
+                assessment,
+                [{
+                    "response": "Danish bridge numerical crack method",
+                    "reason": " ".join(numerical_method_issues),
+                }],
+            )
     status = assessment.get("status", "NOT ASSESSED")
     display_status = presentation.assessment_status_label(status)
     value = assessment.get("value")
@@ -10270,6 +10712,11 @@ def _crack_width_panel(e):
         st.warning(message)
     else:
         st.info(message)
+    if numerical_method_issues:
+        st.warning(
+            "Numerical crack-method evidence rejected: "
+            + " ".join(numerical_method_issues)
+        )
     st.caption(
         "Acceptance route: "
         f"{assessment.get('required_combination') or 'not established'}; "
@@ -11779,6 +12226,22 @@ def _render_chord_off(och, *, assessment_complete=True):
                "authoritative combined verification.")
 
 
+def _torsion_material_factor_caption(t):
+    factor_basis = t.get("material_factor_basis") or {}
+    alpha_ct = t["alpha_ct"]
+    return (
+        "Concrete material factors: compression "
+        f"gamma_c = {t['gamma_c']:.3f} (final concrete material input); "
+        f"tension gamma_ct = {t['gamma_ct']:.3f} "
+        f"({factor_basis.get('mode') or 'factor basis unavailable'}). "
+        f"alpha_ct = {alpha_ct:.3f}. "
+        "fctd = alpha_ct x fctk,0.05 / gamma_ct = "
+        f"{alpha_ct:.3f} x {t['fctk_005']:.3f} / {t['gamma_ct']:.3f} "
+        f"= {t['fctd']:.3f} MPa. "
+        f"Source: {factor_basis.get('reference') or '-'}."
+    )
+
+
 def torsion_view(inp, results):
     """Torsion resistance from the thin-walled tube (TRd,s / TRd,max / TRd,c), the
     required longitudinal steel, and the combined shear+torsion crushing check."""
@@ -11926,15 +12389,7 @@ def torsion_view(inp, results):
         _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok,
                         code_applicable=t.get("code_applicable", True))
 
-    factor_basis = t.get("material_factor_basis") or {}
-    st.caption(
-        "Concrete material factors: compression "
-        f"gamma_c = {t['gamma_c']:.3f} (final concrete material input); "
-        f"tension gamma_ct = {t['gamma_ct']:.3f} "
-        f"({factor_basis.get('mode') or 'factor basis unavailable'}). "
-        f"fctd = fctk,0.05/gamma_ct = {t['fctd']:.3f} MPa. "
-        f"Source: {factor_basis.get('reference') or '-'}."
-    )
+    st.caption(_torsion_material_factor_caption(t))
 
     if t.get("subdivided"):
         subs = t["subtubes"]
@@ -12679,6 +13134,7 @@ def _analysis_workspace(inp):
             fatigue_record = fatigue_analysis.calculation_conformance_record(
                 st.session_state["results"].get("fatigue"),
                 design_methodology=inp.get("design_methodology"),
+                current_basis=inp.get(fatigue_inputs.BASIS_KEY),
             )
             if fatigue_record is not None:
                 calculation_record["fatigue_conformance"] = fatigue_record
@@ -12687,6 +13143,14 @@ def _analysis_workspace(inp):
                 design_methodology=inp.get("design_methodology"),
                 fatigue_context=(
                     fatigue_analysis.bridge_publication_context(inp)
+                ),
+                danish_basis_context=bridge_inputs.danish_basis_context(inp),
+                danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
+                danish_crack_context=(
+                    bridge_analysis.danish_crack_publication_context(
+                        inp,
+                        st.session_state["results"],
+                    )
                 ),
             )
             if bridge_record is not None:

@@ -15,7 +15,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-003 | PR-03 | Closed and merged | The 2023 crack-control core distinguishes mild reinforcement and prestressing steel, derives per-tendon `xi1`, and fails closed on invalid contribution evidence. | `tools/pr03_crack_oracle.py`; frozen `SLS-2023-XI1` and independent scalar direct-tension formulas. | Mixed/prestress-only, bond, diameter, invalid-input, decompression, persistence/publication, report/manual and provenance regressions; consolidated exact-head evidence accepted. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`; all threads resolved. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | No `xi` or edition applicability is inferred; the selectable 2023 method remains subject to the project design basis. |
 | F-004 | PR-02 | Closed and merged | Danish fatigue presets resolve `gamma_s,fat = 1.20 x 1.10 x gamma0 x gamma3` and `gamma_c,fat = 1.45 x 1.10 x gamma0 x gamma3`; preset, approved-final override, and migrated legacy values have distinct persisted states and report derivations. Approved final overrides and their approval are retained outside preset widget state. PR-02 originally blocked unresolved legacy values; the authoritative PR-04 analysis-versus-conformance policy now retains and calculates positive finite values with a qualified conformance state without reopening F-004. | At unity category factors, `gamma_s,fat = 1.32` and `gamma_c,fat = 1.595`; all edition selections, non-unity categories and override persistence remain asserted. PR-04 adds values 0.5 and 2.0 plus missing/contradictory approval and legacy-review controls as cross-cutting F-005/F-010 evidence. | `tests/test_fatigue_inputs.py`; `tests/test_fatigue_analysis.py`; `tests/test_project_io.py`; Streamlit switching/reload and live/durable controls in `tests/test_app_smoke.py`; PDF evidence in `tests/test_report.py`. | Eleven earlier actionable threads plus the later interrupted-project-load finding were resolved; Codex Review accepted PR-02 exact head `c789ad9bfc94921f3383e9bce3c056b8e445cdcd`. | `QA CLOSURE ACCEPTED - c789ad9bfc94921f3383e9bce3c056b8e445cdcd` | [PR #205](https://github.com/KasperLFabricius/Sector/pull/205); squash `91bb63f9bd05050f508334202ca531367420062e` | Under the superseding cross-cutting policy, old saved positive finite factors remain actual calculation inputs. Without a dedicated approved custom basis they yield `REVIEW / NOT FULLY ASSESSED`, not a standard PASS. |
 | F-005 | PR-04 | Implemented on branch; exact-head external gates pending | A distinct `DS/EN 1992-2:2005 + AC:2008` method records inherited, overridden, added and not-assessed checks; calculates brittle Method b, separate box-wall torsion, bridge SLS stress/crack routing, separate web/flange minimum reinforcement and bridge concrete fatigue; mandatory unsupported states block overall PASS. One canonical conformance record now separates numerical validity from the selected-standard prescription: positive finite custom `cot(theta)`, `k`, Miner `C` and fatigue material factors are retained and calculated, while deviations produce visible `REVIEW / NOT FULLY ASSESSED` or a qualified `APPROVED CUSTOM` verdict and are never relabelled as a standard PASS. | Controlled local standard matrix plus independent `tools/pr04_bridge_oracle.py` examples for brittle reinforcement, common-angle wall torsion and both angle bounds, corrected concrete Miner life, bridge SLS limits and the web/flange `k` dimension rule. Frozen false-PASS examples `cot(theta)=10`, `k=0.01` and standard Miner `C=100` retain analytical results but cannot emit an unqualified standard PASS. | Canonical conformance, bridge/fatigue core, raw adapter, mutable publication evidence, Streamlit, project/autosave/download state, cache/signature, report and manual regressions; exact-head focused/full counts are recorded after the final implementation SHA. | Pending exact-head Codex Review after commit and CI. | Pending original reviewer. | Pending | Methods a/c, added bridge web/interface interaction, shear/torsion fatigue, deflection and opened segmental-joint checks remain explicit blocking `NOT ASSESSED` when applicable. F-020 remains excluded. |
-| F-006 | PR-05 | Planned | Add distinct DS/EN 1992-2 + DK/NA:2015 methodology and Danish bridge choices. | To be established in owning PR for road, footbridge, and railway cases. | Pending | Pending | Pending | Pending | None accepted. |
+| F-006 | PR-05 | Implemented on branch; exact-head external gates pending | A distinct `DS/EN 1992-2:2005 + DK/NA:2015` method inherits the merged bridge-base record and adds only evidenced Danish overrides/additions: Danish coefficients, high-strength approval, environmental/cover/de-icing routes, mandatory brittle Method A disposition, and the Danish crack matrix. Its numerical crack route follows the bridge standard's Section 7 / 7.3.4(101) referral through the related DS/EN 1992-1-1 DK NA:2013: cover-dependent `k3`, conditional `(h-x)/3`, and separately reported fine/coarse systems. Static Danish annex availability is recorded as information only; Annex J/KK/NN/OO routing remains blocking `NOT ASSESSED` without typed project applicability and complete external analysis evidence. Inherited, overridden, added, not-applicable and not-assessed states remain explicit. | `docs/pr05_dk_bridge_decision_map.md`; independent `tools/pr05_dk_bridge_oracle.py`; frozen road, footbridge and railway crack/cover/authority/fatigue/annex fixture in `tests/fixtures/pr05_dk_bridge_decisions.json`. | Focused Danish method/oracle, bridge/SLS, project persistence, cache/publication, capacity-factor and headless app tests are green before the final documentation/render gate; exact-head counts follow after review fixes stabilize. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Method A structural analysis is not implemented and remains blocking `NOT ASSESSED` when required; no Method B fallback is allowed. Annex applicability/analysis is not implemented and cannot be inferred from static DK/NA availability. |
 | F-007 | PR-03 | Closed and merged | EN 1992-1-1:2023 uniform direct tension is calculated only for the validated solid-rectangle/opposed-face domain; unsupported or incomplete states are explicit blocking dispositions. | Standalone rectangular perimeter-area, reinforcement-ratio, strain, spacing and crack-width oracle in `tools/pr03_crack_oracle.py`. | Direct-tension, transition, unsupported-domain, decompression, SLS precedence and app integration regressions accepted on the exact head. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | 2005 direct tension and non-rectangular/combined all-tension inputs remain explicitly `NOT ASSESSED`; they cannot yield PASS. |
 | F-008 | PR-03 | Closed and merged | The engine records dominant direction/scope, while UI, overview, saved limitations, manual and report state that orthogonal or inclined crack systems are not assessed. | Rotation oracle compares an asymmetric section and reinforcement under rigid rotations with transformed loads. | Rotated engine cases plus app summary, report text/raster and manual content gates accepted on the exact head. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | Directional limitation remains explicit until PR-06 supplies an applicable opt-in multidirectional method. |
 | F-009 | PR-06 | Planned | Keep independent `Vx`/`Vy` results but prevent combined PASS without a selected applicable interaction method. | To be established in owning PR for uniaxial limits, balanced biaxial load, axis swap, rotation, and interaction boundary. | Pending | Pending | Pending | Pending | No universal interaction rule will be inferred. |
@@ -31,7 +31,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-019 | PR-10 | Planned | Improve continuation titles/status context and page-break/keep-together behavior for long tables. | Controlled small/default/dense PDF layouts to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-020 | Excluded | Excluded — non-code local build hygiene; user-directed exclusion | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | F-021 | PR-14 | Planned | Implement a defensible reproducibility model and controlled-build timestamp/hash behavior. | Two controlled Windows-build comparison to be established in owning PR. | Pending | Pending | Pending | Pending | Byte identity will not be claimed unless demonstrated. |
-| F-022 | PR-05 | Planned | Add explicit infrastructure-manager/project-basis fields with mapped-rule calculation effects and provenance. | Authority-routing decision table and round-trip examples to be established in owning PR. | Pending | Pending | Pending | Pending | Unmapped authority choices warn and cannot silently change calculations. |
+| F-022 | PR-05 | Implemented on branch; exact-head external gates pending | Typed, non-inferred bridge class, infrastructure manager, authority/project sources and approvals, environmental/surface/de-icing applicability, control/consequence class, fatigue applicability, cover and coefficient provenance are bound through input, calculation signature/cache, immutable result fingerprint, project/session/autosave/download publication, UI and report. Required traffic fatigue now correlates the global analysis switch, canonical coverage-table applicability, each selected reinforcement/concrete fatigue check and its calculated evidence, and the declared Danish traffic model/source with the exact current calculated fatigue authority/method/spectrum/cycle-count basis; disabled, unselected, conflicting, stale or missing routes cannot produce a Danish project-basis PASS. Evidenced mappings change only cover, de-icing evidence, Danish crack routing and `alpha_ct` torsional cracking resistance; other authority choices qualify the conclusion without silently changing inputs. | The PR-05 decision map distinguishes Eurocode, DK NA, Road Directorate, Banedanmark and project authority. The independent fixture covers mapped road/foot/rail choices, conflicts, unmapped authorities, Danish cover/de-icing routes, eight traffic-fatigue correlation boundaries, static-annex qualification and calculation-changing/custom-only effects. | Save-load-resave, malformed/Boolean/non-finite inputs, method/edition switches, basis mutation, stale result/cache, required-fatigue routing and missing/duplicate correlation regressions are included in the focused PR-05 tests. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Unmapped, project-defined or conflicting authority choices warn and cannot silently alter calculations or produce an unqualified selected-standard PASS. |
 | F-023 | PR-06 | Planned | Add separate opt-in, sourced biaxial crack/shear interaction options with domain and fallback state. | Independent limiting, symmetry, rotation, and unsupported-domain benchmarks to be established in owning PR. | Pending | Pending | Pending | Pending | No universal interaction rule will be invented. |
 | F-024 | PR-07 | Planned | Add amendment history, sign-off, action ownership, and closure state to reports. | Blank/partial/full governance report fixtures to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-025 | PR-12 | Planned | Prevent whole Inputs-workspace rebuild/stall on ordinary pane changes. | Browser rerun/time-to-idle telemetry to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
@@ -52,7 +52,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-040 | PR-10 | Planned | Remove literal caret markup and normalize scientific notation, subscripts, powers, degrees, and units through one notation layer. | Text extraction and raster notation checks to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-041 | PR-11 | Planned | Add section-based Figure/Table numbering, captions, references, repeated units, and grayscale-safe plots. | Caption/reference and grayscale visual checks to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-042 | PR-11 | Planned | Add a shared publication style system plus structural and raster PDF preflight. | Complete manual and representative report preflight/crop regression to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
-| F-043 | PR-03 core closed and merged; PR-04 bridge-base inheritance/override implemented; PR-05 Danish bridge override pending | PR-03 canonically separates response duration from SLS combination and binds every accepted criterion to immutable current response evidence across raw, project/session/autosave and report boundaries. PR-04 reuses that mechanism for DS/EN 1992-2 Table 7.101N rather than a generic maximum; missing, ambiguous, malformed or stale routing remains `NOT ASSESSED / REVIEW`. | Frozen ordinary 2004 QP `0.22 mm` versus unrelated `0.31 mm` at `0.30 mm`; 2023 appearance/durability/decompression routes; bridge base Table 7.101N member/prestress routes and missing-combination controls. | PR-03 independent closure included 33 routing/correlation and decompression probes plus 52 canonical-body/schema mutation probes. PR-04 adds bridge routing, alias, malformed-evidence, persistence, UI/report and headless regressions within its bounded 775-pass gate. | GitHub CI and Codex Review accepted PR-03 exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`; PR-04 exact-head review is pending. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` for PR-03 core; PR-04/PR-05 inheritance/override closure remains sequential. | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` for PR-03 core | PR-05 must add the Danish bridge matrix, especially the DK non-prestressed frequent-column route; required decompression remains `NOT ASSESSED` without complete concrete-stress evidence. |
+| F-043 | PR-03 core closed and merged; PR-04 bridge-base merged; PR-05 Danish override implemented, external gates pending | PR-03 canonically separates duration from SLS combination and binds accepted criteria to immutable current response evidence. PR-05 reuses that mechanism for the exact Danish matrix: non-prestressed road/foot/rail uses the Frequent width column; prestressed road/foot and rail use their distinct Frequent widths plus a separate quasi-permanent decompression criterion. The correlated width is calculated with the related Danish numerical method, including cover-dependent `k3`, the source-limited effective-height term and both fine/coarse systems. Missing, ambiguous, duplicate, malformed or stale mappings or numerical-method provenance remain `NOT ASSESSED / REVIEW`; no duration/name inference or generic maximum is used. | Independent fixture covers non-prestressed aggressive/extra-aggressive `0.30/0.20 mm`, prestressed road/foot `0.20/0.10 mm`, prestressed rail `0.10/0.10 mm`, and separate quasi-permanent decompression. Numerical probes cross both verdict boundaries: at 20 mm cover the inherited model passes `0.20 mm` while the Danish method fails, and at 37.5 mm cover the inherited model fails `0.30 mm` while the Danish method passes. Adversarial cases prove an unrelated quasi-permanent crack response and a passing width cannot satisfy a Frequent criterion or missing concrete-stress evidence. | `tests/test_pr05_danish_bridge.py` exercises every Danish matrix cell, both numerical threshold crossings, base/Danish separation, fine/coarse evidence, missing/moderate/conflicting applicability, duplicate Frequent response, missing/stale correlation, complete decompression and project/session publication attacks in addition to the inherited PR-03/PR-04 gates. | Pending exact-head Codex Review after commit. | PR-03 core accepted at `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`; PR-05 closure pending original reviewer. | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206) for PR-03 core; PR-05 pending | Required decompression remains `NOT ASSESSED` unless the complete, uniquely routed quasi-permanent concrete-stress response, case identity and provenance are current. |
 
 ## PR-01 evidence log
 
@@ -699,11 +699,12 @@ mandatory; this matrix does not self-certify PR closure.
 - The final implementation audit found one remaining durability gap:
   standalone fatigue conformance was present in live solver/report evidence but
   was not retained in the input-hash-bound calculation record. The canonical
-  `sector.fatigue-conformance-evidence/v1` snapshot now carries the actual
+  `sector.fatigue-conformance-evidence/v2` snapshot now carries the actual
   material factors and Miner coefficient, selected standard and whole-calculation
-  methodology, standard/custom method, source/approval, parameter and aggregate
-  conformance, analytical verdict, qualified verdict and selected-standard
-  verdict. Its SHA-256 seal covers the exact JSON body; every project, load,
+  methodology, standard/custom method, source/approval, the exact typed 11-field
+  fatigue basis, parameter and aggregate conformance, analytical verdict,
+  qualified verdict and selected-standard verdict. Its SHA-256 seal covers the
+  exact JSON body; every project, load,
   download and autosave boundary also reconstructs the parameter records and
   aggregate verdict before retaining it.
 - Valid approved custom factors `0.5` and `2.0` plus project Miner `C=100`
@@ -852,3 +853,477 @@ mandatory; this matrix does not self-certify PR closure.
   controls. Compilation and whitespace validation also pass. Exact-head CI,
   Codex Review, full Streamlit, fresh rendered-artifact and package-content
   gates must restart after the remediation commit.
+
+## PR-05 evidence log
+
+- Scope is frozen to F-006, F-022 and the Danish bridge override portion of
+  F-043. Version remains exactly `0.91`. F-020 remains exactly
+  `Excluded — non-code local build hygiene; user-directed exclusion`. PR-06 and
+  later findings are untouched.
+- `docs/pr05_dk_bridge_decision_map.md` records the exact local source, edition,
+  clause/table/page, inherited base rule, Danish override, applicability
+  trigger, required typed field, calculation effect and fail-closed fallback.
+  DS/EN 1992-2, its AC and DK NA were read separately. Authority/project
+  requirements were separated from normative Eurocode and national choices
+  using the local Road Directorate bridge basis and Banedanmark BN1-59-5.
+- `tools/pr05_dk_bridge_oracle.py` is independent of production rule helpers.
+  Its frozen fixture covers the complete Danish crack matrix, nominal-cover
+  routes, road/foot/rail de-icing distances, the calculation-changing
+  `alpha_ct` torsional scalar, manager/class mapping outcomes, eight
+  traffic-fatigue correlation boundaries (including declared-versus-calculated
+  model drift) and the static-annex limitation. It
+  includes cases whose correct effect is qualification/warning only.
+- The distinct Danish method retains the merged bridge-base behavior unless an
+  exact DK NA route applies. Danish coefficients, high-strength approval,
+  environmental/cover/de-icing choices, Method A disposition and annex routing
+  are added to the same canonical conformance record rather than a parallel
+  truth source. Positive finite custom factors remain actual calculation
+  inputs; malformed, Boolean, non-finite and unusable values remain hard
+  errors.
+- Manager, bridge class, project basis, authority approval, environmental and
+  de-icing sources, control/consequence class, traffic/fatigue applicability,
+  special rules, and departure/dispensation applicability, methodology/source,
+  authority approval and description are explicit typed fields. They are
+  preserved through project save-load-resave, live/durable session state,
+  autosave/download, calculation signatures and cache keys, immutable result
+  fingerprint, publication validation, UI and report. No authority, class or
+  departure is inferred. Unmapped/conflicting choices retain the input and
+  qualify or block the selected-standard conclusion. A complete approved
+  departure remains a qualified project variation and never becomes an
+  unqualified Danish selected-standard PASS. Required traffic fatigue
+  additionally correlates the global analysis switch, canonical coverage-table
+  applicability and each selected reinforcement/concrete fatigue route;
+  complete calculated evidence remains required by the corresponding canonical
+  check. The declared model must exactly match the current canonical fatigue
+  method, and the declared source must exactly match its spectrum or
+  cycle-count source.
+- The Danish crack router requires the exact Frequent response for every width
+  criterion. Non-prestressed road, foot and railway bridges use 0.30 mm in
+  aggressive and 0.20 mm in extra-aggressive environments. Prestressed road and
+  footbridges use 0.20/0.10 mm, railway bridges use 0.10/0.10 mm, and both
+  prestressed routes additionally require a separate quasi-permanent
+  decompression response. A passing width cannot satisfy missing concrete
+  stress evidence; missing, duplicate, ambiguous, malformed or stale
+  correlation remains `NOT ASSESSED / REVIEW`.
+- Codex Review of exact initial head
+  `183ccc01a47dacfed3ba66622019560ed8b4144a` identified two P1 publication
+  gaps. First, a stored Danish project-basis, coefficient, high-strength or
+  cover result body could be altered and re-fingerprinted without semantic
+  revalidation. Second, free-text departure evidence had no independent typed
+  applicability decision, so a project departure could coexist with an
+  unqualified selected-standard PASS. Six focused red tests reproduced the
+  failures before remediation.
+- Danish publication evidence was advanced to schema v3 at that head.
+  Publication reconstructs the
+  current typed basis and positive finite concrete strength, independently
+  recomputes the four derived Danish checks, and requires exact check-body
+  equality before accepting a stored fingerprint. Manager, custom coefficient,
+  high-strength and cover PASS/REVIEW/FAIL relabelling attacks are rejected even
+  after the documented fingerprint is recomputed. Missing, Boolean,
+  non-finite, textual or non-positive current strength also fails publication
+  closed and latches `matches_saved_inputs = false` through project load and
+  resave.
+- Codex rereview of exact head
+  `da930c0904a22ad6a73bd5c43c22d07e7280e5eb` found one further P1:
+  selecting the Danish bridge edition also activated the separate
+  DS/EN 1992-1-1 DK NA cover/fine/coarse numerical crack model. The focused
+  AppTest reproduced `sls_dk_na = true` red. The Danish bridge mapping now keeps
+  `sls_dk_na = false` and the inherited EN 1992-2 numerical crack response while
+  retaining `bridge-2005-dkna2015` solely for the Danish bridge acceptance
+  matrix. Base and Danish bridge long/short crack widths are equal for identical
+  inputs, no coarse system is emitted for either bridge method, and the separate
+  DS/EN 1992-1-1 DK NA fine/coarse option remains active.
+- The independent fixture now includes five explicit departure dispositions in
+  addition to the complete crack, cover, torsion and authority sets. The
+  focused PR-05 and documentation-assertion slice passes all 98 checks. The
+  consolidated bridge, SLS, capacity, fatigue, publication and project
+  persistence regression slice passes all 741 checks. The complete report and
+  manual suites pass all 196 checks. Four focused headless app calculations
+  cover the inherited base/Danish crack response, the separate DS/EN 1992-1-1
+  DK fine/coarse route and the new non-inferred departure selector/source
+  fields.
+- The refreshed 29-page no-figure manual raster was inspected at the changed
+  Danish-methodology continuation on pages 7–9 and the final pagination
+  boundary on pages 28–29. The refreshed 15-page focused Danish report raster
+  was inspected on pages 6–15, including the selected departure basis,
+  coverage, bound evidence, limitations and QA provenance appendix. Both are
+  readable without clipping or overlap. Exact remediation SHA, exact-head
+  rereview, the single completed GitHub full-suite run and independent reviewer
+  disposition are recorded only after those gates actually complete.
+- Codex Review of exact head
+  `93d504d1e0b1afaa3024429f855ca7d42b5d7b7e` found one further P1
+  correlation gap: the stored `sls_crack` and `dk_direct_crack_method` bodies
+  could be altered and re-fingerprinted independently of the canonical current
+  crack result. Two focused red cases reproduced a false Danish PASS for each
+  check. Publication now requires a strict schema-versioned current crack
+  context, reconstructs both check bodies from the current typed applicability
+  decision and independently validated crack evidence, and requires exact body
+  equality. Live UI/summary/report paths build that authority from the current
+  solver response; project publication reconstructs it from the separately
+  sanitized sibling crack-control record and the saved coverage table. Missing,
+  malformed, Boolean, stale or conflicting context rejects publication and the
+  rejection latch survives save-load-resave.
+- The end-to-end control also exposed that the Danish direct-calculation gate
+  compared a legacy literal `durability` with the canonical SLS kind
+  `Durability crack width`. The gate now requires the canonical criterion
+  identity and kind, so a complete current direct width calculation evidences
+  the method even when the width itself fails its limit; the width verdict
+  remains independently PASS/FAIL. The new live-versus-saved control proves
+  identical reconstructed crack bodies, while a re-fingerprinted bridge-body
+  PASS beside an unchanged failing crack sibling is rejected through project
+  load and resave.
+- Post-remediation local evidence is green before the new commit: all 104
+  focused PR-05 rule/oracle/adversarial checks, 139 bridge core/adapter checks,
+  135 project publication and persistence checks, and the three directly
+  affected Streamlit/report/summary boundaries pass. The final bounded combined
+  gate passes 112 checks, including four bridge/Danish crack AppTests. Exact
+  remediation SHA, exact-head rereview and the one completed full GitHub CI gate
+  remain pending.
+- The refreshed focused report is again 15 pages with publication validation
+  `ACCEPTED`. Pages 6-15 were visually inspected across the pre-method boundary,
+  methodology/basis, coverage, check results, bound evidence, limitations and
+  final QA appendix; no clipping or overlap was found. This remediation changes
+  no manual content or pagination, so the already inspected 29-page manual
+  artifact remains the applicable PR-05 documentation evidence.
+- Codex Review of exact head
+  `26dd4c269144a6606a285cfaf61562148a6e2d0d` identified one P2 presentation
+  mismatch: a custom Danish `alpha_ct` changed torsional cracking resistance and
+  was printed correctly in the report, but the live torsion caption still
+  displayed the inherited `fctd = fctk,0.05 / gamma_ct` trace. A focused red
+  regression reproduced the omission. The live caption now prints `alpha_ct`,
+  `fctk,0.05`, `gamma_ct`, their evaluated `fctd`, and the selected factor-basis
+  source; the focused Danish torsion, live-caption and report slice passes all
+  16 checks. The provisional full-suite run was canceled before completion so
+  it is not counted as the single exact-head CI gate.
+- Codex rereview of exact head
+  `790546b3702cc61751b8974ce04adb073800f903` identified that the live torsion
+  result omitted `alpha_ct`, so the new caption and report trace could still
+  display the inherited fallback beside a calculation that used the custom
+  coefficient. Replacing the formatter-only fixture with an actual Danish
+  calculate-and-render AppTest also exposed a related crash: the context passed
+  `alpha_ct` into the tube-resistance helper even though that helper consumes the
+  already resolved `fctd` and has no such argument. The calculation context no
+  longer crosses that invalid contract boundary; the actual coefficient is
+  copied explicitly to the top-level torsion result; and live/report
+  presentation no longer defaults missing coefficient evidence to `1.0`.
+  Thirty-three focused capacity, Danish coefficient and report checks plus three
+  inherited/Danish live AppTests pass. Run `30404055147` was canceled before
+  completion and is not counted as the single exact-head CI gate.
+- Codex rereview of exact head
+  `689d583631e37d33194ed5da0850e4445625cb3a` identified that the subdivided
+  torsion report returned after its sub-tube table and therefore omitted the
+  Danish coefficient, `fctd` derivation and per-tube cracking evidence. The
+  single- and multi-tube paths now share one material-factor and `fctd` trace,
+  while the compound table reports each `T_Rd,c,i` separately without inventing
+  a pooled compound cracking resistance. The focused red report regression also
+  binds the `alpha_ct = 0.8` operands and both per-tube values. Visual inspection
+  caught and repaired a pagination split between the combined V+T heading and
+  its result; the regression now requires that complete block on one page.
+  Twelve focused torsion-report checks and both canonical rendered-report checks
+  pass. The final 12-page raster was inspected on affected pages 7-8 and
+  pagination-boundary pages 11-12 with no clipping, overlap or orphaned result
+  block. The 42-page canonical fixture then exposed a single-tube Eq. 6.31
+  formula/result split caused by the additional trace row; that complete
+  heading/formula/result/note block is now kept together and the canonical
+  content validator binds it to one page. The final canonical raster was
+  inspected on affected pages 21-22 and pagination-boundary pages 41-42 with no
+  clipping, overlap or orphaned result block. Run `30405116136` was canceled
+  before completion and is not counted as the single exact-head CI gate.
+- Codex rereview of exact head
+  `162c05834040cd3145a11ab08f3479547ceec440` identified that arbitrary
+  preceding content could still split the material-factor table from its
+  `fctd` derivation. The material-factor heading, complete table,
+  `alpha_ct`, derivation, result and source now form one layout-independent
+  keep-together block used by both the single- and subdivided-torsion paths.
+  A structural regression starts with unrelated preceding content and requires
+  the entire trace to remain one semantic flow block. Thirteen focused
+  torsion-report checks and both canonical rendered-report checks pass. The
+  refreshed 12-page compound raster was inspected on affected pages 7-8 and
+  boundaries 11-12; the refreshed 42-page canonical raster was inspected on
+  affected pages 21-22 and boundaries 41-42. Both keep the factor/`fctd`
+  correlation legible without clipping, overlap or orphaned results. Run
+  `30406932381` was canceled before completion and is not counted as the single
+  exact-head CI gate.
+- Codex rereview of exact head
+  `f8f011bc533f187eb9a589cd9318f423d325209e` identified two P1 fail-closed
+  gaps. Required traffic fatigue could leave `dk_project_basis` at PASS while
+  the global fatigue analysis was disabled or both canonical calculation
+  routes were marked not applicable; and the static DK NA annex-availability
+  table itself emitted PASS without typed project applicability or any Annex
+  J/KK/NN/OO analysis evidence. Three focused red cases reproduced those false
+  positive paths.
+- Danish bridge evidence schema v3 at that head bound the global fatigue
+  setting, the
+  canonical reinforcement/concrete coverage applicability and each existing
+  per-check calculation toggle into the immutable basis context. Required
+  traffic fatigue needs a model/source, enabled global analysis, at least one
+  required and enabled route, and no enabled route declared not applicable.
+  The ordinary required bridge check still requires its independently
+  calculated fatigue evidence. A basis/coverage applicability mismatch is a
+  configuration error, and malformed route or Boolean values remain hard
+  errors. These fields are derived from the existing canonical inputs and
+  survive project save-load-resave with the same input hash; no parallel
+  applicability selector was added.
+- `dk_annex_routing` now records the national table as information but always
+  remains blocking `NOT ASSESSED`, because PR-05 has no typed applicability and
+  complete external analysis-evidence route for applicable Annex J/KK/NN/OO
+  work. It is independently reconstructed during publication, so changing it
+  to PASS and recomputing the public fingerprint is rejected. The independent
+  oracle at that head added five traffic-fatigue correlation boundaries and the
+  static-annex outcome without importing production rule helpers.
+- Evidence at that remediation head was green: all 118 PR-05
+  rule/oracle/adversarial
+  tests; 205 focused bridge core, adapter and project tests; 68 focused
+  report/manual/live-app tests; the standalone independent oracle; and five
+  final persistence/manual/render checks including both rendered-report
+  fixtures. The exact current-code focused report has 15 pages; changed pages
+  7-14 and boundary pages 14-15 were inspected without clipping, overlap or
+  missing document control. The 29-page no-figure manual was inspected on
+  changed page 9 and boundary pages 28-29 with the same result. Run
+  `30407749086` was canceled after these review findings and is not counted as
+  the single exact-head CI gate. Exact remediation SHA, exact-head rereview and
+  the one completed GitHub full-suite gate remain pending.
+- Codex rereview of exact head
+  `a8409b7e0958f8a42a5692a51c0bfe4b2654a17f` identified one further P1
+  correlation gap: required Danish traffic fatigue accepted any nonempty
+  declared model/source without comparing them with the calculation's
+  canonical fatigue basis. A project could therefore declare FLM3 while
+  calculating a user-defined grouped spectrum and retain both a Danish
+  project-basis PASS and a canonical fatigue PASS. A focused red regression
+  reproduced that mismatch before remediation. Run `30410066460` was canceled
+  immediately after the finding and is not counted as the single exact-head CI
+  gate.
+- The current Danish evidence schema v4 derives the calculated fatigue
+  authority, method, spectrum source and cycle-count source from the existing
+  canonical fatigue basis. A required Danish declaration must match that
+  calculated method exactly and its source must match either calculated source
+  exactly. The bridge fatigue publication context is now schema v3 and binds
+  the complete 11-field canonical basis into every calculated reinforcement or
+  concrete row; raw adapters, current-input publication and durable
+  save-load-resave validation reject missing, malformed, changed or
+  re-fingerprinted basis evidence. No parallel selector or silent calculation
+  change was introduced: a mismatch remains calculation-preserving but blocks
+  Danish conformity.
+- Current pre-commit evidence is green: all 122 PR-05
+  rule/oracle/adversarial tests, including eight independent traffic-fatigue
+  outcomes; 79 focused bridge publication/adapter checks; the 58-check complete
+  fatigue-analysis suite plus the canonical schema-alignment regression; nine
+  live/durable/download/autosave controls; seven save-load-resave attacks; and
+  all four canonical report/manual render gates. The standalone independent
+  oracle also passes. The exact current-code Danish report has 16 pages;
+  methodology pages 7-15 and the 15-16 boundary were visually inspected
+  without clipping, overlap, missing repeated headers or missing document
+  control. The issued 37-page manual was inspected on affected pages 11-13 and
+  boundary pages 36-37 with the same result. Exact remediation SHA, exact-head
+  rereview and the one completed GitHub full-suite gate remain pending.
+- Codex rereview of exact head
+  `68e0918395dca47f230b1d2d043ec73d7d6852b4` identified two further P1
+  provenance gaps. First, a supplied current or loaded fatigue-basis mapping
+  could omit any of its 11 fields and have the missing evidence manufactured by
+  normalisation before the Danish declared-versus-calculated comparison.
+  Second, the shared live/PDF fatigue publication boundary did not require the
+  same complete basis, and the durable fatigue-conformance snapshot omitted it.
+  Six focused red cases reproduced incomplete Danish evidence, missing,
+  incomplete and Boolean common-publication evidence, the missing durable field
+  and a current-project partial mapping. Run `30412051353` was canceled after
+  the findings and is not counted as the single exact-head CI gate.
+- Current calculation, signature, Danish adapter, shared publication and
+  current-project save/load boundaries now require the exact 11 named fields,
+  typed strings and canonical trimmed/enum values before normalisation. The
+  migration/UI helper remains available only to seed legacy or interactive
+  state; pre-v21 partial projects still migrate to an explicit neutral basis
+  without inferring authority or calculation effects. Fatigue-conformance
+  schema v2 includes the complete basis in its canonical JSON body and digest,
+  so missing, incomplete, Boolean, mutated or stale durable/session/download/
+  autosave evidence is rejected and latches the input match false.
+- Remediation evidence is green: the ten direct strictness/migration
+  regressions; all 64 fatigue-analysis tests; all 49 fatigue-input tests; 29
+  fatigue project tests; 26 fatigue Streamlit tests; four rehashed durable
+  session/download/autosave attacks; all 123 PR-05 rule/oracle/adversarial
+  tests; all 39 manual tests; and all 13 fatigue-report tests, including the
+  explicit live-view and PDF missing-basis publication attacks. No report or manual
+  presentation source changed, so the previously inspected 16-page report and
+  37-page manual page evidence remains applicable. Exact remediation SHA,
+  exact-head rereview and the one completed GitHub full-suite gate remain
+  pending.
+- Codex rereview of exact head
+  `67f7e421872fa7948e7160e759e1007bea368724` identified two further P1
+  correlation gaps. First, a complete internally consistent fatigue result
+  could carry an earlier canonical basis while the current live or report input
+  carried a different complete basis; the shared publication boundary did not
+  compare those two snapshots. Second, a current v21 project with active
+  fatigue could omit the entire basis mapping and reach the legacy neutral-basis
+  seeding path. Six focused controls were added before remediation: five
+  reproduced the stale live/PDF/durable or missing-current-project failures,
+  while the pre-v21 neutral migration control remained green. Provisional run
+  `30413736456` was canceled after the findings and is not counted as the
+  single exact-head CI gate.
+- The shared fatigue publication API now requires the caller's current
+  canonical basis and exact equality with the result-bound basis. Bridge
+  adapters, live results, report generation, calculation-record creation and
+  durable project revalidation all pass the basis from their own immutable
+  current input snapshot; a missing, malformed, Boolean, incomplete or stale
+  value fails publication closed. Current v21 active-fatigue save and load
+  reject an omitted basis mapping, while pre-v21 migration alone may seed the
+  explicit neutral incomplete basis. No calculation coefficient or inherited
+  PR-04 numerical route changes.
+- Pre-commit compatibility evidence after this remediation is green: the six
+  direct red/green controls, all 65 fatigue-analysis tests, all 142 project-I/O
+  tests, 27 focused fatigue Streamlit tests, 14 focused fatigue-report tests,
+  and all 123 PR-05 rule/oracle/adversarial tests. The standalone independent
+  oracle and all four canonical report/manual rendered-artifact boundaries also
+  pass. The report change only supplies current correlation evidence to the
+  existing sanitizer, so the valid canonical output and pagination are
+  unchanged; the previously inspected 16-page report and 37-page manual
+  affected-page/boundary evidence remains applicable. Exact remediation SHA,
+  exact-head rereview and the one completed GitHub full-suite gate remain
+  pending.
+- Codex rereview of exact head
+  `7f953a9d0da8d1010b3731cc34a80b15d4746fe2` identified one P1
+  autosave-correlation gap. The routine autosave pre-publication call supplied
+  only canonical scalars even though Danish reinforcement/concrete fatigue
+  applicability is owned by the canonical bridge coverage table. A valid
+  result could therefore be revalidated against `NOT ESTABLISHED`
+  applicability and have its durable calculation record rejected during
+  autosave. One focused red control captured the first autosave publication
+  call and proved the bridge table was absent. Provisional run `30415287050`
+  was canceled before completion while rereview was pending and is not counted
+  as the single exact-head CI gate.
+- Autosave now builds the same complete publication input mapping as project
+  download/save: canonical scalars plus independently rehydrated canonical
+  bridge tables. The strict Danish publication validator is unchanged and
+  therefore continues to reject stale or contradictory evidence while
+  preserving a valid result whose coverage applicability matches its
+  calculation snapshot. The direct red/green control passes, and the focused
+  12-check autosave/download/session provenance slice is green. Exact
+  remediation SHA, exact-head rereview and the one completed GitHub full-suite
+  gate remain pending.
+- Codex rereview of exact head
+  `7796423ad64ab50a90fff0b23b6ec7144de5cbb2` reported no major issue, and
+  all 16 review threads were resolved. The first completed exact-head GitHub
+  gate, run `30416202190`, then found test-harness drift: 35 tests failed and
+  2,258 passed with one intentional skip. Thirty-two bridge-fatigue tests used
+  pre-v21 current-input fixtures without the now-mandatory calculation-basis
+  object, one UI-order assertion omitted the two final PR-05 panels, and two
+  Python source literals violated the ASCII-source check. Both the 42-page
+  report render and the 37-page manual render succeeded; the package job was
+  correctly skipped after the test-job failure. This failed run is retained as
+  evidence and is not represented as a green full-suite gate.
+- The corrective change supplies the canonical neutral fatigue basis in the
+  shared current bridge-analysis fixture, updates the UI-order contract to the
+  two actual PR-05 panel labels, and expresses the two Unicode expectations
+  with ASCII source escapes without changing rendered text. The complete
+  failure-class reproducer is green with 181 checks; all 123 PR-05
+  rule/oracle/adversarial tests and the standalone independent oracle pass;
+  and all three canonical rendered-report content/pagination checks pass with
+  the same runtime glyphs. No production rule, numerical route, report layout,
+  manual source, or accepted residual limitation changed. Exact corrective
+  SHA, exact-head Codex rereview and the bounded corrective GitHub gate remain
+  pending.
+- Corrective head `c36fe3e3ca7e24a541c13268cae2f92fd2043e4a`
+  subsequently passed Codex Review with all 16 threads resolved. Its one
+  completed exact-head full-suite gate, GitHub Actions run `30417682066`, was
+  green: 2,293 tests passed with one intentional skip, the 42-page canonical
+  report and 37-page manual rendered, and the Windows package was built and
+  verified without launching or independently downloading the unsigned
+  executable.
+- Independent engineering closure then rejected exact head
+  `c36fe3e3ca7e24a541c13268cae2f92fd2043e4a` at P1, high confidence. This
+  invalidates the earlier review disposition recorded above that retained
+  `sls_dk_na = false`; the prior review event remains in this chronological
+  ledger but is not current authority. The Danish bridge selector suppressed
+  the applicable numerical Danish crack method and could therefore publish
+  both a false PASS and a false FAIL.
+- The corrected controlled-source chain is explicit. DS/EN 1992-2:2005
+  Section 7 applies EN 1992-1-1 7.3.4(3)/(4), and 7.3.4(101) recommends the
+  EN 1992-1-1 7.3.4 method. DS/EN 1992-2 DK NA:2015 PDF page 1 adopts the basic
+  Eurocodes with their related national annexes for Danish bridge practice,
+  while PDF page 7 makes no bridge-specific national choice at 7.3.4(101).
+  The contemporaneous related DS/EN 1992-1-1 DK NA:2013 therefore supplies
+  7.3.2(3)'s slab/prestress-only `(h-x)/3` route, 7.3.4(1)'s fine and
+  centroid-matched coarse systems with the one-half coarse width, and
+  7.3.4(3)'s `k3 = 3.4(25/c)^(2/3)`.
+- The independent numerical oracle now freezes both verdict-changing
+  boundaries without importing production rule helpers. For a 300 x 600 mm
+  C30 beam with three 491 mm2 bars, 20 mm cover, 20 mm diameter and 270 kNm,
+  the inherited model gives `wk = 0.190050 mm` (PASS at `0.20 mm`) while the
+  Danish method gives `wk = 0.207333 mm` (FAIL). At 37.5 mm cover, 25 mm
+  diameter and 230 kNm, the inherited model gives `wk = 0.304324 mm` (FAIL at
+  `0.30 mm`) while the Danish method gives `wk = 0.265332 mm` (PASS).
+- The remediation activates the related Danish numerical method only for the
+  distinct Danish bridge route. It records the exact method, source clauses,
+  member/tendon effective-height decision and fine/coarse system definition in
+  the raw result and canonical crack-control record. Current inputs,
+  calculation snapshots, cache/signature, live UI, project save-load-resave,
+  session/autosave/download publication and reports all require that exact
+  provenance; a stale base-model result, missing method record, incomplete
+  fine/coarse response set or edition/method switch fails closed to
+  `NOT ASSESSED`. Autosave publication now includes the canonical geometry and
+  load-case tables needed to re-establish tendon presence and whether crack
+  width was requested.
+- The focused red phase reproduced three failures while retaining three green
+  controls: the Danish selector still set `sls_dk_na = false`, no coarse
+  numerical system was emitted, and the report failed to identify the
+  `DK/NA` label. After remediation, all 128 PR-05 rule/oracle/adversarial tests
+  pass; 451 serviceability, SLS, bridge-adapter, project-publication and focused
+  report checks pass; and nine live UI/report boundary checks cover
+  base-versus-Danish separation, stale session evidence and cache invalidation.
+  A dedicated project persistence control also proves the exact numerical
+  method survives save-load-resave and that deleting it latches the
+  calculation-input match false. Exact remediation SHA, current-head review,
+  the replacement one-run full CI gate and independent closure remain pending.
+- The final publication hardening rejects a rehashed Danish crack snapshot
+  when current inputs disable crack-width calculation, and rejects a Danish
+  numerical-method record after a methodology/code/edition switch. The raw
+  bridge adapter, canonical project record and PDF report all convert those
+  attacks to `NOT ASSESSED`; a valid current Danish result must still correlate
+  its actual member/tendon decision and all four fine/coarse responses with the
+  exact current calculation basis.
+- Current pre-commit remediation evidence is green: all 132 PR-05
+  rule-map/oracle/adversarial tests; 415 changed-module SLS,
+  bridge-adapter and project-persistence tests; seven focused report/manual
+  content and rendered-artifact checks; and the standalone independent oracle.
+  The current dedicated Danish report is 21 pages. Changed methodology and
+  numerical-evidence pages 6-10, 12-13, 16 and 18-19, plus pagination
+  boundaries 5, 20 and 21, were inspected without clipping, overlap, lost
+  repeated headers or missing document control. Pages 18-19 visibly bind the
+  Frequent `0.207333 mm > 0.200 mm` failure to the four fine/coarse responses,
+  cover-dependent `k3`, member/tendon decision and related
+  DS/EN 1992-1-1 DK NA:2013 source chain. The issued manual remains 37 pages;
+  changed pages 13, 27 and 35, adjacent pages 12/14, 26/28 and 34/36, and the
+  36-37 ending boundary were inspected with the same result. Exact remediation
+  SHA, current-head Codex Review, the replacement one-run GitHub full-suite
+  gate and independent closure remain pending.
+- Codex Review of exact head
+  `226dd741a66689673cc5edc5c767e9510e1e1184` identified one P2
+  completeness gap in the uncracked Danish branch. It emitted the two inherited
+  response identities with `NOT APPLICABLE` dispositions, so raw, durable and
+  PDF validators could skip the four-name fine/coarse contract when no response
+  was numeric.
+- The Danish uncracked branch now emits all four fine/coarse response
+  identities with explicit `NOT APPLICABLE` dispositions. Raw bridge and
+  durable/report publication validation require all four identities regardless
+  of whether a width is numeric; deleting one converts the evidence to
+  `NOT ASSESSED`. The two direct red/green controls pass, the bounded PR-05 plus
+  changed-module gate is green at 548 checks (133 PR-05 and 415
+  SLS/bridge-adapter/project checks), all six focused Streamlit/cache/autosave
+  controls pass, and the valid-versus-legacy-two-response PDF controls are
+  green. Exact corrective SHA, rereview and the replacement one-run GitHub
+  full-suite gate remain pending.
+- Codex Review of corrective head
+  `b9a883b956f525adefc23096c5d17789c7726674` identified two further P2
+  provenance boundaries. The canonical Elastic case-table crack-width
+  applicability was absent from the shared row-cache context, and raw Danish
+  results could supply four non-numeric response identities without matching
+  solver dispositions.
+- The table-derived crack-width applicability is now part of the elastic
+  context signature, so enabled-to-disabled and disabled-to-enabled changes
+  rerun the row and respectively clear or rebuild the numerical method and
+  response evidence. Every non-numeric Danish fine/coarse response now requires
+  a matching structured `NOT APPLICABLE` disposition with a non-empty solver
+  reason; missing, malformed or conflicting disposition evidence makes the raw
+  bridge criterion `NOT ASSESSED`. Both red/green controls pass. The bounded
+  post-fix compatibility slice is green at 556 checks: 134 PR-05, 415
+  SLS/bridge-adapter/project checks and seven focused cache/UI controls. Exact
+  corrective SHA, rereview and the one-run GitHub full-suite gate remain
+  pending.

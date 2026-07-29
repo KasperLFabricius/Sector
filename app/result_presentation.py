@@ -11,6 +11,7 @@ import math
 
 import fatigue_analysis
 import fatigue_presentation
+import bridge_inputs
 
 import case_analysis
 import viz
@@ -587,6 +588,8 @@ def fatigue_summary_rows(inp, results, *, stale=False):
 def bridge_summary_rows(inp, results, *, stale=False):
     """Return every explicit EN 1992-2 base-methodology gate row."""
 
+    import bridge_analysis
+
     inp = inp or {}
     results = results or {}
     raw_selected = inp.get("design_methodology")
@@ -595,16 +598,21 @@ def bridge_summary_rows(inp, results, *, stale=False):
         results.get("bridge_methodology"),
         design_methodology=raw_selected,
         fatigue_context=fatigue_analysis.bridge_publication_context(inp),
+        danish_basis_context=bridge_inputs.danish_basis_context(inp),
+        danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
+        danish_crack_context=(
+            bridge_analysis.danish_crack_publication_context(inp, results)
+        ),
     )
-    if selected != bridge.EN1992_2_BASE and payload is None:
+    if not bridge.is_bridge_methodology(selected) and payload is None:
         return []
     if payload is None:
         return [{
             "check": "Bridge methodology",
             "family": "bridge",
             "case": selected,
-            "case_type": "DS/EN 1992-2 base",
-            "source": "DS/EN 1992-2:2005 + AC:2008",
+            "case_type": selected,
+            "source": bridge.methodology_source(selected),
             "status": "NOT RUN",
             "result": "-",
             "criterion": "Complete explicit bridge applicability gate",

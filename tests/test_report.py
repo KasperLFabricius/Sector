@@ -17,10 +17,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report  # noqa: E402
+import bridge_inputs  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import bridge, conformance, detailing, sls  # noqa: E402
+from sector import bridge, conformance, danish_bridge, detailing, sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -681,6 +682,41 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "delta " + sigma not in text
     assert text.count(delta_sigma) >= 7
     assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
+
+
+def test_report_rejects_missing_fatigue_basis_at_common_boundary():
+    inp, out = _fatigue_report_fixture()
+    del out["fatigue"]["basis"]
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {"proj_no": "FAT-BASIS-ATTACK"},
+        inp,
+        out,
+        figures=False,
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "Published fatigue basis is invalid" in text
+    assert "PASS - STANDARD PASS | Traffic B" not in text
+
+
+def test_report_rejects_stale_complete_fatigue_basis_against_current_inputs():
+    inp, out = _fatigue_report_fixture()
+    inp[fatigue_inputs.BASIS_KEY] = {
+        **inp[fatigue_inputs.BASIS_KEY],
+        "notes": "Current edited basis",
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {"proj_no": "FAT-BASIS-STALE"},
+        inp,
+        out,
+        figures=False,
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "basis conflicts with the calculation input snapshot" in text
+    assert "PASS - STANDARD PASS | Traffic B" not in text
 
 
 def test_report_includes_dk_fatigue_factor_derivations():
@@ -2464,6 +2500,195 @@ def test_report_dk_na_shows_fine_and_coarse_columns():
     assert "coarse" in txt.lower() and "fine" in txt.lower()   # both systems in the table
 
 
+def test_report_identifies_danish_bridge_numerical_crack_method():
+    out = _out()
+    out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.207333)
+    out["elastic"]["crack_short"] = dict(
+        _crack(), coarse=False, wk=0.207333
+    )
+    out["elastic"]["crack_coarse"] = dict(
+        _crack(), coarse=True, wk=0.097036
+    )
+    out["elastic"]["crack_short_coarse"] = dict(
+        _crack(), coarse=True, wk=0.097036
+    )
+    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
+    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
+    out["elastic"]["crack_member"] = "Beam"
+    inp = {
+        **_inp(),
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "sls_has_tendons": False,
+    }
+    out["elastic"]["crack_numerical_method"] = (
+        sls.expected_danish_bridge_crack_numerical_method(inp)
+    )
+    txt = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+    ))
+
+    assert "25/c" in txt
+    assert "7.3.4(3)" in txt
+    assert "DS/EN 1992-1-1 DK NA:2013" in txt
+    assert "Long-term (coarse)" in txt
+    assert "Numerical crack-method evidence rejected" not in txt
+
+
+def test_report_chunks_nested_bound_evidence_without_changing_content():
+    value = {
+        "acceptance_evidence": {
+            "response": "x" * 1200,
+            "source": "DS/EN 1992-1-1 DK NA:2013",
+        },
+    }
+    expected = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    parts = sector_report._bound_evidence_value_parts(value)
+
+    assert "".join(parts) == expected
+    assert len(parts) > 1
+    assert max(map(len, parts)) <= (
+        sector_report._BOUND_EVIDENCE_CHUNK_CHARS
+    )
+
+
+def test_report_rejects_stale_danish_bridge_base_crack_snapshot():
+    out = _out()
+    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
+    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
+    out["elastic"]["crack_member"] = "Beam"
+    inp = {
+        **_inp(),
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "sls_has_tendons": False,
+    }
+
+    txt = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+    ))
+
+    assert "NOT ASSESSED - Crack width" in txt
+    assert "Danish bridge crack numerical-method provenance is missing" in (
+        " ".join(txt.split())
+    )
+    assert "PASS - Crack width" not in txt
+
+
+def test_report_rejects_rehashed_danish_crack_result_after_check_disabled():
+    out = _out()
+    out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.207333)
+    out["elastic"]["crack_short"] = dict(
+        _crack(), coarse=False, wk=0.207333
+    )
+    out["elastic"]["crack_coarse"] = dict(
+        _crack(), coarse=True, wk=0.097036
+    )
+    out["elastic"]["crack_short_coarse"] = dict(
+        _crack(), coarse=True, wk=0.097036
+    )
+    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
+    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
+    out["elastic"]["crack_member"] = "Beam"
+    method_inputs = {
+        **_inp(),
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "sls_has_tendons": False,
+    }
+    out["elastic"]["crack_numerical_method"] = (
+        sls.expected_danish_bridge_crack_numerical_method(
+            method_inputs
+        )
+    )
+    inp = {**method_inputs, "sls_cw": False}
+
+    text = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "do not request crack-width calculation" in compact
+    assert "PASS - Crack width" not in compact
+
+
+def test_report_rejects_uncracked_danish_legacy_two_response_snapshot():
+    out = _out()
+    elastic = out["elastic"]
+    elastic.update({
+        "cracked": False,
+        "crack": None,
+        "crack_short": None,
+        "crack_responses": {
+            "Long-term": None,
+            "Total (long + short)": None,
+        },
+        "crack_dispositions": {
+            "Long-term": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+            },
+            "Total (long + short)": {
+                "status": "NOT APPLICABLE",
+                "reason": "The section remained uncracked.",
+            },
+        },
+        "crack_code": bridge.EN1992_2_DK_NA,
+        "crack_edition": sls.EDITION_BRIDGE_DK_2015,
+        "crack_member": "Beam",
+    })
+    elastic.pop("crack_coarse", None)
+    elastic.pop("crack_short_coarse", None)
+    inp = {
+        **_inp(),
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "sls_has_tendons": False,
+    }
+    elastic["crack_numerical_method"] = (
+        sls.expected_danish_bridge_crack_numerical_method(inp)
+    )
+
+    text = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "omits required fine/coarse responses" in compact
+    assert "PASS - Crack width" not in compact
+
+
 def test_report_shows_coarse_only_results():
     # DK NA edge case: the fine (h-x)/3 band has no tension bar but the coarse
     # centroid-matched band does. The report must still show the coarse widths, not
@@ -2927,7 +3152,8 @@ def _torsion_out(interaction=False):
            "cot": 1.751, "theta_deg": 29.7, "util": 40.0 / 76.4, "asl_req": 1176.0,
            "t_ed": 40.0, "fcd": 24.14, "fywd": 416.67, "fyd_long": 416.67,
            "nu": 0.3675, "alpha_cw": 1.0, "fctk_005": 2.248,
-           "fctd": 1.322, "gamma_c": 1.45, "gamma_ct": 1.70,
+           "fctd": 1.322, "alpha_ct": 1.0,
+           "gamma_c": 1.45, "gamma_ct": 1.70,
            "material_factor_basis": {
                "mode": "Edition-derived preset",
                "reference": (
@@ -2967,6 +3193,7 @@ def test_report_includes_torsion_section():
     assert "Table 2.1Na NA" in txt
     assert "1.70 x 1.000 x 1.000 = 1.700" in txt
     assert "26.44" in txt
+    assert "Concrete tension coefficient" in txt
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1176" in txt                            # required Asl
     assert chr(0x2211) in txt                       # summation operator
@@ -2975,6 +3202,58 @@ def test_report_includes_torsion_section():
     assert not any(
         token in txt for token in ("sqrt", "Cfrac", "Big", "sincos", "sum A", "kN.m")
     )
+
+
+def test_report_prints_actual_danish_alpha_ct_in_torsional_cracking_formula():
+    out = _out()
+    torsion = _torsion_out()
+    torsion["alpha_ct"] = 0.8
+    torsion["fctd"] = 0.8 * torsion["fctk_005"] / torsion["gamma_ct"]
+    torsion["trd_c"] *= 0.8
+    out["torsion"] = torsion
+    inp = _inp()
+    inp["design_methodology"] = bridge.EN1992_2_DK_NA
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert "Concrete tension coefficient" in text
+    assert "0.800" in text
+    assert "1.058" in text
+
+
+def test_report_keeps_torsion_factor_and_fctd_as_one_layout_block():
+    import io
+
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), _out(), figures=False
+    )
+    builder._p("Arbitrary preceding report content")
+    preceding = builder.flow[-1]
+    builder._torsion_material_factor_trace(_torsion_out())
+
+    assert builder.flow[0] is preceding
+    assert len(builder.flow) == 2
+    block = builder.flow[1]
+    assert isinstance(block, sector_report.KeepTogether)
+
+    text = []
+    for item in block._content:
+        if hasattr(item, "getPlainText"):
+            text.append(item.getPlainText())
+        elif isinstance(item, sector_report.Table):
+            text.extend(
+                cell.getPlainText()
+                for row in item._cellvalues
+                for cell in row
+                if hasattr(cell, "getPlainText")
+            )
+    normalized = " ".join(" ".join(text).split())
+    assert "Material-factor basis" in normalized
+    assert "Concrete tension coefficient" in normalized
+    assert "fctd = \u03b1ct fctk,0.05 / \u03b3ct" in normalized
+    assert "fctd = 1.322 MPa" in normalized
 
 
 def test_qa_appendix_distinguishes_factor_provenance_modes():
@@ -3142,17 +3421,39 @@ def test_report_torsion_subdivided():
     t["subdivided"] = True
     t["subtubes"] = subs
     t["trd"] = 110.0
+    t["alpha_ct"] = 0.8
+    t["fctd"] = 0.8 * t["fctk_005"] / t["gamma_ct"]
+    subs[0]["trd_c"] = 12.345
+    subs[1]["trd_c"] = 6.789
     # P1: governing = the worst sub-tube (part 2 here), not the pooled TEd/sum(TRd).
     t["util"] = max(s["util"] for s in subs)
     t["governing_sub"] = 1
     t["asl_req"] = 1400.0
     out["torsion"] = t
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    txt = " ".join(_pdf_text(pdf).split())
     assert "Sub-tubes" in txt                        # the compound-section heading
     assert "6.3.1(3)" in txt                         # the sub-division clause
     assert "web" in txt
     assert "governing" in txt                        # P1: governing (max) utilisation
     assert "6.29" in txt                             # P2: crushing printed in sub-report
+    assert "Concrete tension coefficient" in txt
+    assert "0.800" in txt and "1.058" in txt
+    assert "12.35" in txt and "6.79" in txt
+
+    import io
+    import pypdf
+
+    pages = [
+        page.extract_text() or ""
+        for page in pypdf.PdfReader(io.BytesIO(pdf)).pages
+    ]
+    interaction_page = next(
+        page for page in pages
+        if "Combined shear + torsion (concrete crushing)" in page
+    )
+    assert "68.2" in interaction_page
+    assert "Evaluated at the common strut angle" in interaction_page
 
 
 def test_report_invalid_subtube_partition_withholds_verdict():
@@ -3730,6 +4031,25 @@ def _bridge_report_record():
 def _bridge_report_input(methodology=bridge.EN1992_2_BASE):
     inp = _inp()
     inp["design_methodology"] = methodology
+    if methodology == bridge.EN1992_2_DK_NA:
+        inp[bridge_inputs.COVERAGE_TABLE_KEY] = (
+            bridge_inputs.table_from_records(
+                [
+                    {
+                        "check_id": check_id,
+                        "applicability": (
+                            bridge.REQUIRED
+                            if check_id == "section_analysis"
+                            else bridge.NOT_APPLICABLE
+                        ),
+                        "source": f"DB-{check_id}",
+                        "notes": "",
+                    }
+                    for check_id in bridge.APPLICABILITY_CHECK_IDS
+                ],
+                bridge_inputs.COVERAGE_TABLE_KEY,
+            )
+        )
     return inp
 
 
@@ -3750,6 +4070,7 @@ def _bridge_report_fatigue_input(*, custom=False):
         ),
         "fatigue_concrete_miner_source": "",
         "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
     })
     if custom:
         inp.update({
@@ -3828,6 +4149,7 @@ def _bridge_report_concrete_fatigue_record(inp):
                 "fatigue_factor_mode": context["factor_mode"],
                 "fatigue_factor_approval": context["factor_approval"],
                 "fatigue_gamma_ff": context["gamma_ff"],
+                "fatigue_basis": context["basis"],
             },),
         ),
     ))
@@ -3848,6 +4170,114 @@ def test_report_publishes_bridge_coverage_and_check_gate():
     assert "added" in text
     assert "not assessed" in text
     assert "DB-BRIDGE-01" in text
+
+
+def test_report_publishes_bound_danish_manager_basis_and_mapped_deicing():
+    inp = _bridge_report_input(bridge.EN1992_2_DK_NA)
+    inp.update({
+        "bridge_asset_class": danish_bridge.ASSET_ROAD,
+        "bridge_infrastructure_manager": (
+            danish_bridge.MANAGER_ROAD_DIRECTORATE
+        ),
+        "bridge_manager_source": "VD bridge basis 2023+corr.2026",
+        "bridge_project_basis_source": "DB-05 section 2.3",
+        "bridge_authority_approval_reference": "",
+        "bridge_traffic_fatigue_applicability": (
+            danish_bridge.FATIGUE_NOT_APPLICABLE
+        ),
+        "bridge_traffic_fatigue_model": "",
+        "bridge_traffic_fatigue_source": "",
+        "bridge_environment_class": danish_bridge.ENVIRONMENT_AGGRESSIVE,
+        "bridge_environment_source": "DB-05 section 4.2",
+        "bridge_special_rules": "No mapped special relaxation",
+        "bridge_departure_applicability": (
+            danish_bridge.APPLICABILITY_NOT_APPLICABLE
+        ),
+        "bridge_departure_source": "",
+        "bridge_deviations": "",
+        "bridge_control_class": danish_bridge.CONTROL_NORMAL,
+        "bridge_control_source": "DB-05 section 2.4",
+        "bridge_consequence_class": danish_bridge.CONSEQUENCE_CC2,
+        "bridge_consequence_source": "DB-05 section 2.5",
+        "bridge_high_strength_approval": (
+            danish_bridge.APPROVAL_NOT_APPLICABLE
+        ),
+        "bridge_high_strength_approval_reference": "",
+        "bridge_execution_conditions_source": "",
+        "bridge_surface_condition": danish_bridge.SURFACE_WATERPROOFED,
+        "bridge_deicing_applicability": (
+            danish_bridge.APPLICABILITY_REQUIRED
+        ),
+        "bridge_deicing_source": "DB-05 drawing G-02",
+        "bridge_cover_category": danish_bridge.COVER_NONPRESTRESSED,
+        "bridge_nominal_cover_mm": 45.0,
+        "bridge_cover_source": "Drawing B-105 section A",
+        "bridge_collision_risk_applicability": (
+            danish_bridge.APPLICABILITY_NOT_APPLICABLE
+        ),
+        "bridge_alpha_cc_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_cc_custom_methodology": "",
+        "bridge_alpha_cc_approval_reference": "",
+        "bridge_alpha_ct": 1.0,
+        "bridge_alpha_ct_basis": conformance.STANDARD_BASIS,
+        "bridge_alpha_ct_custom_methodology": "",
+        "bridge_alpha_ct_approval_reference": "",
+    })
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id,
+            (
+                bridge.REQUIRED
+                if check_id == "section_analysis"
+                else bridge.NOT_APPLICABLE
+            ),
+            f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    record = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_DK_NA,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=inp["concrete"].fck,
+        section_analysis=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="section solve converged",
+            criterion="requested solver converges",
+            source="bridge inherited section solver",
+            reason="Elastic SLS-1 converged",
+        ),
+        danish_basis=bridge_inputs.danish_basis_from_inputs(inp),
+    ))
+    out = _out()
+    out["bridge_methodology"] = record
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert bridge.EN1992_2_DK_NA in text
+    assert "Publication validation status: ACCEPTED" in text
+    assert "Danish infrastructure-manager and project basis" in text
+    assert danish_bridge.MANAGER_ROAD_DIRECTORATE in text
+    assert "DB-05 section 4.2" in text
+    assert "DB-05 drawing G-02" in text
+    assert "Departure applicability" in text
+    assert danish_bridge.APPLICABILITY_NOT_APPLICABLE in text
+    assert "Departure methodology / source" in text
+    assert "Departure authority approval" in text
+    assert "mapped_deicing_x_m" in text
+    assert "mapped_deicing_y_m" in text
+    appendix = text[text.index("QA appendix - references and notes"):]
+    assert "Danish bridge QA basis" in appendix
+    assert danish_bridge.MANAGER_ROAD_DIRECTORATE in appendix
+    assert "VD bridge basis 2023+corr.2026" in appendix
+    assert "DB-05 section 2.3" in appendix
+    assert "departure applicability" in appendix
+    assert "Danish bridge applicability provenance" in appendix
+    assert "Danish bridge coefficient provenance" in appendix
+    assert "current Danish crack publication context is missing" not in text
 
 
 @pytest.mark.parametrize(

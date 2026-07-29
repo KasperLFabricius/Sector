@@ -1,0 +1,360 @@
+"""Independent scalar/decision oracle for PR-05 Danish bridge choices.
+
+The oracle deliberately imports no Sector production module.  Its route tables
+and scalar relationships are transcribed independently from the controlled
+local DS/EN 1992-2 DK NA:2015 decision map.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+
+
+FREQUENT = "Frequent"
+QUASI_PERMANENT = "Quasi-permanent"
+
+
+def crack_route(asset_class: str, member_class: str, environment: str):
+    """Return independent `(kind, combination, limit)` acceptance rows."""
+
+    if asset_class not in {"road", "footbridge", "railway"}:
+        raise ValueError("unmapped bridge class")
+    if environment not in {"aggressive", "extra_aggressive"}:
+        raise ValueError("unmapped Danish bridge environment")
+    if member_class == "nonprestressed":
+        limit = 0.30 if environment == "aggressive" else 0.20
+        return (("width", FREQUENT, limit),)
+    if member_class != "prestressed":
+        raise ValueError("unmapped Danish member class")
+    if asset_class == "railway":
+        limit = 0.10
+    else:
+        limit = 0.20 if environment == "aggressive" else 0.10
+    return (
+        ("width", FREQUENT, limit),
+        ("decompression", QUASI_PERMANENT, None),
+    )
+
+
+def numerical_crack_width(
+    *,
+    cover_mm: float,
+    bar_diameter_mm: float,
+    rho_p_eff: float,
+    strain_difference: float,
+    limit_mm: float,
+    danish: bool,
+) -> dict:
+    """Independently evaluate the close-centre 2004 crack-width expression.
+
+    This scalar oracle deliberately receives the independently established
+    effective reinforcement ratio and strain difference. It therefore checks
+    the Danish cover term and the resulting standard threshold crossing without
+    importing or reusing Sector's section, solver, or crack-rule helpers.
+    """
+
+    values = (
+        cover_mm,
+        bar_diameter_mm,
+        rho_p_eff,
+        strain_difference,
+        limit_mm,
+    )
+    if any(isinstance(value, bool) for value in values):
+        raise ValueError("Boolean values are not crack-width inputs")
+    cover, phi, rho, strain, limit = map(float, values)
+    if not all(
+        math.isfinite(value)
+        for value in (cover, phi, rho, strain, limit)
+    ):
+        raise ValueError("crack-width inputs must be finite")
+    if min(cover, phi, rho, strain, limit) <= 0.0:
+        raise ValueError("crack-width inputs must be positive")
+    k3 = 3.4 * (25.0 / cover) ** (2.0 / 3.0) if danish else 3.4
+    sr_max = k3 * cover + 0.8 * 0.5 * 0.425 * phi / rho
+    width = sr_max * strain
+    return {
+        "k3": k3,
+        "sr_max_mm": sr_max,
+        "wk_mm": width,
+        "status": "PASS" if width <= limit else "FAIL",
+    }
+
+
+def nominal_cover_requirement_mm(
+    environment: str,
+    cover_category: str,
+    *,
+    railway_collision_risk: bool = False,
+) -> float:
+    """Return independent `cmin,dur + Delta cdev` route in millimetres."""
+
+    if environment not in {"aggressive", "extra_aggressive"}:
+        raise ValueError("unmapped Danish bridge environment")
+    if cover_category not in {
+        "nonprestressed",
+        "pretensioned",
+        "posttension_duct",
+    }:
+        raise ValueError("unmapped cover category")
+    extra = environment == "extra_aggressive"
+    if cover_category == "posttension_duct":
+        cmin_dur = 60.0 if extra else 50.0
+    else:
+        cmin_dur = 50.0 if extra else 40.0
+    required = cmin_dur + 5.0
+    if railway_collision_risk:
+        if cover_category == "nonprestressed":
+            raise ValueError("collision route requires prestressing")
+        required = max(required, 75.0)
+    return required
+
+
+def fctm_mpa(fck_mpa: float) -> float:
+    """2004-family mean tensile strength for the frozen `fck <= 50` case."""
+
+    fck = float(fck_mpa)
+    if not math.isfinite(fck) or fck <= 0.0 or fck > 50.0:
+        raise ValueError("oracle case requires 0 < fck <= 50 MPa")
+    return 0.30 * fck ** (2.0 / 3.0)
+
+
+def torsional_cracking_knm(
+    *,
+    fck_mpa: float,
+    gamma_ct: float,
+    alpha_ct: float,
+    ak_m2: float,
+    tef_mm: float,
+) -> float:
+    """Independent `2 Ak tef alpha_ct fctk,0.05 / gamma_ct` result."""
+
+    values = (fck_mpa, gamma_ct, alpha_ct, ak_m2, tef_mm)
+    if any(isinstance(value, bool) for value in values):
+        raise ValueError("Boolean values are not engineering coefficients")
+    fctk_005 = 0.70 * fctm_mpa(fck_mpa)
+    return (
+        2.0
+        * float(ak_m2)
+        * (float(tef_mm) / 1000.0)
+        * float(alpha_ct)
+        * fctk_005
+        / float(gamma_ct)
+        * 1000.0
+    )
+
+
+def authority_mapping(manager: str, asset_class: str) -> str:
+    """Return the independent mapped/qualified authority effect."""
+
+    mapped = {
+        "road_directorate": {"road", "footbridge"},
+        "local_road": {"road", "footbridge"},
+        "banedanmark": {"railway"},
+        "regional_rail": {"railway"},
+    }
+    if manager == "other" or asset_class == "other":
+        return "REVIEW_ONLY"
+    return (
+        "MAPPED"
+        if asset_class in mapped.get(manager, set())
+        else "CONFLICT_REVIEW"
+    )
+
+
+def departure_outcome(
+    applicability: str,
+    *,
+    description: str,
+    source: str,
+    approval: str,
+) -> str:
+    """Return the independent non-inferred departure/approval disposition."""
+
+    if applicability == "not_established":
+        return "NOT_ASSESSED"
+    if applicability == "required":
+        if not all((description, source, approval)):
+            return "NOT_ASSESSED"
+        return "REVIEW_ONLY"
+    if applicability == "not_applicable":
+        return (
+            "CONFLICT_REVIEW"
+            if any((description, source, approval))
+            else "MAPPED"
+        )
+    raise ValueError("unmapped departure applicability")
+
+
+def traffic_fatigue_outcome(
+    applicability: str,
+    *,
+    analysis_enabled: bool,
+    reinforcement_applicability: str,
+    reinforcement_enabled: bool,
+    concrete_applicability: str,
+    concrete_enabled: bool,
+    declared_model: str,
+    declared_source: str,
+    calculated_authority: str,
+    calculated_method: str,
+    calculated_spectrum_source: str,
+    calculated_cycle_count_source: str,
+) -> str:
+    """Return the independent required-analysis correlation outcome."""
+
+    allowed = {"required", "not_applicable", "not_established"}
+    if applicability not in allowed:
+        raise ValueError("unmapped traffic/fatigue applicability")
+    routes = (
+        (reinforcement_applicability, reinforcement_enabled),
+        (concrete_applicability, concrete_enabled),
+    )
+    if any(route not in allowed for route, _enabled in routes):
+        raise ValueError("unmapped calculated fatigue applicability")
+    if applicability == "not_established":
+        return "NOT_ASSESSED"
+    if applicability == "not_applicable":
+        return "MAPPED"
+    if not all((
+        declared_model,
+        declared_source,
+        calculated_authority,
+        calculated_method,
+        calculated_spectrum_source,
+        calculated_cycle_count_source,
+    )):
+        return "NOT_ASSESSED"
+    if declared_model != calculated_method:
+        return "NOT_ASSESSED"
+    if declared_source not in {
+        calculated_spectrum_source,
+        calculated_cycle_count_source,
+    }:
+        return "NOT_ASSESSED"
+    required = [
+        enabled for route, enabled in routes if route == "required"
+    ]
+    if (
+        not analysis_enabled
+        or not required
+        or not all(required)
+        or any(
+            enabled
+            for route, enabled in routes
+            if route == "not_applicable"
+        )
+    ):
+        return "NOT_ASSESSED"
+    return "MAPPED"
+
+
+def annex_routing_outcome() -> str:
+    """Static national availability alone is never conformity evidence."""
+
+    return "NOT_ASSESSED"
+
+
+def evaluate_fixture(path: str | Path) -> dict:
+    """Evaluate the frozen JSON fixture with only independent oracle code."""
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return {
+        "crack_cases": {
+            case["id"]: crack_route(
+                case["asset_class"],
+                case["member_class"],
+                case["environment"],
+            )
+            for case in data["crack_cases"]
+        },
+        "numerical_crack_cases": {
+            case["id"]: {
+                "base": numerical_crack_width(
+                    cover_mm=case["cover_mm"],
+                    bar_diameter_mm=case["bar_diameter_mm"],
+                    rho_p_eff=case["rho_p_eff"],
+                    strain_difference=case["strain_difference"],
+                    limit_mm=case["limit_mm"],
+                    danish=False,
+                ),
+                "danish": numerical_crack_width(
+                    cover_mm=case["cover_mm"],
+                    bar_diameter_mm=case["bar_diameter_mm"],
+                    rho_p_eff=case["rho_p_eff"],
+                    strain_difference=case["strain_difference"],
+                    limit_mm=case["limit_mm"],
+                    danish=True,
+                ),
+            }
+            for case in data["numerical_crack_cases"]
+        },
+        "cover_cases": {
+            case["id"]: nominal_cover_requirement_mm(
+                case["environment"],
+                case["cover_category"],
+                railway_collision_risk=case.get(
+                    "railway_collision_risk", False
+                ),
+            )
+            for case in data["cover_cases"]
+        },
+        "torsion_cases": {
+            case["id"]: torsional_cracking_knm(**case["inputs"])
+            for case in data["torsion_cases"]
+        },
+        "authority_cases": {
+            case["id"]: authority_mapping(
+                case["manager"], case["asset_class"]
+            )
+            for case in data["authority_cases"]
+        },
+        "departure_cases": {
+            case["id"]: departure_outcome(
+                case["applicability"],
+                description=case["description"],
+                source=case["source"],
+                approval=case["approval"],
+            )
+            for case in data["departure_cases"]
+        },
+        "traffic_fatigue_cases": {
+            case["id"]: traffic_fatigue_outcome(
+                case["applicability"],
+                analysis_enabled=case["analysis_enabled"],
+                reinforcement_applicability=case[
+                    "reinforcement_applicability"
+                ],
+                reinforcement_enabled=case["reinforcement_enabled"],
+                concrete_applicability=case["concrete_applicability"],
+                concrete_enabled=case["concrete_enabled"],
+                declared_model=case["declared_model"],
+                declared_source=case["declared_source"],
+                calculated_authority=case["calculated_authority"],
+                calculated_method=case["calculated_method"],
+                calculated_spectrum_source=case[
+                    "calculated_spectrum_source"
+                ],
+                calculated_cycle_count_source=case[
+                    "calculated_cycle_count_source"
+                ],
+            )
+            for case in data["traffic_fatigue_cases"]
+        },
+        "annex_cases": {
+            case["id"]: annex_routing_outcome()
+            for case in data["annex_cases"]
+        },
+    }
+
+
+if __name__ == "__main__":
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "tests"
+        / "fixtures"
+        / "pr05_dk_bridge_decisions.json"
+    )
+    print(json.dumps(evaluate_fixture(fixture), indent=2))

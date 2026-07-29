@@ -9,6 +9,7 @@ and canonical bridge input tables, then delegates every bridge-method verdict to
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import copy
 import math
 
 import bridge_inputs
@@ -605,6 +606,11 @@ def reinforcement_fatigue_evidence(
             if isinstance(inp, Mapping)
             else None
         ),
+        current_basis=(
+            inp.get(fatigue_inputs.BASIS_KEY)
+            if isinstance(inp, Mapping)
+            else None
+        ),
     )
     if not isinstance(payload, Mapping):
         return bridge.ExternalEvidence(
@@ -710,6 +716,7 @@ def reinforcement_fatigue_evidence(
                     factor_basis.get("approval_reference") or ""
                 ),
                 "fatigue_gamma_ff": gamma_ff,
+                "fatigue_basis": dict(payload["basis"]),
             })
     warnings = _messages(payload.get("warnings"))
     errors = _messages(payload.get("errors"))
@@ -748,6 +755,11 @@ def concrete_fatigue_evidence(
         results.get("fatigue"),
         design_methodology=(
             inp.get("design_methodology")
+            if isinstance(inp, Mapping)
+            else None
+        ),
+        current_basis=(
+            inp.get(fatigue_inputs.BASIS_KEY)
             if isinstance(inp, Mapping)
             else None
         ),
@@ -881,6 +893,7 @@ def concrete_fatigue_evidence(
                     factor_basis.get("approval_reference") or ""
                 ),
                 "fatigue_gamma_ff": gamma_ff,
+                "fatigue_basis": dict(payload["basis"]),
                 "note": (
                     f"spectrum {fatigue_presentation.value(spectrum, 'spectrum_name', '-')}; "
                     f"concrete fibre {row.get('fibre_index', '-')}; "
@@ -903,7 +916,11 @@ def concrete_fatigue_evidence(
     )
 
 
-def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
+def crack_evidence(
+    results: Mapping,
+    *,
+    inp: Mapping | None = None,
+) -> bridge.ExternalEvidence:
     """Aggregate each unique bridge crack criterion at its matched response only."""
 
     entries = results.get("elastic_cases")
@@ -931,6 +948,11 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
         current_mapping_scope = elastic.get(
             "crack_response_mapping_scope"
         )
+        numerical_method_issues = (
+            sls.danish_bridge_crack_result_issues(elastic, inp)
+            if isinstance(inp, Mapping)
+            else ()
+        )
         for criterion in _sequence(assessment.get("criteria")):
             if not isinstance(criterion, Mapping):
                 continue
@@ -939,9 +961,24 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
                 or criterion.get("id")
                 or ""
             ).strip()
-            if not criterion_id.startswith("bridge-standard-"):
+            if not criterion_id.startswith(
+                ("bridge-standard-", "bridge-dk-standard-")
+            ):
                 continue
             record = dict(criterion)
+            if numerical_method_issues:
+                record.update(
+                    status=bridge.STATUS_NOT_ASSESSED,
+                    value=None,
+                    util=None,
+                    acceptance_evidence=None,
+                    reason=(
+                        "Danish bridge numerical crack-method evidence is "
+                        "missing, stale, or conflicts with the current "
+                        "source-backed basis: "
+                        + " ".join(numerical_method_issues)
+                    ),
+                )
             if _status(record.get("status")) in {
                 bridge.STATUS_PASS,
                 bridge.STATUS_FAIL,
@@ -1143,11 +1180,119 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
     return _external(
         rows,
         empty_reason=(
-            "No calculated bridge Table 7.101N crack/decompression criterion "
-            "was found."
+            "No calculated bridge Table 7.101N or Table 7.101N DK NA "
+            "crack/decompression criterion was found."
         ),
-        source="DS/EN 1992-2:2005, Table 7.101N",
+        source=(
+            "DS/EN 1992-2:2005, Table 7.101N; DS/EN 1992-2 "
+            "DK NA:2015, Table 7.101N DK NA"
+        ),
     )
+
+
+danish_basis_from_inputs = bridge_inputs.danish_basis_from_inputs
+danish_basis_context = bridge_inputs.danish_basis_context
+
+
+def _crack_results_from_record(record: Mapping | None) -> dict:
+    """Rebuild the adapter's current-response shape from a safe sibling record."""
+
+    safe = sls.publication_safe_crack_control_record(record)
+    if not isinstance(safe, Mapping):
+        return {}
+    numerical_method = safe.get("numerical_method")
+    entries = []
+    raw_cases = safe.get("cases")
+    if not isinstance(raw_cases, list):
+        return {}
+    for raw_case in raw_cases:
+        if not isinstance(raw_case, Mapping):
+            continue
+        responses = {}
+        contexts = {}
+        raw_responses = raw_case.get("responses")
+        for raw_response in (
+            raw_responses if isinstance(raw_responses, list) else ()
+        ):
+            if not isinstance(raw_response, Mapping):
+                continue
+            name = str(raw_response.get("name") or "").strip()
+            if not name:
+                continue
+            response = {
+                "wk": raw_response.get("wk_mm"),
+                "element_id": raw_response.get("element_id"),
+            }
+            if raw_response.get("decompression") is not None:
+                response["decompression"] = raw_response.get(
+                    "decompression"
+                )
+            responses[name] = response
+            contexts[name] = raw_response.get("context")
+        entries.append({
+            "name": str(raw_case.get("case") or "Elastic"),
+            "results": {
+                "elastic": {
+                    "crack_assessment": raw_case.get("assessment"),
+                    "crack_responses": responses,
+                    "crack_response_contexts": contexts,
+                    "crack_numerical_method": copy.deepcopy(
+                        numerical_method
+                    ),
+                    "crack_response_mapping_scope": raw_case.get(
+                        "response_mapping_scope"
+                    ),
+                },
+            },
+        })
+    return {"elastic_cases": entries}
+
+
+def danish_crack_publication_context(
+    inp: Mapping,
+    results: Mapping | None = None,
+    *,
+    crack_control_record: Mapping | None = None,
+) -> dict | None:
+    """Build current Danish crack authority from live or canonical saved evidence."""
+
+    if not isinstance(inp, Mapping):
+        return {"validation_error": "current bridge inputs are not a mapping"}
+    methodology = str(
+        inp.get("design_methodology") or bridge.COMPONENT_METHODS
+    ).strip()
+    if methodology != bridge.EN1992_2_DK_NA:
+        return None
+    try:
+        coverage = bridge_inputs.normalise_table(
+            inp.get(bridge_inputs.COVERAGE_TABLE_KEY),
+            bridge_inputs.COVERAGE_TABLE_KEY,
+        )
+    except (TypeError, ValueError):
+        coverage = bridge_inputs.empty_table(
+            bridge_inputs.COVERAGE_TABLE_KEY
+        )
+    decisions = bridge_inputs.decisions(coverage)
+    decision = next(
+        (
+            item
+            for item in decisions
+            if item.check_id == "sls_crack"
+        ),
+        bridge.ApplicabilityDecision("sls_crack"),
+    )
+    current_results = (
+        results
+        if isinstance(results, Mapping)
+        else _crack_results_from_record(crack_control_record)
+    )
+    try:
+        return bridge.danish_crack_publication_context(
+            crack_evidence(current_results, inp=inp),
+            decision,
+        )
+    except ValueError as exc:
+        return {"validation_error": str(exc)}
 
 
 def build_evidence(inp: Mapping, results: Mapping) -> bridge.BridgeBaseEvidence:
@@ -1172,6 +1317,11 @@ def build_evidence(inp: Mapping, results: Mapping) -> bridge.BridgeBaseEvidence:
         tables[key] = frame
     concrete = inp.get("concrete")
     fck = getattr(concrete, "fck", inp.get("conc_fck"))
+    danish_basis = (
+        danish_basis_from_inputs(inp)
+        if methodology == bridge.EN1992_2_DK_NA
+        else None
+    )
     return bridge.BridgeBaseEvidence(
         methodology=methodology,
         decisions=bridge_inputs.decisions(
@@ -1211,7 +1361,8 @@ def build_evidence(inp: Mapping, results: Mapping) -> bridge.BridgeBaseEvidence:
         shear=member_shear_evidence(inp, results),
         reinforcement_fatigue=reinforcement_fatigue_evidence(results, inp),
         concrete_fatigue=concrete_fatigue_evidence(results, inp),
-        sls_crack=crack_evidence(results),
+        sls_crack=crack_evidence(results, inp=inp),
+        danish_basis=danish_basis,
         configuration_errors=tuple(dict.fromkeys(
             (*table_errors, *adapter_errors)
         )),

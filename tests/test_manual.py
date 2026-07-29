@@ -370,7 +370,8 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
 def test_manual_documents_bridge_methodology_routing_and_limitations():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for expected in (
-        "DS/EN 1992-2:2005 + AC:2008 bridge methodology",
+        "DS/EN 1992-2:2005 + AC:2008",
+        "DS/EN 1992-2:2005 + DK/NA:2015",
         "whole-calculation methodology",
         "Inherited",
         "Overridden",
@@ -387,7 +388,21 @@ def test_manual_documents_bridge_methodology_routing_and_limitations():
         "Response duration and SLS combination class are separate",
         "quasi-permanent response",
         "unrelated calculated response",
+        "x = 3 m, y = 3 m",
+        "alpha_{ct}",
+        "Method A is mandatory",
+        "Frequent-combination crack width",
+        "a passing crack width cannot substitute",
         "approved project-basis adoption",
+        "explicit departure/dispensation applicability decision",
+        "qualified project variation",
+        "departure applicability",
+        "existing reinforcement/concrete applicability rows",
+        "required-but-disabled route",
+        "exactly match the Fatigue panel's calculated",
+        "model/source mismatch",
+        "national routing information, not analysis evidence",
+        "Annex J, KK, NN or OO",
         "Bridge Methodology",
         "cannot retain a stronger report verdict",
     ):

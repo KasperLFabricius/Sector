@@ -42,7 +42,7 @@ from sector.section import Section
 
 
 STEEL_REFERENCE_MODULUS_MPA = 200_000.0
-FATIGUE_CONFORMANCE_SCHEMA = "sector.fatigue-conformance-evidence/v1"
+FATIGUE_CONFORMANCE_SCHEMA = "sector.fatigue-conformance-evidence/v2"
 _FATIGUE_CONFORMANCE_FIELDS = (
     "valid",
     "converged",
@@ -54,6 +54,7 @@ _FATIGUE_CONFORMANCE_FIELDS = (
     "concrete_method",
     "concrete_miner_basis",
     "concrete_miner_source",
+    "basis",
     "partial_factors",
     "factor_basis",
     "parameter_conformance",
@@ -181,7 +182,7 @@ def concrete_miner_parameter_errors(
     if concrete_method not in CONCRETE_MINER_METHODS:
         return []
     errors: list[str] = []
-    if isinstance(coefficient_c, bool) or type(coefficient_c).__name__ == "bool_":
+    if conformance.is_boolean(coefficient_c):
         errors.append("Concrete fatigue C must be a finite number greater than zero")
     else:
         _positive(coefficient_c, "Concrete fatigue C", errors)
@@ -227,7 +228,7 @@ def concrete_miner_conformance(
     bridge_standard = bool(
         concrete_method == CONCRETE_MINER
         and edition == fatigue_inputs.EC2_2_2005_AC
-        and design_methodology == bridge.EN1992_2_BASE
+        and bridge.is_bridge_methodology(design_methodology)
         and basis == fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     )
     standard_2023 = bool(
@@ -328,7 +329,7 @@ def _resolved_concrete_miner_basis(
         return fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
     if (
         edition == fatigue_inputs.EC2_2_2005_AC
-        and design_methodology == bridge.EN1992_2_BASE
+        and bridge.is_bridge_methodology(design_methodology)
     ):
         return fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
     if edition == fatigue_inputs.EC2_2023:
@@ -458,6 +459,16 @@ def bridge_publication_context(inp: Mapping | None) -> dict:
         "concrete": fatigue_on and concrete_on,
     }
     try:
+        raw_basis = source.get(fatigue_inputs.BASIS_KEY)
+        basis = (
+            fatigue_inputs.default_basis()
+            if raw_basis is None and not any(checks.values())
+            else fatigue_inputs.canonical_basis(raw_basis)
+        )
+    except (TypeError, ValueError) as exc:
+        basis = fatigue_inputs.default_basis()
+        errors.append(f"current fatigue calculation basis is invalid: {exc}")
+    try:
         design_methodology = _design_methodology(
             source.get("design_methodology"),
             allow_default=False,
@@ -557,6 +568,7 @@ def bridge_publication_context(inp: Mapping | None) -> dict:
         "concrete_miner_basis": concrete_miner_basis,
         "concrete_miner_source": concrete_miner_source,
         "parameter_conformance": list(parameter_records),
+        "basis": dict(basis),
         "errors": list(dict.fromkeys(errors)),
     }
 
@@ -579,7 +591,11 @@ def bridge_result_context_errors(
         return ("bridge fatigue adapter check is missing or unknown",)
     current, context_errors = bridge.validate_fatigue_publication_context(
         context,
-        design_methodology=bridge.EN1992_2_BASE,
+        design_methodology=(
+            context.get("design_methodology")
+            if isinstance(context, Mapping)
+            else None
+        ),
     )
     errors = list(context_errors)
     if not isinstance(payload, Mapping):
@@ -629,6 +645,21 @@ def bridge_result_context_errors(
     if payload.get("edition") != current["edition"]:
         errors.append(
             "calculated fatigue edition conflicts with current fatigue inputs"
+        )
+    payload_basis = payload.get("basis")
+    if (
+        not isinstance(payload_basis, Mapping)
+        or set(payload_basis) != set(fatigue_inputs.BASIS_FIELDS)
+    ):
+        errors.append(
+            "calculated fatigue basis is missing, malformed, or incomplete"
+        )
+    elif not _json_equivalent(
+        dict(payload_basis),
+        current["basis"],
+    ):
+        errors.append(
+            "calculated fatigue basis conflicts with current fatigue inputs"
         )
 
     expected_ids = []
@@ -1199,7 +1230,7 @@ def validation_errors(inp: Mapping) -> list[str]:
         groups = {}
 
     try:
-        basis = fatigue_inputs.normalise_basis(
+        basis = fatigue_inputs.canonical_basis(
             inp.get(fatigue_inputs.BASIS_KEY)
         )
     except (TypeError, ValueError) as exc:
@@ -1423,7 +1454,7 @@ def validation_warnings(inp: Mapping) -> list[str]:
             and edition != fatigue_inputs.EC2_2023
             and not (
                 edition == fatigue_inputs.EC2_2_2005_AC
-                and design_methodology == bridge.EN1992_2_BASE
+                and bridge.is_bridge_methodology(design_methodology)
             )
             and inp.get("fatigue_concrete_miner_basis")
             == fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
@@ -1491,7 +1522,7 @@ def invalid_result(
         if str(error).strip()
     ))
     try:
-        basis = fatigue_inputs.normalise_basis(
+        basis = fatigue_inputs.canonical_basis(
             inp.get(fatigue_inputs.BASIS_KEY)
         )
     except (TypeError, ValueError):
@@ -1578,8 +1609,9 @@ def publication_safe_result(
     payload: Mapping | None,
     *,
     design_methodology: str | None,
+    current_basis: Mapping | None,
 ) -> dict | None:
-    """Return a fail-closed fatigue payload for UI/report publication."""
+    """Return fatigue evidence correlated with the current input snapshot."""
 
     if not isinstance(payload, Mapping):
         return None
@@ -1636,6 +1668,30 @@ def publication_safe_result(
         errors.append(
             "Published fatigue design methodology conflicts with the calculation "
             "input snapshot"
+        )
+    try:
+        published_basis = fatigue_inputs.canonical_basis(
+            payload.get("basis")
+        )
+    except (TypeError, ValueError) as exc:
+        published_basis = None
+        errors.append(f"Published fatigue basis is invalid: {exc}")
+    else:
+        result["basis"] = dict(published_basis)
+    try:
+        correlated_basis = fatigue_inputs.canonical_basis(current_basis)
+    except (TypeError, ValueError) as exc:
+        correlated_basis = None
+        errors.append(
+            f"Current fatigue basis is invalid for publication correlation: {exc}"
+        )
+    if (
+        published_basis is not None
+        and correlated_basis is not None
+        and published_basis != correlated_basis
+    ):
+        errors.append(
+            "Published fatigue basis conflicts with the calculation input snapshot"
         )
     checks = payload.get("checks")
     if not isinstance(checks, Mapping):
@@ -1940,12 +1996,14 @@ def calculation_conformance_record(
     payload: Mapping | None,
     *,
     design_methodology: str | None,
+    current_basis: Mapping | None,
 ) -> dict | None:
     """Build immutable, compact fatigue conformance evidence for a project."""
 
     safe = publication_safe_result(
         payload,
         design_methodology=design_methodology,
+        current_basis=current_basis,
     )
     if (
         not isinstance(safe, Mapping)
@@ -1969,6 +2027,7 @@ def publication_safe_conformance_record(
     record: Mapping | None,
     *,
     design_methodology: str | None,
+    current_basis: Mapping | None,
 ) -> dict | None:
     """Revalidate saved fatigue evidence and reject mutation or relabelling."""
 
@@ -1990,6 +2049,7 @@ def publication_safe_conformance_record(
         rebuilt = calculation_conformance_record(
             body,
             design_methodology=design_methodology,
+            current_basis=current_basis,
         )
     except (TypeError, ValueError):
         return None
@@ -2241,7 +2301,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             ],
             dtype=float,
         )
-    basis = fatigue_inputs.normalise_basis(
+    basis = fatigue_inputs.canonical_basis(
         inp.get(fatigue_inputs.BASIS_KEY)
     )
     return PreparedFatigueAnalysis(
