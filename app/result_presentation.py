@@ -8,6 +8,7 @@ engineering solvers.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 
 import fatigue_analysis
 import fatigue_presentation
@@ -782,6 +783,45 @@ def result_summary_rows(inp, results, *, stale=False):
                 assessment.get("util"), "Elastic Results",
                 " ".join(note_parts), inp,
             ))
+        crack_interaction = results.get("crack_interaction")
+        if isinstance(crack_interaction, Mapping):
+            interaction_status = str(
+                crack_interaction.get("status") or ""
+            ).upper()
+            if (
+                interaction_status == "PASS"
+                and crack_interaction.get("qualification")
+            ):
+                summary_status = "REVIEW"
+            else:
+                summary_status = _map_assessment_status(
+                    interaction_status
+                )
+            parameters = crack_interaction.get("parameters") or {}
+            width = parameters.get("crack_width_mm")
+            result_text = (
+                f"{float(width):.3f} mm"
+                if isinstance(width, (int, float))
+                else _percent(crack_interaction.get("utilisation"))
+            )
+            rows.append(_summary_row(
+                "Multidirectional crack interaction",
+                "elastic",
+                summary_status,
+                result_text,
+                str(crack_interaction.get("method_name") or "-"),
+                crack_interaction.get("utilisation"),
+                "Elastic Results",
+                " | ".join(
+                    part
+                    for part in (
+                        str(crack_interaction.get("verdict") or ""),
+                        str(crack_interaction.get("reason") or ""),
+                    )
+                    if part
+                ),
+                inp,
+            ))
 
     minimum = results.get("minimum_reinforcement")
     minimum_direction = str(
@@ -1062,12 +1102,40 @@ def result_summary_rows(inp, results, *, stale=False):
                 if component in directions:
                     append_direction(component, directions[component])
             if shear.get("biaxial"):
+                interaction = shear.get("interaction") or {}
+                interaction_status = str(
+                    interaction.get("status") or "NOT ASSESSED"
+                ).upper()
+                if (
+                    interaction_status == "PASS"
+                    and interaction.get("qualification")
+                ):
+                    summary_status = "REVIEW"
+                else:
+                    summary_status = _map_assessment_status(
+                        interaction_status
+                    )
                 rows.append(_summary_row(
-                    "Biaxial shear interaction", "plastic", "NOT ASSESSED",
-                    result="Independent Vx/Vy checks",
-                    criterion="No general interaction expression",
+                    "Biaxial shear interaction", "plastic", summary_status,
+                    result=(
+                        _percent(interaction.get("utilisation"))
+                        if interaction.get("utilisation") is not None
+                        else "Independent Vx/Vy checks"
+                    ),
+                    criterion=str(
+                        interaction.get("method_name")
+                        or "No general interaction expression"
+                    ),
+                    util=interaction.get("utilisation"),
                     view="Shear",
-                    note="Overall shear requires engineering review",
+                    note=" | ".join(
+                        part
+                        for part in (
+                            str(interaction.get("verdict") or ""),
+                            str(interaction.get("reason") or ""),
+                        )
+                        if part
+                    ) or "Overall shear requires engineering review",
                     inp=inp,
                 ))
         else:

@@ -23,7 +23,7 @@ import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
 from sector import (bridge, codes, conformance, danish_bridge, detailing,  # noqa: E402
-                    sls)
+                    multidirectional, sls)
 
 
 def _v17_crack_defaults():
@@ -98,6 +98,13 @@ def _v19_bridge_defaults():
         "bridge_alpha_ct_custom_methodology": "",
         "bridge_alpha_ct_approval_reference": "",
         "sls_dk_member_class": project_io.DEFAULT_SLS_DK_MEMBER_CLASS,
+    }
+
+
+def _v22_interaction_defaults():
+    return {
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
     }
 
 
@@ -197,6 +204,7 @@ def test_round_trip_tables_and_scalars():
     }
     expected_scalars.update(_v17_crack_defaults())
     expected_scalars.update(_v19_bridge_defaults())
+    expected_scalars.update(_v22_interaction_defaults())
     assert rs == expected_scalars
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == "PL-17"
     assert rt[load_cases.PLASTIC_TABLE_KEY].loc[0, "description"] == (
@@ -573,7 +581,7 @@ def test_v21_round_trip_preserves_typed_bridge_tables_and_methodology():
     payload = json.loads(text)
     restored, restored_scalars = project_io.parse_project(text)
 
-    assert payload["version"] == 21
+    assert payload["version"] == project_io.VERSION
     assert payload["bridge"]["version"] == bridge_inputs.VERSION
     assert restored_scalars["design_methodology"] == bridge.EN1992_2_BASE
     assert restored_scalars["bridge_minimum_scope"] == bridge.MINIMUM_SCOPE_WEB
@@ -1737,9 +1745,10 @@ def test_unknown_scalar_keys_are_dropped():
         "conc_fck": 30.0,
         "sls_tendon_bond": project_io.DEFAULT_SLS_TENDON_BOND,
         "sls_tendon_xi": project_io.DEFAULT_SLS_TENDON_XI,
-        **_v17_crack_defaults(),
-        **_v19_bridge_defaults(),
-    }
+            **_v17_crack_defaults(),
+            **_v19_bridge_defaults(),
+            **_v22_interaction_defaults(),
+        }
 
 
 def test_v18_roundtrips_combination_and_criterion_applicability():

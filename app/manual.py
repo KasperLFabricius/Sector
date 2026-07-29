@@ -973,12 +973,44 @@ def manual_blocks() -> list:
        "face. The sign of shear does not select "
        "the tension face. Web-width overrides and effective link-leg counts are "
        "directional; method, aggregate and stirrup properties are shared.")
-    call("limit", "When both shear components are nonzero, Sector reports two "
-         "independent directional checks. It does **not** apply a resultant or claim "
-         "a general biaxial interaction equation. If both directions pass, overall "
-         "shear remains **REVIEW**; a directional failure makes the overall result "
-         "**FAIL**. With torsion, each V+T direction is screened separately and the "
-          "three-component Vx+Vy+T interaction remains **NOT ASSESSED**.")
+    call("limit", "When both shear components are nonzero, Sector always retains "
+         "the two independent directional checks. With no selected, applicable "
+         "biaxial method, two component PASS results still leave the aggregate "
+         "**REVIEW / NOT ASSESSED**. A directional failure remains an aggregate "
+         "**FAIL**. Sector never infers a universal interaction equation.")
+    h2("Opt-in biaxial shear interaction")
+    md("The **Biaxial shear interaction** panel is separate from the Vx and Vy "
+       "solvers. It requires explicit physical axes and one methodology. Method, "
+       "edition, axes, depth route, source, approval and every domain switch are "
+       "part of the calculation signature; changing any of them invalidates the "
+       "stored aggregate evidence.")
+    table(["Method", "Calculation and applicability"],
+          [["EN 1992-1-1:2023 8.2.1(5), Formulas (8.21)-(8.26)",
+            "For a solid slab, shell or equivalent planar member: Vx and Vy must "
+            "be out-of-plane shear at the same control point on compatible "
+            "per-unit-width bases. Sector calculates "
+            "$v_{Ed}=\\sqrt{v_{Ed,x}^2+v_{Ed,y}^2}$ and the selected piecewise "
+            "(8.22)-(8.24) or rotated (8.25) effective depth."],
+           ["Approved project power sum",
+            "Uses the current directional demands and resistances in "
+            "$\\eta=(|V_x|/V_{Rd,x})^p+(|V_y|/V_{Rd,y})^p$. A positive finite "
+            "custom exponent is calculated exactly as entered. The project "
+            "domain, source and approval/checker reference are mandatory."]])
+    md("The 2023 resultant-demand route also needs a positive finite resistance "
+       "for the calculated resultant direction, together with its source and "
+       "approval. Sector does not reconstruct or certify that external "
+       "directional resistance, so a passing result is labelled **QUALIFIED "
+       "PASS**, not an unqualified Eurocode PASS. The vector demand resultant is "
+       "rotationally invariant, but the full qualified interaction is recorded as "
+       "directional because isotropy of the external resistance is not evidenced. "
+       "The project power sum is labelled "
+       "**APPROVED CUSTOM PASS/FAIL**. Missing, contradictory, stale, malformed or "
+       "out-of-domain evidence fails closed while both component results remain "
+       "visible.")
+    call("limit", "EN 1992-2 Annex LL is not offered as a Danish bridge "
+         "interaction route: DS/EN 1992-2 DK NA:2015 states that Annex LL is not "
+         "applicable. With torsion, each V+T direction is still screened separately "
+         "and the three-component Vx+Vy+T interaction remains **NOT ASSESSED**.")
     md("Where torsion is active, the report also retains the directional Equation "
        "6.31 minimum-reinforcement screen for Vx+T and Vy+T. This screen states "
        "whether minimum reinforcement suffices; it is not an overall resistance "
@@ -1558,12 +1590,43 @@ def manual_blocks() -> list:
        "$k_1/r=1.00$, and the bending $(h-x)$ spacing cap is not applied. Other "
        "uniform-tension geometries and combined all-tension states return a "
        "blocking **NOT ASSESSED** disposition rather than an apparent pass.")
-    call("limit", "Crack-control scope: the bending calculation is a "
-         "**one-directional dominant strain-gradient assessment**. Orthogonal or "
-         "inclined crack systems are not assessed; those systems require an "
-         "explicit multidirectional method (including the relevant Annex G.5 "
-         "route where applicable). This limitation is repeated beside the result "
-         "and in the report conclusion.")
+    call("limit", "Crack-control scope: the canonical bending calculation remains "
+         "a **one-directional dominant strain-gradient assessment**. Orthogonal "
+         "or inclined systems are not part of that component conclusion. Only a "
+         "separately selected, current and in-domain interaction record can provide "
+         "an aggregate conclusion.")
+    h2("Opt-in multidirectional crack interaction")
+    md("The multidirectional selection is independent of crack history and the "
+       "long-term/total response choice. It must name exactly one current "
+       "crack-width-enabled Elastic case, one canonical acceptance criterion and "
+       "that criterion's exact SLS combination. Sector revalidates PR-03's immutable "
+       "criterion-to-response fingerprint before using the limit; a duration label "
+       "can never substitute for the required combination.")
+    table(["Method", "Formula and confirmed domain"],
+          [["DS/EN 1992-1-1:2004 + DK NA 7.3.4(4)",
+            "$1/s_r=\\cos\\theta/s_{r,x}+\\sin\\theta/s_{r,y}$ (7.15) and "
+            "$\\Delta\\varepsilon=\\Delta\\varepsilon_x+"
+            "\\Delta\\varepsilon_y$ (7.101 NA), then "
+            "$w_k=s_r\\Delta\\varepsilon$. Requires the selected 2004/DK route, "
+            "two orthogonal reinforcement directions, plane stress, no unmodelled "
+            "discontinuity and the stated angle domain."],
+           ["EN 1992-1-1:2023 Annex G.5",
+            "$1/s_r=\\sin\\theta/s_{r,x}+\\cos\\theta/s_{r,y}$ (G.22) and "
+            "$\\Delta\\varepsilon=\\Delta\\varepsilon_x+"
+            "\\Delta\\varepsilon_y+|\\varepsilon_2|$ (G.23). Requires the explicit "
+            "2023 crack edition, an orthogonally reinforced membrane region without "
+            "a discontinuity, and $15^\\circ<\\theta<75^\\circ$."],
+           ["Approved project crack power sum",
+            "$\\eta=(w_{k,x}/w_{lim,x})^p+(w_{k,y}/w_{lim,y})^p$. Positive finite "
+            "custom limits and exponent are preserved. Confirmed project domain, "
+            "source and approval/checker reference are mandatory."]])
+    md("The standard-derived routes compare their calculated multidirectional "
+       "width with the limit from the exact canonical criterion. A project power-"
+       "sum conclusion is always labelled **APPROVED CUSTOM PASS/FAIL**. Edition "
+       "mismatch, missing or duplicate case/criterion evidence, changed response "
+       "mapping, malformed values, unconfirmed domain or missing project authority "
+       "returns **NOT ASSESSED/INVALID** without deleting any canonical crack "
+       "response.")
     md("The four editions on the same beam and service moment ($M_x=150$ kNm):")
     table(["Crack-width edition", "$s_{r,max}$ (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"],
           [["EN 1992-1-1:2005", "236", "0.125", "0.188"],

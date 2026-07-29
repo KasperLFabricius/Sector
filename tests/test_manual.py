@@ -85,6 +85,25 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
+def test_manual_documents_separate_sourced_pr06_methods_and_fallbacks():
+    text = "\n".join(
+        str(part)
+        for block in manual.manual_blocks()
+        for part in block[1:]
+    )
+    assert "Opt-in biaxial shear interaction" in text
+    assert "EN 1992-1-1:2023 8.2.1(5)" in text
+    assert "QUALIFIED PASS" in text
+    assert "full qualified interaction is recorded as directional" in text
+    assert "Approved project power sum" in text
+    assert "Opt-in multidirectional crack interaction" in text
+    assert "DK NA 7.3.4(4)" in text
+    assert "EN 1992-1-1:2023 Annex G.5" in text
+    assert "APPROVED CUSTOM PASS/FAIL" in text
+    assert "two component PASS results" in text
+    assert "NOT ASSESSED/INVALID" in text
+
+
 def test_manual_math_spacing_cannot_merge_latex_commands_with_symbols():
     # Adjacent Python string literals previously produced ``\quadf`` and
     # ``\qquadk``. KaTeX renders those invalid commands as red source text.

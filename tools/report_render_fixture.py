@@ -1261,7 +1261,8 @@ def validate_pdf_content(pdf: bytes) -> str:
             )
     for expected in (
         "Crack-control conclusion limitation",
-        "One-directional dominant strain-gradient assessment only",
+        "canonical crack response is a one-directional dominant "
+        "strain-gradient assessment",
         "Assessment scope",
         "Acceptance route",
         "Quasi-permanent",

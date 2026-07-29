@@ -51,6 +51,7 @@ from sector import bridge as bridge_core
 from sector import codes as ec2_codes
 from sector import conformance
 from sector import detailing
+from sector import multidirectional
 from sector import sls as sls_core
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
@@ -483,7 +484,10 @@ class ReportBuilder:
         self.buffer = buffer
         self.meta = meta or {}
         self.inp = inp
-        canonical_out = dict(out or {})
+        canonical_out = multidirectional.publication_safe_results(
+            out,
+            current_inputs=inp,
+        )
         if canonical_out.get("fatigue") is not None:
             canonical_out["fatigue"] = fatigue_analysis.publication_safe_result(
                 canonical_out.get("fatigue"),
@@ -775,6 +779,235 @@ class ReportBuilder:
             self.flow.append(Paragraph(_greek(f"<b>{result}</b>"), self.s["formula"]))
         if ref:
             self.flow.append(Paragraph(_greek(ref), self.s["ref"]))
+
+    def _interaction_evidence(self, record, title):
+        """Render one sealed crack/shear interaction evidence record."""
+
+        self._h2(title)
+        if not isinstance(record, Mapping):
+            shear_title = "shear" in str(title).lower()
+            self._status_block(
+                (
+                    "NOT ASSESSED - independent Vx/Vy checks"
+                    if shear_title
+                    else "NOT ASSESSED - no current interaction evidence"
+                ),
+                "NOT ASSESSED",
+            )
+            self._small(
+                (
+                    "Biaxial interaction: <b>NOT ASSESSED</b>. Independent "
+                    "Vx/Vy checks remain reportable; no undocumented interaction "
+                    "or aggregate PASS is available."
+                    if shear_title
+                    else "Component results remain reportable; no aggregate "
+                    "PASS is available."
+                )
+            )
+            return
+
+        status = str(record.get("status") or "NOT ASSESSED").upper()
+        verdict = str(record.get("verdict") or status)
+        utilisation = record.get("utilisation")
+        banner = (
+            f"{_html_escape(verdict)} - "
+            f"{_html_escape(record.get('method_name') or record.get('method') or '-')}"
+        )
+        if isinstance(utilisation, (int, float)) and math.isfinite(
+            float(utilisation)
+        ):
+            banner += f" | utilisation {_fmt(utilisation, 4)}"
+        self._status_block(banner, status)
+        if record.get("reason"):
+            self._small(
+                "<b>Conclusion:</b> "
+                + _html_escape(str(record.get("reason")))
+            )
+
+        raw_axes = record.get("axes")
+        axes = raw_axes if isinstance(raw_axes, Mapping) else {}
+        raw_criterion = record.get("criterion")
+        criterion = (
+            raw_criterion
+            if isinstance(raw_criterion, Mapping)
+            else {}
+        )
+        rotation_rows = []
+        if "rotationally_invariant" in record:
+            rotation_rows.append([
+                "Full interaction rotationally invariant",
+                (
+                    "yes"
+                    if record.get("rotationally_invariant") is True
+                    else "no"
+                    if record.get("rotationally_invariant") is False
+                    else "-"
+                ),
+            ])
+        if "demand_resultant_rotationally_invariant" in record:
+            rotation_rows.append([
+                "Demand resultant rotationally invariant",
+                (
+                    "yes"
+                    if record.get(
+                        "demand_resultant_rotationally_invariant"
+                    ) is True
+                    else "no"
+                    if record.get(
+                        "demand_resultant_rotationally_invariant"
+                    ) is False
+                    else "-"
+                ),
+            ])
+        if record.get("rotation_scope"):
+            rotation_rows.append([
+                "Rotation scope",
+                _html_escape(str(record.get("rotation_scope"))),
+            ])
+        evidence_rows = [
+            ["Bound field", "Current evidence"],
+            ["Method ID", _html_escape(str(record.get("method") or "-"))],
+            ["Formula / method source", _html_escape(str(record.get("source") or "-"))],
+            [
+                "Resistance / project source",
+                _html_escape(str(record.get("resistance_source") or "-")),
+            ],
+            ["Approval / checker", _html_escape(str(record.get("approval") or "-"))],
+            ["Authority class", _html_escape(str(record.get("authority") or "-"))],
+            ["Qualification", _html_escape(str(record.get("qualification") or "-"))],
+            ["x-axis definition", _html_escape(str(axes.get("x") or "-"))],
+            ["y-axis definition", _html_escape(str(axes.get("y") or "-"))],
+            ["Elastic / Plastic case", _html_escape(str(
+                criterion.get("elastic_case") or record.get("case_id") or "-"
+            ))],
+            ["Criterion ID", _html_escape(str(criterion.get("criterion_id") or "-"))],
+            [
+                "Required SLS combination",
+                _html_escape(str(criterion.get("required_combination") or "-")),
+            ],
+            [
+                "Canonical acceptance fingerprint",
+                _html_escape(str(criterion.get("acceptance_fingerprint") or "-")),
+            ],
+            [
+                "Interaction evidence fingerprint",
+                _html_escape(str(record.get("evidence_fingerprint") or "-")),
+            ],
+            *rotation_rows,
+        ]
+        self._table(
+            evidence_rows,
+            [55 * mm, 115 * mm],
+            font=6.5,
+            keep=False,
+        )
+
+        formula = record.get("formula")
+        if formula:
+            self._formula(
+                _html_escape(str(formula)),
+                ref=_html_escape(str(record.get("source") or "")),
+                result=(
+                    "eta = " + _fmt(utilisation, 6)
+                    if isinstance(utilisation, (int, float))
+                    and math.isfinite(float(utilisation))
+                    else None
+                ),
+            )
+
+        domain = record.get("domain")
+        if isinstance(domain, Mapping):
+            checks = domain.get("checks")
+            rows = [["Applicability-domain evidence", "Confirmed"]]
+            if isinstance(checks, Mapping):
+                rows.extend([
+                    [
+                        _html_escape(str(label)),
+                        "yes" if confirmed is True else "no",
+                    ]
+                    for label, confirmed in checks.items()
+                ])
+            rows.append([
+                "Domain satisfied",
+                "yes" if domain.get("satisfied") is True else "no",
+            ])
+            self._table(
+                rows,
+                [135 * mm, 35 * mm],
+                font=6.7,
+                keep=False,
+            )
+
+        components = record.get("components")
+        if isinstance(components, list) and components:
+            rows = [["Component", "Axis / direction", "Bound quantities"]]
+            for component in components:
+                if not isinstance(component, Mapping):
+                    continue
+                quantities = "; ".join(
+                    f"{key}={_fmt(value, 6) if isinstance(value, (int, float)) and not isinstance(value, bool) else value}"
+                    for key, value in component.items()
+                    if key not in {"id", "axis"}
+                ) or "-"
+                rows.append([
+                    _html_escape(str(component.get("id") or "-")),
+                    _html_escape(str(component.get("axis") or "-")),
+                    _html_escape(quantities),
+                ])
+            self._table(
+                rows,
+                [22 * mm, 47 * mm, 101 * mm],
+                font=6.1,
+                keep=False,
+            )
+
+        parameters = record.get("parameters")
+        terms = record.get("terms")
+        if isinstance(parameters, Mapping) or isinstance(terms, list):
+            rows = [["Calculation item", "Bound value"]]
+            if isinstance(parameters, Mapping):
+                rows.extend([
+                    [
+                        _html_escape(str(key)),
+                        _html_escape(
+                            _fmt(value, 8)
+                            if isinstance(value, (int, float))
+                            and not isinstance(value, bool)
+                            else str(value)
+                        ),
+                    ]
+                    for key, value in parameters.items()
+                ])
+            if isinstance(terms, list):
+                for term in terms:
+                    if not isinstance(term, Mapping):
+                        continue
+                    value_fields = [
+                        (key, value)
+                        for key, value in term.items()
+                        if key != "id"
+                    ]
+                    rows.append([
+                        "term " + _html_escape(str(term.get("id") or "-")),
+                        _html_escape("; ".join(
+                            f"{key}={_fmt(value, 8) if isinstance(value, (int, float)) and not isinstance(value, bool) else value}"
+                            for key, value in value_fields
+                        ) or "-"),
+                    ])
+            self._table(
+                rows,
+                [60 * mm, 110 * mm],
+                font=6.4,
+                keep=False,
+            )
+
+        issues = record.get("issues") or []
+        publication = record.get("publication_validation") or {}
+        for issue in list(issues) + list(publication.get("issues") or []):
+            self._small(
+                "<b>Fail-closed evidence issue:</b> "
+                + _html_escape(str(issue))
+            )
 
     def _table(self, data, widths, header=True, font=8.5, keep=True):
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
@@ -3189,15 +3422,9 @@ class ReportBuilder:
             ])
         self._table(rows, [25 * mm, 27 * mm, 27 * mm, 27 * mm, 28 * mm, 38 * mm])
         if aggregate.get("biaxial"):
-            self._status_block(
-                f"{aggregate.get('status', 'REVIEW')} - independent Vx/Vy checks",
-                aggregate.get("status", "REVIEW"),
-            )
-            self._small(
-                "Biaxial interaction: <b>NOT ASSESSED</b>. Sector performs two "
-                "directional checks and does not apply a resultant or an undocumented "
-                "interaction expression. If both directions pass, the overall shear "
-                "status remains REVIEW."
+            self._interaction_evidence(
+                aggregate.get("interaction"),
+                "Biaxial shear interaction",
             )
         for component in ("vx", "vy"):
             if component in directions:
@@ -4952,6 +5179,10 @@ class ReportBuilder:
             "<b>Crack-control scope.</b> "
             f"{el.get('crack_scope_note') or CRACK_DIRECTIONAL_LIMITATION}"
         )
+        self._interaction_evidence(
+            el.get("crack_interaction"),
+            "Multidirectional crack interaction",
+        )
         if no_results:
             self._small(
                 "No crack width: "
@@ -4997,6 +5228,7 @@ class ReportBuilder:
     def _crack_table(self, cl, cs, clc=None, csc=None):
         # The full crack-width breakdown for both calculated duration states,
         # matching the view. Combination applicability is reported separately.
+        start = len(self.flow)
         self._h2("Crack width - both response states")
         # wk, sr_max, phi and cover come from the engine already in mm; hc_ef (m)
         # and ac_eff (m^2) are metric.
@@ -5055,6 +5287,9 @@ class ReportBuilder:
         for i, spec in enumerate(specs):
             rows.append([spec[0]] + [c[i] for c in cols])
         self._table(rows, widths)
+        # Interaction evidence can leave only enough room for this heading at
+        # the foot of a page.  Keep the heading with its compact response table.
+        self._keep_from(start)
 
     def _crack_worked(self, cw, which=""):
         if not cw:

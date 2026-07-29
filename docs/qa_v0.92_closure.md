@@ -18,7 +18,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-006 | PR-05 | Implemented on branch; exact-head external gates pending | A distinct `DS/EN 1992-2:2005 + DK/NA:2015` method inherits the merged bridge-base record and adds only evidenced Danish overrides/additions: Danish coefficients, high-strength approval, environmental/cover/de-icing routes, mandatory brittle Method A disposition, and the Danish crack matrix. Its numerical crack route follows the bridge standard's Section 7 / 7.3.4(101) referral through the related DS/EN 1992-1-1 DK NA:2013: cover-dependent `k3`, conditional `(h-x)/3`, and separately reported fine/coarse systems. Static Danish annex availability is recorded as information only; Annex J/KK/NN/OO routing remains blocking `NOT ASSESSED` without typed project applicability and complete external analysis evidence. Inherited, overridden, added, not-applicable and not-assessed states remain explicit. | `docs/pr05_dk_bridge_decision_map.md`; independent `tools/pr05_dk_bridge_oracle.py`; frozen road, footbridge and railway crack/cover/authority/fatigue/annex fixture in `tests/fixtures/pr05_dk_bridge_decisions.json`. | Focused Danish method/oracle, bridge/SLS, project persistence, cache/publication, capacity-factor and headless app tests are green before the final documentation/render gate; exact-head counts follow after review fixes stabilize. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Method A structural analysis is not implemented and remains blocking `NOT ASSESSED` when required; no Method B fallback is allowed. Annex applicability/analysis is not implemented and cannot be inferred from static DK/NA availability. |
 | F-007 | PR-03 | Closed and merged | EN 1992-1-1:2023 uniform direct tension is calculated only for the validated solid-rectangle/opposed-face domain; unsupported or incomplete states are explicit blocking dispositions. | Standalone rectangular perimeter-area, reinforcement-ratio, strain, spacing and crack-width oracle in `tools/pr03_crack_oracle.py`. | Direct-tension, transition, unsupported-domain, decompression, SLS precedence and app integration regressions accepted on the exact head. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | 2005 direct tension and non-rectangular/combined all-tension inputs remain explicitly `NOT ASSESSED`; they cannot yield PASS. |
 | F-008 | PR-03 | Closed and merged | The engine records dominant direction/scope, while UI, overview, saved limitations, manual and report state that orthogonal or inclined crack systems are not assessed. | Rotation oracle compares an asymmetric section and reinforcement under rigid rotations with transformed loads. | Rotated engine cases plus app summary, report text/raster and manual content gates accepted on the exact head. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | Directional limitation remains explicit until PR-06 supplies an applicable opt-in multidirectional method. |
-| F-009 | PR-06 | Planned | Keep independent `Vx`/`Vy` results but prevent combined PASS without a selected applicable interaction method. | To be established in owning PR for uniaxial limits, balanced biaxial load, axis swap, rotation, and interaction boundary. | Pending | Pending | Pending | Pending | No universal interaction rule will be inferred. |
+| F-009 | PR-06 | Implemented on branch; exact-head external gates pending | Independent signed `Vx`/`Vy` demands, resistances, utilisations, axes and component verdicts remain reportable. A biaxial aggregate can never become an unqualified PASS from two component passes alone. With no selected method, invalid/currently unbound evidence, or an unsupported domain, the aggregate is `REVIEW / NOT ASSESSED`; a component failure still gives aggregate `FAIL` when current solver evidence exists. The explicit EN 1992-1-1:2023 planar-resultant route is qualified because its resultant-direction resistance is externally evidenced, and an approved project power sum remains an `APPROVED CUSTOM` conclusion. Saved projects do not restore solver resistance evidence, so assessed biaxial verdicts require recalculation; input actions alone may retain a genuine uniaxial `NOT APPLICABLE`. | `tools/pr06_multidirectional_oracle.py` independently freezes zero and both uniaxial limits, balanced action, just-below/at/just-above boundary points, x/y swap, sign reversal, isotropic rigid rotation, and anisotropic non-invariance without importing production rules. | The current canonical-basis matrix has 126 focused checks and the combined interaction/project suite has 268 green checks, plus the exact five-node CI-failure reproduction and standalone oracle. It covers zero/one/two-component mutation, jointly re-sealed obsolete siblings, case deletion/substitution/duplication, PASS/FAIL downgrades, jointly inflated resistance, raw/publication/project/save-load-resave/report boundaries, malformed-current-action no-fallback controls, sole-case identity correlation and genuine uniaxial/component retention. | Exact head `270e40e5bbab804a43876fc3ac295d1a9a34bd47` passed Codex Review with no major issue. Its completed CI gate exposed one bounded single-result case-identity correlation defect and four stale schema/UI/API test contracts; the approved correction and focused matrix are green locally, with corrective SHA and exact-head rereview pending. | Pending original reviewer. | Pending | No universal 2004/DK member `Vx`/`Vy` interaction was identified. EN 1992-2 Annex LL is not offered for the Danish bridge route; `Vx+Vy+T` remains `NOT ASSESSED`. |
 | F-010 | PR-04 | Implemented on branch; exact-head external gates pending | The corrected DS/EN 1992-2 Expression (6.106) route prescribes `C = 14` under the bridge methodology. Any positive finite coefficient remains an analytical input, but a different value is recorded as a deviation and can never be labelled as the AC:2008 relation or an unqualified standard PASS. A separately named Miner/S-N methodology plus explicit source/approval can emit only a qualified custom verdict. Core, preparation, project/session, UI, bridge publication and report boundaries revalidate the actual coefficient, conformance record, method, applicability and typed whole-calculation methodology binding against the calculation snapshot. | Controlled local DS/EN 1992-2:2005 clause 6.8.7(101) with AC:2008 correction and DS/EN 1992-1-1:2023 E.8 applicability; independent `tools/pr04_bridge_oracle.py` standard `C = 14` life/damage plus standard-labelled and approved-project `C = 100` examples. | Included in the consolidated core/project/publication, report, manual, adjacent-fatigue, rendered, policy and Streamlit slices recorded for PR-04, including the exact `C = 100` false-PASS reproducer, mutable evidence and cache/signature controls. | Pending exact-head Codex Review after commit and CI. | Pending original reviewer. | Pending | Project-basis adoption outside the bridge method remains an explicit engineering-authority decision with a recorded approval source; another S-N relation remains a separately sourced project method and is never relabelled as Expression (6.106) or 2023 E.8. |
 | F-011 | PR-07 | Planned | Add report design scope, assumptions/exclusions, overall conclusion, and action register for every non-pass state. | To be established in owning PR through structural report assertions. | Pending | Pending | Pending | Pending | None accepted. |
 | F-012 | PR-13 | Planned | Add ratcheted coverage, selected Ruff, type, and dependency-security CI gates with owned waivers. | Controlled gate-failure demonstrations to be established in owning PR. | Pending | Pending | Pending | Pending | Temporary waivers must name owner and expiry/exit condition. |
@@ -32,7 +32,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-020 | Excluded | Excluded — non-code local build hygiene; user-directed exclusion | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | F-021 | PR-14 | Planned | Implement a defensible reproducibility model and controlled-build timestamp/hash behavior. | Two controlled Windows-build comparison to be established in owning PR. | Pending | Pending | Pending | Pending | Byte identity will not be claimed unless demonstrated. |
 | F-022 | PR-05 | Implemented on branch; exact-head external gates pending | Typed, non-inferred bridge class, infrastructure manager, authority/project sources and approvals, environmental/surface/de-icing applicability, control/consequence class, fatigue applicability, cover and coefficient provenance are bound through input, calculation signature/cache, immutable result fingerprint, project/session/autosave/download publication, UI and report. Required traffic fatigue now correlates the global analysis switch, canonical coverage-table applicability, each selected reinforcement/concrete fatigue check and its calculated evidence, and the declared Danish traffic model/source with the exact current calculated fatigue authority/method/spectrum/cycle-count basis; disabled, unselected, conflicting, stale or missing routes cannot produce a Danish project-basis PASS. Evidenced mappings change only cover, de-icing evidence, Danish crack routing and `alpha_ct` torsional cracking resistance; other authority choices qualify the conclusion without silently changing inputs. | The PR-05 decision map distinguishes Eurocode, DK NA, Road Directorate, Banedanmark and project authority. The independent fixture covers mapped road/foot/rail choices, conflicts, unmapped authorities, Danish cover/de-icing routes, eight traffic-fatigue correlation boundaries, static-annex qualification and calculation-changing/custom-only effects. | Save-load-resave, malformed/Boolean/non-finite inputs, method/edition switches, basis mutation, stale result/cache, required-fatigue routing and missing/duplicate correlation regressions are included in the focused PR-05 tests. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Unmapped, project-defined or conflicting authority choices warn and cannot silently alter calculations or produce an unqualified selected-standard PASS. |
-| F-023 | PR-06 | Planned | Add separate opt-in, sourced biaxial crack/shear interaction options with domain and fallback state. | Independent limiting, symmetry, rotation, and unsupported-domain benchmarks to be established in owning PR. | Pending | Pending | Pending | Pending | No universal interaction rule will be invented. |
+| F-023 | PR-06 | Implemented on branch; exact-head external gates pending | Crack and shear selections, sources, approvals, domains, axes and evidence are separate. Offered crack routes are the sourced 2004/DK inclined-crack equations, EN 1992-1-1:2023 Annex G.5, and an approved project power sum; offered shear routes are EN 1992-1-1:2023 8.2.1(5) and an approved project power sum. Crack aggregation identifies exactly one current Elastic case and canonical PR-03 criterion/combination binding. Every live method result records formula, parameters, terms, source/authority, domain, components, utilisation and qualification through API, signatures/cache, live/durable state, report and manual. Project/autosave/download boundaries retain current inputs and audit provenance but cannot republish assessed aggregate output after load without current solver results; they fail closed and require recalculation. | `docs/pr06_multidirectional_decision_map.md` gives the controlled source/method map. The independent oracle and adversarial matrix cover malformed/Boolean/non-finite/custom-positive parameters, unsupported domains, edition/method switches, missing/duplicate/stale/self-consistent-but-not-current evidence, calculation off/on, persistence/publication bypasses, crack-history separation and acceptance-combination routing. | One non-persisted canonical basis is reconstructed only from current calculation inputs/results. Current Plastic actions establish case, signed demand and zero/one/two-component disposition identity; live directional solver results alone authorize shear resistances. A single unnamed solver result may take only the identity of exactly one canonical action case; empty or multiple action-case collections fail closed, and solver directions never supply or replace action demands. Live crack results alone authorize the PR-03 criterion/response binding. Every disposition is re-derived before publication; stored aggregate fields and obsolete persisted siblings never authenticate one another. Crack/shear legality, uniaxial `NOT APPLICABLE`, durable rejection, schema v22 migration and all publication boundaries remain covered. | Exact head `270e40e5bbab804a43876fc3ac295d1a9a34bd47` passed Codex Review. The completed full-suite gate exposed the bounded sole-action-case correlation gap; its approved canonical-model fix and regression are green locally, with corrective SHA and rereview pending. | Pending original reviewer. | Pending | Project-defined methods require explicit source, approval and confirmed domain and remain qualified custom conclusions. Unsupported or ambiguous multidirectional states stay `NOT ASSESSED / REVIEW`; no authority or universal formula is inferred. |
 | F-024 | PR-07 | Planned | Add amendment history, sign-off, action ownership, and closure state to reports. | Blank/partial/full governance report fixtures to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-025 | PR-12 | Planned | Prevent whole Inputs-workspace rebuild/stall on ordinary pane changes. | Browser rerun/time-to-idle telemetry to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-026 | PR-12 | Planned | Render only the active input pane while retaining unmounted values in one canonical draft model. | Zero-lost-edit and inactive-payload browser evidence to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
@@ -1327,3 +1327,345 @@ mandatory; this matrix does not self-certify PR closure.
   SLS/bridge-adapter/project checks and seven focused cache/UI controls. Exact
   corrective SHA, rereview and the one-run GitHub full-suite gate remain
   pending.
+
+## PR-06 evidence log
+
+- Scope is limited to F-009 and F-023 on exact merged base
+  `82551e98714dfd47ff7f631685cc791c1431385f` (tree
+  `e014b24b5e70e6756bd7ecf0b3b52a87c261cd4b`). Version remains exactly
+  `0.91`; project schema advances to v22. F-020 remains exactly
+  `Excluded — non-code local build hygiene; user-directed exclusion`.
+- `docs/pr06_multidirectional_decision_map.md` records the controlled local-only
+  standards review. EN 1992-1-1:2004 7.3.4(4), Formula (7.15), and the current
+  DK NA 7.3.4(4), Formula (7.101 NA), support the offered 2004/DK inclined-crack
+  route. EN 1992-1-1:2023 9.2.3(7) and Annex G.5, Formulas (G.22)-(G.27),
+  support the separately selected membrane-crack route. EN 1992-1-1:2023
+  8.2.1(5), Formulas (8.21)-(8.26), supports the planar resultant-demand route.
+  Owner/project authority is not confused with normative Eurocode authority.
+- EN 1992-2 Annex LL is deliberately not offered under the Danish bridge route:
+  DS/EN 1992-2 DK NA:2015 states that Annex LL is not applicable. No universal
+  2004/DK member `Vx`/`Vy` interaction or owner replacement was identified.
+  Sector therefore retains independent component results and withholds the
+  aggregate unless one explicit method is current and in domain.
+- The implementation separates crack and shear configurations and sealed
+  evidence. Method, edition, on/off state, axes, direction/depth route, domain
+  switches, formulas/parameters, source, approval, component values, terms,
+  utilisation and conclusion enter current-input correlation and publication.
+  Crack evidence additionally names exactly one current Elastic case, canonical
+  criterion and required SLS combination and revalidates PR-03's immutable
+  acceptance fingerprint. Missing, duplicate, contradictory, malformed, stale,
+  or self-consistent-but-not-current evidence fails closed without erasing
+  component results. Publication re-assesses sealed crack evidence against the
+  current canonical PR-03 result. For shear, canonical current load-case
+  actions establish case identity and signed demands, while separately current
+  directional solver results establish components and resistances. Every
+  assessed two-component `PASS` or `FAIL` requires both authorities, correlated
+  exactly; neither substitutes for the other. Non-assessed zero/one-component
+  dispositions remain derivable from the authority that proves them. Every
+  disposition is re-derived before the publication overlay. Deleting every
+  aggregate representation also creates a durable rejection rather than
+  exposing a pre-existing aggregate `PASS`.
+- Positive finite custom engineering values are calculated as entered. A
+  project method requires source, approval and confirmed domain and returns only
+  `APPROVED CUSTOM PASS/FAIL`. The EN 1992-1-1:2023 shear resultant route
+  returns `QUALIFIED PASS/FAIL` because Sector records but does not reconstruct
+  its externally supplied resultant-direction resistance. Neither route becomes
+  an unqualified selected-standard aggregate PASS. Values beyond former UI
+  preset ranges remain available; a finite power-sum input whose mathematical
+  utilisation exceeds floating-point range is retained and produces a
+  conservative finite lower-bound `FAIL`, with the saturation recorded in its
+  sealed evidence rather than crashing or rejecting the input.
+- `tools/pr06_multidirectional_oracle.py` imports no Sector production module.
+  It freezes both uniaxial limits, zero action, balanced action, just-below/at/
+  just-above boundary points, x/y swap, sign reversal, isotropic rigid rotation
+  and directional/anisotropic non-invariance. Its standalone run is green.
+  `tests/test_pr06_multidirectional.py` adds unsupported-domain, edition/method
+  switch, malformed/Boolean/non-finite/custom-positive, missing/duplicate/stale
+  evidence, calculation off/on, persistence/publication and explicit
+  two-component-false-PASS probes.
+- Final pre-commit focused evidence is green: 248 independent-oracle,
+  interaction, schema/persistence, presentation and report/manual checks, plus
+  five live Streamlit/cache/session/autosave/download controls. The separate
+  serviceability/SLS compatibility slice is green at 243 checks. The issued
+  report artifact regression and the issued manual artifact regression pass;
+  already-green broader suites are not duplicated before the required one-run
+  exact-head GitHub full-suite gate.
+- Bounded visual QA used a 14-page report with both approved project
+  interactions and a 31-page no-figure manual. Report overview page 1, shear
+  interaction page 7 and crack interaction page 11 were inspected with
+  boundaries 2, 6-8 and 10-12. Manual shear pages 12-13 and crack pages 22-23
+  were inspected with boundaries 11 and 21. Equations, long evidence
+  fingerprints, repeated furniture and tables are visible without clipping or
+  overlap. One newly exposed orphan heading was grouped with its response table
+  and the same report boundary was re-rendered cleanly.
+- Initial implementation head
+  `2b0d00ce2484b690b951b4f8f15a517df4c4a5ef` received one Codex Review P2
+  and no P1: an enabled crack method that failed before criterion binding was
+  retained only at the top level, so the multi-case PDF route could omit the
+  fail-closed warning. The remediation falls back to the configured Elastic
+  case identity for failed assessments and clears stale nested interaction
+  records before attaching the current one. Both early-failure modes and the
+  generated multi-case PDF are covered by red/green regressions.
+- A bounded malformed-evidence audit of the first corrective head reproduced
+  two publication crashes: a re-sealed crack record could provide a scalar
+  `criterion` or `configuration` and reach case-routing `.get()` calls before
+  fail-closed validation. The shared case-identity extractor now accepts only
+  mapping containers and non-empty string identities, while still using the
+  configured case as the fallback for a valid early-failure record. Both crash
+  probes now produce a durable `PUBLICATION REJECTED / NOT ASSESSED` result.
+  The updated bounded corrective gate passes 173 checks, including the complete
+  PR-06 interaction suite, affected report/publication checks and ASCII/version
+  controls; the standalone independent oracle remains green.
+- Codex Review of exact first corrective head
+  `4e5eb14d1c66aecd02501c83b411ac99aeb63d0f` identified one further P2 and
+  no P1: the 2023 Annex G.5 selector accepted either its code label or edition,
+  allowing contradictory headless values to produce an unqualified standard
+  PASS. The two red probes reproduced both disagreement directions. The 2023
+  route now requires the exact EN 1992-1-1:2023 code/edition pair; the 2004/DK
+  route likewise accepts only its exact direct pair or the exact Danish bridge
+  referral pair. Both contradictory probes fail closed, while direct-DK,
+  bridge-DK and 2023 controls remain green. The combined final corrective gate
+  passes 176 checks and the standalone independent oracle remains green.
+- Codex Review of exact second corrective head
+  `d6aec6f7949a30b44c2055e8b5c05209dd4f23f5` identified two further P2
+  shear-evidence boundaries and no P1. First, the 2023 demand vector was
+  correctly rotation-invariant but the whole qualified check was incorrectly
+  labelled invariant even though isotropy of the external directional
+  resistance is not evidenced. The record, semantic validator, report,
+  decision map and manual now distinguish demand-resultant invariance from the
+  directional full interaction. Second, semantic checks of retained `Vx`/`Vy`
+  component evidence ran only for aggregate PASS/FAIL, allowing re-sealed
+  malformed components to survive a `NOT ASSESSED` or uniaxial `NOT
+  APPLICABLE` aggregate. Retained shear components are now validated before
+  any aggregate-status early return.
+- Eighteen independent red/green probes cover both findings, including demand,
+  resistance, sign, utilisation, verdict, non-empty axis and method tampering
+  in both non-assessed status families. Malformed component and interaction-term
+  identities also reject without a publication crash. The bounded corrective
+  matrix passes 196 interaction, affected-report, publication, manual, ASCII
+  and version checks, and the production-independent oracle remains green.
+- The affected artifacts were regenerated after the rotation-scope correction.
+  The 15-page report was inspected at shear pages 7-8 and crack pages 11-13;
+  the 31-page manual was inspected at shear pages 11-13. The report explicitly
+  shows `Full interaction rotationally invariant: no`, `Demand resultant
+  rotationally invariant: yes`, and the external-resistance scope. Tables,
+  equations, section boundaries, repeated furniture and footers remain clear
+  without clipping or overlap.
+- Codex Review of exact third corrective head
+  `7cb687dc5a66b0ef8d404b59cff19e44c752d1b1` identified one further P2 and
+  no P1: a re-sealed PASS/FAIL could change only its assessment state, status
+  and verdict to `NOT ASSESSED / REVIEW`, reach the non-pass early return and
+  suppress a current failing conclusion. Non-pass records now validate their
+  canonical assessment/verdict shape and reject retained utilisation, terms,
+  satisfied-domain or other calculated conclusion evidence before that return.
+  The current-input boundary also rejects a stripped `NOT ASSESSED` record when
+  its explicit active crack or shear method and domain require a real current
+  conclusion (or an explicit `INVALID`/`NOT APPLICABLE` disposition).
+- Four independent red/green probes cover project crack and project shear FAIL
+  downgrades with both retained and stripped calculation evidence. All 72
+  focused PR-06 interaction tests remain green, including legitimate disabled,
+  unsupported-domain, malformed and uniaxial non-pass states. The updated
+  bounded corrective matrix passes 200 checks and the standalone independent
+  oracle remains green. No report/manual content changed in this remediation,
+  so the previously accepted affected-page render inspection remains current.
+- Codex Review of exact fourth corrective head
+  `2e922c37dab9403447278a1cb5a4a13be758c9ac` identified one narrower P2 and
+  no P1: a stripped crack FAIL could be re-sealed as `NOT APPLICABLE`, although
+  the crack evaluator never emits that disposition. The semantic boundary now
+  rejects `NOT APPLICABLE` for every crack-interaction record while preserving
+  the legitimate uniaxial shear disposition. The expanded retained/stripped
+  downgrade matrix has six green controls; all 74 focused PR-06 tests and the
+  updated bounded 202-check matrix pass. Report/manual content remains
+  unchanged.
+- Codex Review of exact fifth corrective head
+  `3a1afb8a47be1bda5442af82f4e78e4d7bb13832` identified the remaining
+  symmetric P2 and no P1: a biaxial shear FAIL could be stripped and re-sealed
+  as `NOT APPLICABLE` without proving that the current case is uniaxial. The
+  calculation bundle now stores a separately fingerprinted directional
+  component basis for every shear case. `NOT APPLICABLE` is accepted only when
+  exactly one matching basis record exists, contains fewer than two current
+  components and equals the retained interaction components. Missing,
+  duplicated, malformed, re-sealed-but-contradictory or biaxial basis evidence
+  rejects publication.
+- The downgrade matrix now has eight retained/stripped crack/shear controls.
+  A genuine uniaxial case accepts with one `Vx` component, a separately re-sealed
+  contradictory basis rejects, and save/load/resave preserves the valid
+  current-case binding. Missing and orphan directional basis records also fail
+  closed because their case identities must cover the shear-interaction case
+  set exactly. A further red probe showed that stripping and re-sealing both
+  copies could otherwise mislabel zero evidence as uniaxial; `NOT APPLICABLE`
+  now requires exactly one valid current directional component, while zero
+  components are invalid. All 81 focused PR-06 tests and the updated bounded
+  209-check matrix pass; the standalone oracle remains green. No report/manual
+  content changed.
+- Codex Review of exact sixth corrective head
+  `4c788df95bc1edb095ba7012bb3919c095bc552c` raised credible false-PASS P1
+  `3673823854`: an attacker could truncate both the interaction components and
+  the separately persisted directional sibling to one component, re-seal both,
+  and turn a biaxial `PASS` or `FAIL` into `NOT APPLICABLE`. The supervisor
+  stopped further external review and CI triggers and classified this as the
+  same persisted-evidence/correlation family; another cross-field fingerprint
+  comparison was explicitly disallowed.
+- The consolidation removes the persisted `directional_shear_cases` sibling.
+  `publication_safe_interaction_record` now constructs its sole current basis
+  internally: project/save boundaries use canonical Plastic load-case actions,
+  while raw/live boundaries use full current directional solver components.
+  The basis carries distinct publication and assessor case identities, signed
+  demand identity and its source kind. Stored cases must cover that basis
+  exactly; their component demands must match; and `assess_shear_interaction`
+  must reproduce the complete stored disposition record before publication.
+  Any obsolete persisted sibling is itself rejecting. Every shear exit now
+  seals the assessment case and retained components, including `INVALID`; a
+  genuine one-component state remains `NOT APPLICABLE` with its component result.
+- The bounded post-consolidation matrix is green: 104 focused PR-06 checks plus
+  the production-independent oracle, and 62 affected report/manual/
+  presentation and Streamlit/session/autosave/download checks. It includes
+  zero/one/two-component truncation with and without a jointly re-sealed old
+  sibling; case-list deletion, emptying, substitution, inner case substitution
+  and duplication; malformed current-action sources that cannot fall back to
+  solver evidence; source `PASS` and `FAIL` downgrades for both crack and shear;
+  crack-versus-shear disposition legality; valid zero/one/two-component
+  controls; raw/publication/project save-load-resave and durable rejection; and
+  report retention of both `Vx`/`Vy` components. No production report or manual
+  content changed, so the earlier affected-page and pagination inspection
+  remains current.
+- The canonical-basis correction was committed as
+  `3f8aa13392b7ec74c9a2ac1dc6478dd663eeb2d3` (tree
+  `ffc284cac2bc7fc0f0df2e5999bc53f2a01d2c02`). Exact-head Codex Review
+  found no further P1 and one current-schema P2, `3674301123`: a v22 project
+  could enable either interaction route while omitting its method key, then
+  acquire the default `not-assessed` selection during parse. The file boundary
+  now requires the crack/shear method key (and a non-null method value) whenever
+  its matching enable flag is true. Explicit stored `not-assessed` remains a
+  valid deliberate selection, and legacy migration remains conservative.
+- Four missing/null crack/shear controls exercise both parse and dump
+  boundaries, while two positive round trips preserve a deliberate explicit
+  `not-assessed` selection. The focused interaction and project-persistence
+  suites are green at 252 checks, and the production-independent
+  boundary/symmetry oracle remains green. No report/manual content changed in
+  this remediation.
+- The current-schema correction was committed as
+  `fb1261ad16aa6547462139151801d378d9f25193` (tree
+  `18aed0528ae6c84a1b56289c57d772d5f4197c8d`). Exact-head Codex Review found
+  no P1 and one publication-overlay P2, `3674461270`: rejection changed the
+  conclusion but left rejected utilisation, formula, parameters, terms and
+  copied aggregate components available to the PDF renderer.
+- A rejected interaction overlay is now rebuilt from minimal immutable
+  rejection metadata rather than copied from the unusable aggregate. It carries
+  no calculation, source/authority, domain/axis or copied component fields;
+  current crack responses and directional `Vx`/`Vy` results remain outside that
+  overlay and are preserved. Current crack input selects the report case, so
+  removing rejected aggregate criterion/configuration data does not hide the
+  rejection at a multi-case report boundary.
+- The updated raw/publication/report control injects uniquely identifiable
+  hostile aggregate formula, parameter, term, source, approval and component
+  data and proves none survives publication, while both independent passing
+  shear directions remain. A separate multi-case control proves the rejected
+  crack overlay is routed from current input to only its selected Elastic case
+  while both current crack assessments survive. The focused
+  interaction/project matrix is green at 254 checks, ten affected crack/shear
+  report checks and two Streamlit/session/autosave/download checks pass, and
+  the independent boundary/symmetry oracle remains green. The issued rejection
+  fixture contains no aggregate formula or utilisation. Visual inspection of
+  affected pages 7 and 11 plus pagination neighbors 6, 8, 10 and 12 found clear
+  rejection wording, retained component calculations, legible
+  equations/tables, and no clipping or overlap.
+- Exact-head Codex Review of
+  `4e3cf3f2219e67c178ab5e22097eeb322ce1c3a6` raised two credible same-family
+  P1 findings. `3674667811` showed that a saved standard crack aggregate and
+  its stored acceptance binding/criterion limit could be edited and jointly
+  re-sealed into a false PASS. `3674667818` showed that a saved shear
+  aggregate could inflate its own component resistances, recompute and
+  re-seal a false PASS because current project actions established demands but
+  not resistance authority. The supervisor paused external review/CI and
+  required one canonical current input/result basis rather than another
+  stored-sibling correlation.
+- The correction now always reconstructs the current directional basis away
+  from the stored aggregate. Canonical Plastic actions establish exact case,
+  assessor identity, signed demands and zero/one/two-component state. When
+  current solver results exist, their directional components are separately
+  validated and must cover and match those actions exactly; only that basis
+  can supply component resistances and reproduce a `PASS` or `FAIL`. When
+  solver results are unavailable at a saved-project boundary, two-component
+  assessed shear conclusions reject. Zero-component `INVALID`, genuine
+  one-component `NOT APPLICABLE`, and inactive/out-of-domain `NOT ASSESSED`
+  remain derivable from current actions. No fallback reads resistances from
+  the interaction being authenticated.
+- Crack publication likewise recomputes the complete interaction from current
+  inputs and current PR-03 crack results and compares the full disposition.
+  Without those current results, an assessed crack conclusion rejects; a
+  stored crack-control sibling cannot authenticate a stored interaction.
+  Saved projects therefore retain their input/audit context but require
+  recalculation before assessed crack or biaxial shear output can be
+  republished. Live autosave validation receives the current solver result so
+  it does not erase valid session evidence; the emitted autosave/download copy
+  still fails closed on reload, where live solver results are deliberately not
+  restored.
+- The bounded red/green matrix now includes production-generated false-PASS
+  reproductions for a jointly changed standard crack limit/binding and jointly
+  inflated shear resistances, plus input-only zero/one/two-component
+  dispositions, live/current-result controls, project save-load-resave,
+  durable rejection, session/autosave separation and retained raw component
+  results. `tests/test_pr06_multidirectional.py` passes 119 checks; the combined
+  PR-06/project persistence slice passes 261; six directly affected
+  Streamlit/session/autosave controls, five affected report checks, three
+  manual/presentation checks and the independent oracle are green. No
+  report/manual layout content changed, so the prior affected-page visual
+  inspection remains current.
+- Exact-head Codex Review of
+  `57002cac3cb1ebccc6f72021fa474208d3613283` raised same-family false-PASS P1
+  `3675017024`: a report/headless caller could provide current solver directions
+  but omit every canonical action field. Because the solver basis and stored
+  aggregate could then be changed together, the earlier live boundary accepted
+  a two-component `PASS` or `FAIL` without independently correlating case
+  identity and signed demands to current actions. The supervisor marked the
+  preceding review/CI as stale and required the invariant to be closed inside
+  the canonical model, not by another stored-field fingerprint comparison.
+- The correction centralizes one non-substitutable authority rule. An assessed
+  shear `PASS` or `FAIL` now requires canonical current actions for exact case
+  identities and signed demands plus independently current solver directions
+  for matching components and resistances. Both authorities are indexed and
+  correlated for exact case coverage, assessment identity and signed-demand
+  identity before the solver evidence can reproduce the stored disposition.
+  Missing all actions, missing results, partial/duplicate/substituted action
+  cases and jointly aligned solver/aggregate mutations reject. Exact matching
+  controls accept. Solver-only zero-component `INVALID` and genuine
+  one-component `NOT APPLICABLE`, plus their component results, remain intact.
+- The post-fix bounded matrix is green: all 125 PR-06 rule/oracle/adversarial
+  checks and all 142 project-persistence checks pass; all six focused
+  Streamlit/raw-session/autosave/download checks and six affected shear-report
+  checks pass; and the standalone production-independent oracle remains green.
+  The matrix crosses raw calculation-record validation, headless publication
+  overlay, report, project save/load/resave and live/durable session/autosave
+  boundaries. A one-pass audit of every return from the shared publication
+  record/results and missing-record overlay found no assessed-shear acceptance
+  route outside the dual-authority check.
+- Production report templates and manual content did not change. The new
+  fail-closed reason was nevertheless rendered in a focused 14-page report and
+  inspected on shear page 7 with pagination neighbours 6 and 8. Both `Vx`/`Vy`
+  component tables remain visible; rejection text, evidence table and
+  continuing resistance equations are legible with no clipping or overlap.
+- Exact head `270e40e5bbab804a43876fc3ac295d1a9a34bd47` passed Codex Review with
+  no major issue. Its completed full-suite run `30462264612` then failed five
+  nodes: two PR-05 tests still asserted schema v21 instead of the intentional
+  v22, one UI contract omitted the two PR-06 expanders, and one legacy API
+  contract omitted the two new disabled interaction fields. The substantive
+  fifth failure exposed a single-result publication case labelled `Plastic`
+  while its sole canonical current action case was `PL-01`, which incorrectly
+  latched otherwise matching disabled/zero-component evidence stale.
+- The approved bounded repair derives that single solver-result identity only
+  when current action authority contains exactly one case. Signed demands stay
+  action-authoritative and components/resistances stay solver-authoritative;
+  empty or multiple action-case collections return no solver case authority.
+  The exact five failed nodes now pass, all 126 PR-06 invariant checks and all
+  142 project-persistence checks pass, and the independent oracle remains
+  green. No report/manual production content changed.
+- Exact final corrective SHA, current-head Codex rereview, the replacement
+  exact-head GitHub full-suite gate, independent exact-SHA closure and merge
+  remain pending. All automatically started superseded-head CI runs, including
+  the runs for rejected heads
+  `4c788df95bc1edb095ba7012bb3919c095bc552c`,
+  `3f8aa13392b7ec74c9a2ac1dc6478dd663eeb2d3` and
+  `fb1261ad16aa6547462139151801d378d9f25193`, plus
+  `4e3cf3f2219e67c178ab5e22097eeb322ce1c3a6`, are not counted as the
+  required final exact-head gate.

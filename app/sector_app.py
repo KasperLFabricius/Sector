@@ -47,7 +47,8 @@ from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import (bridge, capacity, codes, combined, conformance,  # noqa: E402
                     danish_bridge, detailing, geometry, kernels,
-                    material_presets as mp, shear, templates, torsion)
+                    material_presets as mp, multidirectional, shear,
+                    templates, torsion)
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector import sls as sls_core  # noqa: E402
@@ -2444,6 +2445,7 @@ _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
 _INVALID_FACTOR_INPUT_KEYS_KEY = "_invalid_factor_input_keys"
 _INVALID_CRACK_INPUT_KEYS_KEY = "_invalid_crack_input_keys"
+_INVALID_INTERACTION_INPUT_KEYS_KEY = "_invalid_interaction_input_keys"
 _INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
 _FATIGUE_NUMERIC_FACTOR_KEYS = frozenset(
     key
@@ -2500,6 +2502,18 @@ def _invalid_crack_input_keys() -> tuple[str, ...]:
     return tuple(sorted({str(key) for key in raw if key in allowed}))
 
 
+def _invalid_interaction_input_keys() -> tuple[str, ...]:
+    """Return rejected multidirectional keys retained across app reruns."""
+
+    raw = st.session_state.get(
+        _INVALID_INTERACTION_INPUT_KEYS_KEY, ()
+    )
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return ()
+    allowed = set(multidirectional.INTERACTION_INPUT_KEYS)
+    return tuple(sorted({str(key) for key in raw if key in allowed}))
+
+
 def _valid_crack_numeric(value) -> bool:
     """Require a finite real scalar and reject Boolean values before coercion."""
 
@@ -2509,6 +2523,32 @@ def _valid_crack_numeric(value) -> bool:
         return math.isfinite(float(value))
     except (TypeError, ValueError):
         return False
+
+
+def _valid_interaction_value(key, value) -> bool:
+    """Validate one typed PR-06 field before Streamlit may coerce it."""
+
+    if key in multidirectional.INTERACTION_NUMERIC_INPUT_KEYS:
+        return _valid_crack_numeric(value)
+    if key in multidirectional.INTERACTION_BOOLEAN_INPUT_KEYS:
+        return isinstance(value, bool)
+    if key == "crack_interaction_method":
+        return (
+            isinstance(value, str)
+            and value in multidirectional.CRACK_METHODS
+        )
+    if key == "shear_interaction_method":
+        return (
+            isinstance(value, str)
+            and value in multidirectional.SHEAR_METHODS
+        )
+    if key == "crack_interaction_combination":
+        return isinstance(value, str) and value in sls_core.SLS_COMBINATIONS
+    if key == "shear_interaction_depth_route":
+        return isinstance(value, str) and value in multidirectional.DEPTH_ROUTES
+    if key in multidirectional.INTERACTION_TEXT_INPUT_KEYS:
+        return isinstance(value, str)
+    return False
 
 
 def _invalid_factor_input_error(domain: str, keys) -> str | None:
@@ -2648,6 +2688,74 @@ def _sanitise_crack_input_state() -> None:
         )
     else:
         st.session_state.pop(_INVALID_CRACK_INPUT_KEYS_KEY, None)
+
+
+def _sanitise_interaction_input_state() -> None:
+    """Reject hostile interaction state without synthesising authority."""
+
+    defaults = {
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+    }
+    allowed = set(multidirectional.INTERACTION_INPUT_KEYS)
+    invalid_keys = set(_invalid_interaction_input_keys())
+    newly_invalid = set()
+
+    def sanitise(mapping, *, drop_invalid=False) -> bool:
+        changed = False
+        for key in allowed:
+            if key not in mapping:
+                continue
+            if _valid_interaction_value(key, mapping[key]):
+                continue
+            if drop_invalid:
+                mapping.pop(key)
+            else:
+                mapping[key] = copy.deepcopy(defaults[key])
+            newly_invalid.add(key)
+            changed = True
+        return changed
+
+    sanitise(st.session_state)
+    durable = st.session_state.get(_INPUT_STATE_KEY)
+    if isinstance(durable, dict):
+        durable = dict(durable)
+        if sanitise(durable):
+            st.session_state[_INPUT_STATE_KEY] = durable
+    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY)
+    if isinstance(pending, dict):
+        pending = dict(pending)
+        pending_changed = sanitise(pending, drop_invalid=True)
+        for key in newly_invalid:
+            if key in pending:
+                pending.pop(key)
+                pending_changed = True
+        if pending_changed:
+            st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
+
+    explicit_repairs = {
+        key
+        for key in allowed
+        if (
+            key not in newly_invalid
+            and isinstance(pending, dict)
+            and key in pending
+            and _valid_interaction_value(key, pending[key])
+            and key in st.session_state
+            and _valid_interaction_value(key, st.session_state[key])
+            and pending[key] == st.session_state[key]
+        )
+    }
+    invalid_keys.update(newly_invalid)
+    invalid_keys.difference_update(explicit_repairs)
+    if invalid_keys:
+        st.session_state[_INVALID_INTERACTION_INPUT_KEYS_KEY] = tuple(
+            sorted(invalid_keys)
+        )
+    else:
+        st.session_state.pop(
+            _INVALID_INTERACTION_INPUT_KEYS_KEY, None
+        )
 
 
 def _capture_factor_override_state(domain: str) -> None:
@@ -2825,6 +2933,46 @@ def _render_crack_repair_control(box) -> None:
         help=(
             "This is an explicit engineering confirmation; Sector never treats "
             "a Boolean value as 0 or 1 mm."
+        ),
+    )
+
+
+def _confirm_interaction_repairs(keys) -> None:
+    """Journal the displayed typed interaction values as explicit repairs."""
+
+    for key in keys:
+        if _valid_interaction_value(key, st.session_state.get(key)):
+            _record_input_event(key)
+
+
+def _render_interaction_repair_control(box, keys) -> None:
+    """Require confirmation after a hostile multidirectional state was rejected."""
+
+    relevant = set(keys)
+    rejected = tuple(
+        key
+        for key in _invalid_interaction_input_keys()
+        if key in relevant
+    )
+    if not rejected:
+        return
+    box.error(
+        "Rejected malformed multidirectional state remains blocked. Edit every "
+        "listed field, or confirm the displayed typed values after checking "
+        f"them ({', '.join(rejected)})."
+    )
+    box.button(
+        "Confirm repaired interaction values",
+        key=(
+            "confirm_crack_interaction_repairs"
+            if relevant == set(multidirectional.CRACK_INPUT_KEYS)
+            else "confirm_shear_interaction_repairs"
+        ),
+        on_click=_confirm_interaction_repairs,
+        args=(rejected,),
+        help=(
+            "Confirmation clears only the hostile-state rejection latch. It "
+            "does not confirm a method domain, source, or approval."
         ),
     )
 
@@ -3025,7 +3173,12 @@ def _project_input_hash() -> str:
     digest = project_io.input_sha256(tables, scalars)
     rejected_factors = _invalid_factor_input_keys()
     rejected_crack = _invalid_crack_input_keys()
-    if not rejected_factors and not rejected_crack:
+    rejected_interaction = _invalid_interaction_input_keys()
+    if (
+        not rejected_factors
+        and not rejected_crack
+        and not rejected_interaction
+    ):
         return digest
     # A calculation made while a rejected widget value is held fail-closed must
     # never appear to match the same reconstructed numeric defaults after repair.
@@ -3035,6 +3188,8 @@ def _project_input_hash() -> str:
         *rejected_factors,
         "rejected-crack-inputs",
         *rejected_crack,
+        "rejected-interaction-inputs",
+        *rejected_interaction,
     ))
     return hashlib.sha256(invalid_state.encode("utf-8")).hexdigest()
 
@@ -3052,6 +3207,13 @@ def _gather_project() -> str:
         raise ValueError(
             "Boolean/non-numeric project crack-control input was rejected "
             f"({', '.join(rejected_crack)}); repair every listed value before saving"
+        )
+    rejected_interaction = _invalid_interaction_input_keys()
+    if rejected_interaction:
+        raise ValueError(
+            "Malformed multidirectional interaction input was rejected "
+            f"({', '.join(rejected_interaction)}); repair every listed value "
+            "before saving"
         )
     tables, scalars = _project_state()
     return project_io.dump_project(
@@ -3139,6 +3301,7 @@ def _perform_autosave() -> bool:
             calculation,
             calculation_inputs=publication_inputs,
             input_digest=digest,
+            calculation_results=st.session_state.get("results"),
         )
         if safe_calculation != calculation:
             st.session_state["calculation_record"] = safe_calculation
@@ -3273,6 +3436,7 @@ def _apply_pending_project() -> None:
     st.session_state.pop("_latest_inputs", None)
     st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
     st.session_state.pop(_INVALID_CRACK_INPUT_KEYS_KEY, None)
+    st.session_state.pop(_INVALID_INTERACTION_INPUT_KEYS_KEY, None)
     for key in _FACTOR_MODE_RUNTIME_KEYS:
         st.session_state.pop(key, None)
     # Parsing retains historical scalar loads for compatibility with non-UI callers,
@@ -3704,6 +3868,7 @@ def _generate_report(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
+    case_errors = tuple(case_errors) + multidirectional.validation_errors(inp)
     if case_errors:
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
@@ -4199,6 +4364,7 @@ _ELASTIC_CONTEXT_SIG_KEYS = (
     "sls_project_quasi_permanent_limit",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
+    *multidirectional.CRACK_INPUT_KEYS,
 )
 # Shear inputs. Folded into the overall signature (not the plastic/elastic split)
 # so a shear-only change marks the results stale without forcing the bending
@@ -4222,6 +4388,7 @@ _SHEAR_SIG_KEYS = (
     "torsion_sub_b0", "torsion_sub_h0", "torsion_sub_b1", "torsion_sub_h1",
     "torsion_sub_b2", "torsion_sub_h2", "torsion_sub_b3", "torsion_sub_h3",
     "combined_on", "combined_method", "combined_mv_independent",
+    *multidirectional.SHEAR_INPUT_KEYS,
 )
 _CAPACITY_CONTEXT_SIG_KEYS = tuple(
     key for key in _SHEAR_SIG_KEYS if key not in {"shear_V", "torsion_T"}
@@ -5751,6 +5918,378 @@ def build_inputs(host=st):
         ),
     )
 
+    with scw.expander(
+        "Multidirectional crack interaction (opt-in)",
+        expanded=False,
+    ) as crack_interaction_box:
+        crack_interaction_box.caption(
+            "Separate from the canonical one-direction crack response and its "
+            "history/duration states. A combined conclusion needs one exact "
+            "method, a current Elastic case and criterion, explicit axes, and "
+            "all method-specific domain evidence."
+        )
+        _render_interaction_repair_control(
+            crack_interaction_box,
+            multidirectional.CRACK_INPUT_KEYS,
+        )
+        crack_interaction_on = _seeded_toggle(
+            crack_interaction_box,
+            "Assess multidirectional crack interaction",
+            False,
+            "crack_interaction_on",
+            disabled=not (elastic_on and sls_cw),
+            help=(
+                "Off retains every existing crack response and leaves the "
+                "multidirectional interaction NOT ASSESSED."
+            ),
+        )
+        crack_interaction_method = _seeded_selectbox(
+            crack_interaction_box,
+            "Crack-interaction methodology",
+            list(multidirectional.CRACK_METHODS),
+            multidirectional.CRACK_METHOD_NONE,
+            "crack_interaction_method",
+            disabled=not crack_interaction_on,
+            format_func=lambda value: (
+                multidirectional.CRACK_METHOD_LABELS[value]
+                if isinstance(value, str)
+                and value in multidirectional.CRACK_METHOD_LABELS
+                else "Rejected invalid crack-interaction selection"
+            ),
+            help=(
+                "The 2004/DK and 2023 methods implement their stated inclined-"
+                "crack domains. The project power sum always remains an "
+                "approved-custom verdict."
+            ),
+        )
+        _crack_interaction_active = bool(
+            crack_interaction_on
+            and crack_interaction_method
+            != multidirectional.CRACK_METHOD_NONE
+        )
+        _elastic_crack_names = [
+            str(value).strip()
+            for value in case_frames[load_cases.ELASTIC_TABLE_KEY].loc[
+                case_frames[load_cases.ELASTIC_TABLE_KEY][
+                    "check_crack_width"
+                ].astype(bool),
+                load_cases.NAME,
+            ].tolist()
+            if str(value).strip()
+        ]
+        _default_crack_case = (
+            _elastic_crack_names[0] if _elastic_crack_names else ""
+        )
+        _default_crack_criterion = (
+            "bridge-dk-standard-durability"
+            if sls_edition == sls_core.EDITION_BRIDGE_DK_2015
+            else "bridge-standard-durability"
+            if sls_edition == sls_core.EDITION_BRIDGE_2005_AC
+            else "project-characteristic"
+            if project_criteria
+            and sls_project_characteristic_limit > 0.0
+            else "project-frequent"
+            if project_criteria and sls_project_frequent_limit > 0.0
+            else "project-quasi-permanent"
+            if project_criteria
+            and sls_project_quasi_permanent_limit > 0.0
+            else "standard-durability"
+        )
+        crack_case_col, crack_criterion_col = (
+            crack_interaction_box.columns(2)
+        )
+        _seeded_text(
+            crack_case_col,
+            "Exact Elastic case ID",
+            _default_crack_case,
+            "crack_interaction_case_id",
+            disabled=not _crack_interaction_active,
+            help=(
+                "Must identify exactly one current crack-width-enabled Elastic "
+                "case. Duplicate or stale identities fail closed."
+            ),
+        )
+        _seeded_text(
+            crack_criterion_col,
+            "Exact canonical criterion ID",
+            _default_crack_criterion,
+            "crack_interaction_criterion_id",
+            disabled=not _crack_interaction_active,
+            help=(
+                "For example standard-durability, standard-appearance, "
+                "project-frequent, or bridge-dk-standard-durability. The "
+                "criterion's immutable PR-03 binding is revalidated."
+            ),
+        )
+        _seeded_selectbox(
+            crack_interaction_box,
+            "Criterion SLS combination",
+            list(sls_core.SLS_COMBINATIONS),
+            sls_core.COMBINATION_QUASI_PERMANENT,
+            "crack_interaction_combination",
+            disabled=not _crack_interaction_active,
+            help=(
+                "Must exactly match the selected canonical criterion. Response "
+                "duration never substitutes for this selection."
+            ),
+        )
+        crack_axis_x_col, crack_axis_y_col = (
+            crack_interaction_box.columns(2)
+        )
+        _seeded_text(
+            crack_axis_x_col,
+            "x-axis / first reinforcement direction",
+            "x reinforcement direction",
+            "crack_interaction_axis_x",
+            disabled=not _crack_interaction_active,
+        )
+        _seeded_text(
+            crack_axis_y_col,
+            "y-axis / second reinforcement direction",
+            "y reinforcement direction",
+            "crack_interaction_axis_y",
+            disabled=not _crack_interaction_active,
+        )
+        _crack_standard_method = crack_interaction_method in {
+            multidirectional.CRACK_METHOD_DK_2004,
+            multidirectional.CRACK_METHOD_EN_2023,
+        }
+        _crack_project_method = (
+            crack_interaction_method
+            == multidirectional.CRACK_METHOD_PROJECT
+        )
+        _seeded_checkbox(
+            crack_interaction_box,
+            "Two orthogonal reinforcement directions confirmed",
+            False,
+            "crack_interaction_orthogonal",
+            disabled=not (
+                _crack_interaction_active and _crack_standard_method
+            ),
+        )
+        _seeded_checkbox(
+            crack_interaction_box,
+            "Plane-stress state at the assessed point confirmed",
+            False,
+            "crack_interaction_plane_stress",
+            disabled=not (
+                _crack_interaction_active
+                and crack_interaction_method
+                == multidirectional.CRACK_METHOD_DK_2004
+            ),
+        )
+        _seeded_checkbox(
+            crack_interaction_box,
+            "Membrane-element domain confirmed",
+            False,
+            "crack_interaction_membrane",
+            disabled=not (
+                _crack_interaction_active
+                and crack_interaction_method
+                == multidirectional.CRACK_METHOD_EN_2023
+            ),
+        )
+        _seeded_checkbox(
+            crack_interaction_box,
+            "No unmodelled discontinuity in the assessed region",
+            False,
+            "crack_interaction_no_discontinuity",
+            disabled=not (
+                _crack_interaction_active and _crack_standard_method
+            ),
+        )
+        _seeded_checkbox(
+            crack_interaction_box,
+            "Approved project-method domain confirmed",
+            False,
+            "crack_interaction_domain_confirmed",
+            disabled=not (
+                _crack_interaction_active and _crack_project_method
+            ),
+        )
+        crack_angle_col, crack_sx_col, crack_sy_col = (
+            crack_interaction_box.columns(3)
+        )
+        _seeded_number(
+            crack_angle_col,
+            r"Method angle $\theta$ ($^\circ$)",
+            None,
+            None,
+            45.0,
+            1.0,
+            "crack_interaction_angle_deg",
+            disabled=not (
+                _crack_interaction_active and _crack_standard_method
+            ),
+            help=(
+                "2004/DK: from first reinforcement axis to principal tensile "
+                "stress. 2023 G.5: between principal compressive strain and "
+                "x reinforcement. The strict method angle domain is checked."
+            ),
+        )
+        _seeded_number(
+            crack_sx_col,
+            r"$s_{r,x}$ (mm)",
+            None,
+            None,
+            150.0,
+            1.0,
+            "crack_interaction_spacing_x_mm",
+            disabled=not (
+                _crack_interaction_active and _crack_standard_method
+            ),
+        )
+        _seeded_number(
+            crack_sy_col,
+            r"$s_{r,y}$ (mm)",
+            None,
+            None,
+            150.0,
+            1.0,
+            "crack_interaction_spacing_y_mm",
+            disabled=not (
+                _crack_interaction_active and _crack_standard_method
+            ),
+        )
+        crack_ex_col, crack_ey_col, crack_e2_col = (
+            crack_interaction_box.columns(3)
+        )
+        _seeded_number(
+            crack_ex_col,
+            r"$\Delta\varepsilon_x$",
+            None,
+            None,
+            0.0005,
+            0.0001,
+            "crack_interaction_strain_x",
+            disabled=not (
+                _crack_interaction_active and _crack_standard_method
+            ),
+        )
+        _seeded_number(
+            crack_ey_col,
+            r"$\Delta\varepsilon_y$",
+            None,
+            None,
+            0.0005,
+            0.0001,
+            "crack_interaction_strain_y",
+            disabled=not (
+                _crack_interaction_active and _crack_standard_method
+            ),
+        )
+        _seeded_number(
+            crack_e2_col,
+            r"$\varepsilon_2$ (2023 G.26; absolute value applied)",
+            None,
+            None,
+            0.0,
+            0.0001,
+            "crack_interaction_transverse_strain",
+            disabled=not (
+                _crack_interaction_active
+                and crack_interaction_method
+                == multidirectional.CRACK_METHOD_EN_2023
+            ),
+        )
+        crack_wx_col, crack_wy_col = crack_interaction_box.columns(2)
+        _seeded_number(
+            crack_wx_col,
+            r"Project component $w_{k,x}$ (mm)",
+            None,
+            None,
+            0.0,
+            0.01,
+            "crack_interaction_component_x_mm",
+            disabled=not (
+                _crack_interaction_active and _crack_project_method
+            ),
+        )
+        _seeded_number(
+            crack_wy_col,
+            r"Project component $w_{k,y}$ (mm)",
+            None,
+            None,
+            0.0,
+            0.01,
+            "crack_interaction_component_y_mm",
+            disabled=not (
+                _crack_interaction_active and _crack_project_method
+            ),
+        )
+        crack_lx_col, crack_ly_col, crack_p_col = (
+            crack_interaction_box.columns(3)
+        )
+        _seeded_number(
+            crack_lx_col,
+            r"Project $w_{\mathrm{lim},x}$ (mm)",
+            None,
+            None,
+            0.30,
+            0.01,
+            "crack_interaction_limit_x_mm",
+            disabled=not (
+                _crack_interaction_active and _crack_project_method
+            ),
+        )
+        _seeded_number(
+            crack_ly_col,
+            r"Project $w_{\mathrm{lim},y}$ (mm)",
+            None,
+            None,
+            0.30,
+            0.01,
+            "crack_interaction_limit_y_mm",
+            disabled=not (
+                _crack_interaction_active and _crack_project_method
+            ),
+        )
+        _seeded_number(
+            crack_p_col,
+            r"Project exponent $p$",
+            None,
+            None,
+            2.0,
+            0.1,
+            "crack_interaction_exponent",
+            disabled=not (
+                _crack_interaction_active and _crack_project_method
+            ),
+            help=(
+                "A positive finite custom value is calculated and retained. "
+                "It is never relabelled as a Eurocode exponent."
+            ),
+        )
+        _seeded_text(
+            crack_interaction_box,
+            "Project method source",
+            "",
+            "crack_interaction_source",
+            disabled=not (
+                _crack_interaction_active and _crack_project_method
+            ),
+        )
+        _seeded_text(
+            crack_interaction_box,
+            "Project method approval / checker reference",
+            "",
+            "crack_interaction_approval",
+            disabled=not (
+                _crack_interaction_active and _crack_project_method
+            ),
+        )
+        if crack_interaction_method == multidirectional.CRACK_METHOD_DK_2004:
+            crack_interaction_box.caption(
+                multidirectional.CRACK_SOURCE_DK_2004
+            )
+        elif (
+            crack_interaction_method
+            == multidirectional.CRACK_METHOD_EN_2023
+        ):
+            crack_interaction_box.caption(
+                multidirectional.CRACK_SOURCE_EN_2023
+            )
+
     detailing_member_type = _seeded_selectbox(
         det,
         "Member type",
@@ -5950,6 +6489,199 @@ def build_inputs(host=st):
         "shear_vy_bw", disabled=not shear_on,
         help=r"Web width for $V_{y,Ed}$ (depth along y; bottom/top faces).",
     )
+    with sts.expander(
+        "Biaxial shear interaction (opt-in)",
+        expanded=False,
+    ) as shear_interaction_box:
+        shear_interaction_box.caption(
+            "The Vx and Vy solvers remain independent. Two component PASS "
+            "results never create a combined PASS by themselves."
+        )
+        _render_interaction_repair_control(
+            shear_interaction_box,
+            multidirectional.SHEAR_INPUT_KEYS,
+        )
+        shear_interaction_on = _seeded_toggle(
+            shear_interaction_box,
+            "Assess biaxial Vx/Vy interaction",
+            False,
+            "shear_interaction_on",
+            disabled=not shear_on,
+            help=(
+                "Off retains both directional calculations and leaves their "
+                "aggregate interaction NOT ASSESSED."
+            ),
+        )
+        shear_interaction_method = _seeded_selectbox(
+            shear_interaction_box,
+            "Shear-interaction methodology",
+            list(multidirectional.SHEAR_METHODS),
+            multidirectional.SHEAR_METHOD_NONE,
+            "shear_interaction_method",
+            disabled=not shear_interaction_on,
+            format_func=lambda value: (
+                multidirectional.SHEAR_METHOD_LABELS[value]
+                if isinstance(value, str)
+                and value in multidirectional.SHEAR_METHOD_LABELS
+                else "Rejected invalid shear-interaction selection"
+            ),
+        )
+        _shear_interaction_active = bool(
+            shear_interaction_on
+            and shear_interaction_method
+            != multidirectional.SHEAR_METHOD_NONE
+        )
+        shear_axis_x_col, shear_axis_y_col = (
+            shear_interaction_box.columns(2)
+        )
+        _seeded_text(
+            shear_axis_x_col,
+            "Vx physical axis definition",
+            "global x / Vx",
+            "shear_interaction_axis_x",
+            disabled=not _shear_interaction_active,
+        )
+        _seeded_text(
+            shear_axis_y_col,
+            "Vy physical axis definition",
+            "global y / Vy",
+            "shear_interaction_axis_y",
+            disabled=not _shear_interaction_active,
+        )
+        _shear_standard_interaction = (
+            shear_interaction_method
+            == multidirectional.SHEAR_METHOD_EN_2023
+        )
+        _shear_project_interaction = (
+            shear_interaction_method
+            == multidirectional.SHEAR_METHOD_PROJECT
+        )
+        _seeded_checkbox(
+            shear_interaction_box,
+            "Planar member (solid slab, shell, or equivalent) confirmed",
+            False,
+            "shear_interaction_planar_member",
+            disabled=not (
+                _shear_interaction_active
+                and _shear_standard_interaction
+            ),
+        )
+        _seeded_checkbox(
+            shear_interaction_box,
+            "Vx and Vy refer to the same control point",
+            False,
+            "shear_interaction_same_control_point",
+            disabled=not (
+                _shear_interaction_active
+                and _shear_standard_interaction
+            ),
+        )
+        _seeded_checkbox(
+            shear_interaction_box,
+            "Compatible per-unit-width component basis confirmed",
+            False,
+            "shear_interaction_per_unit_width",
+            disabled=not (
+                _shear_interaction_active
+                and _shear_standard_interaction
+            ),
+        )
+        _seeded_checkbox(
+            shear_interaction_box,
+            "Both actions are out-of-plane shear forces",
+            False,
+            "shear_interaction_out_of_plane",
+            disabled=not (
+                _shear_interaction_active
+                and _shear_standard_interaction
+            ),
+        )
+        _seeded_checkbox(
+            shear_interaction_box,
+            "Approved project-method domain confirmed",
+            False,
+            "shear_interaction_domain_confirmed",
+            disabled=not (
+                _shear_interaction_active
+                and _shear_project_interaction
+            ),
+        )
+        _seeded_selectbox(
+            shear_interaction_box,
+            "EN 1992-1-1:2023 effective-depth route",
+            list(multidirectional.DEPTH_ROUTES),
+            multidirectional.DEPTH_ROUTE_PIECEWISE,
+            "shear_interaction_depth_route",
+            disabled=not (
+                _shear_interaction_active
+                and _shear_standard_interaction
+            ),
+        )
+        shear_resistance_col, shear_exponent_col = (
+            shear_interaction_box.columns(2)
+        )
+        _seeded_number(
+            shear_resistance_col,
+            r"Resultant-direction $v_{Rd}$ (kN/m)",
+            None,
+            None,
+            0.0,
+            1.0,
+            "shear_interaction_resultant_resistance_kn_per_m",
+            disabled=not (
+                _shear_interaction_active
+                and _shear_standard_interaction
+            ),
+            help=(
+                "Current resistance at the resultant direction and the reported "
+                "effective depth. A positive finite engineering value is "
+                "retained, but the aggregate verdict stays qualified because "
+                "Sector does not reconstruct its full directional basis."
+            ),
+        )
+        _seeded_number(
+            shear_exponent_col,
+            r"Approved project exponent $p$",
+            None,
+            None,
+            2.0,
+            0.1,
+            "shear_interaction_exponent",
+            disabled=not (
+                _shear_interaction_active
+                and _shear_project_interaction
+            ),
+            help=(
+                "Used only by the approved project power sum. It is never "
+                "treated as a Eurocode default."
+            ),
+        )
+        _seeded_text(
+            shear_interaction_box,
+            (
+                "Resultant resistance source"
+                if _shear_standard_interaction
+                else "Project interaction source"
+            ),
+            "",
+            "shear_interaction_source",
+            disabled=not _shear_interaction_active,
+        )
+        _seeded_text(
+            shear_interaction_box,
+            (
+                "Resultant resistance approval / checker reference"
+                if _shear_standard_interaction
+                else "Project interaction approval / checker reference"
+            ),
+            "",
+            "shear_interaction_approval",
+            disabled=not _shear_interaction_active,
+        )
+        if _shear_standard_interaction:
+            shear_interaction_box.caption(
+                multidirectional.SHEAR_SOURCE_EN_2023
+            )
     # Shear reinforcement (vertical links). When present, the member's resistance is
     # VRd = min(VRd,s, VRd,max) under 6.2.3 or 8.2.3 rather than VRd,c; the strut
     # angle theta is auto-optimised within the shared cot(theta) bounds in the
@@ -6947,17 +7679,41 @@ def build_inputs(host=st):
     shared_sig = geom_sig + material_sig + _get(_SHARED_SIG_KEYS)
     plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
     invalid_crack_input_keys = _invalid_crack_input_keys()
+    invalid_interaction_input_keys = _invalid_interaction_input_keys()
+    invalid_crack_interaction_keys = tuple(
+        key
+        for key in invalid_interaction_input_keys
+        if key in multidirectional.CRACK_INPUT_KEYS
+    )
+    invalid_shear_interaction_keys = tuple(
+        key
+        for key in invalid_interaction_input_keys
+        if key in multidirectional.SHEAR_INPUT_KEYS
+    )
     elastic_case_context_sig = (
         shared_sig
         + _get(_ELASTIC_CONTEXT_SIG_KEYS)
         + (("invalid_crack_input_keys", invalid_crack_input_keys),)
+        + (
+            (
+                "invalid_crack_interaction_input_keys",
+                invalid_crack_interaction_keys,
+            ),
+        )
     )
     invalid_factor_input_keys = _invalid_factor_input_keys()
     capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS) + (
         ("invalid_factor_input_keys", invalid_factor_input_keys),
     )
     plastic_case_context_sig = (
-        plastic_bending_context_sig + capacity_context_sig
+        plastic_bending_context_sig
+        + capacity_context_sig
+        + (
+            (
+                "invalid_shear_interaction_input_keys",
+                invalid_shear_interaction_keys,
+            ),
+        )
     )
     plastic_table_sig = _case_table_signature(
         case_frames[load_cases.PLASTIC_TABLE_KEY],
@@ -7182,6 +7938,10 @@ def build_inputs(host=st):
                 sls_steel_limit_pct=sls_steel_limit_pct,
                 sls_pre_limit_pct=sls_pre_limit_pct,
                 sls_limit_source=sls_limit_source,
+                **multidirectional.crack_configuration(st.session_state),
+                invalid_interaction_input_keys=(
+                    invalid_interaction_input_keys
+                ),
                 shear_on=shear_on,
                 shear_method=(combined_method if combined_on else shear_method),
                 shear_Vx=case_head["shear_Vx"], shear_Vy=case_head["shear_Vy"],
@@ -7208,6 +7968,7 @@ def build_inputs(host=st):
                 ),
                 shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
                 shear_fywk=shear_fywk,
+                **multidirectional.shear_configuration(st.session_state),
                 strut_cot_min=strut_cot_min,
                 strut_cot_max=strut_cot_max,
                 torsion_on=torsion_on,
@@ -8125,6 +8886,7 @@ def run_analysis(
                 if reuse_fatigue is not None
                 else _run_fatigue_or_invalid(inp)
             )
+        multidirectional.apply_to_results(inp, result)
         result["bridge_methodology"] = bridge_analysis.assess(inp, result)
         return result
 
@@ -8152,6 +8914,7 @@ def run_analysis(
             if reuse_fatigue is not None
             else _run_fatigue_or_invalid(inp)
         )
+    multidirectional.apply_to_results(inp, result)
     result["bridge_methodology"] = bridge_analysis.assess(inp, result)
     return result
 
@@ -10789,6 +11552,55 @@ def _crack_width_panel(e):
         "Crack-control scope: "
         f"{e.get('crack_scope_note') or CRACK_DIRECTIONAL_LIMITATION}"
     )
+    interaction = e.get("crack_interaction")
+    if isinstance(interaction, Mapping):
+        st.markdown("**Multidirectional crack interaction**")
+        interaction_status = str(
+            interaction.get("status") or "NOT ASSESSED"
+        ).upper()
+        interaction_message = (
+            f"{interaction.get('verdict') or interaction_status}: "
+            f"{interaction.get('method_name') or '-'}"
+            + (
+                f"; utilisation {_pct(interaction.get('utilisation'))}"
+                if interaction.get("utilisation") is not None
+                else ""
+            )
+        )
+        if interaction_status in {"FAIL", "INVALID"}:
+            st.error(interaction_message)
+        elif interaction_status == "PASS" and not interaction.get(
+            "qualification"
+        ):
+            st.success(interaction_message)
+        elif interaction_status == "NOT APPLICABLE":
+            st.info(interaction_message)
+        else:
+            st.warning(interaction_message)
+        if interaction.get("interaction_assessed"):
+            parameters = interaction.get("parameters") or {}
+            rows = [
+                {
+                    "Quantity": key,
+                    "Value": value,
+                }
+                for key, value in parameters.items()
+            ]
+            if rows:
+                st.dataframe(rows, hide_index=True, width="stretch")
+            criterion_evidence = interaction.get("criterion") or {}
+            st.caption(
+                f"{interaction.get('formula') or ''} "
+                f"Case {criterion_evidence.get('elastic_case') or '-'}; "
+                f"criterion {criterion_evidence.get('criterion_id') or '-'}; "
+                "combination "
+                f"{criterion_evidence.get('required_combination') or '-'}; "
+                "immutable acceptance fingerprint "
+                f"{criterion_evidence.get('acceptance_fingerprint') or '-'}. "
+                f"Source: {interaction.get('source') or '-'}."
+            )
+        elif interaction.get("reason"):
+            st.caption(str(interaction["reason"]))
     if no_results:
         st.info(
             "No crack width: "
@@ -11737,12 +12549,61 @@ def shear_view(inp, results):
                 ),
             })
         if aggregate.get("biaxial"):
-            message = (
-                f"{aggregate.get('status', 'REVIEW')}: Vx,Ed and Vy,Ed are checked "
-                "independently; biaxial interaction is not assessed."
-            )
-            (st.error if aggregate.get("status") in {"FAIL", "INVALID"}
-             else st.warning)(message)
+            interaction = aggregate.get("interaction") or {}
+            interaction_status = str(
+                interaction.get("status") or "NOT ASSESSED"
+            ).upper()
+            if interaction.get("interaction_assessed"):
+                message = (
+                    f"{interaction.get('verdict') or interaction_status}: "
+                    f"{interaction.get('method_name') or 'biaxial shear method'}"
+                    + (
+                        f"; utilisation {_pct(interaction.get('utilisation'))}"
+                        if interaction.get("utilisation") is not None
+                        else ""
+                    )
+                )
+                if interaction_status in {"FAIL", "INVALID"}:
+                    st.error(message)
+                elif interaction.get("qualification"):
+                    st.warning(message)
+                else:
+                    st.success(message)
+                interaction_rows = [
+                    {
+                        "Term": str(term.get("id") or ""),
+                        "Value": term.get("value"),
+                    }
+                    for term in (interaction.get("terms") or [])
+                    if isinstance(term, Mapping)
+                ]
+                if interaction_rows:
+                    st.dataframe(
+                        interaction_rows,
+                        hide_index=True,
+                        width="stretch",
+                    )
+                st.caption(
+                    f"{interaction.get('formula') or ''} "
+                    f"Source: {interaction.get('source') or '-'}. "
+                    + (
+                        "Approval: "
+                        f"{interaction.get('approval')}."
+                        if interaction.get("approval")
+                        else ""
+                    )
+                )
+            else:
+                message = (
+                    f"{aggregate.get('status', 'REVIEW')}: Vx,Ed and Vy,Ed "
+                    "are checked independently; "
+                    f"{interaction.get('reason') or 'biaxial interaction is not assessed.'}"
+                )
+                (
+                    st.error
+                    if aggregate.get("status") in {"FAIL", "INVALID"}
+                    else st.warning
+                )(message)
             components = inp.get("shear_components") or {}
             st.plotly_chart(
                 viz.biaxial_shear_overview_figure(
@@ -13047,6 +13908,7 @@ def _analysis_workspace(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
+    case_errors = tuple(case_errors) + multidirectional.validation_errors(inp)
     if calc and case_errors:
         st.session_state["_case_error"] = "; ".join(case_errors) + "."
         calc = False
@@ -13131,6 +13993,15 @@ def _analysis_workspace(inp):
             )
             if crack_control_record is not None:
                 calculation_record["crack_control"] = crack_control_record
+            interaction_record = (
+                multidirectional.interaction_calculation_record(
+                    st.session_state["results"]
+                )
+            )
+            if interaction_record is not None:
+                calculation_record["multidirectional_interaction"] = (
+                    interaction_record
+                )
             fatigue_record = fatigue_analysis.calculation_conformance_record(
                 st.session_state["results"].get("fatigue"),
                 design_methodology=inp.get("design_methodology"),
@@ -13295,6 +14166,7 @@ _restore_input_state(
 )
 _sanitise_factor_input_state()
 _sanitise_crack_input_state()
+_sanitise_interaction_input_state()
 
 main_page = st.segmented_control(
     "Workspace",
