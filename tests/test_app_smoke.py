@@ -5288,7 +5288,8 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
-        "Bridge methodology (DS/EN 1992-2 base)",
+        "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
+        "Danish infrastructure-manager and project design basis",
         "Bulk assignments",
     ]
     _goto_input_tab(at, "Project & report")
@@ -5298,7 +5299,8 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
-        "Bridge methodology (DS/EN 1992-2 base)",
+        "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
+        "Danish infrastructure-manager and project design basis",
         "Bulk assignments",
         "About",
         "Report",

@@ -63,6 +63,7 @@ def _base_input(**changes):
         "shear_on": False,
         "fatigue_on": False,
         "fatigue_gamma_ff": 1.0,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
     }
     value.update(changes)
     return value

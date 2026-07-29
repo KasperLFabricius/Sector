@@ -3063,7 +3063,7 @@ def test_report_keeps_torsion_factor_and_fctd_as_one_layout_block():
     normalized = " ".join(" ".join(text).split())
     assert "Material-factor basis" in normalized
     assert "Concrete tension coefficient" in normalized
-    assert "fctd = αct fctk,0.05 / γct" in normalized
+    assert "fctd = \u03b1ct fctk,0.05 / \u03b3ct" in normalized
     assert "fctd = 1.322 MPa" in normalized
 
 

@@ -1357,7 +1357,7 @@ def validate_pdf_content(pdf: bytes) -> str:
     )
     if not all(value in torsion_minimum_page for value in (
         "6.020 (designed reinforcement required)",
-        "If ≤ 1, only minimum shear + torsion reinforcement is required",
+        "If \u2264 1, only minimum shear + torsion reinforcement is required",
     )):
         raise AssertionError(
             "the torsion minimum-reinforcement result is split across pages"

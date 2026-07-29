@@ -1198,3 +1198,25 @@ mandatory; this matrix does not self-certify PR closure.
   12-check autosave/download/session provenance slice is green. Exact
   remediation SHA, exact-head rereview and the one completed GitHub full-suite
   gate remain pending.
+- Codex rereview of exact head
+  `7796423ad64ab50a90fff0b23b6ec7144de5cbb2` reported no major issue, and
+  all 16 review threads were resolved. The first completed exact-head GitHub
+  gate, run `30416202190`, then found test-harness drift: 35 tests failed and
+  2,258 passed with one intentional skip. Thirty-two bridge-fatigue tests used
+  pre-v21 current-input fixtures without the now-mandatory calculation-basis
+  object, one UI-order assertion omitted the two final PR-05 panels, and two
+  Python source literals violated the ASCII-source check. Both the 42-page
+  report render and the 37-page manual render succeeded; the package job was
+  correctly skipped after the test-job failure. This failed run is retained as
+  evidence and is not represented as a green full-suite gate.
+- The corrective change supplies the canonical neutral fatigue basis in the
+  shared current bridge-analysis fixture, updates the UI-order contract to the
+  two actual PR-05 panel labels, and expresses the two Unicode expectations
+  with ASCII source escapes without changing rendered text. The complete
+  failure-class reproducer is green with 181 checks; all 123 PR-05
+  rule/oracle/adversarial tests and the standalone independent oracle pass;
+  and all three canonical rendered-report content/pagination checks pass with
+  the same runtime glyphs. No production rule, numerical route, report layout,
+  manual source, or accepted residual limitation changed. Exact corrective
+  SHA, exact-head Codex rereview and the bounded corrective GitHub gate remain
+  pending.
