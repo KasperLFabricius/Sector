@@ -1077,8 +1077,14 @@ def test_publication_rejects_unhashable_interaction_term_identity():
         ("crack", "NOT ASSESSED"),
         ("shear", "NOT ASSESSED"),
         ("crack", "NOT APPLICABLE"),
+        ("shear", "NOT APPLICABLE"),
     ],
-    ids=["crack-review", "shear-review", "crack-not-applicable"],
+    ids=[
+        "crack-review",
+        "shear-review",
+        "crack-not-applicable",
+        "shear-not-applicable",
+    ],
 )
 @pytest.mark.parametrize(
     "strip_calculation_evidence",
@@ -1117,20 +1123,12 @@ def test_publication_rejects_downgraded_active_conclusions(
             **multidirectional.crack_configuration({}),
             **_shear_input(),
             "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+            "plastic_case": {"id": "ULS-DOWNGRADE"},
         }
-        interaction = multidirectional.assess_shear_interaction(
-            inputs,
-            _shear_case(0.9, 1.0, 0.9, 1.0),
-            case_id="ULS-DOWNGRADE",
-        )
-        bundle = {
-            "schema": multidirectional.INTERACTION_BUNDLE_SCHEMA,
-            "crack": None,
-            "shear_cases": [{
-                "case": "ULS-DOWNGRADE",
-                "interaction": interaction,
-            }],
-        }
+        results = _shear_case(0.9, 1.0, 0.9, 1.0)
+        multidirectional.apply_to_results(inputs, results)
+        bundle = multidirectional.interaction_calculation_record(results)
+        interaction = bundle["shear_cases"][0]["interaction"]
     assert interaction["status"] == "FAIL"
 
     downgraded = copy.deepcopy(interaction)
@@ -1188,6 +1186,188 @@ def test_publication_rejects_downgraded_active_conclusions(
         "downgraded" in issue
         or "active" in issue
         or "NOT APPLICABLE" in issue
+        or "directional case" in issue
+        for issue in safe["publication_validation"]["issues"]
+    )
+
+
+def test_publication_rejects_fully_stripped_biaxial_not_applicable_forgery():
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(),
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        "plastic_case": {"id": "ULS-STRIPPED"},
+    }
+    results = _shear_case(0.9, 1.0, 0.9, 1.0)
+    multidirectional.apply_to_results(inputs, results)
+    forged = multidirectional.interaction_calculation_record(results)
+    interaction = forged["shear_cases"][0]["interaction"]
+    assert interaction["status"] == "FAIL"
+    assert len(forged["directional_shear_cases"][0]["components"]) == 2
+
+    interaction.update(
+        interaction_assessed=True,
+        status="NOT APPLICABLE",
+        verdict="NOT APPLICABLE",
+        qualification=None,
+        utilisation=None,
+        components=[],
+        terms=[],
+        reason="Forged stripped disposition.",
+        issues=[],
+    )
+    for key in (
+        "angle",
+        "approval",
+        "authority",
+        "axes",
+        "calculation_saturated",
+        "domain",
+        "formula",
+        "parameters",
+        "resistance_source",
+        "rotation_scope",
+        "rotationally_invariant",
+        "source",
+    ):
+        interaction.pop(key, None)
+    forged["shear_cases"][0]["interaction"] = _reseal_result(interaction)
+    directional = forged["directional_shear_cases"][0]
+    directional["components"] = []
+    directional.pop("fingerprint")
+    directional["fingerprint"] = _canonical_fingerprint(directional)
+    forged = _reseal_bundle(forged)
+
+    safe = multidirectional.publication_safe_interaction_record(
+        forged,
+        current_inputs=inputs,
+    )
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "exactly one current directional shear component" in issue
+        for issue in safe["publication_validation"]["issues"]
+    )
+
+
+def test_uniaxial_shear_publication_binds_current_case_and_resaves():
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(),
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+    }
+    results = _shear_case(0.2, 1.0, 0.3, 1.0)
+    results["shear"]["directions"].pop("vy")
+    results["shear"].update(
+        active_directions=["vx"],
+        biaxial=False,
+        status="PASS",
+    )
+    multidirectional.apply_to_results(inputs, results)
+    bundle = multidirectional.interaction_calculation_record(results)
+
+    assert bundle["directional_shear_cases"][0]["case"] == "Plastic"
+    assert [
+        component["id"]
+        for component in bundle["directional_shear_cases"][0]["components"]
+    ] == ["vx"]
+    safe = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs,
+    )
+    assert safe["publication_validation"]["status"] == "ACCEPTED"
+
+    forged = copy.deepcopy(bundle)
+    forged_basis = forged["directional_shear_cases"][0]
+    forged_basis["components"] = []
+    forged_basis.pop("fingerprint")
+    forged_basis["fingerprint"] = _canonical_fingerprint(forged_basis)
+    forged = _reseal_bundle(forged)
+    rejected = multidirectional.publication_safe_interaction_record(
+        forged,
+        current_inputs=inputs,
+    )
+    assert rejected["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "current directional shear component" in issue
+        for issue in rejected["publication_validation"]["issues"]
+    )
+
+    digest = project_io.input_sha256({}, inputs)
+    text = project_io.dump_project(
+        {},
+        inputs,
+        calculation={
+            "performed_at_utc": "2026-07-29T11:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "7" * 40,
+            "input_sha256": digest,
+            "multidirectional_interaction": bundle,
+        },
+    )
+    _tables, restored = project_io.parse_project(text)
+    provenance = project_io.project_provenance(text)
+    assert provenance["calculation"]["matches_saved_inputs"] is True
+    assert provenance["calculation"]["multidirectional_interaction"][
+        "publication_validation"
+    ]["status"] == "ACCEPTED"
+
+    resaved = project_io.dump_project(
+        {},
+        restored,
+        calculation=provenance["calculation"],
+    )
+    resaved_provenance = project_io.project_provenance(resaved)
+    assert resaved_provenance["calculation"]["matches_saved_inputs"] is True
+    assert resaved_provenance["calculation"][
+        "multidirectional_interaction"
+    ]["publication_validation"]["status"] == "ACCEPTED"
+
+
+@pytest.mark.parametrize(
+    "basis_attack",
+    ["missing-field", "missing-case", "orphan-case"],
+)
+def test_shear_publication_requires_exact_directional_case_coverage(
+    basis_attack,
+):
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(multidirectional.SHEAR_METHOD_EN_2023),
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        "shear_interaction_planar_member": True,
+        "shear_interaction_same_control_point": True,
+        "shear_interaction_no_torsion": True,
+        "shear_interaction_resultant_resistance_kn": 1.0,
+        "shear_interaction_resistance_source": "FE envelope SH-06",
+    }
+    results = _shear_case(0.3, 1.0, 0.4, 1.0)
+    multidirectional.apply_to_results(inputs, results)
+    bundle = multidirectional.interaction_calculation_record(results)
+    assert multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs,
+    )["publication_validation"]["status"] == "ACCEPTED"
+
+    attacked = copy.deepcopy(bundle)
+    if basis_attack == "missing-field":
+        attacked.pop("directional_shear_cases")
+    elif basis_attack == "missing-case":
+        attacked["directional_shear_cases"] = []
+    else:
+        orphan = copy.deepcopy(attacked["directional_shear_cases"][0])
+        orphan["case"] = "ULS-ORPHAN"
+        orphan.pop("fingerprint")
+        orphan["fingerprint"] = _canonical_fingerprint(orphan)
+        attacked["directional_shear_cases"].append(orphan)
+    attacked = _reseal_bundle(attacked)
+
+    safe = multidirectional.publication_safe_interaction_record(
+        attacked,
+        current_inputs=inputs,
+    )
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "directional shear case" in issue
         for issue in safe["publication_validation"]["issues"]
     )
 
