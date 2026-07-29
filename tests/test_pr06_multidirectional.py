@@ -316,6 +316,25 @@ def _shear_input(method=multidirectional.SHEAR_METHOD_PROJECT):
     return values
 
 
+def _with_single_case_shear_actions(inputs, results):
+    """Return current inputs with action authority matching solver directions."""
+
+    current = copy.deepcopy(inputs)
+    directions = (results.get("shear") or {}).get("directions") or {}
+    current["shear_on"] = True
+    current["shear_components"] = {
+        component_id: {
+            "signed_v_ed": (
+                float(directions[component_id]["signed_v_ed"])
+                if component_id in directions
+                else 0.0
+            ),
+        }
+        for component_id in ("vx", "vy")
+    }
+    return current
+
+
 def test_independent_oracle_covers_limits_boundary_and_symmetries():
     matrix = benchmark_matrix()
     points = matrix["points"]
@@ -672,6 +691,10 @@ def test_standard_methods_pass_semantic_publication_recomputation():
         depth_x=400.0,
         depth_y=600.0,
     )
+    shear_inputs = _with_single_case_shear_actions(
+        shear_inputs,
+        shear_results,
+    )
     multidirectional.apply_to_results(shear_inputs, shear_results)
     shear_bundle = multidirectional.interaction_calculation_record(
         shear_results
@@ -915,7 +938,11 @@ def test_positive_custom_parameters_are_preserved_even_when_nonstandard():
 
     extreme_inputs = _shear_input()
     extreme_inputs["shear_interaction_exponent"] = 1.0e308
-    extreme_case = _shear_case(2.0, 1.0, 0.0, 1.0)
+    extreme_case = _shear_case(2.0, 1.0, 0.1, 1.0)
+    extreme_inputs = _with_single_case_shear_actions(
+        extreme_inputs,
+        extreme_case,
+    )
     extreme = multidirectional.assess_shear_interaction(
         extreme_inputs, extreme_case
     )
@@ -1059,6 +1086,8 @@ def test_canonical_component_count_derives_legal_shear_disposition(
         for component_id, direction in results["shear"]["directions"].items()
         if component_id in retained_component_ids
     }
+    if len(retained_component_ids) == 2:
+        inputs = _with_single_case_shear_actions(inputs, results)
     multidirectional.apply_to_results(inputs, results)
     interaction = results["shear"]["interaction"]
 
@@ -2317,6 +2346,7 @@ def test_project_rejects_jointly_resealed_shear_resistance_false_pass():
         "plastic_case": {"id": case_id},
     }
     current_results = _shear_case(0.8, 1.0, 0.8, 1.0)
+    inputs = _with_single_case_shear_actions(inputs, current_results)
     multidirectional.apply_to_results(inputs, current_results)
     assert current_results["shear"]["interaction"]["status"] == "FAIL"
 
@@ -2365,6 +2395,176 @@ def test_project_rejects_jointly_resealed_shear_resistance_false_pass():
         "prior publication boundary" in issue
         or "durable publication rejection" in issue
         for issue in saved["publication_validation"]["issues"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("vx", "vy", "expected_status"),
+    [
+        (0.2, 0.3, "PASS"),
+        (0.9, 0.9, "FAIL"),
+    ],
+    ids=["assessed-pass", "assessed-fail"],
+)
+def test_assessed_shear_requires_both_authorities_raw_and_headless(
+    vx,
+    vy,
+    expected_status,
+):
+    case_id = "ULS-DUAL-AUTHORITY"
+    inputs_without_actions = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(),
+        "shear_on": True,
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        "plastic_case": {"id": case_id},
+    }
+    jointly_forged_results = _shear_case(vx, 1.0, vy, 1.0)
+    multidirectional.apply_to_results(
+        inputs_without_actions,
+        jointly_forged_results,
+    )
+    bundle = multidirectional.interaction_calculation_record(
+        jointly_forged_results
+    )
+    assert bundle["shear_cases"][0]["interaction"]["status"] == (
+        expected_status
+    )
+
+    raw_rejected = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs_without_actions,
+        current_results=jointly_forged_results,
+    )
+    assert raw_rejected["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "without both independent current authorities" in issue
+        and "action case/signed-demand authority" in issue
+        for issue in raw_rejected["publication_validation"]["issues"]
+    )
+
+    headless_rejected = multidirectional.publication_safe_results(
+        jointly_forged_results,
+        current_inputs=inputs_without_actions,
+    )
+    assert headless_rejected["_publication_interaction_bundle"][
+        "publication_validation"
+    ]["status"] == "REJECTED"
+    assert set(headless_rejected["shear"]["directions"]) == {"vx", "vy"}
+    assert headless_rejected["shear"]["interaction"]["status"] == (
+        "NOT ASSESSED"
+    )
+
+    inputs_with_actions = _with_single_case_shear_actions(
+        inputs_without_actions,
+        jointly_forged_results,
+    )
+    missing_solver = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs_with_actions,
+    )
+    assert missing_solver["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "without both independent current authorities" in issue
+        and "solver component/resistance authority" in issue
+        for issue in missing_solver["publication_validation"]["issues"]
+    )
+
+    raw_accepted = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs_with_actions,
+        current_results=jointly_forged_results,
+    )
+    assert raw_accepted["publication_validation"]["status"] == "ACCEPTED"
+    headless_accepted = multidirectional.publication_safe_results(
+        jointly_forged_results,
+        current_inputs=inputs_with_actions,
+    )
+    assert headless_accepted["_publication_interaction_bundle"][
+        "publication_validation"
+    ]["status"] == "ACCEPTED"
+    assert headless_accepted["shear"]["interaction"]["status"] == (
+        expected_status
+    )
+
+
+@pytest.mark.parametrize(
+    "action_attack",
+    [
+        "missing-case",
+        "partial-case",
+        "duplicate-case",
+        "substituted-case",
+    ],
+)
+def test_assessed_shear_requires_exact_multicase_action_authority(
+    action_attack,
+):
+    actions = [
+        {"name": "ULS-A", "vx_ed_kn": 0.2, "vy_ed_kn": 0.3},
+        {"name": "ULS-B", "vx_ed_kn": -0.4, "vy_ed_kn": 0.1},
+    ]
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(),
+        "shear_on": True,
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        "load_cases": {"plastic": copy.deepcopy(actions)},
+    }
+    results = {
+        "plastic_cases": [
+            {
+                "name": "ULS-A",
+                "results": _shear_case(0.2, 1.0, 0.3, 1.0),
+            },
+            {
+                "name": "ULS-B",
+                "results": _shear_case(
+                    0.4,
+                    1.0,
+                    0.1,
+                    1.0,
+                    method=multidirectional.SHEAR_CODE_EN_2023,
+                ),
+            },
+        ],
+    }
+    results["plastic_cases"][1]["results"]["shear"]["directions"]["vx"][
+        "signed_v_ed"
+    ] = -0.4
+    multidirectional.apply_to_results(inputs, results)
+    bundle = multidirectional.interaction_calculation_record(results)
+    accepted = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs,
+        current_results=results,
+    )
+    assert accepted["publication_validation"]["status"] == "ACCEPTED"
+
+    attacked = copy.deepcopy(inputs)
+    attacked_actions = copy.deepcopy(actions)
+    if action_attack == "missing-case":
+        attacked_actions.pop()
+    elif action_attack == "partial-case":
+        attacked_actions[1].pop("vy_ed_kn")
+    elif action_attack == "duplicate-case":
+        attacked_actions[1]["name"] = "ULS-A"
+    else:
+        attacked_actions[1]["name"] = "ULS-SUBSTITUTED"
+    attacked["load_cases"]["plastic"] = attacked_actions
+
+    rejected = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=attacked,
+        current_results=results,
+    )
+    assert rejected["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "current input-action" in issue
+        or "current action inputs" in issue
+        or "does not cover exactly" in issue
+        or "directional shear case authority is missing" in issue
+        for issue in rejected["publication_validation"]["issues"]
     )
 
 

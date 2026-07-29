@@ -3076,6 +3076,11 @@ def _pr06_project_shear_report_case():
         "shear_interaction_exponent": 2.0,
         "shear_interaction_source": "Project DB clause INT-06",
         "shear_interaction_approval": "Checker approval QA-06",
+        "shear_on": True,
+        "shear_components": {
+            "vx": {"signed_v_ed": 80.0},
+            "vy": {"signed_v_ed": 65.0},
+        },
     }
     out = _out()
     vx = copy.deepcopy(_shear_out())
@@ -3138,6 +3143,41 @@ def test_report_binds_sourced_project_shear_interaction_evidence():
     assert "Interaction evidence fingerprint" in txt
     assert "Domain satisfied yes" in txt
     assert "Full interaction rotationally invariant yes" in txt
+
+
+def test_report_rejects_joint_solver_aggregate_pass_without_action_authority():
+    inp, out = _pr06_project_shear_report_case()
+    inp.pop("shear_components")
+    for component_id, direction in out["shear"]["directions"].items():
+        forged_demand = 8.0 if component_id == "vx" else 6.5
+        direction["v_ed"] = forged_demand
+        direction["signed_v_ed"] = forged_demand
+        direction["util"] = forged_demand / direction["res"]["vrd_c"]
+        direction["status"] = "PASS"
+    multidirectional.apply_to_results(inp, out)
+    assert out["shear"]["interaction"]["status"] == "PASS"
+
+    safe = multidirectional.publication_safe_results(
+        out,
+        current_inputs=inp,
+    )
+    validation = safe["_publication_interaction_bundle"][
+        "publication_validation"
+    ]
+    assert validation["status"] == "REJECTED"
+    assert any(
+        "without both independent current authorities" in issue
+        and "action case/signed-demand authority" in issue
+        for issue in validation["issues"]
+    )
+    assert set(safe["shear"]["directions"]) == {"vx", "vy"}
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+    assert "Vx,Ed" in txt and "Vy,Ed" in txt
+    assert "PUBLICATION REJECTED" in txt
+    assert "APPROVED CUSTOM PASS" not in txt
 
 
 def test_report_distinguishes_resultant_demand_from_full_rotation_property():

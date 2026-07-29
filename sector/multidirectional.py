@@ -2389,7 +2389,7 @@ def _directional_basis_index(
 def _canonical_directional_case_basis(
     current_inputs: Mapping,
     current_results: Mapping | None,
-) -> tuple[list[dict] | None, list[str], bool]:
+) -> tuple[list[dict] | None, list[str], bool, bool]:
     """Return one current directional basis without reading stored aggregates.
 
     Live solver directions are the only authority for component resistances.
@@ -2488,11 +2488,17 @@ def _canonical_directional_case_basis(
                     "not match current action inputs"
                 )
 
+    has_input_action_authority = isinstance(input_basis, list)
     if isinstance(solver_basis, list):
-        return copy.deepcopy(solver_basis), issues, True
-    if isinstance(input_basis, list):
-        return copy.deepcopy(input_basis), issues, False
-    return None, issues, False
+        return (
+            copy.deepcopy(solver_basis),
+            issues,
+            True,
+            has_input_action_authority,
+        )
+    if has_input_action_authority:
+        return copy.deepcopy(input_basis), issues, False, True
+    return None, issues, False, False
 
 
 def _input_only_shear_disposition_issues(
@@ -2558,6 +2564,30 @@ def _input_only_shear_disposition_issues(
             f"canonical current-action disposition {expected}"
         ]
     return []
+
+
+def _assessed_shear_authority_issues(
+    interaction: Mapping,
+    *,
+    has_input_action_authority: bool,
+    has_solver_directional_authority: bool,
+    label: str,
+) -> list[str]:
+    """Require both independent current authorities for shear PASS/FAIL."""
+
+    if str(interaction.get("status") or "").upper() not in {"PASS", "FAIL"}:
+        return []
+    missing = []
+    if not has_input_action_authority:
+        missing.append("canonical current action case/signed-demand authority")
+    if not has_solver_directional_authority:
+        missing.append("current solver component/resistance authority")
+    if not missing:
+        return []
+    return [
+        f"{label} cannot publish PASS/FAIL without both independent current "
+        f"authorities; missing {', '.join(missing)}"
+    ]
 
 
 def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
@@ -3687,13 +3717,16 @@ def publication_safe_interaction_record(
     current_inputs: Mapping,
     current_results: Mapping | None = None,
 ) -> dict | None:
-    """Validate stored interaction evidence against one current case basis.
+    """Validate stored interaction evidence against current independent bases.
 
-    The basis is reconstructed here from canonical calculation inputs, or from
-    current directional solver results when the raw/headless input shape does
-    not carry case actions. It is never read from a persisted interaction
-    sibling. A prior rejection is durable: repairing a stored record without a
-    new calculation cannot upgrade it back to accepted evidence.
+    Every assessed two-component shear conclusion requires both canonical
+    current actions (case identity and signed demands) and current directional
+    solver results (components and resistances), correlated exactly. Neither
+    authority substitutes for the other. Non-assessed zero/one-component
+    dispositions may still be derived from the authority that proves them. No
+    authority is read from a persisted interaction sibling. A prior rejection
+    is durable: repairing a stored record without a new calculation cannot
+    upgrade it back to accepted evidence.
     """
 
     if not isinstance(record, Mapping):
@@ -3814,6 +3847,7 @@ def publication_safe_interaction_record(
         current_directional_basis,
         directional_basis_issues,
         has_solver_directional_authority,
+        has_input_action_authority,
     ) = _canonical_directional_case_basis(
         current_inputs,
         current_results,
@@ -3985,6 +4019,17 @@ def publication_safe_interaction_record(
                 "identity does not match the independently reconstructed "
                 "current case authority"
             )
+            continue
+        assessed_authority_issues = _assessed_shear_authority_issues(
+            interaction,
+            has_input_action_authority=has_input_action_authority,
+            has_solver_directional_authority=(
+                has_solver_directional_authority
+            ),
+            label=f"stored shear-interaction case {case_name}",
+        )
+        issues.extend(assessed_authority_issues)
+        if assessed_authority_issues:
             continue
         if (
             has_solver_directional_authority

@@ -1356,14 +1356,15 @@ mandatory; this matrix does not self-certify PR closure.
   acceptance fingerprint. Missing, duplicate, contradictory, malformed, stale,
   or self-consistent-but-not-current evidence fails closed without erasing
   component results. Publication re-assesses sealed crack evidence against the
-  current canonical PR-03 result. For shear, one non-persisted basis is
-  reconstructed internally from canonical current load-case actions or, at a
-  live raw/headless boundary, the full current directional solver components.
-  Stored case identity and signed demands must match that basis, then every
-  `PASS`, `FAIL`, `NOT ASSESSED`, `NOT APPLICABLE` or `INVALID` disposition is
-  re-derived exactly before the publication overlay. Deleting every aggregate
-  representation also creates a durable rejection rather than exposing a
-  pre-existing aggregate `PASS`.
+  current canonical PR-03 result. For shear, canonical current load-case
+  actions establish case identity and signed demands, while separately current
+  directional solver results establish components and resistances. Every
+  assessed two-component `PASS` or `FAIL` requires both authorities, correlated
+  exactly; neither substitutes for the other. Non-assessed zero/one-component
+  dispositions remain derivable from the authority that proves them. Every
+  disposition is re-derived before the publication overlay. Deleting every
+  aggregate representation also creates a durable rejection rather than
+  exposing a pre-existing aggregate `PASS`.
 - Positive finite custom engineering values are calculated as entered. A
   project method requires source, approval and confirmed domain and returns only
   `APPROVED CUSTOM PASS/FAIL`. The EN 1992-1-1:2023 shear resultant route
@@ -1611,6 +1612,39 @@ mandatory; this matrix does not self-certify PR closure.
   manual/presentation checks and the independent oracle are green. No
   report/manual layout content changed, so the prior affected-page visual
   inspection remains current.
+- Exact-head Codex Review of
+  `57002cac3cb1ebccc6f72021fa474208d3613283` raised same-family false-PASS P1
+  `3675017024`: a report/headless caller could provide current solver directions
+  but omit every canonical action field. Because the solver basis and stored
+  aggregate could then be changed together, the earlier live boundary accepted
+  a two-component `PASS` or `FAIL` without independently correlating case
+  identity and signed demands to current actions. The supervisor marked the
+  preceding review/CI as stale and required the invariant to be closed inside
+  the canonical model, not by another stored-field fingerprint comparison.
+- The correction centralizes one non-substitutable authority rule. An assessed
+  shear `PASS` or `FAIL` now requires canonical current actions for exact case
+  identities and signed demands plus independently current solver directions
+  for matching components and resistances. Both authorities are indexed and
+  correlated for exact case coverage, assessment identity and signed-demand
+  identity before the solver evidence can reproduce the stored disposition.
+  Missing all actions, missing results, partial/duplicate/substituted action
+  cases and jointly aligned solver/aggregate mutations reject. Exact matching
+  controls accept. Solver-only zero-component `INVALID` and genuine
+  one-component `NOT APPLICABLE`, plus their component results, remain intact.
+- The post-fix bounded matrix is green: all 125 PR-06 rule/oracle/adversarial
+  checks and all 142 project-persistence checks pass; all six focused
+  Streamlit/raw-session/autosave/download checks and six affected shear-report
+  checks pass; and the standalone production-independent oracle remains green.
+  The matrix crosses raw calculation-record validation, headless publication
+  overlay, report, project save/load/resave and live/durable session/autosave
+  boundaries. A one-pass audit of every return from the shared publication
+  record/results and missing-record overlay found no assessed-shear acceptance
+  route outside the dual-authority check.
+- Production report templates and manual content did not change. The new
+  fail-closed reason was nevertheless rendered in a focused 14-page report and
+  inspected on shear page 7 with pagination neighbours 6 and 8. Both `Vx`/`Vy`
+  component tables remain visible; rejection text, evidence table and
+  continuing resistance equations are legible with no clipping or overlap.
 - Exact final corrective SHA, current-head Codex rereview, the replacement
   exact-head GitHub full-suite gate, independent exact-SHA closure and merge
   remain pending. All automatically started superseded-head CI runs, including

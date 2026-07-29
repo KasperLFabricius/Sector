@@ -9231,8 +9231,14 @@ def test_pr06_live_autosave_uses_current_solver_authority_but_file_recalculates(
     monkeypatch.setattr(
         sector_app, "_invalid_interaction_input_keys", lambda: ()
     )
+    project_state = {"tables": tables, "scalars": scalars}
     monkeypatch.setattr(
-        sector_app, "_project_state", lambda: (tables, scalars)
+        sector_app,
+        "_project_state",
+        lambda: (
+            project_state["tables"],
+            project_state["scalars"],
+        ),
     )
     monkeypatch.setattr(
         sector_app, "_current_table", lambda *_args, **_kwargs: object()
@@ -9280,5 +9286,56 @@ def test_pr06_live_autosave_uses_current_solver_authority_but_file_recalculates(
     saved = json.loads(captured["data"])["calculation"]
     assert saved["matches_saved_inputs"] is False
     assert saved["multidirectional_interaction"][
+        "publication_validation"
+    ]["status"] == "REJECTED"
+
+    forged_case_results = {
+        "shear": {
+            "directions": {
+                "vx": direction("vx", 0.05),
+                "vy": direction("vy", 0.06),
+            },
+            "biaxial": True,
+            "status": "REVIEW",
+        },
+    }
+    forged_results = {
+        "plastic_cases": [{
+            "name": case_id,
+            "results": forged_case_results,
+        }],
+    }
+    multidirectional.apply_to_results(scalars, forged_results)
+    assert forged_case_results["shear"]["interaction"]["status"] == "PASS"
+    state["results"] = forged_results
+    state["calculation_record"] = {
+        "input_sha256": digest,
+        "multidirectional_interaction": (
+            multidirectional.interaction_calculation_record(forged_results)
+        ),
+    }
+    project_state["tables"] = {}
+    captured.clear()
+
+    assert sector_app._perform_autosave() is True
+    rejected_live = state["calculation_record"]
+    rejected_interaction = rejected_live["multidirectional_interaction"]
+    assert rejected_live["matches_saved_inputs"] is False
+    assert rejected_interaction["publication_validation"]["status"] == (
+        "REJECTED"
+    )
+    assert any(
+        "without both independent current authorities" in issue
+        and "action case/signed-demand authority" in issue
+        for issue in rejected_interaction["publication_validation"]["issues"]
+    )
+    assert set(
+        state["results"]["plastic_cases"][0]["results"]["shear"][
+            "directions"
+        ]
+    ) == {"vx", "vy"}
+    forged_saved = json.loads(captured["data"])["calculation"]
+    assert forged_saved["matches_saved_inputs"] is False
+    assert forged_saved["multidirectional_interaction"][
         "publication_validation"
     ]["status"] == "REJECTED"
