@@ -1611,15 +1611,20 @@ def apply_to_results(inp: Mapping, results: Mapping) -> dict:
     elastic_entries = results.get("elastic_cases")
     if isinstance(elastic_entries, list):
         selected_case = str(
-            crack_result.get("criterion", {}).get("elastic_case") or ""
+            crack_result.get("criterion", {}).get("elastic_case")
+            or (
+                crack_result.get("configuration") or {}
+            ).get("crack_interaction_case_id")
+            or ""
         )
         for entry in elastic_entries:
             if not isinstance(entry, dict):
                 continue
-            if str(entry.get("name") or "") != selected_case:
-                continue
             elastic = (entry.get("results") or {}).get("elastic")
-            if isinstance(elastic, dict):
+            if not isinstance(elastic, dict):
+                continue
+            elastic.pop("crack_interaction", None)
+            if str(entry.get("name") or "") == selected_case:
                 elastic["crack_interaction"] = copy.deepcopy(crack_result)
     elif isinstance(results.get("elastic"), dict):
         results["elastic"]["crack_interaction"] = copy.deepcopy(crack_result)
@@ -3159,7 +3164,13 @@ def publication_safe_results(
         else None
     )
     selected_case = (
-        str((crack.get("criterion") or {}).get("elastic_case") or "")
+        str(
+            (crack.get("criterion") or {}).get("elastic_case")
+            or (
+                crack.get("configuration") or {}
+            ).get("crack_interaction_case_id")
+            or ""
+        )
         if isinstance(crack, Mapping)
         else ""
     )

@@ -634,6 +634,64 @@ def test_crack_method_edition_switch_invalidates_the_conclusion():
     assert "requires the explicit EN 1992-1-1:2023" in result["reason"]
 
 
+@pytest.mark.parametrize(
+    ("mutate_inputs", "expected_status"),
+    [
+        (
+            {
+                "sls_code": multidirectional.CRACK_CODE_DK_2004,
+                "sls_edition": "2004",
+            },
+            "NOT ASSESSED",
+        ),
+        (
+            {"crack_interaction_criterion_id": "missing-criterion"},
+            "INVALID",
+        ),
+    ],
+)
+def test_failed_crack_interaction_is_attached_to_selected_elastic_case(
+    mutate_inputs,
+    expected_status,
+):
+    target = _crack_results()
+    target_elastic = target.pop("elastic")
+    results = {
+        "elastic_cases": [
+            {
+                "name": "SLS-01",
+                "results": {"elastic": target_elastic},
+            },
+            {
+                "name": "SLS-OTHER",
+                "results": {"elastic": copy.deepcopy(target_elastic)},
+            },
+        ],
+    }
+    results["elastic_cases"][1]["results"]["elastic"][
+        "crack_interaction"
+    ] = {"status": "PASS", "stale": True}
+    inputs = _crack_input(multidirectional.CRACK_METHOD_EN_2023)
+    inputs.update({
+        "sls_code": multidirectional.CRACK_CODE_EN_2023,
+        "sls_edition": "2023",
+        **mutate_inputs,
+    })
+
+    multidirectional.apply_to_results(inputs, results)
+
+    top = results["crack_interaction"]
+    target_record = results["elastic_cases"][0]["results"]["elastic"][
+        "crack_interaction"
+    ]
+    assert top["status"] == expected_status
+    assert target_record == top
+    assert (
+        "crack_interaction"
+        not in results["elastic_cases"][1]["results"]["elastic"]
+    )
+
+
 def test_crack_stale_duplicate_and_missing_evidence_fail_closed():
     inputs = _crack_input(multidirectional.CRACK_METHOD_PROJECT)
     inputs.update({

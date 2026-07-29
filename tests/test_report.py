@@ -3228,6 +3228,60 @@ def test_report_binds_project_crack_interaction_to_current_pr03_evidence():
     assert "Interaction evidence fingerprint" in txt
 
 
+def test_report_surfaces_failed_crack_interaction_on_selected_elastic_case():
+    inp, out = _pr06_project_crack_report_case()
+    target = out.pop("elastic")
+    elastic_rows = [
+        {
+            "name": name,
+            "description": description,
+            "n_long_ed_kn": 0.0,
+            "mx_long_ed_knm": 80.0,
+            "my_long_ed_knm": 0.0,
+            "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 20.0,
+            "my_short_ed_knm": 0.0,
+            "check_stress": True,
+            "check_crack_width": True,
+        }
+        for name, description in (
+            ("EL-TEST", "Selected crack case"),
+            ("EL-OTHER", "Other crack case"),
+        )
+    ]
+    inp["elastic_cases"] = elastic_rows
+    out["elastic_cases"] = [
+        {
+            "name": elastic_rows[0]["name"],
+            "actions": elastic_rows[0],
+            "evaluated": True,
+            "results": {"elastic": target},
+        },
+        {
+            "name": elastic_rows[1]["name"],
+            "actions": elastic_rows[1],
+            "evaluated": True,
+            "results": {"elastic": copy.deepcopy(target)},
+        },
+    ]
+    inp.update({
+        "crack_interaction_method": (
+            multidirectional.CRACK_METHOD_EN_2023
+        ),
+        "sls_code": multidirectional.CRACK_CODE_DK_2004,
+        "sls_edition": "2004",
+    })
+    multidirectional.apply_to_results(inp, out)
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "Annex G.5 method requires the explicit EN 1992-1-1:2023" in txt
+    assert "NOT ASSESSED" in txt
+    assert "EL-TEST" in txt
+
+
 def _shear_out_2023():
     from sector import codes as _codes, shear as _shear
 
