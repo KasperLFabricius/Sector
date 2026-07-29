@@ -2060,7 +2060,7 @@ def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
 
     assert not at.exception
     assert at.selectbox(key="sls_code").value == bridge.EN1992_2_DK_NA
-    assert at.session_state["_latest_inputs"]["sls_dk_na"] is False
+    assert at.session_state["_latest_inputs"]["sls_dk_na"] is True
     assert at.session_state["_latest_inputs"]["sls_edition"] == (
         sls.EDITION_BRIDGE_DK_2015
     )
@@ -2110,8 +2110,8 @@ def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
     )
 
 
-def test_danish_bridge_keeps_inherited_bridge_crack_numerics():
-    def calculated_widths(methodology):
+def test_danish_bridge_applies_related_dk_na_crack_numerics():
+    def calculated(methodology):
         at = _fresh().run()
         at.selectbox(key="design_methodology").set_value(methodology).run()
         _set_and_click(
@@ -2124,17 +2124,102 @@ def test_danish_bridge_keeps_inherited_bridge_crack_numerics():
         )
         assert not at.exception
         current = at.session_state["result_input_snapshot"]
-        assert current["sls_dk_na"] is False
         elastic = at.session_state["results"]["elastic"]
         assert elastic["crack"] is not None
         assert elastic["crack_short"] is not None
-        assert elastic.get("crack_coarse") is None
-        assert elastic.get("crack_short_coarse") is None
-        return elastic["crack"]["wk"], elastic["crack_short"]["wk"]
+        return current, elastic, at.session_state["calculation_record"]
 
-    inherited = calculated_widths(bridge.EN1992_2_BASE)
-    danish = calculated_widths(bridge.EN1992_2_DK_NA)
-    assert danish == pytest.approx(inherited)
+    base_inputs, inherited, _base_record = calculated(
+        bridge.EN1992_2_BASE
+    )
+    dk_inputs, danish, calculation_record = calculated(
+        bridge.EN1992_2_DK_NA
+    )
+
+    assert base_inputs["sls_dk_na"] is False
+    assert inherited.get("crack_coarse") is None
+    assert inherited.get("crack_short_coarse") is None
+    assert dk_inputs["sls_dk_na"] is True
+    assert danish["crack_coarse"] is not None
+    assert danish["crack_short_coarse"] is not None
+    assert danish["crack"]["wk"] != pytest.approx(
+        inherited["crack"]["wk"]
+    )
+    assert danish["crack_short"]["wk"] != pytest.approx(
+        inherited["crack_short"]["wk"]
+    )
+    assert danish["crack_numerical_method"][
+        "schema"
+    ] == sls.CRACK_NUMERICAL_METHOD_SCHEMA
+    assert danish["crack_numerical_method"]["dk_na_applied"] is True
+    assert danish["crack_numerical_method"]["systems"] == [
+        "fine",
+        "coarse",
+    ]
+    assert calculation_record["crack_control"][
+        "numerical_method"
+    ] == danish["crack_numerical_method"]
+
+
+def test_danish_bridge_stale_base_crack_session_fails_closed_in_ui():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+    )
+    assert not at.exception
+    stale = copy.deepcopy(at.session_state["results"])
+    stale["elastic"].pop("crack_numerical_method")
+    at.session_state["results"] = stale
+
+    _select_view(at, "Elastic Results")
+
+    assert not at.exception
+    assert any(
+        "Numerical crack-method evidence rejected" in warning.value
+        for warning in at.warning
+    )
+    assert not any(
+        "PASS - Crack width" in success.value
+        for success in at.success
+    )
+
+
+def test_bridge_method_switch_invalidates_base_crack_cache():
+    at = _fresh().run()
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_BASE
+    ).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("number_input", "el_short_Mx", 150.0),
+        ("checkbox", "sls_cw", True),
+    )
+    base_sig = at.session_state["result_elastic_sig"]
+    base_width = at.session_state["results"]["elastic"]["crack"]["wk"]
+
+    _goto_page(at, "Inputs")
+    at.selectbox(key="design_methodology").set_value(
+        bridge.EN1992_2_DK_NA
+    ).run()
+    _calculate(at)
+
+    assert not at.exception
+    assert at.session_state["result_elastic_sig"] != base_sig
+    elastic = at.session_state["results"]["elastic"]
+    assert elastic["crack"]["wk"] != pytest.approx(base_width)
+    assert elastic["crack_coarse"] is not None
+    assert elastic["crack_numerical_method"]["dk_na_applied"] is True
 
 
 def test_torsion_live_caption_prints_actual_danish_alpha_ct():

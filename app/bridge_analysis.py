@@ -9,6 +9,7 @@ and canonical bridge input tables, then delegates every bridge-method verdict to
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import copy
 import math
 
 import bridge_inputs
@@ -915,7 +916,11 @@ def concrete_fatigue_evidence(
     )
 
 
-def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
+def crack_evidence(
+    results: Mapping,
+    *,
+    inp: Mapping | None = None,
+) -> bridge.ExternalEvidence:
     """Aggregate each unique bridge crack criterion at its matched response only."""
 
     entries = results.get("elastic_cases")
@@ -943,6 +948,11 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
         current_mapping_scope = elastic.get(
             "crack_response_mapping_scope"
         )
+        numerical_method_issues = (
+            sls.danish_bridge_crack_result_issues(elastic, inp)
+            if isinstance(inp, Mapping)
+            else ()
+        )
         for criterion in _sequence(assessment.get("criteria")):
             if not isinstance(criterion, Mapping):
                 continue
@@ -956,6 +966,19 @@ def crack_evidence(results: Mapping) -> bridge.ExternalEvidence:
             ):
                 continue
             record = dict(criterion)
+            if numerical_method_issues:
+                record.update(
+                    status=bridge.STATUS_NOT_ASSESSED,
+                    value=None,
+                    util=None,
+                    acceptance_evidence=None,
+                    reason=(
+                        "Danish bridge numerical crack-method evidence is "
+                        "missing, stale, or conflicts with the current "
+                        "source-backed basis: "
+                        + " ".join(numerical_method_issues)
+                    ),
+                )
             if _status(record.get("status")) in {
                 bridge.STATUS_PASS,
                 bridge.STATUS_FAIL,
@@ -1177,6 +1200,7 @@ def _crack_results_from_record(record: Mapping | None) -> dict:
     safe = sls.publication_safe_crack_control_record(record)
     if not isinstance(safe, Mapping):
         return {}
+    numerical_method = safe.get("numerical_method")
     entries = []
     raw_cases = safe.get("cases")
     if not isinstance(raw_cases, list):
@@ -1212,6 +1236,9 @@ def _crack_results_from_record(record: Mapping | None) -> dict:
                     "crack_assessment": raw_case.get("assessment"),
                     "crack_responses": responses,
                     "crack_response_contexts": contexts,
+                    "crack_numerical_method": copy.deepcopy(
+                        numerical_method
+                    ),
                     "crack_response_mapping_scope": raw_case.get(
                         "response_mapping_scope"
                     ),
@@ -1261,7 +1288,7 @@ def danish_crack_publication_context(
     )
     try:
         return bridge.danish_crack_publication_context(
-            crack_evidence(current_results),
+            crack_evidence(current_results, inp=inp),
             decision,
         )
     except ValueError as exc:
@@ -1334,7 +1361,7 @@ def build_evidence(inp: Mapping, results: Mapping) -> bridge.BridgeBaseEvidence:
         shear=member_shear_evidence(inp, results),
         reinforcement_fatigue=reinforcement_fatigue_evidence(results, inp),
         concrete_fatigue=concrete_fatigue_evidence(results, inp),
-        sls_crack=crack_evidence(results),
+        sls_crack=crack_evidence(results, inp=inp),
         danish_basis=danish_basis,
         configuration_errors=tuple(dict.fromkeys(
             (*table_errors, *adapter_errors)

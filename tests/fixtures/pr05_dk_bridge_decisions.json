@@ -1,5 +1,5 @@
 {
-  "schema": "sector.pr05-dk-bridge-oracle/v1",
+  "schema": "sector.pr05-dk-bridge-oracle/v2",
   "crack_cases": [
     {
       "id": "road-nonprestressed-aggressive",
@@ -102,6 +102,50 @@
         ["width", "Frequent", 0.10],
         ["decompression", "Quasi-permanent", null]
       ]
+    }
+  ],
+  "numerical_crack_cases": [
+    {
+      "id": "extra-aggressive-cover-20-false-pass-boundary",
+      "cover_mm": 20.0,
+      "bar_diameter_mm": 20.0,
+      "bar_y_mm": 30.0,
+      "moment_knm": 270.0,
+      "rho_p_eff": 0.06546666666666652,
+      "strain_difference": 0.0015846070233601962,
+      "limit_mm": 0.20,
+      "environment": "extra_aggressive",
+      "expected": {
+        "base_k3": 3.4,
+        "danish_k3": 3.9453505085708622,
+        "base_sr_max_mm": 119.93482688391052,
+        "danish_sr_max_mm": 130.84183705532774,
+        "base_wk_mm": 0.1900495690257339,
+        "danish_wk_mm": 0.2073328939472235,
+        "base_status": "PASS",
+        "danish_status": "FAIL"
+      }
+    },
+    {
+      "id": "aggressive-cover-37-5-false-fail-boundary",
+      "cover_mm": 37.5,
+      "bar_diameter_mm": 25.0,
+      "bar_y_mm": 50.0,
+      "moment_knm": 230.0,
+      "rho_p_eff": 0.03928000000000001,
+      "strain_difference": 0.001291164061759732,
+      "limit_mm": 0.30,
+      "environment": "aggressive",
+      "expected": {
+        "base_k3": 3.4,
+        "danish_k3": 2.594685616454219,
+        "base_sr_max_mm": 235.69755600814662,
+        "danish_sr_max_mm": 205.49826662517984,
+        "base_wk_mm": 0.3043242137623205,
+        "danish_wk_mm": 0.2653319766203516,
+        "base_status": "FAIL",
+        "danish_status": "PASS"
+      }
     }
   ],
   "cover_cases": [

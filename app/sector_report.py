@@ -67,6 +67,7 @@ _CRACK_CANDIDATE_COL_WIDTHS = tuple(
     value * mm
     for value in (17, 7, 16, 13, 13, 10, 10, 17, 18, 18, 13, 13)
 )
+_BOUND_EVIDENCE_CHUNK_CHARS = 300
 
 # A Unicode (Greek-capable) font for the report. DejaVuSans is free and shipped
 # with the app; Helvetica is the fallback (Greek glyphs then render as boxes, but
@@ -153,6 +154,26 @@ def _greek(s):
     """Replace the ASCII engineering tokens in display text with Greek glyphs."""
     s = _GREEK_RE.sub(lambda m: _GREEK[m.group(1)], s)
     return s.replace("&lt;=", "&#8804;").replace("&gt;=", "&#8805;")
+
+
+def _bound_evidence_value_parts(value) -> tuple[str, ...]:
+    """Bound structured evidence rows so one cell cannot exceed an A4 frame."""
+
+    if isinstance(value, (Mapping, list, tuple)):
+        text = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+    elif isinstance(value, float):
+        text = f"{value:.12g}"
+    else:
+        text = str(value)
+    return tuple(
+        text[start:start + _BOUND_EVIDENCE_CHUNK_CHARS]
+        for start in range(0, max(len(text), 1), _BOUND_EVIDENCE_CHUNK_CHARS)
+    )
 
 
 def _kaleido_server_api():
@@ -1251,20 +1272,16 @@ class ReportBuilder:
                 if not isinstance(evidence, Mapping):
                     continue
                 for field, value in evidence.items():
-                    if isinstance(value, (Mapping, list, tuple)):
-                        value = json.dumps(
-                            value,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                            ensure_ascii=True,
-                        )
-                    elif isinstance(value, float):
-                        value = f"{value:.12g}"
-                    evidence_rows.append([
-                        _html_escape(title),
-                        _html_escape(f"{row_number}: {field}"),
-                        _html_escape(str(value)),
-                    ])
+                    parts = _bound_evidence_value_parts(value)
+                    for part_number, part in enumerate(parts, start=1):
+                        label = f"{row_number}: {field}"
+                        if len(parts) > 1:
+                            label += f" [{part_number}/{len(parts)}]"
+                        evidence_rows.append([
+                            _html_escape(title),
+                            _html_escape(label),
+                            _html_escape(part),
+                        ])
         if len(evidence_rows) > 1:
             self._h2("Bound calculation evidence")
             self._table(
@@ -4750,20 +4767,48 @@ class ReportBuilder:
         elastic_case = (
             elastic_case if isinstance(elastic_case, Mapping) else {}
         )
+        crack_record = {
+            "cases": [{
+                "case": str(
+                    elastic_case.get("id")
+                    or "Elastic"
+                ),
+                "assessment": raw_assessment,
+                "response_mapping_scope": copy.deepcopy(
+                    el.get("crack_response_mapping_scope")
+                ),
+                "responses": response_records,
+            }],
+        }
+        if isinstance(el.get("crack_numerical_method"), Mapping):
+            crack_record["numerical_method"] = copy.deepcopy(
+                el.get("crack_numerical_method")
+            )
+        expected_numerical_method = (
+            sls_core.expected_danish_bridge_crack_numerical_method(
+                self.inp
+            )
+        )
+        unexpected_crack_issues = []
+        if expected_numerical_method is None:
+            if sls_core.danish_bridge_crack_route_selected(self.inp):
+                unexpected_crack_issues.append(
+                    "Current report Danish bridge crack evidence exists "
+                    "although current inputs do not request crack-width "
+                    "calculation."
+                )
+            elif crack_record.get("numerical_method") is not None:
+                unexpected_crack_issues.append(
+                    "Current report Danish bridge crack numerical-method "
+                    "evidence is not applicable to the current methodology, "
+                    "code, and edition."
+                )
         publication_record = (
-            sls_core.publication_safe_crack_control_record({
-                "cases": [{
-                    "case": str(
-                        elastic_case.get("id")
-                        or "Elastic"
-                    ),
-                    "assessment": raw_assessment,
-                    "response_mapping_scope": copy.deepcopy(
-                        el.get("crack_response_mapping_scope")
-                    ),
-                    "responses": response_records,
-                }],
-            })
+            sls_core.publication_safe_crack_control_record(
+                crack_record,
+                expected_numerical_method=expected_numerical_method,
+                additional_validation_issues=unexpected_crack_issues,
+            )
             or {"cases": []}
         )
         publication_cases = publication_record.get("cases") or []
@@ -5056,7 +5101,16 @@ class ReportBuilder:
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
         if code:
             note = f"Crack-width code: {code}. "
-            if "DK NA" in code:
+            if (
+                "DK NA" in code
+                or code == bridge_core.EN1992_2_DK_NA
+                or isinstance(
+                    self.out["elastic"].get(
+                        "crack_numerical_method"
+                    ),
+                    Mapping,
+                )
+            ):
                 note += ("k<sub>3</sub> = 3.4&#183;(25/c)<super>2/3</super> "
                          "(&#167;7.3.4(3)). ")
                 if coarse:
@@ -5068,6 +5122,25 @@ class ReportBuilder:
                     note += ("The (h-x)/3 term in h<sub>c,ef</sub> applies to slabs "
                              "and prestressed members only.")
             self._small(note)
+            numerical_method = self.out["elastic"].get(
+                "crack_numerical_method"
+            )
+            if isinstance(numerical_method, Mapping):
+                sources = numerical_method.get("source_clauses")
+                source_text = (
+                    "; ".join(str(item) for item in sources)
+                    if isinstance(sources, list)
+                    else "-"
+                )
+                self._small(
+                    "Numerical method provenance: "
+                    + _html_escape(
+                        str(numerical_method.get("method") or "-")
+                    )
+                    + ". Controlled source chain: "
+                    + _html_escape(source_text)
+                    + "."
+                )
 
     def _crack_candidates(self, cases):
         """Append the complete sorted per-element crack-width audit table."""
@@ -6069,17 +6142,30 @@ class ReportBuilder:
             edition = "EN 1992-1-1:2023" if crack_2023 else "DS/EN 1992-1-1"
             lines.append(f"{edition} (Eurocode 2): {clauses}.")
             lines.append(
-                "Stress and crack-width acceptance limits are the explicit "
-                "user-entered project criteria printed with the result; Sector "
-                "does not infer exposure class or action-combination applicability."
+                "Stress and crack-width acceptance criteria are printed with "
+                "the result. Standard-derived routes use the explicitly selected "
+                "applicability fields; project-defined routes use separately "
+                "sourced user limits. Sector does not infer exposure class or "
+                "action-combination applicability."
             )
             if any(
-                "DK NA" in str(result.get("crack_code", ""))
+                (
+                    "DK NA" in str(result.get("crack_code", ""))
+                    or result.get("crack_code")
+                    == bridge_core.EN1992_2_DK_NA
+                    or isinstance(
+                        result.get("crack_numerical_method"),
+                        Mapping,
+                    )
+                )
                 for result in elastic_results
             ):
                 lines.append(
-                    "The Danish National Annex modifications to crack spacing and "
-                    "effective tension-area height are stated with the calculation."
+                    "The Danish bridge numerical route follows DS/EN 1992-2 "
+                    "Section 7 and 7.3.4(101) through the related "
+                    "DS/EN 1992-1-1 DK NA:2013. Its cover-dependent crack spacing, "
+                    "source-limited effective tension-area height and fine/coarse "
+                    "systems are stated with the calculation."
                 )
         if shear_results:
             sh = shear_results[0]

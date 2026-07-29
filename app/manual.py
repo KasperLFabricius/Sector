@@ -856,11 +856,12 @@ def manual_blocks() -> list:
     table(["Crack-width code", "What it changes"],
           [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
            ["DS/EN 1992-2:2005 + AC:2008", "The base 2005 crack model with bridge member/exposure acceptance routed by Table 7.101N"],
-           ["DS/EN 1992-2:2005 + DK/NA:2015", "The same numerical crack model with the Danish road/foot/rail, environmental and prestress acceptance matrix"],
+           ["DS/EN 1992-2:2005 + DK/NA:2015", "The related DS/EN 1992-1-1 DK NA:2013 numerical method (cover-dependent $k_3$, conditional effective height, and fine/coarse systems) with the Danish road/foot/rail acceptance matrix"],
            ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
-    call("standard", "The DK NA reports the fine and the coarse crack system side "
-         "by side, each for the sustained and total (long + short) response "
+    call("standard", "Both Danish crack-width options, including the Danish "
+         "bridge method, report the fine and the coarse crack system side by "
+         "side, each for the sustained and total (long + short) response "
          "(four crack widths). "
          "Part C derives every model in full with the worked crack width.")
     call("standard", "Response duration and SLS combination class are separate. "
@@ -1518,10 +1519,13 @@ def manual_blocks() -> list:
        "reinforcement's centroid (figure 7.100 NA; for a rectangle the $2(h-d)$ "
        "band), and **halves** the crack width. **Worked:** the band is $0.100$ m "
        "high and $w_k=0.077$ mm.")
-    call("tip", "The single *DS/EN 1992-1-1 + DK NA* option reports the fine and the "
-         "coarse system side by side, each for the sustained and total "
-         "(long + short) response -- four crack widths -- so you can read both "
-         "without re-running.")
+    call("tip", "The *DS/EN 1992-1-1 + DK NA* and *DS/EN 1992-2:2005 + "
+         "DK/NA:2015* options report the fine and coarse systems side by side, "
+         "each for the sustained and total (long + short) response -- four "
+         "crack widths -- so you can read both without re-running. For the "
+         "bridge option, EN 1992-2 Section 7 and 7.3.4(101), the bridge NA "
+         "routing, and the contemporaneous related 2013 concrete NA form the "
+         "recorded rule chain.")
     h2("EN 1992-1-1:2023 refined model")
     md("The 2023 edition uses a refined model (9.2.3):\n\n"
        "$$w_k = k_w\\,\\frac{k_1}{r}\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-"
@@ -1918,12 +1922,13 @@ def manual_blocks() -> list:
            ["Reinforcement law", "DS/EN 1992-1-1 3.2.7"],
            ["Prestressing steel law", "DS/EN 1992-1-1 3.3.6"],
            ["Cracking and crack width (2005)", "DS/EN 1992-1-1 7.3"],
-           ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
+           ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA:2013 7.3.2(3), 7.3.4(1) and 7.3.4(3)"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
            ["Reinforcement fatigue (2005)", "DS/EN 1992-1-1:2005+A1:2014 6.8.2, 6.8.4 and Tables 6.3N/6.4N"],
            ["Concrete fatigue (2005)", "DS/EN 1992-1-1:2005 6.8.7 / Formula (6.72); DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
             ["Bridge methodology relationship", "DS/EN 1992-2:2005 1.1.2 and clause-by-clause inheritance from DS/EN 1992-1-1:2004"],
             ["Danish bridge national choices", "DS/EN 1992-2 DK NA:2015, including 3.1.2, 3.1.6, 4.2, 4.4.1.2, 5.10.1, Table 7.101N and Annex applicability"],
+            ["Danish bridge numerical crack chain", "DS/EN 1992-2:2005 Section 7 and 7.3.4(101); DS/EN 1992-2 DK NA:2015 PDF pages 1 and 7; related DS/EN 1992-1-1 DK NA:2013 7.3.2(3), 7.3.4(1) and 7.3.4(3)"],
             ["Danish road/footbridge authority basis", "Vejdirektoratet, Projekteringsgrundlag for broer, March 2023 with corrections through 30 June 2026"],
             ["Danish railway authority basis", "Banedanmark BN1-59-5, 2024"],
             ["Bridge prestress brittle failure", "DS/EN 1992-2:2005 5.10.1(106) and 6.1(109)-(110)"],

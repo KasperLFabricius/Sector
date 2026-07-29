@@ -38,6 +38,51 @@ def crack_route(asset_class: str, member_class: str, environment: str):
     )
 
 
+def numerical_crack_width(
+    *,
+    cover_mm: float,
+    bar_diameter_mm: float,
+    rho_p_eff: float,
+    strain_difference: float,
+    limit_mm: float,
+    danish: bool,
+) -> dict:
+    """Independently evaluate the close-centre 2004 crack-width expression.
+
+    This scalar oracle deliberately receives the independently established
+    effective reinforcement ratio and strain difference. It therefore checks
+    the Danish cover term and the resulting standard threshold crossing without
+    importing or reusing Sector's section, solver, or crack-rule helpers.
+    """
+
+    values = (
+        cover_mm,
+        bar_diameter_mm,
+        rho_p_eff,
+        strain_difference,
+        limit_mm,
+    )
+    if any(isinstance(value, bool) for value in values):
+        raise ValueError("Boolean values are not crack-width inputs")
+    cover, phi, rho, strain, limit = map(float, values)
+    if not all(
+        math.isfinite(value)
+        for value in (cover, phi, rho, strain, limit)
+    ):
+        raise ValueError("crack-width inputs must be finite")
+    if min(cover, phi, rho, strain, limit) <= 0.0:
+        raise ValueError("crack-width inputs must be positive")
+    k3 = 3.4 * (25.0 / cover) ** (2.0 / 3.0) if danish else 3.4
+    sr_max = k3 * cover + 0.8 * 0.5 * 0.425 * phi / rho
+    width = sr_max * strain
+    return {
+        "k3": k3,
+        "sr_max_mm": sr_max,
+        "wk_mm": width,
+        "status": "PASS" if width <= limit else "FAIL",
+    }
+
+
 def nominal_cover_requirement_mm(
     environment: str,
     cover_category: str,
@@ -224,6 +269,27 @@ def evaluate_fixture(path: str | Path) -> dict:
                 case["environment"],
             )
             for case in data["crack_cases"]
+        },
+        "numerical_crack_cases": {
+            case["id"]: {
+                "base": numerical_crack_width(
+                    cover_mm=case["cover_mm"],
+                    bar_diameter_mm=case["bar_diameter_mm"],
+                    rho_p_eff=case["rho_p_eff"],
+                    strain_difference=case["strain_difference"],
+                    limit_mm=case["limit_mm"],
+                    danish=False,
+                ),
+                "danish": numerical_crack_width(
+                    cover_mm=case["cover_mm"],
+                    bar_diameter_mm=case["bar_diameter_mm"],
+                    rho_p_eff=case["rho_p_eff"],
+                    strain_difference=case["strain_difference"],
+                    limit_mm=case["limit_mm"],
+                    danish=True,
+                ),
+            }
+            for case in data["numerical_crack_cases"]
         },
         "cover_cases": {
             case["id"]: nominal_cover_requirement_mm(

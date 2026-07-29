@@ -83,11 +83,11 @@ _DEG = chr(0x00B0)
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
 # Crack-width code edition -> the crack-spacing flags. edition: "2004" (EC2 7.3.4)
-# or "2023" (EC2 9.2.3 refined). dk_na activates only the separate
+# or "2023" (EC2 9.2.3 refined). dk_na activates the related
 # DS/EN 1992-1-1 DK NA numerical model: cover-dependent k3, the conditional
-# (h-x)/3 effective-height term, and both fine and coarse crack systems. The
-# Danish bridge method keeps the inherited EN 1992-2 numerical model; its
-# distinct edition token routes only the Danish bridge acceptance criteria.
+# (h-x)/3 effective-height term, and both fine and coarse crack systems.
+# DS/EN 1992-2:2005 section 7 imports/recommends that method; the 2015 bridge
+# NA makes the related national annex part of Danish bridge practice.
 _CRACK_CODES = {
     "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
     "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
@@ -97,7 +97,7 @@ _CRACK_CODES = {
         edition=sls_core.EDITION_BRIDGE_2005_AC,
     ),
     bridge.EN1992_2_DK_NA: dict(
-        dk_na=False,
+        dk_na=True,
         edition=sls_core.EDITION_BRIDGE_DK_2015,
     ),
 }
@@ -3117,6 +3117,12 @@ def _perform_autosave() -> bool:
             current_scalars,
         )
         publication_inputs = dict(canonical_inputs["scalars"])
+        publication_inputs.update(
+            canonical_inputs.get("tables") or {}
+        )
+        publication_inputs["load_cases"] = (
+            canonical_inputs.get("load_cases") or {}
+        )
         # Danish fatigue applicability is owned by the bridge coverage table;
         # autosave must validate against the same complete map as project save.
         publication_inputs.update(
@@ -7607,6 +7613,13 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # (not a slab or a prestressed member) -- dropping the (h-x)/3 hc,ef term.
         dk_na = inp["sls_dk_na"]
         include_hx = (not dk_na) or inp["sls_member"] == "Slab" or bool(inp["tendons"])
+        crack_numerical_method = (
+            sls_core.calculated_danish_bridge_crack_numerical_method(
+                inp,
+                dk_na_applied=dk_na,
+                include_hx_term=include_hx,
+            )
+        )
         # Cracking is irreversible and is triggered by the maximum load the section
         # ever sees, so the section is cracked if EITHER the sustained (long-term) or
         # the peak (total) action exceeds the cracking stress. The peak check uses
@@ -7675,6 +7688,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             crack_scope_note=CRACK_DIRECTIONAL_LIMITATION,
             crack_code=(inp["sls_code"] if inp["sls_cw"] else None),
             crack_edition=(inp["sls_edition"] if inp["sls_cw"] else None),
+            crack_numerical_method=(
+                crack_numerical_method if inp["sls_cw"] else None
+            ),
             crack_member=(
                 inp["sls_member"]
                 if inp["sls_cw"] and dk_na
@@ -8136,6 +8152,7 @@ def crack_control_calculation_record(results):
             "results": {"elastic": results.get("elastic")},
         }]
     cases = []
+    numerical_methods = []
     for entry in entries:
         elastic = (entry.get("results") or {}).get("elastic") or {}
         if not elastic.get("show_cw"):
@@ -8143,6 +8160,9 @@ def crack_control_calculation_record(results):
         raw_assessment = elastic.get("crack_assessment")
         if not raw_assessment:
             continue
+        numerical_methods.append(
+            copy.deepcopy(elastic.get("crack_numerical_method"))
+        )
         assessment = (
             raw_assessment
             if isinstance(raw_assessment, Mapping)
@@ -8220,9 +8240,19 @@ def crack_control_calculation_record(results):
             ),
             "responses": responses,
         })
-    return sls_core.publication_safe_crack_control_record(
-        {"cases": cases} if cases else None
-    )
+    if not cases:
+        return None
+    record = {"cases": cases}
+    if (
+        numerical_methods
+        and all(
+            isinstance(method, Mapping)
+            and method == numerical_methods[0]
+            for method in numerical_methods
+        )
+    ):
+        record["numerical_method"] = numerical_methods[0]
+    return sls_core.publication_safe_crack_control_record(record)
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -10597,6 +10627,21 @@ def _crack_width_panel(e):
     st.markdown(f"**Crack control** ({e.get('crack_code', 'EC2 7.3.4')})")
     no_results = cl is None and cs is None and clc is None and csc is None
     assessment = e.get("crack_assessment", {})
+    numerical_method_issues = ()
+    if e.get("crack_code") == bridge.EN1992_2_DK_NA:
+        numerical_method_issues = (
+            sls_core.danish_bridge_crack_numerical_method_issues(
+                e.get("crack_numerical_method")
+            )
+        )
+        if numerical_method_issues:
+            assessment = sls_core.publication_safe_crack_assessment(
+                assessment,
+                [{
+                    "response": "Danish bridge numerical crack method",
+                    "reason": " ".join(numerical_method_issues),
+                }],
+            )
     status = assessment.get("status", "NOT ASSESSED")
     display_status = presentation.assessment_status_label(status)
     value = assessment.get("value")
@@ -10644,6 +10689,11 @@ def _crack_width_panel(e):
         st.warning(message)
     else:
         st.info(message)
+    if numerical_method_issues:
+        st.warning(
+            "Numerical crack-method evidence rejected: "
+            + " ".join(numerical_method_issues)
+        )
     st.caption(
         "Acceptance route: "
         f"{assessment.get('required_combination') or 'not established'}; "

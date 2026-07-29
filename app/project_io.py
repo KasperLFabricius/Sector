@@ -1018,6 +1018,11 @@ def publication_safe_calculation_record(
     fatigue_context = fatigue_analysis.bridge_publication_context(
         current_inputs
     )
+    expected_crack_numerical_method = (
+        sls.expected_danish_bridge_crack_numerical_method(
+            current_inputs
+        )
+    )
     publication_matches = True
     if "matches_saved_inputs" in calculation:
         publication_matches = calculation.get("matches_saved_inputs") is True
@@ -1027,12 +1032,45 @@ def publication_safe_calculation_record(
         if calculation.get(key) not in (None, "")
     }
     if "crack_control" in calculation:
+        raw_crack_control = calculation.get("crack_control")
+        unexpected_crack_issues = []
+        if expected_crack_numerical_method is None:
+            if sls.danish_bridge_crack_route_selected(current_inputs):
+                unexpected_crack_issues.append(
+                    "Stored Danish bridge crack evidence exists although "
+                    "current inputs do not request crack-width calculation."
+                )
+            elif (
+                isinstance(raw_crack_control, Mapping)
+                and raw_crack_control.get("numerical_method") is not None
+            ):
+                unexpected_crack_issues.append(
+                    "Stored Danish bridge crack numerical-method evidence is "
+                    "not applicable to the current methodology, code, and "
+                    "edition."
+                )
         record["crack_control"] = sls.publication_safe_crack_control_record(
-            calculation.get("crack_control")
+            raw_crack_control,
+            expected_numerical_method=(
+                expected_crack_numerical_method
+            ),
+            additional_validation_issues=unexpected_crack_issues,
         )
         if record["crack_control"] is None:
             record.pop("crack_control")
             publication_matches = False
+        elif (
+            expected_crack_numerical_method is not None
+            or unexpected_crack_issues
+        ):
+            crack_validation = record["crack_control"].get(
+                "publication_validation"
+            )
+            publication_matches = (
+                publication_matches
+                and isinstance(crack_validation, Mapping)
+                and crack_validation.get("status") == "ACCEPTED"
+            )
     if "fatigue_conformance" in calculation:
         record["fatigue_conformance"] = (
             fatigue_analysis.publication_safe_conformance_record(
@@ -1106,6 +1144,10 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
     }
     if calculation:
         publication_inputs = dict(content["scalars"])
+        publication_inputs.update(content.get("tables") or {})
+        publication_inputs["load_cases"] = (
+            content.get("load_cases") or {}
+        )
         publication_inputs.update(
             _bridge_tables_from_payload(content.get("bridge"))
         )
@@ -1179,7 +1221,12 @@ def project_provenance(text: str) -> dict:
     recorded = provenance.get("input_sha256")
     calculation = publication_safe_calculation_record(
         data.get("calculation"),
-        calculation_inputs={**raw_scalars, **bridge_tables},
+        calculation_inputs={
+            **raw_scalars,
+            **raw_tables,
+            "load_cases": raw_load_cases or {},
+            **bridge_tables,
+        },
         input_digest=actual,
     )
     return {

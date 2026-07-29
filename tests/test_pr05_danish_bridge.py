@@ -14,6 +14,9 @@ import numpy as np
 import pytest
 
 from sector import bridge, capacity, codes, conformance, danish_bridge, sls
+from sector.codes import fctm
+from sector.section import Section
+from sector.serviceability import analyse_cracking
 from tools import pr05_dk_bridge_oracle as oracle
 
 
@@ -162,7 +165,7 @@ def _dk_crack_control_record(results):
     elastic = results["elastic_cases"][0]["results"]["elastic"]
     assessment = elastic["crack_assessment"]
     informational = set(assessment.get("informational_responses") or ())
-    return sls.publication_safe_crack_control_record({
+    record = {
         "cases": [{
             "case": "Danish SLS",
             "assessment": copy.deepcopy(assessment),
@@ -188,7 +191,133 @@ def _dk_crack_control_record(results):
                 for name, response in elastic["crack_responses"].items()
             ],
         }],
-    })
+    }
+    if isinstance(elastic.get("crack_numerical_method"), dict):
+        record["numerical_method"] = copy.deepcopy(
+            elastic["crack_numerical_method"]
+        )
+    return sls.publication_safe_crack_control_record(record)
+
+
+def _dk_numerical_method_inputs():
+    return {
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_cw": True,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_has_tendons": False,
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+    }
+
+
+def _dk_numerical_crack_control_record(width=0.207333):
+    """Return one durable fine/coarse Danish result with exact provenance."""
+
+    inp = _dk_numerical_method_inputs()
+    expected_method = (
+        sls.expected_danish_bridge_crack_numerical_method(inp)
+    )
+    contexts = {
+        "Long-term (fine)": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "dk-qp",
+            "provenance": "explicit Danish QP mapping",
+            "solver_provenance": {"state": "dk-qp"},
+        },
+        "Long-term (coarse)": {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response_id": "dk-qp",
+            "provenance": "explicit Danish QP mapping",
+            "solver_provenance": {"state": "dk-qp"},
+        },
+        "Total (fine)": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "total",
+            "response_id": "dk-frequent",
+            "provenance": "explicit Danish frequent mapping",
+            "solver_provenance": {"state": "dk-frequent"},
+        },
+        "Total (coarse)": {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "total",
+            "response_id": "dk-frequent",
+            "provenance": "explicit Danish frequent mapping",
+            "solver_provenance": {"state": "dk-frequent"},
+        },
+    }
+    responses = {
+        "Long-term (fine)": {"wk": 0.18, "element_id": "R1"},
+        "Long-term (coarse)": {"wk": 0.09, "element_id": "R1"},
+        "Total (fine)": {"wk": width, "element_id": "R1"},
+        "Total (coarse)": {"wk": 0.097036, "element_id": "R1"},
+    }
+    mapping_scope = [
+        {
+            "combination": sls.COMBINATION_QUASI_PERMANENT,
+            "duration": "long",
+            "response": "Long-term (fine)",
+            "response_id": "dk-qp",
+            "elastic_case": "DK-EL-1",
+            "state": "dk-qp",
+            "provenance": "explicit Danish QP mapping",
+            "solver_provenance": {"state": "dk-qp"},
+        },
+        {
+            "combination": sls.COMBINATION_FREQUENT,
+            "duration": "total",
+            "response": "Total (fine)",
+            "response_id": "dk-frequent",
+            "elastic_case": "DK-EL-1",
+            "state": "dk-frequent",
+            "provenance": "explicit Danish frequent mapping",
+            "solver_provenance": {"state": "dk-frequent"},
+        },
+    ]
+    assessment = sls.crack_assessment(
+        responses,
+        valid=True,
+        criteria=_criteria({
+            "asset_class": "road",
+            "member_class": "nonprestressed",
+            "environment": "extra_aggressive",
+        }),
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    informational = set(
+        assessment.get("informational_responses") or ()
+    )
+    record = {
+        "numerical_method": expected_method,
+        "cases": [{
+            "case": "DK-EL-1",
+            "assessment": assessment,
+            "response_mapping_scope": mapping_scope,
+            "responses": [
+                {
+                    "name": name,
+                    "wk_mm": response["wk"],
+                    "element_id": response["element_id"],
+                    "solver_status": "CALCULATED",
+                    "solver_reason": "",
+                    "context": contexts[name],
+                    "acceptance_role": (
+                        "informational"
+                        if name in informational
+                        else "criterion input"
+                    ),
+                }
+                for name, response in responses.items()
+            ],
+        }],
+    }
+    return sls.publication_safe_crack_control_record(
+        record,
+        expected_numerical_method=expected_method,
+    )
 
 
 def _basis(**changes):
@@ -401,6 +530,20 @@ def test_oracle_has_no_sector_import_and_frozen_fixture_is_self_consistent():
                 assert actual == pytest.approx(expected)
             else:
                 assert actual == expected
+    for case in data["numerical_crack_cases"]:
+        actual = evaluated["numerical_crack_cases"][case["id"]]
+        expected = case["expected"]
+        for route in ("base", "danish"):
+            assert actual[route]["k3"] == pytest.approx(
+                expected[f"{route}_k3"]
+            )
+            assert actual[route]["sr_max_mm"] == pytest.approx(
+                expected[f"{route}_sr_max_mm"]
+            )
+            assert actual[route]["wk_mm"] == pytest.approx(
+                expected[f"{route}_wk_mm"]
+            )
+            assert actual[route]["status"] == expected[f"{route}_status"]
 
 
 @pytest.mark.parametrize(
@@ -457,6 +600,217 @@ def test_danish_crack_matrix_matches_independent_oracle(case):
         assert _production_route(case) == (
             ("width", sls.COMBINATION_FREQUENT, expected[0][2]),
         )
+
+
+@pytest.mark.parametrize(
+    "case",
+    _fixture()["numerical_crack_cases"],
+    ids=lambda x: x["id"],
+)
+def test_danish_numerical_crack_route_crosses_standard_threshold(case):
+    """Freeze both false-verdict boundaries from the independent review."""
+
+    y = case["bar_y_mm"] / 1000.0
+    section = Section.from_polygon(
+        corners=[
+            (0.0, 0.0),
+            (0.3, 0.0),
+            (0.3, 0.6),
+            (0.0, 0.6),
+        ],
+        bars_xy_area_mm2=[
+            (0.075, y, 491.0),
+            (0.150, y, 491.0),
+            (0.225, y, 491.0),
+        ],
+    )
+    common = {
+        "fctm": fctm(30.0),
+        "Es": 200_000.0,
+        "beta": 0.5,
+        "kt": 0.6,
+        "bar_diameter": case["bar_diameter_mm"],
+        "cover": case["cover_mm"],
+    }
+    base = analyse_cracking(
+        section,
+        0.0,
+        case["moment_knm"],
+        0.0,
+        6.0,
+        **common,
+    ).crack
+    danish = analyse_cracking(
+        section,
+        0.0,
+        case["moment_knm"],
+        0.0,
+        6.0,
+        k3_cover_dependent=True,
+        include_hx_term=False,
+        **common,
+    ).crack
+    coarse = analyse_cracking(
+        section,
+        0.0,
+        case["moment_knm"],
+        0.0,
+        6.0,
+        k3_cover_dependent=True,
+        include_hx_term=False,
+        coarse=True,
+        **common,
+    ).crack
+    expected = oracle.evaluate_fixture(FIXTURE)[
+        "numerical_crack_cases"
+    ][case["id"]]
+
+    assert base.rho_p_eff == pytest.approx(case["rho_p_eff"])
+    assert base.esm_ecm == pytest.approx(case["strain_difference"])
+    assert base.sr_max == pytest.approx(expected["base"]["sr_max_mm"])
+    assert base.wk == pytest.approx(expected["base"]["wk_mm"])
+    assert danish.sr_max == pytest.approx(
+        expected["danish"]["sr_max_mm"]
+    )
+    assert danish.wk == pytest.approx(expected["danish"]["wk_mm"])
+    assert coarse.coarse is True
+    assert coarse.wk < danish.wk
+
+    criteria_case = {
+        "asset_class": "road",
+        "member_class": "nonprestressed",
+        "environment": case["environment"],
+    }
+
+    def assessed_status(fine, coarse_result=None):
+        responses = {"Frequent (fine)": {"wk": fine.wk, "element_id": "B1"}}
+        if coarse_result is not None:
+            responses["Frequent (coarse)"] = {
+                "wk": coarse_result.wk,
+                "element_id": "B1",
+            }
+        contexts = {
+            name: {
+                "combination": sls.COMBINATION_FREQUENT,
+                "duration": "total",
+                "response_id": "threshold-frequent",
+                "provenance": "independent PR-05 threshold fixture",
+                "solver_provenance": {"state": "threshold-frequent"},
+            }
+            for name in responses
+        }
+        return sls.crack_assessment(
+            responses,
+            valid=True,
+            criteria=_criteria(criteria_case),
+            response_contexts=contexts,
+            response_mapping_scope=[{
+                "combination": sls.COMBINATION_FREQUENT,
+                "duration": "total",
+                "response": next(iter(responses)),
+                "response_id": "threshold-frequent",
+                "elastic_case": "PR05-threshold",
+                "state": "threshold-frequent",
+                "provenance": "independent PR-05 threshold fixture",
+                "solver_provenance": {"state": "threshold-frequent"},
+            }],
+        )["verdict"]
+
+    assert assessed_status(base) == expected["base"]["status"]
+    assert assessed_status(danish, coarse) == expected["danish"]["status"]
+
+
+def test_danish_numerical_method_provenance_rejects_old_base_route():
+    inp = _dk_numerical_method_inputs()
+    expected = sls.expected_danish_bridge_crack_numerical_method(inp)
+    correct = sls.calculated_danish_bridge_crack_numerical_method(
+        inp,
+        dk_na_applied=True,
+        include_hx_term=False,
+    )
+    stale_base = sls.calculated_danish_bridge_crack_numerical_method(
+        inp,
+        dk_na_applied=False,
+        include_hx_term=True,
+    )
+
+    assert not sls.danish_bridge_crack_numerical_method_issues(
+        correct,
+        expected=expected,
+    )
+    issues = sls.danish_bridge_crack_numerical_method_issues(
+        stale_base,
+        expected=expected,
+    )
+    assert any("dk_na_applied" in issue for issue in issues)
+    assert any("systems" in issue for issue in issues)
+
+    stale_results = _dk_crack_results(width=0.19)
+    stale_evidence = bridge_analysis.crack_evidence(
+        stale_results,
+        inp=inp,
+    )
+    assert stale_evidence.status == bridge.STATUS_NOT_ASSESSED
+    assert "numerical crack-method evidence" in stale_evidence.reason
+
+
+def test_danish_numerical_method_does_not_infer_tendons_from_member_class():
+    inp = _dk_numerical_method_inputs()
+    inp.pop("sls_has_tendons")
+
+    expected = sls.expected_danish_bridge_crack_numerical_method(inp)
+
+    assert expected["has_tendons"] is None
+    assert expected["include_hx_term"] is None
+    issues = sls.danish_bridge_crack_numerical_method_issues(
+        expected,
+        expected=expected,
+    )
+    assert any("tendon presence" in issue for issue in issues)
+    assert any("effective-height routing" in issue for issue in issues)
+
+
+def test_danish_numerical_publication_rejects_malformed_case_collection():
+    inp = _dk_numerical_method_inputs()
+    expected = sls.expected_danish_bridge_crack_numerical_method(inp)
+    record = {
+        "numerical_method": expected,
+        "cases": {"not": "a canonical case list"},
+    }
+
+    safe = sls.publication_safe_crack_control_record(
+        record,
+        expected_numerical_method=expected,
+    )
+
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert "cases are missing or malformed" in (
+        safe["publication_validation"]["reason"]
+    )
+
+
+def test_danish_crack_publication_requires_fine_coarse_method_provenance():
+    record = _dk_numerical_crack_control_record()
+    expected = record["numerical_method"]
+    assert record["publication_validation"]["status"] == "ACCEPTED"
+    assert record["cases"][0]["assessment"]["verdict"] == "FAIL"
+
+    stale = copy.deepcopy(record)
+    stale.pop("numerical_method")
+    rejected = sls.publication_safe_crack_control_record(
+        stale,
+        expected_numerical_method=expected,
+    )
+    assert rejected["publication_validation"]["status"] == "REJECTED"
+    assert rejected["cases"][0]["assessment"]["verdict"] == "REVIEW"
+    assert rejected["cases"][0]["assessment"]["status"] == "NOT ASSESSED"
+
+    reconstructed = bridge_analysis._crack_results_from_record(record)
+    evidence = bridge_analysis.crack_evidence(
+        reconstructed,
+        inp=_dk_numerical_method_inputs(),
+    )
+    assert evidence.status == bridge.STATUS_FAIL
 
 
 def test_danish_crack_route_fails_closed_on_missing_conflicting_or_moderate_class():
@@ -1410,6 +1764,123 @@ def test_danish_project_save_load_resave_preserves_every_basis_field_and_hash():
     assert json.loads(second)["version"] == 21
 
 
+def test_danish_numerical_crack_provenance_survives_save_load_resave():
+    scalars = _project_scalars(
+        sls_cw=True,
+        sls_code=bridge.EN1992_2_DK_NA,
+        sls_member="Beam",
+        sls_has_tendons=False,
+    )
+    crack_record = _dk_numerical_crack_control_record()
+    digest = project_io.input_sha256({}, scalars)
+    calculation = {
+        "performed_at_utc": "2026-07-29T04:00:00+00:00",
+        "sector_version": "0.91",
+        "source_revision": "pr05-dk-numerical-method",
+        "input_sha256": digest,
+        "crack_control": crack_record,
+    }
+
+    first = project_io.dump_project(
+        {},
+        scalars,
+        calculation=calculation,
+    )
+    first_provenance = project_io.project_provenance(first)
+    first_calculation = first_provenance["calculation"]
+    assert first_calculation["matches_saved_inputs"] is True
+    assert first_calculation["crack_control"][
+        "publication_validation"
+    ]["status"] == "ACCEPTED"
+    assert first_calculation["crack_control"][
+        "numerical_method"
+    ] == crack_record["numerical_method"]
+
+    loaded_tables, loaded_scalars = project_io.parse_project(first)
+    second = project_io.dump_project(
+        loaded_tables,
+        loaded_scalars,
+        calculation=first_calculation,
+    )
+    second_calculation = project_io.project_provenance(second)[
+        "calculation"
+    ]
+    assert second_calculation["matches_saved_inputs"] is True
+    assert second_calculation["crack_control"][
+        "numerical_method"
+    ] == crack_record["numerical_method"]
+
+    stale_calculation = copy.deepcopy(calculation)
+    stale_calculation["crack_control"].pop("numerical_method")
+    stale = project_io.project_provenance(project_io.dump_project(
+        {},
+        scalars,
+        calculation=stale_calculation,
+    ))["calculation"]
+    assert stale["matches_saved_inputs"] is False
+    assert stale["crack_control"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
+    assert stale["crack_control"]["cases"][0]["assessment"][
+        "status"
+    ] == "NOT ASSESSED"
+
+
+def test_project_rejects_rehashed_danish_crack_evidence_after_check_disabled():
+    scalars = _project_scalars(
+        sls_cw=False,
+        sls_code=bridge.EN1992_2_DK_NA,
+        sls_member="Beam",
+    )
+    tables = {}
+    digest = project_io.input_sha256(tables, scalars)
+    text = project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-29T04:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "pr05-disabled-crack-attack",
+            "input_sha256": digest,
+            "crack_control": _dk_numerical_crack_control_record(),
+        },
+    )
+    calculation = project_io.project_provenance(text)["calculation"]
+
+    assert calculation["matches_saved_inputs"] is False
+    assert calculation["crack_control"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
+    assert calculation["crack_control"]["cases"][0]["assessment"][
+        "status"
+    ] == "NOT ASSESSED"
+    assert "do not request crack-width calculation" in (
+        calculation["crack_control"]["publication_validation"]["reason"]
+    )
+
+
+def test_raw_bridge_adapter_rejects_danish_result_after_method_switch():
+    inp = {
+        **_dk_numerical_method_inputs(),
+        "design_methodology": bridge.EN1992_2_BASE,
+        "sls_code": bridge.EN1992_2_BASE,
+        "sls_edition": sls.EDITION_BRIDGE_2005_AC,
+    }
+    issues = sls.danish_bridge_crack_result_issues(
+        {
+            "crack_numerical_method": (
+                _dk_numerical_crack_control_record()["numerical_method"]
+            ),
+        },
+        inp,
+    )
+
+    assert any(
+        "not applicable to the current methodology" in issue
+        for issue in issues
+    )
+
+
 def test_required_fatigue_route_survives_project_save_load_resave():
     decisions = tuple(
         replace(
@@ -1509,7 +1980,12 @@ def _dk_methodology_record(**scalar_changes):
 
 
 def _dk_crack_methodology_record(width=0.29):
-    scalars = _project_scalars()
+    scalars = _project_scalars(
+        sls_cw=True,
+        sls_code=bridge.EN1992_2_DK_NA,
+        sls_member="Beam",
+        sls_has_tendons=False,
+    )
     decisions = tuple(
         replace(
             item,
@@ -1520,7 +1996,10 @@ def _dk_crack_methodology_record(width=0.29):
         else item
         for item in _decisions()
     )
-    results = _dk_crack_results(width)
+    results = bridge_analysis._crack_results_from_record(
+        _dk_numerical_crack_control_record(width)
+    )
+    inp = _project_inputs(scalars, decisions)
     evidence = bridge.BridgeBaseEvidence(
         methodology=bridge.EN1992_2_DK_NA,
         decisions=decisions,
@@ -1528,9 +2007,9 @@ def _dk_crack_methodology_record(width=0.29):
         has_hollow_section=False,
         fck_mpa=40.0,
         brittle_method=bridge.BRITTLE_METHOD_A,
-        sls_crack=bridge_analysis.crack_evidence(results),
+        sls_crack=bridge_analysis.crack_evidence(results, inp=inp),
         danish_basis=bridge_inputs.danish_basis_from_inputs(
-            _project_inputs(scalars, decisions)
+            inp
         ),
     )
     return bridge.assess_base_methodology(evidence), results, decisions
@@ -1862,7 +2341,12 @@ def test_publication_rejects_rebound_danish_crack_verdict_forgery(check_id):
 
 def test_live_and_saved_danish_crack_context_reconstruct_identical_verdicts():
     record, results, decisions = _dk_crack_methodology_record(width=0.31)
-    scalars = _project_scalars()
+    scalars = _project_scalars(
+        sls_cw=True,
+        sls_code=bridge.EN1992_2_DK_NA,
+        sls_member="Beam",
+        sls_has_tendons=False,
+    )
     inp = {
         **scalars,
         **_project_tables(decisions),
@@ -1948,7 +2432,12 @@ def test_danish_publication_rejects_missing_or_malformed_crack_context(
 def test_project_crack_sibling_rejects_bridge_forgery_and_latches_resave():
     record, results, decisions = _dk_crack_methodology_record(width=0.31)
     sibling = _dk_crack_control_record(results)
-    scalars = _project_scalars()
+    scalars = _project_scalars(
+        sls_cw=True,
+        sls_code=bridge.EN1992_2_DK_NA,
+        sls_member="Beam",
+        sls_has_tendons=False,
+    )
     tables = _project_tables(decisions)
     digest = project_io.input_sha256(tables, scalars)
     calculation = {
@@ -2019,7 +2508,12 @@ def test_project_crack_sibling_rejects_bridge_forgery_and_latches_resave():
 
 def test_bridge_summary_rejects_rebound_danish_crack_verdict():
     record, results, decisions = _dk_crack_methodology_record(width=0.31)
-    scalars = _project_scalars()
+    scalars = _project_scalars(
+        sls_cw=True,
+        sls_code=bridge.EN1992_2_DK_NA,
+        sls_member="Beam",
+        sls_has_tendons=False,
+    )
     inp = {
         **scalars,
         **_project_tables(decisions),

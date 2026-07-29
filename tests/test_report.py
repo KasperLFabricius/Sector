@@ -2500,6 +2500,142 @@ def test_report_dk_na_shows_fine_and_coarse_columns():
     assert "coarse" in txt.lower() and "fine" in txt.lower()   # both systems in the table
 
 
+def test_report_identifies_danish_bridge_numerical_crack_method():
+    out = _out()
+    out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.207333)
+    out["elastic"]["crack_short"] = dict(
+        _crack(), coarse=False, wk=0.207333
+    )
+    out["elastic"]["crack_coarse"] = dict(
+        _crack(), coarse=True, wk=0.097036
+    )
+    out["elastic"]["crack_short_coarse"] = dict(
+        _crack(), coarse=True, wk=0.097036
+    )
+    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
+    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
+    out["elastic"]["crack_member"] = "Beam"
+    inp = {
+        **_inp(),
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "sls_has_tendons": False,
+    }
+    out["elastic"]["crack_numerical_method"] = (
+        sls.expected_danish_bridge_crack_numerical_method(inp)
+    )
+    txt = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+    ))
+
+    assert "25/c" in txt
+    assert "7.3.4(3)" in txt
+    assert "DS/EN 1992-1-1 DK NA:2013" in txt
+    assert "Long-term (coarse)" in txt
+    assert "Numerical crack-method evidence rejected" not in txt
+
+
+def test_report_chunks_nested_bound_evidence_without_changing_content():
+    value = {
+        "acceptance_evidence": {
+            "response": "x" * 1200,
+            "source": "DS/EN 1992-1-1 DK NA:2013",
+        },
+    }
+    expected = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    parts = sector_report._bound_evidence_value_parts(value)
+
+    assert "".join(parts) == expected
+    assert len(parts) > 1
+    assert max(map(len, parts)) <= (
+        sector_report._BOUND_EVIDENCE_CHUNK_CHARS
+    )
+
+
+def test_report_rejects_stale_danish_bridge_base_crack_snapshot():
+    out = _out()
+    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
+    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
+    out["elastic"]["crack_member"] = "Beam"
+    inp = {
+        **_inp(),
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "sls_has_tendons": False,
+    }
+
+    txt = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+    ))
+
+    assert "NOT ASSESSED - Crack width" in txt
+    assert "Danish bridge crack numerical-method provenance is missing" in (
+        " ".join(txt.split())
+    )
+    assert "PASS - Crack width" not in txt
+
+
+def test_report_rejects_rehashed_danish_crack_result_after_check_disabled():
+    out = _out()
+    out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.207333)
+    out["elastic"]["crack_short"] = dict(
+        _crack(), coarse=False, wk=0.207333
+    )
+    out["elastic"]["crack_coarse"] = dict(
+        _crack(), coarse=True, wk=0.097036
+    )
+    out["elastic"]["crack_short_coarse"] = dict(
+        _crack(), coarse=True, wk=0.097036
+    )
+    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
+    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
+    out["elastic"]["crack_member"] = "Beam"
+    method_inputs = {
+        **_inp(),
+        "design_methodology": bridge.EN1992_2_DK_NA,
+        "sls_code": bridge.EN1992_2_DK_NA,
+        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
+        "sls_member": "Beam",
+        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "sls_has_tendons": False,
+    }
+    out["elastic"]["crack_numerical_method"] = (
+        sls.expected_danish_bridge_crack_numerical_method(
+            method_inputs
+        )
+    )
+    inp = {**method_inputs, "sls_cw": False}
+
+    text = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+    ))
+    compact = " ".join(text.split())
+
+    assert "NOT ASSESSED - Crack width" in compact
+    assert "do not request crack-width calculation" in compact
+    assert "PASS - Crack width" not in compact
+
+
 def test_report_shows_coarse_only_results():
     # DK NA edge case: the fine (h-x)/3 band has no tension bar but the coarse
     # centroid-matched band does. The report must still show the coarse widths, not

@@ -13,6 +13,7 @@ from tools.report_render_fixture import (
 )
 from tools.pr05_dk_report_fixture import (
     build_fixture_pdf as build_pr05_fixture_pdf,
+    validate_pdf_content as validate_pr05_pdf_content,
 )
 
 
@@ -36,7 +37,9 @@ def test_issued_report_renders_every_page_and_retains_expected_content():
 
 
 def test_pr05_split_danish_tables_keep_visible_document_control():
-    """Exercise the Danish basis/evidence continuation-page transformation."""
+    """Exercise Danish numerical/methodology pages and page continuation."""
 
-    pages = render_pdf(build_pr05_fixture_pdf())
+    pdf = build_pr05_fixture_pdf()
+    validate_pr05_pdf_content(pdf)
+    pages = render_pdf(pdf)
     validate_rendered_pages(pages, require_document_control=True)
