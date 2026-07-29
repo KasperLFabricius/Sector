@@ -2488,6 +2488,64 @@ def test_assessed_shear_requires_both_authorities_raw_and_headless(
     )
 
 
+def test_single_solver_result_binds_only_the_sole_canonical_action_case():
+    case_id = "PL-01"
+    calculation_inputs = {
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+        "shear_on": False,
+        "plastic_case": {"id": case_id},
+    }
+    current_results = {"shear": {"directions": {}}}
+    multidirectional.apply_to_results(calculation_inputs, current_results)
+    bundle = multidirectional.interaction_calculation_record(current_results)
+    assert bundle["shear_cases"][0]["interaction"]["status"] == "INVALID"
+
+    publication_inputs = copy.deepcopy(calculation_inputs)
+    publication_inputs.pop("plastic_case")
+    publication_inputs["load_cases"] = {
+        "plastic": [{
+            "name": case_id,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+        }],
+    }
+    solver_authority = multidirectional.directional_shear_case_authority(
+        current_results,
+        current_inputs=publication_inputs,
+    )
+    assert solver_authority[0]["case"] == case_id
+    assert solver_authority[0]["assessment_case_id"] == case_id
+    assert solver_authority[0]["components"] == []
+    accepted = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=publication_inputs,
+        current_results=current_results,
+    )
+    assert accepted["publication_validation"]["status"] == "ACCEPTED"
+    assert accepted["shear_cases"][0]["interaction"]["status"] == "INVALID"
+
+    for ambiguous_actions in (
+        [],
+        [
+            {"name": case_id, "vx_ed_kn": 0.0, "vy_ed_kn": 0.0},
+            {"name": "PL-02", "vx_ed_kn": 0.0, "vy_ed_kn": 0.0},
+        ],
+    ):
+        ambiguous_inputs = copy.deepcopy(publication_inputs)
+        ambiguous_inputs["load_cases"]["plastic"] = ambiguous_actions
+        assert multidirectional.directional_shear_case_authority(
+            current_results,
+            current_inputs=ambiguous_inputs,
+        ) is None
+        rejected = multidirectional.publication_safe_interaction_record(
+            bundle,
+            current_inputs=ambiguous_inputs,
+            current_results=current_results,
+        )
+        assert rejected["publication_validation"]["status"] == "REJECTED"
+
+
 @pytest.mark.parametrize(
     "action_attack",
     [

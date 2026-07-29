@@ -5471,9 +5471,11 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     labels = [ex.label for ex in at.expander]
     assert labels == [
         "Stress and crack-width criteria (Elastic)",
+        "Multidirectional crack interaction (opt-in)",
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Biaxial shear interaction (opt-in)",
         "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
         "Danish infrastructure-manager and project design basis",
         "Bulk assignments",
@@ -5482,9 +5484,11 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     labels = [ex.label for ex in at.expander]
     assert labels == [
         "Stress and crack-width criteria (Elastic)",
+        "Multidirectional crack interaction (opt-in)",
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Biaxial shear interaction (opt-in)",
         "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
         "Danish infrastructure-manager and project design basis",
         "Bulk assignments",
@@ -6293,7 +6297,11 @@ def test_legacy_scalar_analysis_constructs_complete_explicit_mapping_scope(
     }
 
     result = sector_app.run_analysis(inp)
-    assert set(result) == {"bridge_methodology"}
+    assert set(result) == {
+        "bridge_methodology",
+        "crack_interaction",
+        "shear_interactions",
+    }
     assert result["bridge_methodology"]["active"] is False
     assert result["bridge_methodology"]["status"] == (
         bridge.STATUS_NOT_APPLICABLE

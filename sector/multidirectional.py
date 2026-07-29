@@ -1347,22 +1347,52 @@ def directional_shear_case_authority(
                 })
             return authority
 
-        plastic_case = (
-            current_inputs.get("plastic_case")
-            if isinstance(current_inputs, Mapping)
-            else None
-        )
-        assessment_case_id = (
-            str(
-                plastic_case.get("id")
-                or plastic_case.get("name")
-                or ""
-            ).strip()
-            if isinstance(plastic_case, Mapping)
-            else ""
-        )
+        action_authority = directional_shear_input_authority(current_inputs)
+        if isinstance(action_authority, list):
+            # A single live solver result has no intrinsic case identifier. Bind
+            # its directions to exactly one canonical current action case, while
+            # leaving signed demands owned by that action authority and
+            # resistances/components owned by the solver result.
+            if len(action_authority) != 1:
+                return None
+            action_case = action_authority[0]
+            if not isinstance(action_case, Mapping):
+                return None
+            action_case_id = str(action_case.get("case") or "").strip()
+            raw_assessment_case_id = action_case.get("assessment_case_id")
+            if not isinstance(raw_assessment_case_id, str):
+                return None
+            assessment_case_id = raw_assessment_case_id.strip()
+            if (
+                not action_case_id
+                or (
+                    assessment_case_id
+                    and action_case_id != assessment_case_id
+                )
+                or (
+                    not assessment_case_id
+                    and action_case_id != "Plastic"
+                )
+            ):
+                return None
+        else:
+            plastic_case = (
+                current_inputs.get("plastic_case")
+                if isinstance(current_inputs, Mapping)
+                else None
+            )
+            assessment_case_id = (
+                str(
+                    plastic_case.get("id")
+                    or plastic_case.get("name")
+                    or ""
+                ).strip()
+                if isinstance(plastic_case, Mapping)
+                else ""
+            )
+            action_case_id = assessment_case_id or "Plastic"
         return [{
-            "case": assessment_case_id or "Plastic",
+            "case": action_case_id,
             "assessment_case_id": assessment_case_id,
             "basis_kind": "current-solver-directions",
             "components": copy.deepcopy(

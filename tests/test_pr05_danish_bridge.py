@@ -1892,7 +1892,7 @@ def test_danish_project_save_load_resave_preserves_every_basis_field_and_hash():
     assert project_io.input_sha256(first_tables, first_scalars) == (
         project_io.input_sha256(first_tables, second_scalars)
     )
-    assert json.loads(second)["version"] == 21
+    assert json.loads(second)["version"] == project_io.VERSION
 
 
 def test_danish_numerical_crack_provenance_survives_save_load_resave():
@@ -2068,7 +2068,7 @@ def test_required_fatigue_route_survives_project_save_load_resave():
     assert project_io.input_sha256(second_tables, second_scalars) == (
         project_io.input_sha256(first_tables, first_scalars)
     )
-    assert json.loads(second)["version"] == 21
+    assert json.loads(second)["version"] == project_io.VERSION
 
 
 @pytest.mark.parametrize(
