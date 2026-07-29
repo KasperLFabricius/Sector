@@ -555,10 +555,27 @@ def _validate_multidirectional_scalars(
         },
     }
     active_methods = []
-    if scalars.get("crack_interaction_on") is True:
-        active_methods.append(crack_method)
-    if scalars.get("shear_interaction_on") is True:
-        active_methods.append(shear_method)
+    active_method_selections = (
+        (
+            "crack_interaction_on",
+            "crack_interaction_method",
+            crack_method,
+        ),
+        (
+            "shear_interaction_on",
+            "shear_interaction_method",
+            shear_method,
+        ),
+    )
+    for enabled_key, method_key, method in active_method_selections:
+        if scalars.get(enabled_key) is not True:
+            continue
+        if method_key not in scalars or method is None:
+            raise ValueError(
+                "current project has an active multidirectional method with "
+                f"missing required fields: {method_key}"
+            )
+        active_methods.append(method)
     for method in active_methods:
         required = required_by_method.get(method, set())
         missing = sorted(required - set(scalars))

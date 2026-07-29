@@ -2081,6 +2081,68 @@ def test_project_save_load_resave_rejects_joint_directional_truncation():
     )
 
 
+@pytest.mark.parametrize(
+    ("enabled_key", "method_key"),
+    [
+        ("crack_interaction_on", "crack_interaction_method"),
+        ("shear_interaction_on", "shear_interaction_method"),
+    ],
+)
+@pytest.mark.parametrize("method_value", ["missing", None])
+def test_current_active_project_requires_explicit_interaction_method(
+    enabled_key,
+    method_key,
+    method_value,
+):
+    scalars = {enabled_key: True}
+    if method_value is None:
+        scalars[method_key] = None
+    project = {
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": scalars,
+    }
+
+    with pytest.raises(ValueError, match=method_key):
+        project_io.parse_project(json.dumps(project))
+    with pytest.raises(ValueError, match=method_key):
+        project_io.dump_project({}, scalars)
+
+
+@pytest.mark.parametrize(
+    ("enabled_key", "method_key", "method"),
+    [
+        (
+            "crack_interaction_on",
+            "crack_interaction_method",
+            multidirectional.CRACK_METHOD_NONE,
+        ),
+        (
+            "shear_interaction_on",
+            "shear_interaction_method",
+            multidirectional.SHEAR_METHOD_NONE,
+        ),
+    ],
+)
+def test_current_active_project_preserves_explicit_not_assessed_method(
+    enabled_key,
+    method_key,
+    method,
+):
+    encoded = project_io.dump_project(
+        {},
+        {
+            enabled_key: True,
+            method_key: method,
+        },
+    )
+    _tables, restored = project_io.parse_project(encoded)
+
+    assert restored[enabled_key] is True
+    assert restored[method_key] == method
+
+
 def test_current_project_omissions_and_malformed_values_fail_closed():
     current_missing = {
         "format": project_io.FORMAT,

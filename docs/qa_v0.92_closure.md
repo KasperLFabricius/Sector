@@ -1528,8 +1528,25 @@ mandatory; this matrix does not self-certify PR closure.
   report retention of both `Vx`/`Vy` components. No production report or manual
   content changed, so the earlier affected-page and pagination inspection
   remains current.
-- Exact corrective SHA, current-head Codex rereview, the single completed
+- The canonical-basis correction was committed as
+  `3f8aa13392b7ec74c9a2ac1dc6478dd663eeb2d3` (tree
+  `ffc284cac2bc7fc0f0df2e5999bc53f2a01d2c02`). Exact-head Codex Review
+  found no further P1 and one current-schema P2, `3674301123`: a v22 project
+  could enable either interaction route while omitting its method key, then
+  acquire the default `not-assessed` selection during parse. The file boundary
+  now requires the crack/shear method key (and a non-null method value) whenever
+  its matching enable flag is true. Explicit stored `not-assessed` remains a
+  valid deliberate selection, and legacy migration remains conservative.
+- Four missing/null crack/shear controls exercise both parse and dump
+  boundaries, while two positive round trips preserve a deliberate explicit
+  `not-assessed` selection. The focused interaction and project-persistence
+  suites are green at 252 checks, and the production-independent
+  boundary/symmetry oracle remains green. No report/manual content changed in
+  this remediation.
+- Exact final corrective SHA, current-head Codex rereview, the replacement
   exact-head GitHub full-suite gate, independent exact-SHA closure and merge
   remain pending. All automatically started superseded-head CI runs, including
-  the run for rejected head `4c788df95bc1edb095ba7012bb3919c095bc552c`,
-  are not counted as the required exact-head gate.
+  the runs for rejected heads
+  `4c788df95bc1edb095ba7012bb3919c095bc552c` and
+  `3f8aa13392b7ec74c9a2ac1dc6478dd663eeb2d3`, are not counted as the required
+  final exact-head gate.
