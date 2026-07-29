@@ -397,6 +397,10 @@ def test_manual_documents_bridge_methodology_routing_and_limitations():
         "explicit departure/dispensation applicability decision",
         "qualified project variation",
         "departure applicability",
+        "existing reinforcement/concrete applicability rows",
+        "required-but-disabled route",
+        "national routing information, not analysis evidence",
+        "Annex J, KK, NN or OO",
         "Bridge Methodology",
         "cannot retain a stronger report verdict",
     ):

@@ -169,6 +169,10 @@ class DanishBridgeBasis:
     traffic_fatigue_applicability: str = NOT_ESTABLISHED
     traffic_fatigue_model: str = ""
     traffic_fatigue_source: str = ""
+    reinforcement_fatigue_applicability: str = NOT_ESTABLISHED
+    concrete_fatigue_applicability: str = NOT_ESTABLISHED
+    reinforcement_fatigue_on: Any = False
+    concrete_fatigue_on: Any = False
     environment_class: str = NOT_ESTABLISHED
     environment_source: str = ""
     special_rules: str = ""
@@ -244,7 +248,12 @@ def basis_context(basis: DanishBridgeBasis) -> dict[str, Any]:
         "torsion_gamma3",
     }
     numeric_positive = {"alpha_cc", "alpha_ct"}
-    boolean_fields = {"fatigue_on", "torsion_on"}
+    boolean_fields = {
+        "fatigue_on",
+        "torsion_on",
+        "reinforcement_fatigue_on",
+        "concrete_fatigue_on",
+    }
     for key, value in raw.items():
         if key in boolean_fields:
             output[key] = _typed_bool(value, key)
@@ -463,6 +472,26 @@ def assess_project_basis(basis: DanishBridgeBasis) -> dict[str, Any]:
             reason="Unknown traffic/fatigue applicability token.",
             evidence=(snapshot,),
         )
+    fatigue_routes = (
+        (
+            "reinforcement fatigue",
+            basis.reinforcement_fatigue_applicability,
+            basis.reinforcement_fatigue_on,
+        ),
+        (
+            "concrete fatigue",
+            basis.concrete_fatigue_applicability,
+            basis.concrete_fatigue_on,
+        ),
+    )
+    for label, applicability, _enabled in fatigue_routes:
+        if applicability not in FATIGUE_APPLICABILITY:
+            return _result(
+                STATUS_INVALID,
+                source=AUTHORITY_SOURCE,
+                reason=f"Unknown {label} applicability token.",
+                evidence=(snapshot,),
+            )
     if basis.traffic_fatigue_applicability == NOT_ESTABLISHED:
         missing.append("traffic/fatigue applicability")
     elif basis.traffic_fatigue_applicability == FATIGUE_REQUIRED:
@@ -470,6 +499,26 @@ def assess_project_basis(basis: DanishBridgeBasis) -> dict[str, Any]:
             missing.append("traffic/fatigue model")
         if not basis.traffic_fatigue_source:
             missing.append("traffic/fatigue source")
+        for label, applicability, _enabled in fatigue_routes:
+            if applicability == NOT_ESTABLISHED:
+                missing.append(f"{label} applicability")
+        if not basis.fatigue_on:
+            missing.append("enabled fatigue analysis")
+        required_routes = [
+            (label, enabled)
+            for label, applicability, enabled in fatigue_routes
+            if applicability == FATIGUE_REQUIRED
+        ]
+        if not required_routes:
+            missing.append("at least one required calculated fatigue check")
+        for label, enabled in required_routes:
+            if not enabled:
+                missing.append(f"enabled {label} calculation")
+        for label, applicability, enabled in fatigue_routes:
+            if applicability == FATIGUE_NOT_APPLICABLE and enabled:
+                missing.append(
+                    f"{label} calculation conflicts with Not applicable routing"
+                )
     if basis.departure_applicability not in APPLICABILITY_OPTIONS:
         return _result(
             STATUS_INVALID,

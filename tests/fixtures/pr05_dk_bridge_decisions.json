@@ -266,5 +266,63 @@
       "approval": "",
       "expected": "NOT_ASSESSED"
     }
+  ],
+  "traffic_fatigue_cases": [
+    {
+      "id": "required-reinforcement-calculated",
+      "applicability": "required",
+      "analysis_enabled": true,
+      "reinforcement_applicability": "required",
+      "reinforcement_enabled": true,
+      "concrete_applicability": "not_applicable",
+      "concrete_enabled": false,
+      "expected": "MAPPED"
+    },
+    {
+      "id": "required-global-analysis-disabled",
+      "applicability": "required",
+      "analysis_enabled": false,
+      "reinforcement_applicability": "required",
+      "reinforcement_enabled": true,
+      "concrete_applicability": "not_applicable",
+      "concrete_enabled": false,
+      "expected": "NOT_ASSESSED"
+    },
+    {
+      "id": "required-without-required-check",
+      "applicability": "required",
+      "analysis_enabled": true,
+      "reinforcement_applicability": "not_applicable",
+      "reinforcement_enabled": false,
+      "concrete_applicability": "not_applicable",
+      "concrete_enabled": false,
+      "expected": "NOT_ASSESSED"
+    },
+    {
+      "id": "required-check-disabled",
+      "applicability": "required",
+      "analysis_enabled": true,
+      "reinforcement_applicability": "required",
+      "reinforcement_enabled": false,
+      "concrete_applicability": "not_applicable",
+      "concrete_enabled": false,
+      "expected": "NOT_ASSESSED"
+    },
+    {
+      "id": "not-applicable-check-enabled",
+      "applicability": "required",
+      "analysis_enabled": true,
+      "reinforcement_applicability": "required",
+      "reinforcement_enabled": true,
+      "concrete_applicability": "not_applicable",
+      "concrete_enabled": true,
+      "expected": "NOT_ASSESSED"
+    }
+  ],
+  "annex_cases": [
+    {
+      "id": "static-national-routing-only",
+      "expected": "NOT_ASSESSED"
+    }
   ]
 }

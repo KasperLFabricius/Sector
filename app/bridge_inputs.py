@@ -543,6 +543,22 @@ def danish_basis_from_inputs(value: Mapping) -> danish_bridge.DanishBridgeBasis:
 
     concrete = value.get("concrete")
     alpha_cc = getattr(concrete, "alpha_cc", value.get("conc_alpha_cc"))
+    try:
+        coverage_decisions = {
+            decision.check_id: decision
+            for decision in decisions(value.get(COVERAGE_TABLE_KEY))
+        }
+    except (TypeError, ValueError):
+        coverage_decisions = {}
+
+    def fatigue_applicability(check_id: str) -> str:
+        decision = coverage_decisions.get(check_id)
+        return (
+            decision.applicability
+            if decision is not None
+            else danish_bridge.NOT_ESTABLISHED
+        )
+
     return danish_bridge.DanishBridgeBasis(
         asset_class=value.get(
             "bridge_asset_class", danish_bridge.NOT_ESTABLISHED
@@ -562,6 +578,14 @@ def danish_basis_from_inputs(value: Mapping) -> danish_bridge.DanishBridgeBasis:
         ),
         traffic_fatigue_model=value.get("bridge_traffic_fatigue_model", ""),
         traffic_fatigue_source=value.get("bridge_traffic_fatigue_source", ""),
+        reinforcement_fatigue_applicability=fatigue_applicability(
+            "reinforcement_fatigue"
+        ),
+        concrete_fatigue_applicability=fatigue_applicability(
+            "concrete_fatigue"
+        ),
+        reinforcement_fatigue_on=value.get("fatigue_check_steel", False),
+        concrete_fatigue_on=value.get("fatigue_check_concrete", False),
         environment_class=value.get(
             "bridge_environment_class", danish_bridge.NOT_ESTABLISHED
         ),

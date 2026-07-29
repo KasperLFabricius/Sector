@@ -803,6 +803,12 @@ def manual_blocks() -> list:
        "selected-standard PASS. Sector never infers road, footbridge or railway "
        "class, manager, control class, consequence class, departure applicability, "
        "or authority from geometry, free text, loads, or another selection.")
+    md("When traffic/fatigue is **Required**, its model and source must correlate "
+       "with an enabled global fatigue analysis, the existing reinforcement/concrete "
+       "applicability rows, the corresponding calculation toggles, and the resulting "
+       "calculated check evidence. A disabled analysis, a required-but-disabled "
+       "route, or an enabled route declared not applicable remains fail-closed and "
+       "cannot support a Danish project-basis PASS.")
     table(["Explicit Danish choice", "Mapped Sector effect"],
           [["Road Directorate / local road + road or footbridge",
             "Mapped manager/class evidence; project source remains mandatory"],
@@ -828,9 +834,14 @@ def manual_blocks() -> list:
        "ducts, plus 5 mm execution deviation; the explicit railway collision-risk "
        "route requires 75 mm.")
     call("limit", "DK NA Method A is mandatory for prestressed brittle-failure "
-         "avoidance and Method B is not permitted. Sector does not implement the "
-         "independent Method A structural analysis, so a required Method A check "
-         "remains **NOT ASSESSED** and is never replaced by Method B.")
+          "avoidance and Method B is not permitted. Sector does not implement the "
+          "independent Method A structural analysis, so a required Method A check "
+          "remains **NOT ASSESSED** and is never replaced by Method B.")
+    call("limit", "The printed DK NA Annex A/B/E/F/G/H/I/J/KK/LL/MM/NN/OO/PP/QQ "
+         "table is national routing information, not analysis evidence. Sector has "
+         "no typed project applicability and complete external analysis evidence "
+         "for applicable Annex J, KK, NN or OO routes in PR-05, so the annex check "
+         "remains **NOT ASSESSED** and can never be promoted by the static table.")
     h2("Crack width")
     md("Tick **Crack width** on each Elastic table row that requires acceptance. "
        "If any row is ticked, the global crack settings apply to every ticked row. "

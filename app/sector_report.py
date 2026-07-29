@@ -1099,6 +1099,23 @@ class ReportBuilder:
                 ("Traffic / fatigue applicability", "traffic_fatigue_applicability"),
                 ("Traffic / fatigue model", "traffic_fatigue_model"),
                 ("Traffic / fatigue source", "traffic_fatigue_source"),
+                ("Global fatigue analysis enabled", "fatigue_on"),
+                (
+                    "Reinforcement fatigue applicability",
+                    "reinforcement_fatigue_applicability",
+                ),
+                (
+                    "Reinforcement fatigue check selected",
+                    "reinforcement_fatigue_on",
+                ),
+                (
+                    "Concrete fatigue applicability",
+                    "concrete_fatigue_applicability",
+                ),
+                (
+                    "Concrete fatigue check selected",
+                    "concrete_fatigue_on",
+                ),
                 ("High-strength approval", "high_strength_approval"),
                 ("High-strength approval source", "high_strength_approval_reference"),
                 ("Execution-conditions source", "execution_conditions_source"),

@@ -288,6 +288,9 @@ def _project_scalars(**changes):
         "bridge_alpha_ct_custom_methodology": "",
         "bridge_alpha_ct_approval_reference": "",
         "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
+        "fatigue_on": False,
+        "fatigue_check_steel": False,
+        "fatigue_check_concrete": False,
     }
     values.update(changes)
     return values
@@ -310,6 +313,13 @@ def _project_tables(decisions=None):
                 bridge_inputs.COVERAGE_TABLE_KEY,
             )
         ),
+    }
+
+
+def _project_inputs(scalars=None, decisions=None):
+    return {
+        **(scalars if scalars is not None else _project_scalars()),
+        **_project_tables(decisions),
     }
 
 
@@ -372,6 +382,8 @@ def test_oracle_has_no_sector_import_and_frozen_fixture_is_self_consistent():
         ("torsion_cases", "expected_knm"),
         ("authority_cases", "expected"),
         ("departure_cases", "expected"),
+        ("traffic_fatigue_cases", "expected"),
+        ("annex_cases", "expected"),
     ):
         for case in data[group]:
             actual = evaluated[group][case["id"]]
@@ -382,6 +394,40 @@ def test_oracle_has_no_sector_import_and_frozen_fixture_is_self_consistent():
                 assert actual == pytest.approx(expected)
             else:
                 assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "case",
+    _fixture()["traffic_fatigue_cases"],
+    ids=lambda x: x["id"],
+)
+def test_danish_traffic_fatigue_correlation_matches_independent_oracle(case):
+    applicability = {
+        "required": danish_bridge.FATIGUE_REQUIRED,
+        "not_applicable": danish_bridge.FATIGUE_NOT_APPLICABLE,
+        "not_established": danish_bridge.NOT_ESTABLISHED,
+    }
+    result = danish_bridge.assess_project_basis(_basis(
+        traffic_fatigue_applicability=applicability[case["applicability"]],
+        traffic_fatigue_model="FLM3",
+        traffic_fatigue_source="VD basis section 6.8",
+        reinforcement_fatigue_applicability=applicability[
+            case["reinforcement_applicability"]
+        ],
+        concrete_fatigue_applicability=applicability[
+            case["concrete_applicability"]
+        ],
+        fatigue_on=case["analysis_enabled"],
+        reinforcement_fatigue_on=case["reinforcement_enabled"],
+        concrete_fatigue_on=case["concrete_enabled"],
+    ))
+    actual = (
+        "MAPPED"
+        if result["status"] == danish_bridge.STATUS_PASS
+        else "NOT_ASSESSED"
+    )
+
+    assert actual == case["expected"]
 
 
 @pytest.mark.parametrize("case", _fixture()["crack_cases"], ids=lambda x: x["id"])
@@ -663,6 +709,189 @@ def test_manager_mapping_is_explicit_and_unmapped_choice_is_warning_only():
     assert "remain calculation inputs" in strict_factor["reason"]
 
 
+def test_required_traffic_fatigue_cannot_pass_with_analysis_disabled():
+    result = danish_bridge.assess_project_basis(_basis(
+        traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
+        traffic_fatigue_model="FLM3",
+        traffic_fatigue_source="VD basis section 6.8",
+        reinforcement_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
+        concrete_fatigue_applicability=danish_bridge.FATIGUE_NOT_APPLICABLE,
+        reinforcement_fatigue_on=True,
+        concrete_fatigue_on=False,
+        fatigue_on=False,
+    ))
+
+    assert result["status"] == danish_bridge.STATUS_NOT_ASSESSED
+    assert "fatigue analysis" in result["reason"]
+
+
+def test_required_traffic_fatigue_cannot_use_not_applicable_calculation_checks():
+    basis = _basis(
+        traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
+        traffic_fatigue_model="FLM3",
+        traffic_fatigue_source="VD basis section 6.8",
+        reinforcement_fatigue_applicability=(
+            danish_bridge.FATIGUE_NOT_APPLICABLE
+        ),
+        concrete_fatigue_applicability=(
+            danish_bridge.FATIGUE_NOT_APPLICABLE
+        ),
+        fatigue_on=True,
+    )
+    result = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_DK_NA,
+        decisions=tuple(
+            bridge.ApplicabilityDecision(
+                check_id,
+                bridge.NOT_APPLICABLE,
+                f"DB-{check_id}",
+            )
+            for check_id in bridge.APPLICABILITY_CHECK_IDS
+        ),
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        danish_basis=basis,
+    ))
+
+    project_basis = next(
+        row for row in result["checks"]
+        if row["check_id"] == "dk_project_basis"
+    )
+    assert project_basis["status"] == bridge.STATUS_NOT_ASSESSED
+    assert "calculated fatigue check" in project_basis["reason"]
+    assert result["status"] == bridge.STATUS_NOT_ASSESSED
+
+
+def test_required_traffic_fatigue_passes_basis_only_with_matching_calculated_route():
+    decisions = tuple(
+        bridge.ApplicabilityDecision(
+            check_id,
+            (
+                bridge.REQUIRED
+                if check_id == "reinforcement_fatigue"
+                else bridge.NOT_APPLICABLE
+            ),
+            f"DB-{check_id}",
+        )
+        for check_id in bridge.APPLICABILITY_CHECK_IDS
+    )
+    basis = _basis(
+        traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
+        traffic_fatigue_model="FLM3",
+        traffic_fatigue_source="VD basis section 6.8",
+        reinforcement_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
+        concrete_fatigue_applicability=danish_bridge.FATIGUE_NOT_APPLICABLE,
+        reinforcement_fatigue_on=True,
+        concrete_fatigue_on=False,
+        fatigue_on=True,
+    )
+    result = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_DK_NA,
+        decisions=decisions,
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        reinforcement_fatigue=bridge.ExternalEvidence(
+            status=bridge.STATUS_PASS,
+            result="governing damage = 0.72",
+            criterion="damage <= 1.0",
+            source="calculated FLM3 spectrum",
+            reason="The enabled reinforcement fatigue route was calculated.",
+            evidence=({"status": bridge.STATUS_PASS, "damage": 0.72},),
+        ),
+        danish_basis=basis,
+    ))
+
+    project_basis = next(
+        row for row in result["checks"]
+        if row["check_id"] == "dk_project_basis"
+    )
+    reinforcement = next(
+        row for row in result["checks"]
+        if row["check_id"] == "reinforcement_fatigue"
+    )
+    assert project_basis["status"] == bridge.STATUS_PASS
+    assert reinforcement["status"] == bridge.STATUS_PASS
+    assert result["status"] == bridge.STATUS_NOT_ASSESSED
+
+
+def test_danish_basis_derives_fatigue_routes_from_canonical_inputs():
+    decisions = tuple(
+        replace(
+            decision,
+            applicability=bridge.REQUIRED,
+            source="DB-reinforcement-fatigue",
+        )
+        if decision.check_id == "reinforcement_fatigue"
+        else decision
+        for decision in _decisions()
+    )
+    inputs = _project_inputs(
+        _project_scalars(
+            bridge_traffic_fatigue_applicability=(
+                danish_bridge.FATIGUE_REQUIRED
+            ),
+            bridge_traffic_fatigue_model="FLM3",
+            bridge_traffic_fatigue_source="VD basis section 6.8",
+            fatigue_on=True,
+            fatigue_check_steel=True,
+            fatigue_check_concrete=False,
+        ),
+        decisions,
+    )
+    basis = bridge_inputs.danish_basis_from_inputs(inputs)
+    context = danish_bridge.basis_context(basis)
+
+    assert basis.reinforcement_fatigue_applicability == bridge.REQUIRED
+    assert basis.concrete_fatigue_applicability == bridge.NOT_APPLICABLE
+    assert context["fatigue_on"] is True
+    assert context["reinforcement_fatigue_on"] is True
+    assert context["concrete_fatigue_on"] is False
+
+
+def test_danish_method_rejects_conflicting_fatigue_applicability_snapshots():
+    result = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_DK_NA,
+        decisions=tuple(
+            bridge.ApplicabilityDecision(
+                check_id,
+                bridge.NOT_APPLICABLE,
+                f"DB-{check_id}",
+            )
+            for check_id in bridge.APPLICABILITY_CHECK_IDS
+        ),
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        danish_basis=_basis(
+            reinforcement_fatigue_applicability=bridge.REQUIRED,
+        ),
+    ))
+
+    assert result["status"] == bridge.STATUS_INVALID
+    assert any(
+        "reinforcement_fatigue applicability conflicts" in error
+        for error in result["configuration_errors"]
+    )
+
+
+def test_danish_basis_rejects_malformed_fatigue_route_state():
+    malformed_toggle = danish_bridge.assess_project_basis(_basis(
+        reinforcement_fatigue_on="true",
+    ))
+    malformed_route = danish_bridge.assess_project_basis(_basis(
+        reinforcement_fatigue_applicability="Required-ish",
+    ))
+
+    assert malformed_toggle["status"] == danish_bridge.STATUS_INVALID
+    assert "must be Boolean" in malformed_toggle["reason"]
+    assert malformed_route["status"] == danish_bridge.STATUS_INVALID
+    assert "Unknown reinforcement fatigue applicability" in (
+        malformed_route["reason"]
+    )
+
+
 def test_departure_applicability_requires_source_and_approval_without_inference():
     missing_decision = danish_bridge.assess_project_basis(_basis(
         departure_applicability=danish_bridge.NOT_ESTABLISHED,
@@ -924,6 +1153,33 @@ def test_danish_method_is_distinct_and_method_a_never_falls_back_to_method_b():
     } == relationships
 
 
+def test_danish_static_annex_table_never_passes_without_applicability_evidence():
+    result = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
+        methodology=bridge.EN1992_2_DK_NA,
+        decisions=tuple(
+            bridge.ApplicabilityDecision(
+                check_id,
+                bridge.NOT_APPLICABLE,
+                f"DB-{check_id}",
+            )
+            for check_id in bridge.APPLICABILITY_CHECK_IDS
+        ),
+        has_tendons=False,
+        has_hollow_section=False,
+        fck_mpa=40.0,
+        danish_basis=_basis(),
+    ))
+
+    annex = next(
+        row for row in result["checks"]
+        if row["check_id"] == "dk_annex_routing"
+    )
+    assert annex["status"] == bridge.STATUS_NOT_ASSESSED
+    assert "applicability" in annex["reason"]
+    assert "analysis evidence" in annex["reason"]
+    assert result["status"] == bridge.STATUS_NOT_ASSESSED
+
+
 def test_danish_direct_crack_method_follows_explicit_applicability():
     decisions = tuple(
         bridge.ApplicabilityDecision(
@@ -1057,6 +1313,58 @@ def test_danish_project_save_load_resave_preserves_every_basis_field_and_hash():
     assert json.loads(second)["version"] == 21
 
 
+def test_required_fatigue_route_survives_project_save_load_resave():
+    decisions = tuple(
+        replace(
+            decision,
+            applicability=bridge.REQUIRED,
+            source="DB-reinforcement-fatigue",
+        )
+        if decision.check_id == "reinforcement_fatigue"
+        else decision
+        for decision in _decisions()
+    )
+    scalars = _project_scalars(
+        bridge_traffic_fatigue_applicability=danish_bridge.FATIGUE_REQUIRED,
+        bridge_traffic_fatigue_model="FLM3",
+        bridge_traffic_fatigue_source="VD basis section 6.8",
+        fatigue_on=True,
+        fatigue_check_steel=True,
+        fatigue_check_concrete=False,
+    )
+    first = project_io.dump_project(_project_tables(decisions), scalars)
+    first_tables, first_scalars = project_io.parse_project(first)
+    first_context = bridge_inputs.danish_basis_context({
+        **first_scalars,
+        **first_tables,
+    })
+
+    second = project_io.dump_project(first_tables, first_scalars)
+    second_tables, second_scalars = project_io.parse_project(second)
+    second_context = bridge_inputs.danish_basis_context({
+        **second_scalars,
+        **second_tables,
+    })
+
+    assert second_context == first_context
+    assert second_context["traffic_fatigue_applicability"] == (
+        danish_bridge.FATIGUE_REQUIRED
+    )
+    assert second_context["reinforcement_fatigue_applicability"] == (
+        bridge.REQUIRED
+    )
+    assert second_context["concrete_fatigue_applicability"] == (
+        bridge.NOT_APPLICABLE
+    )
+    assert second_context["fatigue_on"] is True
+    assert second_context["reinforcement_fatigue_on"] is True
+    assert second_context["concrete_fatigue_on"] is False
+    assert project_io.input_sha256(second_tables, second_scalars) == (
+        project_io.input_sha256(first_tables, first_scalars)
+    )
+    assert json.loads(second)["version"] == 21
+
+
 @pytest.mark.parametrize(
     ("key", "bad"),
     [
@@ -1083,7 +1391,7 @@ def test_project_boundary_rejects_malformed_danish_bridge_state(key, bad):
 
 def _dk_methodology_record(**scalar_changes):
     scalars = _project_scalars(**scalar_changes)
-    basis = bridge_inputs.danish_basis_from_inputs(scalars)
+    basis = bridge_inputs.danish_basis_from_inputs(_project_inputs(scalars))
     evidence = bridge.BridgeBaseEvidence(
         methodology=bridge.EN1992_2_DK_NA,
         decisions=_decisions(),
@@ -1117,7 +1425,9 @@ def _dk_crack_methodology_record(width=0.29):
         fck_mpa=40.0,
         brittle_method=bridge.BRITTLE_METHOD_A,
         sls_crack=bridge_analysis.crack_evidence(results),
-        danish_basis=bridge_inputs.danish_basis_from_inputs(scalars),
+        danish_basis=bridge_inputs.danish_basis_from_inputs(
+            _project_inputs(scalars, decisions)
+        ),
     )
     return bridge.assess_base_methodology(evidence), results, decisions
 
@@ -1136,7 +1446,7 @@ def _dk_crack_context(
 
 def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs():
     scalars = _project_scalars()
-    context = bridge_inputs.danish_basis_context(scalars)
+    context = bridge_inputs.danish_basis_context(_project_inputs(scalars))
     fatigue_context = fatigue_analysis.bridge_publication_context(scalars)
     record = _dk_methodology_record()
 
@@ -1222,6 +1532,7 @@ def test_danish_basis_is_bound_against_recomputed_fingerprint_and_current_inputs
                 "bridge_nominal_cover_mm": 40.0,
             },
         ),
+        ("dk_annex_routing", {}),
     ],
 )
 def test_publication_recomputes_danish_derived_checks_after_fingerprint_attack(
@@ -1238,7 +1549,9 @@ def test_publication_recomputes_danish_derived_checks_after_fingerprint_attack(
         record,
         design_methodology=bridge.EN1992_2_DK_NA,
         fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
-        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(
+            _project_inputs(scalars)
+        ),
         danish_fck_mpa=scalars["conc_fck"],
         danish_crack_context=_dk_crack_context(),
     )
@@ -1264,7 +1577,9 @@ def test_publication_recomputes_danish_derived_checks_after_fingerprint_attack(
         attacked,
         design_methodology=bridge.EN1992_2_DK_NA,
         fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
-        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(
+            _project_inputs(scalars)
+        ),
         danish_fck_mpa=scalars["conc_fck"],
         danish_crack_context=_dk_crack_context(),
     )
@@ -1286,7 +1601,9 @@ def test_danish_publication_requires_current_typed_positive_fck(bad_fck):
         _dk_methodology_record(),
         design_methodology=bridge.EN1992_2_DK_NA,
         fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
-        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(
+            _project_inputs(scalars)
+        ),
         danish_fck_mpa=bad_fck,
         danish_crack_context=_dk_crack_context(),
     )
@@ -1425,7 +1742,9 @@ def test_publication_rejects_rebound_danish_crack_verdict_forgery(check_id):
         attacked,
         design_methodology=bridge.EN1992_2_DK_NA,
         fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
-        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(
+            _project_inputs(scalars)
+        ),
         danish_fck_mpa=scalars["conc_fck"],
         danish_crack_context=_dk_crack_context(),
     )
@@ -1473,7 +1792,7 @@ def test_live_and_saved_danish_crack_context_reconstruct_identical_verdicts():
                 scalars
             ),
             danish_basis_context=bridge_inputs.danish_basis_context(
-                scalars
+                _project_inputs(scalars, decisions)
             ),
             danish_fck_mpa=scalars["conc_fck"],
             danish_crack_context=context,
@@ -1508,7 +1827,9 @@ def test_danish_publication_rejects_missing_or_malformed_crack_context(
         _dk_methodology_record(),
         design_methodology=bridge.EN1992_2_DK_NA,
         fatigue_context=fatigue_analysis.bridge_publication_context(scalars),
-        danish_basis_context=bridge_inputs.danish_basis_context(scalars),
+        danish_basis_context=bridge_inputs.danish_basis_context(
+            _project_inputs(scalars)
+        ),
         danish_fck_mpa=scalars["conc_fck"],
         danish_crack_context=context,
     )

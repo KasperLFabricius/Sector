@@ -161,12 +161,18 @@ def validate_pdf_content(pdf: bytes) -> tuple[int, ...]:
         "Departure applicability",
         "Departure methodology / source",
         "Departure authority approval",
+        "Global fatigue analysis enabled",
+        "Reinforcement fatigue applicability",
+        "Reinforcement fatigue check selected",
+        "Concrete fatigue applicability",
+        "Concrete fatigue check selected",
         "DB-05 section 4.2",
         "DB-05 drawing G-02",
         "mapped_deicing_x_m",
         "mapped_deicing_y_m",
         "Danish bridge nominal cover",
         "Danish annex applicability",
+        "Static national annex routing recorded",
         "Danish bridge QA basis",
         "Danish bridge applicability provenance",
         "Danish bridge coefficient provenance",
@@ -179,6 +185,7 @@ def validate_pdf_content(pdf: bytes) -> tuple[int, ...]:
         if (
             "Bridge methodology" in text
             or "Danish infrastructure-manager" in text
+            or "Danish annex applicability" in text
             or "mapped_deicing" in text
         )
     )
@@ -194,7 +201,10 @@ def write_fixture(output: pathlib.Path) -> tuple[list[pathlib.Path], tuple[int, 
     pdf_path = output / "sector-pr05-danish-bridge-report.pdf"
     pdf_path.write_bytes(pdf)
     pages = report_render_fixture.render_pdf(pdf)
-    report_render_fixture.validate_rendered_pages(pages)
+    report_render_fixture.validate_rendered_pages(
+        pages,
+        require_document_control=True,
+    )
     paths = [pdf_path]
     for index, page in enumerate(pages, start=1):
         path = output / f"sector-pr05-report-page-{index:02d}.png"

@@ -106,7 +106,7 @@ STATUS_NOT_RUN = "NOT RUN"
 STATUS_REVIEW = "REVIEW"
 
 BRIDGE_EVIDENCE_SCHEMA = "sector.bridge-methodology-evidence/v2"
-DANISH_BRIDGE_EVIDENCE_SCHEMA = "sector.dk-bridge-methodology-evidence/v2"
+DANISH_BRIDGE_EVIDENCE_SCHEMA = "sector.dk-bridge-methodology-evidence/v3"
 DANISH_CRACK_PUBLICATION_CONTEXT_SCHEMA = (
     "sector.dk-bridge-crack-publication-context/v1"
 )
@@ -382,7 +382,9 @@ _DANISH_ADDITIONAL_RULES = (
         "DS/EN 1992-2:2005 annex set",
         "DS/EN 1992-2 DK NA:2015, PDF page 5",
         "The national applicable, informative, replaced, and not-applicable "
-        "annex states are printed without simulating unsupported annex methods.",
+        "annex states are printed as routing information only. Without explicit "
+        "applicability and complete analysis evidence for an applicable annex, "
+        "the conformity check remains NOT ASSESSED.",
     ),
 )
 
@@ -1600,6 +1602,29 @@ def _danish_check(
     )
 
 
+def _assess_danish_annex_routing() -> BridgeCheckResult:
+    """Publish static national routing without treating it as analysis evidence."""
+
+    return _result(
+        "dk_annex_routing",
+        STATUS_NOT_ASSESSED,
+        result="Static national annex routing recorded",
+        criterion=(
+            "Explicit applicability and complete analysis evidence for every "
+            "applicable Annex J, KK, NN, or OO route"
+        ),
+        source=danish_bridge.ANNEX_SOURCE,
+        reason=(
+            "The DK NA annex table establishes national availability only. "
+            "Sector has no typed project applicability or complete analysis "
+            "evidence for Annex J, KK, NN, or OO, so the static table cannot "
+            "support a selected-standard conformity PASS."
+        ),
+        evidence=danish_bridge.annex_routing(),
+        methodology=EN1992_2_DK_NA,
+    )
+
+
 def _expected_danish_publication_checks(
     basis: danish_bridge.DanishBridgeBasis,
     *,
@@ -1624,6 +1649,7 @@ def _expected_danish_publication_checks(
             "dk_cover",
             danish_bridge.assess_cover(basis),
         ),
+        _assess_danish_annex_routing(),
     )
     return {
         check.check_id: _bind_check_relationship(
@@ -1942,6 +1968,25 @@ def _assess_danish_methodology(
     except ValueError as exc:
         basis_snapshot = {"validation_error": str(exc)}
         configuration_errors.append(str(exc))
+    for check_id, basis_applicability in (
+        (
+            "reinforcement_fatigue",
+            basis.reinforcement_fatigue_applicability,
+        ),
+        (
+            "concrete_fatigue",
+            basis.concrete_fatigue_applicability,
+        ),
+    ):
+        current_applicability = decisions[check_id].applicability
+        if (
+            basis_applicability != danish_bridge.NOT_ESTABLISHED
+            and basis_applicability != current_applicability
+        ):
+            configuration_errors.append(
+                f"Danish project-basis {check_id} applicability conflicts "
+                "with the canonical bridge applicability decision"
+            )
 
     checks = [
         _external_result(
@@ -2000,19 +2045,7 @@ def _assess_danish_methodology(
             evidence.sls_crack,
             decisions["sls_crack"],
         ),
-        _result(
-            "dk_annex_routing",
-            STATUS_PASS,
-            result="National annex applicability table recorded",
-            criterion="Apply only annexes available under DK NA:2015",
-            source=danish_bridge.ANNEX_SOURCE,
-            reason=(
-                "Static Danish annex routing is recorded. An applicable annex "
-                "still requires its own complete analysis evidence."
-            ),
-            evidence=danish_bridge.annex_routing(),
-            methodology=EN1992_2_DK_NA,
-        ),
+        _assess_danish_annex_routing(),
     ]
     checks = [
         _bind_check_relationship(check, EN1992_2_DK_NA)

@@ -143,6 +143,53 @@ def departure_outcome(
     raise ValueError("unmapped departure applicability")
 
 
+def traffic_fatigue_outcome(
+    applicability: str,
+    *,
+    analysis_enabled: bool,
+    reinforcement_applicability: str,
+    reinforcement_enabled: bool,
+    concrete_applicability: str,
+    concrete_enabled: bool,
+) -> str:
+    """Return the independent required-analysis correlation outcome."""
+
+    allowed = {"required", "not_applicable", "not_established"}
+    if applicability not in allowed:
+        raise ValueError("unmapped traffic/fatigue applicability")
+    routes = (
+        (reinforcement_applicability, reinforcement_enabled),
+        (concrete_applicability, concrete_enabled),
+    )
+    if any(route not in allowed for route, _enabled in routes):
+        raise ValueError("unmapped calculated fatigue applicability")
+    if applicability == "not_established":
+        return "NOT_ASSESSED"
+    if applicability == "not_applicable":
+        return "MAPPED"
+    required = [
+        enabled for route, enabled in routes if route == "required"
+    ]
+    if (
+        not analysis_enabled
+        or not required
+        or not all(required)
+        or any(
+            enabled
+            for route, enabled in routes
+            if route == "not_applicable"
+        )
+    ):
+        return "NOT_ASSESSED"
+    return "MAPPED"
+
+
+def annex_routing_outcome() -> str:
+    """Static national availability alone is never conformity evidence."""
+
+    return "NOT_ASSESSED"
+
+
 def evaluate_fixture(path: str | Path) -> dict:
     """Evaluate the frozen JSON fixture with only independent oracle code."""
 
@@ -184,6 +231,23 @@ def evaluate_fixture(path: str | Path) -> dict:
                 approval=case["approval"],
             )
             for case in data["departure_cases"]
+        },
+        "traffic_fatigue_cases": {
+            case["id"]: traffic_fatigue_outcome(
+                case["applicability"],
+                analysis_enabled=case["analysis_enabled"],
+                reinforcement_applicability=case[
+                    "reinforcement_applicability"
+                ],
+                reinforcement_enabled=case["reinforcement_enabled"],
+                concrete_applicability=case["concrete_applicability"],
+                concrete_enabled=case["concrete_enabled"],
+            )
+            for case in data["traffic_fatigue_cases"]
+        },
+        "annex_cases": {
+            case["id"]: annex_routing_outcome()
+            for case in data["annex_cases"]
         },
     }
 
