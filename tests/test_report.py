@@ -3124,6 +3124,37 @@ def test_report_binds_sourced_project_shear_interaction_evidence():
     assert "eta = (abs(Vx)/VRd,x)^p + (abs(Vy)/VRd,y)^p" in txt
     assert "Interaction evidence fingerprint" in txt
     assert "Domain satisfied yes" in txt
+    assert "Full interaction rotationally invariant yes" in txt
+
+
+def test_report_distinguishes_resultant_demand_from_full_rotation_property():
+    inp, out = _pr06_project_shear_report_case()
+    inp.update({
+        "shear_interaction_method": (
+            multidirectional.SHEAR_METHOD_EN_2023
+        ),
+        "shear_interaction_planar_member": True,
+        "shear_interaction_same_control_point": True,
+        "shear_interaction_per_unit_width": True,
+        "shear_interaction_out_of_plane": True,
+        "shear_interaction_depth_route": (
+            multidirectional.DEPTH_ROUTE_ROTATED
+        ),
+        "shear_interaction_resultant_resistance_kn_per_m": 500.0,
+        "shear_interaction_source": "Directional resistance note SR-06",
+        "shear_interaction_approval": "Independent checker IC-06",
+    })
+    for direction in out["shear"]["directions"].values():
+        direction["method"] = multidirectional.SHEAR_CODE_EN_2023
+    multidirectional.apply_to_results(inp, out)
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "Full interaction rotationally invariant no" in txt
+    assert "Demand resultant rotationally invariant yes" in txt
+    assert "external resistance isotropy is not evidenced" in txt
 
 
 def test_report_rejects_conflicting_interaction_representations_but_keeps_vx_vy():
@@ -3280,6 +3311,21 @@ def test_report_surfaces_failed_crack_interaction_on_selected_elastic_case():
     assert "Annex G.5 method requires the explicit EN 1992-1-1:2023" in txt
     assert "NOT ASSESSED" in txt
     assert "EL-TEST" in txt
+
+
+def test_report_rejects_malformed_crack_criterion_without_crashing():
+    inp, out = _pr06_project_crack_report_case()
+    out["crack_interaction"]["criterion"] = "not-an-evidence-object"
+    out["elastic"]["crack_interaction"]["criterion"] = (
+        "not-an-evidence-object"
+    )
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "PUBLICATION REJECTED" in txt
+    assert "NOT ASSESSED" in txt
 
 
 def _shear_out_2023():

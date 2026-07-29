@@ -60,6 +60,11 @@ CRACK_SOURCE_EN_2023 = (
 SHEAR_SOURCE_EN_2023 = (
     "EN 1992-1-1:2023, 8.2.1(5), Formulas (8.21)-(8.26)"
 )
+SHEAR_EN_2023_ROTATION_SCOPE = (
+    "The vector demand resultant is rotationally invariant; the full qualified "
+    "interaction remains directional because external resistance isotropy is "
+    "not evidenced."
+)
 
 CRACK_CODE_DK_2004 = "DS/EN 1992-1-1 + DK NA"
 CRACK_CODE_EN_2023 = "EN 1992-1-1:2023"
@@ -1520,7 +1525,9 @@ def assess_shear_interaction(
                     {"id": "x-squared", "value": qx ** 2},
                     {"id": "y-squared", "value": qy ** 2},
                 ],
-                rotationally_invariant=True,
+                demand_resultant_rotationally_invariant=True,
+                rotationally_invariant=False,
+                rotation_scope=SHEAR_EN_2023_ROTATION_SCOPE,
                 interaction_assessed=True,
                 status="PASS" if passed else "FAIL",
                 verdict="QUALIFIED PASS" if passed else "QUALIFIED FAIL",
@@ -1965,6 +1972,106 @@ def _semantic_number(value) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _shear_component_semantic_issues(
+    components,
+    label: str,
+) -> list[str]:
+    """Validate retained directional evidence for every aggregate status."""
+
+    if not isinstance(components, list):
+        return [f"{label} component evidence is not a list"]
+    if not components:
+        return []
+    issues = []
+    identities = [
+        component.get("id")
+        for component in components
+        if isinstance(component, Mapping)
+    ]
+    if (
+        len(identities) != len(components)
+        or any(
+            not isinstance(identity, str)
+            or identity not in {"vx", "vy"}
+            for identity in identities
+        )
+        or len(identities) != len(set(identities))
+    ):
+        issues.append(
+            f"{label} retained shear component identities are malformed, "
+            "duplicated, or unsupported"
+        )
+    component_axes = []
+    for component in components:
+        if not isinstance(component, Mapping):
+            continue
+        component_id = str(component.get("id") or "unknown")
+        demand = _semantic_number(component.get("demand_kn"))
+        resistance = _semantic_number(component.get("resistance_kn"))
+        signed_demand = _semantic_number(
+            component.get("signed_demand_kn")
+        )
+        visible_utilisation = _semantic_number(
+            component.get("utilisation")
+        )
+        width = _semantic_number(component.get("width_mm"))
+        depth = _semantic_number(component.get("depth_mm"))
+        axis = component.get("axis")
+        method_identity = component.get("method")
+        resistance_kind = component.get("resistance_kind")
+        expected_axis = {"vx": "y", "vy": "x"}.get(component_id)
+        if (
+            demand is None
+            or demand < 0.0
+            or resistance is None
+            or resistance <= 0.0
+            or signed_demand is None
+            or visible_utilisation is None
+            or visible_utilisation < 0.0
+            or width is None
+            or width <= 0.0
+            or depth is None
+            or depth <= 0.0
+            or not isinstance(axis, str)
+            or not axis.strip()
+            or axis.strip().casefold() != expected_axis
+            or not isinstance(method_identity, str)
+            or not method_identity.strip()
+            or not isinstance(resistance_kind, str)
+            or not resistance_kind.strip()
+        ):
+            issues.append(
+                f"{label} {component_id} component evidence is malformed"
+            )
+            continue
+        component_axes.append(axis.strip().casefold())
+        expected_utilisation = demand / resistance
+        expected_status = (
+            "PASS"
+            if expected_utilisation <= 1.0 + _PASS_TOLERANCE
+            else "FAIL"
+        )
+        if (
+            not _close(visible_utilisation, expected_utilisation)
+            or not _close(abs(signed_demand), demand)
+            or str(component.get("status") or "").upper()
+            != expected_status
+        ):
+            issues.append(
+                f"{label} {component_id} component demand, resistance, sign, "
+                "utilisation, or verdict is contradictory"
+            )
+    if (
+        len(component_axes) == len(components)
+        and len(component_axes) == 2
+        and len(set(component_axes)) != 2
+    ):
+        issues.append(
+            f"{label} directional component axes are not distinct"
+        )
+    return issues
+
+
 def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
     """Reject a re-sealed record that contradicts its own bound evidence."""
 
@@ -2007,6 +2114,7 @@ def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
         item.get("id"): item
         for item in components
         if isinstance(item, Mapping)
+        and isinstance(item.get("id"), str)
     } if isinstance(components, list) else {}
     terms = record.get("terms")
     if not isinstance(terms, list):
@@ -2018,14 +2126,22 @@ def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
             for item in terms
             if isinstance(item, Mapping)
         ]
-        if len(term_ids) != len(terms):
+        valid_term_ids = (
+            len(term_ids) == len(terms)
+            and all(
+                isinstance(term_id, str) and term_id
+                for term_id in term_ids
+            )
+        )
+        if not valid_term_ids:
             issues.append(f"{label} contains a malformed interaction term")
-        if len(term_ids) != len(set(term_ids)):
+        elif len(term_ids) != len(set(term_ids)):
             issues.append(f"{label} contains duplicate interaction terms")
         term_by_id = {
             item.get("id"): item
             for item in terms
             if isinstance(item, Mapping)
+            and isinstance(item.get("id"), str)
         }
 
     status = str(record.get("status") or "").upper()
@@ -2056,6 +2172,9 @@ def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
         issues.append(
             f"{label} is marked assessed without a PASS/FAIL conclusion"
         )
+
+    if kind == "shear" and components:
+        issues.extend(_shear_component_semantic_issues(components, label))
 
     if status not in {"PASS", "FAIL"}:
         return issues
@@ -2118,62 +2237,6 @@ def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
                         f"{label} crack criterion contradicts its immutable "
                         "acceptance evidence or selected route"
                     )
-    else:
-        component_axes = []
-        for component_id in ("vx", "vy"):
-            component = component_by_id.get(component_id) or {}
-            demand = _semantic_number(component.get("demand_kn"))
-            resistance = _semantic_number(component.get("resistance_kn"))
-            visible_utilisation = _semantic_number(
-                component.get("utilisation")
-            )
-            signed_demand = _semantic_number(
-                component.get("signed_demand_kn")
-            )
-            axis = component.get("axis")
-            method_identity = component.get("method")
-            if (
-                demand is None
-                or demand < 0.0
-                or resistance is None
-                or resistance <= 0.0
-                or visible_utilisation is None
-                or signed_demand is None
-                or not isinstance(axis, str)
-                or not axis.strip()
-                or not isinstance(method_identity, str)
-                or not method_identity.strip()
-            ):
-                issues.append(
-                    f"{label} {component_id} component evidence is malformed"
-                )
-                continue
-            component_axes.append(axis.strip().casefold())
-            expected_component_utilisation = demand / resistance
-            expected_component_status = (
-                "PASS"
-                if expected_component_utilisation
-                <= 1.0 + _PASS_TOLERANCE
-                else "FAIL"
-            )
-            if (
-                not _close(
-                    visible_utilisation,
-                    expected_component_utilisation,
-                )
-                or not _close(abs(signed_demand), demand)
-                or str(component.get("status") or "").upper()
-                != expected_component_status
-            ):
-                issues.append(
-                    f"{label} {component_id} component demand, resistance, "
-                    "sign, utilisation, or verdict is contradictory"
-                )
-        if len(component_axes) == 2 and len(set(component_axes)) != 2:
-            issues.append(
-                f"{label} directional component axes are not distinct"
-            )
-
     method = record.get("method")
     expected_utilisation = None
     if method == CRACK_METHOD_PROJECT:
@@ -2734,7 +2797,12 @@ def _record_semantic_issues(record: Mapping, label: str) -> list[str]:
                 "satisfied": True,
             }
             or set(term_by_id) != {"x-squared", "y-squared"}
-            or record.get("rotationally_invariant") is not True
+            or record.get(
+                "demand_resultant_rotationally_invariant"
+            ) is not True
+            or record.get("rotationally_invariant") is not False
+            or record.get("rotation_scope")
+            != SHEAR_EN_2023_ROTATION_SCOPE
         ):
             issues.append(
                 f"{label} resultant formula, authority, domain, terms, or "
@@ -2782,7 +2850,10 @@ def _result_fingerprint_issues(record: Mapping, label: str) -> list[str]:
         for item in components
         if isinstance(item, Mapping)
     ]
-    if len(identities) != len(components):
+    if (
+        len(identities) != len(components)
+        or any(not isinstance(identity, str) for identity in identities)
+    ):
         return [f"{label} contains a malformed component record"]
     if len(identities) != len(set(identities)):
         return [f"{label} contains duplicate component identities"]
@@ -2948,25 +3019,28 @@ def publication_safe_interaction_record(
                 f"stored shear-interaction case {case_name or index + 1} "
                 "does not match current inputs"
             )
-        current_shear_method = str(
-            current_inputs.get("shear_method") or ""
+        current_shear_method = str(current_inputs.get("shear_method") or "")
+        raw_components = (
+            interaction.get("components")
+            if isinstance(interaction, Mapping)
+            else None
         )
         if (
             current_shear_method
             and isinstance(interaction, Mapping)
-            and str(interaction.get("status") or "").upper()
-            in {"PASS", "FAIL"}
+            and isinstance(raw_components, list)
+            and raw_components
         ):
             component_methods = {
                 str(component.get("method") or "")
-                for component in interaction.get("components") or []
+                for component in raw_components
                 if isinstance(component, Mapping)
             }
             if component_methods != {current_shear_method}:
                 issues.append(
                     f"stored shear-interaction case "
-                    f"{case_name or index + 1} method edition does not "
-                    "match current inputs"
+                    f"{case_name or index + 1} component method edition "
+                    "does not match current inputs"
                 )
     if len(case_names) != len(set(case_names)):
         issues.append("stored shear-interaction case identities are duplicated")

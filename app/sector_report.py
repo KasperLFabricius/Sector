@@ -824,8 +824,46 @@ class ReportBuilder:
                 + _html_escape(str(record.get("reason")))
             )
 
-        axes = record.get("axes") or {}
-        criterion = record.get("criterion") or {}
+        raw_axes = record.get("axes")
+        axes = raw_axes if isinstance(raw_axes, Mapping) else {}
+        raw_criterion = record.get("criterion")
+        criterion = (
+            raw_criterion
+            if isinstance(raw_criterion, Mapping)
+            else {}
+        )
+        rotation_rows = []
+        if "rotationally_invariant" in record:
+            rotation_rows.append([
+                "Full interaction rotationally invariant",
+                (
+                    "yes"
+                    if record.get("rotationally_invariant") is True
+                    else "no"
+                    if record.get("rotationally_invariant") is False
+                    else "-"
+                ),
+            ])
+        if "demand_resultant_rotationally_invariant" in record:
+            rotation_rows.append([
+                "Demand resultant rotationally invariant",
+                (
+                    "yes"
+                    if record.get(
+                        "demand_resultant_rotationally_invariant"
+                    ) is True
+                    else "no"
+                    if record.get(
+                        "demand_resultant_rotationally_invariant"
+                    ) is False
+                    else "-"
+                ),
+            ])
+        if record.get("rotation_scope"):
+            rotation_rows.append([
+                "Rotation scope",
+                _html_escape(str(record.get("rotation_scope"))),
+            ])
         evidence_rows = [
             ["Bound field", "Current evidence"],
             ["Method ID", _html_escape(str(record.get("method") or "-"))],
@@ -855,6 +893,7 @@ class ReportBuilder:
                 "Interaction evidence fingerprint",
                 _html_escape(str(record.get("evidence_fingerprint") or "-")),
             ],
+            *rotation_rows,
         ]
         self._table(
             evidence_rows,

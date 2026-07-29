@@ -376,6 +376,9 @@ def test_en_2023_planar_resultant_matches_oracle_and_stays_qualified():
     assert result["utilisation"] == pytest.approx(1.0)
     assert result["verdict"] == "QUALIFIED PASS"
     assert result["qualification"].startswith("QUALIFIED")
+    assert result["demand_resultant_rotationally_invariant"] is True
+    assert result["rotationally_invariant"] is False
+    assert "external resistance" in result["rotation_scope"]
 
 
 @pytest.mark.parametrize(
@@ -964,6 +967,108 @@ def test_publication_rejects_malformed_crack_case_binding_without_crash(
     assert safe["crack_interaction"]["publication_validation"][
         "status"
     ] == "REJECTED"
+
+
+@pytest.mark.parametrize(
+    ("component_field", "forged_value"),
+    [
+        ("demand_kn", -0.1),
+        ("resistance_kn", 0.0),
+        ("signed_demand_kn", 9.0),
+        ("utilisation", 9.0),
+        ("status", "FAIL"),
+        ("axis", "forged axis"),
+        ("method", "forged method"),
+        ("id", {"malformed": "vx"}),
+    ],
+)
+@pytest.mark.parametrize("uniaxial", [False, True], ids=["biaxial", "uniaxial"])
+def test_publication_validates_retained_nonpass_shear_components(
+    component_field,
+    forged_value,
+    uniaxial,
+):
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+    }
+    case = _shear_case(0.2, 1.0, 0.3, 1.0)
+    if uniaxial:
+        case["shear"]["directions"].pop("vy")
+        case["shear"].update(
+            active_directions=["vx"],
+            biaxial=False,
+            status="PASS",
+        )
+    interaction = multidirectional.assess_shear_interaction(
+        inputs,
+        case,
+        case_id="ULS-RETAINED",
+    )
+    assert interaction["status"] == (
+        "NOT APPLICABLE" if uniaxial else "NOT ASSESSED"
+    )
+    bundle = _reseal_bundle({
+        "schema": multidirectional.INTERACTION_BUNDLE_SCHEMA,
+        "crack": None,
+        "shear_cases": [{
+            "case": "ULS-RETAINED",
+            "interaction": interaction,
+        }],
+    })
+    forged = copy.deepcopy(bundle)
+    forged_interaction = forged["shear_cases"][0]["interaction"]
+    forged_interaction["components"][0][component_field] = forged_value
+    forged["shear_cases"][0]["interaction"] = _reseal_result(
+        forged_interaction
+    )
+    forged = _reseal_bundle(forged)
+
+    safe = multidirectional.publication_safe_interaction_record(
+        forged,
+        current_inputs=inputs,
+    )
+
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "component" in issue
+        for issue in safe["publication_validation"]["issues"]
+    )
+
+
+def test_publication_rejects_unhashable_interaction_term_identity():
+    inputs = {
+        **multidirectional.crack_configuration({}),
+        **_shear_input(),
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+    }
+    interaction = multidirectional.assess_shear_interaction(
+        inputs,
+        _shear_case(0.2, 1.0, 0.3, 1.0),
+        case_id="ULS-MALFORMED-TERM",
+    )
+    interaction["terms"][0]["id"] = {"malformed": "vx"}
+    interaction = _reseal_result(interaction)
+    bundle = _reseal_bundle({
+        "schema": multidirectional.INTERACTION_BUNDLE_SCHEMA,
+        "crack": None,
+        "shear_cases": [{
+            "case": "ULS-MALFORMED-TERM",
+            "interaction": interaction,
+        }],
+    })
+
+    safe = multidirectional.publication_safe_interaction_record(
+        bundle,
+        current_inputs=inputs,
+    )
+
+    assert safe["publication_validation"]["status"] == "REJECTED"
+    assert any(
+        "term" in issue
+        for issue in safe["publication_validation"]["issues"]
+    )
 
 
 def test_publication_rejects_tampered_stale_duplicate_and_durable_evidence():

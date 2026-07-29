@@ -1000,7 +1000,10 @@ def manual_blocks() -> list:
        "for the calculated resultant direction, together with its source and "
        "approval. Sector does not reconstruct or certify that external "
        "directional resistance, so a passing result is labelled **QUALIFIED "
-       "PASS**, not an unqualified Eurocode PASS. The project power sum is labelled "
+       "PASS**, not an unqualified Eurocode PASS. The vector demand resultant is "
+       "rotationally invariant, but the full qualified interaction is recorded as "
+       "directional because isotropy of the external resistance is not evidenced. "
+       "The project power sum is labelled "
        "**APPROVED CUSTOM PASS/FAIL**. Missing, contradictory, stale, malformed or "
        "out-of-domain evidence fails closed while both component results remain "
        "visible.")

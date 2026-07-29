@@ -94,6 +94,7 @@ def test_manual_documents_separate_sourced_pr06_methods_and_fallbacks():
     assert "Opt-in biaxial shear interaction" in text
     assert "EN 1992-1-1:2023 8.2.1(5)" in text
     assert "QUALIFIED PASS" in text
+    assert "full qualified interaction is recorded as directional" in text
     assert "Approved project power sum" in text
     assert "Opt-in multidirectional crack interaction" in text
     assert "DK NA 7.3.4(4)" in text
