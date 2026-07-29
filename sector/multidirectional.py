@@ -72,7 +72,6 @@ SHEAR_CODE_EN_2023 = "DS/EN 1992-1-1:2023"
 
 INTERACTION_RESULT_SCHEMA = "sector.multidirectional.interaction.v1"
 INTERACTION_BUNDLE_SCHEMA = "sector.multidirectional.bundle.v1"
-DIRECTIONAL_SHEAR_CASE_SCHEMA = "sector.multidirectional.shear-case.v1"
 
 _PASS_TOLERANCE = 1.0e-9
 _VALUE_REL_TOLERANCE = 1.0e-9
@@ -482,21 +481,6 @@ def _seal_result(record: Mapping) -> dict:
     safe.pop("evidence_fingerprint", None)
     safe["evidence_fingerprint"] = _fingerprint(safe)
     return safe
-
-
-def _seal_directional_shear_case(
-    case_id: str,
-    components: Sequence[Mapping],
-) -> dict:
-    """Seal a separate copy of the current directional solver evidence."""
-
-    record = {
-        "schema": DIRECTIONAL_SHEAR_CASE_SCHEMA,
-        "case": str(case_id or ""),
-        "components": copy.deepcopy(list(components)),
-    }
-    record["fingerprint"] = _fingerprint(record)
-    return record
 
 
 def _not_assessed(
@@ -1326,6 +1310,200 @@ def _current_shear_components(case_results: Mapping) -> list[dict]:
     ]
 
 
+def directional_shear_case_authority(
+    results: Mapping | None,
+    *,
+    current_inputs: Mapping | None = None,
+) -> list[dict] | None:
+    """Reconstruct case/demand identity from current live solver results.
+
+    The returned authority is deliberately outside the persisted interaction
+    bundle and never reads an interaction result. Publication compares the
+    editable stored evidence with this current source so two jointly re-sealed
+    bundle copies cannot authenticate each other.
+    """
+
+    if not isinstance(results, Mapping):
+        return None
+    try:
+        plastic_entries = results.get("plastic_cases")
+        if isinstance(plastic_entries, list):
+            authority = []
+            for entry in plastic_entries:
+                if not isinstance(entry, Mapping):
+                    return None
+                case_id = str(entry.get("name") or "").strip()
+                case_results = entry.get("results")
+                if not case_id or not isinstance(case_results, Mapping):
+                    return None
+                authority.append({
+                    "case": case_id,
+                    "assessment_case_id": case_id,
+                    "basis_kind": "current-solver-directions",
+                    "components": copy.deepcopy(
+                        _current_shear_components(case_results)
+                    ),
+                })
+            return authority
+
+        plastic_case = (
+            current_inputs.get("plastic_case")
+            if isinstance(current_inputs, Mapping)
+            else None
+        )
+        assessment_case_id = (
+            str(
+                plastic_case.get("id")
+                or plastic_case.get("name")
+                or ""
+            ).strip()
+            if isinstance(plastic_case, Mapping)
+            else ""
+        )
+        return [{
+            "case": assessment_case_id or "Plastic",
+            "assessment_case_id": assessment_case_id,
+            "basis_kind": "current-solver-directions",
+            "components": copy.deepcopy(
+                _current_shear_components(results)
+            ),
+        }]
+    except (InteractionInputError, TypeError, ValueError):
+        return None
+
+
+def _directional_authority_from_action_records(
+    records,
+    *,
+    shear_enabled,
+) -> list[dict] | None:
+    if not isinstance(shear_enabled, bool) or not isinstance(records, list):
+        return None
+    authority = []
+    try:
+        for record in records:
+            if not isinstance(record, Mapping):
+                return None
+            case_id = str(record.get("name") or "").strip()
+            if not case_id:
+                return None
+            components = []
+            for component, field in (
+                ("vx", "vx_ed_kn"),
+                ("vy", "vy_ed_kn"),
+            ):
+                signed = _real(
+                    record.get(field),
+                    f"{case_id} {component} input demand",
+                )
+                if shear_enabled and abs(signed) > 0.0:
+                    components.append({
+                        "id": component,
+                        "signed_demand_kn": signed,
+                        "demand_kn": abs(signed),
+                    })
+            authority.append({
+                "case": case_id,
+                "assessment_case_id": case_id,
+                "basis_kind": "current-input-actions",
+                "components": components,
+            })
+    except (InteractionInputError, TypeError, ValueError):
+        return None
+    return authority
+
+
+def directional_shear_input_authority(
+    current_inputs: Mapping | None,
+) -> list[dict] | None:
+    """Reconstruct case/demand identity independently from canonical inputs."""
+
+    if not isinstance(current_inputs, Mapping):
+        return None
+    shear_enabled = current_inputs.get("shear_on")
+    load_case_payload = current_inputs.get("load_cases")
+    if load_case_payload is not None:
+        if not isinstance(load_case_payload, Mapping):
+            return None
+        return _directional_authority_from_action_records(
+            load_case_payload.get("plastic"),
+            shear_enabled=shear_enabled,
+        )
+
+    plastic_cases = current_inputs.get("plastic_cases")
+    if plastic_cases is not None:
+        if isinstance(plastic_cases, list):
+            records = plastic_cases
+        else:
+            try:
+                records = plastic_cases.to_dict("records")
+            except (AttributeError, TypeError, ValueError):
+                return None
+        return _directional_authority_from_action_records(
+            records,
+            shear_enabled=shear_enabled,
+        )
+
+    raw_components = current_inputs.get("shear_components")
+    if isinstance(raw_components, Mapping):
+        actions = {}
+        try:
+            for component in ("vx", "vy"):
+                raw = raw_components.get(component)
+                if not isinstance(raw, Mapping):
+                    return None
+                actions[component] = _real(
+                    raw.get(
+                        "signed_v_ed",
+                        raw.get("v_ed"),
+                    ),
+                    f"current {component} input demand",
+                )
+        except (InteractionInputError, TypeError, ValueError):
+            return None
+    elif (
+        "shear_Vx" in current_inputs
+        and "shear_Vy" in current_inputs
+    ):
+        try:
+            actions = {
+                "vx": _real(
+                    current_inputs.get("shear_Vx"),
+                    "current Vx input demand",
+                ),
+                "vy": _real(
+                    current_inputs.get("shear_Vy"),
+                    "current Vy input demand",
+                ),
+            }
+        except (InteractionInputError, TypeError, ValueError):
+            return None
+    else:
+        return None
+    if not isinstance(shear_enabled, bool):
+        return None
+    case = current_inputs.get("plastic_case")
+    assessment_case_id = (
+        str(case.get("id") or case.get("name") or "").strip()
+        if isinstance(case, Mapping)
+        else ""
+    )
+    return [{
+        "case": assessment_case_id or "Plastic",
+        "assessment_case_id": assessment_case_id,
+        "basis_kind": "current-input-actions",
+        "components": [
+            {
+                "id": component,
+                "signed_demand_kn": signed,
+                "demand_kn": abs(signed),
+            }
+            for component, signed in actions.items()
+            if shear_enabled and abs(signed) > 0.0
+        ],
+    }]
+
+
 def _effective_depth(
     qx: float,
     qy: float,
@@ -1362,26 +1540,45 @@ def assess_shear_interaction(
 
     config = shear_configuration(inp)
     method = config.get("shear_interaction_method")
-    rejected = _rejected_input_keys(inp, SHEAR_INPUT_KEYS)
-    if rejected:
-        return _invalid(
-            "shear",
-            config,
-            str(method or ""),
-            "the live input boundary rejected biaxial shear fields "
-            f"({', '.join(rejected)}); explicitly repair them before calculation",
-        )
-    if not isinstance(config.get("shear_interaction_on"), bool):
-        return _invalid(
-            "shear",
-            config,
-            str(method or ""),
-            "shear interaction enablement must be an explicit Boolean selection",
-        )
+    components = []
+    component_error = None
     try:
         components = _current_shear_components(case_results)
     except (InteractionInputError, TypeError, ValueError) as exc:
-        return _invalid("shear", config, str(method or ""), exc)
+        component_error = exc
+
+    def finalize(record: Mapping) -> dict:
+        result = copy.deepcopy(dict(record))
+        result["components"] = copy.deepcopy(components)
+        result["case_id"] = str(case_id or "")
+        return _seal_result(result)
+
+    rejected = _rejected_input_keys(inp, SHEAR_INPUT_KEYS)
+    if rejected:
+        return finalize(
+            _invalid(
+                "shear",
+                config,
+                str(method or ""),
+                "the live input boundary rejected biaxial shear fields "
+                f"({', '.join(rejected)}); explicitly repair them before "
+                "calculation",
+            )
+        )
+    if not isinstance(config.get("shear_interaction_on"), bool):
+        return finalize(
+            _invalid(
+                "shear",
+                config,
+                str(method or ""),
+                "shear interaction enablement must be an explicit Boolean "
+                "selection",
+            )
+        )
+    if component_error is not None:
+        return finalize(
+            _invalid("shear", config, str(method or ""), component_error)
+        )
     if len(components) == 1:
         record = _not_applicable(
             "shear",
@@ -1390,19 +1587,19 @@ def assess_shear_interaction(
             "Only one non-zero shear component is present; its independent "
             "component result is retained.",
         )
-        record["components"] = copy.deepcopy(components)
-        record["case_id"] = str(case_id or "")
-        return _seal_result(record)
+        return finalize(record)
     if len(components) != 2 or {item["id"] for item in components} != {
         "vx",
         "vy",
     }:
-        return _invalid(
-            "shear",
-            config,
-            str(method or ""),
-            "current shear component evidence is missing, duplicated, or "
-            "does not prove a uniaxial state",
+        return finalize(
+            _invalid(
+                "shear",
+                config,
+                str(method or ""),
+                "current shear component evidence is missing, duplicated, or "
+                "does not prove a uniaxial state",
+            )
         )
     if not config["shear_interaction_on"]:
         record = _not_assessed(
@@ -1412,9 +1609,7 @@ def assess_shear_interaction(
             "Independent Vx and Vy results are retained; no biaxial shear "
             "interaction methodology is selected.",
         )
-        record["components"] = copy.deepcopy(components)
-        record["case_id"] = str(case_id or "")
-        return _seal_result(record)
+        return finalize(record)
     if not isinstance(method, str):
         record = _invalid(
             "shear",
@@ -1422,9 +1617,7 @@ def assess_shear_interaction(
             str(method or ""),
             "shear interaction method must be a structured text selection",
         )
-        record["components"] = copy.deepcopy(components)
-        record["case_id"] = str(case_id or "")
-        return _seal_result(record)
+        return finalize(record)
     if method not in SHEAR_METHODS or method == SHEAR_METHOD_NONE:
         record = _not_assessed(
             "shear",
@@ -1432,9 +1625,7 @@ def assess_shear_interaction(
             str(method or SHEAR_METHOD_NONE),
             "No supported biaxial shear-interaction methodology is selected.",
         )
-        record["components"] = copy.deepcopy(components)
-        record["case_id"] = str(case_id or "")
-        return _seal_result(record)
+        return finalize(record)
     try:
         axes = _axes(config, "shear_interaction")
         component_by_id = {item["id"]: item for item in components}
@@ -1644,10 +1835,7 @@ def assess_shear_interaction(
         )
         return _seal_result(record)
     except (InteractionInputError, TypeError, ValueError) as exc:
-        record = _invalid("shear", config, str(method or ""), exc)
-        record["components"] = copy.deepcopy(components)
-        record["case_id"] = str(case_id or "")
-        return _seal_result(record)
+        return finalize(_invalid("shear", config, str(method or ""), exc))
 
 
 def apply_to_results(inp: Mapping, results: Mapping) -> dict:
@@ -1823,7 +2011,6 @@ def interaction_calculation_record(results: Mapping | None) -> dict | None:
             )
 
     case_interactions = {}
-    directional_shear_cases = []
     if isinstance(shear_cases, list):
         for item in shear_cases:
             if not isinstance(item, Mapping):
@@ -1842,19 +2029,6 @@ def interaction_calculation_record(results: Mapping | None) -> dict | None:
                 continue
             case_name = str(entry.get("name") or "")
             case_results = entry.get("results")
-            if isinstance(case_results, Mapping):
-                try:
-                    directional_shear_cases.append(
-                        _seal_directional_shear_case(
-                            case_name,
-                            _current_shear_components(case_results),
-                        )
-                    )
-                except (InteractionInputError, TypeError, ValueError) as exc:
-                    representation_issues.append(
-                        "current directional shear evidence cannot be sealed "
-                        f"for {case_name or 'an unnamed case'}: {exc}"
-                    )
             shear = (case_results or {}).get("shear")
             if not isinstance(shear, Mapping):
                 continue
@@ -1882,18 +2056,6 @@ def interaction_calculation_record(results: Mapping | None) -> dict | None:
             if isinstance(nested, Mapping)
             else ""
         ) or "Plastic"
-        try:
-            directional_shear_cases.append(
-                _seal_directional_shear_case(
-                    basis_case_name,
-                    _current_shear_components(results),
-                )
-            )
-        except (InteractionInputError, TypeError, ValueError) as exc:
-            representation_issues.append(
-                "current directional shear evidence cannot be sealed for "
-                f"{basis_case_name}: {exc}"
-            )
         if isinstance(nested, Mapping):
             evidence_seen = True
             nested_shear_records.append((
@@ -1914,24 +2076,6 @@ def interaction_calculation_record(results: Mapping | None) -> dict | None:
             representation_issues.append(
                 "top-level and current-case shear interaction evidence conflict"
             )
-    elif isinstance(shear_cases, list):
-        for item in shear_cases:
-            if not isinstance(item, Mapping):
-                continue
-            case_name = str(item.get("case") or "Plastic")
-            try:
-                directional_shear_cases.append(
-                    _seal_directional_shear_case(
-                        case_name,
-                        _current_shear_components(results),
-                    )
-                )
-            except (InteractionInputError, TypeError, ValueError) as exc:
-                representation_issues.append(
-                    "current directional shear evidence cannot be sealed for "
-                    f"{case_name}: {exc}"
-                )
-
     if not evidence_seen:
         return None
 
@@ -2021,9 +2165,6 @@ def interaction_calculation_record(results: Mapping | None) -> dict | None:
         ),
         "shear_cases": copy.deepcopy(
             bundle_shear_cases
-        ),
-        "directional_shear_cases": copy.deepcopy(
-            directional_shear_cases
         ),
     }
     if representation_issues:
@@ -2141,43 +2282,81 @@ def _shear_component_semantic_issues(
     return issues
 
 
-def _directional_shear_case_issues(
+def _directional_demand_identity(
+    components,
+    label: str,
+) -> tuple[list[dict] | None, list[str]]:
+    """Return canonical component/demand identity for independent correlation."""
+
+    if not isinstance(components, list):
+        return None, [f"{label} components are missing or malformed"]
+    issues = []
+    identity = []
+    component_ids = []
+    for index, component in enumerate(components):
+        component_label = f"{label} component {index + 1}"
+        if not isinstance(component, Mapping):
+            issues.append(f"{component_label} is malformed")
+            continue
+        component_id = component.get("id")
+        if component_id not in {"vx", "vy"}:
+            issues.append(f"{component_label} has an unknown identity")
+            continue
+        signed = _semantic_number(component.get("signed_demand_kn"))
+        demand = _semantic_number(component.get("demand_kn"))
+        if signed is None or demand is None or demand < 0.0:
+            issues.append(
+                f"{component_label} demand identity is missing or invalid"
+            )
+            continue
+        if not _close(abs(signed), demand):
+            issues.append(
+                f"{component_label} signed and absolute demands conflict"
+            )
+        component_ids.append(component_id)
+        identity.append({
+            "id": component_id,
+            "signed_demand_kn": signed,
+            "demand_kn": demand,
+        })
+    if len(component_ids) != len(set(component_ids)):
+        issues.append(f"{label} component identities are duplicated")
+    identity.sort(key=lambda item: ("vx", "vy").index(item["id"]))
+    return (None if issues else identity), issues
+
+
+def _current_directional_shear_case_issues(
     record,
     label: str,
 ) -> list[str]:
-    """Validate separately sealed current directional case evidence."""
+    """Validate non-persisted current case/demand authority."""
 
     if not isinstance(record, Mapping):
         return [f"{label} is missing or malformed"]
     issues = []
-    if record.get("schema") != DIRECTIONAL_SHEAR_CASE_SCHEMA:
-        issues.append(f"{label} has an unknown schema")
     case_id = record.get("case")
     if not isinstance(case_id, str) or not case_id.strip():
         issues.append(f"{label} has no case identity")
-    fingerprint = record.get("fingerprint")
-    body = copy.deepcopy(dict(record))
-    body.pop("fingerprint", None)
-    if (
-        not isinstance(fingerprint, str)
-        or len(fingerprint) != 64
-        or any(character not in "0123456789abcdef" for character in fingerprint)
-    ):
-        issues.append(f"{label} has an invalid fingerprint")
-    else:
-        try:
-            expected = _fingerprint(body)
-        except (TypeError, ValueError):
-            expected = None
-            issues.append(f"{label} contains non-canonical evidence")
-        if expected is not None and fingerprint != expected:
-            issues.append(f"{label} fingerprint does not match its body")
-    issues.extend(
-        _shear_component_semantic_issues(
-            record.get("components"),
-            label,
-        )
+    if not isinstance(record.get("assessment_case_id"), str):
+        issues.append(f"{label} has no assessment case identity")
+    basis_kind = record.get("basis_kind")
+    if basis_kind not in {
+        "current-input-actions",
+        "current-solver-directions",
+    }:
+        issues.append(f"{label} has an unknown authority kind")
+    _identity, component_issues = _directional_demand_identity(
+        record.get("components"),
+        label,
     )
+    issues.extend(component_issues)
+    if basis_kind == "current-solver-directions":
+        issues.extend(
+            _shear_component_semantic_issues(
+                record.get("components"),
+                label,
+            )
+        )
     return issues
 
 
@@ -3195,15 +3374,112 @@ def _active_method_cannot_be_not_assessed(
     )
 
 
+def _case_results_from_canonical_shear_components(
+    components,
+) -> dict:
+    """Rebuild the assessor input from one canonical component evidence set."""
+
+    if not isinstance(components, list):
+        raise InteractionInputError(
+            "canonical shear interaction components are missing or malformed"
+        )
+    directions = {}
+    for component in components:
+        if not isinstance(component, Mapping):
+            raise InteractionInputError(
+                "canonical shear interaction component is malformed"
+            )
+        component_id = component.get("id")
+        if component_id not in {"vx", "vy"} or component_id in directions:
+            raise InteractionInputError(
+                "canonical shear interaction component identity is invalid "
+                "or duplicated"
+            )
+        demand = _real(
+            component.get("demand_kn"),
+            f"{component_id} canonical demand",
+            nonnegative=True,
+        )
+        signed = _real(
+            component.get("signed_demand_kn"),
+            f"{component_id} canonical signed demand",
+        )
+        if not _close(abs(signed), demand):
+            raise InteractionInputError(
+                f"{component_id} canonical signed and absolute demands conflict"
+            )
+        resistance = _real(
+            component.get("resistance_kn"),
+            f"{component_id} canonical resistance",
+            positive=True,
+        )
+        utilisation = _real(
+            component.get("utilisation"),
+            f"{component_id} canonical utilisation",
+            nonnegative=True,
+        )
+        direction = {
+            "component": component_id,
+            "axis": _required_text(
+                component.get("axis"),
+                f"{component_id} canonical axis",
+            ),
+            "signed_v_ed": signed,
+            "v_ed": demand,
+            "bw": _real(
+                component.get("width_mm"),
+                f"{component_id} canonical width",
+                positive=True,
+            ),
+            "d": _real(
+                component.get("depth_mm"),
+                f"{component_id} canonical depth",
+                positive=True,
+            ),
+            "status": str(component.get("status") or "").upper(),
+            "method": _required_text(
+                component.get("method"),
+                f"{component_id} canonical method",
+            ),
+            "governing_face": component.get("governing_face"),
+        }
+        resistance_kind = component.get("resistance_kind")
+        if resistance_kind == "VRd,c":
+            direction["res"] = {
+                "valid": True,
+                "vrd_c": resistance,
+            }
+            direction["util"] = utilisation
+        elif resistance_kind == "VRd = min(VRd,s, VRd,max)":
+            direction["links"] = {
+                "res": {
+                    "valid": True,
+                    "vrd": resistance,
+                },
+                "util": utilisation,
+                "code_applicable": True,
+            }
+        else:
+            raise InteractionInputError(
+                f"{component_id} canonical resistance kind is unsupported"
+            )
+        directions[component_id] = direction
+    return {"shear": {"directions": directions}}
+
+
 def publication_safe_interaction_record(
     record: Mapping | None,
     *,
     current_inputs: Mapping,
+    current_results: Mapping | None = None,
 ) -> dict | None:
-    """Validate stored interaction evidence against the current input snapshot.
+    """Validate stored interaction evidence against one current case basis.
 
-    A prior rejection is durable.  Repairing a stored record without a new
-    calculation cannot upgrade it back to accepted evidence.
+    The basis is reconstructed here from canonical calculation inputs, or from
+    current directional solver results when the raw/headless input shape does
+    not carry case actions. It is never read from a persisted interaction
+    sibling. A prior rejection is durable: repairing a stored record without a
+    new calculation cannot upgrade it back to accepted evidence.
     """
 
     if not isinstance(record, Mapping):
@@ -3297,35 +3573,66 @@ def publication_safe_interaction_record(
             "active crack-interaction evidence is missing"
         )
 
-    raw_directional_cases = raw.get("directional_shear_cases")
-    directional_cases = (
-        raw_directional_cases
-        if isinstance(raw_directional_cases, list)
+    if "directional_shear_cases" in raw:
+        issues.append(
+            "persisted sibling directional shear evidence is not an "
+            "authoritative current-case basis; recalculate it from current "
+            "inputs/results"
+        )
+
+    has_current_action_basis = any(
+        key in current_inputs
+        for key in (
+            "load_cases",
+            "plastic_cases",
+            "shear_components",
+            "shear_Vx",
+            "shear_Vy",
+        )
+    )
+    current_directional_basis = directional_shear_input_authority(
+        current_inputs
+    )
+    if (
+        current_directional_basis is None
+        and current_results is not None
+        and not has_current_action_basis
+    ):
+        current_directional_basis = directional_shear_case_authority(
+            current_results,
+            current_inputs=current_inputs,
+        )
+    current_directional_cases = (
+        current_directional_basis
+        if isinstance(current_directional_basis, list)
         else []
     )
-    if not isinstance(raw_directional_cases, list):
+    current_directional_by_case: dict[str, list[Mapping]] = {}
+    if (
+        current_directional_basis is not None
+        and not isinstance(current_directional_basis, list)
+    ):
         issues.append(
-            "stored directional shear cases are missing or are not a list"
+            "current directional shear case authority is malformed"
         )
-    directional_by_case: dict[str, list[Mapping]] = {}
-    for index, directional_case in enumerate(directional_cases):
-        label = f"directional shear case {index + 1}"
+    for index, current_case in enumerate(current_directional_cases):
+        label = f"current directional shear case {index + 1}"
         issues.extend(
-            _directional_shear_case_issues(directional_case, label)
+            _current_directional_shear_case_issues(current_case, label)
         )
-        if not isinstance(directional_case, Mapping):
+        if not isinstance(current_case, Mapping):
             continue
-        case_id = directional_case.get("case")
+        case_id = current_case.get("case")
         if isinstance(case_id, str) and case_id.strip():
-            directional_by_case.setdefault(case_id, []).append(
-                directional_case
+            current_directional_by_case.setdefault(case_id, []).append(
+                current_case
             )
     if any(
         len(records) != 1
-        for records in directional_by_case.values()
+        for records in current_directional_by_case.values()
     ):
         issues.append(
-            "stored directional shear case identities are duplicated"
+            "current directional shear case authority identities are duplicated"
         )
 
     raw_cases = raw.get("shear_cases")
@@ -3333,6 +3640,7 @@ def publication_safe_interaction_record(
     if raw_cases is not None and not isinstance(raw_cases, list):
         issues.append("stored shear-interaction cases are not a list")
     case_names = []
+    interactions_by_case: dict[str, list[Mapping]] = {}
     for index, raw_case in enumerate(cases):
         if not isinstance(raw_case, Mapping):
             issues.append(
@@ -3347,6 +3655,14 @@ def publication_safe_interaction_record(
         else:
             case_names.append(case_name)
         interaction = raw_case.get("interaction")
+        if (
+            isinstance(case_name, str)
+            and case_name.strip()
+            and isinstance(interaction, Mapping)
+        ):
+            interactions_by_case.setdefault(case_name, []).append(
+                interaction
+            )
         issues.extend(
             _result_fingerprint_issues(
                 interaction,
@@ -3377,37 +3693,6 @@ def publication_safe_interaction_record(
                 f"{case_name or index + 1} conclusion is downgraded or omits "
                 "the required current assessment"
             )
-        if (
-            isinstance(interaction, Mapping)
-            and str(interaction.get("status") or "").upper()
-            == "NOT APPLICABLE"
-        ):
-            basis_matches = (
-                directional_by_case.get(case_name, [])
-                if isinstance(case_name, str)
-                else []
-            )
-            if len(basis_matches) != 1:
-                issues.append(
-                    f"stored shear-interaction case "
-                    f"{case_name or index + 1} NOT APPLICABLE disposition "
-                    "is not bound to exactly one current directional case "
-                    "evidence record"
-                )
-            else:
-                basis_components = basis_matches[0].get("components")
-                interaction_components = interaction.get("components")
-                if (
-                    not isinstance(basis_components, list)
-                    or len(basis_components) != 1
-                    or interaction_components != basis_components
-                ):
-                    issues.append(
-                        f"stored shear-interaction case "
-                        f"{case_name or index + 1} NOT APPLICABLE disposition "
-                        "does not retain exactly one current directional shear "
-                        "component or contradicts that case evidence"
-                    )
         current_shear_method = str(current_inputs.get("shear_method") or "")
         raw_components = (
             interaction.get("components")
@@ -3433,14 +3718,84 @@ def publication_safe_interaction_record(
                 )
     if len(case_names) != len(set(case_names)):
         issues.append("stored shear-interaction case identities are duplicated")
-    if (
-        len(directional_cases) != len(cases)
-        or set(directional_by_case) != set(case_names)
+    if cases and not isinstance(current_directional_basis, list):
+        issues.append(
+            "current directional shear case authority is missing"
+        )
+    if isinstance(current_directional_basis, list) and (
+        len(current_directional_cases) != len(cases)
+        or set(current_directional_by_case) != set(case_names)
     ):
         issues.append(
-            "stored directional shear case evidence does not cover exactly "
+            "current directional shear case authority does not cover exactly "
             "the current shear-interaction cases"
         )
+    for case_name in set(case_names):
+        current_matches = current_directional_by_case.get(case_name, [])
+        interaction_matches = interactions_by_case.get(case_name, [])
+        if len(current_matches) != 1 or len(interaction_matches) != 1:
+            continue
+        interaction = interaction_matches[0]
+        stored_identity, stored_identity_issues = (
+            _directional_demand_identity(
+                interaction.get("components"),
+                f"stored shear-interaction case {case_name}",
+            )
+        )
+        current_identity, current_identity_issues = (
+            _directional_demand_identity(
+                current_matches[0].get("components"),
+                f"current directional shear case {case_name}",
+            )
+        )
+        issues.extend(stored_identity_issues)
+        issues.extend(current_identity_issues)
+        if (
+            stored_identity is not None
+            and current_identity is not None
+            and stored_identity != current_identity
+        ):
+            issues.append(
+                f"stored shear-interaction case {case_name} does not match "
+                "the independently reconstructed current case/demand authority"
+            )
+            continue
+        if stored_identity is None or current_identity is None:
+            continue
+        assessment_case_id = current_matches[0].get("assessment_case_id")
+        if interaction.get("case_id") != assessment_case_id:
+            issues.append(
+                f"stored shear-interaction case {case_name} assessment case "
+                "identity does not match the independently reconstructed "
+                "current case authority"
+            )
+            continue
+        canonical_components = (
+            current_matches[0].get("components")
+            if current_matches[0].get("basis_kind")
+            == "current-solver-directions"
+            else interaction.get("components")
+        )
+        try:
+            reassessed = assess_shear_interaction(
+                current_inputs,
+                _case_results_from_canonical_shear_components(
+                    canonical_components
+                ),
+                case_id=assessment_case_id,
+            )
+        except (InteractionInputError, TypeError, ValueError) as exc:
+            issues.append(
+                f"stored shear-interaction case {case_name} cannot be "
+                f"reassessed from its canonical component evidence: {exc}"
+            )
+        else:
+            if dict(reassessed) != dict(interaction):
+                issues.append(
+                    f"stored shear-interaction case {case_name} disposition "
+                    "does not match the canonical assessment reconstructed "
+                    "from current inputs and directional case evidence"
+                )
     if current_inputs.get("shear_interaction_on") is True and not cases:
         issues.append("active shear-interaction evidence is missing")
 
@@ -3641,6 +3996,7 @@ def publication_safe_results(
         bundle = publication_safe_interaction_record(
             raw_bundle,
             current_inputs=current_inputs,
+            current_results=safe_results,
         )
     if not isinstance(bundle, Mapping):
         return safe_results

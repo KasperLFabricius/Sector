@@ -8916,6 +8916,7 @@ def test_pr06_download_durable_autosave_and_resave_reject_mutated_evidence(
     tmp_path,
     monkeypatch,
 ):
+    import load_cases
     import project_io
     import sector_app
 
@@ -8949,6 +8950,9 @@ def test_pr06_download_durable_autosave_and_resave_reject_mutated_evidence(
         "shear_interaction_exponent": 2.0,
         "shear_interaction_source": "Project DB clause INT-06",
         "shear_interaction_approval": "Checker approval QA-06",
+        "shear_on": True,
+        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
+        "plastic_case": {"id": "ULS-SESSION-MUTATION"},
     }
     results = {
         "shear": {
@@ -8962,8 +8966,87 @@ def test_pr06_download_durable_autosave_and_resave_reject_mutated_evidence(
     }
     multidirectional.apply_to_results(scalars, results)
     bundle = multidirectional.interaction_calculation_record(results)
-    bundle["shear_cases"][0]["interaction"]["utilisation"] = 0.0
-    digest = project_io.input_sha256({}, scalars)
+    interaction = bundle["shear_cases"][0]["interaction"]
+    retained = [
+        copy.deepcopy(component)
+        for component in interaction["components"]
+        if component["id"] == "vx"
+    ]
+    interaction.update(
+        interaction_assessed=True,
+        status="NOT APPLICABLE",
+        verdict="NOT APPLICABLE",
+        qualification=None,
+        utilisation=None,
+        components=retained,
+        terms=[],
+        reason="Forged jointly re-sealed directional truncation.",
+        issues=[],
+    )
+    for key in (
+        "approval",
+        "authority",
+        "axes",
+        "calculation_saturated",
+        "domain",
+        "formula",
+        "parameters",
+        "rotation_scope",
+        "rotationally_invariant",
+        "source",
+    ):
+        interaction.pop(key, None)
+    interaction.pop("evidence_fingerprint")
+    interaction["evidence_fingerprint"] = hashlib.sha256(json.dumps(
+        interaction,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+    obsolete_sibling = {
+        "schema": "sector.multidirectional.shear-case.v1",
+        "case": "ULS-SESSION-MUTATION",
+        "components": copy.deepcopy(retained),
+    }
+    obsolete_sibling["fingerprint"] = hashlib.sha256(json.dumps(
+        obsolete_sibling,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+    bundle["directional_shear_cases"] = [obsolete_sibling]
+    bundle.pop("fingerprint")
+    bundle["fingerprint"] = hashlib.sha256(json.dumps(
+        bundle,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+    tables = {
+        load_cases.PLASTIC_TABLE_KEY: load_cases.table_from_records(
+            [{
+                "name": "ULS-SESSION-MUTATION",
+                "description": "PR-06 session authority fixture",
+                "n_ed_kn": 0.0,
+                "mx_ed_knm": 0.0,
+                "my_ed_knm": 0.0,
+                "vx_ed_kn": 0.2,
+                "vy_ed_kn": 0.3,
+                "vx_face": load_cases.FACE_AUTO,
+                "vy_face": load_cases.FACE_AUTO,
+                "t_ed_knm": 0.0,
+                "check_minimum_reinforcement": False,
+            }],
+            load_cases.PLASTIC_TABLE_KEY,
+        ),
+        load_cases.ELASTIC_TABLE_KEY: load_cases.empty_table(
+            load_cases.ELASTIC_TABLE_KEY
+        ),
+    }
+    digest = project_io.input_sha256(tables, scalars)
     calculation = {
         "input_sha256": digest,
         "multidirectional_interaction": bundle,
@@ -8984,7 +9067,7 @@ def test_pr06_download_durable_autosave_and_resave_reject_mutated_evidence(
         sector_app, "_invalid_interaction_input_keys", lambda: ()
     )
     monkeypatch.setattr(
-        sector_app, "_project_state", lambda: ({}, scalars)
+        sector_app, "_project_state", lambda: (tables, scalars)
     )
 
     download = json.loads(sector_app._gather_project())
@@ -8995,6 +9078,11 @@ def test_pr06_download_durable_autosave_and_resave_reject_mutated_evidence(
     assert download_record["publication_validation"]["status"] == "REJECTED"
     assert download_record["shear_cases"][0]["interaction"]["status"] == (
         "NOT ASSESSED"
+    )
+    assert any(
+        "independently reconstructed current case/demand authority" in issue
+        or "persisted sibling directional shear evidence" in issue
+        for issue in download_record["publication_validation"]["issues"]
     )
 
     state["calculation_record"] = copy.deepcopy(calculation)

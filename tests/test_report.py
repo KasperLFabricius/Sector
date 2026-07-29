@@ -3110,6 +3110,19 @@ def _pr06_project_shear_report_case():
     return inp, out
 
 
+def _reseal_pr06_result(record):
+    sealed = copy.deepcopy(record)
+    sealed.pop("evidence_fingerprint", None)
+    sealed["evidence_fingerprint"] = hashlib.sha256(json.dumps(
+        sealed,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+    return sealed
+
+
 def test_report_binds_sourced_project_shear_interaction_evidence():
     inp, out = _pr06_project_shear_report_case()
     txt = " ".join(_pdf_text(
@@ -3167,6 +3180,63 @@ def test_report_rejects_conflicting_interaction_representations_but_keeps_vx_vy(
     assert "Vx,Ed" in txt and "Vy,Ed" in txt
     assert "PUBLICATION REJECTED" in txt
     assert "top-level and current-case shear interaction evidence conflict" in txt
+    assert "APPROVED CUSTOM PASS" not in txt
+
+
+def test_report_rejects_jointly_resealed_directional_truncation():
+    inp, out = _pr06_project_shear_report_case()
+    forged = copy.deepcopy(out["shear"]["interaction"])
+    forged.update(
+        interaction_assessed=True,
+        status="NOT APPLICABLE",
+        verdict="NOT APPLICABLE",
+        qualification=None,
+        utilisation=None,
+        components=[
+            copy.deepcopy(forged["components"][0])
+        ],
+        terms=[],
+        reason="Forged jointly re-sealed directional truncation.",
+        issues=[],
+    )
+    for key in (
+        "approval",
+        "authority",
+        "axes",
+        "calculation_saturated",
+        "domain",
+        "formula",
+        "parameters",
+        "rotation_scope",
+        "rotationally_invariant",
+        "source",
+    ):
+        forged.pop(key, None)
+    forged = _reseal_pr06_result(forged)
+    out["shear"]["interaction"] = copy.deepcopy(forged)
+    out["shear_interactions"][0]["interaction"] = copy.deepcopy(forged)
+
+    safe = multidirectional.publication_safe_results(
+        out,
+        current_inputs=inp,
+    )
+    validation = safe["_publication_interaction_bundle"][
+        "publication_validation"
+    ]
+    assert validation["status"] == "REJECTED"
+    assert set(safe["shear"]["directions"]) == {"vx", "vy"}
+    assert safe["shear"]["interaction"]["status"] == "NOT ASSESSED"
+    assert any(
+        "independently reconstructed current case/demand authority" in issue
+        or "does not match current directional results" in issue
+        for issue in validation["issues"]
+    )
+
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+    assert "Vx,Ed" in txt and "Vy,Ed" in txt
+    assert "PUBLICATION REJECTED" in txt
     assert "APPROVED CUSTOM PASS" not in txt
 
 
