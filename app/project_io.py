@@ -887,7 +887,7 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
         )
     if fatigue_inputs.BASIS_KEY in scalar_payload:
         scalar_payload[fatigue_inputs.BASIS_KEY] = (
-            fatigue_inputs.normalise_basis(
+            fatigue_inputs.canonical_basis(
                 scalar_payload[fatigue_inputs.BASIS_KEY]
             )
         )
@@ -1307,7 +1307,12 @@ def parse_project(text: str):
     if fatigue_inputs.BASIS_KEY in scalars:
         if not isinstance(scalars[fatigue_inputs.BASIS_KEY], dict):
             raise ValueError("fatigue basis must be an object")
-        scalars[fatigue_inputs.BASIS_KEY] = fatigue_inputs.normalise_basis(
+        normalise_current_basis = (
+            fatigue_inputs.canonical_basis
+            if data.get("version", 1) >= VERSION
+            else fatigue_inputs.normalise_basis
+        )
+        scalars[fatigue_inputs.BASIS_KEY] = normalise_current_basis(
             scalars[fatigue_inputs.BASIS_KEY]
         )
     elif (

@@ -6754,6 +6754,7 @@ def _fatigue_bound_snapshot():
                 fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
             ),
             "concrete_miner_source": miner_source,
+            "basis": fatigue_inputs.default_basis(),
             "partial_factors": {
                 "gamma_s": gamma_s,
                 "gamma_c": gamma_c,
@@ -6775,17 +6776,74 @@ def _fatigue_bound_snapshot():
     )
 
 
+def test_live_fatigue_view_rejects_missing_basis_on_bound_payload(monkeypatch):
+    import sector_app
+
+    payload = _fatigue_bound_snapshot()
+    assert payload is not None
+    del payload["basis"]
+    rendered = {"errors": [], "markdown": []}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(
+            error=lambda message, **_kwargs: rendered["errors"].append(message),
+            warning=lambda *_args, **_kwargs: None,
+            success=lambda *_args, **_kwargs: None,
+            info=lambda *_args, **_kwargs: None,
+            markdown=lambda message, **_kwargs: rendered["markdown"].append(
+                message
+            ),
+        ),
+    )
+
+    sector_app.fatigue_view(
+        {
+            "fatigue_on": True,
+            "design_methodology": bridge.COMPONENT_METHODS,
+        },
+        {"fatigue": payload},
+    )
+
+    assert any(message.startswith("INVALID -") for message in rendered["errors"])
+    assert any(
+        "fatigue basis" in message.lower()
+        for message in rendered["markdown"]
+    )
+
+
+@pytest.mark.parametrize(
+    "attack",
+    ["partial_factor", "missing_basis", "incomplete_basis", "boolean_basis"],
+)
 def test_download_session_and_autosave_reject_fatigue_evidence_mutation(
+    attack,
     tmp_path,
     monkeypatch,
 ):
+    import fatigue_analysis
     import project_io
     import sector_app
 
     scalars = {"design_methodology": bridge.COMPONENT_METHODS}
     fatigue_record = _fatigue_bound_snapshot()
     assert fatigue_record is not None
-    fatigue_record["partial_factors"]["gamma_s"] = 1.15
+    if attack == "partial_factor":
+        fatigue_record["partial_factors"]["gamma_s"] = 1.15
+    elif attack == "missing_basis":
+        del fatigue_record["basis"]
+    else:
+        if attack == "incomplete_basis":
+            del fatigue_record["basis"]["notes"]
+        else:
+            fatigue_record["basis"]["notes"] = True
+        body = {
+            key: fatigue_record[key]
+            for key in fatigue_analysis._FATIGUE_CONFORMANCE_FIELDS
+        }
+        fatigue_record["evidence_sha256"] = (
+            fatigue_analysis._fatigue_conformance_digest(body)
+        )
     calculation = {
         "input_sha256": project_io.input_sha256({}, scalars),
         "fatigue_conformance": fatigue_record,

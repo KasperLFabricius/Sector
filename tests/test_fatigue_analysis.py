@@ -1154,6 +1154,39 @@ def test_fatigue_publication_accepts_bound_bridge_methodology_control():
     assert safe["assessment_status"] == conformance.STATUS_PASS
 
 
+@pytest.mark.parametrize(
+    "attack",
+    ["missing", "incomplete", "unknown", "boolean"],
+)
+def test_common_fatigue_publication_rejects_malformed_basis(attack):
+    payload = fatigue_analysis.run_analysis(
+        _base(),
+        engine=_passing_engine,
+    )
+    if attack == "missing":
+        del payload["basis"]
+    elif attack == "incomplete":
+        del payload["basis"]["notes"]
+    elif attack == "unknown":
+        payload["basis"]["synthetic"] = ""
+    else:
+        payload["basis"]["notes"] = True
+
+    safe = fatigue_analysis.publication_safe_result(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+    assert safe["valid"] is False
+    assert safe["passed"] is False
+    assert safe["standard_passed"] is False
+    assert any("fatigue basis" in error.lower() for error in safe["errors"])
+    assert fatigue_analysis.calculation_conformance_record(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    ) is None
+
+
 def test_custom_fatigue_conformance_record_preserves_values_and_approval():
     inp = _base(
         design_methodology=bridge.COMPONENT_METHODS,
@@ -1197,6 +1230,41 @@ def test_custom_fatigue_conformance_record_preserves_values_and_approval():
     assert record["qualified_verdict"] == "APPROVED CUSTOM PASS"
     assert record["assessment_status"] == conformance.STATUS_REVIEW
     assert record["standard_passed"] is False
+
+
+def test_fatigue_conformance_record_binds_canonical_basis():
+    payload = fatigue_analysis.run_analysis(
+        _base(),
+        engine=_passing_engine,
+    )
+    record = fatigue_analysis.calculation_conformance_record(
+        payload,
+        design_methodology=bridge.COMPONENT_METHODS,
+    )
+
+    assert record is not None
+    assert record["basis"] == payload["basis"]
+
+    mutated = copy.deepcopy(record)
+    mutated["basis"]["notes"] = "stale basis"
+    assert fatigue_analysis.publication_safe_conformance_record(
+        mutated,
+        design_methodology=bridge.COMPONENT_METHODS,
+    ) is None
+
+    incomplete = copy.deepcopy(record)
+    del incomplete["basis"]["notes"]
+    body = {
+        key: incomplete[key]
+        for key in fatigue_analysis._FATIGUE_CONFORMANCE_FIELDS
+    }
+    incomplete["evidence_sha256"] = (
+        fatigue_analysis._fatigue_conformance_digest(body)
+    )
+    assert fatigue_analysis.publication_safe_conformance_record(
+        incomplete,
+        design_methodology=bridge.COMPONENT_METHODS,
+    ) is None
 
 
 def test_fatigue_conformance_record_rejects_mutation_and_rehashed_relabel():

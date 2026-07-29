@@ -552,7 +552,7 @@ def danish_basis_from_inputs(value: Mapping) -> danish_bridge.DanishBridgeBasis:
     except (TypeError, ValueError):
         coverage_decisions = {}
     try:
-        calculated_fatigue_basis = fatigue_inputs.normalise_basis(
+        calculated_fatigue_basis = fatigue_inputs.canonical_basis(
             value.get(fatigue_inputs.BASIS_KEY)
         )
     except (TypeError, ValueError):

@@ -42,7 +42,7 @@ from sector.section import Section
 
 
 STEEL_REFERENCE_MODULUS_MPA = 200_000.0
-FATIGUE_CONFORMANCE_SCHEMA = "sector.fatigue-conformance-evidence/v1"
+FATIGUE_CONFORMANCE_SCHEMA = "sector.fatigue-conformance-evidence/v2"
 _FATIGUE_CONFORMANCE_FIELDS = (
     "valid",
     "converged",
@@ -54,6 +54,7 @@ _FATIGUE_CONFORMANCE_FIELDS = (
     "concrete_method",
     "concrete_miner_basis",
     "concrete_miner_source",
+    "basis",
     "partial_factors",
     "factor_basis",
     "parameter_conformance",
@@ -458,8 +459,11 @@ def bridge_publication_context(inp: Mapping | None) -> dict:
         "concrete": fatigue_on and concrete_on,
     }
     try:
-        basis = fatigue_inputs.normalise_basis(
-            source.get(fatigue_inputs.BASIS_KEY)
+        raw_basis = source.get(fatigue_inputs.BASIS_KEY)
+        basis = (
+            fatigue_inputs.default_basis()
+            if raw_basis is None and not any(checks.values())
+            else fatigue_inputs.canonical_basis(raw_basis)
         )
     except (TypeError, ValueError) as exc:
         basis = fatigue_inputs.default_basis()
@@ -1226,7 +1230,7 @@ def validation_errors(inp: Mapping) -> list[str]:
         groups = {}
 
     try:
-        basis = fatigue_inputs.normalise_basis(
+        basis = fatigue_inputs.canonical_basis(
             inp.get(fatigue_inputs.BASIS_KEY)
         )
     except (TypeError, ValueError) as exc:
@@ -1518,7 +1522,7 @@ def invalid_result(
         if str(error).strip()
     ))
     try:
-        basis = fatigue_inputs.normalise_basis(
+        basis = fatigue_inputs.canonical_basis(
             inp.get(fatigue_inputs.BASIS_KEY)
         )
     except (TypeError, ValueError):
@@ -1664,6 +1668,15 @@ def publication_safe_result(
             "Published fatigue design methodology conflicts with the calculation "
             "input snapshot"
         )
+    try:
+        published_basis = fatigue_inputs.canonical_basis(
+            payload.get("basis")
+        )
+    except (TypeError, ValueError) as exc:
+        published_basis = None
+        errors.append(f"Published fatigue basis is invalid: {exc}")
+    else:
+        result["basis"] = dict(published_basis)
     checks = payload.get("checks")
     if not isinstance(checks, Mapping):
         errors.append("Published fatigue check selection is not structured")
@@ -2268,7 +2281,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             ],
             dtype=float,
         )
-    basis = fatigue_inputs.normalise_basis(
+    basis = fatigue_inputs.canonical_basis(
         inp.get(fatigue_inputs.BASIS_KEY)
     )
     return PreparedFatigueAnalysis(

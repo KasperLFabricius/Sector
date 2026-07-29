@@ -903,6 +903,50 @@ def test_danish_basis_derives_fatigue_routes_from_canonical_inputs():
     )
 
 
+def test_danish_basis_rejects_incomplete_fatigue_basis_before_normalising():
+    incomplete_basis = {
+        **fatigue_inputs.default_basis(),
+        "authority": fatigue_inputs.AUTHORITY_VD,
+        "method": fatigue_inputs.METHOD_VD_FLM4,
+        "spectrum_source": "VD project basis section 6.8",
+        "cycle_count_source": "Traffic register T-04",
+    }
+    del incomplete_basis["notes"]
+    decisions = tuple(
+        replace(
+            decision,
+            applicability=bridge.REQUIRED,
+            source="DB-reinforcement-fatigue",
+        )
+        if decision.check_id == "reinforcement_fatigue"
+        else decision
+        for decision in _decisions()
+    )
+    inputs = _project_inputs(
+        _project_scalars(
+            bridge_traffic_fatigue_applicability=(
+                danish_bridge.FATIGUE_REQUIRED
+            ),
+            bridge_traffic_fatigue_model=fatigue_inputs.METHOD_VD_FLM4,
+            bridge_traffic_fatigue_source=(
+                "VD project basis section 6.8"
+            ),
+            fatigue_basis=incomplete_basis,
+            fatigue_on=True,
+            fatigue_check_steel=True,
+            fatigue_check_concrete=False,
+        ),
+        decisions,
+    )
+
+    basis = bridge_inputs.danish_basis_from_inputs(inputs)
+    result = danish_bridge.assess_project_basis(basis)
+
+    assert basis.calculated_fatigue_method == ""
+    assert result["status"] == danish_bridge.STATUS_NOT_ASSESSED
+    assert "calculated fatigue method" in result["reason"]
+
+
 def test_danish_method_rejects_conflicting_fatigue_applicability_snapshots():
     result = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
         methodology=bridge.EN1992_2_DK_NA,

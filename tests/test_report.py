@@ -684,6 +684,22 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
 
 
+def test_report_rejects_missing_fatigue_basis_at_common_boundary():
+    inp, out = _fatigue_report_fixture()
+    del out["fatigue"]["basis"]
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {"proj_no": "FAT-BASIS-ATTACK"},
+        inp,
+        out,
+        figures=False,
+    )).split())
+
+    assert "INVALID - fatigue not assessed" in text
+    assert "Published fatigue basis is invalid" in text
+    assert "PASS - STANDARD PASS | Traffic B" not in text
+
+
 def test_report_includes_dk_fatigue_factor_derivations():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]
@@ -3846,6 +3862,7 @@ def _bridge_report_fatigue_input(*, custom=False):
         ),
         "fatigue_concrete_miner_source": "",
         "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
+        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
     })
     if custom:
         inp.update({

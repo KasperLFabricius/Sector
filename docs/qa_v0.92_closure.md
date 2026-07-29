@@ -699,11 +699,12 @@ mandatory; this matrix does not self-certify PR closure.
 - The final implementation audit found one remaining durability gap:
   standalone fatigue conformance was present in live solver/report evidence but
   was not retained in the input-hash-bound calculation record. The canonical
-  `sector.fatigue-conformance-evidence/v1` snapshot now carries the actual
+  `sector.fatigue-conformance-evidence/v2` snapshot now carries the actual
   material factors and Miner coefficient, selected standard and whole-calculation
-  methodology, standard/custom method, source/approval, parameter and aggregate
-  conformance, analytical verdict, qualified verdict and selected-standard
-  verdict. Its SHA-256 seal covers the exact JSON body; every project, load,
+  methodology, standard/custom method, source/approval, the exact typed 11-field
+  fatigue basis, parameter and aggregate conformance, analytical verdict,
+  qualified verdict and selected-standard verdict. Its SHA-256 seal covers the
+  exact JSON body; every project, load,
   download and autosave boundary also reconstructs the parameter records and
   aggregate verdict before retaining it.
 - Valid approved custom factors `0.5` and `2.0` plus project Miner `C=100`
@@ -1115,3 +1116,33 @@ mandatory; this matrix does not self-certify PR closure.
   control. The issued 37-page manual was inspected on affected pages 11-13 and
   boundary pages 36-37 with the same result. Exact remediation SHA, exact-head
   rereview and the one completed GitHub full-suite gate remain pending.
+- Codex rereview of exact head
+  `68e0918395dca47f230b1d2d043ec73d7d6852b4` identified two further P1
+  provenance gaps. First, a supplied current or loaded fatigue-basis mapping
+  could omit any of its 11 fields and have the missing evidence manufactured by
+  normalisation before the Danish declared-versus-calculated comparison.
+  Second, the shared live/PDF fatigue publication boundary did not require the
+  same complete basis, and the durable fatigue-conformance snapshot omitted it.
+  Six focused red cases reproduced incomplete Danish evidence, missing,
+  incomplete and Boolean common-publication evidence, the missing durable field
+  and a current-project partial mapping. Run `30412051353` was canceled after
+  the findings and is not counted as the single exact-head CI gate.
+- Current calculation, signature, Danish adapter, shared publication and
+  current-project save/load boundaries now require the exact 11 named fields,
+  typed strings and canonical trimmed/enum values before normalisation. The
+  migration/UI helper remains available only to seed legacy or interactive
+  state; pre-v21 partial projects still migrate to an explicit neutral basis
+  without inferring authority or calculation effects. Fatigue-conformance
+  schema v2 includes the complete basis in its canonical JSON body and digest,
+  so missing, incomplete, Boolean, mutated or stale durable/session/download/
+  autosave evidence is rejected and latches the input match false.
+- Remediation evidence is green: the ten direct strictness/migration
+  regressions; all 64 fatigue-analysis tests; all 49 fatigue-input tests; 29
+  fatigue project tests; 26 fatigue Streamlit tests; four rehashed durable
+  session/download/autosave attacks; all 123 PR-05 rule/oracle/adversarial
+  tests; all 39 manual tests; and all 13 fatigue-report tests, including the
+  explicit live-view and PDF missing-basis publication attacks. No report or manual
+  presentation source changed, so the previously inspected 16-page report and
+  37-page manual page evidence remains applicable. Exact remediation SHA,
+  exact-head rereview and the one completed GitHub full-suite gate remain
+  pending.

@@ -377,6 +377,31 @@ def test_authority_basis_rejects_cross_authority_method_and_unknown_status():
         fi.normalise_basis({"dynamic_effects": "Maybe"})
 
 
+def test_current_fatigue_basis_requires_exact_typed_canonical_fields():
+    basis = fi.default_basis()
+
+    assert fi.canonical_basis(basis) == basis
+
+    incomplete = dict(basis)
+    del incomplete["notes"]
+    with pytest.raises(ValueError, match="missing notes"):
+        fi.canonical_basis(incomplete)
+    with pytest.raises(ValueError, match="missing notes"):
+        fi.basis_signature(incomplete)
+
+    unknown = {**basis, "synthetic": ""}
+    with pytest.raises(ValueError, match="unknown synthetic"):
+        fi.canonical_basis(unknown)
+
+    boolean = {**basis, "notes": True}
+    with pytest.raises(ValueError, match="notes must be typed text"):
+        fi.canonical_basis(boolean)
+
+    padded = {**basis, "notes": " stale "}
+    with pytest.raises(ValueError, match="canonical trimmed text"):
+        fi.canonical_basis(padded)
+
+
 def _spectrum_rows():
     return [
         {

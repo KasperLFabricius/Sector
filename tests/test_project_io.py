@@ -1382,6 +1382,67 @@ def test_v10_rejects_malformed_fatigue_basis(basis, message):
         project_io.parse_project(json.dumps(project))
 
 
+def test_current_project_rejects_incomplete_fatigue_basis():
+    incomplete = fatigue_inputs.default_basis()
+    del incomplete["notes"]
+    project = {
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": {fatigue_inputs.BASIS_KEY: incomplete},
+    }
+
+    with pytest.raises(ValueError, match="fatigue basis fields"):
+        project_io.parse_project(json.dumps(project))
+    with pytest.raises(ValueError, match="fatigue basis fields"):
+        project_io.dump_project(
+            {},
+            {fatigue_inputs.BASIS_KEY: incomplete},
+        )
+
+
+def test_current_project_rejects_boolean_fatigue_basis_field():
+    malformed = {
+        **fatigue_inputs.default_basis(),
+        "notes": True,
+    }
+    project = {
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION,
+        "tables": {},
+        "scalars": {fatigue_inputs.BASIS_KEY: malformed},
+    }
+
+    with pytest.raises(ValueError, match="notes must be typed text"):
+        project_io.parse_project(json.dumps(project))
+    with pytest.raises(ValueError, match="notes must be typed text"):
+        project_io.dump_project(
+            {},
+            {fatigue_inputs.BASIS_KEY: malformed},
+        )
+
+
+def test_legacy_project_migrates_incomplete_fatigue_basis_without_inference():
+    partial = {
+        "authority": fatigue_inputs.AUTHORITY_USER,
+        "method": fatigue_inputs.METHOD_USER_GROUPED,
+        "spectrum_source": "Legacy spectrum register",
+    }
+    project = {
+        "format": project_io.FORMAT,
+        "version": project_io.VERSION - 1,
+        "tables": {},
+        "scalars": {fatigue_inputs.BASIS_KEY: partial},
+    }
+
+    _tables, scalars = project_io.parse_project(json.dumps(project))
+
+    assert scalars[fatigue_inputs.BASIS_KEY] == {
+        **fatigue_inputs.default_basis(),
+        "spectrum_source": "Legacy spectrum register",
+    }
+
+
 def test_v9_rejects_malformed_fatigue_section_and_spectrum_rows():
     malformed_section = json.dumps({
         "format": project_io.FORMAT,
@@ -1931,6 +1992,7 @@ def _approved_custom_fatigue_conformance_record():
             fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
         ),
         "concrete_miner_source": miner_source,
+        "basis": fatigue_inputs.default_basis(),
         "partial_factors": {
             "gamma_s": gamma_s,
             "gamma_c": gamma_c,
@@ -1983,6 +2045,10 @@ def test_project_round_trip_retains_bound_fatigue_conformance_evidence():
     assert fatigue_record["concrete_miner_source"] == (
         "AUTH-SN-7 / checker approval"
     )
+    assert fatigue_record["schema"] == (
+        fatigue_analysis.FATIGUE_CONFORMANCE_SCHEMA
+    )
+    assert fatigue_record["basis"] == fatigue_inputs.default_basis()
     assert fatigue_record["conformance"]["state"] == (
         conformance.STATE_APPROVED_CUSTOM
     )
