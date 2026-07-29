@@ -18,7 +18,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-006 | PR-05 | Implemented on branch; exact-head external gates pending | A distinct `DS/EN 1992-2:2005 + DK/NA:2015` method inherits the merged bridge-base record and adds only evidenced Danish overrides/additions: Danish coefficients, high-strength approval, environmental/cover/de-icing routes, mandatory brittle Method A disposition, and the Danish crack matrix. Its numerical crack route follows the bridge standard's Section 7 / 7.3.4(101) referral through the related DS/EN 1992-1-1 DK NA:2013: cover-dependent `k3`, conditional `(h-x)/3`, and separately reported fine/coarse systems. Static Danish annex availability is recorded as information only; Annex J/KK/NN/OO routing remains blocking `NOT ASSESSED` without typed project applicability and complete external analysis evidence. Inherited, overridden, added, not-applicable and not-assessed states remain explicit. | `docs/pr05_dk_bridge_decision_map.md`; independent `tools/pr05_dk_bridge_oracle.py`; frozen road, footbridge and railway crack/cover/authority/fatigue/annex fixture in `tests/fixtures/pr05_dk_bridge_decisions.json`. | Focused Danish method/oracle, bridge/SLS, project persistence, cache/publication, capacity-factor and headless app tests are green before the final documentation/render gate; exact-head counts follow after review fixes stabilize. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Method A structural analysis is not implemented and remains blocking `NOT ASSESSED` when required; no Method B fallback is allowed. Annex applicability/analysis is not implemented and cannot be inferred from static DK/NA availability. |
 | F-007 | PR-03 | Closed and merged | EN 1992-1-1:2023 uniform direct tension is calculated only for the validated solid-rectangle/opposed-face domain; unsupported or incomplete states are explicit blocking dispositions. | Standalone rectangular perimeter-area, reinforcement-ratio, strain, spacing and crack-width oracle in `tools/pr03_crack_oracle.py`. | Direct-tension, transition, unsupported-domain, decompression, SLS precedence and app integration regressions accepted on the exact head. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | 2005 direct tension and non-rectangular/combined all-tension inputs remain explicitly `NOT ASSESSED`; they cannot yield PASS. |
 | F-008 | PR-03 | Closed and merged | The engine records dominant direction/scope, while UI, overview, saved limitations, manual and report state that orthogonal or inclined crack systems are not assessed. | Rotation oracle compares an asymmetric section and reinforcement under rigid rotations with transformed loads. | Rotated engine cases plus app summary, report text/raster and manual content gates accepted on the exact head. | GitHub CI and Codex Review accepted exact head `298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec`. | `QA CLOSURE ACCEPTED - 298117e5583c5f4ff0d881ecdba6df1e9c5fe4ec` | [PR #206](https://github.com/KasperLFabricius/Sector/pull/206); squash `760db72914f341b9d69a4033ef2676f75bf10ced` | Directional limitation remains explicit until PR-06 supplies an applicable opt-in multidirectional method. |
-| F-009 | PR-06 | Planned | Keep independent `Vx`/`Vy` results but prevent combined PASS without a selected applicable interaction method. | To be established in owning PR for uniaxial limits, balanced biaxial load, axis swap, rotation, and interaction boundary. | Pending | Pending | Pending | Pending | No universal interaction rule will be inferred. |
+| F-009 | PR-06 | Implemented on branch; exact-head external gates pending | Independent signed `Vx`/`Vy` demands, resistances, utilisations, axes and component verdicts remain reportable. A biaxial aggregate can never become an unqualified PASS from two component passes alone. With no selected method, invalid/currently unbound evidence, or an unsupported domain, the aggregate is `REVIEW / NOT ASSESSED`; a component failure still gives aggregate `FAIL`. The explicit EN 1992-1-1:2023 planar-resultant route is qualified because its resultant-direction resistance is externally evidenced, and an approved project power sum remains an `APPROVED CUSTOM` conclusion. | `tools/pr06_multidirectional_oracle.py` independently freezes zero and both uniaxial limits, balanced action, just-below/at/just-above boundary points, x/y swap, sign reversal, isotropic rigid rotation, and anisotropic non-invariance without importing production rules. | `tests/test_pr06_multidirectional.py` plus focused project, presentation, report/manual and five live Streamlit/cache/publication controls. The final pre-commit focused matrix is 248 plus five app checks; issued report/manual artifact regressions pass and affected pages were inspected. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | No universal 2004/DK member `Vx`/`Vy` interaction was identified. EN 1992-2 Annex LL is not offered for the Danish bridge route; `Vx+Vy+T` remains `NOT ASSESSED`. |
 | F-010 | PR-04 | Implemented on branch; exact-head external gates pending | The corrected DS/EN 1992-2 Expression (6.106) route prescribes `C = 14` under the bridge methodology. Any positive finite coefficient remains an analytical input, but a different value is recorded as a deviation and can never be labelled as the AC:2008 relation or an unqualified standard PASS. A separately named Miner/S-N methodology plus explicit source/approval can emit only a qualified custom verdict. Core, preparation, project/session, UI, bridge publication and report boundaries revalidate the actual coefficient, conformance record, method, applicability and typed whole-calculation methodology binding against the calculation snapshot. | Controlled local DS/EN 1992-2:2005 clause 6.8.7(101) with AC:2008 correction and DS/EN 1992-1-1:2023 E.8 applicability; independent `tools/pr04_bridge_oracle.py` standard `C = 14` life/damage plus standard-labelled and approved-project `C = 100` examples. | Included in the consolidated core/project/publication, report, manual, adjacent-fatigue, rendered, policy and Streamlit slices recorded for PR-04, including the exact `C = 100` false-PASS reproducer, mutable evidence and cache/signature controls. | Pending exact-head Codex Review after commit and CI. | Pending original reviewer. | Pending | Project-basis adoption outside the bridge method remains an explicit engineering-authority decision with a recorded approval source; another S-N relation remains a separately sourced project method and is never relabelled as Expression (6.106) or 2023 E.8. |
 | F-011 | PR-07 | Planned | Add report design scope, assumptions/exclusions, overall conclusion, and action register for every non-pass state. | To be established in owning PR through structural report assertions. | Pending | Pending | Pending | Pending | None accepted. |
 | F-012 | PR-13 | Planned | Add ratcheted coverage, selected Ruff, type, and dependency-security CI gates with owned waivers. | Controlled gate-failure demonstrations to be established in owning PR. | Pending | Pending | Pending | Pending | Temporary waivers must name owner and expiry/exit condition. |
@@ -32,7 +32,7 @@ an oracle, regression, reviewed SHA, or closure that has not yet been produced.
 | F-020 | Excluded | Excluded — non-code local build hygiene; user-directed exclusion | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | F-021 | PR-14 | Planned | Implement a defensible reproducibility model and controlled-build timestamp/hash behavior. | Two controlled Windows-build comparison to be established in owning PR. | Pending | Pending | Pending | Pending | Byte identity will not be claimed unless demonstrated. |
 | F-022 | PR-05 | Implemented on branch; exact-head external gates pending | Typed, non-inferred bridge class, infrastructure manager, authority/project sources and approvals, environmental/surface/de-icing applicability, control/consequence class, fatigue applicability, cover and coefficient provenance are bound through input, calculation signature/cache, immutable result fingerprint, project/session/autosave/download publication, UI and report. Required traffic fatigue now correlates the global analysis switch, canonical coverage-table applicability, each selected reinforcement/concrete fatigue check and its calculated evidence, and the declared Danish traffic model/source with the exact current calculated fatigue authority/method/spectrum/cycle-count basis; disabled, unselected, conflicting, stale or missing routes cannot produce a Danish project-basis PASS. Evidenced mappings change only cover, de-icing evidence, Danish crack routing and `alpha_ct` torsional cracking resistance; other authority choices qualify the conclusion without silently changing inputs. | The PR-05 decision map distinguishes Eurocode, DK NA, Road Directorate, Banedanmark and project authority. The independent fixture covers mapped road/foot/rail choices, conflicts, unmapped authorities, Danish cover/de-icing routes, eight traffic-fatigue correlation boundaries, static-annex qualification and calculation-changing/custom-only effects. | Save-load-resave, malformed/Boolean/non-finite inputs, method/edition switches, basis mutation, stale result/cache, required-fatigue routing and missing/duplicate correlation regressions are included in the focused PR-05 tests. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Unmapped, project-defined or conflicting authority choices warn and cannot silently alter calculations or produce an unqualified selected-standard PASS. |
-| F-023 | PR-06 | Planned | Add separate opt-in, sourced biaxial crack/shear interaction options with domain and fallback state. | Independent limiting, symmetry, rotation, and unsupported-domain benchmarks to be established in owning PR. | Pending | Pending | Pending | Pending | No universal interaction rule will be invented. |
+| F-023 | PR-06 | Implemented on branch; exact-head external gates pending | Crack and shear selections, sources, approvals, domains, axes and evidence are separate. Offered crack routes are the sourced 2004/DK inclined-crack equations, EN 1992-1-1:2023 Annex G.5, and an approved project power sum; offered shear routes are EN 1992-1-1:2023 8.2.1(5) and an approved project power sum. Crack aggregation identifies exactly one current Elastic case and canonical PR-03 criterion/combination binding. Every method records formula, parameters, terms, source/authority, domain, components, utilisation and qualification through API, signatures/cache, live/durable state, save/load/resave, autosave/download, report and manual. | `docs/pr06_multidirectional_decision_map.md` gives the controlled source/method map. The independent oracle and adversarial matrix cover malformed/Boolean/non-finite/custom-positive parameters, unsupported domains, edition/method switches, missing/duplicate/stale/self-consistent-but-not-current evidence, calculation off/on, persistence/publication bypasses, crack-history separation and acceptance-combination routing. | Focused regressions retain component results while rejecting false aggregate passes; bind exact current crack acceptance evidence; exercise schema v22 legacy/current migration; reject hostile session, autosave, download, resave and report representations; and invalidate method/edition/axis/direction/on-off changes. | Pending exact-head Codex Review after commit. | Pending original reviewer. | Pending | Project-defined methods require explicit source, approval and confirmed domain and remain qualified custom conclusions. Unsupported or ambiguous multidirectional states stay `NOT ASSESSED / REVIEW`; no authority or universal formula is inferred. |
 | F-024 | PR-07 | Planned | Add amendment history, sign-off, action ownership, and closure state to reports. | Blank/partial/full governance report fixtures to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-025 | PR-12 | Planned | Prevent whole Inputs-workspace rebuild/stall on ordinary pane changes. | Browser rerun/time-to-idle telemetry to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
 | F-026 | PR-12 | Planned | Render only the active input pane while retaining unmounted values in one canonical draft model. | Zero-lost-edit and inactive-payload browser evidence to be established in owning PR. | Pending | Pending | Pending | Pending | None accepted. |
@@ -1327,3 +1327,71 @@ mandatory; this matrix does not self-certify PR closure.
   SLS/bridge-adapter/project checks and seven focused cache/UI controls. Exact
   corrective SHA, rereview and the one-run GitHub full-suite gate remain
   pending.
+
+## PR-06 evidence log
+
+- Scope is limited to F-009 and F-023 on exact merged base
+  `82551e98714dfd47ff7f631685cc791c1431385f` (tree
+  `e014b24b5e70e6756bd7ecf0b3b52a87c261cd4b`). Version remains exactly
+  `0.91`; project schema advances to v22. F-020 remains exactly
+  `Excluded — non-code local build hygiene; user-directed exclusion`.
+- `docs/pr06_multidirectional_decision_map.md` records the controlled local-only
+  standards review. EN 1992-1-1:2004 7.3.4(4), Formula (7.15), and the current
+  DK NA 7.3.4(4), Formula (7.101 NA), support the offered 2004/DK inclined-crack
+  route. EN 1992-1-1:2023 9.2.3(7) and Annex G.5, Formulas (G.22)-(G.27),
+  support the separately selected membrane-crack route. EN 1992-1-1:2023
+  8.2.1(5), Formulas (8.21)-(8.26), supports the planar resultant-demand route.
+  Owner/project authority is not confused with normative Eurocode authority.
+- EN 1992-2 Annex LL is deliberately not offered under the Danish bridge route:
+  DS/EN 1992-2 DK NA:2015 states that Annex LL is not applicable. No universal
+  2004/DK member `Vx`/`Vy` interaction or owner replacement was identified.
+  Sector therefore retains independent component results and withholds the
+  aggregate unless one explicit method is current and in domain.
+- The implementation separates crack and shear configurations and sealed
+  evidence. Method, edition, on/off state, axes, direction/depth route, domain
+  switches, formulas/parameters, source, approval, component values, terms,
+  utilisation and conclusion enter current-input correlation and publication.
+  Crack evidence additionally names exactly one current Elastic case, canonical
+  criterion and required SLS combination and revalidates PR-03's immutable
+  acceptance fingerprint. Missing, duplicate, contradictory, malformed, stale,
+  or self-consistent-but-not-current evidence fails closed without erasing
+  component results. Publication re-assesses sealed crack evidence against the
+  current canonical PR-03 result and sealed shear evidence against the current
+  directional solver results. Deleting every aggregate representation also
+  creates a durable rejection rather than exposing a pre-existing aggregate
+  `PASS`.
+- Positive finite custom engineering values are calculated as entered. A
+  project method requires source, approval and confirmed domain and returns only
+  `APPROVED CUSTOM PASS/FAIL`. The EN 1992-1-1:2023 shear resultant route
+  returns `QUALIFIED PASS/FAIL` because Sector records but does not reconstruct
+  its externally supplied resultant-direction resistance. Neither route becomes
+  an unqualified selected-standard aggregate PASS. Values beyond former UI
+  preset ranges remain available; a finite power-sum input whose mathematical
+  utilisation exceeds floating-point range is retained and produces a
+  conservative finite lower-bound `FAIL`, with the saturation recorded in its
+  sealed evidence rather than crashing or rejecting the input.
+- `tools/pr06_multidirectional_oracle.py` imports no Sector production module.
+  It freezes both uniaxial limits, zero action, balanced action, just-below/at/
+  just-above boundary points, x/y swap, sign reversal, isotropic rigid rotation
+  and directional/anisotropic non-invariance. Its standalone run is green.
+  `tests/test_pr06_multidirectional.py` adds unsupported-domain, edition/method
+  switch, malformed/Boolean/non-finite/custom-positive, missing/duplicate/stale
+  evidence, calculation off/on, persistence/publication and explicit
+  two-component-false-PASS probes.
+- Final pre-commit focused evidence is green: 248 independent-oracle,
+  interaction, schema/persistence, presentation and report/manual checks, plus
+  five live Streamlit/cache/session/autosave/download controls. The separate
+  serviceability/SLS compatibility slice is green at 243 checks. The issued
+  report artifact regression and the issued manual artifact regression pass;
+  already-green broader suites are not duplicated before the required one-run
+  exact-head GitHub full-suite gate.
+- Bounded visual QA used a 14-page report with both approved project
+  interactions and a 31-page no-figure manual. Report overview page 1, shear
+  interaction page 7 and crack interaction page 11 were inspected with
+  boundaries 2, 6-8 and 10-12. Manual shear pages 12-13 and crack pages 22-23
+  were inspected with boundaries 11 and 21. Equations, long evidence
+  fingerprints, repeated furniture and tables are visible without clipping or
+  overlap. One newly exposed orphan heading was grouped with its response table
+  and the same report boundary was re-rendered cleanly.
+- Exact implementation SHA, current-head Codex Review, the single GitHub
+  full-suite gate, independent exact-SHA closure and merge remain pending.

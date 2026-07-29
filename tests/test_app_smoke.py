@@ -10,6 +10,7 @@ import copy
 import dataclasses
 import hashlib
 import json
+import math
 import pathlib
 import re
 import sys
@@ -20,7 +21,7 @@ import numpy as np
 import pytest
 
 from streamlit.testing.v1 import AppTest
-from sector import bridge, sls
+from sector import bridge, multidirectional, sls
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
@@ -8695,3 +8696,345 @@ def test_crack_width_auto_cover_circular_section():
     e = at.session_state["results"]["elastic"]
     if e["crack"] is not None:
         assert e["crack"]["cover"] > 70.0
+
+
+def test_pr06_app_project_shear_method_is_qualified_and_switch_invalidates():
+    at = _fresh()
+    at.run()
+    _set(at, ("checkbox", "shear_on", True))
+    _set(
+        at,
+        ("toggle", "shear_interaction_on", True),
+        (
+            "selectbox",
+            "shear_interaction_method",
+            multidirectional.SHEAR_METHOD_PROJECT,
+        ),
+        ("checkbox", "shear_interaction_domain_confirmed", True),
+        ("number_input", "shear_interaction_exponent", 137.0),
+        (
+            "text_input",
+            "shear_interaction_source",
+            "Project DB clause INT-06",
+        ),
+        (
+            "text_input",
+            "shear_interaction_approval",
+            "Checker approval QA-06",
+        ),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_Vx", 1.0),
+        ("number_input", "shear_Vy", 1.0),
+    )
+
+    assert not at.exception
+    shear = at.session_state["results"]["shear"]
+    assert set(shear["directions"]) == {"vx", "vy"}
+    assert all(
+        item["status"] == "PASS"
+        for item in shear["directions"].values()
+    )
+    assert shear["interaction"]["verdict"] == "APPROVED CUSTOM PASS"
+    assert shear["interaction"]["qualification"] == "APPROVED CUSTOM"
+    assert shear["interaction"]["parameters"]["exponent"] == pytest.approx(
+        137.0
+    )
+    assert shear["status"] == "REVIEW"
+    record = at.session_state["calculation_record"][
+        "multidirectional_interaction"
+    ]
+    assert record["shear_cases"][0]["interaction"][
+        "evidence_fingerprint"
+    ]
+
+    prior_signature = at.session_state["result_sig"]
+    _goto_page(at, "Inputs")
+    at.selectbox(key="shear_interaction_method").set_value(
+        multidirectional.SHEAR_METHOD_EN_2023
+    ).run()
+    assert at.session_state["_latest_inputs"]["signature"] != prior_signature
+    _calculate(at)
+    switched = at.session_state["results"]["shear"]["interaction"]
+    assert switched["status"] == "NOT ASSESSED"
+    assert switched["interaction_assessed"] is False
+    assert "outside or missing its stated domain" in switched["reason"]
+
+
+def test_pr06_enabled_without_method_keeps_vx_vy_and_withholds_aggregate():
+    at = _fresh()
+    at.run()
+    _set(at, ("checkbox", "shear_on", True))
+    _set(at, ("toggle", "shear_interaction_on", True))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_Vx", 1.0),
+        ("number_input", "shear_Vy", 1.0),
+    )
+
+    assert not at.exception
+    assert (
+        "_case_error" not in at.session_state
+        or not at.session_state["_case_error"]
+    )
+    shear = at.session_state["results"]["shear"]
+    assert set(shear["directions"]) == {"vx", "vy"}
+    assert all(
+        item["status"] == "PASS"
+        for item in shear["directions"].values()
+    )
+    assert shear["interaction"]["status"] == "NOT ASSESSED"
+    assert shear["interaction_assessed"] is False
+    assert shear["status"] == "REVIEW"
+
+
+def test_pr06_hostile_interaction_state_blocks_calculation_save_and_autosave(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    hostile = {
+        "shear_interaction_on": np.bool_(True),
+        "shear_interaction_method": ["not", "a", "selection"],
+        "shear_interaction_exponent": math.nan,
+        "shear_interaction_source": {"not": "text"},
+    }
+    for key, value in hostile.items():
+        at.session_state[key] = value
+    at.session_state["_durable_input_scalars"] = dict(hostile)
+
+    at.run()
+
+    expected = tuple(sorted(hostile))
+    assert not at.exception
+    assert at.session_state["_invalid_interaction_input_keys"] == expected
+    inp = at.session_state["_latest_inputs"]
+    assert inp["invalid_interaction_input_keys"] == expected
+    assert multidirectional.validation_errors(inp)
+    assert any(
+        "Rejected malformed multidirectional state" in item.value
+        for item in at.error
+    )
+
+    at.session_state["_autosave_t"] = 0.0
+    _calculate(at)
+    assert "rejected multidirectional interaction fields" in (
+        at.session_state["_case_error"]
+    )
+    assert not (tmp_path / "autosave.json").exists()
+
+    _goto_page(at, "Inputs")
+    at.button(key="confirm_shear_interaction_repairs").click().run()
+    assert "_invalid_interaction_input_keys" not in at.session_state
+
+
+def test_pr06_app_crack_method_binds_current_canonical_criterion():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        (
+            "selectbox",
+            "sls_exposure_class",
+            sls.EXPOSURE_XC2_XC4,
+        ),
+        (
+            "selectbox",
+            "sls_long_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    )
+    case_id = str(first_case_value(at, "el_case_id"))
+    _set(
+        at,
+        ("toggle", "crack_interaction_on", True),
+        (
+            "selectbox",
+            "crack_interaction_method",
+            multidirectional.CRACK_METHOD_PROJECT,
+        ),
+        ("text_input", "crack_interaction_case_id", case_id),
+        (
+            "text_input",
+            "crack_interaction_criterion_id",
+            "standard-durability",
+        ),
+        (
+            "selectbox",
+            "crack_interaction_combination",
+            sls.COMBINATION_QUASI_PERMANENT,
+        ),
+        ("checkbox", "crack_interaction_domain_confirmed", True),
+        ("number_input", "crack_interaction_component_x_mm", 0.10),
+        ("number_input", "crack_interaction_component_y_mm", 0.10),
+        ("number_input", "crack_interaction_limit_x_mm", 0.30),
+        ("number_input", "crack_interaction_limit_y_mm", 0.30),
+        ("number_input", "crack_interaction_exponent", 2.0),
+        (
+            "text_input",
+            "crack_interaction_source",
+            "Project crack note CR-06",
+        ),
+        (
+            "text_input",
+            "crack_interaction_approval",
+            "Checker approval AC-06",
+        ),
+    )
+    _calculate(at)
+
+    assert not at.exception
+    elastic = at.session_state["results"]["elastic"]
+    interaction = at.session_state["results"]["crack_interaction"]
+    criterion = next(
+        item
+        for item in elastic["crack_assessment"]["criteria"]
+        if item["criterion_id"] == "standard-durability"
+    )
+    assert interaction["verdict"] == "APPROVED CUSTOM PASS"
+    assert interaction["criterion"]["elastic_case"] == case_id
+    assert interaction["criterion"]["required_combination"] == (
+        sls.COMBINATION_QUASI_PERMANENT
+    )
+    assert interaction["criterion"]["acceptance_fingerprint"] == (
+        criterion["acceptance_evidence"]["fingerprint"]
+    )
+    assert elastic["crack_interaction"] == interaction
+    assert elastic["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
+
+
+def test_pr06_download_durable_autosave_and_resave_reject_mutated_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    import project_io
+    import sector_app
+
+    def direction(component, demand, resistance):
+        return {
+            "component": component,
+            "axis": "y" if component == "vx" else "x",
+            "v_ed": demand,
+            "signed_v_ed": demand,
+            "bw": 1000.0,
+            "d": 500.0,
+            "method": multidirectional.SHEAR_CODE_EN_2023,
+            "status": "PASS",
+            "util": demand / resistance,
+            "res": {
+                "valid": True,
+                "vrd_c": resistance,
+            },
+        }
+
+    scalars = {
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+        "shear_interaction_on": True,
+        "shear_interaction_method": (
+            multidirectional.SHEAR_METHOD_PROJECT
+        ),
+        "shear_interaction_axis_x": "global x / Vx",
+        "shear_interaction_axis_y": "global y / Vy",
+        "shear_interaction_domain_confirmed": True,
+        "shear_interaction_exponent": 2.0,
+        "shear_interaction_source": "Project DB clause INT-06",
+        "shear_interaction_approval": "Checker approval QA-06",
+    }
+    results = {
+        "shear": {
+            "directions": {
+                "vx": direction("vx", 0.2, 1.0),
+                "vy": direction("vy", 0.3, 1.0),
+            },
+            "biaxial": True,
+            "status": "REVIEW",
+        },
+    }
+    multidirectional.apply_to_results(scalars, results)
+    bundle = multidirectional.interaction_calculation_record(results)
+    bundle["shear_cases"][0]["interaction"]["utilisation"] = 0.0
+    digest = project_io.input_sha256({}, scalars)
+    calculation = {
+        "input_sha256": digest,
+        "multidirectional_interaction": bundle,
+    }
+    state = {"calculation_record": copy.deepcopy(calculation)}
+    monkeypatch.setattr(
+        sector_app,
+        "st",
+        SimpleNamespace(session_state=state),
+    )
+    monkeypatch.setattr(
+        sector_app, "_invalid_factor_input_keys", lambda: ()
+    )
+    monkeypatch.setattr(
+        sector_app, "_invalid_crack_input_keys", lambda: ()
+    )
+    monkeypatch.setattr(
+        sector_app, "_invalid_interaction_input_keys", lambda: ()
+    )
+    monkeypatch.setattr(
+        sector_app, "_project_state", lambda: ({}, scalars)
+    )
+
+    download = json.loads(sector_app._gather_project())
+    download_record = download["calculation"][
+        "multidirectional_interaction"
+    ]
+    assert download["calculation"]["matches_saved_inputs"] is False
+    assert download_record["publication_validation"]["status"] == "REJECTED"
+    assert download_record["shear_cases"][0]["interaction"]["status"] == (
+        "NOT ASSESSED"
+    )
+
+    state["calculation_record"] = copy.deepcopy(calculation)
+    monkeypatch.setattr(
+        sector_app, "_current_table", lambda *_args, **_kwargs: object()
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_pts_from_df",
+        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
+    )
+    monkeypatch.setattr(
+        sector_app, "_project_input_hash", lambda: digest
+    )
+    captured = {}
+
+    def capture_autosave(data, path):
+        captured["data"] = data
+        captured["path"] = path
+        return True
+
+    monkeypatch.setattr(
+        sector_app, "_write_autosave", capture_autosave
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_autosave_path",
+        lambda: tmp_path / "autosave.json",
+    )
+    assert sector_app._perform_autosave() is True
+    durable = state["calculation_record"][
+        "multidirectional_interaction"
+    ]
+    autosaved = json.loads(captured["data"])["calculation"][
+        "multidirectional_interaction"
+    ]
+    assert durable["publication_validation"]["status"] == "REJECTED"
+    assert autosaved["publication_validation"]["status"] == "REJECTED"
+
+    resaved = json.loads(sector_app._gather_project())["calculation"][
+        "multidirectional_interaction"
+    ]
+    assert resaved["publication_validation"]["status"] == "REJECTED"

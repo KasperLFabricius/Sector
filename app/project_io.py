@@ -28,12 +28,21 @@ import fatigue_inputs
 import load_cases
 import material_catalog
 import reinforcement_table as rebar_table
-from sector import bridge, codes, conformance, danish_bridge, detailing, geometry, sls
+from sector import (
+    bridge,
+    codes,
+    conformance,
+    danish_bridge,
+    detailing,
+    geometry,
+    multidirectional,
+    sls,
+)
 from sector import __version__ as sector_version
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 21  # v21: Danish bridge methodology and authority provenance
+VERSION = 22  # v22: sourced multidirectional crack/shear interaction evidence
 DEFAULT_SLS_TENDON_BOND = "Plain round (k1 = 1.6)"
 DEFAULT_SLS_TENDON_XI = 0.0
 DEFAULT_SLS_CRITERION_MODE = sls.CRITERION_MODE_LEGACY
@@ -304,6 +313,7 @@ SCALAR_KEYS = [
     "sls_project_quasi_permanent_limit",
     "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
     "sls_pre_limit_pct", "sls_limit_source",
+    *multidirectional.CRACK_INPUT_KEYS,
     # Fatigue factor provenance. Presets expose every applied multiplier;
     # overrides remain complete approved final inputs.
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
@@ -330,6 +340,7 @@ SCALAR_KEYS = [
     "shear_links", "shear_link_legs", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
+    *multidirectional.SHEAR_INPUT_KEYS,
     "strut_cot_min", "strut_cot_max",
     # Torsion (thin-walled tube, TRd). The stirrup is the shared shear_link_* one.
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
@@ -397,6 +408,164 @@ def _validate_crack_numeric_scalars(scalars: dict) -> None:
         if not math.isfinite(number):
             raise ValueError(
                 f"invalid project crack-control input: {key} must be finite"
+            )
+
+
+def _validate_multidirectional_scalars(
+    scalars: dict,
+    *,
+    project_version: int,
+) -> None:
+    """Validate typed PR-06 fields and reject active current-schema omissions."""
+
+    for key in multidirectional.INTERACTION_BOOLEAN_INPUT_KEYS:
+        if key in scalars and not isinstance(scalars[key], bool):
+            raise ValueError(
+                f"invalid project multidirectional input: {key} must be an "
+                "explicit Boolean selection"
+            )
+    for key in multidirectional.INTERACTION_NUMERIC_INPUT_KEYS:
+        if key not in scalars:
+            continue
+        value = scalars[key]
+        if isinstance(value, bool) or isinstance(value, str):
+            raise ValueError(
+                f"invalid project multidirectional input: {key} must be a "
+                "finite real number, not Boolean/text"
+            )
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"invalid project multidirectional input: {key} must be a "
+                "finite real number"
+            ) from exc
+        if not math.isfinite(number):
+            raise ValueError(
+                f"invalid project multidirectional input: {key} must be finite"
+            )
+    for key in multidirectional.INTERACTION_TEXT_INPUT_KEYS:
+        if key in scalars and not isinstance(scalars[key], str):
+            raise ValueError(
+                f"invalid project multidirectional input: {key} must be text"
+            )
+
+    crack_method = scalars.get("crack_interaction_method")
+    if (
+        crack_method is not None
+        and (
+            not isinstance(crack_method, str)
+            or crack_method not in multidirectional.CRACK_METHODS
+        )
+    ):
+        raise ValueError("unknown crack-interaction methodology")
+    shear_method = scalars.get("shear_interaction_method")
+    if (
+        shear_method is not None
+        and (
+            not isinstance(shear_method, str)
+            or shear_method not in multidirectional.SHEAR_METHODS
+        )
+    ):
+        raise ValueError("unknown shear-interaction methodology")
+    depth_route = scalars.get("shear_interaction_depth_route")
+    if (
+        depth_route is not None
+        and depth_route not in multidirectional.DEPTH_ROUTES
+    ):
+        raise ValueError("unknown biaxial-shear effective-depth route")
+    combination = scalars.get("crack_interaction_combination")
+    if (
+        combination is not None
+        and (
+            not isinstance(combination, str)
+            or combination not in sls.SLS_COMBINATIONS
+        )
+    ):
+        raise ValueError("unknown crack-interaction SLS combination")
+
+    if project_version < VERSION:
+        return
+    required_by_method = {
+        multidirectional.CRACK_METHOD_DK_2004: {
+            "crack_interaction_case_id",
+            "crack_interaction_criterion_id",
+            "crack_interaction_combination",
+            "crack_interaction_axis_x",
+            "crack_interaction_axis_y",
+            "crack_interaction_orthogonal",
+            "crack_interaction_plane_stress",
+            "crack_interaction_no_discontinuity",
+            "crack_interaction_angle_deg",
+            "crack_interaction_spacing_x_mm",
+            "crack_interaction_spacing_y_mm",
+            "crack_interaction_strain_x",
+            "crack_interaction_strain_y",
+        },
+        multidirectional.CRACK_METHOD_EN_2023: {
+            "crack_interaction_case_id",
+            "crack_interaction_criterion_id",
+            "crack_interaction_combination",
+            "crack_interaction_axis_x",
+            "crack_interaction_axis_y",
+            "crack_interaction_orthogonal",
+            "crack_interaction_membrane",
+            "crack_interaction_no_discontinuity",
+            "crack_interaction_angle_deg",
+            "crack_interaction_spacing_x_mm",
+            "crack_interaction_spacing_y_mm",
+            "crack_interaction_strain_x",
+            "crack_interaction_strain_y",
+            "crack_interaction_transverse_strain",
+        },
+        multidirectional.CRACK_METHOD_PROJECT: {
+            "crack_interaction_case_id",
+            "crack_interaction_criterion_id",
+            "crack_interaction_combination",
+            "crack_interaction_axis_x",
+            "crack_interaction_axis_y",
+            "crack_interaction_domain_confirmed",
+            "crack_interaction_component_x_mm",
+            "crack_interaction_component_y_mm",
+            "crack_interaction_limit_x_mm",
+            "crack_interaction_limit_y_mm",
+            "crack_interaction_exponent",
+            "crack_interaction_source",
+            "crack_interaction_approval",
+        },
+        multidirectional.SHEAR_METHOD_EN_2023: {
+            "shear_interaction_axis_x",
+            "shear_interaction_axis_y",
+            "shear_interaction_planar_member",
+            "shear_interaction_same_control_point",
+            "shear_interaction_per_unit_width",
+            "shear_interaction_out_of_plane",
+            "shear_interaction_depth_route",
+            "shear_interaction_resultant_resistance_kn_per_m",
+            "shear_interaction_source",
+            "shear_interaction_approval",
+        },
+        multidirectional.SHEAR_METHOD_PROJECT: {
+            "shear_interaction_axis_x",
+            "shear_interaction_axis_y",
+            "shear_interaction_domain_confirmed",
+            "shear_interaction_exponent",
+            "shear_interaction_source",
+            "shear_interaction_approval",
+        },
+    }
+    active_methods = []
+    if scalars.get("crack_interaction_on") is True:
+        active_methods.append(crack_method)
+    if scalars.get("shear_interaction_on") is True:
+        active_methods.append(shear_method)
+    for method in active_methods:
+        required = required_by_method.get(method, set())
+        missing = sorted(required - set(scalars))
+        if missing:
+            raise ValueError(
+                "current project has an active multidirectional method with "
+                "missing required fields: " + ", ".join(missing)
             )
 
 
@@ -760,6 +929,13 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             and not (has_load_inputs and k in load_cases.LEGACY_SCALAR_KEYS)
         )
     }
+    # Validate active-method completeness before defaults are added. Otherwise
+    # a raw/headless omission could be turned into an apparently deliberate
+    # empty source, axis, or domain field at the save boundary.
+    _validate_multidirectional_scalars(
+        scalar_payload,
+        project_version=VERSION,
+    )
     # Crack-control applicability fields are written even for deliberately
     # partial saves so a reused UI session cannot inherit a previous project's
     # combination route or silently revive the pre-v17 max-of-duration check.
@@ -793,6 +969,11 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
     scalar_payload.setdefault("sls_project_characteristic_limit", 0.0)
     scalar_payload.setdefault("sls_project_frequent_limit", 0.0)
     scalar_payload.setdefault("sls_project_quasi_permanent_limit", 0.0)
+    for key, value in {
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+    }.items():
+        scalar_payload.setdefault(key, value)
     # Empty override widgets use ``None`` in Streamlit state. Persist them exactly
     # like absent optional values so a no-edit load/save keeps the canonical input
     # hash stable and never synthesises an approved numeric factor.
@@ -801,6 +982,10 @@ def _canonical_inputs(tables: dict, scalars: dict) -> dict:
             scalar_payload.pop(key, None)
     _validate_factor_scalars(scalar_payload)
     _validate_crack_numeric_scalars(scalar_payload)
+    _validate_multidirectional_scalars(
+        scalar_payload,
+        project_version=VERSION,
+    )
     # These v6 controls were global because one shear component existed. Their
     # values are consumed only by the v7 migration and are not written again.
     for key in ("shear_axis", "shear_tension", "shear_bw", "shear_link_legs"):
@@ -985,6 +1170,7 @@ _CALCULATION_PROVENANCE_FIELDS = (
     "source_revision",
     "input_sha256",
     "crack_control",
+    "multidirectional_interaction",
     "fatigue_conformance",
     "bridge_methodology",
 )
@@ -1031,6 +1217,32 @@ def publication_safe_calculation_record(
         for key in _CALCULATION_PROVENANCE_FIELDS
         if calculation.get(key) not in (None, "")
     }
+    interaction_record_required = bool(
+        current_inputs.get("crack_interaction_on") is True
+        or current_inputs.get("shear_interaction_on") is True
+    )
+    if "multidirectional_interaction" in calculation:
+        record["multidirectional_interaction"] = (
+            multidirectional.publication_safe_interaction_record(
+                calculation.get("multidirectional_interaction"),
+                current_inputs=current_inputs,
+            )
+        )
+        interaction_validation = (
+            (record.get("multidirectional_interaction") or {}).get(
+                "publication_validation"
+            )
+        )
+        publication_matches = (
+            publication_matches
+            and isinstance(interaction_validation, Mapping)
+            and interaction_validation.get("status") == "ACCEPTED"
+        )
+        if record["multidirectional_interaction"] is None:
+            record.pop("multidirectional_interaction")
+            publication_matches = False
+    elif interaction_record_required:
+        publication_matches = False
     if "crack_control" in calculation:
         raw_crack_control = calculation.get("crack_control")
         unexpected_crack_issues = []
@@ -1159,6 +1371,7 @@ def dump_project(tables: dict, scalars: dict, *, calculation=None,
         payload["calculation"] = record
         payload["provenance"]["results_included"] = bool(
             (record.get("crack_control") or {}).get("cases")
+            or record.get("multidirectional_interaction")
             or record.get("fatigue_conformance")
             or record.get("bridge_methodology")
         )
@@ -1179,6 +1392,10 @@ def project_provenance(text: str) -> dict:
     _reject_unsupported_strut_settings(raw_scalars)
     _validate_factor_scalars(raw_scalars)
     _validate_crack_numeric_scalars(raw_scalars)
+    _validate_multidirectional_scalars(
+        raw_scalars,
+        project_version=int(data.get("version", 1)),
+    )
     _validate_bridge_scalars(raw_scalars)
     _validate_fatigue_miner_scalars(raw_scalars, allow_missing=True)
     provenance = data.get("provenance")
@@ -1240,6 +1457,7 @@ def project_provenance(text: str) -> dict:
                 (calculation or {}).get("crack_control")
                 or {}
             ).get("cases")
+            or (calculation or {}).get("multidirectional_interaction")
             or (calculation or {}).get("fatigue_conformance")
             or (calculation or {}).get("bridge_methodology")
         ),
@@ -1269,6 +1487,10 @@ def parse_project(text: str):
     _reject_unsupported_strut_settings(raw_scalars)
     _validate_factor_scalars(raw_scalars)
     _validate_crack_numeric_scalars(raw_scalars)
+    _validate_multidirectional_scalars(
+        raw_scalars,
+        project_version=int(data.get("version", 1)),
+    )
     _validate_bridge_scalars(raw_scalars)
     _validate_fatigue_miner_scalars(raw_scalars, allow_missing=True)
     if raw_load_cases is not None and not isinstance(raw_load_cases, dict):
@@ -1282,6 +1504,17 @@ def parse_project(text: str):
         for k in TABLE_KEYS if k in raw_tables
     }
     scalars = {k: v for k, v in raw_scalars.items() if k in SCALAR_KEYS}
+    interaction_defaults = {
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+    }
+    if data.get("version", 1) < VERSION:
+        # Legacy projects have no interaction authority. Migrate to explicit
+        # opt-out state without synthesising a source, approval, or domain.
+        scalars.update(interaction_defaults)
+    else:
+        for key, value in interaction_defaults.items():
+            scalars.setdefault(key, value)
     if raw_load_cases is not None:
         plastic_records = raw_load_cases.get("plastic", [])
         if data.get("version", 1) < 7:

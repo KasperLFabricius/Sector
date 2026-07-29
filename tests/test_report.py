@@ -21,7 +21,8 @@ import bridge_inputs  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import bridge, conformance, danish_bridge, detailing, sls  # noqa: E402
+from sector import (bridge, conformance, danish_bridge, detailing,  # noqa: E402
+                    multidirectional, sls)
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -3058,6 +3059,173 @@ def test_report_biaxial_shear_separates_directions_and_withholds_interaction():
     assert "independent Vx/Vy checks" in txt
     assert "Biaxial interaction: NOT ASSESSED" in txt
     assert "undocumented interaction" in txt
+
+
+def _pr06_project_shear_report_case():
+    inp = {
+        **_inp(),
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+        "shear_interaction_on": True,
+        "shear_interaction_method": (
+            multidirectional.SHEAR_METHOD_PROJECT
+        ),
+        "shear_interaction_axis_x": "deck longitudinal / Vx",
+        "shear_interaction_axis_y": "deck transverse / Vy",
+        "shear_interaction_domain_confirmed": True,
+        "shear_interaction_exponent": 2.0,
+        "shear_interaction_source": "Project DB clause INT-06",
+        "shear_interaction_approval": "Checker approval QA-06",
+    }
+    out = _out()
+    vx = copy.deepcopy(_shear_out())
+    vx.update(
+        component="vx",
+        axis="y",
+        tension_low=True,
+        signed_v_ed=80.0,
+        status="PASS",
+    )
+    vy = copy.deepcopy(_shear_out())
+    vy.update(
+        component="vy",
+        axis="x",
+        tension_low=False,
+        v_ed=65.0,
+        signed_v_ed=65.0,
+        util=65.0 / vy["res"]["vrd_c"],
+        status="PASS",
+    )
+    out["shear"] = dict(
+        vx,
+        directions={"vx": vx, "vy": vy},
+        active_directions=["vx", "vy"],
+        governing_component="vx",
+        biaxial=True,
+        interaction_assessed=False,
+        interaction_status="NOT ASSESSED",
+        status="REVIEW",
+    )
+    multidirectional.apply_to_results(inp, out)
+    return inp, out
+
+
+def test_report_binds_sourced_project_shear_interaction_evidence():
+    inp, out = _pr06_project_shear_report_case()
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "APPROVED CUSTOM PASS" in txt
+    assert "Project DB clause INT-06" in txt
+    assert "Checker approval QA-06" in txt
+    assert "deck longitudinal / Vx" in txt
+    assert "deck transverse / Vy" in txt
+    assert "eta = (abs(Vx)/VRd,x)^p + (abs(Vy)/VRd,y)^p" in txt
+    assert "Interaction evidence fingerprint" in txt
+    assert "Domain satisfied yes" in txt
+
+
+def test_report_rejects_conflicting_interaction_representations_but_keeps_vx_vy():
+    inp, out = _pr06_project_shear_report_case()
+    out["shear"]["interaction"]["utilisation"] = 0.0
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "Vx,Ed" in txt and "Vy,Ed" in txt
+    assert "PUBLICATION REJECTED" in txt
+    assert "top-level and current-case shear interaction evidence conflict" in txt
+    assert "APPROVED CUSTOM PASS" not in txt
+
+
+def test_report_rejects_nested_shear_pass_after_bundle_fields_are_deleted():
+    inp, out = _pr06_project_shear_report_case()
+    out.pop("crack_interaction")
+    out.pop("shear_interactions")
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "Vx,Ed" in txt and "Vy,Ed" in txt
+    assert "PUBLICATION REJECTED" in txt
+    assert (
+        "current shear interaction is not represented exactly once"
+        in txt
+    )
+    assert "APPROVED CUSTOM PASS" not in txt
+
+
+def _pr06_project_crack_report_case():
+    inp = {
+        **_inp(),
+        **multidirectional.crack_configuration({}),
+        **multidirectional.shear_configuration({}),
+        "crack_interaction_on": True,
+        "crack_interaction_method": (
+            multidirectional.CRACK_METHOD_PROJECT
+        ),
+        "crack_interaction_case_id": "EL-TEST",
+        "crack_interaction_criterion_id": "standard-durability",
+        "crack_interaction_combination": sls.COMBINATION_QUASI_PERMANENT,
+        "crack_interaction_axis_x": "deck longitudinal reinforcement",
+        "crack_interaction_axis_y": "deck transverse reinforcement",
+        "crack_interaction_domain_confirmed": True,
+        "crack_interaction_component_x_mm": 0.18,
+        "crack_interaction_component_y_mm": 0.12,
+        "crack_interaction_limit_x_mm": 0.30,
+        "crack_interaction_limit_y_mm": 0.30,
+        "crack_interaction_exponent": 2.0,
+        "crack_interaction_source": "Project DB clause CR-06",
+        "crack_interaction_approval": "Checker approval QA-06",
+    }
+    out = _out()
+    elastic = out["elastic"]
+    elastic["elastic_case"] = {"id": "EL-TEST"}
+    contexts = elastic["crack_response_contexts"]
+    mapping_scope = copy.deepcopy(elastic["crack_response_mapping_scope"])
+    for entry in mapping_scope:
+        entry["solver_provenance"] = copy.deepcopy(
+            contexts[entry["response"]]["solver_provenance"]
+        )
+    elastic["crack_response_mapping_scope"] = mapping_scope
+    elastic["crack_assessment"] = sls.crack_assessment(
+        elastic["crack_responses"],
+        valid=True,
+        criteria=[{
+            "id": "standard-durability",
+            "kind": sls.CRITERION_DURABILITY,
+            "source_type": sls.CRITERION_MODE_STANDARD,
+            "source": (
+                "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
+            ),
+            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
+            "limit_mm": 0.30,
+            "applicability": {"member": "reinforced"},
+        }],
+        response_contexts=contexts,
+        response_mapping_scope=mapping_scope,
+    )
+    multidirectional.apply_to_results(inp, out)
+    return inp, out
+
+
+def test_report_binds_project_crack_interaction_to_current_pr03_evidence():
+    inp, out = _pr06_project_crack_report_case()
+    txt = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "APPROVED CUSTOM PASS" in txt
+    assert "Project DB clause CR-06" in txt
+    assert "Checker approval QA-06" in txt
+    assert "deck longitudinal reinforcement" in txt
+    assert "deck transverse reinforcement" in txt
+    assert "standard-durability" in txt
+    assert "Quasi-permanent" in txt
+    assert "eta = (wk,x/wlim,x)^p + (wk,y/wlim,y)^p" in txt
+    assert "Canonical acceptance fingerprint" in txt
+    assert "Interaction evidence fingerprint" in txt
 
 
 def _shear_out_2023():

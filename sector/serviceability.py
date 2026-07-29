@@ -67,9 +67,10 @@ _KPA_PER_MPA = 1000.0
 CRACK_SCOPE_DOMINANT_DIRECTION = "dominant-direction"
 CRACK_SCOPE_DIRECT_TENSION = "uniform-direct-tension"
 CRACK_DIRECTIONAL_LIMITATION = (
-    "One-directional dominant strain-gradient assessment only. Orthogonal or "
-    "inclined crack systems are not assessed; an explicit multidirectional method "
-    "is required for those systems."
+    "The canonical crack response is a one-directional dominant strain-gradient "
+    "assessment. Orthogonal or inclined systems are not included in that component "
+    "conclusion; only separately selected, in-domain multidirectional evidence can "
+    "provide an aggregate conclusion."
 )
 CRACK_DIRECT_TENSION_SCOPE = (
     "Validated uniform direct-tension branch for a solid rectangular section with "
