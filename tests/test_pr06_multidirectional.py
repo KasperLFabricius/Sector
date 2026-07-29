@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import project_io  # noqa: E402
 import result_presentation  # noqa: E402
-from sector import multidirectional, sls  # noqa: E402
+from sector import danish_bridge, multidirectional, sls  # noqa: E402
 from tools.pr06_multidirectional_oracle import (  # noqa: E402
     benchmark_matrix,
     crack_dk_2004,
@@ -429,10 +429,21 @@ def test_en_2023_planar_method_rejects_wrong_component_edition():
     assert "explicit DS/EN 1992-1-1:2023" in result["reason"]
 
 
-def test_dk_crack_formula_matches_independent_oracle_and_binding():
+@pytest.mark.parametrize(
+    ("selected_code", "selected_edition"),
+    [
+        (multidirectional.CRACK_CODE_DK_2004, "2004"),
+        (danish_bridge.METHODOLOGY, sls.EDITION_BRIDGE_DK_2015),
+    ],
+)
+def test_dk_crack_formula_matches_independent_oracle_and_binding(
+    selected_code,
+    selected_edition,
+):
     inputs = _crack_input(multidirectional.CRACK_METHOD_DK_2004)
     inputs.update({
-        "sls_code": multidirectional.CRACK_CODE_DK_2004,
+        "sls_code": selected_code,
+        "sls_edition": selected_edition,
         "crack_interaction_orthogonal": True,
         "crack_interaction_plane_stress": True,
         "crack_interaction_no_discontinuity": True,
@@ -630,6 +641,35 @@ def test_crack_method_edition_switch_invalidates_the_conclusion():
     result = multidirectional.assess_crack_interaction(
         inputs, _crack_results()
     )
+    assert result["status"] == "NOT ASSESSED"
+    assert "requires the explicit EN 1992-1-1:2023" in result["reason"]
+
+
+@pytest.mark.parametrize(
+    ("selected_code", "selected_edition"),
+    [
+        (multidirectional.CRACK_CODE_DK_2004, "2023"),
+        (multidirectional.CRACK_CODE_EN_2023, "2004"),
+    ],
+)
+def test_contradictory_2023_crack_code_and_edition_fail_closed(
+    selected_code,
+    selected_edition,
+):
+    inputs = _crack_input(multidirectional.CRACK_METHOD_EN_2023)
+    inputs.update({
+        "sls_code": selected_code,
+        "sls_edition": selected_edition,
+        "crack_interaction_orthogonal": True,
+        "crack_interaction_membrane": True,
+        "crack_interaction_no_discontinuity": True,
+    })
+
+    result = multidirectional.assess_crack_interaction(
+        inputs,
+        _crack_results(),
+    )
+
     assert result["status"] == "NOT ASSESSED"
     assert "requires the explicit EN 1992-1-1:2023" in result["reason"]
 
@@ -872,6 +912,58 @@ def test_uniaxial_fallback_retains_component_and_case_identity():
     assert interaction["case_id"] == "ULS-UNI"
     assert [item["id"] for item in interaction["components"]] == ["vx"]
     assert interaction["components"][0]["status"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    ("malformed_field", "malformed_value"),
+    [
+        ("criterion", "not-an-evidence-object"),
+        ("configuration", "not-a-configuration-object"),
+    ],
+)
+def test_publication_rejects_malformed_crack_case_binding_without_crash(
+    malformed_field,
+    malformed_value,
+):
+    results = _crack_results()
+    inputs = {
+        **multidirectional.shear_configuration({}),
+        **_crack_input(multidirectional.CRACK_METHOD_PROJECT),
+    }
+    inputs.update({
+        "crack_interaction_domain_confirmed": True,
+        "crack_interaction_component_x_mm": 0.1,
+        "crack_interaction_component_y_mm": 0.1,
+        "crack_interaction_limit_x_mm": 0.3,
+        "crack_interaction_limit_y_mm": 0.3,
+        "crack_interaction_source": "CR-06",
+        "crack_interaction_approval": "AC-06",
+    })
+    multidirectional.apply_to_results(inputs, results)
+    for record in (
+        results["crack_interaction"],
+        results["elastic"]["crack_interaction"],
+    ):
+        if malformed_field == "configuration":
+            record["criterion"] = {}
+        record[malformed_field] = malformed_value
+        sealed = _reseal_result(record)
+        record.clear()
+        record.update(sealed)
+
+    safe = multidirectional.publication_safe_results(
+        results,
+        current_inputs=inputs,
+    )
+
+    assert safe["crack_interaction"]["status"] == "NOT ASSESSED"
+    assert (
+        safe["crack_interaction"]["qualification"]
+        == "PUBLICATION REJECTED"
+    )
+    assert safe["crack_interaction"]["publication_validation"][
+        "status"
+    ] == "REJECTED"
 
 
 def test_publication_rejects_tampered_stale_duplicate_and_durable_evidence():

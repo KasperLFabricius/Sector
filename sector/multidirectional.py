@@ -15,7 +15,7 @@ import math
 from collections.abc import Mapping, Sequence
 from numbers import Real
 
-from . import sls
+from . import danish_bridge, sls
 
 
 CRACK_METHOD_NONE = "not-assessed"
@@ -424,6 +424,24 @@ def interaction_configuration(inp: Mapping | None) -> dict:
     }
 
 
+def _crack_case_identity(record: Mapping | None) -> str:
+    """Return a structurally valid bound or configured Elastic case identity."""
+
+    if not isinstance(record, Mapping):
+        return ""
+    for container_name, field_name in (
+        ("criterion", "elastic_case"),
+        ("configuration", "crack_interaction_case_id"),
+    ):
+        container = record.get(container_name)
+        if not isinstance(container, Mapping):
+            continue
+        case_id = container.get(field_name)
+        if isinstance(case_id, str) and case_id.strip():
+            return case_id
+    return ""
+
+
 def _result_base(kind: str, config: Mapping, method: str) -> dict:
     labels = (
         CRACK_METHOD_LABELS if kind == "crack" else SHEAR_METHOD_LABELS
@@ -688,19 +706,26 @@ def _crack_selected_edition_matches(
     selected_code = str(inp.get("sls_code") or "").strip()
     selected_edition = str(inp.get("sls_edition") or "").strip()
     if method == CRACK_METHOD_DK_2004:
-        bridge_dk = selected_edition == sls.EDITION_BRIDGE_DK_2015
-        matches = selected_code == CRACK_CODE_DK_2004 or bridge_dk
+        direct_dk = (
+            selected_code == CRACK_CODE_DK_2004
+            and selected_edition == "2004"
+        )
+        bridge_dk = (
+            selected_code == danish_bridge.METHODOLOGY
+            and selected_edition == sls.EDITION_BRIDGE_DK_2015
+        )
+        matches = direct_dk or bridge_dk
         return matches, (
             "the DK inclined-crack method requires the DS/EN 1992-1-1 "
-            "+ DK NA crack route (including its Danish bridge referral)"
+            "+ DK NA code/edition pair (or its exact Danish bridge referral)"
         )
     if method == CRACK_METHOD_EN_2023:
         return (
             selected_code == CRACK_CODE_EN_2023
-            or selected_edition == "2023"
+            and selected_edition == "2023"
         ), (
             "the Annex G.5 method requires the explicit EN 1992-1-1:2023 "
-            "crack edition"
+            "crack code/edition pair"
         )
     return True, ""
 
@@ -1610,13 +1635,7 @@ def apply_to_results(inp: Mapping, results: Mapping) -> dict:
     results["crack_interaction"] = crack_result
     elastic_entries = results.get("elastic_cases")
     if isinstance(elastic_entries, list):
-        selected_case = str(
-            crack_result.get("criterion", {}).get("elastic_case")
-            or (
-                crack_result.get("configuration") or {}
-            ).get("crack_interaction_case_id")
-            or ""
-        )
+        selected_case = _crack_case_identity(crack_result)
         for entry in elastic_entries:
             if not isinstance(entry, dict):
                 continue
@@ -1766,9 +1785,7 @@ def interaction_calculation_record(results: Mapping | None) -> dict | None:
                     "top-level and Elastic-case crack interaction evidence "
                     f"conflict for {case_name or 'the current case'}"
                 )
-        selected_case = str(
-            ((crack.get("criterion") or {}).get("elastic_case")) or ""
-        )
+        selected_case = _crack_case_identity(crack)
         if selected_case and (
             len(nested_crack_records) != 1
             or sum(
@@ -3163,17 +3180,7 @@ def publication_safe_results(
         if isinstance(crack, Mapping)
         else None
     )
-    selected_case = (
-        str(
-            (crack.get("criterion") or {}).get("elastic_case")
-            or (
-                crack.get("configuration") or {}
-            ).get("crack_interaction_case_id")
-            or ""
-        )
-        if isinstance(crack, Mapping)
-        else ""
-    )
+    selected_case = _crack_case_identity(crack)
     elastic_entries = safe_results.get("elastic_cases")
     if isinstance(elastic_entries, list):
         for entry in elastic_entries:
