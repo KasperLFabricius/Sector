@@ -73,31 +73,10 @@ def test_invalid_curve_keeps_a_recognised_preset_internally_consistent():
     assert out["items"][0]["curve"] == 4
 
 
-def test_legacy_valid_assignment_ids_clone_the_former_global_law():
-    catalogue = mc.from_legacy_scalars({"mild_fytk": 412.0}, "mild")
-    out = mc.materialise_legacy_assignments(
-        catalogue, "mild", ["M2", "archive steel", "M2", "M4"]
-    )
-
-    assert mc.material_ids(out, "mild") == ["M1", "M2", "M4"]
-    assert [item["fytk"] for item in out["items"]] == [412.0, 412.0, 412.0]
-    assert "single-material" in out["items"][1]["description"]
-
-
-def test_legacy_migration_preserves_user_values_and_modulus_units():
-    out = mc.from_legacy_scalars({
-        "mild_preset": mc.DEFAULT_MILD_PRESET,
-        "mild_active_comp": False,
-        "mild_fytk": 612.0,
-        "mild_Es": 198.0,
-    }, "mild")
-    entry = out["items"][0]
-    material = mc.build_material(entry, "mild")
-
-    assert entry["id"] == "M1"
-    assert entry["active_in_compression"] is False
-    assert material.fytk == 612.0
-    assert material.Es == 198000.0
+def test_missing_current_catalogue_initialises_current_default():
+    out = mc.ensure_catalog({"mild_fytk": 412.0}, "mild")
+    assert mc.material_ids(out, "mild") == ["M1"]
+    assert out["items"][0]["fytk"] == 550.0
 
 
 def test_apply_preset_keeps_identity_and_description():

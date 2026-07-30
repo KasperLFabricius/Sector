@@ -23,13 +23,7 @@ _FIELDS = {
     "el_short_P": (load_cases.ELASTIC_TABLE_KEY, "n_short_ed_kn"),
     "el_short_Mx": (load_cases.ELASTIC_TABLE_KEY, "mx_short_ed_knm"),
     "el_short_My": (load_cases.ELASTIC_TABLE_KEY, "my_short_ed_knm"),
-    "sls_long_combination": (
-        load_cases.ELASTIC_TABLE_KEY, "long_combination"
-    ),
-    "sls_total_combination": (
-        load_cases.ELASTIC_TABLE_KEY, "total_combination"
-    ),
-    "sls_cw": (load_cases.ELASTIC_TABLE_KEY, "check_crack_width"),
+    "sls_cw": (load_cases.ELASTIC_TABLE_KEY, "calculate_crack_width"),
 }
 _DESCRIPTION_KEYS = {
     "pl_case_type", "pl_case_source", "el_case_type", "el_case_source",
@@ -80,7 +74,7 @@ def apply_case_changes(at, changes):
     if not case_updates:
         return ordinary, False
 
-    defaults = load_cases.tables_from_legacy_scalars({})
+    defaults = load_cases.default_tables()
     frames = {}
     for base_key in load_cases.CASE_TABLE_KEYS:
         value = (

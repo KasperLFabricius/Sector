@@ -29,18 +29,6 @@ DEFAULT_PRESTRESS_PRESET = "EN 1992-1-1:2005"
 MILD_FIELDS = tuple(mp.MILD_FIELD_META)
 PRESTRESS_FIELDS = tuple(mp.PRESTRESS_FIELD_META)
 
-LEGACY_MILD_KEYS = (
-    "mild_preset", "mild_active_comp", "mild_fytk", "mild_fyck",
-    "mild_futk", "mild_eut", "mild_gamma_y", "mild_gamma_u",
-    "mild_gamma_E", "mild_k", "mild_ey0t", "mild_ey0c", "mild_Es",
-)
-LEGACY_PRESTRESS_KEYS = (
-    "pre_preset", "pre_IS", "pre_fytk", "pre_futk", "pre_eut",
-    "pre_gamma_y", "pre_gamma_u", "pre_gamma_E", "pre_k", "pre_ey0t",
-    "pre_Es",
-)
-LEGACY_KEYS = LEGACY_MILD_KEYS + LEGACY_PRESTRESS_KEYS
-
 
 def _kind(kind: str) -> str:
     value = str(kind).strip().lower()
@@ -202,35 +190,12 @@ def normalise_catalog(value, kind: str) -> dict:
     return {"version": VERSION, "next_id": next_number, "items": items}
 
 
-def from_legacy_scalars(scalars: Mapping, kind: str) -> dict:
-    """Migrate the former one-material flat inputs to a one-item catalogue."""
-    kind = _kind(kind)
-    prefix = "mild" if kind == "mild" else "pre"
-    selected = _text(scalars.get(f"{prefix}_preset"), default_preset(kind))
-    entry = default_entry(kind, preset=selected)
-    entry["preset"] = selected if selected in presets(kind) else "Custom / imported"
-    if kind == "mild":
-        entry["active_in_compression"] = bool(
-            scalars.get("mild_active_comp", True)
-        )
-    for field in fields(kind):
-        key = f"{prefix}_{field}"
-        if key in scalars:
-            entry[field] = _finite(scalars[key], entry[field])
-    # The legacy flat UI originally stored the modulus in MPa and later changed
-    # to GPa. Values at or above 1000 are unambiguously the former unit.
-    if entry.get("Es", 0.0) >= 1000.0:
-        entry["Es"] /= 1000.0
-    selected_values = presets(kind).get(selected, {})
-    entry["curve"] = int(selected_values.get("curve", entry["curve"]))
-    return normalise_catalog({"items": [entry], "next_id": 2}, kind)
-
-
 def ensure_catalog(scalars: Mapping, kind: str) -> dict:
+    """Return the current catalogue or initialise a current-schema default."""
     key = catalog_key(kind)
     if key in scalars:
         return normalise_catalog(scalars[key], kind)
-    return from_legacy_scalars(scalars, kind)
+    return default_catalog(kind)
 
 
 def entries(catalog, kind: str) -> list[dict]:
@@ -261,39 +226,6 @@ def invalid_assignments(material_ids_: Sequence[str], catalog, kind: str) -> lis
     available = set(material_ids(catalog, kind))
     return sorted({str(value).strip() for value in material_ids_
                    if str(value).strip() not in available})
-
-
-def materialise_legacy_assignments(catalog, kind: str,
-                                   assigned_ids: Sequence[str]) -> dict:
-    """Preserve valid pre-v6 material IDs without changing old calculations.
-
-    Reinforcement rows gained a material-ID field before several material laws
-    were supported. Every row still used the one global law. When such a project
-    contains e.g. ``M2``, clone that global law under ``M2`` so the v6 project has
-    the same element IDs *and* the same numerical behaviour. Non-schema labels
-    remain undefined and visible for the engineer to resolve rather than being
-    silently rewritten.
-    """
-    kind = _kind(kind)
-    canonical = normalise_catalog(catalog, kind)
-    prefix = id_prefix(kind)
-    pattern = re.compile(rf"^{prefix}([1-9][0-9]*)$")
-    existing = {item["id"] for item in canonical["items"]}
-    source = canonical["items"][0]
-    for value in assigned_ids:
-        material_id = _text(value)
-        if not pattern.fullmatch(material_id) or material_id in existing:
-            continue
-        item = copy.deepcopy(source)
-        item["id"] = material_id
-        item["name"] = f"Migrated material {material_id}"
-        migration_note = "Migrated from the former single-material project law."
-        item["description"] = " ".join(
-            part for part in (item.get("description", ""), migration_note) if part
-        )
-        canonical["items"].append(item)
-        existing.add(material_id)
-    return normalise_catalog(canonical, kind)
 
 
 def _next_id(catalog: Mapping, kind: str) -> tuple[str, int]:

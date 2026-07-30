@@ -140,7 +140,7 @@ def _allocate_id(prefix: str, used: set[str], next_number: int) -> tuple[str, in
 def normalise_table(value, kind: str, *, default_mode: str = AREA_MODE) -> pd.DataFrame:
     """Return a canonical mixed-type element table.
 
-    Legacy ``x/y/area`` rows migrate to area-authoritative records. Missing or
+    Minimal ``x/y/area`` rows normalise to area-authoritative records. Missing or
     duplicate IDs are replaced deterministically; existing valid IDs never change.
     The non-authoritative size value is derived on every normalisation.
     """

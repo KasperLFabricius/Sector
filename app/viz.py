@@ -930,7 +930,7 @@ def fatigue_utilisation_map_figure(
         for result in [*reinforcement.values(), *concrete]
     ]
     search = _fatigue_value(spectrum, "concrete_search")
-    # The certified upper criterion is a bound over a search region, not a sampled
+    # The upper criterion is a bound over a search region, not a sampled
     # point represented by the colour axis. It has a dedicated red indicator below;
     # including it here can collapse every actual point into the bottom of the scale.
     cmax, tickvals, colour_scale_capped = _fatigue_utilisation_scale(
@@ -1059,7 +1059,7 @@ def fatigue_utilisation_map_figure(
                     )
                     + f"{_fatigue_hover_number(search_upper, '.3f')}"
                     + (
-                        "<br>search convergence = certified"
+                        "<br>search convergence = bounded"
                         if search_converged
                         else "<br>search convergence = not converged"
                     )
@@ -1171,9 +1171,9 @@ def fatigue_utilisation_map_figure(
             y=[search_y],
             mode="markers",
             name=(
-                "certified equivalent bound > 1.00"
+                "bounded equivalent result > 1.00"
                 if equivalent_concrete
-                else "certified search bound > 1.00"
+                else "bounded search result > 1.00"
             ),
             marker=dict(
                 size=19,
@@ -1183,9 +1183,9 @@ def fatigue_utilisation_map_figure(
             ),
             customdata=[(
                 (
-                    "Certified upper equivalent utilisation = "
+                    "Bounded upper equivalent utilisation = "
                     if equivalent_concrete
-                    else "Certified upper damage = "
+                    else "Bounded upper damage = "
                 )
                 + f"{_fatigue_hover_number(search_upper, '.3f')}"
                 + "<br>Marker is at the worst evaluated fibre; the conservative "
@@ -1279,7 +1279,7 @@ def fatigue_utilisation_map_figure(
             xanchor="left",
             yanchor="bottom",
             text=(
-                "certified search upper D = "
+                "bounded search upper D = "
                 f"{_fatigue_hover_number(search_upper, '.3f')} &gt; 1.00"
             ),
             showarrow=False,

@@ -8,15 +8,12 @@ engineering solvers.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
 
-import fatigue_analysis
 import fatigue_presentation
-import bridge_inputs
 
 import case_analysis
 import viz
-from sector import bridge, detailing, sls
+from sector import detailing
 
 _MM = 1000.0
 _DEGREE = chr(0x00B0)
@@ -285,10 +282,10 @@ def _summary_row(check, family, status, result="-", criterion="-", util=None,
     }
 
 
-def _util_summary_status(util, *, valid=True, applicable=True):
+def _util_summary_status(util, *, valid=True):
     if not valid:
         return "INVALID"
-    if not applicable or util is None:
+    if util is None:
         return "NOT ASSESSED"
     if not math.isfinite(util):
         return "FAIL"
@@ -304,6 +301,8 @@ def _map_assessment_status(status):
         "INVALID": "INVALID",
         "NOT ASSESSED": "NOT ASSESSED",
         "NOT APPLICABLE": "NOT APPLICABLE",
+        "NOT CALCULATED": "NOT CALCULATED",
+        "CALCULATED": "CALCULATED",
         "REVIEW": "REVIEW",
     }.get(str(status or "").upper(), "NOT ASSESSED")
 
@@ -321,14 +320,11 @@ def minimum_area_check(minimum, check):
     )
 
 
-def interaction_assessment_status(interaction, *, applicable=True):
-    """Acceptance state for a V+T interaction without issuing an invalid verdict."""
+def interaction_assessment_status(interaction):
+    """Acceptance state for a mathematically valid V+T interaction."""
     interaction = interaction or {}
-    code_applicable = bool(
-        interaction.get("code_applicable", applicable) and applicable
-    )
     value = interaction.get("value")
-    if not interaction.get("valid") or not code_applicable or value is None:
+    if not interaction.get("valid") or value is None:
         return "NOT ASSESSED"
     value = float(value)
     if not math.isfinite(value):
@@ -382,7 +378,6 @@ def combined_physical_components(combined):
     longitudinal-chord demand are different physical checks.
     """
     combined = combined or {}
-    applicable = bool(combined.get("code_applicable", True))
     transverse = combined.get("transverse")
     if transverse is None:
         missing_note = "Shear links are required for the combined component checks"
@@ -392,7 +387,6 @@ def combined_physical_components(combined):
             "status": "NOT ASSESSED",
             "util": None,
             "valid": False,
-            "applicable": False,
             "note": missing_note,
         }
         stirrup = {
@@ -401,7 +395,6 @@ def combined_physical_components(combined):
             "status": "NOT ASSESSED",
             "util": None,
             "valid": False,
-            "applicable": False,
             "note": missing_note,
         }
     else:
@@ -418,11 +411,9 @@ def combined_physical_components(combined):
             "status": _util_summary_status(
                 concrete_util,
                 valid=transverse_valid,
-                applicable=applicable,
             ),
             "util": concrete_util,
             "valid": transverse_valid,
-            "applicable": applicable,
             "note": (
                 f"V-T crushing at cot {_THETA} = {cot:.2f}"
                 if transverse_valid and cot is not None
@@ -437,11 +428,9 @@ def combined_physical_components(combined):
             "status": _util_summary_status(
                 stirrup_util,
                 valid=transverse_valid,
-                applicable=applicable,
             ),
             "util": stirrup_util,
             "valid": transverse_valid,
-            "applicable": applicable,
             "note": (
                 f"Shear {_percent(transverse.get('shear_fraction'))} + "
                 f"torsion {_percent(transverse.get('torsion_fraction'))}"
@@ -479,16 +468,6 @@ def combined_physical_components(combined):
     )
     main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
     long_valid = governing is not None and main_valid
-    long_applicable = bool(
-        applicable
-        and long_valid
-        and conditional
-        and not coverage
-        and all(
-            item.get("code_applicable", True)
-            for item in required_candidates
-        )
-    )
     long_util = governing.get("util") if governing is not None else None
     if not main_valid:
         long_status = "NOT ASSESSED"
@@ -515,13 +494,12 @@ def combined_physical_components(combined):
         face = "negative" if fallback.get("tension_low", True) else "positive"
         long_note = (
             f"Required {fallback.get('axis', '?')}-axis {face} face uses "
-            "a pure-axis fallback; no code verdict"
+            "a pure-axis fallback; no demand-versus-resistance verdict"
         )
     else:
         long_status = _util_summary_status(
             long_util,
             valid=long_valid,
-            applicable=long_applicable,
         )
         face = "negative" if governing.get("tension_low", True) else "positive"
         long_note = f"Governing {governing.get('axis', '?')}-axis {face} face"
@@ -531,7 +509,6 @@ def combined_physical_components(combined):
         "status": long_status,
         "util": long_util,
         "valid": long_valid,
-        "applicable": long_applicable,
         "note": long_note,
         "governing": governing,
         "coverage": coverage,
@@ -586,91 +563,6 @@ def fatigue_summary_rows(inp, results, *, stale=False):
     }]
 
 
-def bridge_summary_rows(inp, results, *, stale=False):
-    """Return every explicit EN 1992-2 base-methodology gate row."""
-
-    import bridge_analysis
-
-    inp = inp or {}
-    results = results or {}
-    raw_selected = inp.get("design_methodology")
-    selected = str(raw_selected or bridge.COMPONENT_METHODS)
-    payload = bridge.publication_safe_record(
-        results.get("bridge_methodology"),
-        design_methodology=raw_selected,
-        fatigue_context=fatigue_analysis.bridge_publication_context(inp),
-        danish_basis_context=bridge_inputs.danish_basis_context(inp),
-        danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
-        danish_crack_context=(
-            bridge_analysis.danish_crack_publication_context(inp, results)
-        ),
-    )
-    if not bridge.is_bridge_methodology(selected) and payload is None:
-        return []
-    if payload is None:
-        return [{
-            "check": "Bridge methodology",
-            "family": "bridge",
-            "case": selected,
-            "case_type": selected,
-            "source": bridge.methodology_source(selected),
-            "status": "NOT RUN",
-            "result": "-",
-            "criterion": "Complete explicit bridge applicability gate",
-            "util": None,
-            "view": "Bridge Methodology",
-            "note": "Calculate to assess the bridge coverage matrix.",
-        }]
-
-    rows = []
-    for check in payload.get("checks") or ():
-        status = _map_assessment_status(check.get("status"))
-        if stale and status not in {"NOT APPLICABLE", "NOT RUN"}:
-            status = "STALE"
-        disposition = str(check.get("disposition") or "")
-        reason = str(check.get("reason") or "")
-        rows.append({
-            "check": f"Bridge - {check.get('title') or check.get('check_id')}",
-            "family": "bridge",
-            "case": selected,
-            "case_type": disposition,
-            "source": str(check.get("source") or payload.get("source") or "-"),
-            "status": status,
-            "result": str(check.get("result") or "-"),
-            "criterion": str(check.get("criterion") or "-"),
-            "util": check.get("utilisation"),
-            "view": "Bridge Methodology",
-            "note": "; ".join(
-                part for part in (disposition, reason) if part
-            ),
-        })
-    publication_errors = (
-        (payload.get("publication_validation") or {}).get("errors")
-        or ()
-    )
-    for error in (
-        *(payload.get("configuration_errors") or ()),
-        *publication_errors,
-    ):
-        rows.append({
-            "check": "Bridge methodology configuration",
-            "family": "bridge",
-            "case": selected,
-            "case_type": "coverage matrix",
-            "source": str(payload.get("source") or "-"),
-            "status": "STALE" if stale else "INVALID",
-            "result": "-",
-            "criterion": (
-                "One decision per required coverage row and one matching "
-                "whole-calculation methodology"
-            ),
-            "util": None,
-            "view": "Bridge Methodology",
-            "note": str(error),
-        })
-    return rows
-
-
 def result_summary_rows(inp, results, *, stale=False):
     """Build the shared UI/PDF overview without rerunning any solver."""
     inp = inp or {}
@@ -713,112 +605,58 @@ def result_summary_rows(inp, results, *, stale=False):
             ))
     elif elastic is not None:
         converged = bool(elastic.get("converged", True))
-        assessments = elastic.get("stress_assessments") or {}
+        outputs = elastic.get("stress_outputs") or {}
         names = [
             ("Concrete stress", "concrete"),
             ("Reinforcement stress", "reinforcement"),
         ]
         if inp.get("tendons"):
             names.append(("Tendon stress", "prestress"))
-        if not assessments:
+        if not outputs:
             rows.append(_summary_row(
                 "Elastic stresses",
                 "elastic",
-                "INVALID" if not converged else "NOT ASSESSED",
+                "INVALID" if not converged else "NOT RUN",
                 view="Elastic Results",
                 note=("Solver did not converge" if not converged
-                      else "No stress criteria supplied"),
+                      else "No stress output returned"),
                 inp=inp,
             ))
         else:
             for label, key in names:
-                assessment = assessments.get(key) or {}
+                output = outputs.get(key) or {}
                 status = (
                     "INVALID" if not converged
-                    else _map_assessment_status(assessment.get("status"))
+                    else str(
+                        output.get("calculation_state") or "NOT CALCULATED"
+                    )
                 )
-                value, limit = assessment.get("value"), assessment.get("limit")
+                value = output.get("value")
                 result = "-" if value is None else f"{value:.3f} MPa"
-                criterion = (
-                    "not supplied"
-                    if limit is None or limit <= 0.0
-                    else f"<= {limit:.3f} MPa"
-                )
                 rows.append(_summary_row(
-                    label, "elastic", status, result, criterion,
-                    assessment.get("util"), "Elastic Results",
-                    assessment.get("criterion") or "", inp,
+                    label, "elastic", status, result, "Output only",
+                    None, "Elastic Results",
+                    output.get("governing") or output.get("quantity") or "", inp,
                 ))
         if elastic.get("show_cw") or inp.get("sls_cw"):
-            assessment = elastic.get("crack_assessment") or {}
+            output = elastic.get("crack_output") or {}
             status = (
                 "INVALID" if not converged
-                else _map_assessment_status(assessment.get("status"))
-            )
-            value, limit = assessment.get("value"), assessment.get("limit")
-            decompression = (
-                assessment.get("criterion") == sls.CRITERION_DECOMPRESSION
-            )
-            if decompression:
-                result = "-" if value is None else f"{value:.3f} MPa"
-                criterion = "concrete stress <= 0 MPa"
-                check = "Decompression"
-            else:
-                result = "-" if value is None else f"{value:.3f} mm"
-                criterion = (
-                    "not supplied"
-                    if limit is None or limit <= 0.0
-                    else f"<= {limit:.3f} mm"
+                else str(
+                    output.get("calculation_state") or "NOT CALCULATED"
                 )
-                check = "Crack width"
-            note_parts = []
-            if assessment.get("reason"):
-                note_parts.append(str(assessment["reason"]))
-            elif assessment.get("governing"):
-                note_parts.append(str(assessment["governing"]))
-            if elastic.get("crack_scope_note"):
-                note_parts.append(str(elastic["crack_scope_note"]))
-            rows.append(_summary_row(
-                check, "elastic", status, result, criterion,
-                assessment.get("util"), "Elastic Results",
-                " ".join(note_parts), inp,
-            ))
-        crack_interaction = results.get("crack_interaction")
-        if isinstance(crack_interaction, Mapping):
-            interaction_status = str(
-                crack_interaction.get("status") or ""
-            ).upper()
-            if (
-                interaction_status == "PASS"
-                and crack_interaction.get("qualification")
-            ):
-                summary_status = "REVIEW"
-            else:
-                summary_status = _map_assessment_status(
-                    interaction_status
-                )
-            parameters = crack_interaction.get("parameters") or {}
-            width = parameters.get("crack_width_mm")
-            result_text = (
-                f"{float(width):.3f} mm"
-                if isinstance(width, (int, float))
-                else _percent(crack_interaction.get("utilisation"))
             )
+            value = output.get("value")
+            result = "-" if value is None else f"{value:.3f} mm"
             rows.append(_summary_row(
-                "Multidirectional crack interaction",
-                "elastic",
-                summary_status,
-                result_text,
-                str(crack_interaction.get("method_name") or "-"),
-                crack_interaction.get("utilisation"),
-                "Elastic Results",
-                " | ".join(
-                    part
-                    for part in (
-                        str(crack_interaction.get("verdict") or ""),
-                        str(crack_interaction.get("reason") or ""),
+                "Crack width", "elastic", status, result, "Output only",
+                None, "Elastic Results",
+                "; ".join(
+                    value for value in (
+                        str(output.get("case") or ""),
+                        str(output.get("governing") or ""),
                     )
-                    if part
+                    if value
                 ),
                 inp,
             ))
@@ -1086,7 +924,6 @@ def result_summary_rows(inp, results, *, stale=False):
                     _util_summary_status(
                         links.get("util"),
                         valid=bool((links.get("res") or {}).get("valid")),
-                        applicable=bool(links.get("code_applicable", True)),
                     ),
                     _percent(links.get("util")),
                     "<= 100 %",
@@ -1102,40 +939,14 @@ def result_summary_rows(inp, results, *, stale=False):
                 if component in directions:
                     append_direction(component, directions[component])
             if shear.get("biaxial"):
-                interaction = shear.get("interaction") or {}
-                interaction_status = str(
-                    interaction.get("status") or "NOT ASSESSED"
-                ).upper()
-                if (
-                    interaction_status == "PASS"
-                    and interaction.get("qualification")
-                ):
-                    summary_status = "REVIEW"
-                else:
-                    summary_status = _map_assessment_status(
-                        interaction_status
-                    )
                 rows.append(_summary_row(
-                    "Biaxial shear interaction", "plastic", summary_status,
-                    result=(
-                        _percent(interaction.get("utilisation"))
-                        if interaction.get("utilisation") is not None
-                        else "Independent Vx/Vy checks"
-                    ),
-                    criterion=str(
-                        interaction.get("method_name")
-                        or "No general interaction expression"
-                    ),
-                    util=interaction.get("utilisation"),
+                    "Generic cross-direction shear interaction",
+                    "plastic",
+                    "NOT CALCULATED",
+                    result="Independent Vx and Vy calculations",
+                    criterion="Not calculated",
                     view="Shear",
-                    note=" | ".join(
-                        part
-                        for part in (
-                            str(interaction.get("verdict") or ""),
-                            str(interaction.get("reason") or ""),
-                        )
-                        if part
-                    ) or "Overall shear requires engineering review",
+                    note="No aggregate cross-direction verdict",
                     inp=inp,
                 ))
         else:
@@ -1154,7 +965,6 @@ def result_summary_rows(inp, results, *, stale=False):
             _util_summary_status(
                 torsion.get("util"),
                 valid=bool(torsion.get("valid")),
-                applicable=bool(torsion.get("code_applicable", True)),
             ),
             _percent(torsion.get("util")),
             "<= 100 %",
@@ -1178,26 +988,44 @@ def result_summary_rows(inp, results, *, stale=False):
                 if not direction:
                     continue
                 label = "Vx+T" if component == "vx" else "Vy+T"
-                util = direction.get("governing_util")
+                util = direction.get("dkna_sum")
+                status = (
+                    "NOT ASSESSED"
+                    if not direction.get("valid")
+                    else "PASS" if direction.get("dkna_ok") else "FAIL"
+                )
                 rows.append(_summary_row(
-                    f"Combined {label} directional screen",
+                    f"Combined {label} - DK NA sum",
                     "plastic",
-                    _map_assessment_status(direction.get("status")),
+                    status,
                     _percent(util),
-                    "Each reported check <= 100 %",
+                    "<= 100 %",
                     util,
                     "M-V-T Combined",
-                    "See the directional result for component checks",
+                    str(direction.get("method") or ""),
                     inp,
                 ))
+                if direction.get("valid"):
+                    for physical in combined_physical_components(direction):
+                        rows.append(_summary_row(
+                            f"Combined {label} {physical['label'].lower()}",
+                            "plastic",
+                            physical["status"],
+                            _percent(physical["util"]),
+                            "<= 100 %",
+                            physical["util"],
+                            "M-V-T Combined",
+                            physical["note"],
+                            inp,
+                        ))
             rows.append(_summary_row(
-                "Combined Vx-Vy-T interaction",
+                "Generic Vx-Vy-T interaction",
                 "plastic",
-                "NOT ASSESSED",
-                result="Independent Vx+T and Vy+T screens",
-                criterion="No established three-component expression",
+                "NOT CALCULATED",
+                result="Independent Vx+T and Vy+T calculations",
+                criterion="Not calculated",
                 view="M-V-T Combined",
-                note="Overall combined result requires engineering review",
+                note="No aggregate cross-direction verdict",
                 inp=inp,
             ))
             if stale and results:
@@ -1208,7 +1036,6 @@ def result_summary_rows(inp, results, *, stale=False):
                         row["note"] = f"Last status: {previous}; inputs changed"
             return rows
         valid = bool(combined.get("valid"))
-        applicable = bool(combined.get("code_applicable", True))
         util = combined.get("dkna_sum")
         missing = [
             label
@@ -1233,7 +1060,6 @@ def result_summary_rows(inp, results, *, stale=False):
             else _util_summary_status(
                 util,
                 valid=valid,
-                applicable=applicable,
             )
         )
         rows.append(_summary_row(
@@ -1278,7 +1104,6 @@ def multi_case_summary_rows(inp, results, *, stale=False):
         return (
             result_summary_rows(inp, results, stale=stale)
             + fatigue_summary_rows(inp, results, stale=stale)
-            + bridge_summary_rows(inp, results, stale=stale)
         )
 
     mode = str(inp.get("mode") or "")
@@ -1386,7 +1211,6 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             stale=stale,
         ))
     rows.extend(fatigue_summary_rows(inp, results, stale=stale))
-    rows.extend(bridge_summary_rows(inp, results, stale=stale))
     return rows
 
 
@@ -1394,8 +1218,8 @@ def overall_summary_status(rows):
     """Return the most conservative state represented in a summary table."""
     states = {row.get("status") for row in rows}
     for status in (
-        "INVALID", "FAIL", "STALE", "REVIEW", "NOT ASSESSED", "NOT RUN", "PASS",
-        "NOT APPLICABLE",
+        "INVALID", "FAIL", "STALE", "REVIEW", "NOT ASSESSED", "NOT RUN",
+        "PASS", "CALCULATED", "NOT CALCULATED", "NOT APPLICABLE",
     ):
         if status in states:
             return status

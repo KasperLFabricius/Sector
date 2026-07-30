@@ -1,7 +1,7 @@
 """Sector - reinforced-concrete cross-section analysis (Streamlit interface).
 
-Define a section, select the required solvers and review stresses, capacities
-and acceptance checks.
+Define a section, select numerical methods and review calculation outputs and
+demand-versus-resistance checks.
 """
 
 from __future__ import annotations
@@ -9,14 +9,12 @@ from __future__ import annotations
 import copy
 import dataclasses
 import functools
-import hashlib
 import math
 import os
 import pathlib
 import re
 import sys
 import time
-from collections.abc import Mapping
 from datetime import datetime, timezone
 
 # Make both the repo root (for ``sector``) and this app folder (for ``viz``)
@@ -29,9 +27,9 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-import case_analysis  # noqa: E402
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
+import case_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import fatigue_presentation  # noqa: E402
@@ -45,22 +43,16 @@ from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import (bridge, capacity, codes, combined, conformance,  # noqa: E402
-                    danish_bridge, detailing, geometry, kernels,
-                    material_presets as mp, multidirectional, shear,
-                    templates, torsion)
+from sector import (bridge, capacity, codes, combined, detailing, geometry,  # noqa: E402
+                    kernels, material_presets as mp, shear, templates, torsion)
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector import sls as sls_core  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
 from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
 from sector.section import Section  # noqa: E402
-from sector.serviceability import (  # noqa: E402
-    CRACK_DIRECTIONAL_LIMITATION,
-    analyse_cracking,
-    combined_cracking,
-    evaluate_crack_width,
-)
+from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
+                                   crack_width)
 
 # The tool version comes from the sector package (the single source of truth); it
 # shows in the title, the browser tab, the About panel and the report footer.
@@ -74,7 +66,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # so widget labels use $...$ but table headers/cells use these). Written via chr()
 # so the source stays ASCII (BMP code points, no surrogate pairs).
 _EPS, _SIGMA, _RHO, _PHI = chr(0x3B5), chr(0x3C3), chr(0x3C1), chr(0x3C6)
-_XI = chr(0x3BE)
 _KAPPA = chr(0x3BA)
 _THETA, _NU, _ALPHA, _DELTA = chr(0x3B8), chr(0x3BD), chr(0x3B1), chr(0x394)
 _TAU = chr(0x3C4)
@@ -84,23 +75,17 @@ _DEG = chr(0x00B0)
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
 
 # Crack-width code edition -> the crack-spacing flags. edition: "2004" (EC2 7.3.4)
-# or "2023" (EC2 9.2.3 refined). dk_na activates the related
-# DS/EN 1992-1-1 DK NA numerical model: cover-dependent k3, the conditional
-# (h-x)/3 effective-height term, and both fine and coarse crack systems.
-# DS/EN 1992-2:2005 section 7 imports/recommends that method; the 2015 bridge
-# NA makes the related national annex part of Danish bridge practice.
+# or "2023" (EC2 9.2.3 refined). dk_na: cover-dependent k3 and the (h-x)/3
+# effective-height term only for slabs/prestressed; the DK NA option reports BOTH
+# the fine and the coarse crack system (7.3.4(1)) -- the coarse effective area is
+# the band whose centroid matches the tension reinforcement (figure 7.100 NA) and
+# its wk is halved -- for both the long-term and the short-term load.
 _CRACK_CODES = {
     "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
     "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
     "EN 1992-1-1:2023": dict(dk_na=False, edition="2023"),
-    bridge.EN1992_2_BASE: dict(
-        dk_na=False,
-        edition=sls_core.EDITION_BRIDGE_2005_AC,
-    ),
-    bridge.EN1992_2_DK_NA: dict(
-        dk_na=True,
-        edition=sls_core.EDITION_BRIDGE_DK_2015,
-    ),
+    bridge.EN1992_2_BASE: dict(dk_na=False, edition="2004"),
+    bridge.EN1992_2_DK_NA: dict(dk_na=True, edition="2004"),
 }
 # Old saved values for the (now merged) fine/coarse DK NA options.
 _CRACK_CODE_ALIASES = {
@@ -164,100 +149,6 @@ _KTC_CHOICES = {
     "0.85 - General / other cases (default)": 0.85,
     "1.00 - 5.1.6(1) reference-age and loading conditions": 1.0,
 }
-
-
-def _edition_family(label):
-    """Normalise a user-visible method/preset label for alignment reporting."""
-    text = str(label or "")
-    if "2023" in text:
-        return "EN 1992-1-1:2023"
-    if "DK NA" in text:
-        return "EN 1992-1-1:2005 + DK NA"
-    if "2005" in text or "2004" in text:
-        return "EN 1992-1-1:2005"
-    return "Custom material law"
-
-
-def _design_basis_summary(*, concrete_preset, mild_preset=None,
-                          prestress_preset=None, mild_materials=None,
-                          prestress_materials=None,
-                          crack_code=None, shear_method=None, shear_links=False,
-                          torsion_method=None, combined_method=None,
-                          detailing_method=None, fatigue_method=None,
-                          methodology=None):
-    """Whole-calculation edition map and any material hybrid/coverage qualification.
-
-    Sector intentionally permits independent expert choices. This summary makes
-    those choices conspicuous instead of silently presenting a mixed-edition report
-    as one end-to-end code implementation.
-    """
-    selections = []
-    if methodology:
-        selections.append(("Whole calculation", methodology))
-    selections.append(("Concrete material", concrete_preset))
-    if mild_materials:
-        selections.extend(
-            (f"Reinforcing steel {item['id']}", item["preset"])
-            for item in mild_materials
-        )
-    elif mild_preset:
-        selections.append(("Reinforcing steel", mild_preset))
-    if prestress_materials:
-        selections.extend(
-            (f"Prestressing steel {item['id']}", item["preset"])
-            for item in prestress_materials
-        )
-    elif prestress_preset:
-        selections.append(("Prestressing steel", prestress_preset))
-    if crack_code:
-        selections.append(("Crack width", crack_code))
-    if shear_method:
-        selections.append(("Shear", shear_method))
-    if torsion_method:
-        selections.append(("Torsion", torsion_method))
-    if combined_method:
-        selections.append(("Combined M-V-T", combined_method))
-    if detailing_method:
-        selections.append(("Longitudinal detailing", detailing_method))
-    if fatigue_method:
-        selections.append(("Fatigue", fatigue_method))
-
-    components = [
-        {"role": role, "selection": str(selection),
-         "family": _edition_family(selection)}
-        for role, selection in selections
-    ]
-    normative = {c["family"] for c in components
-                 if c["family"] != "Custom material law"}
-    has_custom = any(c["family"] == "Custom material law" for c in components)
-    mixed = len(normative) > 1 or (has_custom and bool(normative))
-
-    if mixed:
-        status = "Mixed/custom design basis - review every selected method"
-    elif normative and not has_custom:
-        status = f"Edition-aligned: {next(iter(normative))}"
-    elif has_custom:
-        status = "Custom material-law basis"
-    else:
-        status = "Design basis not identified"
-
-    limitations = []
-    if crack_code:
-        limitations.append(CRACK_DIRECTIONAL_LIMITATION)
-    concrete_2023 = _edition_family(concrete_preset) == "EN 1992-1-1:2023"
-    if concrete_2023 and (torsion_method or combined_method):
-        limitations.append(
-            "Torsion and combined M-V-T use a selected 2005-family method; "
-            "Sector does not implement those checks to EN 1992-1-1:2023."
-        )
-    return {
-        "components": components,
-        "families": sorted(normative),
-        "has_custom": has_custom,
-        "mixed": mixed,
-        "status": status,
-        "limitations": limitations,
-    }
 
 
 def _prefill(prefix, preset, presets):
@@ -354,6 +245,40 @@ def _seeded_text_area(box, label, default, key, **kw):
 
     st.session_state.setdefault(key, default)
     return box.text_area(label, key=key, **_input_widget_kwargs(key, kw))
+
+
+_TORSION_GAMMA_METHOD_KEY = "_torsion_gamma_ct_default_method"
+_TORSION_GAMMA_MANAGED_KEY = "_torsion_gamma_ct_uses_method_default"
+
+
+def _mark_torsion_gamma_ct_custom():
+    """Stop method changes from replacing an explicitly edited factor."""
+    st.session_state[_TORSION_GAMMA_MANAGED_KEY] = False
+
+
+def _seed_torsion_gamma_ct(method):
+    """Seed or update the editable tensile factor from the selected method.
+
+    A fresh input follows the method default. Once the engineer edits it, later
+    method changes preserve that actual value. Loaded projects are marked
+    explicit in :func:`_apply_pending_project` before this helper runs.
+    """
+    code = _SHEAR_CODES.get(method, codes.EC2_2005_DKNA)
+    default = float(code.gamma_ct)
+    previous_method = st.session_state.get(_TORSION_GAMMA_METHOD_KEY)
+    if "torsion_gamma_ct" not in st.session_state:
+        st.session_state["torsion_gamma_ct"] = default
+        st.session_state[_TORSION_GAMMA_MANAGED_KEY] = True
+    elif previous_method is None:
+        st.session_state.setdefault(_TORSION_GAMMA_MANAGED_KEY, False)
+    elif (
+        previous_method != method
+        and st.session_state.get(_TORSION_GAMMA_MANAGED_KEY, False)
+    ):
+        st.session_state["torsion_gamma_ct"] = default
+        _journal_current_input_values("torsion_gamma_ct")
+    st.session_state[_TORSION_GAMMA_METHOD_KEY] = method
+    return default
 
 
 def _safe_build(box, builder, curve, vals, **extra):
@@ -1719,41 +1644,15 @@ def _case_column_config(key):
         }
     return {
         **text,
-        "long_combination": st.column_config.SelectboxColumn(
-            "Long response SLS combination",
-            help=(
-                "Explicit combination represented by the sustained/long-term "
-                "response. Duration alone never establishes this designation."
-            ),
-            options=list(sls_core.SLS_COMBINATIONS),
-            default=sls_core.COMBINATION_UNSPECIFIED,
-            required=True,
-            width="medium",
-        ),
-        "total_combination": st.column_config.SelectboxColumn(
-            "Total response SLS combination",
-            help=(
-                "Explicit combination represented by the calculated total "
-                "(long + short) response. It is not inferred as characteristic "
-                "or frequent."
-            ),
-            options=list(sls_core.SLS_COMBINATIONS),
-            default=sls_core.COMBINATION_UNSPECIFIED,
-            required=True,
-            width="medium",
-        ),
         "n_long_ed_kn": force("N_Ed,long [kN]", "Sustained axial force; tension is positive."),
         "mx_long_ed_knm": force("Mx_Ed,long [kNm]", "Sustained moment about x."),
         "my_long_ed_knm": force("My_Ed,long [kNm]", "Sustained moment about y."),
         "n_short_ed_kn": force("N_Ed,short [kN]", "Instantaneous axial-force part."),
         "mx_short_ed_knm": force("Mx_Ed,short [kNm]", "Instantaneous moment part about x."),
         "my_short_ed_knm": force("My_Ed,short [kNm]", "Instantaneous moment part about y."),
-        "check_stress": st.column_config.CheckboxColumn(
-            "Stress limits", help="Assess this case against the global stress limits.",
-            default=True, width="small",
-        ),
-        "check_crack_width": st.column_config.CheckboxColumn(
-            "Crack width", help="Assess crack width for this case.",
+        "calculate_crack_width": st.column_config.CheckboxColumn(
+            "Calculate crack width",
+            help="Run the selected numerical crack-width method for this action.",
             default=False, width="small",
         ),
     }
@@ -1786,8 +1685,6 @@ def _case_table_editor(box, key):
                 "height": "auto",
                 "column_config": _case_column_config(key),
                 "column_order": load_cases.TABLE_COLUMNS[key],
-                "on_change": _commit_case_editor_delta,
-                "args": (key,),
             },
         ),
     )
@@ -1798,12 +1695,7 @@ def _case_table_editor(box, key):
 
 def _load_case_editors(box):
     """Render and return the authoritative Plastic and Elastic case tables."""
-    legacy = {
-        key: st.session_state[key]
-        for key in load_cases.LEGACY_SCALAR_KEYS
-        if key in st.session_state
-    }
-    defaults = load_cases.tables_from_legacy_scalars(legacy)
+    defaults = load_cases.default_tables()
     for key in load_cases.CASE_TABLE_KEYS:
         if key not in st.session_state:
             st.session_state[key] = defaults[key]
@@ -1819,9 +1711,8 @@ def _load_case_editors(box):
     box.markdown("**Elastic cases**")
     box.caption(
         "Long and short action parts share the global creep coefficient below. "
-        "Designate the SLS combination represented by each calculated response "
-        "separately from duration; Not designated makes a required criterion "
-        "NOT ASSESSED. Select stress and crack-width acceptance per row."
+        "Stresses are always reported. Crack width is an optional calculation "
+        "for each user-defined action; no combination completeness is inferred."
     )
     elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
     return {
@@ -1835,108 +1726,6 @@ _BRIDGE_EDITOR_KEYS = {
     key: f"{key}_editor"
     for key in bridge_inputs.TABLE_KEYS
 }
-_NON_REPLAYABLE_WIDGET_KEYS = frozenset({
-    *_CASE_EDITOR_KEYS.values(),
-    _FATIGUE_EDITOR_KEY,
-    *_BRIDGE_EDITOR_KEYS.values(),
-})
-
-
-def _apply_native_editor_delta(seed, delta):
-    """Apply one cumulative Streamlit data-editor delta to its frozen seed.
-
-    Streamlit owns the widget-state dictionary, so it must never be assigned
-    back through ``session_state``.  Its delta is nevertheless available inside
-    the widget callback.  Applying that cumulative delta to the same immutable
-    seed used by the editor lets the callback commit the authoritative table
-    before a second browser event can supersede the rerun.
-    """
-
-    frame = (
-        seed.copy(deep=True)
-        if isinstance(seed, pd.DataFrame)
-        else pd.DataFrame(seed)
-    ).reset_index(drop=True)
-    if not isinstance(delta, dict):
-        return frame
-
-    edited_rows = delta.get("edited_rows")
-    if isinstance(edited_rows, dict):
-        for row_id, changes in edited_rows.items():
-            try:
-                row_pos = int(row_id)
-            except (TypeError, ValueError):
-                continue
-            if (
-                row_pos < 0
-                or row_pos >= len(frame)
-                or not isinstance(changes, dict)
-            ):
-                continue
-            for column, value in changes.items():
-                if column in frame.columns:
-                    frame.iat[row_pos, frame.columns.get_loc(column)] = value
-
-    deleted_rows = delta.get("deleted_rows")
-    if isinstance(deleted_rows, (list, tuple)):
-        positions = []
-        for row_id in deleted_rows:
-            try:
-                row_pos = int(row_id)
-            except (TypeError, ValueError):
-                continue
-            if 0 <= row_pos < len(frame):
-                positions.append(row_pos)
-        if positions:
-            frame = frame.drop(frame.index[sorted(set(positions))])
-
-    added_rows = delta.get("added_rows")
-    if isinstance(added_rows, (list, tuple)):
-        rows = [row for row in added_rows if isinstance(row, dict)]
-        if rows:
-            frame = pd.concat(
-                [frame, pd.DataFrame(rows)],
-                ignore_index=True,
-                sort=False,
-            )
-    return frame.reset_index(drop=True)
-
-
-def _commit_case_editor_delta(key):
-    """Commit a native load-editor event before its rerun can be interrupted."""
-
-    editor_key = _CASE_EDITOR_KEYS[key]
-    seed_key = f"_{key}_editor_seed"
-    seed = st.session_state.get(seed_key, st.session_state.get(key))
-    current = _apply_native_editor_delta(
-        seed, st.session_state.get(editor_key)
-    )
-    st.session_state[key] = load_cases.normalise_table(current, key)
-
-
-def _commit_fatigue_editor_delta():
-    """Commit a native fatigue-editor event before rerun recovery."""
-
-    key = fatigue_inputs.SPECTRUM_TABLE_KEY
-    seed_key = f"_{key}_editor_seed"
-    seed = st.session_state.get(seed_key, st.session_state.get(key))
-    current = _apply_native_editor_delta(
-        seed, st.session_state.get(_FATIGUE_EDITOR_KEY)
-    )
-    st.session_state[key] = fatigue_inputs.normalise_spectrum_table(current)
-
-
-def _commit_bridge_editor_delta(key):
-    """Commit one bridge evidence-table event before an interrupted rerun."""
-
-    editor_key = _BRIDGE_EDITOR_KEYS[key]
-    seed_key = f"_{key}_editor_seed"
-    seed = st.session_state.get(seed_key, st.session_state.get(key))
-    current = _apply_native_editor_delta(
-        seed,
-        st.session_state.get(editor_key),
-    )
-    st.session_state[key] = bridge_inputs.normalise_table(current, key)
 
 
 def _fatigue_spectrum_column_config():
@@ -2036,7 +1825,6 @@ def _fatigue_spectrum_editor(box):
                 "height": "auto",
                 "column_config": _fatigue_spectrum_column_config(),
                 "column_order": fatigue_inputs.SPECTRUM_COLUMNS,
-                "on_change": _commit_fatigue_editor_delta,
             },
         ),
     )
@@ -2046,146 +1834,71 @@ def _fatigue_spectrum_editor(box):
 
 
 def _bridge_column_config(key):
-    """Readable strict columns for the four bridge evidence tables."""
-
-    text = lambda label, help_text, required=False: st.column_config.TextColumn(
-        label,
-        help=help_text,
-        required=required,
-        width="medium",
-    )
-    def number(label, help_text, *, min_value=None, max_value=None):
-        return st.column_config.NumberColumn(
-            label,
-            help=help_text,
-            format="%.3f",
-            required=True,
-            width="small",
-            min_value=min_value,
-            max_value=max_value,
-        )
-    basis_config = st.column_config.SelectboxColumn(
-        "Parameter basis *",
-        options=list(conformance.BASIS_OPTIONS),
-        default=conformance.STANDARD_BASIS,
-        required=True,
-        width="medium",
-        help=(
-            "Selected-standard prescription assesses the value against the "
-            "normative range. Custom design basis preserves the value and "
-            "requires its methodology and approval/source for a qualified "
-            "custom verdict."
-        ),
-    )
-    provenance_config = {
-        "parameter_basis": basis_config,
-        "custom_methodology": text(
-            "Custom methodology",
-            "Alternative calculation or design-basis methodology.",
-        ),
-        "approval_reference": text(
-            "Approval / source",
-            "Design-basis clause, authority source, or checker approval.",
-        ),
+    """Readable strict columns for one optional bridge calculation table."""
+    labels = {
+        "region_id": "Region *",
+        "m_rep_knm": "Mrep [kNm]",
+        "z_s_m": "zs [m]",
+        "f_yk_mpa": "fyk [MPa]",
+        "as_provided_mm2": "As,provided [mm2]",
+        "wall_id": "Wall *",
+        "cot_theta": "cot(theta)",
+        "v_ed_kn": "VEd [kN]",
+        "v_rd_max_kn": "VRd,max [kN]",
+        "t_ed_equivalent_kn": "TEd,eq [kN]",
+        "t_rd_max_equivalent_kn": "TRd,max,eq [kN]",
+        "component": "Component *",
+        "act_mm2": "Act [mm2]",
+        "k_c": "kc",
+        "k": "k",
+        "fct_eff_mpa": "fct,eff [MPa]",
+        "sigma_s_mpa": "sigma_s [MPa]",
+        "restrained_shrinkage": "Restrained shrinkage",
     }
-    if key == bridge_inputs.COVERAGE_TABLE_KEY:
-        return {
-            "check_id": text(
-                "Check ID",
-                "Canonical EN 1992-2 coverage row.",
-                True,
-            ),
-            "applicability": st.column_config.SelectboxColumn(
-                "Applicability *",
-                options=list(bridge.APPLICABILITY_OPTIONS),
-                default=bridge.NOT_ESTABLISHED,
+    config = {}
+    for column in bridge_inputs.TABLE_COLUMNS[key]:
+        if column in bridge_inputs.TEXT_COLUMNS[key]:
+            if column == "component":
+                config[column] = st.column_config.SelectboxColumn(
+                    labels[column],
+                    options=["web", "flange"],
+                    required=True,
+                    width="small",
+                )
+            else:
+                config[column] = st.column_config.TextColumn(
+                    labels[column],
+                    required=True,
+                    pinned=True,
+                    width="small",
+                )
+        elif column in bridge_inputs.BOOLEAN_COLUMNS[key]:
+            config[column] = st.column_config.CheckboxColumn(
+                labels[column],
+                default=False,
+                width="small",
+            )
+        else:
+            config[column] = st.column_config.NumberColumn(
+                labels[column],
+                format="%.4g",
                 required=True,
-                width="medium",
-                help=(
-                    "Required runs the implemented check. Not applicable needs "
-                    "a project-basis source and remains visible."
-                ),
-            ),
-            "source": text(
-                "Project-basis source *",
-                "Document/clause supporting this applicability decision.",
-            ),
-            "notes": text("Notes", "Optional applicability explanation."),
-        }
-    if key == bridge_inputs.BRITTLE_TABLE_KEY:
-        return {
-            "region_id": text("Tensile region *", "Unique region ID.", True),
-            "m_rep_knm": number("Mrep [kNm]", "Cracking/replacement moment."),
-            "z_s_m": number("zs [m]", "Internal lever arm."),
-            "f_yk_mpa": number("fyk [MPa]", "Characteristic steel strength."),
-            "as_provided_mm2": number(
-                "As,provided [mm2]",
-                "Provided reinforcement in this tensile region.",
-            ),
-        }
-    if key == bridge_inputs.BOX_WALL_TABLE_KEY:
-        return {
-            "wall_id": text("Wall *", "Unique box-wall ID.", True),
-            "cot_theta": number(
-                "cot(theta)",
-                "Positive analytical input. DS/EN 1992-1-1 6.2.3(2) "
-                "conformance is assessed separately against 1.0 to 2.5 and "
-                "the common-angle rule.",
-            ),
-            "v_ed_kn": number("VEd [kN]", "Wall shear action."),
-            "v_rd_max_kn": number("VRd,max [kN]", "Wall shear resistance."),
-            "t_ed_equivalent_kn": number(
-                "TEd,eq [kN]",
-                "Torsion-equivalent wall action.",
-            ),
-            "t_rd_max_equivalent_kn": number(
-                "TRd,max,eq [kN]",
-                "Torsion-equivalent wall resistance.",
-            ),
-            **provenance_config,
-        }
-    return {
-        "component": st.column_config.SelectboxColumn(
-            "Component *",
-            options=["Web", "Flange"],
-            required=True,
-            width="small",
-        ),
-        "act_mm2": number("Act [mm2]", "Effective concrete tension area."),
-        "k_c": number("kc", "Stress-distribution coefficient."),
-        "k": number(
-            "k",
-            "Positive analytical coefficient. Conformance to the "
-            "dimension-derived 0.65 to 1.00 range in DS/EN 1992-2 "
-            "7.3.2(102) is assessed separately.",
-        ),
-        "fct_eff_mpa": number("fct,eff [MPa]", "Effective tensile strength."),
-        "sigma_s_mpa": number("sigma_s [MPa]", "Permitted steel stress."),
-        "as_provided_mm2": number(
-            "As,provided [mm2]",
-            "Provided component reinforcement.",
-        ),
-        "restrained_shrinkage": st.column_config.CheckboxColumn(
-            "Restrained shrinkage",
-            help="Applies the bridge fct,eff >= 2.9 MPa floor.",
-            default=False,
-            width="small",
-        ),
-        **provenance_config,
-    }
+                min_value=0.0,
+                step=0.1,
+                width="small",
+            )
+    return config
 
 
-def _bridge_table_editor(box, key, *, disabled=False):
-    """Render one canonical bridge evidence table with a stable editor seed."""
-
+def _bridge_table_editor(box, key):
+    """Render one stable native editor and return its canonical current rows."""
     editor_key = _BRIDGE_EDITOR_KEYS[key]
     seed_key = f"_{key}_editor_seed"
     if key not in st.session_state:
         st.session_state[key] = bridge_inputs.empty_table(key)
     if editor_key not in st.session_state or seed_key not in st.session_state:
         st.session_state[seed_key] = bridge_inputs.normalise_table(
-            st.session_state[key],
-            key,
+            st.session_state[key], key
         )
     seed = bridge_inputs.normalise_table(st.session_state[seed_key], key)
     edited = box.data_editor(
@@ -2194,25 +1907,12 @@ def _bridge_table_editor(box, key, *, disabled=False):
         **_input_widget_kwargs(
             editor_key,
             {
-                "num_rows": (
-                    "fixed"
-                    if key == bridge_inputs.COVERAGE_TABLE_KEY
-                    else "dynamic"
-                ),
+                "num_rows": "dynamic",
                 "hide_index": True,
                 "width": "stretch",
                 "height": "auto",
                 "column_config": _bridge_column_config(key),
                 "column_order": bridge_inputs.TABLE_COLUMNS[key],
-                "disabled": (
-                    True
-                    if disabled
-                    else ["check_id"]
-                    if key == bridge_inputs.COVERAGE_TABLE_KEY
-                    else False
-                ),
-                "on_change": _commit_bridge_editor_delta,
-                "args": (key,),
             },
         ),
     )
@@ -2221,139 +1921,68 @@ def _bridge_table_editor(box, key, *, disabled=False):
     return current
 
 
+def _bridge_tables_panel(box):
+    """Direct optional bridge calculations; empty tables simply do not run."""
+    standard = _seeded_selectbox(
+        box,
+        "Selected bridge method family",
+        list(bridge.METHODS),
+        bridge.COMPONENT_METHODS,
+        "bridge_standard",
+        help=(
+            "A direct calculation choice. It supplies equations, references and "
+            "warnings; it is not a bridge-code coverage statement."
+        ),
+    )
+    box.caption(
+        "Add only the calculations needed. Empty tables are ignored. Method B "
+        "remains available with a warning when the selected Danish method family "
+        "expects another brittle-failure method."
+    )
+    labels = {
+        bridge_inputs.BRITTLE_TABLE_KEY: "Optional brittle Method B",
+        bridge_inputs.BOX_WALL_TABLE_KEY: "Box-wall shear and torsion",
+        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: (
+            "Web/flange minimum crack reinforcement"
+        ),
+    }
+    tables = {}
+    for key in bridge_inputs.TABLE_KEYS:
+        box.markdown(f"**{labels[key]}**")
+        tables[key] = _bridge_table_editor(box, key)
+    return standard, tables
+
+
 def _fatigue_basis_prefix():
     revision = int(st.session_state.get("_fatigue_basis_revision", 0))
     return f"fatiguebasis_r{revision}"
 
 
 def _fatigue_basis_panel(box, *, disabled):
-    """Render authority/provenance declarations; they never modify values."""
-
+    """Render the direct grouped-spectrum method and optional assumptions."""
     basis = fatigue_inputs.normalise_basis(
         st.session_state.get(fatigue_inputs.BASIS_KEY)
     )
     prefix = _fatigue_basis_prefix()
-    authority = _seeded_selectbox(
-        box,
-        "Authority",
-        list(fatigue_inputs.AUTHORITIES),
-        basis["authority"],
-        f"{prefix}_authority",
-        disabled=disabled,
-        help="Authority whose fatigue loading method defines the entered spectrum.",
-    )
-    methods = list(fatigue_inputs.METHODS_BY_AUTHORITY[authority])
-    method_default = (
-        basis["method"] if basis["method"] in methods else methods[0]
-    )
-    method = _seeded_selectbox(
-        box,
-        "Spectrum method",
-        methods,
-        method_default,
-        f"{prefix}_method",
-        disabled=disabled,
-        help="Loading method represented by the grouped spectrum. It records the "
-             "basis and does not modify actions or cycle counts.",
-    )
-    box.caption(fatigue_inputs.METHOD_REFERENCES[method])
-
-    left, right = box.columns(2)
-    spectrum_source = _seeded_text(
-        left,
-        "Spectrum source",
-        basis["spectrum_source"],
-        f"{prefix}_spectrum_source",
-        disabled=disabled,
-        help="Document or calculation that defines the entered fatigue spectrum.",
-    )
-    cycle_count_source = _seeded_text(
-        right,
-        "Cycle-count source",
-        basis["cycle_count_source"],
-        f"{prefix}_cycle_count_source",
-        disabled=disabled,
-        help="Document or calculation supporting the entered number of cycles.",
-    )
-    dynamic_effects = _seeded_selectbox(
-        left,
-        "Dynamic effects",
-        list(fatigue_inputs.DYNAMIC_OPTIONS),
-        basis["dynamic_effects"],
-        f"{prefix}_dynamic_effects",
-        disabled=disabled,
-        help="Records whether the entered actions include the required dynamic "
-             "effects; Sector applies none automatically.",
-    )
-    cycle_counting = _seeded_selectbox(
-        right,
-        "Cycle counting",
-        list(fatigue_inputs.COUNTING_OPTIONS),
-        basis["cycle_counting"],
-        f"{prefix}_cycle_counting",
-        disabled=disabled,
-        help="Method used to convert the action history to the grouped cycle bins.",
-    )
-    concurrence_basis = _seeded_text(
-        left,
-        "Lane/track concurrence",
-        basis["concurrence_basis"],
-        f"{prefix}_concurrence_basis",
-        disabled=disabled,
-        help="Basis for simultaneous lane, track or traffic actions in the spectrum.",
-    )
-    atypical_traffic = _seeded_selectbox(
-        right,
-        "Atypical traffic",
-        list(fatigue_inputs.ATYPICAL_OPTIONS),
-        basis["atypical_traffic"],
-        f"{prefix}_atypical_traffic",
-        disabled=disabled,
-        help="Records whether atypical traffic has been assessed in the spectrum.",
-    )
-    approval_reference = _seeded_text(
-        left,
-        "Approval/reference",
-        basis["approval_reference"],
-        f"{prefix}_approval_reference",
-        disabled=disabled,
-        help="Approval, waiver or project reference required by the selected method.",
-    )
-    authority_adjustments = _seeded_text(
-        right,
-        "Authority adjustments",
-        basis["authority_adjustments"],
-        f"{prefix}_authority_adjustments",
-        disabled=disabled,
-        help="State applied action/cycle adjustments. This field is descriptive.",
+    method = fatigue_inputs.METHOD_GROUPED
+    box.caption(
+        f"{method}. Every action and cycle count in the table is used exactly "
+        "as entered; Sector does not infer traffic completeness."
     )
     notes = _seeded_text_area(
         box,
-        "Basis notes",
+        "Action-set notes",
         basis["notes"],
         f"{prefix}_notes",
         disabled=disabled,
         height=68,
-        help="Optional assumptions or limitations needed to reproduce the spectrum.",
+        help="Optional assumptions needed to identify or reproduce the action set.",
     )
     basis = fatigue_inputs.normalise_basis({
-        "authority": authority,
         "method": method,
-        "spectrum_source": spectrum_source,
-        "cycle_count_source": cycle_count_source,
-        "dynamic_effects": dynamic_effects,
-        "cycle_counting": cycle_counting,
-        "concurrence_basis": concurrence_basis,
-        "atypical_traffic": atypical_traffic,
-        "approval_reference": approval_reference,
-        "authority_adjustments": authority_adjustments,
         "notes": notes,
     })
     st.session_state[fatigue_inputs.BASIS_KEY] = basis
-    if not disabled:
-        warnings = fatigue_inputs.basis_warnings(basis)
-        if warnings:
-            box.warning("QA declarations: " + "; ".join(warnings) + ".")
     return basis
 
 
@@ -2400,30 +2029,25 @@ def _fatigue_spectrum_signature(value):
 
 
 def _bridge_table_signature(value, key):
-    """Stable bridge-table content, retaining invalid cells as sentinels."""
-
     frame = bridge_inputs.normalise_table(value, key)
     rows = []
     for record in frame.to_dict("records"):
-        row = []
-        for column in bridge_inputs.TABLE_COLUMNS[key]:
-            cell = record[column]
-            if column in bridge_inputs.NUMERIC_COLUMNS[key]:
-                try:
-                    number = float(cell)
-                except (TypeError, ValueError):
-                    number = math.nan
-                cell = number if math.isfinite(number) else "<invalid>"
-            elif column in bridge_inputs.BOOLEAN_COLUMNS[key]:
-                cell = (
-                    bool(cell)
-                    if isinstance(cell, bool)
-                    else ("<invalid>", repr(cell))
+        rows.append(tuple(
+            (
+                bool(record[column])
+                if column in bridge_inputs.BOOLEAN_COLUMNS[key]
+                else (
+                    str(record[column])
+                    if column in bridge_inputs.TEXT_COLUMNS[key]
+                    else (
+                        float(record[column])
+                        if math.isfinite(float(record[column]))
+                        else "<invalid>"
+                    )
                 )
-            else:
-                cell = str(cell)
-            row.append(cell)
-        rows.append(tuple(row))
+            )
+            for column in bridge_inputs.TABLE_COLUMNS[key]
+        ))
     return tuple(rows)
 
 
@@ -2443,538 +2067,7 @@ _INPUT_STATE_KEY = "_durable_input_scalars"
 _INPUT_BUILD_KEY = "_inputs_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
-_INVALID_FACTOR_INPUT_KEYS_KEY = "_invalid_factor_input_keys"
-_INVALID_CRACK_INPUT_KEYS_KEY = "_invalid_crack_input_keys"
-_INVALID_INTERACTION_INPUT_KEYS_KEY = "_invalid_interaction_input_keys"
 _INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
-_FATIGUE_NUMERIC_FACTOR_KEYS = frozenset(
-    key
-    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS
-    if key.startswith("fatigue_")
-)
-_TORSION_NUMERIC_FACTOR_KEYS = frozenset(
-    key
-    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS
-    if key.startswith("torsion_")
-)
-_FACTOR_MODE_STATE = {
-    "fatigue": {
-        "mode_key": "fatigue_factor_mode",
-        "override_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
-        "value_keys": ("fatigue_gamma_s", "fatigue_gamma_c"),
-        "approval_key": "fatigue_factor_approval",
-        "snapshot_key": "_fatigue_override_factor_snapshot",
-        "previous_mode_key": "_fatigue_factor_mode_previous",
-    },
-    "torsion": {
-        "mode_key": "torsion_factor_mode",
-        "override_mode": codes.FACTOR_MODE_OVERRIDE,
-        "value_keys": ("torsion_gamma_ct",),
-        "approval_key": "torsion_factor_approval",
-        "snapshot_key": "_torsion_override_factor_snapshot",
-        "previous_mode_key": "_torsion_factor_mode_previous",
-    },
-}
-_FACTOR_MODE_RUNTIME_KEYS = tuple(
-    key
-    for spec in _FACTOR_MODE_STATE.values()
-    for key in (spec["snapshot_key"], spec["previous_mode_key"])
-)
-
-
-def _invalid_factor_input_keys() -> tuple[str, ...]:
-    """Return the canonical rejected-factor marker from live session state."""
-
-    raw = st.session_state.get(_INVALID_FACTOR_INPUT_KEYS_KEY, ())
-    if not isinstance(raw, (list, tuple, set, frozenset)):
-        return ()
-    allowed = set(project_io.FACTOR_NUMERIC_SCALAR_KEYS)
-    return tuple(sorted({str(key) for key in raw if key in allowed}))
-
-
-def _invalid_crack_input_keys() -> tuple[str, ...]:
-    """Return rejected crack/SLS numeric keys retained across app reruns."""
-
-    raw = st.session_state.get(_INVALID_CRACK_INPUT_KEYS_KEY, ())
-    if not isinstance(raw, (list, tuple, set, frozenset)):
-        return ()
-    allowed = set(sls_core.CRACK_NUMERIC_INPUT_KEYS)
-    return tuple(sorted({str(key) for key in raw if key in allowed}))
-
-
-def _invalid_interaction_input_keys() -> tuple[str, ...]:
-    """Return rejected multidirectional keys retained across app reruns."""
-
-    raw = st.session_state.get(
-        _INVALID_INTERACTION_INPUT_KEYS_KEY, ()
-    )
-    if not isinstance(raw, (list, tuple, set, frozenset)):
-        return ()
-    allowed = set(multidirectional.INTERACTION_INPUT_KEYS)
-    return tuple(sorted({str(key) for key in raw if key in allowed}))
-
-
-def _valid_crack_numeric(value) -> bool:
-    """Require a finite real scalar and reject Boolean values before coercion."""
-
-    if sls_core.is_boolean_value(value) or isinstance(value, str):
-        return False
-    try:
-        return math.isfinite(float(value))
-    except (TypeError, ValueError):
-        return False
-
-
-def _valid_interaction_value(key, value) -> bool:
-    """Validate one typed PR-06 field before Streamlit may coerce it."""
-
-    if key in multidirectional.INTERACTION_NUMERIC_INPUT_KEYS:
-        return _valid_crack_numeric(value)
-    if key in multidirectional.INTERACTION_BOOLEAN_INPUT_KEYS:
-        return isinstance(value, bool)
-    if key == "crack_interaction_method":
-        return (
-            isinstance(value, str)
-            and value in multidirectional.CRACK_METHODS
-        )
-    if key == "shear_interaction_method":
-        return (
-            isinstance(value, str)
-            and value in multidirectional.SHEAR_METHODS
-        )
-    if key == "crack_interaction_combination":
-        return isinstance(value, str) and value in sls_core.SLS_COMBINATIONS
-    if key == "shear_interaction_depth_route":
-        return isinstance(value, str) and value in multidirectional.DEPTH_ROUTES
-    if key in multidirectional.INTERACTION_TEXT_INPUT_KEYS:
-        return isinstance(value, str)
-    return False
-
-
-def _invalid_factor_input_error(domain: str, keys) -> str | None:
-    """Describe rejected state for one material-factor domain, if present."""
-
-    rejected = tuple(
-        key for key in _invalid_factor_input_keys() if key in set(keys)
-    )
-    if not rejected:
-        return None
-    return (
-        f"Boolean/non-numeric values are not accepted for {domain} material "
-        f"factors ({', '.join(rejected)}). Enter explicit positive numeric "
-        "values before calculation."
-    )
-
-
-def _sanitise_factor_input_state() -> None:
-    """Turn malformed factor state into an explicit missing value before widgets.
-
-    Project parsing rejects such values outright. This second boundary covers
-    browser/session/autosave mirrors and custom integrations that mutate
-    ``session_state`` directly. Invalid values map to ``None`` where Streamlit
-    supports an empty numeric control. The persistent rejection marker still
-    blocks calculation and saving if a browser reconstructs a numeric default;
-    only a real edit or explicit repair confirmation can clear that marker.
-    """
-
-    allowed = set(project_io.FACTOR_NUMERIC_SCALAR_KEYS)
-    invalid_keys = set(_invalid_factor_input_keys())
-    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {})
-    explicit_repairs = set()
-    if isinstance(pending, dict):
-        for key in allowed:
-            if key not in pending:
-                continue
-            try:
-                codes.strict_positive_real(pending[key], key)
-            except ValueError:
-                continue
-            explicit_repairs.add(key)
-    invalid_keys.difference_update(explicit_repairs)
-
-    def sanitise(mapping) -> bool:
-        changed = False
-        for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS:
-            if key not in mapping or mapping[key] is None:
-                continue
-            try:
-                codes.strict_positive_real(mapping[key], key)
-            except ValueError:
-                mapping[key] = None
-                if key not in explicit_repairs:
-                    invalid_keys.add(key)
-                changed = True
-        return changed
-
-    sanitise(st.session_state)
-    for state_key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
-        state = st.session_state.get(state_key)
-        if isinstance(state, dict):
-            state = dict(state)
-            if sanitise(state):
-                st.session_state[state_key] = state
-    if invalid_keys:
-        st.session_state[_INVALID_FACTOR_INPUT_KEYS_KEY] = tuple(
-            sorted(invalid_keys)
-        )
-    else:
-        st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
-
-
-def _sanitise_crack_input_state() -> None:
-    """Fail closed on malformed crack numerics in live, durable or event state."""
-
-    allowed = set(sls_core.CRACK_NUMERIC_INPUT_KEYS)
-    invalid_keys = set(_invalid_crack_input_keys())
-    newly_invalid = set()
-
-    def sanitise(mapping, *, drop_invalid=False) -> bool:
-        changed = False
-        for key in allowed:
-            if key not in mapping:
-                continue
-            if _valid_crack_numeric(mapping[key]):
-                continue
-            if drop_invalid:
-                mapping.pop(key)
-            else:
-                mapping[key] = 0.0
-            newly_invalid.add(key)
-            changed = True
-        return changed
-
-    sanitise(st.session_state)
-    durable = st.session_state.get(_INPUT_STATE_KEY)
-    if isinstance(durable, dict):
-        durable = dict(durable)
-        if sanitise(durable):
-            st.session_state[_INPUT_STATE_KEY] = durable
-    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY)
-    if isinstance(pending, dict):
-        pending = dict(pending)
-        pending_changed = sanitise(pending, drop_invalid=True)
-        # Any invalid copy of a key wins over an earlier journal value for that
-        # key. Keeping even a valid-looking stale event could let the sanitized
-        # live placeholder match it on the next interrupted rerun.
-        for key in newly_invalid:
-            if key in pending:
-                pending.pop(key)
-                pending_changed = True
-        if pending_changed:
-            st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
-
-    # A real widget edit/confirmation is journalled with the current value.
-    # Newly rejected values always win this run, and an invalid pending entry is
-    # removed rather than converted to a plausible 0.0 event. Thus an interrupted
-    # rerun cannot later promote a synthesized placeholder to an explicit repair.
-    explicit_repairs = {
-        key
-        for key in allowed
-        if (
-            key not in newly_invalid
-            and isinstance(pending, dict)
-            and key in pending
-            and _valid_crack_numeric(pending[key])
-            and key in st.session_state
-            and _valid_crack_numeric(st.session_state[key])
-            and float(pending[key]) == float(st.session_state[key])
-        )
-    }
-    invalid_keys.update(newly_invalid)
-    invalid_keys.difference_update(explicit_repairs)
-    if invalid_keys:
-        st.session_state[_INVALID_CRACK_INPUT_KEYS_KEY] = tuple(
-            sorted(invalid_keys)
-        )
-    else:
-        st.session_state.pop(_INVALID_CRACK_INPUT_KEYS_KEY, None)
-
-
-def _sanitise_interaction_input_state() -> None:
-    """Reject hostile interaction state without synthesising authority."""
-
-    defaults = {
-        **multidirectional.crack_configuration({}),
-        **multidirectional.shear_configuration({}),
-    }
-    allowed = set(multidirectional.INTERACTION_INPUT_KEYS)
-    invalid_keys = set(_invalid_interaction_input_keys())
-    newly_invalid = set()
-
-    def sanitise(mapping, *, drop_invalid=False) -> bool:
-        changed = False
-        for key in allowed:
-            if key not in mapping:
-                continue
-            if _valid_interaction_value(key, mapping[key]):
-                continue
-            if drop_invalid:
-                mapping.pop(key)
-            else:
-                mapping[key] = copy.deepcopy(defaults[key])
-            newly_invalid.add(key)
-            changed = True
-        return changed
-
-    sanitise(st.session_state)
-    durable = st.session_state.get(_INPUT_STATE_KEY)
-    if isinstance(durable, dict):
-        durable = dict(durable)
-        if sanitise(durable):
-            st.session_state[_INPUT_STATE_KEY] = durable
-    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY)
-    if isinstance(pending, dict):
-        pending = dict(pending)
-        pending_changed = sanitise(pending, drop_invalid=True)
-        for key in newly_invalid:
-            if key in pending:
-                pending.pop(key)
-                pending_changed = True
-        if pending_changed:
-            st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
-
-    explicit_repairs = {
-        key
-        for key in allowed
-        if (
-            key not in newly_invalid
-            and isinstance(pending, dict)
-            and key in pending
-            and _valid_interaction_value(key, pending[key])
-            and key in st.session_state
-            and _valid_interaction_value(key, st.session_state[key])
-            and pending[key] == st.session_state[key]
-        )
-    }
-    invalid_keys.update(newly_invalid)
-    invalid_keys.difference_update(explicit_repairs)
-    if invalid_keys:
-        st.session_state[_INVALID_INTERACTION_INPUT_KEYS_KEY] = tuple(
-            sorted(invalid_keys)
-        )
-    else:
-        st.session_state.pop(
-            _INVALID_INTERACTION_INPUT_KEYS_KEY, None
-        )
-
-
-def _capture_factor_override_state(domain: str) -> None:
-    """Retain one domain's approved final factors outside preset widget state."""
-
-    spec = _FACTOR_MODE_STATE[domain]
-    snapshot = {
-        key: copy.deepcopy(st.session_state.get(key))
-        for key in spec["value_keys"]
-    }
-    snapshot[spec["approval_key"]] = copy.deepcopy(
-        st.session_state.get(spec["approval_key"], "")
-    )
-    st.session_state[spec["snapshot_key"]] = snapshot
-
-
-def _restore_factor_override_state(domain: str) -> None:
-    """Restore an earlier override, or make a first override explicitly empty."""
-
-    spec = _FACTOR_MODE_STATE[domain]
-    snapshot = st.session_state.get(spec["snapshot_key"])
-    if not isinstance(snapshot, dict):
-        snapshot = {}
-    for key in spec["value_keys"]:
-        st.session_state[key] = copy.deepcopy(snapshot.get(key))
-    approval_key = spec["approval_key"]
-    st.session_state[approval_key] = copy.deepcopy(snapshot.get(approval_key, ""))
-    _journal_current_input_values(*spec["value_keys"], approval_key)
-
-
-def _apply_fatigue_preset_state() -> None:
-    """Apply a preset only after an explicit preset-driver widget event."""
-
-    if (
-        st.session_state.get("fatigue_factor_mode")
-        != fatigue_inputs.FACTOR_MODE_PRESET
-    ):
-        return
-    try:
-        preset = fatigue_inputs.fatigue_factor_preset(
-            st.session_state.get(
-                "fatigue_edition",
-                fatigue_inputs.EC2_2005_DKNA,
-            ),
-            gamma0=st.session_state.get("fatigue_gamma0", 1.0),
-            gamma3=st.session_state.get("fatigue_gamma3", 1.0),
-        )
-    except ValueError:
-        return
-    st.session_state["fatigue_gamma_s"] = preset["gamma_s"]
-    st.session_state["fatigue_gamma_c"] = preset["gamma_c"]
-    _journal_current_input_values("fatigue_gamma_s", "fatigue_gamma_c")
-
-
-def _factor_mode_changed(domain: str) -> None:
-    """Keep preset-derived values separate from approved override values."""
-
-    spec = _FACTOR_MODE_STATE[domain]
-    mode_key = spec["mode_key"]
-    previous_key = spec["previous_mode_key"]
-    current_mode = st.session_state.get(mode_key)
-    previous_mode = st.session_state.get(previous_key)
-    if (
-        previous_mode == spec["override_mode"]
-        and current_mode != previous_mode
-    ):
-        _capture_factor_override_state(domain)
-    elif (
-        current_mode == spec["override_mode"]
-        and previous_mode != current_mode
-    ):
-        _restore_factor_override_state(domain)
-    if (
-        domain == "fatigue"
-        and current_mode == fatigue_inputs.FACTOR_MODE_PRESET
-        and previous_mode != current_mode
-    ):
-        _apply_fatigue_preset_state()
-    st.session_state[previous_key] = current_mode
-
-
-def _prepare_factor_mode_state(domain: str, default_mode: str) -> None:
-    """Initialise mode tracking and safely absorb non-widget project injection."""
-
-    spec = _FACTOR_MODE_STATE[domain]
-    mode_key = spec["mode_key"]
-    previous_key = spec["previous_mode_key"]
-    st.session_state.setdefault(mode_key, default_mode)
-    current_mode = st.session_state[mode_key]
-    if previous_key not in st.session_state:
-        st.session_state[previous_key] = current_mode
-        if current_mode == spec["override_mode"]:
-            _capture_factor_override_state(domain)
-        return
-
-    previous_mode = st.session_state[previous_key]
-    if previous_mode == current_mode:
-        return
-    # Widget transitions run _factor_mode_changed before the rerun and therefore
-    # arrive here already synchronised. A mismatch is a project/custom-integration
-    # replacement. Preserve explicit approved values, but never silently promote
-    # preset values into a first unapproved override.
-    if previous_mode == spec["override_mode"]:
-        _capture_factor_override_state(domain)
-    elif current_mode == spec["override_mode"]:
-        if isinstance(st.session_state.get(spec["snapshot_key"]), dict):
-            _restore_factor_override_state(domain)
-        elif str(st.session_state.get(spec["approval_key"], "")).strip():
-            _capture_factor_override_state(domain)
-        else:
-            _restore_factor_override_state(domain)
-    st.session_state[previous_key] = current_mode
-
-
-def _confirm_factor_repairs(keys) -> None:
-    """Journal currently displayed positive factors as an explicit repair."""
-
-    for key in keys:
-        try:
-            codes.strict_positive_real(st.session_state.get(key), key)
-        except ValueError:
-            continue
-        _record_input_event(key)
-
-
-def _render_factor_repair_control(box, domain: str, keys) -> None:
-    """Expose a same-value repair path for rejected factor widget state."""
-
-    rejected = tuple(
-        key for key in _invalid_factor_input_keys() if key in set(keys)
-    )
-    if not rejected:
-        return
-    box.warning(
-        "Rejected material-factor state remains blocked. Edit each enabled "
-        "listed field, or confirm the displayed positive values after checking "
-        f"them ({', '.join(rejected)})."
-    )
-    box.button(
-        f"Confirm repaired {domain} factor values",
-        key=f"confirm_{domain}_factor_repairs",
-        on_click=_confirm_factor_repairs,
-        args=(rejected,),
-        help=(
-            "This is an explicit engineering confirmation. It does not approve "
-            "or change any final-factor override."
-        ),
-    )
-
-
-def _confirm_crack_repairs(keys) -> None:
-    """Journal currently displayed finite values as an explicit repair."""
-
-    for key in keys:
-        if _valid_crack_numeric(st.session_state.get(key)):
-            _record_input_event(key)
-
-
-def _render_crack_repair_control(box) -> None:
-    """Expose a same-value confirmation path for rejected crack numeric state."""
-
-    rejected = _invalid_crack_input_keys()
-    if not rejected:
-        return
-    box.error(
-        "Rejected Boolean/non-numeric crack-control state remains blocked. "
-        "Edit every listed field, or confirm the displayed finite values after "
-        f"checking them ({', '.join(rejected)})."
-    )
-    box.button(
-        "Confirm repaired crack-control values",
-        key="confirm_crack_numeric_repairs",
-        on_click=_confirm_crack_repairs,
-        args=(rejected,),
-        help=(
-            "This is an explicit engineering confirmation; Sector never treats "
-            "a Boolean value as 0 or 1 mm."
-        ),
-    )
-
-
-def _confirm_interaction_repairs(keys) -> None:
-    """Journal the displayed typed interaction values as explicit repairs."""
-
-    for key in keys:
-        if _valid_interaction_value(key, st.session_state.get(key)):
-            _record_input_event(key)
-
-
-def _render_interaction_repair_control(box, keys) -> None:
-    """Require confirmation after a hostile multidirectional state was rejected."""
-
-    relevant = set(keys)
-    rejected = tuple(
-        key
-        for key in _invalid_interaction_input_keys()
-        if key in relevant
-    )
-    if not rejected:
-        return
-    box.error(
-        "Rejected malformed multidirectional state remains blocked. Edit every "
-        "listed field, or confirm the displayed typed values after checking "
-        f"them ({', '.join(rejected)})."
-    )
-    box.button(
-        "Confirm repaired interaction values",
-        key=(
-            "confirm_crack_interaction_repairs"
-            if relevant == set(multidirectional.CRACK_INPUT_KEYS)
-            else "confirm_shear_interaction_repairs"
-        ),
-        on_click=_confirm_interaction_repairs,
-        args=(rejected,),
-        help=(
-            "Confirmation clears only the hostile-state rejection latch. It "
-            "does not confirm a method domain, source, or approval."
-        ),
-    )
 
 
 def _record_input_event(
@@ -2995,7 +2088,6 @@ def _record_input_event(
     if (
         st.session_state.get("_main_page", "Inputs") == "Inputs"
         and key in st.session_state
-        and key not in _NON_REPLAYABLE_WIDGET_KEYS
     ):
         pending = dict(st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}))
         pending[key] = copy.deepcopy(st.session_state[key])
@@ -3066,12 +2158,6 @@ def _restore_input_state(*, replace: bool = False) -> None:
     # Multiple rapid events accumulate here, so a later interruption does not
     # discard an earlier edit from the same burst.
     for key, value in st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}).items():
-        # Native data-editor keys contain Streamlit-owned edit deltas. Streamlit
-        # forbids assigning those widget values through session_state. Their
-        # callbacks already apply the cumulative delta to the canonical base
-        # table before this recovery path can run.
-        if key in _NON_REPLAYABLE_WIDGET_KEYS:
-            continue
         st.session_state[key] = copy.deepcopy(value)
 
 
@@ -3146,10 +2232,7 @@ def _project_state():
     scalars = {
         key: st.session_state[key] if key in st.session_state else durable[key]
         for key in project_io.SCALAR_KEYS
-        if (
-            key not in load_cases.LEGACY_SCALAR_KEYS
-            and (key in st.session_state or key in durable)
-        )
+        if key in st.session_state or key in durable
     }
     for key in load_cases.CASE_TABLE_KEYS:
         tables[key] = load_cases.normalise_table(
@@ -3162,59 +2245,18 @@ def _project_state():
         )
     for key in bridge_inputs.TABLE_KEYS:
         tables[key] = bridge_inputs.normalise_table(
-            st.session_state.get(key),
-            key,
+            st.session_state.get(key), key
         )
     return tables, scalars
 
 
 def _project_input_hash() -> str:
     tables, scalars = _project_state()
-    digest = project_io.input_sha256(tables, scalars)
-    rejected_factors = _invalid_factor_input_keys()
-    rejected_crack = _invalid_crack_input_keys()
-    rejected_interaction = _invalid_interaction_input_keys()
-    if (
-        not rejected_factors
-        and not rejected_crack
-        and not rejected_interaction
-    ):
-        return digest
-    # A calculation made while a rejected widget value is held fail-closed must
-    # never appear to match the same reconstructed numeric defaults after repair.
-    invalid_state = "\0".join((
-        digest,
-        "rejected-factor-inputs",
-        *rejected_factors,
-        "rejected-crack-inputs",
-        *rejected_crack,
-        "rejected-interaction-inputs",
-        *rejected_interaction,
-    ))
-    return hashlib.sha256(invalid_state.encode("utf-8")).hexdigest()
+    return project_io.input_sha256(tables, scalars)
 
 
 def _gather_project() -> str:
     """Serialise current inputs with their source and calculation provenance."""
-    rejected = _invalid_factor_input_keys()
-    if rejected:
-        raise ValueError(
-            "Boolean/non-numeric project material-factor input was rejected "
-            f"({', '.join(rejected)}); repair every listed value before saving"
-        )
-    rejected_crack = _invalid_crack_input_keys()
-    if rejected_crack:
-        raise ValueError(
-            "Boolean/non-numeric project crack-control input was rejected "
-            f"({', '.join(rejected_crack)}); repair every listed value before saving"
-        )
-    rejected_interaction = _invalid_interaction_input_keys()
-    if rejected_interaction:
-        raise ValueError(
-            "Malformed multidirectional interaction input was rejected "
-            f"({', '.join(rejected_interaction)}); repair every listed value "
-            "before saving"
-        )
     tables, scalars = _project_state()
     return project_io.dump_project(
         tables,
@@ -3272,44 +2314,7 @@ def _perform_autosave() -> bool:
         digest = _project_input_hash()
     except Exception:
         return False
-    try:
-        current_tables, current_scalars = _project_state()
-        canonical_inputs = project_io._canonical_inputs(
-            current_tables,
-            current_scalars,
-        )
-        publication_inputs = dict(canonical_inputs["scalars"])
-        publication_inputs.update(
-            canonical_inputs.get("tables") or {}
-        )
-        publication_inputs["load_cases"] = (
-            canonical_inputs.get("load_cases") or {}
-        )
-        # Danish fatigue applicability is owned by the bridge coverage table;
-        # autosave must validate against the same complete map as project save.
-        publication_inputs.update(
-            project_io._bridge_tables_from_payload(
-                canonical_inputs.get("bridge")
-            )
-        )
-    except Exception:
-        publication_inputs = {}
-    record_changed_by_validation = False
-    calculation = st.session_state.get("calculation_record")
-    if isinstance(calculation, Mapping):
-        safe_calculation = project_io.publication_safe_calculation_record(
-            calculation,
-            calculation_inputs=publication_inputs,
-            input_digest=digest,
-            calculation_results=st.session_state.get("results"),
-        )
-        if safe_calculation != calculation:
-            st.session_state["calculation_record"] = safe_calculation
-            record_changed_by_validation = True
-    if (
-        digest == st.session_state.get("_autosave_hash")
-        and not record_changed_by_validation
-    ):
+    if digest == st.session_state.get("_autosave_hash"):
         return False                                 # unchanged since the last save
     try:
         data = _gather_project()
@@ -3428,43 +2433,13 @@ def _apply_pending_project() -> None:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
         return
     # A valid project load is an explicit whole-input replacement. Do not replay
-    # uncommitted browser events or expose the immutable solver payload from the
-    # project that was open previously. A rapid navigation event can supersede the
-    # Inputs rebuild, so Analysis must stay unavailable until build_inputs() reaches
-    # its normal commit point and _snapshot_input_state() installs a new payload.
+    # uncommitted browser events from the project that was open previously.
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
-    st.session_state.pop("_latest_inputs", None)
-    st.session_state.pop(_INVALID_FACTOR_INPUT_KEYS_KEY, None)
-    st.session_state.pop(_INVALID_CRACK_INPUT_KEYS_KEY, None)
-    st.session_state.pop(_INVALID_INTERACTION_INPUT_KEYS_KEY, None)
-    for key in _FACTOR_MODE_RUNTIME_KEYS:
-        st.session_state.pop(key, None)
-    # Parsing retains historical scalar loads for compatibility with non-UI callers,
-    # but the table-native app must not keep them in live or durable state. The
-    # migrated canonical tables above contain the same information.
-    scalars = {
-        key: value
-        for key, value in scalars.items()
-        if key not in load_cases.LEGACY_SCALAR_KEYS
-    }
-    for key in load_cases.LEGACY_SCALAR_KEYS:
-        st.session_state.pop(key, None)
-    # Optional factor inputs must never leak from the project previously open in
-    # this Streamlit session. In particular, a current approved-override project
-    # may deliberately be incomplete; preserving that absence is what prevents a
-    # stale/preset number from being reported as its approved final factor.
-    replaceable_factor_keys = (
-        *project_io.FATIGUE_SCALAR_KEYS,
-        *project_io.TORSION_FACTOR_SCALAR_KEYS,
-        *project_io.BRIDGE_SCALAR_KEYS,
-    )
-    for key in replaceable_factor_keys:
+    # A current project load replaces all fatigue settings from the prior session.
+    for key in project_io.FATIGUE_SCALAR_KEYS:
         st.session_state.pop(key, None)
     _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
-    # Missing load tables in a partial project must not inherit cases from the
-    # project that happened to be open before it. The Inputs page will seed its
-    # normal defaults when a table is genuinely absent.
     for key in load_cases.CASE_TABLE_KEYS:
         if key not in tables:
             st.session_state.pop(key, None)
@@ -3499,6 +2474,18 @@ def _apply_pending_project() -> None:
         _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
     for key, value in scalars.items():
         st.session_state[key] = value
+    if "torsion_gamma_ct" in scalars:
+        effective_torsion_method = (
+            scalars.get("combined_method")
+            if scalars.get("combined_on")
+            else scalars.get("torsion_method")
+        )
+        st.session_state[_TORSION_GAMMA_METHOD_KEY] = (
+            effective_torsion_method or codes.EC2_2005_DKNA.label
+        )
+        # A loaded value is an explicit persisted input even when it happens to
+        # equal the selected method's current default.
+        st.session_state[_TORSION_GAMMA_MANAGED_KEY] = False
     if any(key in scalars for key in mat_catalog.CATALOG_KEYS):
         _bump_material_catalog_revision()
         st.session_state.pop("_material_alias_revision", None)
@@ -3520,10 +2507,7 @@ def _apply_pending_project() -> None:
     durable = {
         key: value
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
-        if (
-            key not in load_cases.LEGACY_SCALAR_KEYS
-            and key not in replaceable_factor_keys
-        )
+        if key not in project_io.FATIGUE_SCALAR_KEYS
     }
     durable.update(scalars)
     st.session_state[_INPUT_STATE_KEY] = durable
@@ -3532,9 +2516,6 @@ def _apply_pending_project() -> None:
     for marker, src in project_io.PREV_MARKERS.items():
         if src in scalars:
             st.session_state[marker] = scalars[src]
-    # For a strength-dependent edition (EN 2023) the panel derives the effective
-    # eta_cc*k_tc coefficient from the loaded fck and explicit/migrated k_tc value.
-    # Keep the legacy marker aligned for compatibility with older sessions.
     if "conc_fck" in scalars:
         st.session_state["conc_alpha_fck"] = scalars["conc_fck"]
     for ed in ("ed_corners", "ed_hole", "ed_bars", "ed_tendons"):
@@ -3545,11 +2526,9 @@ def _apply_pending_project() -> None:
     else:
         st.session_state.pop("calculation_record", None)
     st.session_state["_loaded_project_provenance"] = provenance
-    # A project may retain a compact crack-control snapshot in calculation
-    # provenance, but it is never restored as a live solver result. Remove any
-    # live result/report from the previously open project so it cannot be mistaken
-    # for evidence belonging to the newly loaded section; the snapshot remains
-    # accessible through ``calculation_record`` and its input-hash match flag.
+    # Project files intentionally contain inputs, not result payloads. Remove any
+    # result/report from the previously open project so it cannot be mistaken for
+    # evidence belonging to the newly loaded section.
     for key in (
         "results", "result_sig", "result_plastic_sig", "result_elastic_sig",
         "result_fatigue_sig",
@@ -3574,7 +2553,7 @@ def _apply_pending_project() -> None:
             integrity = "verified" if verified else "does not match"
             detail = f"Sector {version}, source {revision}, input hash {integrity}"
         else:
-            detail = "legacy file; source provenance unavailable"
+            detail = "current project provenance unavailable"
         st.session_state["_project_msg"] = (
             "success" if verified is not False else "error",
             f"Project loaded ({detail}). Recalculate to create current results.",
@@ -3606,12 +2585,8 @@ def _save_load_panel() -> None:
                              "JSON file.")
     if project_error:
         box.error(f"Project download blocked: {project_error}.")
-    box.caption(
-        f"Saved with Sector {APP_VERSION}, source {short_revision()}; "
-        "structured crack-control, fatigue-conformance, and bridge-methodology "
-        "evidence is retained as hash-bound provenance, while live results are "
-        "recalculated on load."
-    )
+    box.caption(f"Saved with Sector {APP_VERSION}, source "
+                f"{short_revision()}; results are recalculated on load.")
     loaded = st.session_state.get("_loaded_project_provenance")
     if loaded:
         if loaded.get("sector_version"):
@@ -3636,81 +2611,8 @@ def _save_load_panel() -> None:
                     f"{calculation.get('performed_at_utc') or 'time unavailable'}"
                     f" | {match}"
                 )
-                crack_cases = (
-                    (calculation.get("crack_control") or {}).get("cases")
-                    or []
-                )
-                if crack_cases:
-                    summary = "; ".join(
-                        f"{item.get('case') or 'Elastic'}: "
-                        f"{(item.get('assessment') or {}).get('verdict') or (item.get('assessment') or {}).get('status') or 'REVIEW'}"
-                        for item in crack_cases
-                    )
-                    box.caption(
-                        "Recorded crack-control snapshot (audit only): "
-                        + summary
-                    )
-                fatigue_record = calculation.get("fatigue_conformance")
-                if isinstance(fatigue_record, Mapping):
-                    factors = fatigue_record.get("partial_factors") or {}
-                    factor_summary = ", ".join(
-                        f"{label}={float(factors[key]):g}"
-                        for key, label in (
-                            ("gamma_s", "gamma_s"),
-                            ("gamma_c", "gamma_c,fat"),
-                        )
-                        if factors.get(key) is not None
-                    )
-                    concrete = (
-                        fatigue_record.get("concrete_parameters") or {}
-                    )
-                    miner_summary = (
-                        f", Miner C={float(concrete['c']):g}"
-                        if concrete.get("c") is not None
-                        else ""
-                    )
-                    box.caption(
-                        "Recorded fatigue conformance (audit only): "
-                        f"{fatigue_record.get('qualified_verdict') or 'REVIEW'}"
-                        f" | selected standard "
-                        f"{fatigue_record.get('edition') or '-'}"
-                        f" | methodology "
-                        f"{fatigue_record.get('design_methodology') or '-'}"
-                        + (
-                            f" | {factor_summary}{miner_summary}"
-                            if factor_summary or miner_summary
-                            else ""
-                        )
-                    )
-                    factor_approval = str(
-                        (
-                            fatigue_record.get("factor_basis") or {}
-                        ).get("approval_reference")
-                        or ""
-                    ).strip()
-                    miner_source = str(
-                        fatigue_record.get("concrete_miner_source") or ""
-                    ).strip()
-                    sources = "; ".join(
-                        item
-                        for item in (
-                            (
-                                f"factor approval/source: {factor_approval}"
-                                if factor_approval
-                                else ""
-                            ),
-                            (
-                                f"Miner approval/source: {miner_source}"
-                                if miner_source
-                                else ""
-                            ),
-                        )
-                        if item
-                    )
-                    if sources:
-                        box.caption("Recorded fatigue sources: " + sources)
         else:
-            box.caption("Loaded: legacy project | provenance unavailable")
+            box.caption("Loaded: current project | provenance unavailable")
     _autosave_panel(box)
     up = box.file_uploader("Load project", type=["json"], key="project_upload",
                            help="Restore a section from a downloaded project file.")
@@ -3725,9 +2627,13 @@ def _save_load_panel() -> None:
         (box.success if msg[0] == "success" else box.error)(msg[1])
 
 
-_REPORT_FIELDS = [("proj_no", "Project no."), ("proj_name", "Project name"),
-                  ("section", "Section"), ("rev", "Revision"), ("author", "Author"),
-                  ("checker", "Checker"), ("approver", "Approver")]
+_REPORT_FIELDS = [
+    ("proj_no", "Project no."),
+    ("proj_name", "Project name"),
+    ("section", "Section"),
+    ("rev", "Revision"),
+    ("author", "Prepared by"),
+]
 _REPORT_DEFAULT = "Default report"
 _REPORT_QA_APPENDIX = "Default report + QA appendix"
 _REPORT_CONTENT_OPTIONS = (_REPORT_DEFAULT, _REPORT_QA_APPENDIX)
@@ -3800,10 +2706,7 @@ def _report_panel(input_signature):
     _seeded_text(box, _REPORT_FIELDS[2][1], "", "rep_section")
     c1, c2 = box.columns(2)
     _seeded_text(c1, "Revision", "", "rep_rev")
-    _seeded_text(c2, "Author", "", "rep_author")
-    c3, c4 = box.columns(2)
-    _seeded_text(c3, "Checker", "", "rep_checker")
-    _seeded_text(c4, "Approver", "", "rep_approver")
+    _seeded_text(c2, "Prepared by", "", "rep_author")
     _seeded_text_area(box, "Comments", "", "rep_comments", height=80)
     _seeded_selectbox(
         box,
@@ -3868,7 +2771,6 @@ def _generate_report(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
-    case_errors = tuple(case_errors) + multidirectional.validation_errors(inp)
     if case_errors:
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
@@ -4351,20 +3253,7 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
-    "sls_cw", "sls_phi", "sls_bond", "sls_code", "sls_member",
-    "sls_tendon_bond", "sls_tendon_xi",
-    "sls_criterion_mode", "sls_prestress_class", "sls_protection_class",
-    "sls_exposure_class", "sls_bridge_exposure_class",
-    "sls_dk_member_class", "bridge_asset_class",
-    "bridge_environment_class", "design_methodology",
-    "sls_exposure_context",
-    "sls_check_appearance", "sls_appearance_limit",
-    "sls_check_durability", "sls_decompression_applicability",
-    "sls_project_characteristic_limit", "sls_project_frequent_limit",
-    "sls_project_quasi_permanent_limit",
-    "sls_wk_limit", "sls_conc_limit_pct", "sls_steel_limit_pct",
-    "sls_pre_limit_pct", "sls_limit_source",
-    *multidirectional.CRACK_INPUT_KEYS,
+    "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
 )
 # Shear inputs. Folded into the overall signature (not the plastic/elastic split)
 # so a shear-only change marks the results stale without forcing the bending
@@ -4380,20 +3269,17 @@ _SHEAR_SIG_KEYS = (
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
-    "torsion_factor_mode", "torsion_gamma0", "torsion_gamma3",
-    "torsion_gamma_ct", "torsion_factor_approval",
+    "torsion_gamma_ct",
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
     "torsion_sub_x2", "torsion_sub_y2", "torsion_sub_x3", "torsion_sub_y3",
     "torsion_sub_b0", "torsion_sub_h0", "torsion_sub_b1", "torsion_sub_h1",
     "torsion_sub_b2", "torsion_sub_h2", "torsion_sub_b3", "torsion_sub_h3",
     "combined_on", "combined_method", "combined_mv_independent",
-    *multidirectional.SHEAR_INPUT_KEYS,
 )
 _CAPACITY_CONTEXT_SIG_KEYS = tuple(
     key for key in _SHEAR_SIG_KEYS if key not in {"shear_V", "torsion_T"}
 ) + (
-    "design_methodology", "bridge_alpha_ct",
     "minimum_reinforcement_on", "clear_spacing_on",
     "transverse_detailing_on", "detailing_edition",
     "detailing_member_type", "detailing_cut_direction",
@@ -4421,9 +3307,6 @@ def build_inputs(host=st):
         st.session_state[
             fatigue_inputs.SPECTRUM_TABLE_KEY
         ] = fatigue_inputs.empty_spectrum_table()
-    for key in bridge_inputs.TABLE_KEYS:
-        if key not in st.session_state:
-            st.session_state[key] = bridge_inputs.empty_table(key)
     mild_catalogue = mat_catalog.normalise_catalog(
         st.session_state[mat_catalog.MILD_CATALOG_KEY], "mild"
     )
@@ -4457,14 +3340,11 @@ def build_inputs(host=st):
     # Geometry tables and their drawing remain visible together. The wider input
     # column keeps the four editable point grids practical on a normal laptop.
     sec, sec_preview = sec_tab.columns([1.15, 0.85], gap="large")
-    scw = aset.expander("Stress and crack-width criteria (Elastic)", expanded=False)
+    scw = aset.expander("Elastic crack-width method", expanded=False)
     det = aset.expander("Reinforcement detailing", expanded=False)
     fat = aset.expander("Fatigue", expanded=False)
+    brg = aset.expander("Optional bridge calculations", expanded=False)
     sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
-    brg = aset.expander(
-        "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
-        expanded=False,
-    )
     about_slot = project.container()
     report_slot = project.container()
     save_slot = project.container()
@@ -4484,434 +3364,6 @@ def build_inputs(host=st):
             },
         ),
     )
-    design_methodology = _seeded_selectbox(
-        aset,
-        "Whole-calculation methodology",
-        list(bridge.METHODOLOGIES),
-        bridge.COMPONENT_METHODS,
-        "design_methodology",
-        help=(
-            "Independent component methods preserves Sector's normal expert "
-            "method selection. The base and Danish bridge options remain "
-            "distinct whole-calculation methods with separate immutable "
-            "coverage/applicability evidence."
-        ),
-    )
-    bridge_method_active = bridge.is_bridge_methodology(design_methodology)
-    base_bridge_method_active = design_methodology == bridge.EN1992_2_BASE
-    dk_bridge_method_active = bridge.is_danish_bridge_methodology(
-        design_methodology
-    )
-    if bridge_method_active:
-        # These methods are owned by the bridge base selection. The numerical
-        # crack-spacing model still inherits the 2004-family calculation, while
-        # acceptance is routed by the bridge edition token.
-        st.session_state["fatigue_edition"] = fatigue_inputs.EC2_2_2005_AC
-        st.session_state["sls_code"] = design_methodology
-        st.session_state["sls_criterion_mode"] = (
-            sls_core.CRITERION_MODE_STANDARD
-        )
-        st.session_state["sls_check_appearance"] = False
-    brg.caption(
-        "EN 1992-2 inherits compatible EN 1992-1-1 clauses and separately "
-        "records every bridge override, addition, and unsupported provision. "
-        "A required gap blocks the whole methodology verdict."
-    )
-    brg.dataframe(
-        pd.DataFrame(bridge.coverage_matrix(design_methodology))[
-            ["check_id", "title", "disposition", "bridge_reference"]
-        ],
-        hide_index=True,
-        width="stretch",
-    )
-    brg.markdown("**Applicability and project-basis decisions**")
-    bridge_coverage_table = _bridge_table_editor(
-        brg,
-        bridge_inputs.COVERAGE_TABLE_KEY,
-        disabled=not bridge_method_active,
-    )
-    bc1, bc2 = brg.columns(2)
-    bridge_brittle_method = _seeded_selectbox(
-        bc1,
-        "Prestressed brittle-failure method",
-        list(bridge.BRITTLE_METHODS),
-        bridge.BRITTLE_NOT_ESTABLISHED,
-        "bridge_brittle_method",
-        disabled=not bridge_method_active,
-        help=(
-            "Sector calculates Method b only under the base bridge method. "
-            "The Danish NA requires Method a, which remains explicitly "
-            "NOT ASSESSED until independent evidence is supplied."
-        ),
-    )
-    bridge_expected_box_walls = _seeded_number(
-        bc2,
-        "Expected box-wall rows",
-        0,
-        100,
-        0,
-        1,
-        "bridge_expected_box_walls",
-        disabled=not bridge_method_active,
-        help="Exact number of separately assessed box walls; 0 only when not applicable.",
-    )
-    bridge_minimum_scope = _seeded_selectbox(
-        bc1,
-        "Minimum crack-reinforcement components",
-        list(bridge.MINIMUM_SCOPES),
-        bridge.MINIMUM_SCOPE_NOT_ESTABLISHED,
-        "bridge_minimum_scope",
-        disabled=not bridge_method_active,
-    )
-    bridge_shear_scope = _seeded_selectbox(
-        bc2,
-        "Bridge shear/detailing scope",
-        list(bridge.SHEAR_SCOPES),
-        bridge.SHEAR_SCOPE_NOT_ESTABLISHED,
-        "bridge_shear_scope",
-        disabled=not bridge_method_active,
-        help=(
-            "Inherited member shear can be accepted only after the project "
-            "records that no added bridge web/interface model is required."
-        ),
-    )
-    bridge_exposure = _seeded_selectbox(
-        bc1,
-        "Bridge SLS stress exposure/applicability",
-        list(bridge.BRIDGE_EXPOSURES),
-        bridge.BRIDGE_EXPOSURE_NOT_ESTABLISHED,
-        "bridge_exposure",
-        disabled=not bridge_method_active,
-        help=(
-            "The 0.60 fck characteristic stress criterion is implemented for "
-            "the XD/XF/XS bridge application. Other cases need an explicit "
-            "not-applicable decision and source."
-        ),
-    )
-    dkbox = brg.expander(
-        "Danish infrastructure-manager and project design basis",
-        expanded=dk_bridge_method_active,
-    )
-    dk1, dk2 = dkbox.columns(2)
-    bridge_asset_class = _seeded_selectbox(
-        dk1,
-        "Bridge / infrastructure class",
-        list(danish_bridge.ASSET_CLASSES),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_asset_class",
-        disabled=not dk_bridge_method_active,
-        help="Never inferred from the manager, loads, or model geometry.",
-    )
-    bridge_infrastructure_manager = _seeded_selectbox(
-        dk2,
-        "Infrastructure manager",
-        list(danish_bridge.INFRASTRUCTURE_MANAGERS),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_infrastructure_manager",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_manager_source = _seeded_text(
-        dk1,
-        "Manager requirement document and edition",
-        "",
-        "bridge_manager_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_project_basis_source = _seeded_text(
-        dk2,
-        "Project design-basis document / clause",
-        "",
-        "bridge_project_basis_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_authority_approval_reference = _seeded_text(
-        dk1,
-        "Departure authority approval / dispensation reference",
-        "",
-        "bridge_authority_approval_reference",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_departure_applicability = _seeded_selectbox(
-        dk2,
-        "Project departure / dispensation applicability",
-        list(danish_bridge.APPLICABILITY_OPTIONS),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_departure_applicability",
-        disabled=not dk_bridge_method_active,
-        help=(
-            "Select explicitly. Sector never infers a departure from free-text "
-            "notes or an authority reference."
-        ),
-    )
-    bridge_departure_source = _seeded_text(
-        dk1,
-        "Departure methodology / source clause",
-        "",
-        "bridge_departure_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_environment_class = _seeded_selectbox(
-        dk2,
-        "Danish bridge environmental class",
-        list(danish_bridge.ENVIRONMENT_CLASSES),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_environment_class",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_environment_source = _seeded_text(
-        dk1,
-        "Environmental-class project source",
-        "",
-        "bridge_environment_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_control_class = _seeded_selectbox(
-        dk2,
-        "Construction / control class",
-        list(danish_bridge.CONTROL_CLASSES),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_control_class",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_control_source = _seeded_text(
-        dk2,
-        "Control-class source",
-        "",
-        "bridge_control_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_consequence_class = _seeded_selectbox(
-        dk1,
-        "Consequence class",
-        list(danish_bridge.CONSEQUENCE_CLASSES),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_consequence_class",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_consequence_source = _seeded_text(
-        dk2,
-        "Consequence-class source",
-        "",
-        "bridge_consequence_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_traffic_fatigue_applicability = _seeded_selectbox(
-        dk1,
-        "Traffic / fatigue-model applicability",
-        list(danish_bridge.FATIGUE_APPLICABILITY),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_traffic_fatigue_applicability",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_traffic_fatigue_model = _seeded_text(
-        dk2,
-        "Selected traffic / fatigue model",
-        "",
-        "bridge_traffic_fatigue_model",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_traffic_fatigue_source = _seeded_text(
-        dk1,
-        "Traffic / fatigue model source",
-        "",
-        "bridge_traffic_fatigue_source",
-        disabled=not dk_bridge_method_active,
-    )
-    dk2.caption(
-        "When Required, the declared model must exactly match Fatigue > "
-        "Spectrum basis > Method. The declared source must exactly match the "
-        "calculated spectrum source or cycle-count source, and both calculated "
-        "sources must be stated."
-    )
-    bridge_high_strength_approval = _seeded_selectbox(
-        dk2,
-        "Infrastructure-manager approval for fck > 50 MPa",
-        list(danish_bridge.APPROVAL_STATES),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_high_strength_approval",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_high_strength_approval_reference = _seeded_text(
-        dk1,
-        "High-strength approval reference",
-        "",
-        "bridge_high_strength_approval_reference",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_execution_conditions_source = _seeded_text(
-        dk2,
-        "Project-specific execution-conditions source",
-        "",
-        "bridge_execution_conditions_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_surface_condition = _seeded_selectbox(
-        dk1,
-        "Bridge surface condition",
-        list(danish_bridge.SURFACE_CONDITIONS),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_surface_condition",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_deicing_applicability = _seeded_selectbox(
-        dk2,
-        "De-icing-distance rule applicability",
-        list(danish_bridge.APPLICABILITY_OPTIONS),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_deicing_applicability",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_deicing_source = _seeded_text(
-        dk1,
-        "De-icing applicability / geometry source",
-        "",
-        "bridge_deicing_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_cover_category = _seeded_selectbox(
-        dk2,
-        "Cover reinforcement / duct category",
-        list(danish_bridge.COVER_CATEGORIES),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_cover_category",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_nominal_cover_mm = _seeded_number(
-        dk2,
-        "Actual nominal cover cnom (mm)",
-        0.0,
-        500.0,
-        None,
-        1.0,
-        "bridge_nominal_cover_mm",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_cover_source = _seeded_text(
-        dk1,
-        "Nominal-cover model / drawing source",
-        "",
-        "bridge_cover_source",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_collision_risk_applicability = _seeded_selectbox(
-        dk2,
-        "Rail prestressing collision-risk 75 mm route",
-        list(danish_bridge.APPLICABILITY_OPTIONS),
-        danish_bridge.NOT_ESTABLISHED,
-        "bridge_collision_risk_applicability",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_alpha_cc_basis = _seeded_selectbox(
-        dk1,
-        "alpha_cc basis",
-        list(conformance.BASIS_OPTIONS),
-        conformance.STANDARD_BASIS,
-        "bridge_alpha_cc_basis",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_alpha_cc_custom_methodology = _seeded_text(
-        dk2,
-        "alpha_cc custom methodology",
-        "",
-        "bridge_alpha_cc_custom_methodology",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_alpha_cc_approval_reference = _seeded_text(
-        dk1,
-        "alpha_cc custom approval / source",
-        "",
-        "bridge_alpha_cc_approval_reference",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_alpha_ct = _seeded_number(
-        dk2,
-        "Danish bridge alpha_ct (actual calculation input)",
-        0.01,
-        2.0,
-        1.0,
-        0.01,
-        "bridge_alpha_ct",
-        disabled=not dk_bridge_method_active,
-        help=(
-            "Used directly in torsional fctd when the Danish bridge method is "
-            "selected. A positive custom value is retained and qualified."
-        ),
-    )
-    bridge_alpha_ct_basis = _seeded_selectbox(
-        dk1,
-        "alpha_ct basis",
-        list(conformance.BASIS_OPTIONS),
-        conformance.STANDARD_BASIS,
-        "bridge_alpha_ct_basis",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_alpha_ct_custom_methodology = _seeded_text(
-        dk2,
-        "alpha_ct custom methodology",
-        "",
-        "bridge_alpha_ct_custom_methodology",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_alpha_ct_approval_reference = _seeded_text(
-        dk1,
-        "alpha_ct custom approval / source",
-        "",
-        "bridge_alpha_ct_approval_reference",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_special_rules = _seeded_text_area(
-        dkbox,
-        "Mapped special project rules",
-        "",
-        "bridge_special_rules",
-        disabled=not dk_bridge_method_active,
-    )
-    bridge_deviations = _seeded_text_area(
-        dkbox,
-        "Project departure / dispensation description",
-        "",
-        "bridge_deviations",
-        disabled=not dk_bridge_method_active,
-    )
-    brg.markdown("**Prestressed Method-b tensile regions**")
-    bridge_brittle_table = _bridge_table_editor(
-        brg,
-        bridge_inputs.BRITTLE_TABLE_KEY,
-        disabled=not base_bridge_method_active,
-    )
-    brg.markdown("**Box-wall shear/torsion evidence**")
-    bridge_box_wall_table = _bridge_table_editor(
-        brg,
-        bridge_inputs.BOX_WALL_TABLE_KEY,
-        disabled=not bridge_method_active,
-    )
-    brg.markdown("**Separate web/flange minimum crack reinforcement**")
-    bridge_minimum_table = _bridge_table_editor(
-        brg,
-        bridge_inputs.MINIMUM_TABLE_KEY,
-        disabled=not bridge_method_active,
-    )
-    bridge_tables = {
-        bridge_inputs.COVERAGE_TABLE_KEY: bridge_coverage_table,
-        bridge_inputs.BRITTLE_TABLE_KEY: bridge_brittle_table,
-        bridge_inputs.BOX_WALL_TABLE_KEY: bridge_box_wall_table,
-        bridge_inputs.MINIMUM_TABLE_KEY: bridge_minimum_table,
-    }
-    bridge_table_errors = bridge_inputs.all_table_errors(bridge_tables)
-    if bridge_method_active and bridge_table_errors:
-        brg.error(
-            "Bridge evidence table input is incomplete: "
-            + "; ".join(bridge_table_errors)
-            + "."
-        )
-    if bridge_method_active:
-        for warning in bridge_inputs.conformance_warnings(bridge_tables):
-            brg.warning(
-                warning
-                + " The analytical result is retained, but the selected-standard "
-                "verdict remains REVIEW / NOT FULLY ASSESSED unless a complete "
-                "custom methodology and approval/source are recorded."
-            )
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
     fatigue_on = _seeded_toggle(
@@ -4927,91 +3379,9 @@ def build_inputs(host=st):
         list(fatigue_inputs.EDITIONS),
         fatigue_inputs.EC2_2005_DKNA,
         "fatigue_edition",
-        disabled=not fatigue_on or bridge_method_active,
-        on_change=_apply_fatigue_preset_state,
+        disabled=not fatigue_on,
         help="Selects the Eurocode fatigue-resistance expressions and preset values.",
     )
-    _prepare_factor_mode_state(
-        "fatigue", fatigue_inputs.FACTOR_MODE_PRESET
-    )
-    fatigue_factor_mode = _seeded_selectbox(
-        fat,
-        "Fatigue material-factor source",
-        list(fatigue_inputs.FACTOR_MODES),
-        fatigue_inputs.FACTOR_MODE_PRESET,
-        "fatigue_factor_mode",
-        disabled=not fatigue_on,
-        on_change=_factor_mode_changed,
-        args=("fatigue",),
-        help=(
-            "Edition-derived resolves the material factors and every displayed "
-            "multiplier from the selected edition. Approved final override keeps "
-            "deliberate project values when the edition changes."
-        ),
-    )
-    fg1, fg2 = fat.columns(2)
-    fatigue_uses_categories = bool(
-        fatigue_inputs.FATIGUE_FACTOR_PRESETS[fatigue_edition][
-            "uses_gamma0_gamma3"
-        ]
-    )
-    invalid_factor_keys = set(_invalid_factor_input_keys())
-    fatigue_gamma0 = _seeded_number(
-        fg1,
-        r"$\gamma_0$",
-        None,
-        None,
-        1.0,
-        0.05,
-        "fatigue_gamma0",
-        on_change=_apply_fatigue_preset_state,
-        disabled=(
-            not (
-                fatigue_on
-                and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
-                and fatigue_uses_categories
-            )
-            and "fatigue_gamma0" not in invalid_factor_keys
-        ),
-        help=(
-            "Danish multiplier for structural parts in geotechnical structures. "
-            "Use 1.0 when it does not apply."
-        ),
-    )
-    fatigue_gamma3 = _seeded_number(
-        fg2,
-        r"$\gamma_3$",
-        None,
-        None,
-        1.0,
-        0.05,
-        "fatigue_gamma3",
-        on_change=_apply_fatigue_preset_state,
-        disabled=(
-            not (
-                fatigue_on
-                and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
-                and fatigue_uses_categories
-            )
-            and "fatigue_gamma3" not in invalid_factor_keys
-        ),
-        help=(
-            "Danish execution-control multiplier established by the project "
-            "design basis."
-        ),
-    )
-    try:
-        fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
-            fatigue_edition,
-            gamma0=fatigue_gamma0,
-            gamma3=fatigue_gamma3,
-        )
-    except ValueError:
-        # Display-only fallback. The raw invalid/missing category inputs continue
-        # into validation and block calculation before the fatigue engine.
-        fatigue_factor_preset = fatigue_inputs.fatigue_factor_preset(
-            fatigue_edition
-        )
     fatigue_check_steel = _seeded_toggle(
         fat,
         "Reinforcement",
@@ -5043,141 +3413,16 @@ def build_inputs(host=st):
             "amplitude for 10^6 cycles, and its Cycles value is ignored for concrete."
         ),
     )
-    concrete_miner_enabled = (
-        fatigue_concrete_method
-        in fatigue_analysis.CONCRETE_MINER_METHODS
-    )
-    if (
-        fatigue_concrete_method == fatigue_analysis.CONCRETE_PROJECT_MINER
-    ):
-        st.session_state["fatigue_concrete_miner_basis"] = (
-            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
-        )
-    elif (
-        fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
-        and fatigue_edition == fatigue_inputs.EC2_2_2005_AC
-        and bridge_method_active
-    ):
-        st.session_state["fatigue_concrete_miner_basis"] = (
-            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-        )
-    elif (
-        fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
-        and fatigue_edition == fatigue_inputs.EC2_2023
-    ):
-        st.session_state["fatigue_concrete_miner_basis"] = (
-            fatigue_inputs.MINER_BASIS_2023_STANDARD
-        )
-    elif (
-        st.session_state.get("fatigue_concrete_miner_basis")
-        in {
-            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
-            fatigue_inputs.MINER_BASIS_2023_STANDARD,
-            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
-        }
-    ):
-        st.session_state["fatigue_concrete_miner_basis"] = (
-            fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
-        )
-    fatigue_concrete_miner_basis = _seeded_selectbox(
-        fat,
-        "Concrete Miner method applicability",
-        list(fatigue_inputs.MINER_BASES),
-        fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED,
-        "fatigue_concrete_miner_basis",
-        disabled=(
-            not (
-                fatigue_on
-                and fatigue_check_concrete
-                and concrete_miner_enabled
-            )
-            or (
-                fatigue_edition == fatigue_inputs.EC2_2_2005_AC
-                and bridge_method_active
-            )
-            or "2023" in fatigue_edition
-            or (
-                fatigue_concrete_method
-                == fatigue_analysis.CONCRETE_PROJECT_MINER
-            )
-        ),
-        help=(
-            "The corrected 2005 Miner life equation belongs to EN 1992-2. "
-            "Outside the bridge methodology it is available only through an "
-            "explicit approved project-basis adoption and keeps C = 14. The "
-            "2023 standard route uses its own E.5.3 expressions. A different "
-            "S-N relation is selected as a separate approved project method."
-        ),
-    )
-    fatigue_concrete_miner_source = _seeded_text(
-        fat,
-        "Concrete Miner authority source",
-        "",
-        "fatigue_concrete_miner_source",
-        disabled=not (
-            fatigue_on
-            and fatigue_check_concrete
-            and concrete_miner_enabled
-            and fatigue_concrete_miner_basis in {
-                fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION,
-                fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
-            }
-        ),
-        help=(
-            "Project design-basis clause, checker approval, or authority source "
-            "for the selected adoption or project S-N relation."
-        ),
-    )
-    if (
-        fatigue_on
-        and fatigue_check_concrete
-        and fatigue_concrete_method == fatigue_analysis.CONCRETE_MINER
-        and "2023" not in fatigue_edition
-        and not (
-            fatigue_edition == fatigue_inputs.EC2_2_2005_AC
-            and bridge_method_active
-        )
-        and (
-            fatigue_concrete_miner_basis
-            != fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
-            or not str(fatigue_concrete_miner_source).strip()
-        )
-    ):
-        fat.warning(
-            "The 2005 explicit concrete Miner equation is bridge-specific. "
-            "Choose the 1-1 equivalent method or record an approved project "
-            "adoption and source."
-        )
-    if (
-        fatigue_on
-        and fatigue_check_concrete
-        and (
-            fatigue_concrete_method
-            == fatigue_analysis.CONCRETE_PROJECT_MINER
-        )
-        and not str(fatigue_concrete_miner_source).strip()
-    ):
-        fat.warning(
-            "The project concrete S-N relation needs a document/clause/approval "
-            "source before an APPROVED CUSTOM verdict can be issued. Without it, "
-            "the analytical result remains REVIEW."
-        )
-    if fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY:
-        fat.warning(
-            "Legacy saved fatigue factors are retained and calculated as custom "
-            "review-required values. Select the edition preset or record an "
-            "approved override to establish a qualified basis."
-        )
     fat.caption(
-        "No category is inferred. Edition-derived values use only the displayed "
-        "gamma0/gamma3 inputs; approved overrides remain final values."
+        "Enter complete partial factors. Sector applies no control-, "
+        "construction- or consequence-class multiplier."
     )
     ff1, ff2, ff3 = fat.columns(3)
     fatigue_gamma_ff = _seeded_number(
         ff1,
         r"$\gamma_{Ff}$",
-        None,
-        None,
+        0.1,
+        10.0,
         1.0,
         0.05,
         "fatigue_gamma_ff",
@@ -5188,144 +3433,26 @@ def build_inputs(host=st):
     fatigue_gamma_s = _seeded_number(
         ff2,
         r"$\gamma_s$",
-        None,
-        None,
-        (
-            None
-            if (
-                fatigue_factor_mode != fatigue_inputs.FACTOR_MODE_PRESET
-                and "fatigue_gamma_s" not in st.session_state
-            )
-            else fatigue_factor_preset["gamma_s"]
-        ),
+        0.1,
+        10.0,
+        1.15,
         0.05,
         "fatigue_gamma_s",
-        disabled=(
-            (
-                not (fatigue_on and fatigue_check_steel)
-                or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
-                or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY
-            )
-            and "fatigue_gamma_s" not in invalid_factor_keys
-        ),
+        disabled=not (fatigue_on and fatigue_check_steel),
         help=r"Final material factor reducing $\Delta\sigma_{Rsk}$ and the "
              "reinforcement yield or proof-stress limit.",
     )
     fatigue_gamma_c = _seeded_number(
         ff3,
         r"$\gamma_{c,\mathrm{fat}}$",
-        None,
-        None,
-        (
-            None
-            if (
-                fatigue_factor_mode != fatigue_inputs.FACTOR_MODE_PRESET
-                and "fatigue_gamma_c" not in st.session_state
-            )
-            else fatigue_factor_preset["gamma_c"]
-        ),
+        0.1,
+        10.0,
+        1.50,
         0.05,
         "fatigue_gamma_c",
-        disabled=(
-            (
-                not (fatigue_on and fatigue_check_concrete)
-                or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_PRESET
-                or fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_LEGACY
-            )
-            and "fatigue_gamma_c" not in invalid_factor_keys
-        ),
+        disabled=not (fatigue_on and fatigue_check_concrete),
         help=r"Final material factor in the design concrete fatigue strength "
              r"$f_{cd,\mathrm{fat}}$.",
-    )
-    fatigue_display_gamma_s = (
-        fatigue_factor_preset["gamma_s"]
-        if fatigue_gamma_s is None and not fatigue_check_steel
-        else fatigue_gamma_s
-    )
-    fatigue_display_gamma_c = (
-        fatigue_factor_preset["gamma_c"]
-        if fatigue_gamma_c is None and not fatigue_check_concrete
-        else fatigue_gamma_c
-    )
-    try:
-        _resolved_s, _resolved_c, fatigue_factor_display = (
-            fatigue_inputs.resolve_fatigue_factors(
-                fatigue_edition,
-                mode=fatigue_factor_mode,
-                gamma_s=fatigue_display_gamma_s,
-                gamma_c=fatigue_display_gamma_c,
-                gamma0=fatigue_gamma0,
-                gamma3=fatigue_gamma3,
-                approval_reference=(
-                    str(
-                        st.session_state.get(
-                            "fatigue_factor_approval"
-                        )
-                        or ""
-                    ).strip()
-                    if fatigue_factor_mode
-                    == fatigue_inputs.FACTOR_MODE_OVERRIDE
-                    else ""
-                ),
-            )
-        )
-    except ValueError as exc:
-        fatigue_factor_display = None
-        if (
-            fatigue_on
-            and _invalid_factor_input_error(
-                "fatigue",
-                _FATIGUE_NUMERIC_FACTOR_KEYS,
-            )
-            is None
-        ):
-            fat.error(
-                "Fatigue material-factor input is incomplete: "
-                f"{exc}. Enter every enabled approved final factor before "
-                "calculation."
-            )
-    fatigue_factor_state_error = _invalid_factor_input_error(
-        "fatigue",
-        _FATIGUE_NUMERIC_FACTOR_KEYS,
-    )
-    if fatigue_on and fatigue_factor_state_error is not None:
-        fat.error(fatigue_factor_state_error)
-    if fatigue_factor_display is not None:
-        fat.caption(
-            "Reinforcement derivation: "
-            f"{fatigue_factor_display['gamma_s_derivation']}. "
-            "Concrete derivation: "
-            f"{fatigue_factor_display['gamma_c_derivation']}. "
-            f"Edition provision: {fatigue_factor_display['reference']}."
-        )
-        for record in fatigue_factor_display[
-            "parameter_conformance"
-        ].values():
-            if record["state"] != conformance.STATE_CONFORMS:
-                fat.warning(
-                    record["message"]
-                    + " The analytical fatigue result is retained; the "
-                    "selected-standard verdict is not an unqualified PASS."
-                )
-    fatigue_factor_approval = _seeded_text(
-        fat,
-        "Fatigue-factor approval / source",
-        "",
-        "fatigue_factor_approval",
-        disabled=not (
-            fatigue_on
-            and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
-        ),
-        help=(
-            "Project decision, design-basis clause, or checker approval supporting "
-            "the overridden final fatigue material factors. This is separate from "
-            "the spectrum-method approval/reference below."
-        ),
-    )
-    _render_factor_repair_control(
-        fat,
-        "fatigue",
-        _FATIGUE_NUMERIC_FACTOR_KEYS,
     )
     fc1, fc2 = fat.columns(2)
     fatigue_beta_cc_t0 = _seeded_number(
@@ -5370,64 +3497,24 @@ def build_inputs(host=st):
     fatigue_concrete_c = _seeded_number(
         fc2,
         r"Concrete fatigue $C$",
-        None,
-        None,
-        fatigue_inputs.STANDARD_CONCRETE_MINER_C,
+        0.1,
+        100.0,
+        14.0,
         0.5,
         "fatigue_concrete_c",
-        disabled=not (
-            fatigue_on
-            and fatigue_check_concrete
-            and concrete_miner_enabled
+        disabled=(
+            not (fatigue_on and fatigue_check_concrete)
+            or fatigue_concrete_method == fatigue_analysis.CONCRETE_EQUIVALENT
         ),
-        help=(
-            r"Any positive finite coefficient is calculated. The selected "
-            r"standard prescribes $C = 14$; another value is custom and needs "
-            "a clearly stated Miner/S-N methodology and approval/source for a "
-            "qualified custom verdict."
-        ),
+        help=r"Coefficient in the implemented $\log_{10}N_R$ concrete fatigue-life "
+             "relation.",
     )
-    if (
-        fatigue_on
-        and fatigue_check_concrete
-        and concrete_miner_enabled
-    ):
-        try:
-            miner_record = fatigue_analysis.concrete_miner_conformance(
-                edition=fatigue_edition,
-                concrete_method=fatigue_concrete_method,
-                miner_basis=fatigue_concrete_miner_basis,
-                miner_source=str(
-                    fatigue_concrete_miner_source or ""
-                ).strip(),
-                coefficient_c=fatigue_concrete_c,
-                design_methodology=design_methodology,
-            )
-            if miner_record["state"] != conformance.STATE_CONFORMS:
-                fat.warning(
-                    miner_record["message"]
-                    + " The result is analytical/custom evidence, not an "
-                    "unqualified AC:2008 or EC2 standard check."
-                )
-        except ValueError:
-            # The ordinary validation message covers a malformed/non-positive C.
-            pass
     fat.markdown("**Spectrum basis**")
     fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
-    if (
-        fatigue_on
-        and fatigue_factor_mode == fatigue_inputs.FACTOR_MODE_OVERRIDE
-        and not str(fatigue_factor_approval).strip()
-    ):
-        fat.warning(
-            "An approved final-factor override needs a dedicated fatigue-factor "
-            "approval/source before an APPROVED CUSTOM verdict can be issued. "
-            "Without it, the analytical result remains REVIEW. The spectrum-method "
-            "approval/reference does not authorize material-factor changes."
-        )
+    bridge_standard, bridge_tables = _bridge_tables_panel(brg)
 
-    # Load tables are rendered before the acceptance controls so their per-case
-    # checkboxes can enable the relevant crack-width settings in the same rerun.
+    # Load tables are rendered before the crack controls so their per-case
+    # choices can enable the numerical crack-width settings in the same rerun.
     case_frames = _load_case_editors(loads)
     if fatigue_on:
         loads.markdown("**Grouped fatigue spectra**")
@@ -5440,7 +3527,7 @@ def build_inputs(host=st):
         fatigue_spectrum = fatigue_inputs.active_spectrum_table(
             st.session_state.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
         )
-    case_head = load_cases.legacy_scalars_from_tables(case_frames)
+    case_head = load_cases.head_inputs(case_frames)
     pl_case_id = case_head["pl_case_id"]
     pl_case_type = case_head["pl_case_type"]
     pl_case_source = ""
@@ -5461,7 +3548,7 @@ def build_inputs(host=st):
     sls_cw = bool(
         not case_frames[load_cases.ELASTIC_TABLE_KEY].empty
         and case_frames[load_cases.ELASTIC_TABLE_KEY][
-            "check_crack_width"
+            "calculate_crack_width"
         ].any()
     )
     loads.markdown("**Global Elastic parameter**")
@@ -5471,9 +3558,6 @@ def build_inputs(host=st):
         help="One global final creep coefficient. Sustained actions use "
              "Ec,eff = Ec/(1+phi).",
     )
-    aset.markdown("**Design-basis alignment**")
-    design_basis_slot = aset.container()
-
     aset.markdown("**Neutral-axis sweep (plastic)**")
     v_min = _seeded_number(
         aset, r"Start angle $\varphi_{NA,\min}$ ($^\circ$)",
@@ -5508,32 +3592,9 @@ def build_inputs(host=st):
              "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
     scw.caption(
-        "Stress limits are user-defined. Crack criteria below carry their own "
-        "source and explicit SLS-combination applicability."
-    )
-    sls_conc_limit_pct = _seeded_number(
-        scw, r"Concrete compression limit (% $f_{ck}$, 0 = not assessed)",
-        0.0, 100.0, 60.0, 1.0, "sls_conc_limit_pct", disabled=not elastic_on,
-        help=r"Upper concrete compressive stress as a percentage of $f_{ck}$.")
-    sls_steel_limit_pct = _seeded_number(
-        scw, r"Reinforcement tension limit (% $f_{yk}$, 0 = not assessed)",
-        0.0, 100.0, 80.0, 1.0, "sls_steel_limit_pct", disabled=not elastic_on,
-        help="Upper reinforcing-steel tensile-stress criterion as a percentage of "
-             r"the entered characteristic yield strength $f_{yk}$.")
-    sls_pre_limit_pct = _seeded_number(
-        scw, r"Tendon tension limit (% $f_{pk}$, 0 = not assessed)",
-        0.0, 100.0, 75.0, 1.0, "sls_pre_limit_pct", disabled=not elastic_on,
-        help="Upper prestressing-steel tensile-stress criterion as a percentage of "
-             r"the entered characteristic tendon strength $f_{pk}$. It is assessed only "
-             "when the section contains tendons.")
-    sls_limit_source = _seeded_text(
-        scw, "Acceptance-criteria source",
-        "Project design basis / user-defined criteria", "sls_limit_source",
-        disabled=not elastic_on,
-        help="Document, clause or project requirement supporting the limits.")
-    scw.caption(
-        "Stress and crack-width checks are selected per Elastic case in the "
-        "Loads table."
+        "Concrete and reinforcement stresses are always reported for every "
+        "Elastic action. Crack width is a numerical output only and is enabled "
+        "per action in the Loads table."
     )
     sls_phi = _seeded_number(
         scw, r"Crack-width element diameter $\phi$ (mm, 0 = auto)",
@@ -5555,14 +3616,28 @@ def build_inputs(host=st):
                 "help": (
                     "EC2 7.11 bond coefficient k1 for the crack spacing, applied "
                     "to the mild reinforcement: 0.8 for ribbed / high-bond bars "
-                    "(e.g. Tentor), 1.6 for plain round bars. The separate "
-                    "prestressing-steel control applies to tendons in the 2023 "
-                    "method; the 2005 method retains k1 = 1.6 for tendons."
+                    "(e.g. Tentor), 1.6 for plain round bars. Prestressing "
+                    "tendons always use k1 = 1.6."
                 ),
             },
         ),
     )
     sls_k1 = _BOND_K1[sls_bond]
+    sls_tendon_xi = _seeded_number(
+        scw,
+        r"Bonded-tendon ratio $\xi$ (0 = unset)",
+        0.0,
+        10.0,
+        0.0,
+        0.05,
+        "sls_tendon_xi",
+        disabled=not (elastic_on and sls_cw),
+        help=(
+            "2023 mixed mild/prestressing crack calculation: tendon-to-ribbed-"
+            "reinforcement bond-strength ratio. Enter the selected method input; "
+            "zero leaves it unspecified."
+        ),
+    )
     # Migrate the pre-coarse-system saved value before the selectbox reads it.
     if st.session_state.get("sls_code") in _CRACK_CODE_ALIASES:
         st.session_state["sls_code"] = _CRACK_CODE_ALIASES[st.session_state["sls_code"]]
@@ -5573,10 +3648,7 @@ def build_inputs(host=st):
         **_input_widget_kwargs(
             "sls_code",
             {
-                "disabled": (
-                    not (elastic_on and sls_cw)
-                    or bridge_method_active
-                ),
+                "disabled": not (elastic_on and sls_cw),
                 "help": (
                     "Crack-spacing method. The DK NA reports fine and coarse "
                     "systems; the 2023 option uses the refined model in 9.2.3. "
@@ -5587,321 +3659,6 @@ def build_inputs(host=st):
     )
     sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
     sls_edition = _CRACK_CODES[sls_code]["edition"]
-    sls_criterion_mode = _seeded_selectbox(
-        scw,
-        "Crack-criterion source and routing",
-        list(sls_core.CRITERION_MODES),
-        sls_core.CRITERION_MODE_STANDARD,
-        "sls_criterion_mode",
-        disabled=(
-            not (elastic_on and sls_cw)
-            or bridge_method_active
-        ),
-        help=(
-            "Standard-derived routes appearance/durability criteria to the "
-            "combination required by the selected edition, member/protection "
-            "group and structured exposure group. "
-            "Project-defined requires a separate positive limit for every "
-            "applicable combination. Legacy ambiguity always returns REVIEW."
-        ),
-    )
-    standard_criteria = (
-        sls_criterion_mode == sls_core.CRITERION_MODE_STANDARD
-    )
-    project_criteria = (
-        sls_criterion_mode == sls_core.CRITERION_MODE_PROJECT
-    )
-    sls_prestress_class = _seeded_selectbox(
-        scw,
-        "Crack-control member / prestress class",
-        list(sls_core.PRESTRESS_CLASSES),
-        sls_core.PRESTRESS_REINFORCED_UNBONDED,
-        "sls_prestress_class",
-        disabled=not (elastic_on and sls_cw and standard_criteria),
-        help=(
-            "The 2004 route distinguishes reinforced/unbonded from bonded "
-            "prestress. The 2023 Table 9.2 route also uses the structured "
-            "protection and exposure groups below."
-        ),
-    )
-    sls_protection_class = _seeded_selectbox(
-        scw,
-        "2023 bonded-tendon protection / member group",
-        list(sls_core.PROTECTION_CLASSES),
-        project_io.DEFAULT_SLS_PROTECTION_CLASS,
-        "sls_protection_class",
-        disabled=not (
-            elastic_on
-            and sls_cw
-            and standard_criteria
-            and sls_edition == "2023"
-            and sls_prestress_class == sls_core.PRESTRESS_BONDED
-        ),
-        help=(
-            "Table 9.2 separates bonded tendons with Protection Level 1 "
-            "(together with pretensioned members) from bonded tendons with "
-            "Protection Levels 2/3. Not established blocks the verdict."
-        ),
-    )
-    sls_exposure_class = _seeded_selectbox(
-        scw,
-        "2023 Table 9.2 governing exposure group",
-        list(sls_core.EXPOSURE_CLASSES_2023),
-        project_io.DEFAULT_SLS_EXPOSURE_CLASS,
-        "sls_exposure_class",
-        disabled=not (
-            elastic_on
-            and sls_cw
-            and standard_criteria
-            and sls_edition == "2023"
-        ),
-        help=(
-            "Select the governing Table 9.2 row group explicitly. Combined "
-            "exposures require an engineering choice of the governing group; "
-            "Sector does not parse or infer it from free text."
-        ),
-    )
-    sls_dk_member_class = _seeded_selectbox(
-        scw,
-        "DK NA Table 7.101N member class",
-        list(danish_bridge.MEMBER_CLASSES),
-        project_io.DEFAULT_SLS_DK_MEMBER_CLASS,
-        "sls_dk_member_class",
-        disabled=not (
-            elastic_on
-            and sls_cw
-            and standard_criteria
-            and sls_edition == sls_core.EDITION_BRIDGE_DK_2015
-        ),
-        help=(
-            "Separate from bond class: explicitly selects the Danish "
-            "non-prestressed or pre/post-tensioned acceptance row. Sector also "
-            "checks it against the calculation snapshot's tendon presence."
-        ),
-    )
-    sls_bridge_exposure_class = _seeded_selectbox(
-        scw,
-        "EN 1992-2 Table 7.101N governing exposure group",
-        list(sls_core.BRIDGE_EXPOSURE_CLASSES),
-        project_io.DEFAULT_SLS_BRIDGE_EXPOSURE_CLASS,
-        "sls_bridge_exposure_class",
-        disabled=not (
-            elastic_on
-            and sls_cw
-            and standard_criteria
-            and sls_edition == sls_core.EDITION_BRIDGE_2005_AC
-        ),
-        help=(
-            "Select the bridge table row explicitly. It routes reinforced/"
-            "unbonded width to quasi-permanent, bonded width to frequent, and "
-            "bonded decompression to the required quasi-permanent or frequent "
-            "combination. Duration is never used as a substitute."
-        ),
-    )
-    sls_exposure_context = _seeded_text(
-        scw,
-        "Exposure / application context",
-        "",
-        "sls_exposure_context",
-        disabled=not (elastic_on and sls_cw and standard_criteria),
-        help=(
-            "Project-specific exposure/application provenance. For the 2023 "
-            "edition this supplements, but never replaces, the structured "
-            "Table 9.2 group."
-        ),
-    )
-    sls_check_appearance = _seeded_checkbox(
-        scw,
-        "Assess 2023 appearance criterion (Table 9.1)",
-        False,
-        "sls_check_appearance",
-        disabled=not (
-            elastic_on
-            and sls_cw
-            and standard_criteria
-        ) or bridge_method_active,
-        help=(
-            "Adds a separate appearance criterion. This standard-derived route "
-            "is implemented for the 2023 edition; selecting it with another "
-            "edition blocks the verdict until it is cleared or the edition is "
-            "changed. Sector does not reuse a duration label."
-        ),
-    )
-    sls_appearance_limit = _seeded_number(
-        scw,
-        "Appearance crack-width limit (mm, 0 = not assessed)",
-        0.0,
-        5.0,
-        0.30,
-        0.05,
-        "sls_appearance_limit",
-        disabled=not (
-            elastic_on
-            and sls_cw
-            and standard_criteria
-            and sls_edition == "2023"
-            and sls_check_appearance
-        ),
-        help="Limit selected from Table 9.1 for the stated application context.",
-    )
-    sls_check_durability = _seeded_checkbox(
-        scw,
-        (
-            "Assess durability criterion "
-            + (
-                "(Table 9.2)"
-                if sls_edition == "2023"
-                else "(Table 7.101N DK NA)"
-                if sls_edition == sls_core.EDITION_BRIDGE_DK_2015
-                else "(Table 7.101N)"
-                if sls_edition == sls_core.EDITION_BRIDGE_2005_AC
-                else "(Table 7.1N)"
-            )
-        ),
-        True,
-        "sls_check_durability",
-        disabled=not (elastic_on and sls_cw and standard_criteria),
-        help=(
-            "Adds the standard durability crack-width criterion for the stated "
-            "exposure/application."
-        ),
-    )
-    sls_wk_limit = _seeded_number(
-        scw,
-        r"Durability crack-width limit $w_{\mathrm{lim}}$ (mm, 0 = not assessed)",
-        0.0,
-        5.0,
-        0.30,
-        0.05,
-        "sls_wk_limit",
-        disabled=not (
-            elastic_on
-            and sls_cw
-            and standard_criteria
-            and sls_check_durability
-        ) or sls_edition in {
-            sls_core.EDITION_BRIDGE_2005_AC,
-            sls_core.EDITION_BRIDGE_DK_2015,
-        },
-        help=(
-            "Limit selected from the applicable standard table. Only a response "
-            "explicitly tagged with the required SLS combination can govern. "
-            "EN 1992-2 standard limits are fixed by Table 7.101N and ignore this "
-            "user-defined field."
-        ),
-    )
-    if (
-        elastic_on
-        and sls_cw
-        and standard_criteria
-        and sls_edition == sls_core.EDITION_BRIDGE_2005_AC
-    ):
-        scw.caption(
-            "Table 7.101N owns the standard value: 0.30 mm QP for reinforced/"
-            "unbonded, 0.20 mm frequent for the applicable bonded rows, or "
-            "decompression only for XD/XS."
-        )
-    if (
-        elastic_on
-        and sls_cw
-        and standard_criteria
-        and sls_edition == sls_core.EDITION_BRIDGE_DK_2015
-    ):
-        scw.caption(
-            "Table 7.101N DK NA routes every final-state width check to the "
-            "Frequent combination: non-prestressed 0.30/0.20 mm, road or "
-            "footbridge prestressed 0.20/0.10 mm, and railway prestressed "
-            "0.10/0.10 mm for Aggressive/Extra aggressive. Prestressed rows "
-            "also require a separate Quasi-permanent decompression response."
-        )
-    sls_decompression_applicability = _seeded_selectbox(
-        scw,
-        "2004 quasi-permanent decompression applicability",
-        list(sls_core.DECOMPRESSION_OPTIONS),
-        sls_core.DECOMPRESSION_NOT_ESTABLISHED,
-        "sls_decompression_applicability",
-        disabled=not (
-            elastic_on
-            and sls_cw
-            and standard_criteria
-            and sls_edition == "2004"
-            and sls_prestress_class == sls_core.PRESTRESS_BONDED
-        ),
-        help=(
-            "The 2004 bonded-prestress route retains the explicit project "
-            "applicability decision. For 2023, Table 9.2 derives decompression "
-            "and its QP/frequent combination from the structured fields above."
-        ),
-    )
-    sls_project_characteristic_limit = _seeded_number(
-        scw,
-        "Project characteristic-combination limit (mm, 0 = not applicable)",
-        0.0,
-        5.0,
-        0.0,
-        0.05,
-        "sls_project_characteristic_limit",
-        disabled=not (elastic_on and sls_cw and project_criteria),
-        help="Positive value explicitly applies the project criterion here.",
-    )
-    sls_project_frequent_limit = _seeded_number(
-        scw,
-        "Project frequent-combination limit (mm, 0 = not applicable)",
-        0.0,
-        5.0,
-        0.0,
-        0.05,
-        "sls_project_frequent_limit",
-        disabled=not (elastic_on and sls_cw and project_criteria),
-        help="Positive value explicitly applies the project criterion here.",
-    )
-    sls_project_quasi_permanent_limit = _seeded_number(
-        scw,
-        "Project quasi-permanent-combination limit (mm, 0 = not applicable)",
-        0.0,
-        5.0,
-        0.0,
-        0.05,
-        "sls_project_quasi_permanent_limit",
-        disabled=not (elastic_on and sls_cw and project_criteria),
-        help="Positive value explicitly applies the project criterion here.",
-    )
-    sls_tendon_bond = _seeded_selectbox(
-        scw,
-        r"Prestressing-steel bond condition ($k_b$)",
-        list(_BOND_K1),
-        project_io.DEFAULT_SLS_TENDON_BOND,
-        "sls_tendon_bond",
-        disabled=not (
-            elastic_on and sls_cw and sls_edition == "2023"
-        ),
-        help=(
-            "Bond condition used in EN 1992-1-1:2023 Formula (9.18): "
-            "the high-bond choice maps to kb = 0.9 and the poor-bond "
-            "choice maps to kb = 1.2. It applies to prestressing "
-            "tendons only."
-        ),
-    )
-    sls_tendon_k1 = _BOND_K1[sls_tendon_bond]
-    sls_tendon_xi = _seeded_number(
-        scw,
-        r"Prestressing bond-strength ratio $\xi$ (0 = not assessed)",
-        0.0,
-        1.0,
-        project_io.DEFAULT_SLS_TENDON_XI,
-        0.05,
-        "sls_tendon_xi",
-        disabled=not (elastic_on and sls_cw and sls_edition == "2023"),
-        help=(
-            "Explicit tendon-to-ribbed-reinforcement bond-strength ratio from "
-            "the applicable product/project basis. Sector derives each "
-            r"$\xi_1 = \sqrt{\xi\phi_s/\phi_p}$ for mixed reinforcement, using the "
-            "largest effective mild-bar diameter and each tendon table "
-            r"diameter; for prestressing-only crack control $\xi_1 = \xi$. Zero "
-            "fails closed when a tendon contributes."
-        ),
-    )
-    _render_crack_repair_control(scw)
     sls_member = scw.selectbox(
         "Member type",
         ["Beam", "Slab"],
@@ -5917,378 +3674,6 @@ def build_inputs(host=st):
             },
         ),
     )
-
-    with scw.expander(
-        "Multidirectional crack interaction (opt-in)",
-        expanded=False,
-    ) as crack_interaction_box:
-        crack_interaction_box.caption(
-            "Separate from the canonical one-direction crack response and its "
-            "history/duration states. A combined conclusion needs one exact "
-            "method, a current Elastic case and criterion, explicit axes, and "
-            "all method-specific domain evidence."
-        )
-        _render_interaction_repair_control(
-            crack_interaction_box,
-            multidirectional.CRACK_INPUT_KEYS,
-        )
-        crack_interaction_on = _seeded_toggle(
-            crack_interaction_box,
-            "Assess multidirectional crack interaction",
-            False,
-            "crack_interaction_on",
-            disabled=not (elastic_on and sls_cw),
-            help=(
-                "Off retains every existing crack response and leaves the "
-                "multidirectional interaction NOT ASSESSED."
-            ),
-        )
-        crack_interaction_method = _seeded_selectbox(
-            crack_interaction_box,
-            "Crack-interaction methodology",
-            list(multidirectional.CRACK_METHODS),
-            multidirectional.CRACK_METHOD_NONE,
-            "crack_interaction_method",
-            disabled=not crack_interaction_on,
-            format_func=lambda value: (
-                multidirectional.CRACK_METHOD_LABELS[value]
-                if isinstance(value, str)
-                and value in multidirectional.CRACK_METHOD_LABELS
-                else "Rejected invalid crack-interaction selection"
-            ),
-            help=(
-                "The 2004/DK and 2023 methods implement their stated inclined-"
-                "crack domains. The project power sum always remains an "
-                "approved-custom verdict."
-            ),
-        )
-        _crack_interaction_active = bool(
-            crack_interaction_on
-            and crack_interaction_method
-            != multidirectional.CRACK_METHOD_NONE
-        )
-        _elastic_crack_names = [
-            str(value).strip()
-            for value in case_frames[load_cases.ELASTIC_TABLE_KEY].loc[
-                case_frames[load_cases.ELASTIC_TABLE_KEY][
-                    "check_crack_width"
-                ].astype(bool),
-                load_cases.NAME,
-            ].tolist()
-            if str(value).strip()
-        ]
-        _default_crack_case = (
-            _elastic_crack_names[0] if _elastic_crack_names else ""
-        )
-        _default_crack_criterion = (
-            "bridge-dk-standard-durability"
-            if sls_edition == sls_core.EDITION_BRIDGE_DK_2015
-            else "bridge-standard-durability"
-            if sls_edition == sls_core.EDITION_BRIDGE_2005_AC
-            else "project-characteristic"
-            if project_criteria
-            and sls_project_characteristic_limit > 0.0
-            else "project-frequent"
-            if project_criteria and sls_project_frequent_limit > 0.0
-            else "project-quasi-permanent"
-            if project_criteria
-            and sls_project_quasi_permanent_limit > 0.0
-            else "standard-durability"
-        )
-        crack_case_col, crack_criterion_col = (
-            crack_interaction_box.columns(2)
-        )
-        _seeded_text(
-            crack_case_col,
-            "Exact Elastic case ID",
-            _default_crack_case,
-            "crack_interaction_case_id",
-            disabled=not _crack_interaction_active,
-            help=(
-                "Must identify exactly one current crack-width-enabled Elastic "
-                "case. Duplicate or stale identities fail closed."
-            ),
-        )
-        _seeded_text(
-            crack_criterion_col,
-            "Exact canonical criterion ID",
-            _default_crack_criterion,
-            "crack_interaction_criterion_id",
-            disabled=not _crack_interaction_active,
-            help=(
-                "For example standard-durability, standard-appearance, "
-                "project-frequent, or bridge-dk-standard-durability. The "
-                "criterion's immutable PR-03 binding is revalidated."
-            ),
-        )
-        _seeded_selectbox(
-            crack_interaction_box,
-            "Criterion SLS combination",
-            list(sls_core.SLS_COMBINATIONS),
-            sls_core.COMBINATION_QUASI_PERMANENT,
-            "crack_interaction_combination",
-            disabled=not _crack_interaction_active,
-            help=(
-                "Must exactly match the selected canonical criterion. Response "
-                "duration never substitutes for this selection."
-            ),
-        )
-        crack_axis_x_col, crack_axis_y_col = (
-            crack_interaction_box.columns(2)
-        )
-        _seeded_text(
-            crack_axis_x_col,
-            "x-axis / first reinforcement direction",
-            "x reinforcement direction",
-            "crack_interaction_axis_x",
-            disabled=not _crack_interaction_active,
-        )
-        _seeded_text(
-            crack_axis_y_col,
-            "y-axis / second reinforcement direction",
-            "y reinforcement direction",
-            "crack_interaction_axis_y",
-            disabled=not _crack_interaction_active,
-        )
-        _crack_standard_method = crack_interaction_method in {
-            multidirectional.CRACK_METHOD_DK_2004,
-            multidirectional.CRACK_METHOD_EN_2023,
-        }
-        _crack_project_method = (
-            crack_interaction_method
-            == multidirectional.CRACK_METHOD_PROJECT
-        )
-        _seeded_checkbox(
-            crack_interaction_box,
-            "Two orthogonal reinforcement directions confirmed",
-            False,
-            "crack_interaction_orthogonal",
-            disabled=not (
-                _crack_interaction_active and _crack_standard_method
-            ),
-        )
-        _seeded_checkbox(
-            crack_interaction_box,
-            "Plane-stress state at the assessed point confirmed",
-            False,
-            "crack_interaction_plane_stress",
-            disabled=not (
-                _crack_interaction_active
-                and crack_interaction_method
-                == multidirectional.CRACK_METHOD_DK_2004
-            ),
-        )
-        _seeded_checkbox(
-            crack_interaction_box,
-            "Membrane-element domain confirmed",
-            False,
-            "crack_interaction_membrane",
-            disabled=not (
-                _crack_interaction_active
-                and crack_interaction_method
-                == multidirectional.CRACK_METHOD_EN_2023
-            ),
-        )
-        _seeded_checkbox(
-            crack_interaction_box,
-            "No unmodelled discontinuity in the assessed region",
-            False,
-            "crack_interaction_no_discontinuity",
-            disabled=not (
-                _crack_interaction_active and _crack_standard_method
-            ),
-        )
-        _seeded_checkbox(
-            crack_interaction_box,
-            "Approved project-method domain confirmed",
-            False,
-            "crack_interaction_domain_confirmed",
-            disabled=not (
-                _crack_interaction_active and _crack_project_method
-            ),
-        )
-        crack_angle_col, crack_sx_col, crack_sy_col = (
-            crack_interaction_box.columns(3)
-        )
-        _seeded_number(
-            crack_angle_col,
-            r"Method angle $\theta$ ($^\circ$)",
-            None,
-            None,
-            45.0,
-            1.0,
-            "crack_interaction_angle_deg",
-            disabled=not (
-                _crack_interaction_active and _crack_standard_method
-            ),
-            help=(
-                "2004/DK: from first reinforcement axis to principal tensile "
-                "stress. 2023 G.5: between principal compressive strain and "
-                "x reinforcement. The strict method angle domain is checked."
-            ),
-        )
-        _seeded_number(
-            crack_sx_col,
-            r"$s_{r,x}$ (mm)",
-            None,
-            None,
-            150.0,
-            1.0,
-            "crack_interaction_spacing_x_mm",
-            disabled=not (
-                _crack_interaction_active and _crack_standard_method
-            ),
-        )
-        _seeded_number(
-            crack_sy_col,
-            r"$s_{r,y}$ (mm)",
-            None,
-            None,
-            150.0,
-            1.0,
-            "crack_interaction_spacing_y_mm",
-            disabled=not (
-                _crack_interaction_active and _crack_standard_method
-            ),
-        )
-        crack_ex_col, crack_ey_col, crack_e2_col = (
-            crack_interaction_box.columns(3)
-        )
-        _seeded_number(
-            crack_ex_col,
-            r"$\Delta\varepsilon_x$",
-            None,
-            None,
-            0.0005,
-            0.0001,
-            "crack_interaction_strain_x",
-            disabled=not (
-                _crack_interaction_active and _crack_standard_method
-            ),
-        )
-        _seeded_number(
-            crack_ey_col,
-            r"$\Delta\varepsilon_y$",
-            None,
-            None,
-            0.0005,
-            0.0001,
-            "crack_interaction_strain_y",
-            disabled=not (
-                _crack_interaction_active and _crack_standard_method
-            ),
-        )
-        _seeded_number(
-            crack_e2_col,
-            r"$\varepsilon_2$ (2023 G.26; absolute value applied)",
-            None,
-            None,
-            0.0,
-            0.0001,
-            "crack_interaction_transverse_strain",
-            disabled=not (
-                _crack_interaction_active
-                and crack_interaction_method
-                == multidirectional.CRACK_METHOD_EN_2023
-            ),
-        )
-        crack_wx_col, crack_wy_col = crack_interaction_box.columns(2)
-        _seeded_number(
-            crack_wx_col,
-            r"Project component $w_{k,x}$ (mm)",
-            None,
-            None,
-            0.0,
-            0.01,
-            "crack_interaction_component_x_mm",
-            disabled=not (
-                _crack_interaction_active and _crack_project_method
-            ),
-        )
-        _seeded_number(
-            crack_wy_col,
-            r"Project component $w_{k,y}$ (mm)",
-            None,
-            None,
-            0.0,
-            0.01,
-            "crack_interaction_component_y_mm",
-            disabled=not (
-                _crack_interaction_active and _crack_project_method
-            ),
-        )
-        crack_lx_col, crack_ly_col, crack_p_col = (
-            crack_interaction_box.columns(3)
-        )
-        _seeded_number(
-            crack_lx_col,
-            r"Project $w_{\mathrm{lim},x}$ (mm)",
-            None,
-            None,
-            0.30,
-            0.01,
-            "crack_interaction_limit_x_mm",
-            disabled=not (
-                _crack_interaction_active and _crack_project_method
-            ),
-        )
-        _seeded_number(
-            crack_ly_col,
-            r"Project $w_{\mathrm{lim},y}$ (mm)",
-            None,
-            None,
-            0.30,
-            0.01,
-            "crack_interaction_limit_y_mm",
-            disabled=not (
-                _crack_interaction_active and _crack_project_method
-            ),
-        )
-        _seeded_number(
-            crack_p_col,
-            r"Project exponent $p$",
-            None,
-            None,
-            2.0,
-            0.1,
-            "crack_interaction_exponent",
-            disabled=not (
-                _crack_interaction_active and _crack_project_method
-            ),
-            help=(
-                "A positive finite custom value is calculated and retained. "
-                "It is never relabelled as a Eurocode exponent."
-            ),
-        )
-        _seeded_text(
-            crack_interaction_box,
-            "Project method source",
-            "",
-            "crack_interaction_source",
-            disabled=not (
-                _crack_interaction_active and _crack_project_method
-            ),
-        )
-        _seeded_text(
-            crack_interaction_box,
-            "Project method approval / checker reference",
-            "",
-            "crack_interaction_approval",
-            disabled=not (
-                _crack_interaction_active and _crack_project_method
-            ),
-        )
-        if crack_interaction_method == multidirectional.CRACK_METHOD_DK_2004:
-            crack_interaction_box.caption(
-                multidirectional.CRACK_SOURCE_DK_2004
-            )
-        elif (
-            crack_interaction_method
-            == multidirectional.CRACK_METHOD_EN_2023
-        ):
-            crack_interaction_box.caption(
-                multidirectional.CRACK_SOURCE_EN_2023
-            )
 
     detailing_member_type = _seeded_selectbox(
         det,
@@ -6489,199 +3874,6 @@ def build_inputs(host=st):
         "shear_vy_bw", disabled=not shear_on,
         help=r"Web width for $V_{y,Ed}$ (depth along y; bottom/top faces).",
     )
-    with sts.expander(
-        "Biaxial shear interaction (opt-in)",
-        expanded=False,
-    ) as shear_interaction_box:
-        shear_interaction_box.caption(
-            "The Vx and Vy solvers remain independent. Two component PASS "
-            "results never create a combined PASS by themselves."
-        )
-        _render_interaction_repair_control(
-            shear_interaction_box,
-            multidirectional.SHEAR_INPUT_KEYS,
-        )
-        shear_interaction_on = _seeded_toggle(
-            shear_interaction_box,
-            "Assess biaxial Vx/Vy interaction",
-            False,
-            "shear_interaction_on",
-            disabled=not shear_on,
-            help=(
-                "Off retains both directional calculations and leaves their "
-                "aggregate interaction NOT ASSESSED."
-            ),
-        )
-        shear_interaction_method = _seeded_selectbox(
-            shear_interaction_box,
-            "Shear-interaction methodology",
-            list(multidirectional.SHEAR_METHODS),
-            multidirectional.SHEAR_METHOD_NONE,
-            "shear_interaction_method",
-            disabled=not shear_interaction_on,
-            format_func=lambda value: (
-                multidirectional.SHEAR_METHOD_LABELS[value]
-                if isinstance(value, str)
-                and value in multidirectional.SHEAR_METHOD_LABELS
-                else "Rejected invalid shear-interaction selection"
-            ),
-        )
-        _shear_interaction_active = bool(
-            shear_interaction_on
-            and shear_interaction_method
-            != multidirectional.SHEAR_METHOD_NONE
-        )
-        shear_axis_x_col, shear_axis_y_col = (
-            shear_interaction_box.columns(2)
-        )
-        _seeded_text(
-            shear_axis_x_col,
-            "Vx physical axis definition",
-            "global x / Vx",
-            "shear_interaction_axis_x",
-            disabled=not _shear_interaction_active,
-        )
-        _seeded_text(
-            shear_axis_y_col,
-            "Vy physical axis definition",
-            "global y / Vy",
-            "shear_interaction_axis_y",
-            disabled=not _shear_interaction_active,
-        )
-        _shear_standard_interaction = (
-            shear_interaction_method
-            == multidirectional.SHEAR_METHOD_EN_2023
-        )
-        _shear_project_interaction = (
-            shear_interaction_method
-            == multidirectional.SHEAR_METHOD_PROJECT
-        )
-        _seeded_checkbox(
-            shear_interaction_box,
-            "Planar member (solid slab, shell, or equivalent) confirmed",
-            False,
-            "shear_interaction_planar_member",
-            disabled=not (
-                _shear_interaction_active
-                and _shear_standard_interaction
-            ),
-        )
-        _seeded_checkbox(
-            shear_interaction_box,
-            "Vx and Vy refer to the same control point",
-            False,
-            "shear_interaction_same_control_point",
-            disabled=not (
-                _shear_interaction_active
-                and _shear_standard_interaction
-            ),
-        )
-        _seeded_checkbox(
-            shear_interaction_box,
-            "Compatible per-unit-width component basis confirmed",
-            False,
-            "shear_interaction_per_unit_width",
-            disabled=not (
-                _shear_interaction_active
-                and _shear_standard_interaction
-            ),
-        )
-        _seeded_checkbox(
-            shear_interaction_box,
-            "Both actions are out-of-plane shear forces",
-            False,
-            "shear_interaction_out_of_plane",
-            disabled=not (
-                _shear_interaction_active
-                and _shear_standard_interaction
-            ),
-        )
-        _seeded_checkbox(
-            shear_interaction_box,
-            "Approved project-method domain confirmed",
-            False,
-            "shear_interaction_domain_confirmed",
-            disabled=not (
-                _shear_interaction_active
-                and _shear_project_interaction
-            ),
-        )
-        _seeded_selectbox(
-            shear_interaction_box,
-            "EN 1992-1-1:2023 effective-depth route",
-            list(multidirectional.DEPTH_ROUTES),
-            multidirectional.DEPTH_ROUTE_PIECEWISE,
-            "shear_interaction_depth_route",
-            disabled=not (
-                _shear_interaction_active
-                and _shear_standard_interaction
-            ),
-        )
-        shear_resistance_col, shear_exponent_col = (
-            shear_interaction_box.columns(2)
-        )
-        _seeded_number(
-            shear_resistance_col,
-            r"Resultant-direction $v_{Rd}$ (kN/m)",
-            None,
-            None,
-            0.0,
-            1.0,
-            "shear_interaction_resultant_resistance_kn_per_m",
-            disabled=not (
-                _shear_interaction_active
-                and _shear_standard_interaction
-            ),
-            help=(
-                "Current resistance at the resultant direction and the reported "
-                "effective depth. A positive finite engineering value is "
-                "retained, but the aggregate verdict stays qualified because "
-                "Sector does not reconstruct its full directional basis."
-            ),
-        )
-        _seeded_number(
-            shear_exponent_col,
-            r"Approved project exponent $p$",
-            None,
-            None,
-            2.0,
-            0.1,
-            "shear_interaction_exponent",
-            disabled=not (
-                _shear_interaction_active
-                and _shear_project_interaction
-            ),
-            help=(
-                "Used only by the approved project power sum. It is never "
-                "treated as a Eurocode default."
-            ),
-        )
-        _seeded_text(
-            shear_interaction_box,
-            (
-                "Resultant resistance source"
-                if _shear_standard_interaction
-                else "Project interaction source"
-            ),
-            "",
-            "shear_interaction_source",
-            disabled=not _shear_interaction_active,
-        )
-        _seeded_text(
-            shear_interaction_box,
-            (
-                "Resultant resistance approval / checker reference"
-                if _shear_standard_interaction
-                else "Project interaction approval / checker reference"
-            ),
-            "",
-            "shear_interaction_approval",
-            disabled=not _shear_interaction_active,
-        )
-        if _shear_standard_interaction:
-            shear_interaction_box.caption(
-                multidirectional.SHEAR_SOURCE_EN_2023
-            )
     # Shear reinforcement (vertical links). When present, the member's resistance is
     # VRd = min(VRd,s, VRd,max) under 6.2.3 or 8.2.3 rather than VRd,c; the strut
     # angle theta is auto-optimised within the shared cot(theta) bounds in the
@@ -6715,182 +3907,16 @@ def build_inputs(host=st):
     if combined_on:
         sts.caption(f"Torsion method set by Combined: {combined_method}")
     effective_torsion_method = combined_method if combined_on else torsion_method
-    torsion_code = _SHEAR_CODES[effective_torsion_method]
-    _prepare_factor_mode_state("torsion", codes.FACTOR_MODE_PRESET)
-    torsion_factor_mode = _seeded_selectbox(
-        sts,
-        "Concrete tensile-factor source",
-        list(codes.FACTOR_MODES),
-        codes.FACTOR_MODE_PRESET,
-        "torsion_factor_mode",
-        disabled=not torsion_on,
-        on_change=_factor_mode_changed,
-        args=("torsion",),
-        help=(
-            "Edition-derived resolves the concrete-tension factor from the "
-            "selected torsion method. Approved final override retains a deliberate "
-            "project value across method switches."
-        ),
+    torsion_gamma_ct_boolean_state = isinstance(
+        st.session_state.get("torsion_gamma_ct"), (bool, np.bool_)
     )
-    tf1, tf2 = sts.columns(2)
-    torsion_uses_categories = bool(
-        torsion_code.material_factors_use_gamma0_gamma3
-    )
-    torsion_gamma0 = _seeded_number(
-        tf1,
-        r"$\gamma_0$",
-        0.1,
-        10.0,
-        1.0,
-        0.05,
-        "torsion_gamma0",
-        disabled=(
-            not (
-                torsion_on
-                and torsion_factor_mode == codes.FACTOR_MODE_PRESET
-                and torsion_uses_categories
-            )
-            and "torsion_gamma0" not in invalid_factor_keys
-        ),
-        help=(
-            "Danish factor for structural parts in geotechnical structures. "
-            "Use 1.0 when it does not apply."
-        ),
-    )
-    torsion_gamma3 = _seeded_number(
-        tf2,
-        r"$\gamma_3$",
-        0.1,
-        10.0,
-        1.0,
-        0.05,
-        "torsion_gamma3",
-        disabled=(
-            not (
-                torsion_on
-                and torsion_factor_mode == codes.FACTOR_MODE_PRESET
-                and torsion_uses_categories
-            )
-            and "torsion_gamma3" not in invalid_factor_keys
-        ),
-        help=(
-            "Danish execution-control multiplier. Enter the value established "
-            "by the project design basis."
-        ),
-    )
-    try:
-        torsion_factor_preset = torsion_code.material_factor_basis(
-            gamma0=torsion_gamma0,
-            gamma3=torsion_gamma3,
-        )
-    except ValueError:
-        # Display-only fallback; the raw invalid/missing category value is still
-        # passed to the public torsion preflight and cannot reach resistance.
-        torsion_factor_preset = torsion_code.material_factor_basis()
-    if torsion_factor_mode == codes.FACTOR_MODE_PRESET:
-        st.session_state["torsion_gamma_ct"] = (
-            torsion_factor_preset["tension_final"]
-        )
-    torsion_gamma_ct = _seeded_number(
-        sts,
-        r"Final concrete tension factor $\gamma_{ct}$",
-        0.1,
-        10.0,
-        (
-            None
-            if (
-                torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
-                and "torsion_gamma_ct" not in st.session_state
-            )
-            else torsion_factor_preset["tension_final"]
-        ),
-        0.01,
-        "torsion_gamma_ct",
-        disabled=(
-            (
-                not torsion_on
-                or torsion_factor_mode == codes.FACTOR_MODE_PRESET
-            )
-            and "torsion_gamma_ct" not in invalid_factor_keys
-        ),
-        help=(
-            "Final factor applied to fctk,0.05 for torsional concrete cracking. "
-            "It is separate from the compression factor used by fcd."
-        ),
-    )
-    torsion_factor_approval = _seeded_text(
-        sts,
-        "Tensile-factor approval / source",
-        "",
-        "torsion_factor_approval",
-        disabled=not (
-            torsion_on
-            and torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
-        ),
-        help=(
-            "Project decision, design-basis clause, or checker approval supporting "
-            "an overridden final tensile factor."
-        ),
-    )
-    _render_factor_repair_control(
-        sts,
-        "torsion",
-        _TORSION_NUMERIC_FACTOR_KEYS,
-    )
-    try:
-        _resolved_gamma_ct, torsion_factor_display = (
-            torsion_code.resolve_concrete_tension_factor(
-                mode=torsion_factor_mode,
-                gamma_ct=torsion_gamma_ct,
-                gamma0=torsion_gamma0,
-                gamma3=torsion_gamma3,
-            )
-        )
-    except ValueError as exc:
-        torsion_factor_display = None
-        if (
-            torsion_on
-            and _invalid_factor_input_error(
-                "torsion",
-                _TORSION_NUMERIC_FACTOR_KEYS,
-            )
-            is None
-        ):
-            sts.error(
-                "Concrete tensile-factor input is incomplete: "
-                f"{exc}. Enter a positive approved final factor before "
-                "calculation."
-            )
-    torsion_factor_state_error = _invalid_factor_input_error(
-        "torsion",
-        _TORSION_NUMERIC_FACTOR_KEYS,
-    )
-    if torsion_on and torsion_factor_state_error is not None:
-        sts.error(torsion_factor_state_error)
-    if torsion_factor_display is not None and torsion_uses_categories:
-        sts.caption(
-            "DK NA Table 2.1Na NA: compression basis "
-            f"{torsion_factor_preset['compression_base']:.2f} x gamma0 x gamma3 "
-            f"= {torsion_factor_preset['compression_final']:.3f}; tension basis "
-            f"{torsion_factor_display['tension_derivation']}. "
-            "Torsional fctd uses the final tensile factor; fcd retains the final "
-            "compression factor from the concrete material panel."
-        )
-    elif torsion_factor_display is not None:
-        sts.caption(
-            "Selected base-EN tensile-factor basis: "
-            f"{torsion_factor_display['tension_derivation']}. "
-            "Torsional fctd and compressive fcd use separately reported factors."
-        )
-    if (
-        torsion_on
-        and torsion_factor_mode == codes.FACTOR_MODE_OVERRIDE
-        and not str(torsion_factor_approval).strip()
-    ):
-        sts.error(
-            "The final tensile-factor override is retained, but an approval/source "
-            "is required before a torsion verdict can be issued."
-        )
+    if torsion_gamma_ct_boolean_state:
+        # Streamlit number_input normalises injected Boolean scalars to 0.0/1.0.
+        # Clear the malformed state before method-default reseeding and widget
+        # construction so neither can turn it into a valid-looking coefficient.
+        st.session_state["torsion_gamma_ct"] = None
+        _mark_torsion_gamma_ct_custom()
+    torsion_gamma_default = _seed_torsion_gamma_ct(effective_torsion_method)
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
     sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
@@ -6901,6 +3927,52 @@ def build_inputs(host=st):
         "torsion_tef", disabled=not _tors,
         help="Effective wall thickness of the tube. 0 derives it as A/u (capped at "
              "the real wall for a hollow section); enter a value to override.")
+    torsion_gamma_ct = _seeded_number(
+        sts,
+        r"Concrete tensile factor $\gamma_{ct}$",
+        None,
+        None,
+        torsion_gamma_default,
+        0.05,
+        "torsion_gamma_ct",
+        disabled=not _tors,
+        format="%.3f",
+        on_change=_mark_torsion_gamma_ct_custom,
+        help=(
+            r"Direct positive-finite input used in "
+            r"$f_{ctd}=f_{ctk,0.05}/\gamma_{ct}$ and $T_{Rd,c}$. "
+            f"The selected method starts at {torsion_gamma_default:.2f}; "
+            "custom values are retained, not clamped or replaced."
+        ),
+    )
+    torsion_gamma_ct_error = None
+    try:
+        torsion_gamma_ct_number = float(torsion_gamma_ct)
+    except (TypeError, ValueError):
+        torsion_gamma_ct_number = None
+    if (
+        torsion_gamma_ct_boolean_state
+        or isinstance(torsion_gamma_ct, (bool, np.bool_))
+        or torsion_gamma_ct_number is None
+        or not math.isfinite(torsion_gamma_ct_number)
+        or torsion_gamma_ct_number <= 0.0
+    ):
+        torsion_gamma_ct_error = (
+            "Concrete tensile factor gamma_ct must be a positive finite real "
+            "number."
+        )
+        sts.error(torsion_gamma_ct_error)
+    elif not math.isclose(
+        torsion_gamma_ct_number,
+        torsion_gamma_default,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        sts.caption(
+            f"Custom gamma_ct = {torsion_gamma_ct_number:g}; the selected "
+            f"method default is {torsion_gamma_default:g}. The custom value is "
+            "used unchanged."
+        )
     torsion_nu_v = _seeded_checkbox(
         sts, r"$\nu_t = \nu_v$ (closed stirrups + distributed long. steel)", False,
         "torsion_nu_v", disabled=not _tors,
@@ -7013,9 +4085,10 @@ def build_inputs(host=st):
             or strut_cot_max > code_cot_max + 1e-9
         ):
             sts.caption(
-                "Note: the shared strut bounds fall outside the active code range "
+                "Warning: the shared strut bounds fall outside the selected "
+                "method's default range "
                 f"{code_cot_min:g}..{code_cot_max:g}. The values are allowed, but "
-                "the resulting checks carry no code verdict."
+                "the actual values are retained in every calculation."
             )
     if "_capacity_steel_pending_material_id" in st.session_state:
         st.session_state["capacity_steel_material_id"] = st.session_state.pop(
@@ -7499,6 +4572,11 @@ def build_inputs(host=st):
     ]
     prestress = tendon_materials[0] if tendon_materials else selected_prestress
     material_error = material_assignment_error
+    if torsion_gamma_ct_error:
+        material_error = (
+            f"{material_error} {torsion_gamma_ct_error}".strip()
+            if material_error else torsion_gamma_ct_error
+        )
     if material_definition_errors:
         definition_message = (
             "Invalid material definition(s): "
@@ -7531,48 +4609,6 @@ def build_inputs(host=st):
     prestress_preset = (used_prestress_entries[0]["preset"]
                         if used_prestress_entries
                         else prestress_catalogue["items"][0]["preset"])
-
-    effective_shear_method = (
-        combined_method if combined_on else shear_method
-    ) if shear_on else None
-    effective_torsion_method = (
-        combined_method if combined_on else torsion_method
-    ) if torsion_on else None
-    design_basis = _design_basis_summary(
-        methodology=design_methodology,
-        concrete_preset=concrete_preset,
-        mild_materials=used_mild_entries,
-        prestress_materials=used_prestress_entries,
-        crack_code=sls_code if (elastic_on and sls_cw) else None,
-        shear_method=effective_shear_method,
-        shear_links=bool(shear_links),
-        torsion_method=effective_torsion_method,
-        combined_method=combined_method if combined_on else None,
-        detailing_method=(
-            detailing_edition
-            if (
-                minimum_reinforcement_on
-                or transverse_detailing_on
-                or clear_spacing_on
-            )
-            else None
-        ),
-        fatigue_method=fatigue_edition if fatigue_on else None,
-    )
-    if design_basis["mixed"] or design_basis["limitations"]:
-        design_basis_slot.warning(design_basis["status"])
-    elif design_basis["has_custom"]:
-        design_basis_slot.info(design_basis["status"])
-    else:
-        design_basis_slot.success(design_basis["status"])
-    design_basis_slot.caption(
-        " | ".join(
-            f"{item['role']}: {item['selection']}"
-            for item in design_basis["components"]
-        )
-    )
-    for limitation in design_basis["limitations"]:
-        design_basis_slot.warning(limitation)
 
     # The elastic solver uses a fixed 200 GPa reference ratio and one multiplier per
     # element. Their product is each assigned material's actual E/Ec ratio.
@@ -7645,32 +4681,7 @@ def build_inputs(host=st):
     # Table actions live in their canonical frames, while the shared calculation
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.
-    def _signature_context_value(key):
-        # Crack applicability is owned by the canonical Elastic case table,
-        # not a standalone widget/session value. Bind its derived aggregate
-        # explicitly so enabling or disabling the last crack-width row also
-        # invalidates row-cache reuse.
-        if key == "sls_cw":
-            return bool(sls_cw)
-        return st.session_state.get(key)
-
-    _get = lambda keys: tuple(
-        _signature_context_value(key) for key in keys
-    )
-
-    def _factor_signature_value(value):
-        if value is None:
-            return None
-        try:
-            return codes.strict_positive_real(value, "material factor")
-        except ValueError:
-            return (
-                "invalid-material-factor",
-                type(value).__module__,
-                type(value).__qualname__,
-                repr(value),
-            )
-
+    _get = lambda keys: tuple(st.session_state.get(k) for k in keys)
     material_sig = (
         mat_catalog.signature(mild_catalogue, "mild"),
         mat_catalog.signature(prestress_catalogue, "prestress"),
@@ -7678,42 +4689,10 @@ def build_inputs(host=st):
     )
     shared_sig = geom_sig + material_sig + _get(_SHARED_SIG_KEYS)
     plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
-    invalid_crack_input_keys = _invalid_crack_input_keys()
-    invalid_interaction_input_keys = _invalid_interaction_input_keys()
-    invalid_crack_interaction_keys = tuple(
-        key
-        for key in invalid_interaction_input_keys
-        if key in multidirectional.CRACK_INPUT_KEYS
-    )
-    invalid_shear_interaction_keys = tuple(
-        key
-        for key in invalid_interaction_input_keys
-        if key in multidirectional.SHEAR_INPUT_KEYS
-    )
-    elastic_case_context_sig = (
-        shared_sig
-        + _get(_ELASTIC_CONTEXT_SIG_KEYS)
-        + (("invalid_crack_input_keys", invalid_crack_input_keys),)
-        + (
-            (
-                "invalid_crack_interaction_input_keys",
-                invalid_crack_interaction_keys,
-            ),
-        )
-    )
-    invalid_factor_input_keys = _invalid_factor_input_keys()
-    capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS) + (
-        ("invalid_factor_input_keys", invalid_factor_input_keys),
-    )
+    elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
+    capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS)
     plastic_case_context_sig = (
-        plastic_bending_context_sig
-        + capacity_context_sig
-        + (
-            (
-                "invalid_shear_interaction_input_keys",
-                invalid_shear_interaction_keys,
-            ),
-        )
+        plastic_bending_context_sig + capacity_context_sig
     )
     plastic_table_sig = _case_table_signature(
         case_frames[load_cases.PLASTIC_TABLE_KEY],
@@ -7729,32 +4708,16 @@ def build_inputs(host=st):
         (
             "fatigue",
             True,
-            ("design_methodology", design_methodology),
             geom_sig,
             material_sig,
             fatigue_edition,
             bool(fatigue_check_steel),
             bool(fatigue_check_concrete),
             fatigue_concrete_method,
-            fatigue_concrete_miner_basis,
-            str(fatigue_concrete_miner_source).strip(),
-            fatigue_factor_mode,
-            str(fatigue_factor_approval).strip(),
-            ("invalid_factor_input_keys", invalid_factor_input_keys),
-            _factor_signature_value(fatigue_gamma0),
-            _factor_signature_value(fatigue_gamma3),
             float(concrete.fck),
             float(concrete.alpha_cc),
-            (
-                None
-                if fatigue_gamma_c is None
-                else _factor_signature_value(fatigue_gamma_c)
-            ),
-            (
-                None
-                if fatigue_gamma_s is None
-                else _factor_signature_value(fatigue_gamma_s)
-            ),
+            float(fatigue_gamma_c),
+            float(fatigue_gamma_s),
             float(fatigue_gamma_ff),
             float(fatigue_beta_cc_t0),
             float(fatigue_t0_days),
@@ -7770,31 +4733,10 @@ def build_inputs(host=st):
         else ("fatigue", False)
     )
     bridge_sig = (
-        "bridge-methodology",
-        design_methodology,
-        bridge_brittle_method,
-        int(bridge_expected_box_walls),
-        bridge_minimum_scope,
-        bridge_shear_scope,
-        bridge_exposure,
+        "bridge",
+        bridge_standard,
         tuple(
-            (key, st.session_state.get(key))
-            for key in project_io.BRIDGE_SCALAR_KEYS
-            if key not in {
-                "design_methodology",
-                "bridge_brittle_method",
-                "bridge_expected_box_walls",
-                "bridge_minimum_scope",
-                "bridge_shear_scope",
-                "bridge_exposure",
-            }
-        ),
-        ("sls_dk_member_class", sls_dk_member_class),
-        tuple(
-            (
-                key,
-                _bridge_table_signature(bridge_tables[key], key),
-            )
+            (key, _bridge_table_signature(bridge_tables[key], key))
             for key in bridge_inputs.TABLE_KEYS
         ),
     )
@@ -7815,10 +4757,15 @@ def build_inputs(host=st):
             st.caption("Reinforced-concrete and prestressed cross-section analysis.")
             st.markdown(
                 "- **Plastic:** M-M capacity and utilisation\n"
-                "- **Elastic:** cracked-section stresses\n"
-                "- **Acceptance:** stress and crack-width criteria\n"
+                "- **Elastic:** cracked-section stresses and optional crack width\n"
                 "- **Fatigue:** grouped spectrum assessment\n"
-                "- **Capacity checks:** shear, torsion and combined M-V-T")
+                "- **Capacity checks:** shear, torsion and combined M-V-T\n"
+                "- **Bridge calculations:** optional independent numerical methods")
+            st.caption(
+                "Sector is a transparent calculation tool. The selected methods "
+                "supply equations, references, defaults and warnings; the engineer "
+                "controls the action set and coefficients."
+            )
             st.caption("Set inputs, Calculate, review Results Overview, then export.")
             st.divider()
             st.markdown(f"**Sector v{APP_VERSION}**")
@@ -7841,37 +4788,6 @@ def build_inputs(host=st):
                 concrete_eta_cc=concrete_eta_cc,
                 mild_preset=mild_preset,
                 prestress_preset=prestress_preset,
-                design_basis=design_basis,
-                design_methodology=design_methodology,
-                bridge_brittle_method=bridge_brittle_method,
-                bridge_expected_box_walls=bridge_expected_box_walls,
-                bridge_minimum_scope=bridge_minimum_scope,
-                bridge_shear_scope=bridge_shear_scope,
-                bridge_exposure=bridge_exposure,
-                **{
-                    key: st.session_state.get(key)
-                    for key in project_io.BRIDGE_SCALAR_KEYS
-                    if key not in {
-                        "design_methodology",
-                        "bridge_brittle_method",
-                        "bridge_expected_box_walls",
-                        "bridge_minimum_scope",
-                        "bridge_shear_scope",
-                        "bridge_exposure",
-                    }
-                },
-                bridge_coverage_base=bridge_tables[
-                    bridge_inputs.COVERAGE_TABLE_KEY
-                ],
-                bridge_brittle_regions_base=bridge_tables[
-                    bridge_inputs.BRITTLE_TABLE_KEY
-                ],
-                bridge_box_walls_base=bridge_tables[
-                    bridge_inputs.BOX_WALL_TABLE_KEY
-                ],
-                bridge_minimum_components_base=bridge_tables[
-                    bridge_inputs.MINIMUM_TABLE_KEY
-                ],
                 plastic_case={
                     "id": str(pl_case_id).strip(),
                     "type": pl_case_type,
@@ -7907,41 +4823,8 @@ def build_inputs(host=st):
                 el_phi=phi_creep, conc_Ec=conc_Ec,
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
-                sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
-                sls_tendon_bond=sls_tendon_bond,
-                sls_tendon_k1=sls_tendon_k1,
                 sls_tendon_xi=sls_tendon_xi,
-                sls_criterion_mode=sls_criterion_mode,
-                sls_prestress_class=sls_prestress_class,
-                sls_protection_class=sls_protection_class,
-                sls_exposure_class=sls_exposure_class,
-                sls_bridge_exposure_class=sls_bridge_exposure_class,
-                sls_dk_member_class=sls_dk_member_class,
-                sls_has_tendons=bool(tendon_elements),
-                sls_exposure_context=sls_exposure_context,
-                sls_invalid_numeric_inputs=_invalid_crack_input_keys(),
-                sls_check_appearance=sls_check_appearance,
-                sls_appearance_limit=sls_appearance_limit,
-                sls_check_durability=sls_check_durability,
-                sls_decompression_applicability=(
-                    sls_decompression_applicability
-                ),
-                sls_project_characteristic_limit=(
-                    sls_project_characteristic_limit
-                ),
-                sls_project_frequent_limit=sls_project_frequent_limit,
-                sls_project_quasi_permanent_limit=(
-                    sls_project_quasi_permanent_limit
-                ),
-                sls_wk_limit=sls_wk_limit,
-                sls_conc_limit_pct=sls_conc_limit_pct,
-                sls_steel_limit_pct=sls_steel_limit_pct,
-                sls_pre_limit_pct=sls_pre_limit_pct,
-                sls_limit_source=sls_limit_source,
-                **multidirectional.crack_configuration(st.session_state),
-                invalid_interaction_input_keys=(
-                    invalid_interaction_input_keys
-                ),
+                sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
                 shear_on=shear_on,
                 shear_method=(combined_method if combined_on else shear_method),
                 shear_Vx=case_head["shear_Vx"], shear_Vy=case_head["shear_Vy"],
@@ -7968,18 +4851,13 @@ def build_inputs(host=st):
                 ),
                 shear_link_dia=shear_link_dia, shear_link_s=shear_link_s,
                 shear_fywk=shear_fywk,
-                **multidirectional.shear_configuration(st.session_state),
                 strut_cot_min=strut_cot_min,
                 strut_cot_max=strut_cot_max,
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_T=torsion_T, torsion_tef=torsion_tef,
                 torsion_nu_v=torsion_nu_v,
-                torsion_factor_mode=torsion_factor_mode,
-                torsion_gamma0=torsion_gamma0,
-                torsion_gamma3=torsion_gamma3,
                 torsion_gamma_ct=torsion_gamma_ct,
-                torsion_factor_approval=torsion_factor_approval,
                 torsion_subdivide=torsion_subdivide,
                 torsion_subrects=torsion_subrects,
                 combined_on=combined_on, combined_method=combined_method,
@@ -8001,24 +4879,18 @@ def build_inputs(host=st):
                 fatigue_check_steel=fatigue_check_steel,
                 fatigue_check_concrete=fatigue_check_concrete,
                 fatigue_concrete_method=fatigue_concrete_method,
-                fatigue_concrete_miner_basis=(
-                    fatigue_concrete_miner_basis
-                ),
-                fatigue_concrete_miner_source=(
-                    fatigue_concrete_miner_source
-                ),
-                fatigue_factor_mode=fatigue_factor_mode,
-                fatigue_factor_approval=fatigue_factor_approval,
-                fatigue_gamma0=fatigue_gamma0,
-                fatigue_gamma3=fatigue_gamma3,
                 fatigue_gamma_c=fatigue_gamma_c,
                 fatigue_gamma_s=fatigue_gamma_s,
-                invalid_factor_input_keys=invalid_factor_input_keys,
                 fatigue_gamma_ff=fatigue_gamma_ff,
                 fatigue_beta_cc_t0=fatigue_beta_cc_t0,
                 fatigue_t0_days=fatigue_t0_days,
                 fatigue_concrete_k1=fatigue_concrete_k1,
                 fatigue_concrete_c=fatigue_concrete_c,
+                bridge_standard=bridge_standard,
+                **{
+                    key: bridge_inputs.normalise_table(bridge_tables[key], key)
+                    for key in bridge_inputs.TABLE_KEYS
+                },
                 mode=mode, extent=extent,
                 label_scale=label_scale, label_min_gap=label_min_gap,
                 signature=sig,
@@ -8085,11 +4957,6 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
             hc_ef=c.hc_ef, phi=c.phi, cover=c.cover, coarse=c.coarse,
             edition=c.edition, kw=c.kw, k1_r=c.k1_r, kfl=c.kfl,
             sr_max_geometric=c.sr_max_geometric,
-            as_eff=c.as_eff, ap_eff=c.ap_eff,
-            ap_eff_weighted=c.ap_eff_weighted, xi1=c.xi1,
-            reinforcement_type=c.reinforcement_type, bc_ef=c.bc_ef,
-            direct_tension=c.direct_tension, scope=c.scope,
-            direction_deg=c.direction_deg,
         )
 
     kind, number, element_id = element(cw.gov_bar)
@@ -8101,21 +4968,8 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
         element_id=element_id, coarse=cw.coarse,
         edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
         sr_max_geometric=cw.sr_max_geometric,
-        as_eff=cw.as_eff, ap_eff=cw.ap_eff,
-        ap_eff_weighted=cw.ap_eff_weighted,
-        xi1_min=cw.xi1_min, xi1_max=cw.xi1_max,
-        bc_ef=cw.bc_ef, direct_tension=cw.direct_tension,
-        scope=cw.scope, direction_deg=cw.direction_deg,
         candidates=[candidate(c) for c in cw.candidates],
     )
-
-
-# Compatibility names retained for integrations that imported the former app
-# helpers. Their implementations now live in the headless calculation layer.
-_gross_area_centroid = capacity.gross_area_centroid
-_design_yield = capacity.design_yield
-_prestress_resultants = capacity.prestress_resultants
-_prestress_axial = capacity.prestress_axial
 
 
 def _outline_bbox(outer):
@@ -8147,7 +5001,6 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
     run that only touched the elastic (or only the plastic) inputs recomputes just
     the affected half.
     """
-    sls_core.require_non_boolean_crack_numeric_inputs(inp)
     out = {}
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
@@ -8299,20 +5152,10 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         )
         if governing_element is not None and governing_element["total_mpa"] <= 0.0:
             governing_element = None
-        stress_checks = sls_core.stress_assessments(
+        stress_outputs = sls_core.stress_outputs(
             total,
             n_bars=len(inp["bars"]),
             max_concrete_compression=r.max_concrete_compression / 1000.0,
-            fck=inp["concrete"].fck,
-            fyk=[material.fytk for material in bar_laws],
-            # The tendon SLS criterion is stated against characteristic ultimate
-            # strength fpk (the material model calls this ``futk``); ``fytk`` is
-            # the separate fp0.1k proof stress.
-            fpk=([material.futk for material in tendon_laws]
-                 if tendon_laws else None),
-            concrete_limit_pct=inp["sls_conc_limit_pct"],
-            reinforcement_limit_pct=inp["sls_steel_limit_pct"],
-            prestress_limit_pct=inp["sls_pre_limit_pct"],
             valid=r.converged,
             bar_ids=bar_ids, tendon_ids=tendon_ids,
         )
@@ -8320,7 +5163,6 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             total=total, long=mpa(r.bar_stress_long), dif=mpa(r.bar_stress_dif),
             rst1=mpa(r.bar_stress_rst1),
             max_conc=r.max_concrete_compression / 1000.0,
-            max_conc_long=r.long.max_concrete_compression / 1000.0,
             max_conc_xy=tuple(r.short_term.max_concrete_xy),
             # Public point identifiers are one-based everywhere; the engine keeps
             # zero-based arrays internally.
@@ -8341,21 +5183,15 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             stress_plane=(r.short_term.eps0, r.short_term.kx, r.short_term.ky),
             elements=elements,
             concrete_corners=corners,
-            stress_assessments=stress_checks,
-            sls_limit_source=inp["sls_limit_source"],
-            sls_conc_limit_pct=inp["sls_conc_limit_pct"],
-            sls_steel_limit_pct=inp["sls_steel_limit_pct"],
-            sls_pre_limit_pct=inp["sls_pre_limit_pct"],
-            sls_wk_limit=inp["sls_wk_limit"],
+            stress_outputs=stress_outputs,
         )
 
         # Extended serviceability checks. Each bar's clear cover is taken from the
-        # geometry, so no cover input is needed. The long-duration state at nl
-        # (beta/kt = 0.5/0.4) contributes to the cracking threshold, the
-        # section properties and tension stiffening; the instantaneous total state
-        # -- the total long+short load at ns (beta/kt = 1.0/0.6) -- gives the
-        # total-response crack width. Crack width is reported for both duration
-        # states; criterion routing uses separate structured combination metadata.
+        # geometry, so no cover input is needed. The user-defined long-term
+        # state at nl (beta/kt = 0.5/0.4) drives the cracking threshold, the
+        # section properties and tension stiffening; the short-term (instantaneous)
+        # state -- the total long+short load at ns (beta/kt = 1.0/0.6) -- gives the
+        # short-term crack width. Crack width is reported for both loads.
         if inp["sls_phi"] > 0.0:
             phi = inp["sls_phi"]
         else:
@@ -8364,34 +5200,14 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                 for item in (inp.get("bar_elements", [])
                              + inp.get("tendon_elements", []))
             ]
-        # Bond inputs and reinforcement classification follow sec.bar_arrays()
-        # (mild bars first, then prestressing tendons). The 2005 method retains
-        # its established tendon k1 = 1.6 treatment; the 2023 method exposes the
-        # selected tendon bond condition and uses it to derive kb.
-        reinforcement_types = (
-            ["mild"] * len(inp["bars"])
-            + ["prestress"] * len(inp["tendons"])
-        )
-        tendon_k1 = (
-            inp["sls_tendon_k1"]
-            if inp["sls_edition"] == "2023"
-            else 1.6
-        )
-        k1_bars = (
-            [inp["sls_k1"]] * len(inp["bars"])
-            + [tendon_k1] * len(inp["tendons"])
-        )
+        # k1 per bar: the mild reinforcement uses the selected bond value; any
+        # prestressing tendons (folded into the bar set after the bars) always
+        # use 1.6. Order matches sec.bar_arrays() (bars first, then tendons).
+        k1_bars = [inp["sls_k1"]] * len(inp["bars"]) + [1.6] * len(inp["tendons"])
         # DK NA crack-spacing rules: cover-dependent k3, and -- for an ordinary beam
         # (not a slab or a prestressed member) -- dropping the (h-x)/3 hc,ef term.
         dk_na = inp["sls_dk_na"]
         include_hx = (not dk_na) or inp["sls_member"] == "Slab" or bool(inp["tendons"])
-        crack_numerical_method = (
-            sls_core.calculated_danish_bridge_crack_numerical_method(
-                inp,
-                dk_na_applied=dk_na,
-                include_hx_term=include_hx,
-            )
-        )
         # Cracking is irreversible and is triggered by the maximum load the section
         # ever sees, so the section is cracked if EITHER the sustained (long-term) or
         # the peak (total) action exceeds the cracking stress. The peak check uses
@@ -8410,9 +5226,7 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             bar_diameter=phi, k1=k1_bars,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             edition=inp["sls_edition"],
-            n_mult=n_mult, prestress_stress=prestress_stress,
-            reinforcement_types=reinforcement_types,
-            bond_ratio_xi=inp["sls_tendon_xi"])
+            n_mult=n_mult, prestress_stress=prestress_stress)
         sls_converged = (
             r.converged
             and cr_l.uncracked.converged
@@ -8420,8 +5234,8 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         )
         out["elastic"]["converged"] = sls_converged
         if not sls_converged:
-            for assessment in out["elastic"]["stress_assessments"].values():
-                assessment.update(status="INVALID", util=None, margin=None)
+            for output in out["elastic"]["stress_outputs"].values():
+                output.update(value=None, calculation_state="INVALID")
         crk_t, lam_t, sig_t = combined_cracking(
             sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             p_el_s, inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
@@ -8451,91 +5265,52 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
-            crack_dispositions={},
-            crack_criteria=(
-                sls_core.crack_criteria_from_inputs(inp)
-                if inp["sls_cw"] else []
-            ),
-            crack_response_contexts={},
-            crack_scope_note=CRACK_DIRECTIONAL_LIMITATION,
-            crack_code=(inp["sls_code"] if inp["sls_cw"] else None),
-            crack_edition=(inp["sls_edition"] if inp["sls_cw"] else None),
-            crack_numerical_method=(
-                crack_numerical_method if inp["sls_cw"] else None
-            ),
-            crack_member=(
-                inp["sls_member"]
-                if inp["sls_cw"] and dk_na
-                else None
-            ),
         )
-        # Crack width is its own opt-in, reported for both duration states once the
-        # section has cracked. The instantaneous total state reuses the combined
-        # creep solve `r`: its instantaneous neutral axis with the displayed total
-        # steel stress (s2 + RST1), so the crack-width sigma_s matches the Total
-        # column rather than a raw (long+short)-at-ns solve. Each bar's cover comes
-        # from geometry.
+        # Crack width is its own opt-in, reported for both load cases once the
+        # section has cracked. The short-term state reuses the combined creep solve
+        # `r`: its instantaneous neutral axis with the displayed total steel stress
+        # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
+        # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
         if inp["sls_cw"] and cracked:
-            # Crack width uses the load-induced steel stress. The combined result
-            # reports physical tendon stress, so strip its locked-in prestress to
-            # recover Delta sigma_p. ``analyse_cracking`` already returns the
-            # passive long-term increment because prestress enters that solve only
-            # as a constant equilibrium resultant; subtracting it again would
-            # understate the long-term tendon stress.
+            # Crack width uses the load-induced steel stress, so strip the locked-in
+            # tendon prestress back out of the reported total (mild bars unaffected).
             cw_stress = np.asarray(r.bar_stress_total, dtype=float)
-            long_cw_stress = np.asarray(
-                cr_l.cracked_state.bar_stress, dtype=float
-            )
             if prestress_stress is not None:
                 cw_stress = cw_stress - prestress_stress
             short_state = dataclasses.replace(r.short_term, bar_stress=cw_stress)
-            long_state = dataclasses.replace(
-                cr_l.cracked_state, bar_stress=long_cw_stress
+
+            reinforcement_types = (
+                ["mild"] * len(inp["bars"])
+                + ["prestress"] * len(inp["tendons"])
+            )
+            tendon_xi = (
+                None
+                if not inp["tendons"] or inp.get("sls_tendon_xi", 0.0) <= 0.0
+                else [1.0] * len(inp["bars"])
+                + [float(inp["sls_tendon_xi"])] * len(inp["tendons"])
             )
 
             def _cw(state, n, kt, coarse):
-                return evaluate_crack_width(
-                    sec,
-                    state,
-                    n,
-                    fctm=inp["sls_fctm"],
-                    Es=[material.Es for material in all_laws],
-                    kt=kt,
-                    bar_diameter=phi,
-                    k1=k1_bars,
-                    k3_cover_dependent=dk_na,
-                    include_hx_term=include_hx,
-                    coarse=coarse,
-                    edition=inp["sls_edition"],
-                    n_mult=n_mult,
-                    reinforcement_types=reinforcement_types,
-                    bond_ratio_xi=inp["sls_tendon_xi"],
-                )
+                return crack_width(sec, state, n, fctm=inp["sls_fctm"],
+                                   Es=[material.Es for material in all_laws],
+                                   kt=kt, bar_diameter=phi,
+                                   k1=k1_bars, k3_cover_dependent=dk_na,
+                                   include_hx_term=include_hx, coarse=coarse,
+                                   edition=inp["sls_edition"], n_mult=n_mult,
+                                   reinforcement_types=reinforcement_types,
+                                   bond_ratio_xi=tendon_xi)
 
-            def _disposition(evaluation):
-                result = evaluation.result
-                return {
-                    "status": evaluation.status,
-                    "reason": evaluation.reason,
-                    "scope": result.scope if result is not None else None,
-                }
-
-            # Long-term and total are response-duration states only. Their SLS
-            # combination classes come from explicit load-table fields below;
-            # neither duration is treated as quasi-permanent/frequent by inference.
-            crack_long = _cw(long_state, inp["nl"], 0.4, False)
-            crack_short = _cw(short_state, inp["ns"], 0.6, False)
+            # Long-term crack width is on the cracked section under the user-entered
+            # sustained action (kt = 0.4), computed directly from that state so it
+            # is reported even when the long-term load alone would not cross the
+            # cracking threshold. The short-term is the instantaneous total (kt = 0.6).
             out["elastic"].update(
                 crack=_crack_dict(
-                    crack_long.result,
+                    _cw(cr_l.cracked_state, inp["nl"], 0.4, False),
                     bar_ids, tendon_ids),
                 crack_short=_crack_dict(
-                    crack_short.result,
+                    _cw(short_state, inp["ns"], 0.6, False),
                     bar_ids, tendon_ids),
-                crack_dispositions={
-                    "Long-term": _disposition(crack_long),
-                    "Total (long + short)": _disposition(crack_short),
-                },
                 crack_code=inp["sls_code"],
                 crack_edition=inp["sls_edition"],
                 crack_member=(inp["sls_member"] if dk_na else None),
@@ -8543,128 +5318,33 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             # The DK NA reports the coarse crack system alongside the fine one, for
             # both load cases (four crack widths in total).
             if dk_na:
-                crack_long_coarse = _cw(long_state, inp["nl"], 0.4, True)
-                crack_short_coarse = _cw(short_state, inp["ns"], 0.6, True)
                 out["elastic"].update(
                     crack_coarse=_crack_dict(
-                        crack_long_coarse.result,
+                        _cw(cr_l.cracked_state, inp["nl"], 0.4, True),
                         bar_ids, tendon_ids),
                     crack_short_coarse=_crack_dict(
-                        crack_short_coarse.result,
+                        _cw(short_state, inp["ns"], 0.6, True),
                         bar_ids, tendon_ids),
                 )
-                out["elastic"]["crack_dispositions"] = {
-                    "Long-term (fine)": _disposition(crack_long),
-                    "Total (fine)": _disposition(crack_short),
-                    "Long-term (coarse)": _disposition(crack_long_coarse),
-                    "Total (coarse)": _disposition(crack_short_coarse),
-                }
-        elif inp["sls_cw"]:
-            not_applicable = {
-                "status": "NOT APPLICABLE",
-                "reason": "The section remained uncracked.",
-                "scope": None,
-            }
-            if dk_na:
-                out["elastic"].update(
-                    crack_coarse=None,
-                    crack_short_coarse=None,
-                    crack_dispositions={
-                        name: dict(not_applicable)
-                        for name in (
-                            "Long-term (fine)",
-                            "Total (fine)",
-                            "Long-term (coarse)",
-                            "Total (coarse)",
-                        )
-                    },
-                )
-            else:
-                out["elastic"]["crack_dispositions"] = {
-                    "Long-term": dict(not_applicable),
-                    "Total (long + short)": dict(not_applicable),
-                }
         eout = out["elastic"]
         if (
-            "crack_coarse" in eout
-            or "crack_short_coarse" in eout
+            eout.get("crack_coarse") is not None
+            or eout.get("crack_short_coarse") is not None
         ):
             crack_cases = {
                 "Long-term (fine)": eout.get("crack"),
-                "Total (fine)": eout.get("crack_short"),
+                "Short-term (fine)": eout.get("crack_short"),
                 "Long-term (coarse)": eout.get("crack_coarse"),
-                "Total (coarse)": eout.get("crack_short_coarse"),
-            }
-            response_states = {
-                "Long-term (fine)": "long",
-                "Total (fine)": "total",
-                "Long-term (coarse)": "long",
-                "Total (coarse)": "total",
+                "Short-term (coarse)": eout.get("crack_short_coarse"),
             }
         else:
             crack_cases = {
                 "Long-term": eout.get("crack"),
-                "Total (long + short)": eout.get("crack_short"),
+                "Short-term": eout.get("crack_short"),
             }
-            response_states = {
-                "Long-term": "long",
-                "Total (long + short)": "total",
-            }
-        combination_map = dict(inp.get("sls_response_combinations") or {})
-        provenance_map = dict(inp.get("sls_response_provenance") or {})
-        combination_map.setdefault(
-            "long",
-            inp.get(
-                "sls_long_combination",
-                sls_core.COMBINATION_UNSPECIFIED,
-            ),
-        )
-        combination_map.setdefault(
-            "total",
-            inp.get(
-                "sls_total_combination",
-                sls_core.COMBINATION_UNSPECIFIED,
-            ),
-        )
-        elastic_case_id = str(
-            (inp.get("elastic_case") or {}).get("id") or ""
-        ).strip()
-        response_contexts = {
-            name: {
-                "combination": combination_map[state],
-                "duration": (
-                    "Sustained / long-term response"
-                    if state == "long"
-                    else "Instantaneous total (long + short) response"
-                ),
-                "response_id": (
-                    f"{elastic_case_id}:{state}"
-                    if elastic_case_id else state
-                ),
-                "provenance": provenance_map.get(state),
-                "solver_provenance": {
-                    "state": state,
-                    "elastic_case": dict(inp.get("elastic_case") or {}),
-                    "creep_modular_ratio": (
-                        "nl" if state == "long" else "combined nl/ns"
-                    ),
-                },
-            }
-            for name, state in response_states.items()
-        }
-        eout["crack_response_contexts"] = response_contexts
-        eout["crack_responses"] = crack_cases
-        eout["crack_assessment"] = sls_core.crack_assessment(
+        eout["crack_output"] = sls_core.crack_outputs(
             crack_cases,
-            limit_mm=inp["sls_wk_limit"],
             valid=eout["converged"],
-            dispositions=eout.get("crack_dispositions"),
-            response_contexts=response_contexts,
-            response_mapping_scope=inp.get("sls_response_mapping_scope"),
-            criteria=eout.get("crack_criteria"),
-        )
-        eout["crack_response_mapping_scope"] = copy.deepcopy(
-            eout["crack_assessment"].get("response_mapping_scope") or []
         )
     if inp.get("minimum_reinforcement_on"):
         if inp.get("detailing_edition") == detailing.EC2_2023:
@@ -8707,64 +5387,19 @@ def _run_fatigue_or_invalid(inp):
     )
 
 
-def _invalid_torsion_factor_result(inp, reason):
-    """Immutable INVALID evidence for a missing/non-positive torsion factor."""
-    factor_mode = str(
-        inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
-    )
-    approval_reference = str(
-        inp.get("torsion_factor_approval") or ""
-    ).strip()
-    approval_required = factor_mode == codes.FACTOR_MODE_OVERRIDE
-    approval_valid = not approval_required or bool(approval_reference)
-    factor_reason = f"concrete tensile-factor input invalid: {reason}"
-    return {
-        "tube": {"valid": False, "reason": factor_reason},
-        "t_ed": float(inp.get("torsion_T", 0.0) or 0.0),
-        "trd_s": None,
-        "trd_max": None,
-        "trd_c": None,
-        "trd": None,
-        "util": None,
-        "asl_req": None,
-        "method": inp.get("torsion_method"),
-        "governs": None,
-        "valid": False,
-        "reason": factor_reason,
-        "code_applicable": False,
-        "factor_input_valid": False,
-        "factor_input_reason": reason,
-        "factor_approval_required": approval_required,
-        "factor_approval_valid": approval_valid,
-        "factor_approval_reason": (
-            ""
-            if approval_valid
-            else (
-                "approved final concrete tensile-factor override requires a "
-                "stated approval/source"
-            )
-        ),
-        "material_factor_basis": {
-            "mode": factor_mode,
-            "tension_override": factor_mode == codes.FACTOR_MODE_OVERRIDE,
-            "tension_final": None,
-            "tension_derivation": "not resolved - factor input invalid",
-            "approval_reference": approval_reference,
-            "approval_required": approval_required,
-            "approval_valid": approval_valid,
-        },
-        "interaction": {
-            "valid": False,
-            "code_applicable": False,
-            "reason": factor_reason,
-            "factor_input_valid": False,
-        },
-        "min_reinf": {
-            "applicable": False,
-            "reason": factor_reason,
-            "factor_input_valid": False,
-        },
-    }
+def _run_bridge_or_invalid(inp):
+    """Run optional bridge kernels without suppressing other valid results."""
+    try:
+        return bridge_analysis.run(inp)
+    except (TypeError, ValueError) as exc:
+        return {
+            "selected_standard": inp.get(
+                "bridge_standard", bridge.COMPONENT_METHODS
+            ),
+            "scope": "Independent numerical bridge calculations.",
+            "calculations": {},
+            "errors": (str(exc),),
+        }
 
 
 def run_analysis(
@@ -8777,98 +5412,18 @@ def run_analysis(
     reuse_elastic_cases=None,
     reuse_fatigue=None,
 ):
-    """Run legacy scalar inputs or every row in the canonical case tables.
-
-    The one-case compatibility path remains available for manual examples and
-    older callers. Current app inputs include typed tables, so each named row is
-    mapped onto the verified single-case calculation above. Shared-context cache
-    gating remains the caller's responsibility; matching rows are then reused by
-    name and exact action signature.
-    """
-    sls_core.require_non_boolean_crack_numeric_inputs(inp)
+    """Run every current named action and optional independent calculation."""
+    bridge_result = _run_bridge_or_invalid(inp)
+    bridge_active = bool(
+        bridge_result.get("calculations") or bridge_result.get("errors")
+    )
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
-        return {}
+        return {"bridge": bridge_result} if bridge_active else {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
-        legacy_inp = inp
-        if inp.get("sls_cw"):
-            legacy_inp = dict(inp)
-            combinations = dict(
-                inp.get("sls_response_combinations") or {}
-            )
-            combinations.setdefault(
-                "long",
-                inp.get(
-                    "sls_long_combination",
-                    sls_core.COMBINATION_UNSPECIFIED,
-                ),
-            )
-            combinations.setdefault(
-                "total",
-                inp.get(
-                    "sls_total_combination",
-                    sls_core.COMBINATION_UNSPECIFIED,
-                ),
-            )
-            provenance = dict(
-                inp.get("sls_response_provenance") or {}
-            )
-            provenance.setdefault(
-                "long",
-                "Legacy scalar sls_long_combination input field",
-            )
-            provenance.setdefault(
-                "total",
-                "Legacy scalar sls_total_combination input field",
-            )
-            legacy_inp["sls_response_combinations"] = combinations
-            legacy_inp["sls_response_provenance"] = provenance
-            if inp.get("sls_response_mapping_scope") is None:
-                elastic_case = inp.get("elastic_case")
-                elastic_case = (
-                    elastic_case
-                    if isinstance(elastic_case, Mapping)
-                    else {}
-                )
-                elastic_case_id = str(
-                    elastic_case.get("id") or ""
-                ).strip()
-                elastic_case_label = (
-                    elastic_case_id
-                    or str(elastic_case.get("name") or "").strip()
-                    or "Legacy scalar input"
-                )
-                states = (
-                    (
-                        "long",
-                        "Sustained / long-term response",
-                    ),
-                    (
-                        "total",
-                        "Instantaneous total (long + short) response",
-                    ),
-                )
-                legacy_inp["sls_response_mapping_scope"] = [
-                    {
-                        "combination": combinations[state],
-                        "duration": duration,
-                        "response": (
-                            f"{elastic_case_label} / {state}"
-                        ),
-                        "response_id": (
-                            f"{elastic_case_id}:{state}"
-                            if elastic_case_id
-                            else state
-                        ),
-                        "elastic_case": elastic_case_label,
-                        "state": state,
-                        "provenance": provenance[state],
-                    }
-                    for state, duration in states
-                ]
         result = _run_single_analysis(
-            legacy_inp,
+            inp,
             reuse_plastic=reuse_plastic,
             reuse_elastic=reuse_elastic,
         )
@@ -8886,8 +5441,8 @@ def run_analysis(
                 if reuse_fatigue is not None
                 else _run_fatigue_or_invalid(inp)
             )
-        multidirectional.apply_to_results(inp, result)
-        result["bridge_methodology"] = bridge_analysis.assess(inp, result)
+        if bridge_active:
+            result["bridge"] = bridge_result
         return result
 
     def _runner(case_inp, *, reuse_plastic=None):
@@ -8914,131 +5469,9 @@ def run_analysis(
             if reuse_fatigue is not None
             else _run_fatigue_or_invalid(inp)
         )
-    multidirectional.apply_to_results(inp, result)
-    result["bridge_methodology"] = bridge_analysis.assess(inp, result)
+    if bridge_active:
+        result["bridge"] = bridge_result
     return result
-
-
-def crack_control_calculation_record(results):
-    """Return a compact, input-hash-bound crack-control result snapshot.
-
-    Project files do not restore numerical snapshots as live solver results. This
-    record instead preserves each routed verdict and every response summary as
-    immutable provenance, while ``matches_saved_inputs`` states whether it belongs
-    to the saved inputs.
-    """
-    results = results or {}
-    entries = results.get("elastic_cases")
-    if entries is None:
-        entries = [{
-            "name": (
-                (results.get("elastic") or {}).get("elastic_case", {})
-                or {}
-            ).get("id", "Elastic"),
-            "results": {"elastic": results.get("elastic")},
-        }]
-    cases = []
-    numerical_methods = []
-    for entry in entries:
-        elastic = (entry.get("results") or {}).get("elastic") or {}
-        if not elastic.get("show_cw"):
-            continue
-        raw_assessment = elastic.get("crack_assessment")
-        if not raw_assessment:
-            continue
-        numerical_methods.append(
-            copy.deepcopy(elastic.get("crack_numerical_method"))
-        )
-        assessment = (
-            raw_assessment
-            if isinstance(raw_assessment, Mapping)
-            else sls_core.publication_safe_crack_assessment(
-                None,
-                [{
-                    "response": "assessment",
-                    "reason": (
-                        "Calculated crack assessment rejected: assessment "
-                        "is not a mapping."
-                    ),
-                }],
-            )
-        )
-        dispositions = elastic.get("crack_dispositions") or {}
-        dispositions = (
-            dispositions if isinstance(dispositions, Mapping) else {}
-        )
-        contexts = elastic.get("crack_response_contexts") or {}
-        contexts = contexts if isinstance(contexts, Mapping) else {}
-        informational = set(
-            assessment.get("informational_responses") or []
-        )
-        responses = []
-        response_container = elastic.get("crack_responses")
-        if response_container is None:
-            response_items = ()
-        elif isinstance(response_container, Mapping):
-            response_items = response_container.items()
-        else:
-            response_items = (("crack responses", response_container),)
-        for name, raw_response in response_items:
-            response_is_mapping = isinstance(raw_response, Mapping)
-            response = raw_response if response_is_mapping else {}
-            disposition = dispositions.get(name) or {}
-            raw_wk = response.get("wk")
-            response_rejected = (
-                raw_response is not None and not response_is_mapping
-            )
-            wk_rejected = (
-                response_rejected
-                or (
-                    raw_response is not None
-                    and response_is_mapping
-                    and sls_core.crack_width_numeric_value(raw_wk) is None
-                )
-            )
-            response_record = {
-                "name": name,
-                "wk_mm": None if wk_rejected else raw_wk,
-                "element_id": response.get("element_id"),
-                "solver_status": disposition.get("status"),
-                "solver_reason": disposition.get("reason"),
-                "context": copy.deepcopy(contexts.get(name) or {}),
-                "acceptance_role": (
-                    "informational"
-                    if name in informational else "criterion input"
-                ),
-            }
-            if response.get("decompression") is not None:
-                response_record["decompression"] = copy.deepcopy(
-                    response.get("decompression")
-                )
-            if wk_rejected:
-                response_record["result_validation"] = (
-                    "Calculated crack-width response rejected; no numeric "
-                    "acceptance evidence retained."
-                )
-            responses.append(response_record)
-        cases.append({
-            "case": str(entry.get("name") or "Elastic"),
-            "assessment": copy.deepcopy(assessment),
-            "response_mapping_scope": copy.deepcopy(
-                elastic.get("crack_response_mapping_scope")
-            ),
-            "responses": responses,
-        })
-    if not cases:
-        return None
-    record = {"cases": cases}
-    if (
-        numerical_methods
-        and all(
-            isinstance(method, Mapping)
-            and method == numerical_methods[0]
-            for method in numerical_methods
-        )
-    ):
-        record["numerical_method"] = numerical_methods[0]
-    return sls_core.publication_safe_crack_control_record(record)
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -9059,12 +5492,7 @@ def _run_uniaxial_capacity_checks(inp, out):
     )
     if shear_payload is not None:
         out["shear"] = shear_payload
-    torsion_factor_error = capacity.torsion_factor_validation_error(inp)
-    tors_ctx = (
-        None
-        if torsion_factor_error is not None
-        else capacity.build_torsion_context(inp, n_ed_comp)
-    )
+    tors_ctx = capacity.build_torsion_context(inp, n_ed_comp)
 
     # ---- Member strut angle (EN 1992-1-1 6.3.2(2)) ----------------------------
     # One strut angle serves shear AND torsion (the same web struts carry both).
@@ -9090,11 +5518,8 @@ def _run_uniaxial_capacity_checks(inp, out):
                     if link_ctx is not None else None)
         links_valid = bool(lk_probe is not None and lk_probe["valid"]
                            and lk_probe["vrd_s"] > 0.0 and lk_probe["vrd_max"] > 0.0)
-        tors_valid = bool(
-            tors_ctx is not None
-            and tors_ctx["factor_approval_valid"]
-            and all(tb["valid"] for tb in tors_ctx["subtubes"])
-        )
+        tors_valid = bool(tors_ctx is not None
+                          and all(tb["valid"] for tb in tors_ctx["subtubes"]))
         shear_live = links_valid and v_ed_s > 0.0
         tors_live = tors_valid and t_ed_s > 0.0
 
@@ -9113,7 +5538,9 @@ def _run_uniaxial_capacity_checks(inp, out):
             off_cap = off_max if off_signed >= 0.0 else abs(off_min)
             off_util = (abs(off_signed) / off_cap if off_cap > 0.0
                         else (math.inf if off_signed else 0.0))
-            _, scx, scy = _gross_area_centroid(inp["outer"], inp["holes"])
+            _, scx, scy = capacity.gross_area_centroid(
+                inp["outer"], inp["holes"]
+            )
             s_centroid = scy if l_axis == "x" else scx
             # Shear-axis chord: MRd is CONDITIONAL on the coexisting off-axis moment
             # (the M-M envelope point carrying off_signed) -- the pure-axis capacity
@@ -9167,7 +5594,9 @@ def _run_uniaxial_capacity_checks(inp, out):
             if (chord_faces and tors_live
                     and not tors_ctx.get("subdivide", False)):
                 o_axis = "y" if l_axis == "x" else "x"
-                _, ocx, ocy = _gross_area_centroid(inp["outer"], inp["holes"])
+                _, ocx, ocy = capacity.gross_area_centroid(
+                    inp["outer"], inp["holes"]
+                )
                 o_centroid = ocy if o_axis == "x" else ocx
                 for o_tlow in (True, False):
                     m_ed_o = combined.chord_applied_moment(off_signed, o_tlow)
@@ -9328,13 +5757,6 @@ def _run_uniaxial_capacity_checks(inp, out):
                 trd, asl_req = primary["trd"], primary["asl_req"]
                 tube_main, valid = tors_ctx["tube"], tors_ctx["tube"]["valid"]
                 util_t = (t_ed / trd) if trd > 0.0 else math.inf
-            factor_approval_valid = tors_ctx["factor_approval_valid"]
-            valid = bool(valid and factor_approval_valid)
-            reason = (
-                tors_ctx["factor_approval_reason"]
-                if not factor_approval_valid
-                else tube_main.get("reason")
-            )
             tcode = tors_ctx["tcode"]
             tcot_min, tcot_max = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
             lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
@@ -9347,27 +5769,20 @@ def _run_uniaxial_capacity_checks(inp, out):
                 theta_deg=primary["theta_deg"], util=util_t, asl_req=asl_req,
                 t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
                 fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
-                alpha_cw=tors_ctx["alpha_cw"], fctk_005=tors_ctx["fctk_005"],
-                fctd=tors_ctx["fctd"], alpha_ct=tors_ctx["alpha_ct"],
+                alpha_cw=tors_ctx["alpha_cw"], fctd=tors_ctx["fctd"],
+                fctk_005=tors_ctx["fctk_005"],
                 gamma_c=tors_ctx["gamma_c"], gamma_ct=tors_ctx["gamma_ct"],
                 gamma_s=tors_ctx["gamma_s"],
-                material_factor_basis=tors_ctx["material_factor_basis"],
                 nu_v_detailing=tors_ctx["nu_detail_applied"],
                 sigma_cp=tors_ctx["sigma_cp"], n_prestress=n_prestress,
                 asw_t=tors_ctx["asw_t"], asw_over_s=tors_ctx["asw_over_s_t"],
                 dia=inp["shear_link_dia"], s=inp["shear_link_s"], cot_min=tcot_min,
                 cot_max=tcot_max, method=inp["torsion_method"],
                 governs=primary["governs"], valid=valid,
-                reason=reason, cot_limit_lo=lo_t, cot_limit_hi=hi_t,
+                reason=tube_main.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
                 out_of_limits=torsion_out_of_limits,
-                code_applicable=not torsion_out_of_limits,
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
-                factor_input_valid=True,
-                factor_input_reason="",
-                factor_approval_required=tors_ctx["factor_approval_required"],
-                factor_approval_valid=factor_approval_valid,
-                factor_approval_reason=tors_ctx["factor_approval_reason"],
                 compound_detected=tors_ctx["compound_detected"],
                 subdivision_requested=tors_ctx["subdivision_requested"],
                 subdivision_valid=tors_ctx["subdivision_valid"],
@@ -9475,12 +5890,6 @@ def _run_uniaxial_capacity_checks(inp, out):
                     ochecks.append(fchk)
                     if ochk is None or fchk["util"] > ochk["util"]:
                         ochk = fchk
-            member_code_applicable = bool(
-                not links_out_of_limits
-                and out.get("torsion", {}).get("code_applicable", True)
-            )
-            for chord_check in lchecks + ochecks:
-                chord_check["code_applicable"] = member_code_applicable
             out["shear"].update(
                 links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
                            asw_over_s=link_ctx["asw_over_s"],
@@ -9502,7 +5911,6 @@ def _run_uniaxial_capacity_checks(inp, out):
                            model_2023=link_ctx.get("model_2023", False),
                            z_source=link_ctx["z_src"],
                            out_of_limits=links_out_of_limits,
-                           code_applicable=not links_out_of_limits,
                            required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
                            chord_off=ochk,
                            chord_candidates=lchecks + ochecks,
@@ -9518,13 +5926,7 @@ def _run_uniaxial_capacity_checks(inp, out):
             # reinforcement (only the minimum) is needed if TEd/TRd,c + VEd/VRd,c <= 1.
             sh_ms = out.get("shear")
             _trdc = primary["trd_c"]
-            if not tors_ctx["factor_approval_valid"]:
-                out["torsion"]["min_reinf"] = dict(
-                    applicable=False,
-                    reason=tors_ctx["factor_approval_reason"],
-                    factor_approval_valid=False,
-                )
-            elif tors_ctx["subdivide"]:
+            if tors_ctx["subdivide"]:
                 # 6.31 is written for an approximately solid rectangular section, so
                 # it does not apply to a subdivided compound section.
                 out["torsion"]["min_reinf"] = dict(
@@ -9548,44 +5950,28 @@ def _run_uniaxial_capacity_checks(inp, out):
             sh_links = out.get("shear", {}).get("links")
             p_tube, t_ed_p = primary["tube"], primary["t_ed"]
             if sh_links is not None and sh_links["res"]["valid"] and p_tube["valid"]:
-                if not tors_ctx["factor_approval_valid"]:
-                    out["torsion"]["interaction"] = dict(
-                        valid=False,
-                        code_applicable=False,
-                        reason=tors_ctx["factor_approval_reason"],
-                        factor_approval_valid=False,
-                    )
-                else:
-                    # The member angle when a load drives it; otherwise the
-                    # least-conservative angle (cot = 1 clamped to the shared band).
-                    pl_lo, pl_hi = link_ctx["cot_min"], link_ctx["cot_max"]
-                    cot_c = (
-                        cot_star
-                        if cot_star is not None
-                        else min(max(1.0, pl_lo), pl_hi)
-                    )
-                    trdmax_c = torsion.trd_max(
-                        tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
-                        p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
-                        closed_detailing=tors_ctx["nu_detail"],
-                        fcd_mpa=tors_ctx["fcd"])
-                    vlk = link_ctx["build"](cot_c, cot_c)
-                    inter = combined.crushing_interaction(
-                        t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
-                    out["torsion"]["interaction"] = dict(
-                        valid=True, cot=cot_c,
-                        theta_deg=math.degrees(math.atan(1.0 / cot_c)),
-                        trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
-                        v_ed=v_ed_s, value=inter,
-                        code_applicable=bool(
-                            out["torsion"].get("code_applicable", True)
-                            and sh_links.get("code_applicable", True)
-                        ))
+                # The member angle when a load drives it; otherwise the
+                # least-conservative angle (cot = 1 clamped to the shared band).
+                pl_lo, pl_hi = link_ctx["cot_min"], link_ctx["cot_max"]
+                cot_c = (
+                    cot_star
+                    if cot_star is not None
+                    else min(max(1.0, pl_lo), pl_hi)
+                )
+                trdmax_c = torsion.trd_max(
+                    tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
+                    p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
+                    closed_detailing=tors_ctx["nu_detail"],
+                    fcd_mpa=tors_ctx["fcd"])
+                vlk = link_ctx["build"](cot_c, cot_c)
+                inter = combined.crushing_interaction(
+                    t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
+                out["torsion"]["interaction"] = dict(
+                    valid=True, cot=cot_c,
+                    theta_deg=math.degrees(math.atan(1.0 / cot_c)),
+                    trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
+                    v_ed=v_ed_s, value=inter)
 
-    if torsion_factor_error is not None:
-        out["torsion"] = _invalid_torsion_factor_result(
-            inp, torsion_factor_error
-        )
     capacity.finalize_combined(inp, out)
 
 
@@ -9596,8 +5982,6 @@ def _directional_shear_status(inp, shear_out):
     if inp.get("shear_links"):
         links = shear_out.get("links")
         if links is None or not (links.get("res") or {}).get("valid"):
-            return "NOT ASSESSED"
-        if not links.get("code_applicable", True):
             return "NOT ASSESSED"
         util = links.get("util")
     else:
@@ -9664,15 +6048,13 @@ def _governing_domain(candidate, status, metric, domain):
 
 
 def _torsion_interaction_assessment(torsion_out):
-    """Return the acceptance state of one face-specific V+T crushing screen."""
+    """Return the result state of one face-specific V+T crushing screen."""
     if torsion_out is None:
         return "NOT RUN", 0.0
     torsion_out = torsion_out or {}
     interaction = torsion_out.get("interaction") or {}
     value = interaction.get("value")
-    status = presentation.interaction_assessment_status(
-        interaction, applicable=torsion_out.get("code_applicable", True)
-    )
+    status = presentation.interaction_assessment_status(interaction)
     metric = float(value or 0.0)
     if not math.isfinite(metric):
         metric = math.inf
@@ -9682,7 +6064,7 @@ def _torsion_interaction_assessment(torsion_out):
 def _combined_direction_assessment(inp, candidate_out):
     """Return the conservative status and utilisation for one V+T screen.
 
-    Reuse the same acceptance rows as the application summary so the aggregate,
+    Reuse the same result rows as the application summary so the directional
     results view and report cannot disagree about an invalid or failed sub-check.
     """
     rows = [
@@ -9716,8 +6098,8 @@ def _run_capacity_checks(inp, out):
     """Run directional Vx/Vy checks without claiming a biaxial interaction law.
 
     Each direction is passed independently through the existing verified shear and
-    shear-torsion implementation.  If both components are present, both directional
-    screens are retained and the aggregate state is REVIEW unless either fails.
+    shear-torsion implementation. If both components are present, both directional
+    results are retained with no aggregate cross-direction verdict.
     """
     directional_contract = (
         "shear_Vx" in inp or "shear_Vy" in inp or "shear_components" in inp
@@ -9881,10 +6263,6 @@ def _run_capacity_checks(inp, out):
             combined_out = dict(
                 combined_out,
                 component=component,
-                status=capacity.aggregate_assessment_status(
-                    candidate["combined_status"] for candidate in candidates
-                ),
-                governing_util=combined_governing["combined_metric"],
                 governing_face=(
                     "negative" if combined_governing["tension_low"] else "positive"
                 ),
@@ -9933,40 +6311,26 @@ def _run_capacity_checks(inp, out):
             "metric": shear_governing["shear_metric"],
         }
 
-    governing_component = max(
-        directions,
-        key=lambda component: capacity.assessment_key(
-            directions[component]["status"], directions[component]["metric"]
-        ),
-    )
-    aggregate = dict(directions[governing_component]["shear"])
-    statuses = [directions[component]["status"] for component in active]
-    if "INVALID" in statuses:
-        overall_status = "INVALID"
-    elif "FAIL" in statuses:
-        overall_status = "FAIL"
-    elif len(active) > 1:
-        overall_status = "REVIEW"
-    else:
-        overall_status = statuses[0]
-    aggregate.update(
-        directions={key: value["shear"] for key, value in directions.items()},
-        active_directions=active,
-        governing_component=governing_component,
-        biaxial=len(active) > 1,
-        interaction_assessed=len(active) == 1,
-        interaction_status=("NOT ASSESSED" if len(active) > 1 else "NOT APPLICABLE"),
-        status=overall_status,
-    )
-    out["shear"] = aggregate
-
     if len(active) == 1:
         chosen = directions[active[0]]
+        out["shear"] = chosen["shear"]
         if chosen["torsion"] is not None:
             out["torsion"] = chosen["torsion"]
         if chosen["combined"] is not None:
             out["combined"] = chosen["combined"]
         return
+
+    out["shear"] = {
+        "directions": {
+            key: value["shear"] for key, value in directions.items()
+        },
+        "active_directions": active,
+        "biaxial": True,
+        "note": (
+            "Vx and Vy are calculated independently. Generic cross-direction "
+            "interaction is not calculated."
+        ),
+    }
 
     # Torsion on its own remains fully assessable.  The directional V+T screens
     # above are retained separately; no Vx+Vy+T interaction is inferred.
@@ -9986,39 +6350,13 @@ def _run_capacity_checks(inp, out):
         directional_combined = {
             key: value["combined"] for key, value in directions.items()
         }
-        candidates = {
-            key: value for key, value in directional_combined.items() if value
-        }
-        combined_governing_component = max(
-            candidates,
-            key=lambda key: capacity.assessment_key(
-                candidates[key].get("status"),
-                candidates[key].get("governing_util"),
-            ),
-        ) if candidates else governing_component
-        governing_combined = candidates.get(combined_governing_component, {})
-        combined_statuses = [
-            value.get("status", "NOT ASSESSED") for value in candidates.values()
-        ]
-        if "INVALID" in combined_statuses:
-            combined_status = "INVALID"
-        elif "FAIL" in combined_statuses:
-            combined_status = "FAIL"
-        else:
-            combined_status = "REVIEW"
         out["combined"] = dict(
-            governing_combined,
-            valid=(
-                bool(candidates)
-                and all(bool(value.get("valid")) for value in candidates.values())
-            ),
             directions=directional_combined,
-            governing_component=combined_governing_component,
             biaxial=True,
-            interaction_assessed=False,
-            interaction_status="NOT ASSESSED",
-            status=combined_status,
-            reason="Vx+Vy+T interaction is not established",
+            note=(
+                "Independent Vx+T and Vy+T calculations are reported. Generic "
+                "Vx+Vy+T interaction is not calculated."
+            ),
         )
 
 
@@ -10148,9 +6486,18 @@ def _transverse_detailing_result(inp, out):
 
 # View order follows the checking workflow: consolidated status first, then the
 # plastic, elastic, shear, torsion and combined details.
-VIEWS = ["Results Overview", "Bridge Methodology", "Plastic Results", "N-M Interaction",
-         "Elastic Results", "Fatigue Results", "Detailing", "Shear", "Torsion",
-         "M-V-T Combined"]
+VIEWS = [
+    "Results Overview",
+    "Plastic Results",
+    "N-M Interaction",
+    "Elastic Results",
+    "Fatigue Results",
+    "Bridge Calculations",
+    "Detailing",
+    "Shear",
+    "Torsion",
+    "M-V-T Combined",
+]
 _RESULT_VIEWS = tuple(VIEWS)
 
 
@@ -10258,29 +6605,13 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
         )
 
 
-def _publication_safe_fatigue_result(inp, results):
-    return fatigue_analysis.publication_safe_result(
-        (results or {}).get("fatigue"),
-        design_methodology=(inp or {}).get("design_methodology"),
-        current_basis=(inp or {}).get(fatigue_inputs.BASIS_KEY),
-    )
-
-
 def results_overview_view(inp, results, *, stale=False):
-    """One-screen status and provenance register for every requested check."""
-    safe_results = dict(results or {})
-    if safe_results.get("fatigue") is not None:
-        safe_results["fatigue"] = _publication_safe_fatigue_result(
-            inp,
-            safe_results,
-        )
-    results = safe_results
+    """One-screen result register without a global calculation verdict."""
     rows = presentation.multi_case_summary_rows(inp, results, stale=stale)
-    overall = presentation.overall_summary_status(rows)
     counts = {status: sum(row["status"] == status for row in rows)
               for status in {
                   "PASS", "FAIL", "INVALID", "NOT ASSESSED", "NOT RUN", "STALE",
-                  "NOT APPLICABLE", "REVIEW",
+                  "NOT APPLICABLE", "REVIEW", "CALCULATED",
               }}
     case_register = []
     for family, label in (("plastic", "Plastic / capacity"),
@@ -10362,34 +6693,25 @@ def results_overview_view(inp, results, *, stale=False):
                 ),
             })
 
-    headline = f"{overall} - {len(rows)} checks across {len(case_register)} cases"
-    if overall == "PASS":
-        st.success(headline)
-    elif overall in {"FAIL", "INVALID"}:
-        st.error(headline)
-    else:
-        st.warning(headline)
-    if any(
-        row["check"] in {"Crack width", "Decompression"}
-        for row in rows
-    ):
-        st.warning(
-            "Crack-control conclusion limitation: "
-            f"{CRACK_DIRECTIONAL_LIMITATION}"
-        )
+    st.info(
+        f"{len(rows)} result rows across {len(case_register)} named action sets. "
+        "Demand-versus-resistance checks keep their individual verdicts; "
+        "output-only quantities and the project as a whole have no verdict."
+    )
 
     if case_register:
         st.dataframe(case_register, hide_index=True, width="stretch")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Pass", counts.get("PASS", 0))
-    c2.metric("Fail / invalid", counts.get("FAIL", 0) + counts.get("INVALID", 0))
+    c1.metric("Calculated outputs", counts.get("CALCULATED", 0))
+    c2.metric("Pass / fail", counts.get("PASS", 0) + counts.get("FAIL", 0))
     c3.metric(
         "Review / not evaluated",
         counts.get("REVIEW", 0)
         + counts.get("NOT ASSESSED", 0)
         + counts.get("NOT RUN", 0)
-        + counts.get("NOT APPLICABLE", 0),
+        + counts.get("NOT APPLICABLE", 0)
+        + counts.get("INVALID", 0),
     )
     c4.metric("Stale", counts.get("STALE", 0))
 
@@ -10406,7 +6728,19 @@ def results_overview_view(inp, results, *, stale=False):
             "View": row["view"],
             "Note": row["note"],
         })
-    summary = pd.DataFrame(display)
+    summary = pd.DataFrame(
+        display,
+        columns=(
+            "Check",
+            "Action set",
+            "Status",
+            "Result",
+            "Criterion",
+            "Governing",
+            "View",
+            "Note",
+        ),
+    )
     status_colours = {
         "PASS": "background-color: #E8F5E9; color: #1B5E20; font-weight: 600",
         "FAIL": "background-color: #FDECEC; color: #9B1C1C; font-weight: 600",
@@ -10418,6 +6752,7 @@ def results_overview_view(inp, results, *, stale=False):
         "STALE": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
         "REVIEW": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
         "NOT APPLICABLE": "background-color: #EEF2F6; color: #374151",
+        "CALCULATED": "background-color: #E8F0FE; color: #174EA6",
     }
     styled = summary.style.map(
         lambda value: status_colours.get(str(value), ""),
@@ -10425,96 +6760,6 @@ def results_overview_view(inp, results, *, stale=False):
     )
     st.dataframe(styled, hide_index=True, width="stretch",
                  height=min(35 * (len(display) + 1) + 3, 560))
-
-
-def bridge_methodology_view(inp, results, *, stale=False):
-    """Render the selected EN 1992-2 coverage and typed check evidence."""
-
-    selected_methodology = inp.get("design_methodology")
-    payload = bridge.publication_safe_record(
-        (results or {}).get("bridge_methodology"),
-        design_methodology=selected_methodology,
-        fatigue_context=fatigue_analysis.bridge_publication_context(inp),
-        danish_basis_context=bridge_inputs.danish_basis_context(inp),
-        danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
-        danish_crack_context=(
-            bridge_analysis.danish_crack_publication_context(inp, results)
-        ),
-    )
-    if (
-        not bridge.is_bridge_methodology(selected_methodology)
-        and payload is None
-    ):
-        st.info(
-            "Select a DS/EN 1992-2 whole-calculation methodology in "
-            "Analysis settings to activate this gate."
-        )
-        return
-    if payload is None:
-        st.info("Press Calculate to assess the bridge methodology.")
-        return
-    status = "STALE" if stale else payload["status"]
-    message = f"{status} - {payload.get('methodology') or selected_methodology}"
-    if status == "PASS":
-        st.success(message)
-    elif status in {"FAIL", "INVALID"}:
-        st.error(message)
-    else:
-        st.warning(message)
-    st.caption(payload["source"])
-    st.markdown("**Standards coverage matrix**")
-    st.dataframe(
-        pd.DataFrame(payload["coverage_matrix"])[[
-            "title",
-            "disposition",
-            "inherited_reference",
-            "bridge_reference",
-            "implementation",
-        ]],
-        hide_index=True,
-        width="stretch",
-    )
-    st.markdown("**Applicability and acceptance register**")
-    rows = []
-    for check in payload["checks"]:
-        rows.append({
-            "Check": check["title"],
-            "Disposition": check["disposition"],
-            "Status": "STALE" if stale else check["status"],
-            "Result": check["result"],
-            "Criterion": check["criterion"],
-            "Utilisation": check["utilisation"],
-            "Source": check["source"],
-            "Reason": check["reason"],
-        })
-    st.dataframe(rows, hide_index=True, width="stretch")
-    for check in payload["checks"]:
-        if not check.get("evidence"):
-            continue
-        with st.expander(f"Evidence - {check['title']}", expanded=False):
-            st.dataframe(
-                list(check["evidence"]),
-                hide_index=True,
-                width="stretch",
-            )
-    if payload.get("configuration_errors"):
-        st.error(
-            "Stored/calculated bridge evidence validation: "
-            + "; ".join(payload["configuration_errors"])
-            + "."
-        )
-    publication_errors = (
-        (payload.get("publication_validation") or {}).get("errors")
-        or ()
-    )
-    if publication_errors:
-        st.error(
-            "Bridge input/result correlation: "
-            + "; ".join(publication_errors)
-            + "."
-        )
-    for limitation in payload.get("limitations") or ():
-        st.warning(limitation)
 
 
 def _detailing_status_callout(status, message):
@@ -11177,20 +7422,16 @@ def interaction_view(inp, results):
                    "may use different numerical points.")
 
 
-def _acceptance_metric(box, label, assessment, unit="MPa"):
-    """Render one explicit acceptance result/criterion/status card."""
-    value = assessment.get("value")
-    value_text = "-" if value is None else f"{value:.3f} {unit}"
-    status = assessment.get("status", "NOT ASSESSED")
-    display_status = presentation.assessment_status_label(status)
-    colour = "normal" if status == "OK" else ("inverse" if status in {
-        "EXCEEDED", "INVALID"} else "off")
-    box.metric(label, value_text, delta=display_status, delta_color=colour)
-    limit = assessment.get("limit")
-    limit_text = "not supplied" if limit is None or limit <= 0.0 else f"{limit:.3f} {unit}"
-    util = assessment.get("util")
-    util_text = "" if util is None else f"; utilisation {_pct(util)}"
-    box.caption(f"Limit {limit_text} ({assessment.get('criterion', '-')}){util_text}.")
+def _calculation_output_metric(box, label, output):
+    """Render one output quantity without an acceptance verdict."""
+    value = output.get("value")
+    unit = output.get("unit") or ""
+    value_text = "-" if value is None else f"{value:.3f} {unit}".strip()
+    box.metric(label, value_text)
+    state = output.get("calculation_state", "NOT CALCULATED")
+    governing = output.get("governing")
+    note = state if not governing else f"{state}; governing {governing}"
+    box.caption(note)
 
 
 def elastic_view(inp, results):
@@ -11204,8 +7445,8 @@ def elastic_view(inp, results):
         st.error("INVALID - Elastic result | Solver did not converge; values are "
                  "diagnostic only.")
 
-    st.markdown("### Stress-limit assessment")
-    checks = e.get("stress_assessments", {})
+    st.markdown("### Elastic stress outputs")
+    checks = e.get("stress_outputs", {})
     enabled = [
         ("Concrete compression", checks.get("concrete", {})),
         ("Reinforcement tension", checks.get("reinforcement", {})),
@@ -11213,11 +7454,12 @@ def elastic_view(inp, results):
     if inp.get("tendons"):
         enabled.append(("Tendon tension", checks.get("prestress", {})))
     metric_cols = st.columns(len(enabled))
-    for col, (label, assessment) in zip(metric_cols, enabled):
-        _acceptance_metric(col, label, assessment)
+    for col, (label, output) in zip(metric_cols, enabled):
+        _calculation_output_metric(col, label, output)
     st.caption(
-        f"Criteria: {e.get('sls_limit_source', '-')}. "
-        "Limits apply to the total elastic action.")
+        "Concrete compression and longitudinal reinforcement/tendon tension are "
+        "reported for the actual named Elastic action. No stress limit is applied."
+    )
 
     # Modular ratios are derived per assigned material.
     ec_mpa = inp["conc_Ec"] * 1000.0
@@ -11354,9 +7596,9 @@ def _elastic_sls_section(inp, e):
     """Serviceability sub-report inside the elastic view: the cracking threshold
     and transformed section properties (always); crack width is an independent
     opt-in. The cracking decision is on the *total* (long + short) load -- cracking
-    is triggered by the peak load the section ever sees and is irreversible. Crack
-    widths are reported for both response-duration states, while acceptance is
-    routed independently by their explicit SLS-combination designations."""
+    is triggered by the peak load the section ever sees and is irreversible -- while
+    the crack width is reported for both the user-defined sustained and
+    instantaneous action parts."""
     if "cracked" not in e:
         return
     show_cw = e.get("show_cw", False)
@@ -11402,274 +7644,66 @@ def _elastic_sls_section(inp, e):
 
 
 def _crack_width_panel(e):
-    """Crack width for the sustained and total-response duration states.
-
-    The response's explicit SLS-combination designation, rather than its duration
-    label or magnitude relative to another response, controls criterion routing.
-    The DK NA reports the fine and coarse crack systems for both duration states.
-    """
+    """Crack width (EC2 7.3.4) for the long-term and short-term load cases, side
+    by side. The DK NA reports the fine and the coarse crack system (four columns);
+    each bar's clear cover is taken from the geometry and the bar with the largest
+    wk governs, reported per load case."""
     cl, cs = e.get("crack"), e.get("crack_short")
     clc, csc = e.get("crack_coarse"), e.get("crack_short_coarse")
-    st.markdown(f"**Crack control** ({e.get('crack_code', 'EC2 7.3.4')})")
+    st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
     no_results = cl is None and cs is None and clc is None and csc is None
-    assessment = e.get("crack_assessment", {})
-    numerical_method_issues = ()
-    if e.get("crack_code") == bridge.EN1992_2_DK_NA:
-        numerical_method_issues = (
-            sls_core.danish_bridge_crack_numerical_method_issues(
-                e.get("crack_numerical_method")
-            )
-        )
-        if numerical_method_issues:
-            assessment = sls_core.publication_safe_crack_assessment(
-                assessment,
-                [{
-                    "response": "Danish bridge numerical crack method",
-                    "reason": " ".join(numerical_method_issues),
-                }],
-            )
-    status = assessment.get("status", "NOT ASSESSED")
-    display_status = presentation.assessment_status_label(status)
-    value = assessment.get("value")
-    limit = assessment.get("limit")
-    case = assessment.get("case") or "-"
-    governing = assessment.get("governing") or "-"
-    margin = assessment.get("margin")
-    decompression_governs = (
-        assessment.get("criterion") == sls_core.CRITERION_DECOMPRESSION
+    output = e.get("crack_output", {})
+    value = output.get("value")
+    case = output.get("case") or "-"
+    governing = output.get("governing") or "-"
+    state = output.get("calculation_state", "NOT CALCULATED")
+    st.metric(
+        "Governing calculated crack width",
+        "-" if value is None else f"{value:.3f} mm",
     )
-    result_label = (
-        "governing concrete stress"
-        if decompression_governs else "governing $w_k$"
-    )
-    result_value = (
-        "-"
-        if value is None
-        else f"{value:.3f} {'MPa' if decompression_governs else 'mm'}"
-    )
-    limit_text = (
-        "compression required"
-        if decompression_governs
-        else (
-            "not supplied"
-            if limit is None or limit <= 0.0
-            else f"{limit:.3f} mm"
-        )
-    )
-    status_label = (
-        "Decompression" if decompression_governs else "Crack width"
-    )
-    message = (
-        f"**{display_status} - {status_label}** | {result_label} "
-        f"{result_value} | limit {limit_text} | "
-        f"case {case} | element {governing}"
-    )
-    if margin is not None:
-        margin_unit = "MPa" if decompression_governs else "mm"
-        message += f" | margin {margin:+.3f} {margin_unit}"
-    if status == "OK":
-        st.success(message)
-    elif status in {"EXCEEDED", "INVALID"}:
-        st.error(message)
-    elif status == "NOT ASSESSED":
-        st.warning(message)
-    else:
-        st.info(message)
-    if numerical_method_issues:
-        st.warning(
-            "Numerical crack-method evidence rejected: "
-            + " ".join(numerical_method_issues)
-        )
     st.caption(
-        "Acceptance route: "
-        f"{assessment.get('required_combination') or 'not established'}; "
-        f"source: {assessment.get('criterion_source') or e.get('sls_limit_source', '-')}."
+        f"{state}; action part {case}; longitudinal element {governing}. "
+        "No crack-width limit, exposure acceptance or combination-completeness "
+        "criterion is applied."
     )
-    criterion_rows = []
-    for item in assessment.get("criteria", []):
-        is_decompression = (
-            item.get("kind") == sls_core.CRITERION_DECOMPRESSION
-        )
-        criterion_limit = item.get("limit")
-        criterion_value = item.get("value")
-        criterion_rows.append({
-            "Criterion": item.get("kind"),
-            "Source type": item.get("criterion_source_type"),
-            "Required combination": item.get("required_combination") or "-",
-            "Matched response": ", ".join(
-                item.get("matched_responses") or []
-            ) or "-",
-            "Limit / requirement": (
-                "compression required"
-                if is_decompression
-                else (
-                    "-"
-                    if criterion_limit is None
-                    else f"{criterion_limit:.3f} mm"
-                )
-            ),
-            "Result": (
-                "-"
-                if criterion_value is None
-                else (
-                    f"{criterion_value:.3f} MPa"
-                    if is_decompression
-                    else f"{criterion_value:.3f} mm"
-                )
-            ),
-            "Status": presentation.assessment_status_label(
-                item.get("status")
-            ),
-            "Source": item.get("criterion_source") or "-",
-        })
-    if criterion_rows:
-        st.dataframe(
-            criterion_rows,
-            hide_index=True,
-            width="stretch",
-        )
-    response_rows = []
-    informational = set(assessment.get("informational_responses") or [])
-    for name, context in (
-        assessment.get("response_contexts") or {}
-    ).items():
-        response_rows.append({
-            "Response": name,
-            "Duration state": context.get("duration") or "-",
-            "SLS combination": context.get("combination") or "-",
-            "Acceptance role": (
-                "Informational" if name in informational else "Criterion input"
-            ),
-            "Mapping provenance": context.get("provenance") or "-",
-        })
-    if response_rows:
-        st.dataframe(
-            response_rows,
-            hide_index=True,
-            width="stretch",
-        )
-    st.warning(
-        "Crack-control scope: "
-        f"{e.get('crack_scope_note') or CRACK_DIRECTIONAL_LIMITATION}"
-    )
-    interaction = e.get("crack_interaction")
-    if isinstance(interaction, Mapping):
-        st.markdown("**Multidirectional crack interaction**")
-        interaction_status = str(
-            interaction.get("status") or "NOT ASSESSED"
-        ).upper()
-        interaction_message = (
-            f"{interaction.get('verdict') or interaction_status}: "
-            f"{interaction.get('method_name') or '-'}"
-            + (
-                f"; utilisation {_pct(interaction.get('utilisation'))}"
-                if interaction.get("utilisation") is not None
-                else ""
-            )
-        )
-        if interaction_status in {"FAIL", "INVALID"}:
-            st.error(interaction_message)
-        elif interaction_status == "PASS" and not interaction.get(
-            "qualification"
-        ):
-            st.success(interaction_message)
-        elif interaction_status == "NOT APPLICABLE":
-            st.info(interaction_message)
-        else:
-            st.warning(interaction_message)
-        if interaction.get("interaction_assessed"):
-            parameters = interaction.get("parameters") or {}
-            rows = [
-                {
-                    "Quantity": key,
-                    "Value": value,
-                }
-                for key, value in parameters.items()
-            ]
-            if rows:
-                st.dataframe(rows, hide_index=True, width="stretch")
-            criterion_evidence = interaction.get("criterion") or {}
-            st.caption(
-                f"{interaction.get('formula') or ''} "
-                f"Case {criterion_evidence.get('elastic_case') or '-'}; "
-                f"criterion {criterion_evidence.get('criterion_id') or '-'}; "
-                "combination "
-                f"{criterion_evidence.get('required_combination') or '-'}; "
-                "immutable acceptance fingerprint "
-                f"{criterion_evidence.get('acceptance_fingerprint') or '-'}. "
-                f"Source: {interaction.get('source') or '-'}."
-            )
-        elif interaction.get("reason"):
-            st.caption(str(interaction["reason"]))
     if no_results:
-        st.info(
-            "No crack width: "
-            + (
-                assessment.get("reason")
-                or "section uncracked or no reinforcement in tension."
-            )
-        )
+        st.info("No crack width: section uncracked or no reinforcement in tension.")
         return
-    quants = [
-        "wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
-        f"{_SIGMA}s / {_DELTA}{_SIGMA}p (MPa)", f"{_RHO}p,eff",
-        "As,eff (m2)", "Ap,eff (m2)", f"{_XI}1 Ap,eff (m2)",
-        f"{_XI}1 range", "Ac,eff (m2)", "hc,eff (m)", "bc,eff (m)",
-        "cover c (mm)", f"element dia {_PHI} (mm)", "scope",
-        f"direction ({_DEG})", "governing element",
-    ]
-    keys = [
-        "wk", "sr_max", "esm_ecm", "sigma_s", "rho_p_eff",
-        "as_eff", "ap_eff", "ap_eff_weighted", "_xi1_range",
-        "ac_eff", "hc_ef", "bc_ef", "cover", "phi", "scope",
-        "direction_deg", "element_id",
-    ]
-    fmts = [
-        "{:.3f}", "{:.3f}", "{:.3e}", "{:.3f}", "{:.4f}",
-        "{:.6f}", "{:.6f}", "{:.6f}", "{}", "{:.6f}", "{:.3f}",
-        "{:.3f}", "{:.3f}", "{:.3f}", "{}", "{:.1f}", "{}",
-    ]
+    quants = ["wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
+              f"{_SIGMA}s (MPa)", f"{_RHO}p,eff", "hc,ef (m)", "cover c (mm)",
+              f"element dia {_PHI} (mm)", "governing element"]
+    keys = ["wk", "sr_max", "esm_ecm", "sigma_s", "rho_p_eff", "hc_ef", "cover",
+            "phi", "element_id"]
+    fmts = ["{:.3f}", "{:.3f}", "{:.3e}", "{:.3f}", "{:.4f}", "{:.3f}", "{:.3f}",
+            "{:.3f}", "{}"]
 
     def column(c):
         if c is None:
             return ["-"] * len(keys)
-        values = []
-        for key, fmt in zip(keys, fmts):
-            if key == "_xi1_range":
-                low, high = c.get("xi1_min"), c.get("xi1_max")
-                value = (
-                    "-"
-                    if low is None or high is None
-                    else f"{float(low):.4f} - {float(high):.4f}"
-                )
-                values.append(value)
-                continue
-            value = c.get(key)
-            values.append("-" if value is None else fmt.format(value))
-        return values
+        return [f.format(c[k]) for k, f in zip(keys, fmts)]
 
     has_coarse = clc is not None or csc is not None
     if has_coarse:
         # DK NA: fine and coarse crack systems, each for both load cases.
         data = {"Quantity": quants, "Long-term (fine)": column(cl),
-                "Total (fine)": column(cs), "Long-term (coarse)": column(clc),
-                "Total (coarse)": column(csc)}
+                "Short-term (fine)": column(cs), "Long-term (coarse)": column(clc),
+                "Short-term (coarse)": column(csc)}
     else:
         data = {"Quantity": quants, "Long-term": column(cl),
-                "Total (long + short)": column(cs)}
+                "Short-term": column(cs)}
     st.dataframe(data, hide_index=True, width="stretch")
-    st.caption("Governing (largest-$w_k$) element per response state; each element's "
+    st.caption("Governing (largest-$w_k$) element per load case; each element's "
                "clear cover is the distance to the nearest concrete face minus "
                "its radius.")
 
     cases = ([
         ("Long-term (fine)", cl),
-        ("Total (fine)", cs),
+        ("Short-term (fine)", cs),
         ("Long-term (coarse)", clc),
-        ("Total (coarse)", csc),
+        ("Short-term (coarse)", csc),
     ] if has_coarse else [
         ("Long-term", cl),
-        ("Total (long + short)", cs),
+        ("Short-term", cs),
     ])
     candidate_rows = []
     for case_name, case_result in cases:
@@ -11688,20 +7722,10 @@ def _crack_width_panel(e):
                 "x (mm)": round(row["x_mm"], 2),
                 "y (mm)": round(row["y_mm"], 2),
                 "Area (mm2)": round(row["area_mm2"], 2),
-                "Type": row.get("reinforcement_type", "-"),
                 "Cover (mm)": round(row["cover"], 2),
                 f"{_PHI} (mm)": round(row["phi"], 2),
                 f"{_SIGMA}s (MPa)": round(row["sigma_s"], 3),
-                f"{_XI}1": (
-                    "-"
-                    if row.get("xi1") is None
-                    else round(row["xi1"], 5)
-                ),
-                f"{_XI}1 Ap,eff (m2)": round(
-                    row.get("ap_eff_weighted", 0.0), 7
-                ),
                 "Ac,eff (m2)": round(row["ac_eff"], 6),
-                "Scope": row.get("scope", "-"),
                 f"{_EPS}sm-{_EPS}cm": round(row["esm_ecm"], 7),
                 "sr,max (mm)": round(row["sr_max"], 2),
                 "wk (mm)": round(wk, 3),
@@ -11728,7 +7752,7 @@ _FATIGUE_STATUS_COLOURS = {
     "REVIEW": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
     "STALE": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
     "OK": "background-color: #E8F5E9; color: #1B5E20",
-    "CERTIFIED": "background-color: #E8F5E9; color: #1B5E20",
+    "BOUNDED": "background-color: #E8F0FE; color: #174EA6",
 }
 
 
@@ -12089,7 +8113,7 @@ def _fatigue_concrete_panel(spectrum):
 
     search = fatigue_presentation.value(spectrum, "concrete_search")
     if search is not None:
-        st.markdown("**Certified governing-fibre search**")
+        st.markdown("**Bounded governing-fibre search**")
         point_label = (
             "Point util. [%]" if equivalent_method else "Point D"
         )
@@ -12101,7 +8125,7 @@ def _fatigue_concrete_panel(spectrum):
         absolute_gap = fatigue_presentation.value(search, "absolute_gap")
         _fatigue_result_table([{
             "Status": (
-                "CERTIFIED"
+                "BOUNDED"
                 if fatigue_presentation.value(search, "converged", False)
                 else "INVALID"
             ),
@@ -12214,28 +8238,10 @@ def _fatigue_spectrum_panel(inp, spectrum):
 def _fatigue_result_basis_panel(payload):
     basis = payload.get("basis") or {}
     factors = payload.get("partial_factors") or {}
-    factor_basis = payload.get("factor_basis") or {}
     checks = payload.get("checks") or {}
     parameters = payload.get("concrete_parameters") or {}
-    aggregate_conformance = payload.get("conformance") or {}
     rows = [
         ("Edition", payload.get("edition") or "-"),
-        (
-            "Design methodology",
-            payload.get("design_methodology") or "-",
-        ),
-        (
-            "Standards conformance",
-            aggregate_conformance.get("state") or "-",
-        ),
-        (
-            "Qualified verdict",
-            payload.get("qualified_verdict") or "-",
-        ),
-        (
-            "Selected-standard verdict",
-            aggregate_conformance.get("standard_verdict") or "-",
-        ),
         (
             "Checks",
             ", ".join(
@@ -12247,70 +8253,16 @@ def _fatigue_result_basis_panel(payload):
                 if checks.get(key)
             ) or "-",
         ),
-        ("Authority", basis.get("authority") or "-"),
         ("Method", basis.get("method") or "-"),
-        ("Authority reference", payload.get("authority_reference") or "-"),
-        ("Spectrum source", basis.get("spectrum_source") or "-"),
-        ("Cycle-count source", basis.get("cycle_count_source") or "-"),
-        ("Dynamic effects", basis.get("dynamic_effects") or "-"),
-        ("Cycle counting", basis.get("cycle_counting") or "-"),
-        ("Concurrence basis", basis.get("concurrence_basis") or "-"),
-        ("Atypical traffic", basis.get("atypical_traffic") or "-"),
-        (
-            "Spectrum-method approval/reference",
-            basis.get("approval_reference") or "-",
-        ),
-        ("Authority adjustments", basis.get("authority_adjustments") or "-"),
-        ("Factor source", factor_basis.get("mode") or "-"),
-        ("Factor provision", factor_basis.get("reference") or "-"),
-        (
-            "Factor override approval/source",
-            factor_basis.get("approval_reference") or "-",
-        ),
-        ("gamma0", factor_basis.get("gamma0")),
-        ("gamma3", factor_basis.get("gamma3")),
-        (
-            "gamma_s derivation",
-            factor_basis.get("gamma_s_derivation") or "-",
-        ),
-        (
-            "gamma_c,fat derivation",
-            factor_basis.get("gamma_c_derivation") or "-",
-        ),
+        ("Method reference", payload.get("method_reference") or "-"),
         ("gamma_Ff", factors.get("gamma_ff")),
         ("gamma_s", factors.get("gamma_s")),
         ("gamma_c,fat", factors.get("gamma_c")),
         ("t0 [days]", payload.get("t0_days")),
         ("beta_cc(t0)", parameters.get("beta_cc_t0")),
         ("fck [MPa]", parameters.get("fck_mpa")),
-        ("Concrete fatigue method", payload.get("concrete_method") or "-"),
-        (
-            "Concrete Miner applicability",
-            payload.get("concrete_miner_basis") or "-",
-        ),
-        (
-            "Concrete Miner authority source",
-            payload.get("concrete_miner_source") or "-",
-        ),
-        ("Concrete fatigue C", parameters.get("c")),
         ("Notes", basis.get("notes") or "-"),
     ]
-    for record in payload.get("parameter_conformance") or ():
-        if isinstance(record, Mapping):
-            rows.extend([
-                (
-                    f"{record.get('label') or 'Parameter'} conformance",
-                    record.get("state") or "-",
-                ),
-                (
-                    f"{record.get('label') or 'Parameter'} basis/source",
-                    (
-                        f"{record.get('basis') or '-'}; "
-                        f"{record.get('custom_methodology') or '-'}; "
-                        f"{record.get('approval_reference') or '-'}"
-                    ),
-                ),
-            ])
     _fatigue_result_table([
         # A presentation column must have one Arrow-compatible type.  Mixing the
         # textual provenance rows above with numeric factors made Streamlit coerce
@@ -12318,7 +8270,7 @@ def _fatigue_result_basis_panel(payload):
         {"Item": label, "Value": str(value)}
         for label, value in rows
         if value is not None
-    ], height=920)
+    ], height=760)
     references = payload.get("calculation_references") or {}
     if references:
         st.markdown("**Calculation references**")
@@ -12353,7 +8305,7 @@ def fatigue_view(inp, results, *, stale=False):
     if not inp.get("fatigue_on"):
         st.info("Enable Fatigue in Analysis settings, then press Calculate.")
         return
-    payload = _publication_safe_fatigue_result(inp, results)
+    payload = (results or {}).get("fatigue")
     if payload is None:
         st.info("Press Calculate to assess the grouped spectra.")
         return
@@ -12375,10 +8327,7 @@ def fatigue_view(inp, results, *, stale=False):
     )
     _fatigue_status_callout(
         status,
-        (
-            f"{payload.get('qualified_verdict') or status} | "
-            f"{governing_name} | utilisation {viz.pct(utilisation)}"
-        ),
+        f"{governing_name} | utilisation {viz.pct(utilisation)}",
     )
     warnings = tuple(payload.get("warnings") or ())
     if warnings:
@@ -12475,17 +8424,122 @@ def fatigue_view(inp, results, *, stale=False):
         _fatigue_result_basis_panel(payload)
 
 
-def _verdict_metric(box, label, value, ok, *, code_applicable=True, help=None):
-    """Render a utilisation metric without a reassuring verdict outside scope."""
-    if code_applicable:
-        box.metric(label, value, delta=("OK" if ok else "Over limit"),
-                   delta_color=("normal" if ok else "inverse"), help=help)
-    else:
-        scope_help = ("Exploratory value only: the selected strut-angle bounds fall "
-                      "outside the method's code range, so Sector issues no code "
-                      "compliance verdict.")
-        box.metric(label, value, help=(scope_help if help is None
-                                      else help + " " + scope_help))
+def bridge_view(inp, results):
+    """Present each optional bridge calculation independently."""
+    payload = (results or {}).get("bridge")
+    if payload is None:
+        st.info(
+            "Add a row under Optional bridge calculations and press Calculate."
+        )
+        return
+    st.subheader("Independent bridge calculations")
+    st.caption(
+        f"Selected method family: {payload.get('selected_standard') or '-'}."
+    )
+    st.info(
+        "These are separate numerical methods. Generic bridge-code coverage and "
+        "generic cross-method interaction are not calculated."
+    )
+    errors = tuple(payload.get("errors") or ())
+    if errors:
+        for error in errors:
+            st.error(f"Invalid bridge input: {error}")
+        return
+    calculations = payload.get("calculations") or {}
+    if not calculations:
+        st.info("No bridge calculation rows were supplied.")
+        return
+
+    brittle = calculations.get("brittle_method_b")
+    if brittle:
+        st.markdown("#### Optional brittle Method B")
+        if brittle.get("warning"):
+            st.warning(brittle["warning"])
+        st.caption(
+            f"{brittle.get('equation', '-')} | {brittle.get('source', '-')}"
+        )
+        st.dataframe(
+            [
+                {
+                    "Region": row["region_id"],
+                    "Mrep [kNm]": row["m_rep_knm"],
+                    "zs [m]": row["z_s_m"],
+                    "fyk [MPa]": row["f_yk_mpa"],
+                    "As,required [mm2]": row["as_required_mm2"],
+                    "As,provided [mm2]": row["as_provided_mm2"],
+                    "Utilisation [%]": 100.0 * row["utilisation"],
+                    "Status": row["status"],
+                }
+                for row in brittle["rows"]
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+
+    walls = calculations.get("box_walls")
+    if walls:
+        st.markdown("#### Box-wall shear and torsion")
+        st.caption(f"{walls.get('equation', '-')} | {walls.get('source', '-')}")
+        for warning in walls.get("warnings") or ():
+            st.warning(warning)
+        st.dataframe(
+            [
+                {
+                    "Wall": row["wall_id"],
+                    "cot(theta)": row["cot_theta"],
+                    "VEd [kN]": row["v_ed_kn"],
+                    "VRd,max [kN]": row["v_rd_max_kn"],
+                    "TEd,eq [kN]": row["t_ed_equivalent_kn"],
+                    "TRd,max,eq [kN]": row[
+                        "t_rd_max_equivalent_kn"
+                    ],
+                    "Utilisation [%]": 100.0 * row["utilisation"],
+                    "Status": row["status"],
+                }
+                for row in walls["rows"]
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+
+    minimum = calculations.get("minimum_crack_reinforcement")
+    if minimum:
+        st.markdown("#### Web/flange minimum crack reinforcement")
+        st.caption(
+            f"{minimum.get('equation', '-')} | {minimum.get('source', '-')}"
+        )
+        st.dataframe(
+            [
+                {
+                    "Component": row["component"].capitalize(),
+                    "Act [mm2]": row["act_mm2"],
+                    "fct,eff used [MPa]": row["fct_eff_used_mpa"],
+                    "sigma_s [MPa]": row["sigma_s_mpa"],
+                    "As,required [mm2]": row["as_required_mm2"],
+                    "As,provided [mm2]": row["as_provided_mm2"],
+                    "Utilisation [%]": 100.0 * row["utilisation"],
+                    "Status": row["status"],
+                }
+                for row in minimum["rows"]
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+
+
+def _verdict_metric(box, label, value, ok, *, help=None):
+    """Render a genuine demand-versus-resistance equation.
+
+    Method-default-range deviations are reported separately as warnings and
+    never suppress or relabel this result.
+    """
+    box.metric(
+        label,
+        value,
+        delta=("PASS" if ok else "FAIL"),
+        delta_color=("normal" if ok else "inverse"),
+        help=help,
+    )
 
 
 def _member_material_note(inp):
@@ -12549,61 +8603,10 @@ def shear_view(inp, results):
                 ),
             })
         if aggregate.get("biaxial"):
-            interaction = aggregate.get("interaction") or {}
-            interaction_status = str(
-                interaction.get("status") or "NOT ASSESSED"
-            ).upper()
-            if interaction.get("interaction_assessed"):
-                message = (
-                    f"{interaction.get('verdict') or interaction_status}: "
-                    f"{interaction.get('method_name') or 'biaxial shear method'}"
-                    + (
-                        f"; utilisation {_pct(interaction.get('utilisation'))}"
-                        if interaction.get("utilisation") is not None
-                        else ""
-                    )
-                )
-                if interaction_status in {"FAIL", "INVALID"}:
-                    st.error(message)
-                elif interaction.get("qualification"):
-                    st.warning(message)
-                else:
-                    st.success(message)
-                interaction_rows = [
-                    {
-                        "Term": str(term.get("id") or ""),
-                        "Value": term.get("value"),
-                    }
-                    for term in (interaction.get("terms") or [])
-                    if isinstance(term, Mapping)
-                ]
-                if interaction_rows:
-                    st.dataframe(
-                        interaction_rows,
-                        hide_index=True,
-                        width="stretch",
-                    )
-                st.caption(
-                    f"{interaction.get('formula') or ''} "
-                    f"Source: {interaction.get('source') or '-'}. "
-                    + (
-                        "Approval: "
-                        f"{interaction.get('approval')}."
-                        if interaction.get("approval")
-                        else ""
-                    )
-                )
-            else:
-                message = (
-                    f"{aggregate.get('status', 'REVIEW')}: Vx,Ed and Vy,Ed "
-                    "are checked independently; "
-                    f"{interaction.get('reason') or 'biaxial interaction is not assessed.'}"
-                )
-                (
-                    st.error
-                    if aggregate.get("status") in {"FAIL", "INVALID"}
-                    else st.warning
-                )(message)
+            st.info(
+                "Vx,Ed and Vy,Ed are calculated independently. Generic "
+                "cross-direction interaction is not calculated."
+            )
             components = inp.get("shear_components") or {}
             st.plotly_chart(
                 viz.biaxial_shear_overview_figure(
@@ -12621,7 +8624,7 @@ def shear_view(inp, results):
         st.dataframe(summary, hide_index=True, width="stretch")
         options = [component for component in ("vx", "vy") if component in directions]
         if len(options) > 1:
-            preferred = aggregate.get("governing_component", options[0])
+            preferred = options[0]
             if preferred not in options:
                 preferred = options[0]
             if st.session_state.get("shear_direction_view") not in options:
@@ -12815,10 +8818,10 @@ def shear_view(inp, results):
             )
             st.warning(f"The strut angle bounds (cot {_THETA} in "
                        f"[{links['cot_min']:.2f}, {links['cot_max']:.2f}]) fall "
-                       f"outside the code range [{links['cot_limit_lo']:.1f}, "
-                       f"{links['cot_limit_hi']:.1f}] ({limit_ref}). "
-                       "Values are shown for exploration only: NO CODE VERDICT "
-                       "is issued for the links or dependent interaction checks.")
+                       f"outside the selected method's default range "
+                       f"[{links['cot_limit_lo']:.1f}, "
+                       f"{links['cot_limit_hi']:.1f}] ({limit_ref}). The actual "
+                       "values are retained in the reported calculations.")
         req_txt = (r"links are required ($V_{Ed}>V_{Rd,c}$)" if links["required"]
                    else r"links are not strictly required ($V_{Ed}\leq V_{Rd,c}$); minimum "
                         "reinforcement rules still apply")
@@ -12831,8 +8834,7 @@ def shear_view(inp, results):
         c3.metric(r"$V_{Rd}=\min$", f"{lk['vrd']:.3f} kN",
                   help=f"governed by {lk['governs']}")
         ul_txt = _pct(util_l)
-        _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l,
-                        code_applicable=links.get("code_applicable", True))
+        _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l)
         if links.get("model_2023"):
             st.dataframe(
                 {
@@ -12946,13 +8948,7 @@ def shear_view(inp, results):
             coverage = ch.get("off_not_evaluated")
             fallback = presentation.required_chord_fallback(links)
             fell_back = fallback is not None
-            if not ch.get("code_applicable", True):
-                g3.metric(
-                    r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
-                    _pct(ch["util"]),
-                    help="No code verdict outside the strut-angle range.",
-                )
-            elif coverage:
+            if coverage:
                 g3.metric(
                     r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
                     _pct(ch["util"]),
@@ -12974,9 +8970,12 @@ def shear_view(inp, results):
                     ),
                 )
             else:
-                g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(ch["util"]),
-                          delta=("OK" if ch["ok"] else "Over limit"),
-                          delta_color=("normal" if ch["ok"] else "inverse"))
+                _verdict_metric(
+                    g3,
+                    r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                    _pct(ch["util"]),
+                    ch["ok"],
+                )
             obj_note = (" This demand is part of the strut-angle objective, so "
                         + _THETA + " backs off the band edge when the chord would "
                         "otherwise govern."
@@ -13060,7 +9059,6 @@ def _render_chord_off(och, *, assessment_complete=True):
             r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
             _pct(och["util"]),
             och["ok"],
-            code_applicable=och.get("code_applicable", True),
         )
     else:
         g3.metric(
@@ -13087,22 +9085,6 @@ def _render_chord_off(och, *, assessment_complete=True):
                "authoritative combined verification.")
 
 
-def _torsion_material_factor_caption(t):
-    factor_basis = t.get("material_factor_basis") or {}
-    alpha_ct = t["alpha_ct"]
-    return (
-        "Concrete material factors: compression "
-        f"gamma_c = {t['gamma_c']:.3f} (final concrete material input); "
-        f"tension gamma_ct = {t['gamma_ct']:.3f} "
-        f"({factor_basis.get('mode') or 'factor basis unavailable'}). "
-        f"alpha_ct = {alpha_ct:.3f}. "
-        "fctd = alpha_ct x fctk,0.05 / gamma_ct = "
-        f"{alpha_ct:.3f} x {t['fctk_005']:.3f} / {t['gamma_ct']:.3f} "
-        f"= {t['fctd']:.3f} MPa. "
-        f"Source: {factor_basis.get('reference') or '-'}."
-    )
-
-
 def torsion_view(inp, results):
     """Torsion resistance from the thin-walled tube (TRd,s / TRd,max / TRd,c), the
     required longitudinal steel, and the combined shear+torsion crushing check."""
@@ -13117,27 +9099,12 @@ def torsion_view(inp, results):
         return
     t = results["torsion"]
     _member_material_note(inp)
-    if t.get("factor_input_valid") is False:
-        st.error(
-            "INVALID - the approved final concrete tensile factor is missing or "
-            "not positive. Enter an explicit positive value and recalculate. No "
-            "torsion, V+T (6.29), minimum-reinforcement (6.31), or combined "
-            "verdict is issued."
-        )
-        return
-    if t.get("factor_approval_valid") is False:
-        st.error(
-            "INVALID - the selected approved final concrete tensile-factor override "
-            "has no approval/source. Enter the project decision, design-basis clause, "
-            "or checker approval and recalculate. No torsion, V+T (6.29), "
-            "minimum-reinforcement (6.31), or combined verdict is issued."
-        )
-        return
     directional_interactions = t.get("directional_interactions") or {}
     if directional_interactions:
-        st.warning(
-            "Vx,Ed + Vy,Ed + TEd interaction is not assessed. The table shows "
-            "separate Vx+T and Vy+T screens; the torsion result below is standalone."
+        st.info(
+            "Generic Vx,Ed + Vy,Ed + TEd interaction is not calculated. The table "
+            "shows independent Vx+T and Vy+T calculations; the torsion result below "
+            "is standalone."
         )
         rows = []
         min_reinf_rows = []
@@ -13148,9 +9115,7 @@ def torsion_view(inp, results):
             interaction = item.get("interaction") or {}
             value = interaction.get("value")
             status = item.get("directional_interaction_status") or (
-                presentation.interaction_assessment_status(
-                    interaction, applicable=item.get("code_applicable", True)
-                )
+                presentation.interaction_assessment_status(interaction)
             )
             rows.append({
                 "Directional screen": "Vx,Ed + TEd" if component == "vx"
@@ -13223,11 +9188,11 @@ def torsion_view(inp, results):
         return
     if t["out_of_limits"]:
         st.warning(f"The strut bounds (cot {_THETA} in [{t['cot_min']:.2f}, "
-                   f"{t['cot_max']:.2f}]) fall outside the code range "
+                   f"{t['cot_max']:.2f}]) fall outside the selected method's "
+                   "default range "
                    f"[{t['cot_limit_lo']:.1f}, {t['cot_limit_hi']:.1f}] "
-                   "(6.7N / 6.7a NA). Values are shown for exploration only: "
-                   "NO CODE VERDICT is issued for torsion or dependent interaction "
-                   "checks.")
+                   "(6.7N / 6.7a NA). The actual values are retained in the "
+                   "reported torsion and interaction calculations.")
     util = t["util"]
     ok = viz.util_ok(util)
     util_txt = _pct(util)
@@ -13239,7 +9204,6 @@ def torsion_view(inp, results):
                        "pass/fail check is the governing sub-tube, not this sum")
         _verdict_metric(
             m3, r"Governing utilisation $\max(T_{Ed,i}/T_{Rd,i})$", util_txt, ok,
-            code_applicable=t.get("code_applicable", True),
         )
     else:
         m1, m2, m3, m4 = st.columns(4)
@@ -13247,10 +9211,14 @@ def torsion_view(inp, results):
         m2.metric(r"$T_{Rd}=\min$", f"{t['trd']:.3f} kNm",
                   help=f"governed by {t['governs']}")
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
-        _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok,
-                        code_applicable=t.get("code_applicable", True))
+        _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok)
 
-    st.caption(_torsion_material_factor_caption(t))
+    st.caption(
+        "Torsional cracking provenance: "
+        f"$f_{{ctd}} = f_{{ctk,0.05}}/\\gamma_{{ct}} = "
+        f"{t['fctk_005']:.3f}/{t['gamma_ct']:.3f} = "
+        f"{t['fctd']:.3f}$ MPa. The actual direct gamma_ct input is used."
+    )
 
     if t.get("subdivided"):
         subs = t["subtubes"]
@@ -13315,12 +9283,14 @@ def torsion_view(inp, results):
             {"Quantity": ["Gross area A", "Outer perimeter u", "Wall thickness tef",
                           "Enclosed area Ak", "Centre-line perimeter uk",
                           f"Strut factor {_NU}", f"Chord factor {_ALPHA}cw",
+                          "Concrete tensile factor gamma_ct",
                           "Required long. steel " + chr(0x03A3) + "Asl"],
              "Value": [f"{tube['A'] * 1e6:.0f} mm2", f"{tube['u'] * 1e3:.0f} mm",
                        f"{tube['tef']:.1f} mm ({tef_note})",
                        f"{tube['Ak'] * 1e6:.0f} mm2",
                        f"{tube['uk'] * 1e3:.0f} mm", f"{t['nu']:.3f}",
-                       f"{t['alpha_cw']:.3f}", f"{t['asl_req']:.0f} mm2"]},
+                       f"{t['alpha_cw']:.3f}", f"{t['gamma_ct']:.3f}",
+                       f"{t['asl_req']:.0f} mm2"]},
             hide_index=True, width="stretch")
         st.caption(
             r"$T_{Rd,s} = (A_{sw}/s)\,2 A_k f_{ywd}\cot\theta$ (6.28); "
@@ -13389,7 +9359,6 @@ def torsion_view(inp, results):
         val_txt = _pct(val)
         _verdict_metric(
             i3, r"Sum ($\leq100\%$)", val_txt, ok_i,
-            code_applicable=inter.get("code_applicable", True),
         )
         st.caption(
             r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$ (6.29), "
@@ -13451,13 +9420,10 @@ def combined_view(inp, results):
     aggregate = results["combined"]
     _member_material_note(inp)
     if aggregate.get("biaxial"):
-        aggregate_status = aggregate.get("status", "REVIEW")
-        message = (
-            f"{aggregate_status}: Vx+T and Vy+T are checked separately. The "
-            "simultaneous Vx+Vy+T interaction is NOT ASSESSED."
+        st.info(
+            "Vx+T and Vy+T are calculated separately. Generic simultaneous "
+            "Vx+Vy+T interaction is not calculated."
         )
-        (st.error if aggregate_status in {"FAIL", "INVALID"}
-         else st.warning)(message)
         directions = aggregate.get("directions") or {}
         rows = []
         for component in ("vx", "vy"):
@@ -13473,18 +9439,16 @@ def combined_view(inp, results):
                     component, item.get("governing_face")
                 ),
                 f"cot {_THETA}": item.get("governing_cot"),
-                "Status": item.get("status", (
+                "DK NA sum status": (
                     "NOT ASSESSED" if not item.get("valid")
                     else "PASS" if item.get("dkna_ok") else "FAIL"
-                )),
+                ),
             })
         st.dataframe(rows, hide_index=True, width="stretch")
         options = [component for component in ("vx", "vy") if directions.get(component)]
         if not options:
             return
-        preferred = aggregate.get("governing_component", options[0])
-        if preferred not in options:
-            preferred = options[0]
+        preferred = options[0]
         if st.session_state.get("combined_direction_view") not in options:
             st.session_state["combined_direction_view"] = preferred
         selected = st.segmented_control(
@@ -13509,7 +9473,7 @@ def combined_view(inp, results):
         st.warning("The combined check needs all three actions. Missing: "
                    + "; ".join(missing) + ".")
         return
-    st.caption(f"Shared code edition: {c['method']}.")
+    st.caption(f"Selected calculation method: {c['method']}.")
     if c.get("governing_face"):
         component = c.get("component") or "vy"
         angle_note = (
@@ -13522,11 +9486,10 @@ def combined_view(inp, results):
             f"{viz.directional_face_label(component, c['governing_face'])}"
             f"{angle_note}."
         )
-    if not c.get("code_applicable", True):
+    if c.get("outside_default_range"):
         st.warning("The selected compression-strut bounds fall outside the "
-                   "method's code range. Combined values are exploratory only: "
-                   "NO CODE VERDICT is issued until the shared range is within "
-                   "the permitted limits.")
+                   "selected method's default range. The actual values are "
+                   "retained in every combined calculation.")
     m1, m2, m3 = st.columns(3)
     m1.metric(r"Bending $M$", _pct(c["r_m"]))
     m2.metric(r"Shear $V$", _pct(c["r_v"]))
@@ -13539,8 +9502,7 @@ def combined_view(inp, results):
     st.markdown(r"**DK NA 6.3.2(6): $\sum(S_{Ed}/S_{Rd})\leq1$**")
     ok = c["dkna_ok"]
     d1, d2 = st.columns([1, 2])
-    _verdict_metric(d1, r"$\sum(S_{Ed}/S_{Rd})$", _pct(c["dkna_sum"]), ok,
-                    code_applicable=c.get("code_applicable", True))
+    _verdict_metric(d1, r"$\sum(S_{Ed}/S_{Rd})$", _pct(c["dkna_sum"]), ok)
     if c["m_v_independent"]:
         d2.caption("M and V are checked separately (shear longitudinal steel "
                    "provided): sum = max(M+T, V+T). N is folded into the bending "
@@ -13564,7 +9526,6 @@ def combined_view(inp, results):
                 component["label"],
                 value,
                 status == "PASS",
-                code_applicable=component["applicable"],
                 help=component["note"],
             )
         else:
@@ -13585,8 +9546,6 @@ def combined_view(inp, results):
         cc1, cc2 = st.columns([1, 2])
         _verdict_metric(
             cc1, "Sum", _pct(val), ok_c,
-            code_applicable=cr.get("code_applicable",
-                                   c.get("code_applicable", True)),
         )
         cc2.caption(
             f"At a common strut $\\cot\\theta={cr['cot']:.2f}$ "
@@ -13596,8 +9555,7 @@ def combined_view(inp, results):
         )
         st.plotly_chart(viz.vt_interaction_figure(
             cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],
-            show_verdict=cr.get("code_applicable",
-                                c.get("code_applicable", True))),
+            show_verdict=True),
             width="stretch")
     elif cr is not None and not cr.get("valid"):
         st.warning(_no_common_angle_msg(cr))
@@ -13621,7 +9579,6 @@ def combined_view(inp, results):
             "Closed-stirrup utilisation",
             _pct(tr["u_stirrup"]),
             viz.util_ok(tr["u_stirrup"]),
-            code_applicable=c.get("code_applicable", True),
         )
         if tr["shear_credited"]:
             st.caption(f"The concrete alone carries the shear (VEd = {tr['v_ed']:.1f} "
@@ -13659,13 +9616,7 @@ def combined_view(inp, results):
         g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{lg['m_total']:.1f} kNm",
                   help="bending + shear shift + torsion, as an equivalent moment "
                        "on the governing chord face")
-        if not c.get("code_applicable", True):
-            g3.metric(
-                r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
-                _pct(lg["util"]),
-                help="No code verdict outside the strut-angle range.",
-            )
-        elif coverage:
+        if coverage:
             g3.metric(
                 r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
                 _pct(lg["util"]),
@@ -13687,9 +9638,12 @@ def combined_view(inp, results):
                 ),
             )
         else:
-            g3.metric(r"$M_{Ed,\mathrm{total}}/M_{Rd}$", _pct(lg["util"]),
-                      delta=("OK" if ok_l else "Over limit"),
-                      delta_color=("normal" if ok_l else "inverse"))
+            _verdict_metric(
+                g3,
+                r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                _pct(lg["util"]),
+                ok_l,
+            )
         st.caption(
             f"Tension chord = {face_desc} about the "
             f"{ax_lbl}-axis; $M_{{Ed}}$ and $M_{{Rd}}$ are taken on that face. "
@@ -13805,20 +9759,12 @@ def _render_selected_case_actions(family, actions):
         [
             {
                 "Action part": "Long-term",
-                "Response SLS combination": actions.get(
-                    "long_combination",
-                    sls_core.COMBINATION_UNSPECIFIED,
-                ),
                 "N_Ed [kN]": actions.get("n_long_ed_kn", 0.0),
                 "Mx_Ed [kNm]": actions.get("mx_long_ed_knm", 0.0),
                 "My_Ed [kNm]": actions.get("my_long_ed_knm", 0.0),
             },
             {
-                "Action part": "Short increment",
-                "Response SLS combination": actions.get(
-                    "total_combination",
-                    sls_core.COMBINATION_UNSPECIFIED,
-                ),
+                "Action part": "Short-term",
                 "N_Ed [kN]": actions.get("n_short_ed_kn", 0.0),
                 "Mx_Ed [kNm]": actions.get("mx_short_ed_knm", 0.0),
                 "My_Ed [kNm]": actions.get("my_short_ed_knm", 0.0),
@@ -13827,13 +9773,14 @@ def _render_selected_case_actions(family, actions):
         hide_index=True,
         width="stretch",
     )
-    selected = []
-    if actions.get("check_stress"):
-        selected.append("stress limits")
-    if actions.get("check_crack_width"):
-        selected.append("crack width")
     st.caption(
-        "Acceptance: " + (", ".join(selected) if selected else "none selected")
+        "Stresses are reported for this action. Crack width: "
+        + (
+            "calculated with the selected method"
+            if actions.get("calculate_crack_width")
+            else "not requested"
+        )
+        + "."
     )
 
 
@@ -13908,7 +9855,6 @@ def _analysis_workspace(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
-    case_errors = tuple(case_errors) + multidirectional.validation_errors(inp)
     if calc and case_errors:
         st.session_state["_case_error"] = "; ".join(case_errors) + "."
         calc = False
@@ -13980,7 +9926,7 @@ def _analysis_workspace(inp):
             # live edited geometry or spectra in a stale result view would combine
             # evidence from two different calculations.
             st.session_state["result_input_snapshot"] = copy.deepcopy(inp)
-            calculation_record = {
+            st.session_state["calculation_record"] = {
                 "performed_at_utc": datetime.now(timezone.utc).isoformat(
                     timespec="seconds"
                 ),
@@ -13988,45 +9934,6 @@ def _analysis_workspace(inp):
                 "source_revision": source_revision(),
                 "input_sha256": _project_input_hash(),
             }
-            crack_control_record = crack_control_calculation_record(
-                st.session_state["results"]
-            )
-            if crack_control_record is not None:
-                calculation_record["crack_control"] = crack_control_record
-            interaction_record = (
-                multidirectional.interaction_calculation_record(
-                    st.session_state["results"]
-                )
-            )
-            if interaction_record is not None:
-                calculation_record["multidirectional_interaction"] = (
-                    interaction_record
-                )
-            fatigue_record = fatigue_analysis.calculation_conformance_record(
-                st.session_state["results"].get("fatigue"),
-                design_methodology=inp.get("design_methodology"),
-                current_basis=inp.get(fatigue_inputs.BASIS_KEY),
-            )
-            if fatigue_record is not None:
-                calculation_record["fatigue_conformance"] = fatigue_record
-            bridge_record = bridge.publication_safe_record(
-                st.session_state["results"].get("bridge_methodology"),
-                design_methodology=inp.get("design_methodology"),
-                fatigue_context=(
-                    fatigue_analysis.bridge_publication_context(inp)
-                ),
-                danish_basis_context=bridge_inputs.danish_basis_context(inp),
-                danish_fck_mpa=bridge_inputs.danish_fck_mpa(inp),
-                danish_crack_context=(
-                    bridge_analysis.danish_crack_publication_context(
-                        inp,
-                        st.session_state["results"],
-                    )
-                ),
-            )
-            if bridge_record is not None:
-                calculation_record["bridge_methodology"] = bridge_record
-            st.session_state["calculation_record"] = calculation_record
         else:
             st.session_state.pop("result_input_snapshot", None)
         # Re-default the Plastic view's neutral-axis state to this result's governing
@@ -14055,17 +9962,15 @@ def _analysis_workspace(inp):
         st.warning("Inputs changed since the last calculation - press Calculate to update.")
     result_snapshot = st.session_state.get("result_input_snapshot")
     if stale and view in _RESULT_VIEWS and result_snapshot is None:
-        # Sessions can survive a Streamlit hot reload. A result produced by an
-        # older Sector version has no matching input snapshot, so rendering it
-        # against today's edited inputs would create internally inconsistent QA
-        # evidence. Keep the payload hidden until a current calculation records
-        # the missing snapshot.
+        # Sessions can survive a Streamlit hot reload. A result payload without
+        # its matching input snapshot cannot be rendered against edited inputs
+        # without creating internally inconsistent evidence. Keep it hidden until
+        # a current calculation records the missing snapshot.
         st.error(
-            "The stale calculation predates input snapshots. Press Calculate "
-            "before viewing its input-dependent results."
+            "The stale calculation has no matching input snapshot. Press "
+            "Calculate before viewing its input-dependent results."
         )
         return
-    result_inp = result_snapshot if stale else inp
     if st.session_state.get("_case_error"):
         st.error(st.session_state["_case_error"])
 
@@ -14083,8 +9988,9 @@ def _analysis_workspace(inp):
             + " Other requested analyses remain available; the fatigue result "
             "will be INVALID until the assignments are resolved."
         )
-    safe_fatigue = _publication_safe_fatigue_result(result_inp, results)
-    fatigue_errors = tuple((safe_fatigue or {}).get("errors") or ())
+    fatigue_errors = tuple(
+        ((results or {}).get("fatigue") or {}).get("errors") or ()
+    )
     if fatigue_errors and view != "Fatigue Results":
         st.error(
             "Fatigue not assessed: "
@@ -14095,6 +10001,7 @@ def _analysis_workspace(inp):
     # A stale result must be rendered wholly against the inputs that produced it.
     # Apply this before selecting a case or deciding which checks were enabled so
     # every result view receives one internally consistent input/result pair.
+    result_inp = result_snapshot if stale else inp
     family = (
         "elastic" if view == "Elastic Results"
         else "plastic" if (
@@ -14118,14 +10025,14 @@ def _analysis_workspace(inp):
 
     if view == "Results Overview":
         results_overview_view(result_inp, results, stale=stale)
-    elif view == "Bridge Methodology":
-        bridge_methodology_view(result_inp, results, stale=stale)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
         interaction_view(view_inp, view_results)
     elif view == "Fatigue Results":
         fatigue_view(result_inp, results, stale=stale)
+    elif view == "Bridge Calculations":
+        bridge_view(result_inp, results)
     elif view == "Detailing":
         detailing_view(view_inp, view_results, global_results=results)
     elif view == "Shear":
@@ -14164,9 +10071,6 @@ st.session_state.setdefault("_main_page", "Inputs")
 _restore_input_state(
     replace=bool(st.session_state.get(_INPUT_BUILD_KEY, False))
 )
-_sanitise_factor_input_state()
-_sanitise_crack_input_state()
-_sanitise_interaction_input_state()
 
 main_page = st.segmented_control(
     "Workspace",

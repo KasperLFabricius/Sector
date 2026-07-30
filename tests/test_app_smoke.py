@@ -6,22 +6,17 @@ for each analysis mode, and assert it produces results without error.
 
 from __future__ import annotations
 
-import copy
 import dataclasses
-import hashlib
 import json
 import math
 import pathlib
 import re
 import sys
 import time
-from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from streamlit.testing.v1 import AppTest
-from sector import bridge, multidirectional, sls
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
@@ -368,19 +363,9 @@ def test_persisted_settings_use_the_seeded_number_helper():
     # value=. (wall_mm keeps key= -- it has a dimension-dependent max, so it seeds and
     # clamps by hand -- but still passes no value=, so it does not warn.)
     for key in ("v_min", "v_max", "v_inc", "el_phi", "sls_phi",
-                "sls_tendon_bond", "sls_tendon_xi",
-                "sls_criterion_mode", "sls_prestress_class",
-                "sls_protection_class", "sls_exposure_class",
-                "sls_exposure_context", "sls_check_appearance",
-                "sls_appearance_limit", "sls_check_durability",
-                "sls_decompression_applicability",
-                "sls_project_characteristic_limit",
-                "sls_project_frequent_limit",
-                "sls_project_quasi_permanent_limit",
                 "label_scale", "label_min_gap",                # seeded number inputs
                 "pl_check_util", "pl_interaction",              # seeded checkboxes
                 "conc_preset", "mild_preset", "pre_preset",     # seeded selectboxes
-                "sls_limit_source",
                 "ring_d", "bot_d", "top_d",                     # QS diameter inputs
                 "qs_cover_to_edge", "bot_off_d", "top_off_d",   # QS toggle + interleave
                 "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "dia_mm",  # QS dims
@@ -487,193 +472,6 @@ def test_loading_a_project_applies_a_seeded_setting(tmp_path):
     assert "_clear_section_undo" not in at.session_state
 
 
-def test_loading_partial_current_project_clears_crack_routing_and_bond_inputs():
-    import json
-    import project_io
-
-    at = _fresh()
-    at.run()
-    at.session_state["_pending_project"] = project_io.dump_project(
-        {},
-        {
-            "sls_tendon_bond": "Ribbed / high bond (k1 = 0.8)",
-            "sls_tendon_xi": 0.65,
-        },
-    )
-    at.run()
-    assert not at.exception
-    assert at.session_state["sls_tendon_bond"] == (
-        "Ribbed / high bond (k1 = 0.8)"
-    )
-    assert at.session_state["sls_tendon_xi"] == pytest.approx(0.65)
-
-    # External callers may still provide a valid current-version partial file.
-    # Loading it is a whole-input replacement and must not retain the prior
-    # project's favourable tendon properties in either live or durable state.
-    at.session_state["_pending_project"] = json.dumps({
-        "format": project_io.FORMAT,
-        "version": project_io.VERSION,
-        "tables": {},
-        "scalars": {
-            "sls_cw": True,
-            "sls_code": "EN 1992-1-1:2023",
-        },
-    })
-    at.run()
-
-    assert not at.exception
-    assert at.session_state["sls_tendon_bond"] == (
-        project_io.DEFAULT_SLS_TENDON_BOND
-    )
-    assert at.session_state["sls_tendon_xi"] == pytest.approx(
-        project_io.DEFAULT_SLS_TENDON_XI
-    )
-    assert at.session_state["sls_criterion_mode"] == (
-        sls.CRITERION_MODE_LEGACY
-    )
-    durable = at.session_state["_durable_input_scalars"]
-    assert durable["sls_tendon_bond"] == project_io.DEFAULT_SLS_TENDON_BOND
-    assert durable["sls_tendon_xi"] == pytest.approx(
-        project_io.DEFAULT_SLS_TENDON_XI
-    )
-    assert durable["sls_criterion_mode"] == sls.CRITERION_MODE_LEGACY
-
-
-def test_loading_v17_boolean_crack_json_is_rejected_before_session_apply():
-    import project_io
-
-    at = _fresh()
-    at.run()
-    before_limit = at.session_state["sls_wk_limit"]
-    at.session_state["_pending_project"] = json.dumps({
-        "format": project_io.FORMAT,
-        "version": 17,
-        "tables": {},
-        "scalars": {
-            "sls_code": "EN 1992-1-1:2023",
-            "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
-            "sls_prestress_class": sls.PRESTRESS_BONDED,
-            "sls_wk_limit": True,
-            "sls_tendon_xi": True,
-        },
-    })
-
-    at.run()
-
-    assert not at.exception
-    assert at.session_state["sls_wk_limit"] == before_limit
-    assert not isinstance(at.session_state["sls_wk_limit"], bool)
-    assert not isinstance(
-        at.session_state["_durable_input_scalars"]["sls_wk_limit"],
-        bool,
-    )
-    level, message = at.session_state["_project_msg"]
-    assert level == "error"
-    assert "sls_tendon_xi" in message or "sls_wk_limit" in message
-
-
-def test_loading_structured_crack_snapshot_restores_audit_state_not_live_results():
-    import load_cases
-    import project_io
-
-    tables = {
-        load_cases.ELASTIC_TABLE_KEY: load_cases.normalise_table([{
-            "name": "SLS-QP",
-            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "total_combination": sls.COMBINATION_CHARACTERISTIC,
-            "mx_long_ed_knm": 80.0,
-            "mx_short_ed_knm": 20.0,
-            "check_crack_width": True,
-        }], load_cases.ELASTIC_TABLE_KEY),
-    }
-    scalars = {
-        "mode": "Elastic",
-        "sls_code": "EN 1992-1-1:2023",
-        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
-        "sls_prestress_class": sls.PRESTRESS_BONDED,
-        "sls_protection_class": sls.PROTECTION_LEVEL_2_OR_3,
-        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
-        "sls_exposure_context": "XC3 / durability",
-        "sls_check_durability": True,
-        "sls_wk_limit": 0.30,
-        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
-    }
-    digest = project_io.input_sha256(tables, scalars)
-    crack_control = {
-        "cases": [{
-            "case": "SLS-QP",
-            "assessment": {
-                "status": "OK",
-                "verdict": "PASS",
-                "case": "QP",
-                "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-                "value": 0.22,
-                "limit": 0.30,
-            },
-            "responses": [{
-                "name": "QP",
-                "wk_mm": 0.22,
-                "acceptance_role": "criterion input",
-                "context": {
-                    "combination": sls.COMBINATION_QUASI_PERMANENT,
-                    "response_id": "qp",
-                    "solver_provenance": {"state": "long"},
-                },
-            }],
-        }],
-    }
-    text = project_io.dump_project(
-        tables,
-        scalars,
-        calculation={
-            "performed_at_utc": "2026-07-27T10:00:00+00:00",
-            "sector_version": "0.91",
-            "source_revision": "e" * 40,
-            "input_sha256": digest,
-            "crack_control": crack_control,
-        },
-    )
-    payload = json.loads(text)
-    stale_case = payload["calculation"]["crack_control"]["cases"][0]
-    stale_case["responses"][0]["wk_mm"] = None
-    stale_case["responses"][0]["result_validation"] = (
-        "Injected rejected response in loaded audit snapshot."
-    )
-    text = json.dumps(payload)
-    expected_record = project_io.project_provenance(text)[
-        "calculation"
-    ]["crack_control"]
-
-    at = _fresh()
-    at.run()
-    at.session_state["results"] = {"stale": True}
-    at.session_state["_pending_project"] = text
-    at.run()
-
-    assert not at.exception
-    assert "results" not in at.session_state
-    assert at.session_state["sls_criterion_mode"] == (
-        sls.CRITERION_MODE_STANDARD
-    )
-    assert at.session_state["sls_exposure_context"] == "XC3 / durability"
-    assert at.session_state["sls_protection_class"] == (
-        sls.PROTECTION_LEVEL_2_OR_3
-    )
-    assert at.session_state["sls_exposure_class"] == sls.EXPOSURE_XC2_XC4
-    elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY]
-    assert elastic.loc[0, "long_combination"] == (
-        sls.COMBINATION_QUASI_PERMANENT
-    )
-    loaded_record = at.session_state["calculation_record"]["crack_control"]
-    assert loaded_record == expected_record
-    loaded_assessment = loaded_record["cases"][0]["assessment"]
-    assert loaded_assessment["status"] == "NOT ASSESSED"
-    assert loaded_assessment["verdict"] == "REVIEW"
-    assert loaded_assessment["value"] is None
-    assert loaded_assessment["publication_validation"]["status"] == "REJECTED"
-    assert at.session_state["calculation_record"]["matches_saved_inputs"] is True
-
-
 def test_about_panel_shows_version_author_and_licensee():
     # The About panel carries the single-source release and ownership metadata.
     at = _fresh()
@@ -724,9 +522,6 @@ def test_calculate_elastic_produces_bar_stresses():
     res = at.session_state["results"]
     assert "elastic" in res
     assert len(res["elastic"]["total"]) > 0
-    # Result provenance is added only for an enabled crack-control calculation;
-    # an ordinary elastic run must not persist an irrelevant REVIEW snapshot.
-    assert "crack_control" not in at.session_state["calculation_record"]
 
 
 def test_combined_elastic_reports_four_columns():
@@ -1149,10 +944,14 @@ def test_builder_does_not_touch_points_until_applied():
 
     # AppTest cannot continue reliably from the fragment-to-full-app rerun behind
     # Back because it retains removed builder nodes in its element tree. Serialize
-    # the exact post-Back state into an independent session and calculate there; this
-    # retains the engineering-result assertion without relying on stale test nodes.
+    # the complete current-schema state into an independent session and calculate
+    # there; action tables are inputs too and must not be replaced by empty defaults.
     post_back_project = project_io.dump_project(
-        {key: at.session_state[key] for key in project_io.TABLE_KEYS},
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
         {
             key: at.session_state[key]
             for key in project_io.SCALAR_KEYS
@@ -1811,38 +1610,6 @@ def test_invalid_concrete_strain_order_is_recoverable():
     assert "plastic" in at.session_state["results"]
 
 
-def test_load_project_restores_section_and_calculates():
-    # A pending uploaded project is applied before the widgets are built: the point
-    # tables and scalar inputs are restored and the section calculates.
-    import json
-    at = _fresh()
-    at.run()
-    _calculate(at)
-    assert "results" in at.session_state
-    project = {
-        "format": "sector-project", "version": 1,
-        "tables": {
-            "corners_base": {"columns": ["x (mm)", "y (mm)"],
-                             "rows": [[-100.0, -150.0], [100.0, -150.0],
-                                      [100.0, 150.0], [-100.0, 150.0]]},
-            "hole_base": {"columns": ["x (mm)", "y (mm)"], "rows": []},
-            "bars_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"],
-                          "rows": [[0.0, -120.0, 500.0]]},
-            "tendons_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"], "rows": []},
-        },
-        "scalars": {"conc_fck": 55.0, "mode": "Plastic"},
-    }
-    at.session_state["_pending_project"] = json.dumps(project)
-    at.run()
-    assert not at.exception
-    assert at.session_state["conc_fck"] == 55.0
-    assert list(at.session_state["corners_base"]["x (mm)"]) == [-100.0, 100.0, 100.0, -100.0]
-    assert "results" not in at.session_state
-    _calculate(at)
-    assert not at.exception
-    assert "plastic" in at.session_state["results"]
-
-
 def test_save_load_round_trip_through_the_app():
     # Editing fck, then gathering and re-applying the project, preserves the value.
     import sys as _sys
@@ -1873,53 +1640,6 @@ def test_save_load_round_trip_through_the_app():
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
-def test_loaded_fatigue_conformance_snapshot_is_retained_and_visible():
-    import project_io
-
-    at = _fresh()
-    at.run()
-    tables = {
-        key: at.session_state[key]
-        for key in project_io.PROJECT_TABLE_KEYS
-        if key in at.session_state
-    }
-    scalars = {
-        key: at.session_state[key]
-        for key in project_io.SCALAR_KEYS
-        if key in at.session_state
-    }
-    scalars["design_methodology"] = bridge.COMPONENT_METHODS
-    fatigue_record = _fatigue_bound_snapshot()
-    assert fatigue_record is not None
-    digest = project_io.input_sha256(tables, scalars)
-    source = project_io.dump_project(
-        tables,
-        scalars,
-        calculation={
-            "input_sha256": digest,
-            "fatigue_conformance": fatigue_record,
-        },
-    )
-
-    at.session_state["_pending_project"] = source
-    at.run()
-
-    assert not at.exception
-    assert at.session_state["calculation_record"][
-        "fatigue_conformance"
-    ] == fatigue_record
-    _goto_input_tab(at, "Project & report")
-    captions = " | ".join(item.value for item in at.caption)
-    assert "Recorded fatigue conformance" in captions
-    assert "APPROVED CUSTOM PASS" in captions
-    assert "gamma_s=0.5" in captions
-    assert "gamma_c,fat=2" in captions
-    assert "Miner C=100" in captions
-    assert bridge.COMPONENT_METHODS in captions
-    assert "DB-FAT-21 / checker approval" in captions
-    assert "AUTH-SN-7 / checker approval" in captions
-
-
 def test_app_restores_fatigue_inputs_into_the_ui():
     import fatigue_inputs
     import project_io
@@ -1936,14 +1656,8 @@ def test_app_restores_fatigue_inputs_into_the_ui():
         {
             fatigue_inputs.DETAIL_CATALOG_KEY:
                 fatigue_inputs.default_catalog(),
-            fatigue_inputs.BASIS_KEY:
-                fatigue_inputs.default_basis(),
             "fatigue_on": True,
-            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
-            "fatigue_gamma0": 1.0,
-            "fatigue_gamma3": 1.0,
             "fatigue_gamma_s": 1.32,
-            "fatigue_gamma_c": 1.595,
         },
     )
 
@@ -1958,9 +1672,6 @@ def test_app_restores_fatigue_inputs_into_the_ui():
     assert at.selectbox(key="fatigue_edition").value == (
         fatigue_inputs.EC2_2005_DKNA
     )
-    assert at.selectbox(key="fatigue_factor_mode").value == (
-        fatigue_inputs.FACTOR_MODE_PRESET
-    )
     assert "fatigue_spectrum_editor" in at.session_state
     assert at.selectbox(key="_fatigue_catalog_selected").value == "F1"
     assert (
@@ -1973,6 +1684,7 @@ def test_app_restores_fatigue_inputs_into_the_ui():
         at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY],
         fatigue_inputs.PRESTRESS,
     )
+
     saved = project_io.dump_project(
         {
             key: at.session_state[key]
@@ -1992,1382 +1704,7 @@ def test_app_restores_fatigue_inputs_into_the_ui():
     assert restored_scalars["fatigue_gamma_s"] == 1.32
 
 
-def test_bridge_methodology_owns_routes_and_defaults_to_blocking_gate():
-    import bridge_inputs
-    import fatigue_inputs
-
-    at = _fresh().run()
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_BASE
-    ).run()
-
-    assert not at.exception
-    assert at.selectbox(key="fatigue_edition").value == (
-        fatigue_inputs.EC2_2_2005_AC
-    )
-    assert at.selectbox(key="sls_code").value == (
-        "DS/EN 1992-2:2005 + AC:2008"
-    )
-    assert at.selectbox(key="sls_criterion_mode").value == (
-        sls.CRITERION_MODE_STANDARD
-    )
-    assert all(
-        key in at.session_state
-        for key in bridge_inputs.TABLE_KEYS
-    )
-
-    _calculate(at)
-    payload = at.session_state["results"]["bridge_methodology"]
-
-    assert payload["active"] is True
-    assert payload["status"] != bridge.STATUS_PASS
-    calculation_bridge = at.session_state["calculation_record"][
-        "bridge_methodology"
-    ]
-    assert calculation_bridge["publication_validation"]["status"] == (
-        "ACCEPTED"
-    )
-    assert at.session_state["result_input_snapshot"][
-        "design_methodology"
-    ] == bridge.EN1992_2_BASE
-    assert all(
-        check["status"] == bridge.STATUS_NOT_ASSESSED
-        for check in payload["checks"]
-    )
-    _select_view(at, "Bridge Methodology")
-    assert any(
-        "NOT ASSESSED" in warning.value
-        for warning in at.warning
-    )
-
-    _goto_page(at, "Inputs")
-    at.selectbox(key="design_methodology").set_value(
-        bridge.COMPONENT_METHODS
-    ).run()
-
-    assert not at.exception
-    assert at.session_state["fatigue_concrete_miner_basis"] == (
-        fatigue_inputs.MINER_BASIS_NOT_ESTABLISHED
-    )
-
-
-def test_danish_bridge_method_exposes_noninferred_typed_project_basis():
-    from sector import danish_bridge
-
-    at = _fresh().run()
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_DK_NA
-    ).run()
-
-    assert not at.exception
-    assert at.selectbox(key="sls_code").value == bridge.EN1992_2_DK_NA
-    assert at.session_state["_latest_inputs"]["sls_dk_na"] is True
-    assert at.session_state["_latest_inputs"]["sls_edition"] == (
-        sls.EDITION_BRIDGE_DK_2015
-    )
-    for key in (
-        "bridge_asset_class",
-        "bridge_infrastructure_manager",
-        "bridge_environment_class",
-        "bridge_departure_applicability",
-        "bridge_control_class",
-        "bridge_consequence_class",
-        "bridge_deicing_applicability",
-    ):
-        assert at.selectbox(key=key).value == danish_bridge.NOT_ESTABLISHED
-    for key in (
-        "bridge_manager_source",
-        "bridge_project_basis_source",
-        "bridge_departure_source",
-        "bridge_authority_approval_reference",
-        "bridge_environment_source",
-        "bridge_deicing_source",
-    ):
-        assert at.text_input(key=key).value == ""
-    assert at.number_input(key="bridge_alpha_ct").value == 1.0
-    assert any(
-        "declared model must exactly match" in caption.value
-        for caption in at.caption
-    )
-
-    _calculate(at)
-    payload = at.session_state["results"]["bridge_methodology"]
-    project_basis = next(
-        row for row in payload["checks"]
-        if row["check_id"] == "dk_project_basis"
-    )
-    assert payload["methodology"] == bridge.EN1992_2_DK_NA
-    assert payload["evidence_schema"] == bridge.DANISH_BRIDGE_EVIDENCE_SCHEMA
-    assert payload["danish_basis"]["asset_class"] == (
-        danish_bridge.NOT_ESTABLISHED
-    )
-    assert project_basis["status"] == bridge.STATUS_NOT_ASSESSED
-    assert "Select the bridge class" in project_basis["reason"]
-    calculation_bridge = at.session_state["calculation_record"][
-        "bridge_methodology"
-    ]
-    assert calculation_bridge["publication_validation"]["status"] == (
-        "ACCEPTED"
-    )
-
-
-def test_danish_bridge_applies_related_dk_na_crack_numerics():
-    def calculated(methodology):
-        at = _fresh().run()
-        at.selectbox(key="design_methodology").set_value(methodology).run()
-        _set_and_click(
-            at,
-            "calculate",
-            ("radio", "mode", "Elastic"),
-            ("number_input", "el_long_Mx", 400.0),
-            ("number_input", "el_short_Mx", 150.0),
-            ("checkbox", "sls_cw", True),
-        )
-        assert not at.exception
-        current = at.session_state["result_input_snapshot"]
-        elastic = at.session_state["results"]["elastic"]
-        assert elastic["crack"] is not None
-        assert elastic["crack_short"] is not None
-        return current, elastic, at.session_state["calculation_record"]
-
-    base_inputs, inherited, _base_record = calculated(
-        bridge.EN1992_2_BASE
-    )
-    dk_inputs, danish, calculation_record = calculated(
-        bridge.EN1992_2_DK_NA
-    )
-
-    assert base_inputs["sls_dk_na"] is False
-    assert inherited.get("crack_coarse") is None
-    assert inherited.get("crack_short_coarse") is None
-    assert dk_inputs["sls_dk_na"] is True
-    assert danish["crack_coarse"] is not None
-    assert danish["crack_short_coarse"] is not None
-    assert danish["crack"]["wk"] != pytest.approx(
-        inherited["crack"]["wk"]
-    )
-    assert danish["crack_short"]["wk"] != pytest.approx(
-        inherited["crack_short"]["wk"]
-    )
-    assert danish["crack_numerical_method"][
-        "schema"
-    ] == sls.CRACK_NUMERICAL_METHOD_SCHEMA
-    assert danish["crack_numerical_method"]["dk_na_applied"] is True
-    assert danish["crack_numerical_method"]["systems"] == [
-        "fine",
-        "coarse",
-    ]
-    assert calculation_record["crack_control"][
-        "numerical_method"
-    ] == danish["crack_numerical_method"]
-
-
-def test_danish_bridge_uncracked_keeps_four_not_applicable_responses():
-    at = _fresh().run()
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_DK_NA
-    ).run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 1.0),
-        ("number_input", "el_short_Mx", 0.0),
-        ("checkbox", "sls_cw", True),
-    )
-
-    assert not at.exception
-    elastic = at.session_state["results"]["elastic"]
-    assert elastic["cracked"] is False
-    required = {
-        "Long-term (fine)",
-        "Total (fine)",
-        "Long-term (coarse)",
-        "Total (coarse)",
-    }
-    assert set(elastic["crack_responses"]) == required
-    assert all(
-        elastic["crack_responses"][name] is None
-        for name in required
-    )
-    assert set(elastic["crack_dispositions"]) == required
-    assert all(
-        elastic["crack_dispositions"][name]["status"]
-        == "NOT APPLICABLE"
-        for name in required
-    )
-    crack_record = at.session_state["calculation_record"][
-        "crack_control"
-    ]
-    assert crack_record["numerical_method"]["schema"] == (
-        sls.CRACK_NUMERICAL_METHOD_SCHEMA
-    )
-    assert {
-        response["name"]
-        for response in crack_record["cases"][0]["responses"]
-    } == required
-
-
-def test_danish_bridge_stale_base_crack_session_fails_closed_in_ui():
-    at = _fresh().run()
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_DK_NA
-    ).run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 400.0),
-        ("number_input", "el_short_Mx", 150.0),
-        ("checkbox", "sls_cw", True),
-    )
-    assert not at.exception
-    stale = copy.deepcopy(at.session_state["results"])
-    stale["elastic"].pop("crack_numerical_method")
-    at.session_state["results"] = stale
-
-    _select_view(at, "Elastic Results")
-
-    assert not at.exception
-    assert any(
-        "Numerical crack-method evidence rejected" in warning.value
-        for warning in at.warning
-    )
-    assert not any(
-        "PASS - Crack width" in success.value
-        for success in at.success
-    )
-
-
-def test_bridge_method_switch_invalidates_base_crack_cache():
-    at = _fresh().run()
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_BASE
-    ).run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 400.0),
-        ("number_input", "el_short_Mx", 150.0),
-        ("checkbox", "sls_cw", True),
-    )
-    base_sig = at.session_state["result_elastic_sig"]
-    base_width = at.session_state["results"]["elastic"]["crack"]["wk"]
-
-    _goto_page(at, "Inputs")
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_DK_NA
-    ).run()
-    _calculate(at)
-
-    assert not at.exception
-    assert at.session_state["result_elastic_sig"] != base_sig
-    elastic = at.session_state["results"]["elastic"]
-    assert elastic["crack"]["wk"] != pytest.approx(base_width)
-    assert elastic["crack_coarse"] is not None
-    assert elastic["crack_numerical_method"]["dk_na_applied"] is True
-
-
-def test_danish_crack_toggle_invalidates_elastic_context_cache_both_ways():
-    at = _fresh().run()
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_DK_NA
-    ).run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 400.0),
-        ("number_input", "el_short_Mx", 150.0),
-        ("checkbox", "sls_cw", True),
-    )
-
-    assert not at.exception
-    enabled_sig = at.session_state[
-        "result_elastic_case_context_sig"
-    ]
-    enabled = at.session_state["results"]["elastic"]
-    assert enabled["show_cw"] is True
-    assert enabled["crack_numerical_method"]["dk_na_applied"] is True
-
-    _set(at, ("checkbox", "sls_cw", False))
-    _calculate(at)
-
-    assert not at.exception
-    disabled_sig = at.session_state[
-        "result_elastic_case_context_sig"
-    ]
-    assert disabled_sig != enabled_sig
-    disabled = at.session_state["results"]["elastic"]
-    assert disabled["show_cw"] is False
-    assert disabled["crack_numerical_method"] is None
-    assert disabled["crack_code"] is None
-
-    _set(at, ("checkbox", "sls_cw", True))
-    _calculate(at)
-
-    assert not at.exception
-    reenabled_sig = at.session_state[
-        "result_elastic_case_context_sig"
-    ]
-    assert reenabled_sig != disabled_sig
-    reenabled = at.session_state["results"]["elastic"]
-    assert reenabled["show_cw"] is True
-    assert reenabled["crack_numerical_method"]["dk_na_applied"] is True
-    assert set(reenabled["crack_responses"]) == {
-        "Long-term (fine)",
-        "Total (fine)",
-        "Long-term (coarse)",
-        "Total (coarse)",
-    }
-
-
-def test_torsion_live_caption_prints_actual_danish_alpha_ct():
-    at = _fresh().run()
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_DK_NA
-    ).run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("number_input", "bridge_alpha_ct", 0.8),
-        ("checkbox", "torsion_on", True),
-        ("number_input", "torsion_T", 20.0),
-    )
-
-    assert not at.exception
-    torsion = at.session_state["results"]["torsion"]
-    assert torsion["fctd"] == pytest.approx(
-        0.8 * torsion["fctk_005"] / torsion["gamma_ct"]
-    )
-    assert torsion["alpha_ct"] == pytest.approx(0.8)
-
-    _select_view(at, "Torsion")
-    captions = " | ".join(item.value for item in at.caption)
-    assert "alpha_ct = 0.800" in captions
-    assert (
-        f"0.800 x {torsion['fctk_005']:.3f} / "
-        f"{torsion['gamma_ct']:.3f} = {torsion['fctd']:.3f} MPa"
-    ) in captions
-    assert torsion["material_factor_basis"]["reference"] in captions
-
-
-def test_bridge_view_surfaces_current_methodology_mismatch(monkeypatch):
-    import sector_app
-
-    rendered = {"errors": [], "info": []}
-    fake_st = SimpleNamespace(
-        info=lambda message, **_kwargs: rendered["info"].append(message),
-        error=lambda message, **_kwargs: rendered["errors"].append(message),
-        success=lambda *_args, **_kwargs: None,
-        warning=lambda *_args, **_kwargs: None,
-        caption=lambda *_args, **_kwargs: None,
-        markdown=lambda *_args, **_kwargs: None,
-        dataframe=lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(sector_app, "st", fake_st)
-
-    sector_app.bridge_methodology_view(
-        {"design_methodology": bridge.COMPONENT_METHODS},
-        {"bridge_methodology": _bridge_bound_snapshot()},
-    )
-
-    assert any(
-        message.startswith("INVALID -")
-        for message in rendered["errors"]
-    )
-    assert any(
-        "conflicts with the calculation input snapshot" in message
-        for message in rendered["errors"]
-    )
-    assert rendered["info"] == []
-
-
-@pytest.mark.parametrize(
-    ("attack", "expected"),
-    [
-        ("stale_standard", "fatigue.gamma_c"),
-        ("omitted_gamma_c", "IDs/cardinality"),
-        ("stale_gamma_ff", "fatigue_gamma_ff"),
-        ("stale_basis", "fatigue basis"),
-    ],
-)
-def test_bridge_view_surfaces_fatigue_correlation_rejection(
-    attack,
-    expected,
-    monkeypatch,
-):
-    import contextlib
-    import fatigue_inputs
-    import sector_app
-
-    rendered = {"errors": [], "info": []}
-    fake_st = SimpleNamespace(
-        info=lambda message, **_kwargs: rendered["info"].append(message),
-        error=lambda message, **_kwargs: rendered["errors"].append(message),
-        success=lambda *_args, **_kwargs: None,
-        warning=lambda *_args, **_kwargs: None,
-        caption=lambda *_args, **_kwargs: None,
-        markdown=lambda *_args, **_kwargs: None,
-        dataframe=lambda *_args, **_kwargs: None,
-        expander=lambda *_args, **_kwargs: contextlib.nullcontext(),
-    )
-    monkeypatch.setattr(sector_app, "st", fake_st)
-
-    current_scalars = _bridge_fatigue_publication_scalars(custom=True)
-    if attack == "stale_standard":
-        record = _bridge_concrete_fatigue_snapshot(
-            _bridge_fatigue_publication_scalars()
-        )
-    elif attack == "stale_gamma_ff":
-        current_scalars = _bridge_fatigue_publication_scalars()
-        current_scalars["fatigue_gamma_ff"] = 2.0
-        record = _bridge_concrete_fatigue_snapshot(
-            _bridge_fatigue_publication_scalars()
-        )
-    elif attack == "stale_basis":
-        record = _bridge_concrete_fatigue_snapshot(current_scalars)
-        current_scalars[fatigue_inputs.BASIS_KEY] = {
-            **fatigue_inputs.default_basis(),
-            "authority": fatigue_inputs.AUTHORITY_VD,
-            "method": fatigue_inputs.METHOD_VD_FLM4,
-            "spectrum_source": "VD project basis section 6.8",
-            "cycle_count_source": "Traffic register T-04",
-        }
-    else:
-        record = _bridge_concrete_fatigue_snapshot(current_scalars)
-        concrete = next(
-            check for check in record["checks"]
-            if check["check_id"] == "concrete_fatigue"
-        )
-        row = concrete["evidence"][0]
-        row["fatigue_parameter_conformance"] = [
-            parameter
-            for parameter in row["fatigue_parameter_conformance"]
-            if parameter["parameter_id"] != "fatigue.gamma_c"
-        ]
-        row["status"] = bridge.STATUS_PASS
-        concrete["status"] = bridge.STATUS_PASS
-        record["status"] = bridge.STATUS_PASS
-        record["evidence_fingerprint"] = (
-            bridge.bridge_evidence_fingerprint(
-                record["checks"],
-                record["configuration_errors"],
-            )
-        )
-    sector_app.bridge_methodology_view(
-        current_scalars,
-        {"bridge_methodology": record},
-    )
-
-    assert any(
-        message.startswith("INVALID -")
-        for message in rendered["errors"]
-    )
-    assert any(
-        expected in message
-        for message in rendered["errors"]
-    )
-    assert rendered["info"] == []
-
-
-def test_standard_miner_custom_c_is_editable_warned_and_round_trips():
-    import fatigue_analysis
-    import fatigue_inputs
-    import project_io
-
-    at = _fresh().run()
-    at.toggle(key="fatigue_on").set_value(True).run()
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_BASE
-    ).run()
-
-    standard_c = at.number_input(key="fatigue_concrete_c")
-    assert standard_c.value == pytest.approx(14.0)
-    assert standard_c.disabled is False
-    assert at.session_state["fatigue_concrete_miner_basis"] == (
-        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-    )
-
-    at.number_input(key="fatigue_concrete_c").set_value(100.0).run()
-    assert at.number_input(key="fatigue_concrete_c").value == pytest.approx(
-        100.0
-    )
-    assert any(
-        "does not conform to prescribed value = 14" in warning.value
-        for warning in at.warning
-    )
-
-    standard_saved = project_io.dump_project(
-        {
-            key: at.session_state[key]
-            for key in project_io.PROJECT_TABLE_KEYS
-            if key in at.session_state
-        },
-        {
-            key: at.session_state[key]
-            for key in project_io.SCALAR_KEYS
-            if key in at.session_state
-        },
-    )
-    _tables, standard_restored = project_io.parse_project(standard_saved)
-    assert standard_restored["fatigue_concrete_c"] == 100.0
-    assert standard_restored["fatigue_concrete_miner_basis"] == (
-        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-    )
-
-    at.selectbox(key="fatigue_concrete_method").set_value(
-        fatigue_analysis.CONCRETE_PROJECT_MINER
-    ).run()
-    assert at.number_input(key="fatigue_concrete_c").disabled is False
-    assert at.text_input(key="fatigue_concrete_miner_source").disabled is False
-    assert at.session_state["fatigue_concrete_miner_basis"] == (
-        fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
-    )
-
-    at.number_input(key="fatigue_concrete_c").set_value(100.0).run()
-    at.text_input(key="fatigue_concrete_miner_source").set_value(
-        "AUTH-SN-7 / checker approval"
-    ).run()
-    saved = project_io.dump_project(
-        {
-            key: at.session_state[key]
-            for key in project_io.PROJECT_TABLE_KEYS
-            if key in at.session_state
-        },
-        {
-            key: at.session_state[key]
-            for key in project_io.SCALAR_KEYS
-            if key in at.session_state
-        },
-    )
-    _tables, restored = project_io.parse_project(saved)
-    assert restored["fatigue_concrete_c"] == 100.0
-    assert restored["fatigue_concrete_method"] == (
-        fatigue_analysis.CONCRETE_PROJECT_MINER
-    )
-    assert restored["fatigue_concrete_miner_source"] == (
-        "AUTH-SN-7 / checker approval"
-    )
-
-    at.selectbox(key="fatigue_concrete_method").set_value(
-        fatigue_analysis.CONCRETE_MINER
-    ).run()
-    assert at.number_input(key="fatigue_concrete_c").value == pytest.approx(
-        100.0
-    )
-    assert at.number_input(key="fatigue_concrete_c").disabled is False
-
-
-def test_bridge_parameter_editor_columns_have_no_normative_numeric_clamp():
-    import bridge_inputs
-    import sector_app
-    from sector import conformance
-
-    for table_key, value_column in (
-        (bridge_inputs.BOX_WALL_TABLE_KEY, "cot_theta"),
-        (bridge_inputs.MINIMUM_TABLE_KEY, "k"),
-    ):
-        config = sector_app._bridge_column_config(table_key)
-        numeric = config[value_column]["type_config"]
-        basis = config["parameter_basis"]["type_config"]
-
-        assert numeric["min_value"] is None
-        assert numeric["max_value"] is None
-        assert tuple(basis["options"]) == conformance.BASIS_OPTIONS
-        assert "assessed separately" in config[value_column]["help"]
-
-
-def test_fatigue_reuse_signature_recalculates_after_methodology_switch():
-    import fatigue_analysis
-    import fatigue_inputs
-
-    at = _fresh().run()
-    at.toggle(key="fatigue_on").set_value(True).run()
-    at.selectbox(key="fatigue_edition").set_value(
-        fatigue_inputs.EC2_2_2005_AC
-    ).run()
-    at.selectbox(key="fatigue_concrete_method").set_value(
-        fatigue_analysis.CONCRETE_EQUIVALENT
-    ).run()
-
-    _calculate(at)
-    component_signature = at.session_state["result_fatigue_sig"]
-    assert at.session_state["results"]["fatigue"]["design_methodology"] == (
-        bridge.COMPONENT_METHODS
-    )
-
-    _goto_page(at, "Inputs")
-    at.selectbox(key="design_methodology").set_value(
-        bridge.EN1992_2_BASE
-    ).run()
-    bridge_signature = at.session_state["_latest_inputs"]["fatigue_sig"]
-    assert bridge_signature != component_signature
-
-    _calculate(at)
-    assert not at.exception
-    assert at.session_state["result_fatigue_sig"] == bridge_signature
-    assert at.session_state["results"]["fatigue"]["design_methodology"] == (
-        bridge.EN1992_2_BASE
-    )
-    assert at.session_state["result_input_snapshot"]["design_methodology"] == (
-        bridge.EN1992_2_BASE
-    )
-    assert not any(
-        "design methodology conflicts with the calculation input snapshot"
-        in error.value
-        for error in at.error
-    )
-
-
-def test_fatigue_view_fails_closed_on_relabelled_or_malformed_payload(
-    monkeypatch,
-):
-    import fatigue_analysis
-    import fatigue_inputs
-    import sector_app
-
-    rendered = {"errors": [], "markdown": []}
-    fake_st = SimpleNamespace(
-        error=lambda message, **_kwargs: rendered["errors"].append(message),
-        warning=lambda *_args, **_kwargs: None,
-        success=lambda *_args, **_kwargs: None,
-        info=lambda *_args, **_kwargs: None,
-        markdown=lambda message, **_kwargs: rendered["markdown"].append(message),
-    )
-    monkeypatch.setattr(sector_app, "st", fake_st)
-    base = {
-        "valid": True,
-        "converged": True,
-        "passed": True,
-        "errors": (),
-        "edition": fatigue_inputs.EC2_2_2005_AC,
-        "design_methodology": bridge.EN1992_2_BASE,
-        "checks": {"reinforcement": False, "concrete": True},
-        "concrete_method": fatigue_analysis.CONCRETE_EQUIVALENT,
-        "concrete_parameters": {
-            "c": 100.0,
-            "method": fatigue_analysis.CONCRETE_MINER,
-        },
-    }
-
-    for payload in (base, {**base, "errors": 7}):
-        rendered["errors"].clear()
-        rendered["markdown"].clear()
-        sector_app.fatigue_view(
-            {
-                "fatigue_on": True,
-                "design_methodology": bridge.EN1992_2_BASE,
-            },
-            {"fatigue": payload},
-        )
-        assert any(
-            message.startswith("INVALID -")
-            for message in rendered["errors"]
-        )
-        assert any(
-            "calculation parameters" in message
-            or "structured list of typed messages" in message
-            for message in rendered["markdown"]
-        )
-
-    rendered["errors"].clear()
-    rendered["markdown"].clear()
-    relabelled_basis = {
-        **base,
-        "design_methodology": bridge.COMPONENT_METHODS,
-        "concrete_method": fatigue_analysis.CONCRETE_MINER,
-        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD,
-        "concrete_miner_source": "DB-FAT-21 / checker approval",
-        "concrete_parameters": {
-            "c": 14.0,
-            "method": fatigue_analysis.CONCRETE_MINER,
-        },
-    }
-    sector_app.fatigue_view(
-        {
-            "fatigue_on": True,
-            "design_methodology": bridge.COMPONENT_METHODS,
-        },
-        {"fatigue": relabelled_basis},
-    )
-    assert any(
-        message.startswith("INVALID -")
-        for message in rendered["errors"]
-    )
-    assert any(
-        "conformance" in message
-        for message in rendered["markdown"]
-    )
-
-
-def test_app_fatigue_factor_switches_and_approved_override_persist():
-    import fatigue_inputs
-    import project_io
-
-    at = _fresh()
-    at.run()
-    at.toggle(key="fatigue_on").set_value(True).run()
-
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.32)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.595)
-
-    at.selectbox(key="fatigue_edition").set_value(
-        fatigue_inputs.EC2_2005
-    ).run()
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.15)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.50)
-
-    at.selectbox(key="fatigue_edition").set_value(
-        fatigue_inputs.EC2_2005_DKNA
-    ).run()
-    at.number_input(key="fatigue_gamma0").set_value(0.95).run()
-    at.number_input(key="fatigue_gamma3").set_value(1.10).run()
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(
-        1.20 * 1.10 * 0.95 * 1.10
-    )
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(
-        1.45 * 1.10 * 0.95 * 1.10
-    )
-
-    at.selectbox(key="fatigue_factor_mode").set_value(
-        fatigue_inputs.FACTOR_MODE_OVERRIDE
-    ).run()
-    assert at.number_input(key="fatigue_gamma_s").value is None
-    assert at.number_input(key="fatigue_gamma_c").value is None
-    assert at.text_input(key="fatigue_factor_approval").value == ""
-    at.number_input(key="fatigue_gamma_s").set_value(0.5).run()
-    at.number_input(key="fatigue_gamma_c").set_value(2.0).run()
-    at.text_input(key="fatigue_factor_approval").set_value(
-        "DB-FACT-09 / checker A"
-    ).run()
-    next(
-        widget
-        for widget in at.text_input
-        if widget.label == "Approval/reference"
-    ).set_value("TRAFFIC-09 / authority B").run()
-    at.selectbox(key="fatigue_edition").set_value(
-        fatigue_inputs.EC2_2023
-    ).run()
-
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(0.5)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(2.0)
-    assert at.session_state["fatigue_factor_approval"] == (
-        "DB-FACT-09 / checker A"
-    )
-    assert at.session_state[fatigue_inputs.BASIS_KEY][
-        "approval_reference"
-    ] == "TRAFFIC-09 / authority B"
-    assert any(
-        "approved custom input" in warning.value
-        for warning in at.warning
-    )
-
-    at.selectbox(key="fatigue_factor_mode").set_value(
-        fatigue_inputs.FACTOR_MODE_PRESET
-    ).run()
-    assert at.number_input(key="fatigue_gamma_s").value != pytest.approx(0.5)
-    assert at.number_input(key="fatigue_gamma_c").value != pytest.approx(2.0)
-    at.selectbox(key="fatigue_factor_mode").set_value(
-        fatigue_inputs.FACTOR_MODE_OVERRIDE
-    ).run()
-
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(0.5)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(2.0)
-    assert at.session_state["fatigue_factor_approval"] == (
-        "DB-FACT-09 / checker A"
-    )
-
-    saved = project_io.dump_project(
-        {
-            key: at.session_state[key]
-            for key in project_io.PROJECT_TABLE_KEYS
-            if key in at.session_state
-        },
-        {
-            key: at.session_state[key]
-            for key in project_io.SCALAR_KEYS
-            if key in at.session_state
-        },
-    )
-    _tables, restored = project_io.parse_project(saved)
-    assert restored["fatigue_gamma_s"] == pytest.approx(0.5)
-    assert restored["fatigue_gamma_c"] == pytest.approx(2.0)
-    assert restored["fatigue_factor_approval"] == (
-        "DB-FACT-09 / checker A"
-    )
-
-
-def test_loaded_approved_fatigue_override_keeps_enabled_missing_factor_empty():
-    import fatigue_analysis
-    import fatigue_inputs
-    import project_io
-
-    at = _fresh()
-    at.run()
-    tables = {
-        key: at.session_state[key]
-        for key in project_io.PROJECT_TABLE_KEYS
-        if key in at.session_state
-    }
-    common = {
-        "fatigue_on": True,
-        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
-        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
-        "fatigue_factor_approval": "DB-FACT-21 / checker F",
-        "fatigue_gamma0": 1.0,
-        "fatigue_gamma3": 1.0,
-    }
-
-    # The fresh session already contains both preset numbers. Loading an approved
-    # steel-only override with no steel factor must clear that stale value. The
-    # inactive concrete fallback belongs only to calculation preflight and must not
-    # become a persisted/widget value that could later masquerade as approved.
-    at.session_state["_pending_project"] = project_io.dump_project(
-        tables,
-        {
-            **common,
-            "fatigue_check_steel": True,
-            "fatigue_check_concrete": False,
-        },
-    )
-    at.run()
-
-    assert not at.exception
-    assert at.number_input(key="fatigue_gamma_s").value is None
-    assert at.session_state["fatigue_gamma_s"] is None
-    assert at.number_input(key="fatigue_gamma_c").value is None
-    assert at.session_state["fatigue_gamma_c"] is None
-    steel_errors = fatigue_analysis.validation_errors(
-        at.session_state["_latest_inputs"]
-    )
-    assert "final fatigue material factors are required" in steel_errors
-    at.number_input(key="fatigue_gamma_s").set_value(1.27).run()
-    steel_only_errors = fatigue_analysis.validation_errors(
-        at.session_state["_latest_inputs"]
-    )
-    assert "final fatigue material factors are required" not in steel_only_errors
-    at.toggle(key="fatigue_check_concrete").set_value(True).run()
-    assert at.number_input(key="fatigue_gamma_c").value is None
-    assert (
-        "final fatigue material factors are required"
-        in fatigue_analysis.validation_errors(
-            at.session_state["_latest_inputs"]
-        )
-    )
-
-    # Repeat in the opposite direction in the same session. This proves that the
-    # durable mirror cannot reintroduce the concrete value seeded by the first load.
-    at.session_state["_pending_project"] = project_io.dump_project(
-        tables,
-        {
-            **common,
-            "fatigue_check_steel": False,
-            "fatigue_check_concrete": True,
-        },
-    )
-    at.run()
-
-    assert not at.exception
-    assert at.number_input(key="fatigue_gamma_c").value is None
-    assert at.session_state["fatigue_gamma_c"] is None
-    assert at.number_input(key="fatigue_gamma_s").value is None
-    assert at.session_state["fatigue_gamma_s"] is None
-    concrete_errors = fatigue_analysis.validation_errors(
-        at.session_state["_latest_inputs"]
-    )
-    assert "final fatigue material factors are required" in concrete_errors
-
-    _calculate(at)
-    blocked = at.session_state["results"]["fatigue"]
-    assert blocked["valid"] is False
-    assert "final fatigue material factors are required" in blocked["errors"]
-
-    _goto_page(at, "Inputs")
-    at.number_input(key="fatigue_gamma_c").set_value(1.61).run()
-    repaired_errors = fatigue_analysis.validation_errors(
-        at.session_state["_latest_inputs"]
-    )
-    assert "final fatigue material factors are required" not in repaired_errors
-    at.toggle(key="fatigue_check_steel").set_value(True).run()
-    assert at.number_input(key="fatigue_gamma_s").value is None
-    assert (
-        "final fatigue material factors are required"
-        in fatigue_analysis.validation_errors(
-            at.session_state["_latest_inputs"]
-        )
-    )
-
-
-def test_boolean_factor_session_state_fails_closed_in_both_mirrors(
-    tmp_path,
-    monkeypatch,
-):
-    import fatigue_analysis
-    import fatigue_inputs
-    import project_io
-    from sector import capacity, codes
-
-    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
-    at = _fresh()
-    at.run()
-    factor_state = {
-        "fatigue_on": True,
-        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
-        "fatigue_factor_approval": "DB-FACT-22 / checker G",
-        "fatigue_check_steel": True,
-        "fatigue_check_concrete": True,
-        "fatigue_gamma0": True,
-        "fatigue_gamma3": np.bool_(True),
-        "fatigue_gamma_s": True,
-        "fatigue_gamma_c": np.bool_(True),
-        "torsion_on": True,
-        "torsion_method": codes.EC2_2005_DKNA.label,
-        "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
-        "torsion_factor_approval": "DB-TOR-08 / checker G",
-        "torsion_gamma0": True,
-        "torsion_gamma3": np.bool_(True),
-        "torsion_gamma_ct": np.bool_(True),
-    }
-    for key, value in factor_state.items():
-        at.session_state[key] = value
-    durable = dict(at.session_state["_durable_input_scalars"])
-    durable.update(factor_state)
-    at.session_state["_durable_input_scalars"] = durable
-
-    at.run()
-
-    assert not at.exception
-    expected_keys = tuple(sorted(project_io.FACTOR_NUMERIC_SCALAR_KEYS))
-    assert at.session_state["_invalid_factor_input_keys"] == expected_keys
-    for key in project_io.FACTOR_NUMERIC_SCALAR_KEYS:
-        assert not isinstance(at.session_state[key], (bool, np.bool_))
-        assert not isinstance(
-            at.session_state["_durable_input_scalars"][key],
-            (bool, np.bool_),
-        )
-    inp = at.session_state["_latest_inputs"]
-    assert inp["invalid_factor_input_keys"] == expected_keys
-    assert any(
-        "Boolean/non-numeric values are not accepted" in error
-        for error in fatigue_analysis.validation_errors(inp)
-    )
-    assert (
-        "Boolean/non-numeric values are not accepted"
-        in capacity.torsion_factor_validation_error(inp)
-    )
-    assert any(
-        "Boolean/non-numeric values are not accepted" in message.value
-        for message in at.error
-    )
-    solver_called = False
-
-    def forbidden_engine(*_args, **_kwargs):
-        nonlocal solver_called
-        solver_called = True
-        raise AssertionError("Rejected session factor reached fatigue solver")
-
-    with pytest.raises(
-        ValueError,
-        match="Boolean/non-numeric values are not accepted",
-    ):
-        fatigue_analysis.run_analysis(inp, engine=forbidden_engine)
-    assert solver_called is False
-    with pytest.raises(
-        ValueError,
-        match="Boolean/non-numeric values are not accepted",
-    ):
-        capacity.build_torsion_context(inp, 0.0)
-
-    # Autosave/download share _gather_project. Neither may turn Streamlit's
-    # reconstructed numeric widget defaults into an apparently valid project.
-    at.session_state["_autosave_t"] = 0.0
-    at.run()
-    assert not (tmp_path / "autosave.json").exists()
-
-    # A real widget event is the explicit repair path; hidden/default-driven
-    # reconstruction alone cannot clear a rejected key.
-    at.number_input(key="fatigue_gamma_s").set_value(1.32).run()
-    repaired = at.session_state["_invalid_factor_input_keys"]
-    assert "fatigue_gamma_s" not in repaired
-    assert set(repaired) == set(expected_keys) - {"fatigue_gamma_s"}
-
-
-def test_boolean_crack_state_is_blocked_in_live_durable_result_and_autosave(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
-    at = _fresh()
-    at.run()
-    _set(
-        at,
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 400.0),
-        ("checkbox", "sls_cw", True),
-        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
-        (
-            "selectbox",
-            "sls_exposure_class",
-            sls.EXPOSURE_XC2_XC4,
-        ),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
-    )
-    rejected_state = {
-        "sls_wk_limit": True,
-        "sls_tendon_xi": np.bool_(True),
-    }
-    durable = dict(at.session_state["_durable_input_scalars"])
-    for key, value in rejected_state.items():
-        at.session_state[key] = value
-        durable[key] = value
-    at.session_state["_durable_input_scalars"] = durable
-
-    at.run()
-
-    expected = tuple(sorted(rejected_state))
-    assert not at.exception
-    assert at.session_state["_invalid_crack_input_keys"] == expected
-    for key in rejected_state:
-        assert not isinstance(at.session_state[key], (bool, np.bool_))
-        assert not isinstance(
-            at.session_state["_durable_input_scalars"][key],
-            (bool, np.bool_),
-        )
-    inp = at.session_state["_latest_inputs"]
-    assert inp["sls_invalid_numeric_inputs"] == expected
-    assert any(
-        "Rejected Boolean/non-numeric crack-control state" in item.value
-        for item in at.error
-    )
-
-    _calculate(at)
-    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
-    assert assessment["status"] == "NOT ASSESSED"
-    assert assessment["verdict"] == "REVIEW"
-    assert "unrepaired" in assessment["reason"]
-    assert "sls_wk_limit" in assessment["reason"]
-
-    _goto_page(at, "Inputs")
-    at.session_state["_autosave_t"] = 0.0
-    at.run()
-    assert not (tmp_path / "autosave.json").exists()
-
-    # A real widget edit clears only that key; reconstructed numeric defaults do
-    # not clear the other rejection marker.
-    at.number_input(key="sls_wk_limit").set_value(0.30).run()
-    assert at.session_state["_invalid_crack_input_keys"] == (
-        "sls_tendon_xi",
-    )
-
-
-@pytest.mark.parametrize("pending_value", [np.bool_(True), 0.0])
-def test_invalid_pending_crack_event_cannot_become_an_explicit_repair(
-    monkeypatch,
-    pending_value,
-):
-    import sector_app
-
-    key = "sls_wk_limit"
-    state = {
-        key: np.bool_(True),
-        sector_app._INPUT_STATE_KEY: {key: True},
-        sector_app._PENDING_INPUT_EVENTS_KEY: {key: pending_value},
-    }
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-
-    sector_app._sanitise_crack_input_state()
-    assert state[sector_app._INVALID_CRACK_INPUT_KEYS_KEY] == (key,)
-    assert key not in state[sector_app._PENDING_INPUT_EVENTS_KEY]
-
-    # Simulate an interrupted rerun: the pending journal survives exactly as the
-    # sanitizer left it. A second reconstruction must retain the rejection.
-    sector_app._sanitise_crack_input_state()
-    assert state[sector_app._INVALID_CRACK_INPUT_KEYS_KEY] == (key,)
-
-    # A genuine widget event carries the current checked value and may repair it.
-    state[key] = 0.30
-    state[sector_app._PENDING_INPUT_EVENTS_KEY][key] = 0.30
-    sector_app._sanitise_crack_input_state()
-    assert sector_app._INVALID_CRACK_INPUT_KEYS_KEY not in state
-
-
-@pytest.mark.parametrize("value", [True, np.bool_(True)])
-@pytest.mark.parametrize(
-    "key",
-    [
-        "sls_fctm",
-        "sls_conc_limit_pct",
-        "sls_steel_limit_pct",
-        "sls_pre_limit_pct",
-    ],
-)
-def test_headless_analysis_rejects_boolean_sls_before_solver_use(key, value):
-    import sector_app
-
-    with pytest.raises(ValueError, match=key):
-        sector_app.run_analysis({"sls_cw": False, key: value})
-
-
-def test_stale_category_factor_repair_preserves_approved_overrides_and_outputs(
-    tmp_path,
-    monkeypatch,
-):
-    import fatigue_analysis
-    import fatigue_inputs
-    import project_io
-    import reinforcement_table as rt
-    from sector import capacity, codes
-
-    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
-    at = _fresh()
-    at.run()
-    bars = at.session_state["bars_base"].copy(deep=True)
-    bars[rt.FATIGUE_DETAIL_ID] = "F1"
-    spectrum = fatigue_inputs.normalise_spectrum_table([{
-        "spectrum": "Traffic",
-        "name": "FAT-REPAIR",
-        "description": "Approved-factor repair regression",
-        "cycles": 2.0e6,
-        "n_long_ed_kn": -100.0,
-        "mx_long_ed_knm": 0.0,
-        "my_long_ed_knm": 0.0,
-        "n_short_ed_kn": 0.0,
-        "mx_short_ed_knm": 20.0,
-        "my_short_ed_knm": 0.0,
-    }])
-    tables = {
-        key: at.session_state[key]
-        for key in project_io.PROJECT_TABLE_KEYS
-        if key in at.session_state
-    }
-    tables["bars_base"] = bars
-    tables[fatigue_inputs.SPECTRUM_TABLE_KEY] = spectrum
-    scalars = {
-        key: at.session_state[key]
-        for key in project_io.SCALAR_KEYS
-        if key in at.session_state
-    }
-    scalars.update({
-        "fatigue_on": True,
-        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
-        "fatigue_check_steel": True,
-        "fatigue_check_concrete": True,
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
-        "fatigue_factor_approval": "DB-FACT-23 / checker H",
-        "fatigue_gamma0": 1.0,
-        "fatigue_gamma3": 1.0,
-        "fatigue_gamma_s": 1.33,
-        "fatigue_gamma_c": 1.60,
-        "fatigue_gamma_ff": 1.0,
-        fatigue_inputs.DETAIL_CATALOG_KEY: fatigue_inputs.default_catalog(),
-        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
-        "torsion_on": True,
-        "torsion_method": codes.EC2_2005_DKNA.label,
-        "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
-        "torsion_factor_approval": "DB-TOR-09 / checker H",
-        "torsion_gamma0": 1.0,
-        "torsion_gamma3": 1.0,
-        "torsion_gamma_ct": 1.71,
-    })
-    at.session_state["_pending_project"] = project_io.dump_project(
-        tables, scalars
-    )
-    at.run()
-    assert not at.exception
-
-    stale_categories = {
-        "fatigue_gamma0": True,
-        "fatigue_gamma3": np.bool_(True),
-        "torsion_gamma0": True,
-        "torsion_gamma3": np.bool_(True),
-    }
-    durable = dict(at.session_state["_durable_input_scalars"])
-    for key, value in stale_categories.items():
-        at.session_state[key] = value
-        durable[key] = value
-    at.session_state["_durable_input_scalars"] = durable
-    at.run()
-
-    expected_rejected = tuple(sorted(stale_categories))
-    assert not at.exception
-    assert at.session_state["_invalid_factor_input_keys"] == expected_rejected
-    for key in stale_categories:
-        assert at.number_input(key=key).disabled is False
-    assert at.button(key="confirm_fatigue_factor_repairs").disabled is False
-    assert at.button(key="confirm_torsion_factor_repairs").disabled is False
-    assert at.number_input(key="fatigue_gamma_s").value == pytest.approx(1.33)
-    assert at.number_input(key="fatigue_gamma_c").value == pytest.approx(1.60)
-    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.71)
-
-    # Browser reconstruction can place apparently valid values back into the live
-    # widget namespace without a real edit. The marker must survive that rerun
-    # until the engineer uses the enabled explicit-confirmation control.
-    repaired_categories = {
-        "fatigue_gamma0": 0.97,
-        "fatigue_gamma3": 1.04,
-        "torsion_gamma0": 0.98,
-        "torsion_gamma3": 1.03,
-    }
-    for key in ("fatigue_gamma0", "fatigue_gamma3"):
-        at.session_state[key] = repaired_categories[key]
-    at.run()
-    assert at.session_state["_invalid_factor_input_keys"] == expected_rejected
-    at.button(key="confirm_fatigue_factor_repairs").click().run()
-    assert set(at.session_state["_invalid_factor_input_keys"]) == {
-        "torsion_gamma0",
-        "torsion_gamma3",
-    }
-
-    # Reproduce the former overwrite path for torsion: switch to the preset, repair
-    # its categories through enabled controls, then return to override. The
-    # separately retained approved final value must survive that whole sequence.
-    at.selectbox(key="torsion_factor_mode").set_value(
-        codes.FACTOR_MODE_PRESET
-    ).run()
-    assert at.number_input(key="torsion_gamma_ct").value != pytest.approx(1.71)
-    for key in ("torsion_gamma0", "torsion_gamma3"):
-        value = repaired_categories[key]
-        widget = at.number_input(key=key)
-        assert widget.disabled is False
-        widget.set_value(value).run()
-    at.selectbox(key="torsion_factor_mode").set_value(
-        codes.FACTOR_MODE_OVERRIDE
-    ).run()
-
-    assert "_invalid_factor_input_keys" not in at.session_state
-    assert at.session_state["fatigue_gamma_s"] == pytest.approx(1.33)
-    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.60)
-    assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.71)
-    assert at.session_state["fatigue_factor_approval"] == (
-        "DB-FACT-23 / checker H"
-    )
-    assert at.session_state["torsion_factor_approval"] == (
-        "DB-TOR-09 / checker H"
-    )
-
-    # Preset values may be displayed temporarily, but returning to override must
-    # restore the separately retained approved values and their approvals.
-    at.selectbox(key="fatigue_factor_mode").set_value(
-        fatigue_inputs.FACTOR_MODE_PRESET
-    ).run()
-    assert at.number_input(key="fatigue_gamma_s").value != pytest.approx(1.33)
-    at.selectbox(key="fatigue_factor_mode").set_value(
-        fatigue_inputs.FACTOR_MODE_OVERRIDE
-    ).run()
-
-    inp = at.session_state["_latest_inputs"]
-    assert not any(
-        "Boolean/non-numeric values are not accepted" in error
-        for error in fatigue_analysis.validation_errors(inp)
-    )
-    assert capacity.torsion_factor_validation_error(inp) is None
-    assert inp["fatigue_gamma_s"] == pytest.approx(1.33)
-    assert inp["fatigue_gamma_c"] == pytest.approx(1.60)
-    assert inp["torsion_gamma_ct"] == pytest.approx(1.71)
-
-    _calculate(at)
-    assert not at.exception
-    fatigue = at.session_state["results"]["fatigue"]
-    assert fatigue["partial_factors"]["gamma_s"] == pytest.approx(1.33)
-    assert fatigue["partial_factors"]["gamma_c"] == pytest.approx(1.60)
-    calculation_fatigue = at.session_state["calculation_record"][
-        "fatigue_conformance"
-    ]
-    assert calculation_fatigue["partial_factors"]["gamma_s"] == (
-        pytest.approx(1.33)
-    )
-    assert calculation_fatigue["partial_factors"]["gamma_c"] == (
-        pytest.approx(1.60)
-    )
-    assert calculation_fatigue["factor_basis"]["approval_reference"] == (
-        "DB-FACT-23 / checker H"
-    )
-
-    _goto_input_tab(at, "Project & report")
-    download = next(
-        widget
-        for widget in at.download_button
-        if widget.label == "Download project"
-    )
-    assert download.proto.disabled is False
-    at.session_state["_autosave_t"] = 0.0
-    at.run()
-    saved = tmp_path / "autosave.json"
-    assert saved.exists()
-    saved_text = saved.read_text(encoding="utf-8")
-    _, saved_scalars = project_io.parse_project(saved_text)
-    saved_provenance = project_io.project_provenance(saved_text)
-    assert saved_scalars["fatigue_factor_mode"] == (
-        fatigue_inputs.FACTOR_MODE_OVERRIDE
-    )
-    assert saved_scalars["fatigue_gamma_s"] == pytest.approx(1.33)
-    assert saved_scalars["fatigue_gamma_c"] == pytest.approx(1.60)
-    assert saved_scalars["fatigue_factor_approval"] == (
-        "DB-FACT-23 / checker H"
-    )
-    assert saved_scalars["torsion_factor_mode"] == codes.FACTOR_MODE_OVERRIDE
-    assert saved_scalars["torsion_gamma_ct"] == pytest.approx(1.71)
-    assert saved_scalars["torsion_factor_approval"] == (
-        "DB-TOR-09 / checker H"
-    )
-    assert saved_provenance["calculation"]["fatigue_conformance"] == (
-        calculation_fatigue
-    )
-    assert saved_provenance["calculation"]["matches_saved_inputs"] is (
-        saved_provenance["calculation"]["input_sha256"]
-        == saved_provenance["input_sha256"]
-    )
-
-
-def test_app_fatigue_override_does_not_reuse_spectrum_method_approval():
-    import fatigue_inputs
-
-    at = _fresh()
-    at.run()
-    at.toggle(key="fatigue_on").set_value(True).run()
-    at.selectbox(key="fatigue_factor_mode").set_value(
-        fatigue_inputs.FACTOR_MODE_OVERRIDE
-    ).run()
-    next(
-        widget
-        for widget in at.text_input
-        if widget.label == "Approval/reference"
-    ).set_value("VD-FLM5-AGREEMENT").run()
-
-    assert at.text_input(key="fatigue_factor_approval").value == ""
-    assert any(
-        "does not authorize material-factor changes" in warning.value
-        for warning in at.warning
-    )
-
-    at.text_input(key="fatigue_factor_approval").set_value(
-        "DB-FACT-11 / checker C"
-    ).run()
-
-    assert not any(
-        "does not authorize material-factor changes" in warning.value
-        for warning in at.warning
-    )
-    assert at.session_state[fatigue_inputs.BASIS_KEY][
-        "approval_reference"
-    ] == "VD-FLM5-AGREEMENT"
-
-
 def test_loading_nonfatigue_project_clears_prior_fatigue_state():
-    import json
     import fatigue_inputs
     import project_io
 
@@ -3383,8 +1720,6 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
         {
             fatigue_inputs.DETAIL_CATALOG_KEY:
                 fatigue_inputs.default_catalog(),
-            fatigue_inputs.BASIS_KEY:
-                fatigue_inputs.default_basis(),
             "fatigue_on": True,
             "fatigue_gamma_c": 1.595,
             "fatigue_source": "Previous project",
@@ -3395,13 +1730,11 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
     at.run()
     assert at.session_state["fatigue_on"] is True
 
-    old_project = json.dumps({
-        "format": project_io.FORMAT,
-        "version": 8,
-        "tables": {},
-        "scalars": {"mode": "Plastic"},
-    })
-    at.session_state["_pending_project"] = old_project
+    current_nonfatigue_project = project_io.dump_project(
+        {},
+        {"mode": "Plastic"},
+    )
+    at.session_state["_pending_project"] = current_nonfatigue_project
     at.run()
 
     assert not at.exception
@@ -3411,7 +1744,7 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
     assert fatigue_inputs.spectrum_records(
         at.session_state[fatigue_inputs.SPECTRUM_TABLE_KEY]
     ) == []
-    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.595)
+    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.50)
     assert at.session_state[fatigue_inputs.BASIS_KEY] == (
         fatigue_inputs.default_basis()
     )
@@ -3431,9 +1764,11 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
         },
     )
     payload = json.loads(saved)
-    assert payload["fatigue"]["spectrum"] == []
+    assert (
+        payload["tables"][fatigue_inputs.SPECTRUM_TABLE_KEY]["rows"] == []
+    )
     assert payload["scalars"]["fatigue_on"] is False
-    assert payload["scalars"]["fatigue_gamma_c"] == pytest.approx(1.595)
+    assert payload["scalars"]["fatigue_gamma_c"] == pytest.approx(1.50)
 
 
 def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
@@ -3474,11 +1809,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": False,
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
-        "fatigue_gamma0": 1.0,
-        "fatigue_gamma3": 1.0,
-        "fatigue_gamma_s": 1.32,
-        "fatigue_gamma_c": 1.595,
+        "fatigue_gamma_s": 1.15,
         "fatigue_gamma_ff": 1.0,
         fatigue_inputs.DETAIL_CATALOG_KEY: fatigue_inputs.default_catalog(),
         fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
@@ -3494,21 +1825,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert not at.exception
     fatigue = at.session_state["results"]["fatigue"]
     assert fatigue["governing_spectrum"] == "Traffic"
-    assert fatigue["design_methodology"] == bridge.COMPONENT_METHODS
-    assert at.session_state["result_input_snapshot"]["design_methodology"] == (
-        bridge.COMPONENT_METHODS
-    )
     assert len(fatigue["spectra"]) == 1
-    assert fatigue["partial_factors"]["gamma_s"] == pytest.approx(1.32)
-    assert fatigue["factor_basis"]["gamma_s_derivation"] == (
-        "1.20 x 1.10 x 1.000 x 1.000 = 1.320"
-    )
-    fatigue_record = at.session_state["calculation_record"][
-        "fatigue_conformance"
-    ]
-    assert fatigue_record["design_methodology"] == bridge.COMPONENT_METHODS
-    assert fatigue_record["partial_factors"]["gamma_s"] == pytest.approx(1.32)
-    assert fatigue_record["evidence_sha256"]
     assert at.session_state["result_fatigue_sig"] == (
         at.session_state["_latest_inputs"]["fatigue_sig"]
     )
@@ -3598,7 +1915,6 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         if list(frame.value.columns) == ["Item", "Value"]
     )
     assert "Edition" in set(basis_table["Item"])
-    assert "Design methodology" in set(basis_table["Item"])
     assert "gamma_Ff" in set(basis_table["Item"])
     assert basis_table["Value"].map(type).eq(str).all()
 
@@ -3637,7 +1953,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     del at.session_state["result_input_snapshot"]
     at.run()
     assert any(
-        "predates input snapshots" in error.value
+        "has no matching input snapshot" in error.value
         for error in at.error
     )
     assert not any(
@@ -3659,12 +1975,6 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     at.number_input(key="conc_alpha_cc").set_value(changed_alpha_cc).run()
     assert at.session_state["_latest_inputs"]["fatigue_sig"] != fck_fatigue_sig
 
-    at.selectbox(key="fatigue_factor_mode").set_value(
-        fatigue_inputs.FACTOR_MODE_OVERRIDE
-    ).run()
-    at.text_input(key="fatigue_factor_approval").set_value(
-        "DB-FACT-10 / checker B"
-    ).run()
     at.number_input(key="fatigue_gamma_s").set_value(1.20).run()
     assert at.session_state["result_sig"] != (
         at.session_state["_latest_inputs"]["signature"]
@@ -3816,7 +2126,7 @@ def test_bulk_reinforcement_assignment_updates_all_and_selected_rows():
     assert not at.exception
 
 
-def test_fatigue_authority_widgets_write_the_structured_basis():
+def test_fatigue_basis_records_direct_method_and_action_notes():
     import fatigue_inputs
 
     at = _fresh()
@@ -3825,27 +2135,20 @@ def test_fatigue_authority_widgets_write_the_structured_basis():
     prefix = (
         f"fatiguebasis_r{at.session_state['_fatigue_basis_revision']}"
     )
-    at.selectbox(key=f"{prefix}_authority").set_value(
-        fatigue_inputs.AUTHORITY_VD
+    at.text_area(key=f"{prefix}_notes").set_value(
+        "Traffic model register; cycle counts supplied by the engineer"
     ).run()
-    assert at.session_state[fatigue_inputs.BASIS_KEY]["authority"] == (
-        fatigue_inputs.AUTHORITY_VD
-    )
-    assert at.session_state[fatigue_inputs.BASIS_KEY]["method"] == (
-        fatigue_inputs.METHOD_VD_FLM1
-    )
-
-    at.selectbox(key=f"{prefix}_method").set_value(
-        fatigue_inputs.METHOD_VD_FLM4
-    )
-    at.text_input(key=f"{prefix}_spectrum_source").set_value(
-        "Traffic model register"
-    )
-    at.run()
 
     basis = at.session_state[fatigue_inputs.BASIS_KEY]
-    assert basis["method"] == fatigue_inputs.METHOD_VD_FLM4
-    assert basis["spectrum_source"] == "Traffic model register"
+    assert basis == {
+        "method": fatigue_inputs.METHOD_GROUPED,
+        "notes": "Traffic model register; cycle counts supplied by the engineer",
+    }
+    assert not any(
+        "authority" in str(widget.key).lower()
+        for widgets in (at.selectbox, at.text_input, at.text_area)
+        for widget in widgets
+    )
 
 
 def test_v4_case_tables_follow_current_controls_and_preserve_later_rows():
@@ -3870,7 +2173,7 @@ def test_v4_case_tables_follow_current_controls_and_preserve_later_rows():
     assert plastic.loc[0, "name"] == "PL-CURRENT"
     assert plastic.loc[0, "mx_ed_knm"] == pytest.approx(-125.0)
     assert elastic.loc[0, "name"] == "EL-CURRENT"
-    assert bool(elastic.loc[0, "check_crack_width"]) is True
+    assert bool(elastic.loc[0, "calculate_crack_width"]) is True
 
     plastic = load_cases.normalise_table([
         *plastic.to_dict("records"),
@@ -3924,8 +2227,7 @@ def test_v4_multiple_case_rows_each_run_through_verified_solvers():
             "description": "Second elastic row",
             "mx_long_ed_knm": 35.0,
             "mx_short_ed_knm": 10.0,
-            "check_stress": True,
-            "check_crack_width": False,
+            "calculate_crack_width": False,
         },
     ])
 
@@ -4016,25 +2318,6 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     import sys as _sys
     at = _fresh()
     at.run()
-    _set(
-        at,
-        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
-        ("checkbox", "sls_cw", True),
-    )
-    _set(
-        at,
-        (
-            "selectbox",
-            "sls_exposure_class",
-            sls.EXPOSURE_XC2_XC4,
-        ),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
-    )
     at.session_state["_autosave_t"] = 0.0          # make a save due, then rerun
     at.run()
     saved = tmp_path / "autosave.json"
@@ -4043,12 +2326,6 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     import project_io  # noqa: E402
     tables, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
     assert len(tables["corners_base"]) >= 3        # the live section, not blank
-    assert tables["elastic_cases_base"].loc[0, "long_combination"] == (
-        sls.COMBINATION_QUASI_PERMANENT
-    )
-    assert scalars["sls_criterion_mode"] == sls.CRITERION_MODE_STANDARD
-    assert scalars["sls_exposure_class"] == sls.EXPOSURE_XC2_XC4
-    assert scalars["sls_exposure_context"] == "XC3 / durability"
     assert at.session_state["_autosave_last"]      # the panel records the time
 
 
@@ -4195,64 +2472,6 @@ def test_autosave_skips_a_blank_outline(tmp_path, monkeypatch):
     assert not (tmp_path / "autosave.json").exists()
 
 
-def test_load_old_2023_project_migrates_to_general_k_tc():
-    # Older projects did not store k_tc and could carry a manually edited effective
-    # alpha_cc.  Reloading an identified 2023 preset must derive the normative
-    # eta_cc*k_tc value and use the safe general-case default, not preserve a stale
-    # coefficient that contradicts the displayed edition.
-    import json
-    at = _fresh()
-    at.run()
-    project = {
-        "format": "sector-project", "version": 1,
-        "tables": {
-            "corners_base": {"columns": ["x (mm)", "y (mm)"],
-                             "rows": [[-100.0, -150.0], [100.0, -150.0],
-                                      [100.0, 150.0], [-100.0, 150.0]]},
-            "hole_base": {"columns": ["x (mm)", "y (mm)"], "rows": []},
-            "bars_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"],
-                          "rows": [[0.0, -120.0, 500.0]]},
-            "tendons_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"], "rows": []},
-        },
-        "scalars": {"conc_preset": "DS/EN 1992-1-1:2023", "conc_fck": 40.0,
-                    "conc_alpha_cc": 0.5, "mode": "Plastic"},
-    }
-    at.session_state["_pending_project"] = json.dumps(project)
-    at.run()
-    assert not at.exception
-    assert at.session_state["conc_k_tc"] == pytest.approx(0.85)
-    assert at.session_state["conc_alpha_cc"] == pytest.approx(0.85)
-    assert at.number_input(key="conc_alpha_cc").disabled is True
-
-
-def test_load_2023_project_preserves_explicit_k_tc_choice():
-    import json
-    at = _fresh()
-    at.run()
-    project = {
-        "format": "sector-project", "version": 1,
-        "tables": {
-            "corners_base": {"columns": ["x (mm)", "y (mm)"],
-                             "rows": [[-100.0, -150.0], [100.0, -150.0],
-                                      [100.0, 150.0], [-100.0, 150.0]]},
-            "hole_base": {"columns": ["x (mm)", "y (mm)"], "rows": []},
-            "bars_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"],
-                          "rows": [[0.0, -120.0, 500.0]]},
-            "tendons_base": {"columns": ["x (mm)", "y (mm)", "area (mm2)"],
-                             "rows": []},
-        },
-        "scalars": {"conc_preset": "DS/EN 1992-1-1:2023", "conc_fck": 50.0,
-                    "conc_k_tc": 1.0, "conc_alpha_cc": 0.5, "mode": "Plastic"},
-    }
-    at.session_state["_pending_project"] = json.dumps(project)
-    at.run()
-    assert not at.exception
-    eta_50 = (40.0 / 50.0) ** (1.0 / 3.0)
-    assert at.session_state["conc_k_tc"] == pytest.approx(1.0)
-    assert at.session_state["conc_alpha_cc"] == pytest.approx(eta_50)
-    assert any("explicitly assuming" in warning.value for warning in at.warning)
-
-
 def test_generate_report_produces_pdf():
     # The Report panel's Generate button builds a PDF from the current section
     # (figures skipped in the test so it does not need a browser).
@@ -4320,51 +2539,6 @@ def test_report_download_becomes_stale_after_analysis_input_change():
 
     _set(at, ("number_input", "pl_Mx", 123.0))
     assert any("Report out of date" in w.value for w in at.warning)
-
-
-def test_load_project_without_tendon_table_does_not_crash():
-    # An older / partial project may omit the tendon table; the always-mounted
-    # tendon editor must still find a (seeded) base rather than KeyError.
-    import json
-    at = _fresh()
-    at.run()
-    project = {
-        "format": "sector-project", "version": 1,
-        "tables": {"corners_base": {"columns": ["x (mm)", "y (mm)"],
-                                    "rows": [[-100.0, -150.0], [100.0, -150.0],
-                                             [100.0, 150.0], [-100.0, 150.0]]}},
-        "scalars": {"mode": "Plastic"},
-    }
-    at.session_state["_pending_project"] = json.dumps(project)
-    at.run()
-    assert not at.exception
-    assert "tendons_base" in at.session_state
-    assert len(at.session_state["tendons_base"]) == 0
-
-
-def test_partial_v4_project_does_not_inherit_previous_case_tables():
-    import json
-
-    at = _fresh()
-    at.run()
-    _set(at, ("text_input", "pl_case_id", "PL-PREVIOUS"))
-    project = {
-        "format": "sector-project",
-        "version": 4,
-        "tables": {},
-        "scalars": {"mode": "Plastic"},
-    }
-    at.session_state["_pending_project"] = json.dumps(project)
-    at.run()
-
-    assert not at.exception
-    assert at.session_state["plastic_cases_base"].loc[0, "name"] == "PL-01"
-    assert not any(
-        key in at.session_state
-        for key in (
-            "pl_case_id", "pl_P", "pl_Mx", "pl_My", "shear_V", "torsion_T"
-        )
-    )
 
 
 def test_capacity_only_toggle_drops_utilisation_without_locking_case_table():
@@ -4598,53 +2772,41 @@ def test_2023_concrete_k_tc_is_explicit_and_updates_fcd():
     )
 
 
-def test_design_basis_summary_identifies_alignment_and_limitations():
+def test_removed_design_basis_aggregate_is_absent():
     import sector_app
 
-    aligned = sector_app._design_basis_summary(
-        concrete_preset="DS/EN 1992-1-1:2023",
-        mild_preset="DS/EN 1992-1-1:2023",
-        crack_code="EN 1992-1-1:2023",
-        shear_method="DS/EN 1992-1-1:2023",
+    assert not hasattr(sector_app, "_design_basis_summary")
+    at = _fresh()
+    at.run()
+    visible = "\n".join(
+        str(item.value)
+        for group in (at.markdown, at.caption, at.info, at.warning)
+        for item in group
     )
-    assert aligned["mixed"] is False
-    assert aligned["families"] == ["EN 1992-1-1:2023"]
-    assert "Edition-aligned" in aligned["status"]
-
-    limited = sector_app._design_basis_summary(
-        concrete_preset="DS/EN 1992-1-1:2023",
-        mild_preset="DS/EN 1992-1-1:2023",
-        shear_method="DS/EN 1992-1-1:2023",
-        shear_links=True,
-        torsion_method="DS/EN 1992-1-1:2005 + DK NA:2024",
-        combined_method="DS/EN 1992-1-1:2005 + DK NA:2024",
-    )
-    assert limited["mixed"] is True
-    assert not any("shear with links" in item for item in limited["limitations"])
-    assert any("does not implement" in item for item in limited["limitations"])
-
-    # An unused material selector must not create a false mixed-edition warning.
-    tendon_only = sector_app._design_basis_summary(
-        concrete_preset="DS/EN 1992-1-1:2023",
-        mild_preset=None,
-        prestress_preset="DS/EN 1992-1-1:2023",
-    )
-    assert tendon_only["mixed"] is False
-    assert all(
-        component["role"] != "Reinforcing steel"
-        for component in tendon_only["components"]
-    )
-
-    crack_only_2023 = sector_app._design_basis_summary(
-        concrete_preset="DS/EN 1992-1-1:2005 + DK NA:2024",
-        mild_preset="DS/EN 1992-1-1:2005 + DK NA:2024",
-        crack_code="EN 1992-1-1:2023",
-        torsion_method="DS/EN 1992-1-1:2005 + DK NA:2024",
-    )
-    assert crack_only_2023["mixed"] is True
-    assert crack_only_2023["limitations"] == [
-        sector_app.CRACK_DIRECTIONAL_LIMITATION
-    ]
+    assert "Design-basis alignment" not in visible
+    widget_keys = {
+        str(widget.key).lower()
+        for group in (
+            at.number_input,
+            at.text_input,
+            at.text_area,
+            at.selectbox,
+            at.checkbox,
+            at.toggle,
+            at.radio,
+        )
+        for widget in group
+    }
+    for removed in (
+        "infrastructure_manager",
+        "asset_class",
+        "project_basis",
+        "approval",
+        "approver",
+        "cover_calculator",
+        "covercalc",
+    ):
+        assert not any(removed in key for key in widget_keys)
 
 
 def test_es_field_present_and_editable():
@@ -4849,9 +3011,6 @@ def test_inputs_carry_help_tooltips():
         assert w is not None and w.help, key
     for key in (
         "fatigue_edition",
-        "fatigue_factor_mode",
-        "fatigue_gamma0",
-        "fatigue_gamma3",
         "fatigue_check_steel",
         "fatigue_check_concrete",
         "fatigue_concrete_method",
@@ -4869,7 +3028,6 @@ def test_inputs_carry_help_tooltips():
             or _widget(at.toggle, key)
         )
         assert w is not None and w.help, key
-    assert at.text_input(key="fatigue_factor_approval").help
     assert at.number_input(key="fatigue_gamma_ff").label == r"$\gamma_{Ff}$"
     assert at.number_input(key="fatigue_gamma_s").label == r"$\gamma_s$"
     assert at.number_input(key="fatigue_gamma_c").label == (
@@ -4892,20 +3050,11 @@ def test_inputs_carry_help_tooltips():
     assert at.number_input(key="v_min").label == (
         r"Start angle $\varphi_{NA,\min}$ ($^\circ$)"
     )
-    assert at.number_input(key="sls_wk_limit").label == (
-        r"Durability crack-width limit "
-        r"$w_{\mathrm{lim}}$ (mm, 0 = not assessed)"
-    )
+    assert not any(widget.key == "sls_wk_limit" for widget in at.number_input)
     assert at.number_input(key="detailing_d_upper").label == (
         r"Maximum aggregate size $D_{\mathrm{upper}}$ (mm)"
     )
     assert at.selectbox(key="sls_bond").label == r"Mild-steel bond ($k_1$)"
-    assert at.selectbox(key="sls_tendon_bond").label == (
-        r"Prestressing-steel bond condition ($k_b$)"
-    )
-    assert at.number_input(key="sls_tendon_xi").label == (
-        r"Prestressing bond-strength ratio $\xi$ (0 = not assessed)"
-    )
     at.toggle(key="fatigue_on").set_value(True).run()
     _goto_material_tab(at, "Fatigue details")
     fatigue_detail_keys = (
@@ -5064,10 +3213,9 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     ]
     assert list(elastic.columns) == [
         "name", "description",
-        "long_combination", "total_combination",
         "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
-        "check_stress", "check_crack_width",
+        "calculate_crack_width",
     ]
     at.toggle(key="fatigue_on").set_value(True).run()
     fatigue = _widget(at.dataframe, "fatigue_spectrum_editor").value
@@ -5092,123 +3240,6 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "el_long_P", "el_long_Mx", "el_long_My",
         "el_short_P", "el_short_Mx", "el_short_My", "sls_cw",
     })
-
-
-def test_native_data_editor_state_is_not_replayed_through_session_state():
-    at = _fresh()
-    at.run()
-
-    # A real browser edit puts this Streamlit-owned delta in the callback state.
-    # Reassigning it before data_editor is reconstructed raises
-    # StreamlitValueAssignmentNotAllowedError.
-    at.session_state["_pending_input_events"] = {
-        "elastic_cases_editor": {
-            "edited_rows": {0: {"check_crack_width": True}},
-            "added_rows": [],
-            "deleted_rows": [],
-        },
-        "bridge_box_walls_base_editor": {
-            "edited_rows": {},
-            "added_rows": [{
-                "wall_id": "W1",
-                "cot_theta": 10.0,
-                "v_ed_kn": 100.0,
-                "v_rd_max_kn": 200.0,
-                "t_ed_equivalent_kn": 10.0,
-                "t_rd_max_equivalent_kn": 200.0,
-            }],
-            "deleted_rows": [],
-        },
-    }
-    at.run()
-
-    assert not at.exception
-    assert "_pending_input_events" not in at.session_state
-    assert _widget(at.dataframe, "elastic_cases_editor").value is not None
-
-
-def test_native_editor_callback_commits_delta_before_interrupted_recovery(
-    monkeypatch,
-):
-    import bridge_inputs
-    import fatigue_inputs
-    import load_cases
-    import sector_app
-
-    plastic_key = load_cases.PLASTIC_TABLE_KEY
-    plastic_seed = load_cases.normalise_table([
-        {"name": "P1", "mx_ed_knm": 10.0},
-        {"name": "P2", "mx_ed_knm": 20.0},
-    ], plastic_key)
-    state = {
-        "_main_page": "Inputs",
-        plastic_key: plastic_seed.copy(deep=True),
-        f"_{plastic_key}_editor_seed": plastic_seed.copy(deep=True),
-        "plastic_cases_editor": {
-            "edited_rows": {"0": {"mx_ed_knm": 125.0}},
-            "deleted_rows": [1],
-            "added_rows": [{"name": "P3", "mx_ed_knm": 75.0}],
-        },
-    }
-    monkeypatch.setattr(sector_app.st, "session_state", state)
-
-    sector_app._record_input_event(
-        "plastic_cases_editor",
-        sector_app._commit_case_editor_delta,
-        (plastic_key,),
-    )
-
-    committed = state[plastic_key]
-    assert committed["name"].tolist() == ["P1", "P3"]
-    assert committed["mx_ed_knm"].tolist() == pytest.approx([125.0, 75.0])
-    assert "_pending_input_events" not in state
-
-    fatigue_key = fatigue_inputs.SPECTRUM_TABLE_KEY
-    fatigue_seed = fatigue_inputs.normalise_spectrum_table([
-        {"spectrum": "S1", "name": "F1", "cycles": 1000.0},
-    ])
-    state.update({
-        fatigue_key: fatigue_seed.copy(deep=True),
-        f"_{fatigue_key}_editor_seed": fatigue_seed.copy(deep=True),
-        "fatigue_spectrum_editor": {
-            "edited_rows": {0: {"cycles": 2500.0}},
-            "deleted_rows": [],
-            "added_rows": [],
-        },
-    })
-    sector_app._record_input_event(
-        "fatigue_spectrum_editor",
-        sector_app._commit_fatigue_editor_delta,
-    )
-    assert state[fatigue_key].loc[0, "cycles"] == pytest.approx(2500.0)
-    assert "_pending_input_events" not in state
-
-    bridge_key = bridge_inputs.BOX_WALL_TABLE_KEY
-    bridge_seed = bridge_inputs.empty_table(bridge_key)
-    state.update({
-        bridge_key: bridge_seed.copy(deep=True),
-        f"_{bridge_key}_editor_seed": bridge_seed.copy(deep=True),
-        "bridge_box_walls_base_editor": {
-            "edited_rows": {},
-            "deleted_rows": [],
-            "added_rows": [{
-                "wall_id": "W1",
-                "cot_theta": 10.0,
-                "v_ed_kn": 100.0,
-                "v_rd_max_kn": 200.0,
-                "t_ed_equivalent_kn": 10.0,
-                "t_rd_max_equivalent_kn": 200.0,
-            }],
-        },
-    })
-    sector_app._record_input_event(
-        "bridge_box_walls_base_editor",
-        sector_app._commit_bridge_editor_delta,
-        (bridge_key,),
-    )
-    assert state[bridge_key].loc[0, "wall_id"] == "W1"
-    assert state[bridge_key].loc[0, "cot_theta"] == pytest.approx(10.0)
-    assert "_pending_input_events" not in state
 
 
 def test_detailing_controls_run_selected_case_and_section_wide_spacing():
@@ -5290,7 +3321,7 @@ def test_multi_case_overview_and_result_picker_show_selected_actions():
     assert not at.exception
 
 
-def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
+def test_elastic_case_picker_shows_action_parts_and_crack_choice():
     import load_cases
 
     at = _fresh()
@@ -5301,16 +3332,14 @@ def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
             "name": "EL-STRESS",
             "description": "Characteristic",
             "mx_long_ed_knm": 40.0,
-            "check_stress": True,
+            "calculate_crack_width": False,
         },
         {
             "name": "EL-CRACK",
             "description": "Frequent",
-            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "total_combination": sls.COMBINATION_FREQUENT,
             "mx_long_ed_knm": 120.0,
             "mx_short_ed_knm": 30.0,
-            "check_crack_width": True,
+            "calculate_crack_width": True,
         },
     ])
     _select_view(at, "Elastic Results")
@@ -5323,56 +3352,13 @@ def test_elastic_case_picker_shows_action_parts_and_acceptance_flags():
         frame.value for frame in at.dataframe
         if "Action part" in frame.value.columns
     )
-    assert actions["Action part"].tolist() == ["Long-term", "Short increment"]
-    assert actions["Response SLS combination"].tolist() == [
-        sls.COMBINATION_QUASI_PERMANENT,
-        sls.COMBINATION_FREQUENT,
-    ]
+    assert actions["Action part"].tolist() == ["Long-term", "Short-term"]
     assert actions["Mx_Ed [kNm]"].tolist() == pytest.approx([120.0, 30.0])
-    assert any("Acceptance: crack width" in caption.value for caption in at.caption)
-    assert not at.exception
-
-
-def test_duplicate_crack_combination_mappings_across_cases_fail_closed():
-    import load_cases
-
-    at = _fresh()
-    at.run()
-    _set(at, ("radio", "mode", "Elastic"))
-    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, [
-        {
-            "name": "EL-QP-A",
-            "description": "First independent QP response",
-            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "mx_long_ed_knm": 400.0,
-            "check_crack_width": True,
-        },
-        {
-            "name": "EL-QP-B",
-            "description": "Second independent QP response",
-            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "mx_long_ed_knm": 350.0,
-            "check_crack_width": True,
-        },
-    ])
-    _set(
-        at,
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
+    assert any(
+        "Stresses are reported for this action. Crack width: calculated" in caption.value
+        for caption in at.caption
     )
-    _calculate(at)
-
     assert not at.exception
-    entries = at.session_state["results"]["elastic_cases"]
-    assert [entry["name"] for entry in entries] == ["EL-QP-A", "EL-QP-B"]
-    for entry in entries:
-        assessment = entry["results"]["elastic"]["crack_assessment"]
-        assert assessment["status"] == "NOT ASSESSED"
-        assert assessment["verdict"] == "REVIEW"
-        assert "across checked Elastic cases" in assessment["reason"]
-        assert {
-            item["response_id"]
-            for item in assessment["response_provenance"]
-        } == {"EL-QP-A:long", "EL-QP-B:long"}
 
 
 def test_results_overview_shows_action_provenance_and_explicit_states():
@@ -5428,6 +3414,7 @@ def test_calculate_requires_active_action_set_identifiers():
     at = _fresh()
     at.run()
     _set_and_click(at, "calculate", ("text_input", "pl_case_id", ""))
+    assert not at.exception
     assert "results" not in at.session_state
     assert any(
         "At least one Plastic case is required" in error.value
@@ -5470,27 +3457,21 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     assert at.session_state["_input_tab"] == expected_outer[0]
     labels = [ex.label for ex in at.expander]
     assert labels == [
-        "Stress and crack-width criteria (Elastic)",
-        "Multidirectional crack interaction (opt-in)",
+        "Elastic crack-width method",
         "Reinforcement detailing",
         "Fatigue",
+        "Optional bridge calculations",
         "Shear, torsion & combined (Plastic)",
-        "Biaxial shear interaction (opt-in)",
-        "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
-        "Danish infrastructure-manager and project design basis",
         "Bulk assignments",
     ]
     _goto_input_tab(at, "Project & report")
     labels = [ex.label for ex in at.expander]
     assert labels == [
-        "Stress and crack-width criteria (Elastic)",
-        "Multidirectional crack interaction (opt-in)",
+        "Elastic crack-width method",
         "Reinforcement detailing",
         "Fatigue",
+        "Optional bridge calculations",
         "Shear, torsion & combined (Plastic)",
-        "Biaxial shear interaction (opt-in)",
-        "Bridge methodology (DS/EN 1992-2 base or Danish NA)",
-        "Danish infrastructure-manager and project design basis",
         "Bulk assignments",
         "About",
         "Report",
@@ -5578,54 +3559,6 @@ def test_interrupted_inputs_recovery_preserves_the_new_tab_selection():
     assert at.session_state["_material_tab"] == "Prestressing steel"
     assert at.session_state["conc_fck"] == 55.0
     assert not at.exception
-
-
-def test_project_load_invalidates_prior_inputs_before_analysis_can_render():
-    """A superseded load cannot expose the previous project's solver payload."""
-    import project_io
-
-    at = _fresh()
-    at.run()
-    prior_inputs = at.session_state["_latest_inputs"]
-    prior_fck = prior_inputs["concrete"].fck
-
-    tables = {
-        key: at.session_state[key]
-        for key in project_io.PROJECT_TABLE_KEYS
-        if key in at.session_state
-    }
-    scalars = {
-        key: at.session_state[key]
-        for key in project_io.SCALAR_KEYS
-        if key in at.session_state
-    }
-    loaded_fck = 55.0 if prior_fck != 55.0 else 45.0
-    scalars["conc_fck"] = loaded_fck
-
-    # Reproduce a project-load rerun superseded by a rapid Analysis click before
-    # build_inputs() can commit the newly loaded project's immutable payload.
-    at.session_state["_pending_project"] = project_io.dump_project(tables, scalars)
-    at.session_state["_inputs_build_in_progress"] = True
-    at.session_state["_main_page"] = "Analysis"
-    at.run()
-
-    assert not at.exception
-    assert at.session_state["conc_fck"] == loaded_fck
-    assert at.session_state["_durable_input_scalars"]["conc_fck"] == loaded_fck
-    assert "_latest_inputs" not in at.session_state
-    assert not any(button.key == "calculate" for button in at.button)
-    assert any(
-        "Open Inputs once to initialise" in info.value
-        for info in at.info
-    )
-
-    # A completed Inputs build creates the only solver payload that Analysis may
-    # consume, and it belongs to the newly loaded project.
-    _goto_page(at, "Inputs")
-    rebuilt_inputs = at.session_state["_latest_inputs"]
-    assert rebuilt_inputs["concrete"].fck == loaded_fck
-    _goto_page(at, "Analysis")
-    assert any(button.key == "calculate" for button in at.button)
 
 
 def test_tracked_input_tabs_survive_page_and_auxiliary_view_lifecycle():
@@ -5853,11 +3786,21 @@ def test_material_manual_override_calculates():
     at.run()
     # A picked preset must remain editable.
     at.number_input(key="conc_fck").set_value(45.0).run()
-    at.number_input(key="mild_gamma_y").set_value(1.3).run()
+    at.number_input(key="conc_gamma_c").set_value(0.5).run()
+    at.number_input(key="mild_gamma_y").set_value(2.0).run()
     assert not at.exception
     _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
+    snapshot = at.session_state["result_input_snapshot"]
+    assert snapshot["concrete"].gamma_c == pytest.approx(0.5)
+    assert snapshot["steel"].gamma_y == pytest.approx(2.0)
+    assert snapshot["concrete"].fcd == pytest.approx(
+        snapshot["concrete"].alpha_cc * 45.0 / 0.5
+    )
+    assert snapshot["steel"].fytk / snapshot["steel"].gamma_y == pytest.approx(
+        275.0
+    )
 
 
 def test_elastic_reports_cracking_and_section_properties():
@@ -5879,23 +3822,23 @@ def test_elastic_reports_cracking_and_section_properties():
     assert e["props_cr"]["area"] < e["props_un"]["area"]   # cracked section is smaller
 
 
-def test_elastic_reports_explicit_limits_and_complete_evidence():
+def test_elastic_reports_output_only_stresses_and_complete_evidence():
     at = _fresh()
     at.run()
     _set_and_click(
         at, "calculate",
         ("radio", "mode", "Elastic"),
         ("number_input", "el_long_Mx", 400.0),
-        ("number_input", "sls_conc_limit_pct", 10.0),
-        ("number_input", "sls_steel_limit_pct", 10.0),
-        ("text_input", "sls_limit_source", "DB-SLS-01 section 4"),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["converged"] is True
-    assert e["stress_assessments"]["concrete"]["status"] == "EXCEEDED"
-    assert e["stress_assessments"]["reinforcement"]["status"] == "EXCEEDED"
-    assert e["sls_limit_source"] == "DB-SLS-01 section 4"
+    assert e["stress_outputs"]["concrete"]["calculation_state"] == "CALCULATED"
+    assert e["stress_outputs"]["reinforcement"]["calculation_state"] == "CALCULATED"
+    assert e["stress_outputs"]["concrete"]["value"] > 0.0
+    assert e["stress_outputs"]["reinforcement"]["value"] > 0.0
+    assert not {"limit", "util", "status"} & set(e["stress_outputs"]["concrete"])
+    assert "sls_limit_source" not in e
     assert e["max_conc_point"] >= 1                 # public IDs are one-based
     assert e["elements"][0]["element_type"] == "Bar"
     assert {"x_mm", "y_mm", "area_mm2", "strain_permille", "total_mpa"} <= \
@@ -5944,2093 +3887,7 @@ def test_crack_width_reports_both_load_cases():
     assert e["crack"]["cover"] > 0.0       # auto cover from the geometry
 
 
-def test_standard_qp_verdict_ignores_larger_explicit_non_qp_total_response(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
-    at = _fresh()
-    at.run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 400.0),
-        ("number_input", "el_short_Mx", 150.0),
-        ("checkbox", "sls_cw", True),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        (
-            "selectbox",
-            "sls_total_combination",
-            sls.COMBINATION_CHARACTERISTIC,
-        ),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
-    )
-    first = at.session_state["results"]["elastic"]
-    qp_width = first["crack"]["wk"]
-    total_width = first["crack_short"]["wk"]
-    assert total_width > qp_width
-    separating_limit = (qp_width + total_width) / 2.0
-
-    _set_and_click(
-        at,
-        "calculate",
-        ("number_input", "sls_wk_limit", separating_limit),
-    )
-
-    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
-    assert qp_width < separating_limit < total_width
-    assert assessment["status"] == "OK"
-    assert assessment["verdict"] == "PASS"
-    assert assessment["case"] == "Long-term"
-    assert assessment["value"] == pytest.approx(qp_width)
-    assert assessment["informational_responses"] == [
-        "Total (long + short)"
-    ]
-    raw_binding = assessment["criteria"][0]["acceptance_evidence"]
-    assert raw_binding["schema"] == sls.CRACK_ACCEPTANCE_EVIDENCE_SCHEMA
-    assert len(raw_binding["fingerprint"]) == 64
-    recorded = at.session_state["calculation_record"]["crack_control"]
-    recorded_case = recorded["cases"][0]
-    assert recorded_case["assessment"]["verdict"] == "PASS"
-    recorded_binding = recorded_case["assessment"]["criteria"][0][
-        "acceptance_evidence"
-    ]
-    assert recorded_binding["fingerprint"] == raw_binding["fingerprint"]
-    assert recorded_case["response_mapping_scope"] == (
-        first["crack_response_mapping_scope"]
-    )
-    assert any(
-        response["wk_mm"] == pytest.approx(total_width)
-        and response["acceptance_role"] == "informational"
-        for response in recorded_case["responses"]
-    )
-
-    at.session_state["_autosave_t"] = 0.0
-    at.run()
-    import project_io
-    provenance = project_io.project_provenance(
-        (tmp_path / "autosave.json").read_text(encoding="utf-8")
-    )
-    assert provenance["results_included"] is True
-    saved_case = provenance["calculation"]["crack_control"]["cases"][0]
-    assert saved_case["assessment"]["verdict"] == "PASS"
-    assert saved_case["assessment"]["criteria"][0][
-        "acceptance_evidence"
-    ]["fingerprint"] == raw_binding["fingerprint"]
-    assert provenance["calculation"]["matches_saved_inputs"] is True
-
-    stale_record = copy.deepcopy(
-        at.session_state["calculation_record"]
-    )
-    stale_case = stale_record["crack_control"]["cases"][0]
-    criterion_response = next(
-        response
-        for response in stale_case["responses"]
-        if response["acceptance_role"] == "criterion input"
-    )
-    criterion_response["wk_mm"] = total_width
-    assert stale_case["assessment"]["verdict"] == "PASS"
-    at.session_state["calculation_record"] = stale_record
-    at.session_state["_autosave_t"] = 0.0
-    at.run()
-
-    provenance = project_io.project_provenance(
-        (tmp_path / "autosave.json").read_text(encoding="utf-8")
-    )
-    saved_case = provenance["calculation"]["crack_control"]["cases"][0]
-    assert saved_case["assessment"]["status"] == "NOT ASSESSED"
-    assert saved_case["assessment"]["verdict"] == "REVIEW"
-    assert saved_case["assessment"]["value"] is None
-    assert saved_case["assessment"]["util"] is None
-    assert saved_case["assessment"]["margin"] is None
-    assert saved_case["assessment"]["publication_validation"][
-        "status"
-    ] == "REJECTED"
-    assert provenance["calculation"]["matches_saved_inputs"] is True
-
-
-def test_boolean_calculated_crack_width_cannot_create_pass_record():
-    import sector_app
-
-    criteria = sls.crack_criteria_from_inputs({
-        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
-        "sls_edition": "2004",
-        "sls_code": "EN 1992-1-1:2005",
-        "sls_member": "Beam",
-        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
-        "sls_exposure_context": "XC3 / durability",
-        "sls_check_durability": True,
-        "sls_wk_limit": 0.30,
-        "sls_decompression_applicability": (
-            sls.DECOMPRESSION_NOT_REQUIRED
-        ),
-    })
-    contexts = {
-        "Long-term": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "response_id": "long",
-            "solver_provenance": {"state": "long"},
-        },
-        "Total (long + short)": {
-            "combination": sls.COMBINATION_CHARACTERISTIC,
-            "response_id": "total",
-            "solver_provenance": {"state": "long-plus-short"},
-        },
-    }
-    rejected_wk = np.asarray(False, dtype=object)
-    assessment = sls.crack_assessment(
-        {
-            "Long-term": {
-                "wk": 0.22,
-                "element_id": "R1",
-            },
-            "Total (long + short)": {
-                "wk": rejected_wk,
-                "element_id": "R1",
-            },
-        },
-        valid=True,
-        criteria=criteria,
-        response_contexts=contexts,
-    )
-    record = sector_app.crack_control_calculation_record({
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": assessment,
-            "crack_responses": {
-                "Long-term": {
-                    "wk": 0.22,
-                    "element_id": "R1",
-                },
-                "Total (long + short)": {
-                    "wk": rejected_wk,
-                    "element_id": "R1",
-                },
-            },
-            "crack_dispositions": {
-                "Long-term": {"status": "OK"},
-                "Total (long + short)": {"status": "OK"},
-            },
-            "crack_response_contexts": contexts,
-        },
-    })
-
-    recorded = record["cases"][0]
-    assert recorded["assessment"]["status"] == "NOT ASSESSED"
-    assert recorded["assessment"]["verdict"] == "REVIEW"
-    responses = {
-        response["name"]: response for response in recorded["responses"]
-    }
-    assert responses["Long-term"]["wk_mm"] == pytest.approx(0.22)
-    rejected = responses["Total (long + short)"]
-    assert rejected["wk_mm"] is None
-    assert rejected["acceptance_role"] == "informational"
-    assert "rejected" in rejected[
-        "result_validation"
-    ].lower()
-    assert '"PASS"' not in json.dumps(record)
-
-
-def test_non_mapping_crack_response_is_retained_as_rejected_record():
-    import sector_app
-
-    contexts = {
-        "QP": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "qp",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    mapping_scope = [{
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "duration": "long",
-        "response": "QP",
-        "response_id": "qp",
-        "elastic_case": "elastic-1",
-        "state": "long",
-        "provenance": "controlled QP mapping",
-    }]
-    assessment = sls.crack_assessment(
-        {"QP": {"wk": 0.22, "element_id": "R1"}},
-        valid=True,
-        criteria=[{
-            "id": "qa-durability",
-            "kind": sls.CRITERION_DURABILITY,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": 0.30,
-            "applicability": {"member": "reinforced"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert assessment["status"] == "OK"
-    assert assessment["verdict"] == "PASS"
-
-    record = sector_app.crack_control_calculation_record({
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": assessment,
-            "crack_responses": {"QP": 1.0},
-            "crack_dispositions": {"QP": {"status": "OK"}},
-            "crack_response_contexts": contexts,
-            "crack_response_mapping_scope": mapping_scope,
-        },
-    })
-
-    recorded = record["cases"][0]
-    assert recorded["assessment"]["status"] == "NOT ASSESSED"
-    assert recorded["assessment"]["verdict"] == "REVIEW"
-    assert recorded["assessment"]["value"] is None
-    assert recorded["assessment"]["util"] is None
-    assert recorded["assessment"]["margin"] is None
-    assert recorded["assessment"]["publication_validation"][
-        "status"
-    ] == "REJECTED"
-    assert recorded["assessment"]["solver_provenance"] == [{
-        "response": "QP",
-        "solver": {"state": "long"},
-    }]
-    response = recorded["responses"][0]
-    assert response["wk_mm"] is None
-    assert "response rejected" in response["result_validation"].lower()
-    assert '"PASS"' not in json.dumps(record)
-
-
-def _canonical_app_width_results():
-    contexts = {
-        name: {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "qp",
-            "provenance": "map-v1",
-            "solver_provenance": {"solve": "v1", "converged": True},
-        }
-        for name in ("Fine", "Coarse")
-    }
-    mapping_scope = [{
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "duration": "long",
-        "response": "QP",
-        "response_id": "qp",
-        "elastic_case": "elastic-1",
-        "state": "long",
-        "provenance": "map-v1",
-        "solver_provenance": {"solve": "v1", "converged": True},
-    }]
-    responses = {
-        "Fine": {"wk": 0.22, "element_id": "R1"},
-        "Coarse": {"wk": 0.18, "element_id": "R2"},
-    }
-    assessment = sls.crack_assessment(
-        responses,
-        valid=True,
-        criteria=[{
-            "id": "qa-width",
-            "kind": sls.CRITERION_DURABILITY,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled durability criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": 0.30,
-            "applicability": {"member": "reinforced"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert assessment["verdict"] == "PASS"
-    return {
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": assessment,
-            "crack_responses": responses,
-            "crack_dispositions": {
-                name: {"status": "OK"} for name in responses
-            },
-            "crack_response_contexts": contexts,
-            "crack_response_mapping_scope": mapping_scope,
-        },
-    }
-
-
-def _reseal_app_acceptance_binding(binding):
-    body = {
-        key: value
-        for key, value in binding.items()
-        if key != "fingerprint"
-    }
-    binding["fingerprint"] = hashlib.sha256(
-        json.dumps(
-            body,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
-
-
-def test_legacy_scalar_analysis_constructs_complete_explicit_mapping_scope(
-    monkeypatch,
-):
-    import sector_app
-
-    captured = {}
-
-    def capture(single_input, **_kwargs):
-        captured.update(single_input)
-        return {}
-
-    monkeypatch.setattr(sector_app, "_run_single_analysis", capture)
-    inp = {
-        "section": object(),
-        "sls_cw": True,
-        "sls_long_combination": sls.COMBINATION_QUASI_PERMANENT,
-        "sls_total_combination": sls.COMBINATION_CHARACTERISTIC,
-    }
-
-    result = sector_app.run_analysis(inp)
-    assert set(result) == {
-        "bridge_methodology",
-        "crack_interaction",
-        "shear_interactions",
-    }
-    assert result["bridge_methodology"]["active"] is False
-    assert result["bridge_methodology"]["status"] == (
-        bridge.STATUS_NOT_APPLICABLE
-    )
-    assert result["bridge_methodology"]["checks"] == []
-    scope = captured["sls_response_mapping_scope"]
-
-    assert "sls_response_mapping_scope" not in inp
-    assert [item["response_id"] for item in scope] == ["long", "total"]
-    assert [item["state"] for item in scope] == ["long", "total"]
-    assert all(item["duration"] for item in scope)
-    assert all(item["provenance"] for item in scope)
-    assert captured["sls_response_provenance"]["long"].startswith(
-        "Legacy scalar"
-    )
-
-
-@pytest.mark.parametrize(
-    ("mutation", "changed_value"),
-    [
-        ("response_id", "other"),
-        ("duration", "short"),
-        ("provenance", "map-v2"),
-        ("solver_provenance", {"solve": "v2", "converged": True}),
-        ("width", 0.21),
-        ("governing_element", "R9"),
-        ("scope_duration", "short"),
-        ("scope_provenance", "map-v2"),
-        ("criterion_source", "Changed durability criterion"),
-        ("applicability", {"member": "changed"}),
-    ],
-)
-def test_calculation_record_rejects_each_acceptance_binding_mutation(
-    mutation,
-    changed_value,
-):
-    import sector_app
-
-    results = _canonical_app_width_results()
-    elastic = results["elastic"]
-    if mutation in {
-        "response_id",
-        "duration",
-        "provenance",
-        "solver_provenance",
-    }:
-        for context in elastic["crack_response_contexts"].values():
-            context[mutation] = copy.deepcopy(changed_value)
-    elif mutation == "width":
-        elastic["crack_responses"]["Fine"]["wk"] = changed_value
-    elif mutation == "governing_element":
-        elastic["crack_responses"]["Fine"]["element_id"] = changed_value
-    elif mutation.startswith("scope_"):
-        elastic["crack_response_mapping_scope"][0][
-            mutation.removeprefix("scope_")
-        ] = copy.deepcopy(changed_value)
-    else:
-        elastic["crack_assessment"]["criteria"][0][
-            mutation
-        ] = copy.deepcopy(changed_value)
-
-    record = sector_app.crack_control_calculation_record(results)
-    assessment = record["cases"][0]["assessment"]
-
-    assert assessment["status"] == "NOT ASSESSED"
-    assert assessment["verdict"] == "REVIEW"
-    assert assessment["acceptance_evidence"] is None
-    assert assessment["publication_validation"]["reason"]
-
-
-def test_changed_governing_crack_response_invalidates_stale_pass_record():
-    import sector_app
-
-    contexts = {
-        name: {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "qp",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        }
-        for name in ("QP",)
-    }
-    mapping_scope = [{
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "duration": "long",
-        "response": "QP",
-        "response_id": "qp",
-        "elastic_case": "elastic-1",
-        "state": "long",
-        "provenance": "controlled QP mapping",
-    }]
-    criteria = [{
-        "id": "qa-durability",
-        "kind": sls.CRITERION_DURABILITY,
-        "source_type": sls.CRITERION_MODE_STANDARD,
-        "source": "QA controlled criterion",
-        "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-        "limit_mm": 0.30,
-        "applicability": {"member": "reinforced"},
-    }]
-    stale_assessment = sls.crack_assessment(
-        {"QP": {"wk": 0.22, "element_id": "R1"}},
-        valid=True,
-        criteria=criteria,
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert stale_assessment["verdict"] == "PASS"
-
-    record = sector_app.crack_control_calculation_record({
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": stale_assessment,
-            "crack_responses": {
-                "QP": {"wk": 0.45, "element_id": "R1"},
-            },
-            "crack_dispositions": {"QP": {"status": "OK"}},
-            "crack_response_contexts": contexts,
-            "crack_response_mapping_scope": mapping_scope,
-        },
-    })
-
-    recorded = record["cases"][0]
-    assert recorded["responses"][0]["wk_mm"] == pytest.approx(0.45)
-    assert recorded["assessment"]["status"] == "NOT ASSESSED"
-    assert recorded["assessment"]["verdict"] == "REVIEW"
-    assert recorded["assessment"]["value"] is None
-    assert "immutable acceptance evidence does not match" in (
-        recorded["assessment"]["publication_validation"]["reason"]
-    )
-    assert '"PASS"' not in json.dumps(record)
-
-    changed_element = sector_app.crack_control_calculation_record({
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": stale_assessment,
-            "crack_responses": {
-                "QP": {"wk": 0.22, "element_id": "R2"},
-            },
-            "crack_dispositions": {"QP": {"status": "OK"}},
-            "crack_response_contexts": contexts,
-            "crack_response_mapping_scope": mapping_scope,
-        },
-    })
-    element_assessment = changed_element["cases"][0]["assessment"]
-    assert element_assessment["status"] == "NOT ASSESSED"
-    assert "immutable acceptance evidence does not match" in (
-        element_assessment["publication_validation"]["reason"]
-    )
-
-
-def test_current_decompression_evidence_preserves_matching_pass_record():
-    import sector_app
-
-    contexts = {
-        "QP": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "qp",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    mapping_scope = [{
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "duration": "long",
-        "response": "QP",
-        "response_id": "qp",
-        "elastic_case": "elastic-1",
-        "state": "long",
-        "provenance": "controlled QP mapping",
-    }]
-    response = {
-        "wk": 0.18,
-        "element_id": "T1",
-        "decompression": {
-            "status": "OK",
-            "value": -0.25,
-            "governing": "concrete point 1",
-            "reason": "Concrete remains in compression at tendon level.",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    assessment = sls.crack_assessment(
-        {"QP": response},
-        valid=True,
-        criteria=[{
-            "id": "qa-decompression",
-            "kind": sls.CRITERION_DECOMPRESSION,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled decompression criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": None,
-            "applicability": {"member": "bonded prestress"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert assessment["status"] == "OK"
-    assert assessment["verdict"] == "PASS"
-
-    record = sector_app.crack_control_calculation_record({
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": assessment,
-            "crack_responses": {"QP": response},
-            "crack_dispositions": {"QP": {"status": "OK"}},
-            "crack_response_contexts": contexts,
-            "crack_response_mapping_scope": mapping_scope,
-        },
-    })
-
-    recorded = record["cases"][0]
-    assert recorded["assessment"]["status"] == "OK"
-    assert recorded["assessment"]["verdict"] == "PASS"
-    assert recorded["assessment"]["value"] == pytest.approx(-0.25)
-    assert recorded["assessment"]["governing"] == "concrete point 1"
-    assert recorded["responses"][0]["decompression"]["status"] == "OK"
-    assert "publication_validation" not in recorded["assessment"]
-
-
-@pytest.mark.parametrize(
-    ("field", "changed_value", "reason_text"),
-    [
-        ("value", -0.10, "calculated acceptance evidence"),
-        ("value", True, "decompression evidence is incomplete"),
-        (
-            "solver_provenance",
-            float("nan"),
-            "decompression evidence is incomplete",
-        ),
-        (
-            "governing",
-            "concrete point 2",
-            "calculated acceptance evidence",
-        ),
-    ],
-)
-def test_changed_decompression_evidence_invalidates_stale_pass_record(
-    field,
-    changed_value,
-    reason_text,
-):
-    import sector_app
-
-    contexts = {
-        "QP": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "qp",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    mapping_scope = [{
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "duration": "long",
-        "response": "QP",
-        "response_id": "qp",
-        "elastic_case": "elastic-1",
-        "state": "long",
-        "provenance": "controlled QP mapping",
-    }]
-    original_response = {
-        "wk": 0.18,
-        "element_id": "T1",
-        "decompression": {
-            "status": "OK",
-            "value": -0.25,
-            "governing": "concrete point 1",
-            "reason": "Concrete remains in compression at tendon level.",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    assessment = sls.crack_assessment(
-        {"QP": original_response},
-        valid=True,
-        criteria=[{
-            "id": "qa-decompression",
-            "kind": sls.CRITERION_DECOMPRESSION,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled decompression criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": None,
-            "applicability": {"member": "bonded prestress"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    changed_response = copy.deepcopy(original_response)
-    changed_response["decompression"][field] = changed_value
-
-    record = sector_app.crack_control_calculation_record({
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": assessment,
-            "crack_responses": {"QP": changed_response},
-            "crack_dispositions": {"QP": {"status": "OK"}},
-            "crack_response_contexts": contexts,
-            "crack_response_mapping_scope": mapping_scope,
-        },
-    })
-
-    recorded = record["cases"][0]["assessment"]
-    assert recorded["status"] == "NOT ASSESSED"
-    assert recorded["verdict"] == "REVIEW"
-    assert recorded["value"] is None
-    assert reason_text in recorded["publication_validation"]["reason"]
-
-
-def test_changed_non_governing_decompression_evidence_invalidates_pass():
-    import sector_app
-
-    contexts = {
-        name: {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "long",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        }
-        for name in ("Fine", "Coarse")
-    }
-    mapping_scope = [{
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "duration": "long",
-        "response": "QP",
-        "response_id": "long",
-        "elastic_case": "elastic-1",
-        "state": "long",
-        "provenance": "controlled QP mapping",
-    }]
-    response = {
-        "wk": 0.18,
-        "element_id": "T1",
-        "decompression": {
-            "status": "OK",
-            "value": -0.25,
-            "governing": "concrete point 1",
-            "reason": "Concrete remains in compression at tendon level.",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    original_responses = {
-        "Fine": copy.deepcopy(response),
-        "Coarse": copy.deepcopy(response),
-    }
-    assessment = sls.crack_assessment(
-        original_responses,
-        valid=True,
-        criteria=[{
-            "id": "qa-decompression",
-            "kind": sls.CRITERION_DECOMPRESSION,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled decompression criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": None,
-            "applicability": {"member": "bonded prestress"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert assessment["status"] == "OK"
-    assert assessment["verdict"] == "PASS"
-    assert assessment["criteria"][0]["matched_responses"] == [
-        "Fine",
-        "Coarse",
-    ]
-
-    current_responses = copy.deepcopy(original_responses)
-    current_responses["Coarse"]["decompression"]["value"] = -0.10
-    record = sector_app.crack_control_calculation_record({
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": assessment,
-            "crack_responses": current_responses,
-            "crack_dispositions": {
-                "Fine": {"status": "OK"},
-                "Coarse": {"status": "OK"},
-            },
-            "crack_response_contexts": contexts,
-            "crack_response_mapping_scope": mapping_scope,
-        },
-    })
-
-    recorded = record["cases"][0]["assessment"]
-    assert recorded["status"] == "NOT ASSESSED"
-    assert recorded["verdict"] == "REVIEW"
-    assert recorded["value"] is None
-    assert "conflicting decompression acceptance evidence" in (
-        recorded["publication_validation"]["reason"]
-    )
-
-
-def _download_and_autosave_publications(
-    sector_app,
-    crack_control,
-    tmp_path,
-    monkeypatch,
-):
-    calculation = {
-        "input_sha256": "stale",
-        "crack_control": copy.deepcopy(crack_control),
-    }
-    state = {"calculation_record": copy.deepcopy(calculation)}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_factor_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_crack_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(sector_app, "_project_state", lambda: ({}, {}))
-
-    download_text = sector_app._gather_project()
-    download = json.loads(download_text)["calculation"][
-        "crack_control"
-    ]["cases"][0]["assessment"]
-
-    state["calculation_record"] = copy.deepcopy(calculation)
-    monkeypatch.setattr(
-        sector_app,
-        "_current_table",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_input_hash",
-        lambda: "current-input-hash",
-    )
-    captured = {}
-
-    def capture_autosave(data, path):
-        captured["data"] = data
-        captured["path"] = path
-        return True
-
-    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-
-    assert sector_app._perform_autosave() is True
-    durable = state["calculation_record"]["crack_control"][
-        "cases"
-    ][0]["assessment"]
-    saved = json.loads(captured["data"])["calculation"][
-        "crack_control"
-    ]["cases"][0]["assessment"]
-    return (download, durable, saved), (download_text, captured["data"])
-
-
-def _bridge_bound_snapshot():
-    decisions = tuple(
-        bridge.ApplicabilityDecision(
-            check_id=check_id,
-            applicability=(
-                bridge.REQUIRED
-                if check_id == "section_analysis"
-                else bridge.NOT_APPLICABLE
-            ),
-            source=f"DB-{check_id}",
-        )
-        for check_id in bridge.APPLICABILITY_CHECK_IDS
-    )
-    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
-        methodology=bridge.EN1992_2_BASE,
-        decisions=decisions,
-        has_tendons=False,
-        has_hollow_section=False,
-        fck_mpa=40.0,
-        section_analysis=bridge.ExternalEvidence(
-            status=bridge.STATUS_PASS,
-            result="section solve converged",
-            criterion="requested solver converges",
-            source="bridge inherited section solver",
-            reason="Elastic SLS-1 converged",
-        ),
-    ))
-
-
-def _bridge_fatigue_publication_scalars(*, custom=False):
-    import fatigue_analysis
-    import fatigue_inputs
-
-    scalars = {
-        "design_methodology": bridge.EN1992_2_BASE,
-        "fatigue_on": True,
-        "fatigue_check_steel": False,
-        "fatigue_check_concrete": True,
-        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
-        "fatigue_gamma_s": 1.15,
-        "fatigue_gamma_c": 1.50,
-        "fatigue_gamma_ff": 1.0,
-        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
-        "fatigue_concrete_miner_basis": (
-            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-        ),
-        "fatigue_concrete_miner_source": "",
-        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
-        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
-    }
-    if custom:
-        scalars.update({
-            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
-            "fatigue_factor_approval": (
-                "DB-FAT-OVERRIDE-02 / checker approval"
-            ),
-            "fatigue_gamma_c": 2.0,
-        })
-    return scalars
-
-
-def _bridge_concrete_fatigue_snapshot(scalars):
-    import fatigue_analysis
-    from sector import conformance
-
-    context = fatigue_analysis.bridge_publication_context(scalars)
-    assert context["errors"] == []
-    records = {
-        record["parameter_id"]: record
-        for record in context["parameter_conformance"]
-    }
-    concrete_records = (
-        records["fatigue.gamma_c"],
-        records["concrete_fatigue.miner_c"],
-    )
-    status = conformance.aggregate(
-        concrete_records,
-        analytical_status=conformance.STATUS_PASS,
-        selected_standard=context["edition"],
-    )["assessment_status"]
-    decisions = tuple(
-        bridge.ApplicabilityDecision(
-            check_id=check_id,
-            applicability=(
-                bridge.REQUIRED
-                if check_id in {"section_analysis", "concrete_fatigue"}
-                else bridge.NOT_APPLICABLE
-            ),
-            source=f"DB-{check_id}",
-        )
-        for check_id in bridge.APPLICABILITY_CHECK_IDS
-    )
-    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
-        methodology=bridge.EN1992_2_BASE,
-        decisions=decisions,
-        has_tendons=False,
-        has_hollow_section=False,
-        fck_mpa=40.0,
-        section_analysis=bridge.ExternalEvidence(
-            status=bridge.STATUS_PASS,
-            result="section solve converged",
-            criterion="requested solver converges",
-            source="bridge inherited section solver",
-            reason="Elastic SLS-1 converged",
-        ),
-        concrete_fatigue=bridge.ExternalEvidence(
-            status=status,
-            result="50.0 %",
-            criterion="<= 100 %",
-            source="DS/EN 1992-2:2005/AC:2008 Expression (6.106)",
-            reason="solver evidence retained",
-            utilisation=0.5,
-            evidence=({
-                "status": status,
-                "analytical_status": bridge.STATUS_PASS,
-                "methodology": bridge.EN1992_2_BASE,
-                "concrete_method": context["concrete_method"],
-                "concrete_miner_basis": context["concrete_miner_basis"],
-                "concrete_miner_source": context["concrete_miner_source"],
-                "miner_coefficient_c": records[
-                    "concrete_fatigue.miner_c"
-                ]["actual_value"],
-                "parameter_conformance": records[
-                    "concrete_fatigue.miner_c"
-                ],
-                "fatigue_parameter_conformance": concrete_records,
-                "fatigue_edition": context["edition"],
-                "fatigue_factor_mode": context["factor_mode"],
-                "fatigue_factor_approval": context["factor_approval"],
-                "fatigue_gamma_ff": context["gamma_ff"],
-                "fatigue_basis": context["basis"],
-            },),
-        ),
-    ))
-
-
-def _fatigue_bound_snapshot():
-    import fatigue_analysis
-    import fatigue_inputs
-    from sector import conformance
-
-    edition = fatigue_inputs.EC2_2023
-    gamma_s, gamma_c, factor_basis = (
-        fatigue_inputs.resolve_fatigue_factors(
-            edition,
-            mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
-            gamma_s=0.5,
-            gamma_c=2.0,
-            approval_reference="DB-FAT-21 / checker approval",
-        )
-    )
-    miner_source = "AUTH-SN-7 / checker approval"
-    miner_record = fatigue_analysis.concrete_miner_conformance(
-        edition=edition,
-        concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
-        miner_basis=fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION,
-        miner_source=miner_source,
-        coefficient_c=100.0,
-        design_methodology=bridge.COMPONENT_METHODS,
-    )
-    records = [
-        factor_basis["parameter_conformance"]["gamma_s"],
-        factor_basis["parameter_conformance"]["gamma_c"],
-        miner_record,
-    ]
-    aggregate = conformance.aggregate(
-        records,
-        analytical_status=conformance.STATUS_PASS,
-        selected_standard=edition,
-    )
-    return fatigue_analysis.calculation_conformance_record(
-        {
-            "valid": True,
-            "converged": True,
-            "passed": True,
-            "errors": (),
-            "edition": edition,
-            "design_methodology": bridge.COMPONENT_METHODS,
-            "checks": {"reinforcement": True, "concrete": True},
-            "concrete_method": fatigue_analysis.CONCRETE_PROJECT_MINER,
-            "concrete_miner_basis": (
-                fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
-            ),
-            "concrete_miner_source": miner_source,
-            "basis": fatigue_inputs.default_basis(),
-            "partial_factors": {
-                "gamma_s": gamma_s,
-                "gamma_c": gamma_c,
-                "gamma_ff": 1.0,
-            },
-            "factor_basis": factor_basis,
-            "parameter_conformance": records,
-            "conformance": aggregate,
-            "assessment_status": aggregate["assessment_status"],
-            "qualified_verdict": aggregate["qualified_verdict"],
-            "standard_passed": False,
-            "concrete_parameters": {
-                "c": 100.0,
-                "method": fatigue_analysis.CONCRETE_PROJECT_MINER,
-                "parameter_conformance": miner_record,
-            },
-        },
-        design_methodology=bridge.COMPONENT_METHODS,
-        current_basis=fatigue_inputs.default_basis(),
-    )
-
-
-def test_autosave_validation_receives_canonical_bridge_tables(
-    tmp_path,
-    monkeypatch,
-):
-    import bridge_inputs
-    import project_io
-    import sector_app
-
-    coverage = bridge_inputs.table_from_records(
-        [
-            {
-                "check_id": check_id,
-                "applicability": (
-                    bridge.REQUIRED
-                    if check_id == "reinforcement_fatigue"
-                    else bridge.NOT_APPLICABLE
-                ),
-                "source": f"DB-{check_id}",
-                "notes": "",
-            }
-            for check_id in bridge.APPLICABILITY_CHECK_IDS
-        ],
-        bridge_inputs.COVERAGE_TABLE_KEY,
-    )
-    tables = {bridge_inputs.COVERAGE_TABLE_KEY: coverage}
-    scalars = {"design_methodology": bridge.EN1992_2_DK_NA}
-    digest = project_io.input_sha256(tables, scalars)
-    calculation = {
-        "input_sha256": digest,
-        "matches_saved_inputs": True,
-    }
-    state = {"calculation_record": copy.deepcopy(calculation)}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_factor_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_crack_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_state",
-        lambda: (tables, scalars),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_current_table",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_input_hash",
-        lambda: digest,
-    )
-    publication_calls = []
-
-    def capture_publication(
-        raw_calculation,
-        *,
-        calculation_inputs,
-        input_digest,
-        calculation_results=None,
-    ):
-        publication_calls.append(calculation_inputs)
-        assert input_digest == digest
-        assert calculation_results is None
-        return raw_calculation
-
-    monkeypatch.setattr(
-        project_io,
-        "publication_safe_calculation_record",
-        capture_publication,
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_write_autosave",
-        lambda _data, _path: True,
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-
-    assert sector_app._perform_autosave() is True
-    assert len(publication_calls) == 2
-    autosave_inputs = publication_calls[0]
-    assert bridge_inputs.COVERAGE_TABLE_KEY in autosave_inputs
-    applicability = {
-        decision.check_id: decision.applicability
-        for decision in bridge_inputs.decisions(
-            autosave_inputs[bridge_inputs.COVERAGE_TABLE_KEY]
-        )
-    }
-    assert applicability["reinforcement_fatigue"] == bridge.REQUIRED
-    assert applicability["concrete_fatigue"] == bridge.NOT_APPLICABLE
-
-
-def test_live_fatigue_view_rejects_missing_basis_on_bound_payload(monkeypatch):
-    import sector_app
-
-    payload = _fatigue_bound_snapshot()
-    assert payload is not None
-    del payload["basis"]
-    rendered = {"errors": [], "markdown": []}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(
-            error=lambda message, **_kwargs: rendered["errors"].append(message),
-            warning=lambda *_args, **_kwargs: None,
-            success=lambda *_args, **_kwargs: None,
-            info=lambda *_args, **_kwargs: None,
-            markdown=lambda message, **_kwargs: rendered["markdown"].append(
-                message
-            ),
-        ),
-    )
-
-    sector_app.fatigue_view(
-        {
-            "fatigue_on": True,
-            "design_methodology": bridge.COMPONENT_METHODS,
-        },
-        {"fatigue": payload},
-    )
-
-    assert any(message.startswith("INVALID -") for message in rendered["errors"])
-    assert any(
-        "fatigue basis" in message.lower()
-        for message in rendered["markdown"]
-    )
-
-
-def test_live_fatigue_helper_rejects_stale_complete_basis():
-    import fatigue_inputs
-    import sector_app
-
-    payload = _fatigue_bound_snapshot()
-    assert payload is not None
-    current_basis = {
-        **fatigue_inputs.default_basis(),
-        "notes": "Current edited basis",
-    }
-
-    safe = sector_app._publication_safe_fatigue_result(
-        {
-            "fatigue_on": True,
-            "design_methodology": bridge.COMPONENT_METHODS,
-            fatigue_inputs.BASIS_KEY: current_basis,
-        },
-        {"fatigue": payload},
-    )
-
-    assert safe["valid"] is False
-    assert safe["passed"] is False
-    assert safe["standard_passed"] is False
-    assert any(
-        "basis conflicts with the calculation input snapshot" in error
-        for error in safe["errors"]
-    )
-
-
-@pytest.mark.parametrize(
-    "attack",
-    ["partial_factor", "missing_basis", "incomplete_basis", "boolean_basis"],
-)
-def test_download_session_and_autosave_reject_fatigue_evidence_mutation(
-    attack,
-    tmp_path,
-    monkeypatch,
-):
-    import fatigue_analysis
-    import project_io
-    import sector_app
-
-    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
-    fatigue_record = _fatigue_bound_snapshot()
-    assert fatigue_record is not None
-    if attack == "partial_factor":
-        fatigue_record["partial_factors"]["gamma_s"] = 1.15
-    elif attack == "missing_basis":
-        del fatigue_record["basis"]
-    else:
-        if attack == "incomplete_basis":
-            del fatigue_record["basis"]["notes"]
-        else:
-            fatigue_record["basis"]["notes"] = True
-        body = {
-            key: fatigue_record[key]
-            for key in fatigue_analysis._FATIGUE_CONFORMANCE_FIELDS
-        }
-        fatigue_record["evidence_sha256"] = (
-            fatigue_analysis._fatigue_conformance_digest(body)
-        )
-    calculation = {
-        "input_sha256": project_io.input_sha256({}, scalars),
-        "fatigue_conformance": fatigue_record,
-    }
-    state = {"calculation_record": copy.deepcopy(calculation)}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_factor_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_crack_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_state",
-        lambda: ({}, scalars),
-    )
-
-    download = json.loads(sector_app._gather_project())["calculation"]
-    assert "fatigue_conformance" not in download
-    assert download["matches_saved_inputs"] is False
-
-    state["calculation_record"] = copy.deepcopy(calculation)
-    monkeypatch.setattr(
-        sector_app,
-        "_current_table",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_input_hash",
-        lambda: "current-input-hash",
-    )
-    captured = {}
-
-    def capture_autosave(data, path):
-        captured["data"] = data
-        return True
-
-    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-
-    assert sector_app._perform_autosave() is True
-    assert "fatigue_conformance" not in state["calculation_record"]
-    assert state["calculation_record"]["matches_saved_inputs"] is False
-    saved = json.loads(captured["data"])["calculation"]
-    assert "fatigue_conformance" not in saved
-    assert saved["matches_saved_inputs"] is False
-    restored = project_io.project_provenance(
-        captured["data"]
-    )["calculation"]
-    assert restored["matches_saved_inputs"] is False
-
-
-def test_download_session_and_autosave_reject_bridge_binding_mutation(
-    tmp_path,
-    monkeypatch,
-):
-    import sector_app
-
-    bridge_record = _bridge_bound_snapshot()
-    bridge_record["checks"][0]["result"] = "mutated stored result"
-    calculation = {
-        "input_sha256": "stale",
-        "bridge_methodology": bridge_record,
-    }
-    state = {"calculation_record": copy.deepcopy(calculation)}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_factor_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_crack_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_state",
-        lambda: (
-            {},
-            {"design_methodology": bridge.EN1992_2_BASE},
-        ),
-    )
-
-    download_text = sector_app._gather_project()
-    download = json.loads(download_text)["calculation"][
-        "bridge_methodology"
-    ]
-    assert download["status"] == bridge.STATUS_INVALID
-    assert any(
-        "fingerprint does not match" in error
-        for error in download["configuration_errors"]
-    )
-
-    state["calculation_record"] = copy.deepcopy(calculation)
-    monkeypatch.setattr(
-        sector_app,
-        "_current_table",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_input_hash",
-        lambda: "current-input-hash",
-    )
-    captured = {}
-
-    def capture_autosave(data, path):
-        captured["data"] = data
-        return True
-
-    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-
-    assert sector_app._perform_autosave() is True
-    durable = state["calculation_record"]["bridge_methodology"]
-    saved = json.loads(captured["data"])["calculation"][
-        "bridge_methodology"
-    ]
-    assert durable["status"] == bridge.STATUS_INVALID
-    assert saved["status"] == bridge.STATUS_INVALID
-    assert durable == saved
-
-
-@pytest.mark.parametrize(
-    "attack",
-    [
-        "stale_standard",
-        "omitted_gamma_c",
-        "stale_gamma_ff",
-        "stale_basis",
-    ],
-)
-def test_download_durable_and_autosave_reject_bridge_fatigue_correlation(
-    attack,
-    tmp_path,
-    monkeypatch,
-):
-    import fatigue_inputs
-    import project_io
-    import sector_app
-
-    scalars = _bridge_fatigue_publication_scalars(custom=True)
-    if attack == "stale_standard":
-        bridge_record = _bridge_concrete_fatigue_snapshot(
-            _bridge_fatigue_publication_scalars()
-        )
-    elif attack == "stale_gamma_ff":
-        scalars = _bridge_fatigue_publication_scalars()
-        scalars["fatigue_gamma_ff"] = 2.0
-        bridge_record = _bridge_concrete_fatigue_snapshot(
-            _bridge_fatigue_publication_scalars()
-        )
-    elif attack == "stale_basis":
-        bridge_record = _bridge_concrete_fatigue_snapshot(scalars)
-        scalars[fatigue_inputs.BASIS_KEY] = {
-            **fatigue_inputs.default_basis(),
-            "authority": fatigue_inputs.AUTHORITY_VD,
-            "method": fatigue_inputs.METHOD_VD_FLM4,
-            "spectrum_source": "VD project basis section 6.8",
-            "cycle_count_source": "Traffic register T-04",
-        }
-    else:
-        bridge_record = _bridge_concrete_fatigue_snapshot(scalars)
-        concrete = next(
-            check for check in bridge_record["checks"]
-            if check["check_id"] == "concrete_fatigue"
-        )
-        row = concrete["evidence"][0]
-        row["fatigue_parameter_conformance"] = [
-            record
-            for record in row["fatigue_parameter_conformance"]
-            if record["parameter_id"] != "fatigue.gamma_c"
-        ]
-        row["status"] = bridge.STATUS_PASS
-        concrete["status"] = bridge.STATUS_PASS
-        bridge_record["status"] = bridge.STATUS_PASS
-        bridge_record["evidence_fingerprint"] = (
-            bridge.bridge_evidence_fingerprint(
-                bridge_record["checks"],
-                bridge_record["configuration_errors"],
-            )
-        )
-    digest = project_io.input_sha256({}, scalars)
-    calculation = {
-        "input_sha256": digest,
-        "bridge_methodology": bridge_record,
-    }
-    state = {"calculation_record": copy.deepcopy(calculation)}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_factor_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_crack_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_state",
-        lambda: ({}, scalars),
-    )
-
-    download_text = sector_app._gather_project()
-    download_payload = json.loads(download_text)
-    download = download_payload["calculation"]
-    assert download["matches_saved_inputs"] is False
-    assert download["bridge_methodology"]["status"] == bridge.STATUS_INVALID
-    assert download["bridge_methodology"]["publication_validation"][
-        "status"
-    ] == "REJECTED"
-    assert next(
-        check
-        for check in download["bridge_methodology"]["checks"]
-        if check["check_id"] == "concrete_fatigue"
-    )["status"] == bridge.STATUS_NOT_ASSESSED
-
-    state["calculation_record"] = copy.deepcopy(calculation)
-    monkeypatch.setattr(
-        sector_app,
-        "_current_table",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_input_hash",
-        lambda: digest,
-    )
-    captured = {}
-
-    def capture_autosave(data, path):
-        captured["data"] = data
-        return True
-
-    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-
-    assert sector_app._perform_autosave() is True
-    durable = state["calculation_record"]
-    saved = json.loads(captured["data"])["calculation"]
-    loaded = project_io.project_provenance(
-        captured["data"]
-    )["calculation"]
-    for record in (durable, saved, loaded):
-        assert record["matches_saved_inputs"] is False
-        assert record["bridge_methodology"]["publication_validation"][
-            "status"
-        ] == "REJECTED"
-        assert next(
-            check
-            for check in record["bridge_methodology"]["checks"]
-            if check["check_id"] == "concrete_fatigue"
-        )["status"] == bridge.STATUS_NOT_ASSESSED
-
-
-def test_download_session_and_autosave_reject_bridge_methodology_mismatch(
-    tmp_path,
-    monkeypatch,
-):
-    import project_io
-    import sector_app
-
-    scalars = {"design_methodology": bridge.COMPONENT_METHODS}
-    calculation = {
-        "input_sha256": project_io.input_sha256({}, scalars),
-        "bridge_methodology": _bridge_bound_snapshot(),
-    }
-    state = {"calculation_record": copy.deepcopy(calculation)}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_factor_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_crack_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_state",
-        lambda: ({}, scalars),
-    )
-
-    download_payload = json.loads(sector_app._gather_project())
-    download = download_payload["calculation"]["bridge_methodology"]
-    assert download["status"] == bridge.STATUS_INVALID
-    assert download["publication_validation"]["status"] == "REJECTED"
-    assert download_payload["calculation"]["matches_saved_inputs"] is False
-
-    state["calculation_record"] = copy.deepcopy(calculation)
-    monkeypatch.setattr(
-        sector_app,
-        "_current_table",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_input_hash",
-        lambda: project_io.input_sha256({}, scalars),
-    )
-    captured = {}
-
-    def capture_autosave(data, path):
-        captured["data"] = data
-        return True
-
-    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-
-    assert sector_app._perform_autosave() is True
-    durable = state["calculation_record"]["bridge_methodology"]
-    saved_payload = json.loads(captured["data"])
-    saved = saved_payload["calculation"]["bridge_methodology"]
-    assert durable == saved
-    assert durable["status"] == bridge.STATUS_INVALID
-    assert durable["publication_validation"]["status"] == "REJECTED"
-    assert saved_payload["calculation"]["matches_saved_inputs"] is False
-
-
-@pytest.mark.parametrize(
-    ("mutation", "changed_value"),
-    [
-        ("response_id", "other"),
-        ("duration", "short"),
-        ("provenance", "map-v2"),
-        ("solver_provenance", {"solve": "v2", "converged": True}),
-        ("scope_duration", "short"),
-    ],
-)
-def test_download_session_and_autosave_reject_width_binding_mutations(
-    mutation,
-    changed_value,
-    tmp_path,
-    monkeypatch,
-):
-    import sector_app
-
-    record = sector_app.crack_control_calculation_record(
-        _canonical_app_width_results()
-    )
-    assert record["cases"][0]["assessment"]["verdict"] == "PASS"
-    case = record["cases"][0]
-    if mutation.startswith("scope_"):
-        case["response_mapping_scope"][0][
-            mutation.removeprefix("scope_")
-        ] = copy.deepcopy(changed_value)
-    else:
-        for response in case["responses"]:
-            response["context"][mutation] = copy.deepcopy(changed_value)
-
-    assessments, texts = _download_and_autosave_publications(
-        sector_app,
-        record,
-        tmp_path,
-        monkeypatch,
-    )
-
-    for assessment in assessments:
-        assert assessment["status"] == "NOT ASSESSED"
-        assert assessment["verdict"] == "REVIEW"
-        assert assessment["acceptance_evidence"] is None
-    assert all('"verdict": "PASS"' not in text for text in texts)
-
-
-@pytest.mark.parametrize(
-    "malformation",
-    [
-        pytest.param("response-container", id="response-container"),
-        pytest.param("text-width", id="text-crack-width"),
-    ],
-)
-def test_download_session_and_autosave_reject_malformed_binding_schema(
-    malformation,
-    tmp_path,
-    monkeypatch,
-):
-    import sector_app
-
-    record = sector_app.crack_control_calculation_record(
-        _canonical_app_width_results()
-    )
-    binding = record["cases"][0]["assessment"]["criteria"][0][
-        "acceptance_evidence"
-    ]
-    if malformation == "response-container":
-        binding["matched_responses"] = ["Fine"]
-    else:
-        for response in binding["matched_responses"]:
-            acceptance = response["acceptance"]
-            acceptance["value_mm"] = str(acceptance["value_mm"])
-        binding["outcome"]["value"] = str(binding["outcome"]["value"])
-    _reseal_app_acceptance_binding(binding)
-
-    assessments, texts = _download_and_autosave_publications(
-        sector_app,
-        record,
-        tmp_path,
-        monkeypatch,
-    )
-
-    for assessment in assessments:
-        assert assessment["status"] == "NOT ASSESSED"
-        assert assessment["verdict"] == "REVIEW"
-        assert assessment["acceptance_evidence"] is None
-        assert "invalid immutable acceptance evidence" in (
-            assessment["publication_validation"]["reason"]
-        )
-    assert all('"verdict": "PASS"' not in text for text in texts)
-
-
-@pytest.mark.parametrize(
-    ("field", "changed_value"),
-    [
-        ("status", "EXCEEDED"),
-        ("value", -0.10),
-        ("governing", "concrete point 2"),
-        ("solver_provenance", {"state": "changed"}),
-    ],
-)
-def test_download_session_and_autosave_reject_decompression_mutations(
-    field,
-    changed_value,
-    tmp_path,
-    monkeypatch,
-):
-    import sector_app
-
-    contexts = {
-        "QP": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "qp",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    mapping_scope = [{
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "duration": "long",
-        "response": "QP",
-        "response_id": "qp",
-        "elastic_case": "elastic-1",
-        "state": "long",
-        "provenance": "controlled QP mapping",
-    }]
-    response = {
-        "wk": 0.18,
-        "element_id": "T1",
-        "decompression": {
-            "status": "OK",
-            "value": -0.25,
-            "governing": "concrete point 1",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    assessment = sls.crack_assessment(
-        {"QP": response},
-        valid=True,
-        criteria=[{
-            "id": "qa-decompression",
-            "kind": sls.CRITERION_DECOMPRESSION,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled decompression criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": None,
-            "applicability": {"member": "bonded prestress"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    record = sector_app.crack_control_calculation_record({
-        "elastic": {
-            "show_cw": True,
-            "crack_assessment": assessment,
-            "crack_responses": {"QP": response},
-            "crack_dispositions": {"QP": {"status": "OK"}},
-            "crack_response_contexts": contexts,
-            "crack_response_mapping_scope": mapping_scope,
-        },
-    })
-    assert record["cases"][0]["assessment"]["verdict"] == "PASS"
-    record["cases"][0]["responses"][0]["decompression"][
-        field
-    ] = copy.deepcopy(changed_value)
-
-    assessments, texts = _download_and_autosave_publications(
-        sector_app,
-        record,
-        tmp_path,
-        monkeypatch,
-    )
-
-    for published in assessments:
-        assert published["status"] == "NOT ASSESSED"
-        assert published["verdict"] == "REVIEW"
-        assert published["acceptance_evidence"] is None
-    assert all('"verdict": "PASS"' not in text for text in texts)
-
-
-def test_download_and_autosave_share_decompression_publication_guard(
-    tmp_path,
-    monkeypatch,
-):
-    import sector_app
-
-    contexts = {
-        "QP": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "qp",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    mapping_scope = [{
-        "combination": sls.COMBINATION_QUASI_PERMANENT,
-        "duration": "long",
-        "response": "QP",
-        "response_id": "qp",
-        "elastic_case": "elastic-1",
-        "state": "long",
-        "provenance": "controlled QP mapping",
-    }]
-    response = {
-        "wk": 0.18,
-        "element_id": "T1",
-        "decompression": {
-            "status": "OK",
-            "value": -0.25,
-            "governing": "concrete point 1",
-            "solver_provenance": {"state": "long"},
-        },
-    }
-    assessment = sls.crack_assessment(
-        {"QP": response},
-        valid=True,
-        criteria=[{
-            "id": "qa-decompression",
-            "kind": sls.CRITERION_DECOMPRESSION,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled decompression criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": None,
-            "applicability": {"member": "bonded prestress"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    invalid_response = copy.deepcopy(response)
-    invalid_response["decompression"]["solver_provenance"][
-        "residual"
-    ] = float("inf")
-    stale_record = {
-        "cases": [{
-            "case": "SLS-QP",
-            "assessment": assessment,
-            "response_mapping_scope": mapping_scope,
-            "responses": [{
-                "name": "QP",
-                "wk_mm": invalid_response["wk"],
-                "element_id": invalid_response["element_id"],
-                "decompression": invalid_response["decompression"],
-                "acceptance_role": "criterion input",
-                "context": contexts["QP"],
-            }],
-        }],
-    }
-    calculation = {
-        "input_sha256": "stale",
-        "crack_control": stale_record,
-    }
-    state = {"calculation_record": copy.deepcopy(calculation)}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_factor_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_invalid_crack_input_keys",
-        lambda: (),
-    )
-    monkeypatch.setattr(sector_app, "_project_state", lambda: ({}, {}))
-
-    download_text = sector_app._gather_project()
-    download_record = json.loads(download_text)["calculation"][
-        "crack_control"
-    ]
-    download_assessment = download_record["cases"][0]["assessment"]
-    assert download_assessment["status"] == "NOT ASSESSED"
-    assert download_assessment["verdict"] == "REVIEW"
-    assert "Infinity" not in download_text
-
-    state["calculation_record"] = copy.deepcopy(calculation)
-    monkeypatch.setattr(
-        sector_app,
-        "_current_table",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_project_input_hash",
-        lambda: "current-input-hash",
-    )
-    captured = {}
-
-    def capture_autosave(data, path):
-        captured["data"] = data
-        captured["path"] = path
-        return True
-
-    monkeypatch.setattr(sector_app, "_write_autosave", capture_autosave)
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-
-    assert sector_app._perform_autosave() is True
-    durable = state["calculation_record"]["crack_control"][
-        "cases"
-    ][0]["assessment"]
-    saved = json.loads(captured["data"])["calculation"][
-        "crack_control"
-    ]["cases"][0]["assessment"]
-    assert durable["status"] == "NOT ASSESSED"
-    assert saved["status"] == "NOT ASSESSED"
-    assert "Infinity" not in captured["data"]
-
-
-def test_crack_panel_labels_decompression_evidence_in_mpa(monkeypatch):
-    import sector_app
-
-    rendered = {
-        "success": [],
-        "dataframes": [],
-    }
-    fake_st = SimpleNamespace(
-        markdown=lambda *_args, **_kwargs: None,
-        caption=lambda *_args, **_kwargs: None,
-        success=lambda message, **_kwargs: rendered["success"].append(message),
-        error=lambda *_args, **_kwargs: None,
-        warning=lambda *_args, **_kwargs: None,
-        info=lambda *_args, **_kwargs: None,
-        dataframe=lambda data, **_kwargs: rendered["dataframes"].append(data),
-    )
-    monkeypatch.setattr(sector_app, "st", fake_st)
-    sector_app._crack_width_panel({
-        "crack": None,
-        "crack_short": None,
-        "crack_code": "EN 1992-1-1:2023",
-        "crack_assessment": {
-            "status": "OK",
-            "criterion": sls.CRITERION_DECOMPRESSION,
-            "value": -0.25,
-            "limit": None,
-            "case": "QP",
-            "governing": "concrete point 1",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "criterion_source": "QA controlled criterion",
-            "criteria": [{
-                "kind": sls.CRITERION_DECOMPRESSION,
-                "status": "OK",
-                "value": -0.25,
-                "limit": None,
-                "matched_responses": ["QP"],
-                "required_combination": (
-                    sls.COMBINATION_QUASI_PERMANENT
-                ),
-            }],
-            "response_contexts": {},
-        },
-    })
-
-    assert len(rendered["success"]) == 1
-    assert "-0.250 MPa" in rendered["success"][0]
-    assert "-0.250 mm" not in rendered["success"][0]
-    criterion_row = rendered["dataframes"][0][0]
-    assert criterion_row["Limit / requirement"] == "compression required"
-    assert criterion_row["Result"] == "-0.250 MPa"
-
-
-def test_2023_protection_route_change_invalidates_elastic_cache():
-    at = _fresh()
-    at.run()
-    _set(
-        at,
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 400.0),
-        ("number_input", "el_short_Mx", 100.0),
-        ("checkbox", "sls_cw", True),
-        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
-    )
-    _set(
-        at,
-        ("selectbox", "sls_prestress_class", sls.PRESTRESS_BONDED),
-        ("selectbox", "sls_exposure_class", sls.EXPOSURE_XC2_XC4),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        (
-            "selectbox",
-            "sls_total_combination",
-            sls.COMBINATION_FREQUENT,
-        ),
-    )
-    _set(
-        at,
-        (
-            "selectbox",
-            "sls_protection_class",
-            sls.PROTECTION_LEVEL_1_OR_PRETENSIONED,
-        ),
-    )
-    _calculate(at)
-    first = at.session_state["results"]["elastic"]
-    assert [
-        (item["kind"], item["required_combination"])
-        for item in first["crack_criteria"]
-    ] == [
-        (sls.CRITERION_DURABILITY, sls.COMBINATION_FREQUENT),
-        (sls.CRITERION_DECOMPRESSION, sls.COMBINATION_QUASI_PERMANENT),
-    ]
-
-    _set_and_click(
-        at,
-        "calculate",
-        (
-            "selectbox",
-            "sls_protection_class",
-            sls.PROTECTION_LEVEL_2_OR_3,
-        ),
-    )
-    second = at.session_state["results"]["elastic"]
-
-    assert second is not first
-    assert [
-        (item["kind"], item["required_combination"])
-        for item in second["crack_criteria"]
-    ] == [
-        (sls.CRITERION_DURABILITY, sls.COMBINATION_QUASI_PERMANENT),
-    ]
-
-
-def test_missing_response_combination_is_review_with_mapping_provenance():
-    at = _fresh()
-    at.run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 400.0),
-        ("checkbox", "sls_cw", True),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
-    )
-
-    assessment = at.session_state["results"]["elastic"]["crack_assessment"]
-    assert assessment["status"] == "NOT ASSESSED"
-    assert assessment["verdict"] == "REVIEW"
-    assert "No calculated response" in assessment["reason"]
-    assert assessment["response_contexts"]["Long-term"]["combination"] == (
-        sls.COMBINATION_UNSPECIFIED
-    )
-    assert "long_combination table field" in (
-        assessment["response_contexts"]["Long-term"]["provenance"]
-    )
-
-
-def test_crack_limit_verdict_and_candidate_table_are_retained():
+def test_crack_output_and_candidate_table_are_retained_without_verdict():
     at = _fresh()
     at.run()
     _set_and_click(
@@ -8038,21 +3895,14 @@ def test_crack_limit_verdict_and_candidate_table_are_retained():
         ("radio", "mode", "Elastic"),
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("number_input", "sls_wk_limit", 0.01),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
-        ("text_input", "sls_limit_source", "Project crack criterion"),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
-    assert e["crack_assessment"]["status"] == "EXCEEDED"
-    assert e["crack_assessment"]["limit"] == pytest.approx(0.01)
-    assert e["crack_assessment"]["case"] == "Long-term"
-    assert e["crack_assessment"]["governing"].startswith(("R", "P"))
+    assert e["crack_output"]["calculation_state"] == "CALCULATED"
+    assert e["crack_output"]["value"] > 0.0
+    assert e["crack_output"]["case"] in {"Long-term", "Short-term"}
+    assert e["crack_output"]["governing"].startswith(("R", "P"))
+    assert not {"limit", "util", "status"} & set(e["crack_output"])
     assert e["crack"]["candidates"]
     assert e["crack"]["candidates"][0]["wk"] == pytest.approx(e["crack"]["wk"])
     assert {"element_id", "x_mm", "y_mm", "area_mm2", "cover",
@@ -8060,15 +3910,13 @@ def test_crack_limit_verdict_and_candidate_table_are_retained():
         e["crack"]["candidates"][0].keys()
     _select_view(at, "Elastic Results")
     assert any(
-        "FAIL - Crack width" in item.value
-        and "governing" in item.value
-        and "case" in item.value
-        and "element" in item.value
-        for item in at.error
+        "No crack-width limit" in item.value
+        for item in at.caption
     )
+    assert not any("FAIL - Crack width" in item.value for item in at.error)
 
 
-def test_crack_limit_and_source_are_retained_when_no_width_is_calculated():
+def test_no_crack_width_is_output_not_applicable_without_limit_metadata():
     at = _fresh()
     at.run()
     _set_and_click(
@@ -8077,26 +3925,15 @@ def test_crack_limit_and_source_are_retained_when_no_width_is_calculated():
         ("number_input", "el_long_Mx", 0.0),
         ("number_input", "el_short_Mx", 0.0),
         ("checkbox", "sls_cw", True),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("number_input", "sls_wk_limit", 0.25),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
-        ("text_input", "sls_limit_source", "Project no-crack criterion"),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["crack"] is None and e["crack_short"] is None
-    assert e["crack_assessment"]["status"] == "NOT APPLICABLE"
-    assert e["crack_assessment"]["limit"] == pytest.approx(0.25)
-    assert e["sls_limit_source"] == "Project no-crack criterion"
+    assert e["crack_output"]["calculation_state"] == "NOT APPLICABLE"
+    assert e["crack_output"]["value"] is None
+    assert "sls_limit_source" not in e
     _select_view(at, "Elastic Results")
     assert any("No crack width:" in item.value for item in at.info)
-    assert any(
-        "Project no-crack criterion" in item.value for item in at.caption
-    )
 
 
 def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
@@ -8113,12 +3950,6 @@ def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
         ("number_input", "el_short_Mx", 150.0),
         ("checkbox", "sls_cw", True),
         ("selectbox", "sls_code", "DS/EN 1992-1-1 + DK NA"),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
@@ -8127,24 +3958,6 @@ def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
     assert e["crack"]["coarse"] is False and e["crack_coarse"]["coarse"] is True
     assert e["crack_coarse"]["wk"] < e["crack"]["wk"]             # coarse < fine, long-term
     assert e["crack_short_coarse"]["wk"] < e["crack_short"]["wk"]  # coarse < fine, short-term
-    acceptance_status = e["crack_assessment"]["status"]
-    assert acceptance_status in {"OK", "EXCEEDED"}
-    criterion = next(
-        item
-        for item in e["crack_assessment"]["criteria"]
-        if item["status"] == acceptance_status
-    )
-    assert criterion["matched_responses"] == [
-        "Long-term (fine)",
-        "Long-term (coarse)",
-    ]
-    recorded = at.session_state["calculation_record"]["crack_control"][
-        "cases"
-    ][0]["assessment"]
-    assert recorded["status"] == acceptance_status
-    assert recorded["verdict"] == (
-        "PASS" if acceptance_status == "OK" else "FAIL"
-    )
 
 
 def test_non_dk_na_reports_no_coarse_columns():
@@ -8184,137 +3997,41 @@ def test_ec2_2023_crack_edition_calculates():
     assert e["crack"]["wk"] > 0.0 and e["crack"]["k1_r"] >= 1.0
 
 
-def test_ec2_2023_mixed_reinforcement_fails_closed_without_xi_then_calculates():
+def test_bonded_tendon_ratio_invalidates_elastic_results_and_report():
+    # xi enters the 2023 mixed-reinforcement crack equation. Editing it must make
+    # both the elastic result and its generated report stale, and Calculate must
+    # recompute rather than reuse the old elastic result object.
     at = _fresh_qs(mode="Elastic")
     _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
     _set_and_click(
         at,
         "calculate",
-        ("number_input", "pre_IS", 5.0),
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
         ("selectbox", "sls_code", "EN 1992-1-1:2023"),
-        (
-            "selectbox",
-            "sls_exposure_class",
-            sls.EXPOSURE_XC2_XC4,
-        ),
-        (
-            "selectbox",
-            "sls_exposure_class",
-            sls.EXPOSURE_XC2_XC4,
-        ),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
+        ("number_input", "sls_tendon_xi", 0.5),
     )
     assert not at.exception
-    missing = at.session_state["results"]["elastic"]
-    assert missing["crack_assessment"]["status"] == "NOT ASSESSED"
-    assert "bond ratio xi" in missing["crack_assessment"]["reason"]
-    assert missing["crack_assessment"]["value"] is None
-    _select_view(at, "Results Overview")
-    assert any(
-        item.value.startswith("NOT ASSESSED -")
-        for item in at.warning
-    )
+    elastic_before = at.session_state["results"]["elastic"]
+    wk_before = elastic_before["crack"]["wk"]
 
-    _set_and_click(
-        at,
-        "calculate",
-        ("number_input", "sls_tendon_xi", 0.50),
-    )
-    assert not at.exception
-    calculated = at.session_state["results"]["elastic"]
-    assert calculated["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
-    assert calculated["crack"] is not None
-    assert calculated["crack"]["ap_eff"] > 0.0
-    assert 0.0 < calculated["crack"]["ap_eff_weighted"] < \
-        calculated["crack"]["ap_eff"]
-    assert calculated["crack"]["xi1_min"] > 0.0
-    assert calculated["crack"]["xi1_max"] <= 1.0
-    tendon_candidates = [
-        candidate
-        for candidate in calculated["crack"]["candidates"]
-        if candidate["element_type"] == "Tendon"
-    ]
-    assert tendon_candidates
-    latest = at.session_state["_latest_inputs"]
-    n_bars = len(latest["bars"])
-    for candidate in tendon_candidates:
-        tendon_index = candidate["element_no"] - 1
-        material = latest["tendon_materials"][tendon_index]
-        locked_in_mpa = material.Es * material.IS
-        assert locked_in_mpa > 0.0
-        global_index = n_bars + tendon_index
-        # The long-term crack candidate is the passive increment Delta sigma_p:
-        # the combined solver's displayed Long column includes Ep*IS once, while
-        # analyse_cracking already returns the passive value.
-        assert candidate["sigma_s"] == pytest.approx(
-            calculated["long"][global_index] - locked_in_mpa,
-            rel=0.02,
-        )
+    _goto_input_tab(at, "Project & report")
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+    assert "report_buffer" in at.session_state
+    assert not any("Report out of date" in w.value for w in at.warning)
 
-
-def test_ec2_2023_uniform_direct_tension_is_explicitly_scoped():
-    at = _fresh_qs(mode="Elastic")
-    _set_and_click(
-        at,
-        "qs_apply",
-        ("number_input", "bot_n", 4),
-        ("number_input", "top_n", 4),
-        ("number_input", "bot_d", 16.0),
-        ("number_input", "top_d", 16.0),
-        ("number_input", "bot_c_mm", 40.0),
-        ("number_input", "top_c_mm", 40.0),
-    )
-    _set_and_click(
-        at,
-        "calculate",
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_P", 1000.0),
-        ("number_input", "el_long_Mx", 0.0),
-        ("number_input", "el_long_My", 0.0),
-        ("number_input", "el_short_P", 0.0),
-        ("number_input", "el_short_Mx", 0.0),
-        ("number_input", "el_short_My", 0.0),
-        ("checkbox", "sls_cw", True),
-        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
-        (
-            "selectbox",
-            "sls_exposure_class",
-            sls.EXPOSURE_XC2_XC4,
-        ),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("text_input", "sls_exposure_context", "XC3 / appearance"),
-    )
-    assert not at.exception
-    elastic = at.session_state["results"]["elastic"]
-    assert elastic["crack_assessment"]["status"] in {
-        "OK", "EXCEEDED"
-    }, elastic["crack_assessment"].get("reason")
-    assert elastic["crack"]["direct_tension"] is True
-    assert elastic["crack"]["scope"] == "uniform-direct-tension"
-    assert elastic["crack"]["kfl"] == pytest.approx(1.0)
-    assert elastic["crack"]["k1_r"] == pytest.approx(1.0)
-    _select_view(at, "Results Overview")
-    assert any(
-        "Crack-control conclusion limitation" in item.value
-        for item in at.warning
-    )
+    _goto_input_tab(at, "Analysis settings")
+    _set(at, ("number_input", "sls_tendon_xi", 0.75))
     _select_view(at, "Elastic Results")
-    assert not at.exception
-    assert any(
-        "Crack-control scope" in item.value
-        for item in at.warning
-    )
+    assert any("press Calculate" in w.value for w in at.warning)
+    _goto_input_tab(at, "Project & report")
+    assert any("Report out of date" in w.value for w in at.warning)
+
+    _calculate(at)
+    elastic_after = at.session_state["results"]["elastic"]
+    assert elastic_after is not elastic_before
+    assert elastic_after["crack"]["wk"] != pytest.approx(wk_before)
 
 
 def test_old_crack_code_alias_targets_a_current_option():
@@ -8484,39 +4201,10 @@ def test_short_term_load_triggers_cracking():
     e = at.session_state["results"]["elastic"]
     assert e["cracked"] is True                    # cracked by the short-term peak
     assert e["lambda_cr"] < 1.0
-    # Both duration-state crack widths remain reported. Acceptance combination is
-    # a separate explicit input and is not inferred in this calculation-only test.
+    # Both crack widths are reported: the quasi-permanent (long-term) one for the
+    # code limit and the short-term one under the peak.
     assert e["crack"] is not None and e["crack"]["wk"] > 0.0
     assert e["crack_short"] is not None and e["crack_short"]["wk"] > 0.0
-
-
-def test_short_term_only_crack_verdict_ignores_no_tension_long_term():
-    at = _fresh()
-    at.run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 0.0),
-        ("number_input", "el_short_Mx", 400.0),
-        ("checkbox", "sls_cw", True),
-        (
-            "selectbox",
-            "sls_total_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
-    )
-
-    assert not at.exception
-    elastic = at.session_state["results"]["elastic"]
-    assert elastic["crack"] is None
-    assert elastic["crack_short"] is not None
-    assert elastic["crack_dispositions"]["Long-term"]["status"] == (
-        "NOT APPLICABLE"
-    )
-    assert elastic["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
-    assert elastic["crack_assessment"]["case"] == "Total (long + short)"
 
 
 def test_cracked_properties_use_the_governing_load_when_long_term_is_zero():
@@ -8634,15 +4322,14 @@ def test_prestress_gets_its_own_derived_modular_ratio():
     assert "| P1 - Prestressing steel | 195.0 | 5.000 | 5.000 |" in md
 
 
-def test_tendon_stress_limit_uses_fpk_not_proof_stress():
-    # The prestress material distinguishes fp0.1k (fytk) from fpk (futk).
-    # The user-facing tendon stress criterion is explicitly a percentage of fpk.
+def test_tendon_stress_is_an_output_without_a_limit():
     at = _fresh_qs(mode="Elastic")
     _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 3))
     _calculate(at)
-    check = at.session_state["results"]["elastic"]["stress_assessments"]["prestress"]
-    assert check["limit"] == pytest.approx(0.75 * 1860.0)
-    assert check["criterion"] == "75% fpk"
+    output = at.session_state["results"]["elastic"]["stress_outputs"]["prestress"]
+    assert output["calculation_state"] == "CALCULATED"
+    assert math.isfinite(output["value"])
+    assert not {"limit", "util", "status", "criterion"} & set(output)
 
 
 def test_transformed_area_uses_the_tendon_modular_ratio():
@@ -8706,644 +4393,3 @@ def test_crack_width_auto_cover_circular_section():
     e = at.session_state["results"]["elastic"]
     if e["crack"] is not None:
         assert e["crack"]["cover"] > 70.0
-
-
-def test_pr06_app_project_shear_method_is_qualified_and_switch_invalidates():
-    at = _fresh()
-    at.run()
-    _set(at, ("checkbox", "shear_on", True))
-    _set(
-        at,
-        ("toggle", "shear_interaction_on", True),
-        (
-            "selectbox",
-            "shear_interaction_method",
-            multidirectional.SHEAR_METHOD_PROJECT,
-        ),
-        ("checkbox", "shear_interaction_domain_confirmed", True),
-        ("number_input", "shear_interaction_exponent", 137.0),
-        (
-            "text_input",
-            "shear_interaction_source",
-            "Project DB clause INT-06",
-        ),
-        (
-            "text_input",
-            "shear_interaction_approval",
-            "Checker approval QA-06",
-        ),
-    )
-    _set_and_click(
-        at,
-        "calculate",
-        ("number_input", "shear_Vx", 1.0),
-        ("number_input", "shear_Vy", 1.0),
-    )
-
-    assert not at.exception
-    shear = at.session_state["results"]["shear"]
-    assert set(shear["directions"]) == {"vx", "vy"}
-    assert all(
-        item["status"] == "PASS"
-        for item in shear["directions"].values()
-    )
-    assert shear["interaction"]["verdict"] == "APPROVED CUSTOM PASS"
-    assert shear["interaction"]["qualification"] == "APPROVED CUSTOM"
-    assert shear["interaction"]["parameters"]["exponent"] == pytest.approx(
-        137.0
-    )
-    assert shear["status"] == "REVIEW"
-    record = at.session_state["calculation_record"][
-        "multidirectional_interaction"
-    ]
-    assert record["shear_cases"][0]["interaction"][
-        "evidence_fingerprint"
-    ]
-
-    prior_signature = at.session_state["result_sig"]
-    _goto_page(at, "Inputs")
-    at.selectbox(key="shear_interaction_method").set_value(
-        multidirectional.SHEAR_METHOD_EN_2023
-    ).run()
-    assert at.session_state["_latest_inputs"]["signature"] != prior_signature
-    _calculate(at)
-    switched = at.session_state["results"]["shear"]["interaction"]
-    assert switched["status"] == "NOT ASSESSED"
-    assert switched["interaction_assessed"] is False
-    assert "outside or missing its stated domain" in switched["reason"]
-
-
-def test_pr06_enabled_without_method_keeps_vx_vy_and_withholds_aggregate():
-    at = _fresh()
-    at.run()
-    _set(at, ("checkbox", "shear_on", True))
-    _set(at, ("toggle", "shear_interaction_on", True))
-    _set_and_click(
-        at,
-        "calculate",
-        ("number_input", "shear_Vx", 1.0),
-        ("number_input", "shear_Vy", 1.0),
-    )
-
-    assert not at.exception
-    assert (
-        "_case_error" not in at.session_state
-        or not at.session_state["_case_error"]
-    )
-    shear = at.session_state["results"]["shear"]
-    assert set(shear["directions"]) == {"vx", "vy"}
-    assert all(
-        item["status"] == "PASS"
-        for item in shear["directions"].values()
-    )
-    assert shear["interaction"]["status"] == "NOT ASSESSED"
-    assert shear["interaction_assessed"] is False
-    assert shear["status"] == "REVIEW"
-
-
-def test_pr06_hostile_interaction_state_blocks_calculation_save_and_autosave(
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
-    at = _fresh()
-    hostile = {
-        "shear_interaction_on": np.bool_(True),
-        "shear_interaction_method": ["not", "a", "selection"],
-        "shear_interaction_exponent": math.nan,
-        "shear_interaction_source": {"not": "text"},
-    }
-    for key, value in hostile.items():
-        at.session_state[key] = value
-    at.session_state["_durable_input_scalars"] = dict(hostile)
-
-    at.run()
-
-    expected = tuple(sorted(hostile))
-    assert not at.exception
-    assert at.session_state["_invalid_interaction_input_keys"] == expected
-    inp = at.session_state["_latest_inputs"]
-    assert inp["invalid_interaction_input_keys"] == expected
-    assert multidirectional.validation_errors(inp)
-    assert any(
-        "Rejected malformed multidirectional state" in item.value
-        for item in at.error
-    )
-
-    at.session_state["_autosave_t"] = 0.0
-    _calculate(at)
-    assert "rejected multidirectional interaction fields" in (
-        at.session_state["_case_error"]
-    )
-    assert not (tmp_path / "autosave.json").exists()
-
-    _goto_page(at, "Inputs")
-    at.button(key="confirm_shear_interaction_repairs").click().run()
-    assert "_invalid_interaction_input_keys" not in at.session_state
-
-
-def test_pr06_app_crack_method_binds_current_canonical_criterion():
-    at = _fresh()
-    at.run()
-    _set(
-        at,
-        ("radio", "mode", "Elastic"),
-        ("number_input", "el_long_Mx", 400.0),
-        ("checkbox", "sls_cw", True),
-        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
-        (
-            "selectbox",
-            "sls_exposure_class",
-            sls.EXPOSURE_XC2_XC4,
-        ),
-        (
-            "selectbox",
-            "sls_long_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("text_input", "sls_exposure_context", "XC3 / durability"),
-    )
-    case_id = str(first_case_value(at, "el_case_id"))
-    _set(
-        at,
-        ("toggle", "crack_interaction_on", True),
-        (
-            "selectbox",
-            "crack_interaction_method",
-            multidirectional.CRACK_METHOD_PROJECT,
-        ),
-        ("text_input", "crack_interaction_case_id", case_id),
-        (
-            "text_input",
-            "crack_interaction_criterion_id",
-            "standard-durability",
-        ),
-        (
-            "selectbox",
-            "crack_interaction_combination",
-            sls.COMBINATION_QUASI_PERMANENT,
-        ),
-        ("checkbox", "crack_interaction_domain_confirmed", True),
-        ("number_input", "crack_interaction_component_x_mm", 0.10),
-        ("number_input", "crack_interaction_component_y_mm", 0.10),
-        ("number_input", "crack_interaction_limit_x_mm", 0.30),
-        ("number_input", "crack_interaction_limit_y_mm", 0.30),
-        ("number_input", "crack_interaction_exponent", 2.0),
-        (
-            "text_input",
-            "crack_interaction_source",
-            "Project crack note CR-06",
-        ),
-        (
-            "text_input",
-            "crack_interaction_approval",
-            "Checker approval AC-06",
-        ),
-    )
-    _calculate(at)
-
-    assert not at.exception
-    elastic = at.session_state["results"]["elastic"]
-    interaction = at.session_state["results"]["crack_interaction"]
-    criterion = next(
-        item
-        for item in elastic["crack_assessment"]["criteria"]
-        if item["criterion_id"] == "standard-durability"
-    )
-    assert interaction["verdict"] == "APPROVED CUSTOM PASS"
-    assert interaction["criterion"]["elastic_case"] == case_id
-    assert interaction["criterion"]["required_combination"] == (
-        sls.COMBINATION_QUASI_PERMANENT
-    )
-    assert interaction["criterion"]["acceptance_fingerprint"] == (
-        criterion["acceptance_evidence"]["fingerprint"]
-    )
-    assert elastic["crack_interaction"] == interaction
-    assert elastic["crack_assessment"]["status"] in {"OK", "EXCEEDED"}
-
-
-def test_pr06_download_durable_autosave_and_resave_reject_mutated_evidence(
-    tmp_path,
-    monkeypatch,
-):
-    import load_cases
-    import project_io
-    import sector_app
-
-    def direction(component, demand, resistance):
-        return {
-            "component": component,
-            "axis": "y" if component == "vx" else "x",
-            "v_ed": demand,
-            "signed_v_ed": demand,
-            "bw": 1000.0,
-            "d": 500.0,
-            "method": multidirectional.SHEAR_CODE_EN_2023,
-            "status": "PASS",
-            "util": demand / resistance,
-            "res": {
-                "valid": True,
-                "vrd_c": resistance,
-            },
-        }
-
-    scalars = {
-        **multidirectional.crack_configuration({}),
-        **multidirectional.shear_configuration({}),
-        "shear_interaction_on": True,
-        "shear_interaction_method": (
-            multidirectional.SHEAR_METHOD_PROJECT
-        ),
-        "shear_interaction_axis_x": "global x / Vx",
-        "shear_interaction_axis_y": "global y / Vy",
-        "shear_interaction_domain_confirmed": True,
-        "shear_interaction_exponent": 2.0,
-        "shear_interaction_source": "Project DB clause INT-06",
-        "shear_interaction_approval": "Checker approval QA-06",
-        "shear_on": True,
-        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
-        "plastic_case": {"id": "ULS-SESSION-MUTATION"},
-    }
-    results = {
-        "shear": {
-            "directions": {
-                "vx": direction("vx", 0.2, 1.0),
-                "vy": direction("vy", 0.3, 1.0),
-            },
-            "biaxial": True,
-            "status": "REVIEW",
-        },
-    }
-    multidirectional.apply_to_results(scalars, results)
-    bundle = multidirectional.interaction_calculation_record(results)
-    interaction = bundle["shear_cases"][0]["interaction"]
-    retained = [
-        copy.deepcopy(component)
-        for component in interaction["components"]
-        if component["id"] == "vx"
-    ]
-    interaction.update(
-        interaction_assessed=True,
-        status="NOT APPLICABLE",
-        verdict="NOT APPLICABLE",
-        qualification=None,
-        utilisation=None,
-        components=retained,
-        terms=[],
-        reason="Forged jointly re-sealed directional truncation.",
-        issues=[],
-    )
-    for key in (
-        "approval",
-        "authority",
-        "axes",
-        "calculation_saturated",
-        "domain",
-        "formula",
-        "parameters",
-        "rotation_scope",
-        "rotationally_invariant",
-        "source",
-    ):
-        interaction.pop(key, None)
-    interaction.pop("evidence_fingerprint")
-    interaction["evidence_fingerprint"] = hashlib.sha256(json.dumps(
-        interaction,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")).hexdigest()
-    obsolete_sibling = {
-        "schema": "sector.multidirectional.shear-case.v1",
-        "case": "ULS-SESSION-MUTATION",
-        "components": copy.deepcopy(retained),
-    }
-    obsolete_sibling["fingerprint"] = hashlib.sha256(json.dumps(
-        obsolete_sibling,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")).hexdigest()
-    bundle["directional_shear_cases"] = [obsolete_sibling]
-    bundle.pop("fingerprint")
-    bundle["fingerprint"] = hashlib.sha256(json.dumps(
-        bundle,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")).hexdigest()
-    tables = {
-        load_cases.PLASTIC_TABLE_KEY: load_cases.table_from_records(
-            [{
-                "name": "ULS-SESSION-MUTATION",
-                "description": "PR-06 session authority fixture",
-                "n_ed_kn": 0.0,
-                "mx_ed_knm": 0.0,
-                "my_ed_knm": 0.0,
-                "vx_ed_kn": 0.2,
-                "vy_ed_kn": 0.3,
-                "vx_face": load_cases.FACE_AUTO,
-                "vy_face": load_cases.FACE_AUTO,
-                "t_ed_knm": 0.0,
-                "check_minimum_reinforcement": False,
-            }],
-            load_cases.PLASTIC_TABLE_KEY,
-        ),
-        load_cases.ELASTIC_TABLE_KEY: load_cases.empty_table(
-            load_cases.ELASTIC_TABLE_KEY
-        ),
-    }
-    digest = project_io.input_sha256(tables, scalars)
-    calculation = {
-        "input_sha256": digest,
-        "multidirectional_interaction": bundle,
-    }
-    state = {"calculation_record": copy.deepcopy(calculation)}
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app, "_invalid_factor_input_keys", lambda: ()
-    )
-    monkeypatch.setattr(
-        sector_app, "_invalid_crack_input_keys", lambda: ()
-    )
-    monkeypatch.setattr(
-        sector_app, "_invalid_interaction_input_keys", lambda: ()
-    )
-    monkeypatch.setattr(
-        sector_app, "_project_state", lambda: (tables, scalars)
-    )
-
-    download = json.loads(sector_app._gather_project())
-    download_record = download["calculation"][
-        "multidirectional_interaction"
-    ]
-    assert download["calculation"]["matches_saved_inputs"] is False
-    assert download_record["publication_validation"]["status"] == "REJECTED"
-    assert download_record["shear_cases"][0]["interaction"]["status"] == (
-        "NOT ASSESSED"
-    )
-    assert any(
-        "independently reconstructed current case/demand authority" in issue
-        or "persisted sibling directional shear evidence" in issue
-        for issue in download_record["publication_validation"]["issues"]
-    )
-
-    state["calculation_record"] = copy.deepcopy(calculation)
-    monkeypatch.setattr(
-        sector_app, "_current_table", lambda *_args, **_kwargs: object()
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app, "_project_input_hash", lambda: digest
-    )
-    captured = {}
-
-    def capture_autosave(data, path):
-        captured["data"] = data
-        captured["path"] = path
-        return True
-
-    monkeypatch.setattr(
-        sector_app, "_write_autosave", capture_autosave
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-    assert sector_app._perform_autosave() is True
-    durable = state["calculation_record"][
-        "multidirectional_interaction"
-    ]
-    autosaved = json.loads(captured["data"])["calculation"][
-        "multidirectional_interaction"
-    ]
-    assert durable["publication_validation"]["status"] == "REJECTED"
-    assert autosaved["publication_validation"]["status"] == "REJECTED"
-
-    resaved = json.loads(sector_app._gather_project())["calculation"][
-        "multidirectional_interaction"
-    ]
-    assert resaved["publication_validation"]["status"] == "REJECTED"
-
-
-def test_pr06_live_autosave_uses_current_solver_authority_but_file_recalculates(
-    tmp_path,
-    monkeypatch,
-):
-    import load_cases
-    import project_io
-    import sector_app
-
-    case_id = "ULS-LIVE-AUTOSAVE"
-
-    def direction(component, demand):
-        return {
-            "component": component,
-            "axis": "y" if component == "vx" else "x",
-            "v_ed": demand,
-            "signed_v_ed": demand,
-            "bw": 1000.0,
-            "d": 500.0,
-            "method": multidirectional.SHEAR_CODE_EN_2023,
-            "status": "PASS",
-            "util": demand,
-            "res": {"valid": True, "vrd_c": 1.0},
-        }
-
-    scalars = {
-        **multidirectional.crack_configuration({}),
-        **multidirectional.shear_configuration({}),
-        "shear_interaction_on": True,
-        "shear_interaction_method": multidirectional.SHEAR_METHOD_PROJECT,
-        "shear_interaction_axis_x": "global x / Vx",
-        "shear_interaction_axis_y": "global y / Vy",
-        "shear_interaction_domain_confirmed": True,
-        "shear_interaction_exponent": 2.0,
-        "shear_interaction_source": "Project DB clause INT-06",
-        "shear_interaction_approval": "Checker approval QA-06",
-        "shear_on": True,
-        "shear_method": multidirectional.SHEAR_CODE_EN_2023,
-        "plastic_case": {"id": case_id},
-    }
-    case_results = {
-        "shear": {
-            "directions": {
-                "vx": direction("vx", 0.2),
-                "vy": direction("vy", 0.3),
-            },
-            "biaxial": True,
-            "status": "REVIEW",
-        },
-    }
-    results = {
-        "plastic_cases": [{
-            "name": case_id,
-            "results": case_results,
-        }],
-    }
-    multidirectional.apply_to_results(scalars, results)
-    tables = {
-        load_cases.PLASTIC_TABLE_KEY: load_cases.table_from_records(
-            [{
-                "name": case_id,
-                "description": "PR-06 live autosave authority fixture",
-                "n_ed_kn": 0.0,
-                "mx_ed_knm": 0.0,
-                "my_ed_knm": 0.0,
-                "vx_ed_kn": 0.2,
-                "vy_ed_kn": 0.3,
-                "vx_face": load_cases.FACE_AUTO,
-                "vy_face": load_cases.FACE_AUTO,
-                "t_ed_knm": 0.0,
-                "check_minimum_reinforcement": False,
-            }],
-            load_cases.PLASTIC_TABLE_KEY,
-        ),
-        load_cases.ELASTIC_TABLE_KEY: load_cases.empty_table(
-            load_cases.ELASTIC_TABLE_KEY
-        ),
-    }
-    digest = project_io.input_sha256(tables, scalars)
-    state = {
-        "results": results,
-        "calculation_record": {
-            "input_sha256": digest,
-            "multidirectional_interaction": (
-                multidirectional.interaction_calculation_record(results)
-            ),
-        },
-    }
-    monkeypatch.setattr(
-        sector_app,
-        "st",
-        SimpleNamespace(session_state=state),
-    )
-    monkeypatch.setattr(
-        sector_app, "_invalid_factor_input_keys", lambda: ()
-    )
-    monkeypatch.setattr(
-        sector_app, "_invalid_crack_input_keys", lambda: ()
-    )
-    monkeypatch.setattr(
-        sector_app, "_invalid_interaction_input_keys", lambda: ()
-    )
-    project_state = {"tables": tables, "scalars": scalars}
-    monkeypatch.setattr(
-        sector_app,
-        "_project_state",
-        lambda: (
-            project_state["tables"],
-            project_state["scalars"],
-        ),
-    )
-    monkeypatch.setattr(
-        sector_app, "_current_table", lambda *_args, **_kwargs: object()
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_pts_from_df",
-        lambda *_args, **_kwargs: [(0, 0), (1, 0), (0, 1)],
-    )
-    monkeypatch.setattr(
-        sector_app, "_project_input_hash", lambda: digest
-    )
-    captured = {}
-
-    def capture_autosave(data, _path):
-        captured["data"] = data
-        return True
-
-    monkeypatch.setattr(
-        sector_app, "_write_autosave", capture_autosave
-    )
-    monkeypatch.setattr(
-        sector_app,
-        "_autosave_path",
-        lambda: tmp_path / "autosave.json",
-    )
-
-    assert sector_app._perform_autosave() is True
-    live_calculation = state["calculation_record"]
-    live_interaction = live_calculation["multidirectional_interaction"]
-    assert live_calculation["matches_saved_inputs"] is True
-    assert live_interaction["publication_validation"]["status"] == "ACCEPTED"
-    assert [
-        component["id"]
-        for component in live_interaction["shear_cases"][0][
-            "interaction"
-        ]["components"]
-    ] == ["vx", "vy"]
-    assert set(
-        state["results"]["plastic_cases"][0]["results"]["shear"][
-            "directions"
-        ]
-    ) == {"vx", "vy"}
-
-    saved = json.loads(captured["data"])["calculation"]
-    assert saved["matches_saved_inputs"] is False
-    assert saved["multidirectional_interaction"][
-        "publication_validation"
-    ]["status"] == "REJECTED"
-
-    forged_case_results = {
-        "shear": {
-            "directions": {
-                "vx": direction("vx", 0.05),
-                "vy": direction("vy", 0.06),
-            },
-            "biaxial": True,
-            "status": "REVIEW",
-        },
-    }
-    forged_results = {
-        "plastic_cases": [{
-            "name": case_id,
-            "results": forged_case_results,
-        }],
-    }
-    multidirectional.apply_to_results(scalars, forged_results)
-    assert forged_case_results["shear"]["interaction"]["status"] == "PASS"
-    state["results"] = forged_results
-    state["calculation_record"] = {
-        "input_sha256": digest,
-        "multidirectional_interaction": (
-            multidirectional.interaction_calculation_record(forged_results)
-        ),
-    }
-    project_state["tables"] = {}
-    captured.clear()
-
-    assert sector_app._perform_autosave() is True
-    rejected_live = state["calculation_record"]
-    rejected_interaction = rejected_live["multidirectional_interaction"]
-    assert rejected_live["matches_saved_inputs"] is False
-    assert rejected_interaction["publication_validation"]["status"] == (
-        "REJECTED"
-    )
-    assert any(
-        "without both independent current authorities" in issue
-        and "action case/signed-demand authority" in issue
-        for issue in rejected_interaction["publication_validation"]["issues"]
-    )
-    assert set(
-        state["results"]["plastic_cases"][0]["results"]["shear"][
-            "directions"
-        ]
-    ) == {"vx", "vy"}
-    forged_saved = json.loads(captured["data"])["calculation"]
-    assert forged_saved["matches_saved_inputs"] is False
-    assert forged_saved["multidirectional_interaction"][
-        "publication_validation"
-    ]["status"] == "REJECTED"

@@ -11,10 +11,8 @@ long-term/short-term convention:
 * the combined state is ``long + short``.
 
 The pure helpers in this module are shared by project I/O, the fatigue
-application adapter and the Streamlit interface. Authority selections remain
-traceability metadata and validation rules only. Edition factor presets are a
-separate, explicit workflow: their complete derivation is returned with the
-final values, while approved overrides remain unchanged.
+application adapter and the Streamlit interface. The engineer supplies every
+action, cycle count and numerical factor directly.
 """
 
 from __future__ import annotations
@@ -25,9 +23,6 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 
 import pandas as pd
-
-from sector import codes, conformance
-from sector.fatigue import STANDARD_CONCRETE_MINER_C
 
 
 VERSION = 2
@@ -51,261 +46,8 @@ STRESS_MODELS = (
 
 EC2_2005 = "DS/EN 1992-1-1:2005"
 EC2_2005_DKNA = "DS/EN 1992-1-1:2005 + DK NA:2024"
-EC2_2_2005_AC = "DS/EN 1992-2:2005 + AC:2008"
 EC2_2023 = "DS/EN 1992-1-1:2023"
-EDITIONS = (EC2_2005, EC2_2005_DKNA, EC2_2_2005_AC, EC2_2023)
-
-MINER_BASIS_NOT_ESTABLISHED = "Not established - review required"
-MINER_BASIS_BRIDGE_STANDARD = "EN 1992-2 bridge methodology"
-MINER_BASIS_2023_STANDARD = "EN 1992-1-1:2023 standard"
-MINER_BASIS_PROJECT_ADOPTION = "Approved project-basis adoption"
-MINER_BASIS_PROJECT_SN_RELATION = "Approved project S-N relation"
-MINER_BASES = (
-    MINER_BASIS_NOT_ESTABLISHED,
-    MINER_BASIS_BRIDGE_STANDARD,
-    MINER_BASIS_2023_STANDARD,
-    MINER_BASIS_PROJECT_ADOPTION,
-    MINER_BASIS_PROJECT_SN_RELATION,
-)
-
-FACTOR_MODE_PRESET = codes.FACTOR_MODE_PRESET
-FACTOR_MODE_OVERRIDE = codes.FACTOR_MODE_OVERRIDE
-FACTOR_MODE_LEGACY = "Legacy saved factors - review required"
-FACTOR_MODES = (
-    FACTOR_MODE_PRESET,
-    FACTOR_MODE_OVERRIDE,
-    FACTOR_MODE_LEGACY,
-)
-
-# Edition-aligned starting points. The Danish annex first gives the material
-# bases as gamma0*gamma3 multiples in Table 2.1Na NA and then requires both
-# fatigue material factors to be multiplied by 1.1. No project/control category
-# is inferred: gamma0 and gamma3 remain explicit inputs.
-FATIGUE_FACTOR_PRESETS = {
-    EC2_2005: {
-        "gamma_s_base": 1.15,
-        "gamma_c_base": 1.50,
-        "fatigue_multiplier": 1.0,
-        "uses_gamma0_gamma3": False,
-        "reference": (
-            "EN 1992-1-1:2004 + AC:2010 + A1:2014, "
-            "2.4.2.4 and fatigue material factors"
-        ),
-    },
-    EC2_2005_DKNA: {
-        "gamma_s_base": 1.20,
-        "gamma_c_base": 1.45,
-        "fatigue_multiplier": 1.10,
-        "uses_gamma0_gamma3": True,
-        "reference": (
-            "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01, "
-            "2.4.2.4(1), Table 2.1Na NA and fatigue paragraph"
-        ),
-    },
-    EC2_2_2005_AC: {
-        "gamma_s_base": 1.15,
-        "gamma_c_base": 1.50,
-        "fatigue_multiplier": 1.0,
-        "uses_gamma0_gamma3": False,
-        "reference": (
-            "DS/EN 1992-2:2005 + AC:2008; inherited EN 1992-1-1 "
-            "fatigue material factors"
-        ),
-    },
-    EC2_2023: {
-        "gamma_s_base": 1.15,
-        "gamma_c_base": 1.50,
-        "fatigue_multiplier": 1.0,
-        "uses_gamma0_gamma3": False,
-        "reference": "DS/EN 1992-1-1:2023, fatigue material factors",
-    },
-}
-
-
-def fatigue_factor_preset(
-    edition: str,
-    gamma0: float = 1.0,
-    gamma3: float = 1.0,
-) -> dict:
-    """Return resolved edition defaults and their complete derivation."""
-    if edition not in FATIGUE_FACTOR_PRESETS:
-        raise ValueError(f"unknown fatigue edition: {edition}")
-    preset = FATIGUE_FACTOR_PRESETS[edition]
-    g0 = codes.strict_positive_real(gamma0, "fatigue gamma0")
-    g3 = codes.strict_positive_real(gamma3, "fatigue gamma3")
-    uses_categories = bool(preset["uses_gamma0_gamma3"])
-    applied_g0 = g0 if uses_categories else 1.0
-    applied_g3 = g3 if uses_categories else 1.0
-    multiplier = (
-        float(preset["fatigue_multiplier"]) * applied_g0 * applied_g3
-    )
-    gamma_s = float(preset["gamma_s_base"]) * multiplier
-    gamma_c = float(preset["gamma_c_base"]) * multiplier
-    return {
-        "edition": edition,
-        "reference": preset["reference"],
-        "uses_gamma0_gamma3": uses_categories,
-        "gamma0": applied_g0,
-        "gamma3": applied_g3,
-        "gamma_s_base": float(preset["gamma_s_base"]),
-        "gamma_c_base": float(preset["gamma_c_base"]),
-        "fatigue_multiplier": float(preset["fatigue_multiplier"]),
-        "gamma_s": gamma_s,
-        "gamma_c": gamma_c,
-        "gamma_s_derivation": (
-            f"{float(preset['gamma_s_base']):.2f} x "
-            f"{float(preset['fatigue_multiplier']):.2f} x "
-            f"{applied_g0:.3f} x {applied_g3:.3f} = {gamma_s:.3f}"
-            if uses_categories
-            else f"{gamma_s:.3f} (edition tabulated value)"
-        ),
-        "gamma_c_derivation": (
-            f"{float(preset['gamma_c_base']):.2f} x "
-            f"{float(preset['fatigue_multiplier']):.2f} x "
-            f"{applied_g0:.3f} x {applied_g3:.3f} = {gamma_c:.3f}"
-            if uses_categories
-            else f"{gamma_c:.3f} (edition tabulated value)"
-        ),
-    }
-
-
-def resolve_fatigue_factors(
-    edition: str,
-    *,
-    mode: str = FACTOR_MODE_PRESET,
-    gamma_s: float | None = None,
-    gamma_c: float | None = None,
-    gamma0: float = 1.0,
-    gamma3: float = 1.0,
-    approval_reference: str = "",
-) -> tuple[float, float, dict]:
-    """Resolve actual factors and their independent conformance evidence."""
-    preset = fatigue_factor_preset(edition, gamma0=gamma0, gamma3=gamma3)
-    preset_s, preset_c = preset["gamma_s"], preset["gamma_c"]
-    approval = conformance.typed_text(
-        approval_reference,
-        "fatigue-factor approval reference",
-    )
-    if mode == FACTOR_MODE_PRESET:
-        final_s = (
-            preset_s
-            if gamma_s is None
-            else codes.strict_positive_real(
-                gamma_s,
-                "the final reinforcement fatigue material factor",
-            )
-        )
-        final_c = (
-            preset_c
-            if gamma_c is None
-            else codes.strict_positive_real(
-                gamma_c,
-                "the final concrete fatigue material factor",
-            )
-        )
-        parameter_basis = conformance.STANDARD_BASIS
-        custom_methodology = ""
-    elif mode in (FACTOR_MODE_OVERRIDE, FACTOR_MODE_LEGACY):
-        if gamma_s is None or gamma_c is None:
-            raise ValueError("final fatigue material factors are required")
-        final_s = codes.strict_positive_real(
-            gamma_s,
-            "the final reinforcement fatigue material factor",
-        )
-        final_c = codes.strict_positive_real(
-            gamma_c,
-            "the final concrete fatigue material factor",
-        )
-        parameter_basis = conformance.CUSTOM_BASIS
-        custom_methodology = (
-            "Project material-factor override"
-            if mode == FACTOR_MODE_OVERRIDE
-            else "Migrated legacy material-factor value"
-        )
-        if mode == FACTOR_MODE_LEGACY:
-            approval = ""
-    else:
-        raise ValueError(f"unknown fatigue factor mode: {mode}")
-    records = {
-        "gamma_s": conformance.assess_parameter(
-            final_s,
-            parameter_id="fatigue.gamma_s",
-            label="Reinforcement fatigue material factor gamma_s",
-            selected_standard=edition,
-            standard_methodology=(
-                "Edition-derived fatigue material-factor preset"
-            ),
-            normative_source=str(preset["reference"]),
-            basis=parameter_basis,
-            custom_methodology=custom_methodology,
-            approval_reference=approval,
-            prescribed_value=preset_s,
-        ),
-        "gamma_c": conformance.assess_parameter(
-            final_c,
-            parameter_id="fatigue.gamma_c",
-            label="Concrete fatigue material factor gamma_c,fat",
-            selected_standard=edition,
-            standard_methodology=(
-                "Edition-derived fatigue material-factor preset"
-            ),
-            normative_source=str(preset["reference"]),
-            basis=parameter_basis,
-            custom_methodology=custom_methodology,
-            approval_reference=approval,
-            prescribed_value=preset_c,
-        ),
-    }
-    aggregate = conformance.aggregate(
-        list(records.values()),
-        analytical_status=conformance.STATUS_PASS,
-        selected_standard=edition,
-    )
-    if mode == FACTOR_MODE_PRESET:
-        derivation_s = (
-            preset["gamma_s_derivation"]
-            if math.isclose(final_s, preset_s, rel_tol=0.0, abs_tol=1.0e-12)
-            else (
-                f"actual retained value = {final_s:.3f}; edition preset "
-                f"= {preset_s:.3f}"
-            )
-        )
-        derivation_c = (
-            preset["gamma_c_derivation"]
-            if math.isclose(final_c, preset_c, rel_tol=0.0, abs_tol=1.0e-12)
-            else (
-                f"actual retained value = {final_c:.3f}; edition preset "
-                f"= {preset_c:.3f}"
-            )
-        )
-    else:
-        qualifier = (
-            "approved custom final override"
-            if aggregate["state"] == conformance.STATE_APPROVED_CUSTOM
-            else (
-                "custom final override - review required"
-                if mode == FACTOR_MODE_OVERRIDE
-                else "legacy saved final value - review required"
-            )
-        )
-        derivation_s = f"{qualifier} = {final_s:.3f}"
-        derivation_c = f"{qualifier} = {final_c:.3f}"
-    return final_s, final_c, {
-        **preset,
-        "mode": mode,
-        "preset_gamma_s": preset_s,
-        "preset_gamma_c": preset_c,
-        "gamma_s": final_s,
-        "gamma_c": final_c,
-        "approval_reference": approval,
-        "gamma_s_derivation": derivation_s,
-        "gamma_c_derivation": derivation_c,
-        "override": mode == FACTOR_MODE_OVERRIDE,
-        "legacy_review_required": mode == FACTOR_MODE_LEGACY,
-        "parameter_conformance": records,
-        "conformance": aggregate,
-    }
-
+EDITIONS = (EC2_2005, EC2_2005_DKNA, EC2_2023)
 
 PRESET_2005_BARS = "EC2:2005 - straight reinforcing bars"
 PRESET_2005_BENT_BARS = "EC2:2005 - bent reinforcing bars"
@@ -448,107 +190,15 @@ _STANDARD_PRESET_FIELDS = (
     "bend_reduction",
 )
 
-# Authority/method identifiers are stable project-file values.  The labels are
-# deliberately explicit because the selected method is reported as provenance;
-# Sector does not generate traffic models or apply authority-specific factors.
-AUTHORITY_USER = "User-defined / other"
-AUTHORITY_VD = "Vejdirektoratet"
-AUTHORITY_BN_NEW = "Banedanmark - new bridge"
-AUTHORITY_BN_EXISTING = "Banedanmark - existing bridge"
-AUTHORITIES = (
-    AUTHORITY_USER,
-    AUTHORITY_VD,
-    AUTHORITY_BN_NEW,
-    AUTHORITY_BN_EXISTING,
-)
-
-METHOD_USER_GROUPED = "User-defined grouped spectrum"
-METHOD_VD_FLM1 = "VD FLM1 - maximum stress range"
-METHOD_VD_FLM4 = "VD FLM4 - damage spectrum"
-METHOD_VD_FLM5 = "VD FLM5 - measured traffic"
-METHOD_BN_NEW_1 = "BN1-59-5 new bridge - method 1"
-METHOD_BN_NEW_2 = "BN1-59-5 new bridge - method 2"
-METHOD_BN_EXISTING_1 = "BN1-59-5 existing bridge - method 1"
-METHOD_BN_EXISTING_2 = "BN1-59-5 existing bridge - method 2"
-METHOD_BN_EXISTING_3 = "BN1-59-5 existing bridge - method 3"
-METHOD_BN_EXISTING_4 = "BN1-59-5 existing bridge - method 4"
-
-METHODS_BY_AUTHORITY = {
-    AUTHORITY_USER: (METHOD_USER_GROUPED,),
-    AUTHORITY_VD: (METHOD_VD_FLM1, METHOD_VD_FLM4, METHOD_VD_FLM5),
-    AUTHORITY_BN_NEW: (METHOD_BN_NEW_1, METHOD_BN_NEW_2),
-    AUTHORITY_BN_EXISTING: (
-        METHOD_BN_EXISTING_1,
-        METHOD_BN_EXISTING_2,
-        METHOD_BN_EXISTING_3,
-        METHOD_BN_EXISTING_4,
-    ),
-}
-
+METHOD_GROUPED = "Grouped action spectrum"
+METHODS = (METHOD_GROUPED,)
 METHOD_REFERENCES = {
-    METHOD_USER_GROUPED: "User-defined calculation basis",
-    METHOD_VD_FLM1: (
-        "Vejledning til belastnings- og beregningsgrundlag for broer, "
-        "clause 5.3.6 (FLM1)"
+    METHOD_GROUPED: (
+        "User-entered grouped actions and cycle counts; the selected fatigue "
+        "resistance equation is reported separately"
     ),
-    METHOD_VD_FLM4: (
-        "Vejledning til belastnings- og beregningsgrundlag for broer, "
-        "clause 5.3.6 (FLM4)"
-    ),
-    METHOD_VD_FLM5: (
-        "Vejledning til belastnings- og beregningsgrundlag for broer, "
-        "clause 5.3.6 (FLM5)"
-    ),
-    METHOD_BN_NEW_1: "BN1-59-5:2024, clause 13.3.6, method 1",
-    METHOD_BN_NEW_2: "BN1-59-5:2024, clause 13.3.6, method 2",
-    METHOD_BN_EXISTING_1: "BN1-59-5:2024, clause 13.3.7, method 1",
-    METHOD_BN_EXISTING_2: "BN1-59-5:2024, clause 13.3.7, method 2",
-    METHOD_BN_EXISTING_3: "BN1-59-5:2024, clause 13.3.7, method 3",
-    METHOD_BN_EXISTING_4: "BN1-59-5:2024, clause 13.3.7, method 4",
 }
-
-STATUS_NOT_STATED = "Not stated"
-DYNAMIC_INCLUDED = "Included"
-DYNAMIC_NOT_INCLUDED = "Not included"
-DYNAMIC_NOT_APPLICABLE = "Not applicable"
-DYNAMIC_OPTIONS = (
-    STATUS_NOT_STATED,
-    DYNAMIC_INCLUDED,
-    DYNAMIC_NOT_INCLUDED,
-    DYNAMIC_NOT_APPLICABLE,
-)
-
-COUNTING_RAINFLOW = "Rainflow counting completed"
-COUNTING_OTHER = "Other documented counting method"
-COUNTING_NOT_REQUIRED = "Not required"
-COUNTING_OPTIONS = (
-    STATUS_NOT_STATED,
-    COUNTING_RAINFLOW,
-    COUNTING_OTHER,
-    COUNTING_NOT_REQUIRED,
-)
-
-ATYPICAL_CONSIDERED = "Considered"
-ATYPICAL_NOT_APPLICABLE = "Not applicable"
-ATYPICAL_OPTIONS = (
-    STATUS_NOT_STATED,
-    ATYPICAL_CONSIDERED,
-    ATYPICAL_NOT_APPLICABLE,
-)
-
-BASIS_FIELDS = (
-    "authority",
-    "method",
-    "spectrum_source",
-    "cycle_count_source",
-    "dynamic_effects",
-    "cycle_counting",
-    "concurrence_basis",
-    "atypical_traffic",
-    "approval_reference",
-    "authority_adjustments",
-    "notes",
-)
+BASIS_FIELDS = ("method", "notes")
 
 SPECTRUM = "spectrum"
 NAME = "name"
@@ -959,186 +609,37 @@ def catalog_errors(catalog) -> list[str]:
 
 
 def default_basis() -> dict:
-    """Return neutral fatigue-spectrum provenance with no implied modifiers."""
-
-    return {
-        "authority": AUTHORITY_USER,
-        "method": METHOD_USER_GROUPED,
-        "spectrum_source": "",
-        "cycle_count_source": "",
-        "dynamic_effects": STATUS_NOT_STATED,
-        "cycle_counting": STATUS_NOT_STATED,
-        "concurrence_basis": "",
-        "atypical_traffic": STATUS_NOT_STATED,
-        "approval_reference": "",
-        "authority_adjustments": "",
-        "notes": "",
-    }
+    """Return the direct grouped-spectrum calculation choice."""
+    return {"method": METHOD_GROUPED, "notes": ""}
 
 
 def normalise_basis(value) -> dict:
-    """Validate and canonicalise authority/provenance metadata.
-
-    The returned record contains declarations only.  No field is interpreted as
-    a factor on actions, cycles or resistance.
-    """
-
+    """Validate the direct fatigue calculation method."""
     if value is None:
         return default_basis()
     if not isinstance(value, Mapping):
         raise ValueError("fatigue basis must be an object")
-    authority = _text(value.get("authority"), AUTHORITY_USER)
-    if authority not in AUTHORITIES:
-        raise ValueError(f"unknown fatigue authority: {authority}")
-    default_method = METHODS_BY_AUTHORITY[authority][0]
-    method = _text(value.get("method"), default_method)
-    if method not in METHODS_BY_AUTHORITY[authority]:
-        raise ValueError(
-            f"fatigue method '{method}' is not available for {authority}"
-        )
-    dynamic = _text(
-        value.get("dynamic_effects"), STATUS_NOT_STATED
-    )
-    if dynamic not in DYNAMIC_OPTIONS:
-        raise ValueError(f"unknown dynamic-effects status: {dynamic}")
-    counting = _text(
-        value.get("cycle_counting"), STATUS_NOT_STATED
-    )
-    if counting not in COUNTING_OPTIONS:
-        raise ValueError(f"unknown cycle-counting status: {counting}")
-    atypical = _text(
-        value.get("atypical_traffic"), STATUS_NOT_STATED
-    )
-    if atypical not in ATYPICAL_OPTIONS:
-        raise ValueError(f"unknown atypical-traffic status: {atypical}")
-    return {
-        "authority": authority,
-        "method": method,
-        "spectrum_source": _text(value.get("spectrum_source")),
-        "cycle_count_source": _text(value.get("cycle_count_source")),
-        "dynamic_effects": dynamic,
-        "cycle_counting": counting,
-        "concurrence_basis": _text(value.get("concurrence_basis")),
-        "atypical_traffic": atypical,
-        "approval_reference": _text(value.get("approval_reference")),
-        "authority_adjustments": _text(
-            value.get("authority_adjustments")
-        ),
-        "notes": _text(value.get("notes")),
-    }
-
-
-def canonical_basis(value) -> dict:
-    """Return complete, typed current fatigue-basis evidence.
-
-    ``normalise_basis`` remains the migration/UI-seeding helper. Publication,
-    calculation and current-project boundaries must not use it to manufacture
-    omitted evidence, so they call this strict wrapper instead.
-    """
-
-    if not isinstance(value, Mapping):
-        raise ValueError("fatigue basis must be an object")
-    actual_fields = set(value)
-    expected_fields = set(BASIS_FIELDS)
-    if actual_fields != expected_fields:
-        missing = sorted(expected_fields - actual_fields)
-        unknown = sorted(str(field) for field in actual_fields - expected_fields)
-        details = []
-        if missing:
-            details.append("missing " + ", ".join(missing))
-        if unknown:
-            details.append("unknown " + ", ".join(unknown))
-        raise ValueError(
-            "fatigue basis fields are incomplete or unknown"
-            + (": " + "; ".join(details) if details else "")
-        )
-    raw = {}
-    for field in BASIS_FIELDS:
-        item = value.get(field)
-        if not isinstance(item, str):
-            raise ValueError(f"fatigue basis {field} must be typed text")
-        if item != item.strip():
-            raise ValueError(
-                f"fatigue basis {field} must be canonical trimmed text"
-            )
-        raw[field] = item
-    canonical = normalise_basis(raw)
-    if canonical != raw:
-        raise ValueError("fatigue basis values are not canonical")
-    return canonical
+    method = _text(value.get("method"), METHOD_GROUPED)
+    if method not in METHODS:
+        raise ValueError(f"unknown fatigue calculation method: {method}")
+    return {"method": method, "notes": _text(value.get("notes"))}
 
 
 def basis_warnings(value) -> list[str]:
-    """Return concise QA gaps in the selected authority provenance."""
-
-    basis = normalise_basis(value)
-    method = basis["method"]
-    warnings = []
-    if not basis["spectrum_source"]:
-        warnings.append("Fatigue spectrum source is not stated")
-    if not basis["cycle_count_source"]:
-        warnings.append("Fatigue cycle-count basis is not stated")
-    if basis["dynamic_effects"] == STATUS_NOT_STATED:
-        warnings.append("Dynamic effects are not stated")
-    elif basis["dynamic_effects"] == DYNAMIC_NOT_INCLUDED:
-        warnings.append("Spectrum excludes dynamic effects")
-    elif (
-        basis["dynamic_effects"] == DYNAMIC_NOT_APPLICABLE
-        and basis["authority"] != AUTHORITY_USER
-    ):
-        warnings.append(
-            "Dynamic effects are marked not applicable for an authority method"
-        )
-
-    needs_concurrence = (
-        basis["authority"] in (AUTHORITY_BN_NEW, AUTHORITY_BN_EXISTING)
-        or method in (METHOD_VD_FLM4, METHOD_VD_FLM5)
-    )
-    if needs_concurrence and not basis["concurrence_basis"]:
-        warnings.append("Lane/track concurrence basis is not stated")
-
-    rainflow_required = method in (
-        METHOD_BN_NEW_2,
-        METHOD_BN_EXISTING_3,
-        METHOD_BN_EXISTING_4,
-    )
-    if rainflow_required and basis["cycle_counting"] != COUNTING_RAINFLOW:
-        warnings.append("Selected BN1-59-5 method requires rainflow counting")
-    elif (
-        method in (METHOD_VD_FLM4, METHOD_VD_FLM5)
-        and basis["cycle_counting"] == STATUS_NOT_STATED
-    ):
-        warnings.append("Spectrum cycle-counting method is not stated")
-
-    if basis["authority"] == AUTHORITY_VD:
-        if basis["atypical_traffic"] == STATUS_NOT_STATED:
-            warnings.append("Atypical heavy traffic assessment is not stated")
-        if method == METHOD_VD_FLM5 and not basis["approval_reference"]:
-            warnings.append("VD FLM5 infrastructure-manager agreement is not stated")
-    if method == METHOD_BN_NEW_2 and not basis["approval_reference"]:
-        warnings.append(
-            "BN prescribed-traffic source/approval reference is not stated"
-        )
-    if (
-        basis["authority"] != AUTHORITY_USER
-        and not basis["authority_adjustments"]
-    ):
-        warnings.append("Authority load/cycle adjustments are not stated")
-    return warnings
+    """Return no policy warnings; numerical validation is handled elsewhere."""
+    normalise_basis(value)
+    return []
 
 
 def method_requires_single_bin(method: str) -> bool:
-    """Whether one constant-amplitude range is required per result spectrum."""
-
-    return str(method).strip() in (
-        METHOD_VD_FLM1,
-        METHOD_BN_NEW_1,
-        METHOD_BN_EXISTING_1,
-    )
+    """Grouped action spectra permit any positive number of rows."""
+    if str(method).strip() not in METHODS:
+        raise ValueError(f"unknown fatigue calculation method: {method}")
+    return False
 
 
 def basis_signature(value) -> tuple:
-    basis = canonical_basis(value)
+    basis = normalise_basis(value)
     return tuple(basis[field] for field in BASIS_FIELDS)
 
 

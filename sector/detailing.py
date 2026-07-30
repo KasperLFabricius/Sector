@@ -1095,8 +1095,8 @@ def transverse_reinforcement(
     decision when links are omitted.  For defined links, ``legs`` is required and
     ``transverse_leg_spacing_mm`` may be zero, in which case the full web width
     is used as an upper-bound screen when at least two effective legs are present.
-    That bound can prove compliance, but cannot prove non-compliance because the
-    actual largest gap may be smaller.
+    That bound can establish a passing spacing check, but cannot establish a
+    failing spacing check because the actual largest gap may be smaller.
 
     ``torsion_tubes`` records require ``tef_mm``, ``uk_mm`` and the
     rotation-invariant ``minimum_dimension_mm`` derived from the tube outline.

@@ -1,8 +1,4 @@
-"""Load-case table schema, validation and legacy-adapter tests."""
-
-from __future__ import annotations
-
-import json
+import math
 import pathlib
 import sys
 
@@ -12,244 +8,99 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import load_cases as lc  # noqa: E402
-from sector import sls  # noqa: E402
+import load_cases
 
 
-def test_legacy_scalars_migrate_to_typed_solver_tables():
-    tables = lc.tables_from_legacy_scalars({
-        "pl_case_id": "ALS-02",
-        "pl_case_type": "Accidental combination",
-        "pl_case_source": "Model envelope E4",
-        "pl_P": -1250.0,
-        "pl_Mx": 325.0,
-        "pl_My": -40.0,
-        "shear_V": -85.0,
-        "torsion_T": 12.5,
-        "el_case_id": "SLS-FREQ",
-        "el_case_type": "Frequent",
-        "el_long_P": 100.0,
-        "el_long_Mx": 80.0,
-        "el_short_My": -22.0,
-        "sls_conc_limit_pct": 60.0,
-        "sls_steel_limit_pct": 0.0,
-        "sls_pre_limit_pct": 0.0,
-        "sls_cw": True,
-    })
+def test_default_tables_are_current_output_only_schema():
+    tables = load_cases.default_tables()
+    elastic = tables[load_cases.ELASTIC_TABLE_KEY]
 
-    plastic = tables[lc.PLASTIC_TABLE_KEY]
-    assert list(plastic.columns) == list(lc.PLASTIC_COLUMNS)
-    assert plastic.loc[0, "name"] == "ALS-02"
-    assert plastic.loc[0, "description"] == (
-        "Accidental combination | Source: Model envelope E4"
-    )
-    assert plastic.loc[0, "n_ed_kn"] == -1250.0
-    assert plastic.loc[0, "vx_ed_kn"] == 0.0
-    assert plastic.loc[0, "vy_ed_kn"] == -85.0
-    assert plastic.loc[0, "vy_face"] == lc.FACE_NEGATIVE
-    assert plastic.loc[0, "t_ed_knm"] == 12.5
-
-    elastic = tables[lc.ELASTIC_TABLE_KEY]
-    assert list(elastic.columns) == list(lc.ELASTIC_COLUMNS)
-    assert elastic.loc[0, "name"] == "SLS-FREQ"
-    assert elastic.loc[0, "long_combination"] == sls.COMBINATION_UNSPECIFIED
-    assert elastic.loc[0, "total_combination"] == sls.COMBINATION_UNSPECIFIED
-    assert elastic.loc[0, "n_long_ed_kn"] == 100.0
-    assert elastic.loc[0, "my_short_ed_knm"] == -22.0
-    assert bool(elastic.loc[0, "check_stress"]) is True
-    assert bool(elastic.loc[0, "check_crack_width"]) is True
+    assert tuple(elastic.columns) == load_cases.ELASTIC_COLUMNS
+    assert "calculate_crack_width" in elastic
+    assert "check_stress" not in elastic
+    assert "check_crack_width" not in elastic
+    assert not any("limit" in column for column in elastic.columns)
 
 
-def test_default_case_preserves_stress_acceptance_and_opts_out_of_crack_width():
-    elastic = lc.tables_from_legacy_scalars({})[lc.ELASTIC_TABLE_KEY]
-
-    assert bool(elastic.loc[0, "check_stress"]) is True
-    assert bool(elastic.loc[0, "check_crack_width"]) is False
-
-
-def test_case_records_roundtrip_signed_values_text_and_flags_without_nan():
-    source = pd.DataFrame([
-        {
-            "name": "EL-CHAR",
-            "description": "Characteristic stress check",
-            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "total_combination": sls.COMBINATION_CHARACTERISTIC,
-            "n_long_ed_kn": -5.0,
-            "mx_long_ed_knm": 10.0,
-            "my_long_ed_knm": 0.0,
-            "n_short_ed_kn": 2.0,
-            "mx_short_ed_knm": -3.0,
-            "my_short_ed_knm": 4.0,
-            "check_stress": True,
-            "check_crack_width": False,
-        }
-    ])
-    records = lc.table_records(source, lc.ELASTIC_TABLE_KEY)
-    encoded = json.dumps(records, allow_nan=False)
-    assert "NaN" not in encoded
-    restored = lc.table_from_records(json.loads(encoded), lc.ELASTIC_TABLE_KEY)
-    pd.testing.assert_frame_equal(
-        restored,
-        lc.normalise_table(source, lc.ELASTIC_TABLE_KEY),
-        check_dtype=True,
-    )
-    assert records[0]["long_combination"] == (
-        sls.COMBINATION_QUASI_PERMANENT
+def test_any_single_named_characteristic_action_is_valid():
+    elastic = load_cases.normalise_table(
+        [{
+            "name": "Only characteristic case",
+            "description": "User-defined action set",
+            "n_long_ed_kn": 125.0,
+            "mx_long_ed_knm": 22.0,
+            "my_long_ed_knm": -8.0,
+            "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 0.0,
+            "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        }],
+        load_cases.ELASTIC_TABLE_KEY,
     )
 
-
-def test_invalid_elastic_combination_is_rejected_not_inferred():
-    source = lc.normalise_table([{
-        "name": "EL-BAD",
-        "long_combination": "long-term therefore QP",
-        "check_crack_width": True,
-    }], lc.ELASTIC_TABLE_KEY)
-
-    errors = lc.validation_errors(
-        lc.empty_table(lc.PLASTIC_TABLE_KEY),
-        source,
+    assert load_cases.validation_errors(
+        load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY),
+        elastic,
         require_elastic=True,
+    ) == []
+    record = load_cases.table_records(
+        elastic, load_cases.ELASTIC_TABLE_KEY
+    )[0]
+    assert record["name"] == "Only characteristic case"
+    assert record["calculate_crack_width"] is True
+    assert record["n_long_ed_kn"] == pytest.approx(125.0)
+
+
+def test_independent_vx_vy_values_and_faces_roundtrip():
+    plastic = load_cases.normalise_table(
+        [{
+            "name": "P1",
+            "description": "signed directions",
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 20.0,
+            "my_ed_knm": -30.0,
+            "vx_ed_kn": -40.0,
+            "vy_ed_kn": 55.0,
+            "vx_face": "left",
+            "vy_face": "top",
+            "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": False,
+        }],
+        load_cases.PLASTIC_TABLE_KEY,
     )
+    record = load_cases.table_records(
+        plastic, load_cases.PLASTIC_TABLE_KEY
+    )[0]
 
-    assert any("long_combination must be one of" in error for error in errors)
-    with pytest.raises(ValueError, match="long_combination must be one of"):
-        lc.table_records(source, lc.ELASTIC_TABLE_KEY)
+    assert record["vx_ed_kn"] == pytest.approx(-40.0)
+    assert record["vy_ed_kn"] == pytest.approx(55.0)
+    assert record["vx_face"] == load_cases.FACE_NEGATIVE
+    assert record["vy_face"] == load_cases.FACE_POSITIVE
 
 
-def test_directional_shear_faces_roundtrip_and_validate():
-    source = lc.normalise_table([{
-        "name": "PL-BI",
-        "vx_ed_kn": -30.0,
-        "vy_ed_kn": 45.0,
-        "vx_face": "negative",
-        "vy_face": "positive",
-    }], lc.PLASTIC_TABLE_KEY)
-    restored = lc.table_from_records(
-        lc.table_records(source, lc.PLASTIC_TABLE_KEY), lc.PLASTIC_TABLE_KEY
+def test_malformed_active_numeric_value_is_rejected_not_replaced():
+    elastic = pd.DataFrame([{
+        "name": "E1",
+        "mx_long_ed_knm": "not-a-number",
+    }])
+    normalised = load_cases.normalise_table(
+        elastic, load_cases.ELASTIC_TABLE_KEY
     )
-    pd.testing.assert_frame_equal(restored, source)
-
-    invalid = source.copy()
-    invalid.at[0, "vx_face"] = "somewhere"
-    assert any("vx_face must be" in error for error in lc.validation_errors(
-        invalid, lc.empty_table(lc.ELASTIC_TABLE_KEY)
-    ))
-    with pytest.raises(ValueError, match="vx_face must be"):
-        lc.table_records(invalid, lc.PLASTIC_TABLE_KEY)
+    assert math.isnan(normalised.loc[0, "mx_long_ed_knm"])
+    with pytest.raises(ValueError, match="finite number"):
+        load_cases.table_records(
+            normalised, load_cases.ELASTIC_TABLE_KEY
+        )
 
 
-def test_plastic_minimum_reinforcement_flag_roundtrips_as_boolean():
-    source = lc.normalise_table([{
-        "name": "PL-MIN",
-        "mx_ed_knm": 45.0,
-        "check_minimum_reinforcement": True,
-    }], lc.PLASTIC_TABLE_KEY)
-
-    records = lc.table_records(source, lc.PLASTIC_TABLE_KEY)
-    restored = lc.table_from_records(records, lc.PLASTIC_TABLE_KEY)
-
-    assert bool(records[0]["check_minimum_reinforcement"]) is True
-    assert bool(restored.loc[0, "check_minimum_reinforcement"]) is True
-    assert str(restored["check_minimum_reinforcement"].dtype) == "bool"
-
-
-def test_case_serialisation_rejects_invalid_numeric_cells():
-    source = lc.normalise_table([
-        {"name": "PL-BAD", "mx_ed_knm": "not a number"},
-    ], lc.PLASTIC_TABLE_KEY)
-
-    with pytest.raises(
-        ValueError,
-        match=r"plastic_cases_base row 1: mx_ed_knm must be a finite number",
-    ):
-        lc.table_records(source, lc.PLASTIC_TABLE_KEY)
-
-
-def test_validation_requires_globally_unique_names_and_finite_forces():
-    plastic = lc.normalise_table([
-        {"name": "Case A", "mx_ed_knm": 10.0},
-        {"name": "", "n_ed_kn": "not a number", "mx_ed_knm": 4.0},
-    ], lc.PLASTIC_TABLE_KEY)
-    elastic = lc.normalise_table([
-        {"name": "case a", "check_stress": True},
-    ], lc.ELASTIC_TABLE_KEY)
-    errors = lc.validation_errors(
-        plastic, elastic, require_plastic=True, require_elastic=True
+def test_duplicate_names_are_rejected_across_action_families():
+    plastic = load_cases.normalise_table(
+        [{"name": "same"}], load_cases.PLASTIC_TABLE_KEY
     )
-    assert any("duplicated" in error for error in errors)
-    assert any("Plastic row 2: Name is required" in error for error in errors)
-    assert any("must be a finite number" in error for error in errors)
-
-
-def test_completely_blank_editor_rows_are_ignored():
-    plastic = pd.DataFrame([
-        {"name": "PL-01", "mx_ed_knm": 5.0},
-        {"name": "", "description": "", "n_ed_kn": 0.0},
-    ])
-    active = lc.active_table(plastic, lc.PLASTIC_TABLE_KEY)
-    assert active["name"].tolist() == ["PL-01"]
-    assert lc.validation_errors(active, lc.empty_table(lc.ELASTIC_TABLE_KEY)) == []
-
-
-def test_invalid_numeric_only_row_is_not_mistaken_for_blank():
-    plastic = lc.normalise_table([
-        {"name": "", "n_ed_kn": "not a number"},
-    ], lc.PLASTIC_TABLE_KEY)
-
-    errors = lc.validation_errors(plastic, lc.empty_table(lc.ELASTIC_TABLE_KEY))
-
-    assert "Plastic row 1: Name is required" in errors
-    assert "Plastic row 1: n_ed_kn must be a finite number" in errors
-
-
-def test_legacy_overlay_updates_first_row_and_preserves_later_cases():
-    existing = lc.normalise_table([
-        {"name": "OLD", "mx_ed_knm": 1.0},
-        {"name": "KEEP", "mx_ed_knm": 2.0},
-    ], lc.PLASTIC_TABLE_KEY)
-    updated = lc.overlay_legacy_head(existing, lc.PLASTIC_TABLE_KEY, {
-        "pl_case_id": "CURRENT",
-        "pl_Mx": 9.0,
-    })
-    assert updated["name"].tolist() == ["CURRENT", "KEEP"]
-    assert updated["mx_ed_knm"].tolist() == [9.0, 2.0]
-
-
-def test_legacy_overlay_preserves_an_explicitly_cleared_name_for_validation():
-    updated = lc.overlay_legacy_head(
-        None,
-        lc.PLASTIC_TABLE_KEY,
-        {"pl_case_id": "", "pl_Mx": 9.0},
+    elastic = load_cases.normalise_table(
+        [{"name": "SAME"}], load_cases.ELASTIC_TABLE_KEY
     )
-
-    assert updated.loc[0, "name"] == ""
-    assert "Plastic row 1: Name is required" in lc.validation_errors(
-        updated, lc.empty_table(lc.ELASTIC_TABLE_KEY), require_plastic=True
+    assert any(
+        "duplicated" in error
+        for error in load_cases.validation_errors(plastic, elastic)
     )
-
-
-def test_first_rows_remain_available_through_legacy_scalar_adapter():
-    tables = {
-        lc.PLASTIC_TABLE_KEY: lc.normalise_table([
-            {"name": "PL-X", "description": "Description", "n_ed_kn": -42.0,
-             "mx_ed_knm": 1.0, "my_ed_knm": 2.0, "vy_ed_kn": 3.0,
-             "t_ed_knm": 4.0},
-        ], lc.PLASTIC_TABLE_KEY),
-        lc.ELASTIC_TABLE_KEY: lc.normalise_table([
-            {"name": "EL-X", "description": "Elastic description",
-             "n_long_ed_kn": 5.0, "mx_long_ed_knm": 6.0,
-             "my_long_ed_knm": 7.0, "n_short_ed_kn": 8.0,
-             "mx_short_ed_knm": 9.0, "my_short_ed_knm": 10.0,
-             "check_stress": False, "check_crack_width": True},
-        ], lc.ELASTIC_TABLE_KEY),
-    }
-    scalars = lc.legacy_scalars_from_tables(tables)
-    assert scalars["pl_case_id"] == "PL-X"
-    assert scalars["pl_case_type"] == "Description"
-    assert scalars["pl_P"] == -42.0
-    assert scalars["shear_Vx"] == 0.0
-    assert scalars["shear_Vy"] == 3.0
-    assert scalars["torsion_T"] == 4.0
-    assert scalars["el_case_id"] == "EL-X"
-    assert scalars["el_short_My"] == 10.0
-    assert scalars["sls_cw"] is True

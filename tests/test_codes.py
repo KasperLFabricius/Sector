@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import numpy as np
 import pytest
 
 from sector import codes
@@ -88,69 +87,8 @@ def test_dk_na_2024_partial_factors():
     code = codes.CODES["DS/EN 1992-1-1:2005 + DK NA:2024"]
     # Starting values only; the material panels own the final effective factors.
     assert (code.gamma_c, code.gamma_s, code.alpha_cc) == (1.45, 1.20, 1.0)
-    assert code.gamma_ct == pytest.approx(1.70)
     assert code.concrete(35.0).fcd == pytest.approx(35.0 / 1.45)
     assert code.steel(500.0).stress(0.02, design=True) == pytest.approx(500.0 / 1.20)
-
-
-def test_dk_na_material_factor_basis_separates_compression_and_tension():
-    code = codes.EC2_2005_DKNA
-    basis = code.material_factor_basis(gamma0=0.95, gamma3=1.10)
-
-    assert basis["uses_gamma0_gamma3"] is True
-    assert basis["compression_base"] == pytest.approx(1.45)
-    assert basis["tension_base"] == pytest.approx(1.70)
-    assert basis["compression_final"] == pytest.approx(1.45 * 0.95 * 1.10)
-    assert basis["tension_final"] == pytest.approx(1.70 * 0.95 * 1.10)
-    assert basis["steel_final"] == pytest.approx(1.20 * 0.95 * 1.10)
-
-    final, resolved = code.resolve_concrete_tension_factor(
-        gamma0=0.95,
-        gamma3=1.10,
-    )
-    assert final == pytest.approx(1.70 * 0.95 * 1.10)
-    assert resolved["tension_preset"] == pytest.approx(final)
-    assert resolved["tension_derivation"] == (
-        f"1.70 x 0.950 x 1.100 = {final:.3f}"
-    )
-
-
-def test_material_factor_override_is_final_and_base_en_ignores_dk_categories():
-    base = codes.EC2_2005.material_factor_basis(gamma0=0.80, gamma3=1.25)
-    assert base["gamma0"] == pytest.approx(1.0)
-    assert base["gamma3"] == pytest.approx(1.0)
-    assert base["compression_final"] == pytest.approx(1.5)
-    assert base["tension_final"] == pytest.approx(1.5)
-
-    final, resolved = codes.EC2_2005_DKNA.resolve_concrete_tension_factor(
-        mode=codes.FACTOR_MODE_OVERRIDE,
-        gamma_ct=1.62,
-        gamma0=0.95,
-        gamma3=1.10,
-    )
-    assert final == pytest.approx(1.62)
-    assert resolved["tension_preset"] == pytest.approx(1.70 * 0.95 * 1.10)
-    assert resolved["tension_derivation"] == "approved final override = 1.620"
-    assert resolved["tension_override"] is True
-
-
-@pytest.mark.parametrize("boolean_value", [True, np.bool_(True)])
-def test_material_factor_resolvers_reject_boolean_numbers(boolean_value):
-    with pytest.raises(ValueError, match="Boolean values are not accepted"):
-        codes.EC2_2005_DKNA.material_factor_basis(
-            gamma0=boolean_value,
-            gamma3=1.0,
-        )
-    with pytest.raises(ValueError, match="Boolean values are not accepted"):
-        codes.EC2_2005_DKNA.material_factor_basis(
-            gamma0=1.0,
-            gamma3=boolean_value,
-        )
-    with pytest.raises(ValueError, match="Boolean values are not accepted"):
-        codes.EC2_2005_DKNA.resolve_concrete_tension_factor(
-            mode=codes.FACTOR_MODE_OVERRIDE,
-            gamma_ct=boolean_value,
-        )
 
 
 def test_ec2_2023_eta_cc_is_strength_dependent():

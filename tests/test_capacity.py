@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import ast
+import math
 import pathlib
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from sector import capacity, codes
+from sector import capacity, codes, torsion
 
 
 def _rect(b=0.3, h=0.6):
@@ -54,6 +55,7 @@ def _member_input(**overrides):
         "torsion_method": codes.EC2_2005_DKNA.label,
         "torsion_tef": 0.0,
         "torsion_nu_v": False,
+        "torsion_gamma_ct": codes.EC2_2005_DKNA.gamma_ct,
         "torsion_T": 40.0,
         "torsion_subdivide": False,
         "torsion_subrects": [],
@@ -81,6 +83,87 @@ def test_capacity_module_has_no_ui_dependency():
         if isinstance(node, ast.ImportFrom)
     )
     assert not any(name == "streamlit" or name.startswith("streamlit.") for name in imports)
+
+
+def _torsion_cracking_result(method, gamma_ct, demand=28.0):
+    ctx = capacity.build_torsion_context(
+        _member_input(
+            torsion_on=True,
+            torsion_method=method,
+            torsion_gamma_ct=gamma_ct,
+            torsion_T=demand,
+        ),
+        0.0,
+    )
+    result = capacity.tube_torsion(
+        ctx["tube"], ctx["t_ed"], **ctx["_tk"]
+    )
+    return ctx, result
+
+
+def test_torsion_method_defaults_keep_distinct_tensile_factors():
+    assert codes.EC2_2005.gamma_ct == pytest.approx(1.50)
+    assert codes.EC2_2005_DKNA.gamma_ct == pytest.approx(1.70)
+
+    en_ctx, en = _torsion_cracking_result(
+        codes.EC2_2005.label, codes.EC2_2005.gamma_ct
+    )
+    dk_ctx, dk = _torsion_cracking_result(
+        codes.EC2_2005_DKNA.label, codes.EC2_2005_DKNA.gamma_ct
+    )
+
+    assert en_ctx["gamma_ct"] == pytest.approx(1.50)
+    assert dk_ctx["gamma_ct"] == pytest.approx(1.70)
+    assert en["trd_c"] == pytest.approx(29.959649455822216)
+    assert dk["trd_c"] == pytest.approx(26.434984813960778)
+
+
+@pytest.mark.parametrize("gamma_ct", [0.5, 2.0])
+def test_torsion_uses_positive_custom_tensile_factor_unchanged(gamma_ct):
+    ctx, result = _torsion_cracking_result(
+        codes.EC2_2005_DKNA.label, gamma_ct
+    )
+    expected_fctk = 0.7 * codes.fctm(35.0)
+
+    assert ctx["gamma_ct"] == pytest.approx(gamma_ct)
+    assert ctx["fctk_005"] == pytest.approx(expected_fctk)
+    assert ctx["fctd"] == pytest.approx(expected_fctk / gamma_ct)
+    assert result["trd_c"] == pytest.approx(
+        torsion.trd_c(expected_fctk / gamma_ct, 0.1, 100.0)
+    )
+
+
+@pytest.mark.parametrize(
+    "value", [True, False, 0.0, -1.0, math.inf, -math.inf, math.nan, "1.70"]
+)
+def test_torsion_rejects_only_malformed_or_nonpositive_tensile_factors(value):
+    with pytest.raises(ValueError, match="positive finite real"):
+        _torsion_cracking_result(codes.EC2_2005_DKNA.label, value)
+
+
+@pytest.mark.parametrize("value", [np.bool_(True), np.bool_(False)])
+def test_torsion_rejects_numpy_boolean_at_raw_solver_boundary(value):
+    with pytest.raises(ValueError, match="positive finite real"):
+        _torsion_cracking_result(codes.EC2_2005_DKNA.label, value)
+
+
+def test_dk_tensile_factor_prevents_between_threshold_false_pass():
+    demand = 28.0
+    ctx, result = _torsion_cracking_result(
+        codes.EC2_2005_DKNA.label,
+        codes.EC2_2005_DKNA.gamma_ct,
+        demand=demand,
+    )
+    legacy_gamma_c_result = torsion.trd_c(
+        ctx["fctk_005"] / 1.45,
+        ctx["tube"]["Ak"],
+        ctx["tube"]["tef"],
+    )
+
+    assert result["trd_c"] == pytest.approx(26.434984813960778)
+    assert legacy_gamma_c_result == pytest.approx(30.992740816367807)
+    assert demand > result["trd_c"]
+    assert demand < legacy_gamma_c_result
 
 
 def test_build_shear_context_returns_payload_without_ui():
@@ -247,72 +330,6 @@ def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     assert "invalid sub-tube partition" in bad["tube"]["reason"]
 
 
-def test_build_torsion_context_marks_unapproved_final_factor_invalid():
-    ctx = capacity.build_torsion_context(
-        _member_input(
-            torsion_on=True,
-            torsion_factor_mode=codes.FACTOR_MODE_OVERRIDE,
-            torsion_gamma_ct=1.62,
-            torsion_factor_approval="  ",
-        ),
-        0.0,
-    )
-
-    assert ctx["gamma_ct"] == pytest.approx(1.62)
-    assert ctx["factor_approval_required"] is True
-    assert ctx["factor_approval_valid"] is False
-    assert "requires a stated approval/source" in ctx["factor_approval_reason"]
-    assert ctx["material_factor_basis"]["approval_reference"] == ""
-    assert ctx["material_factor_basis"]["approval_valid"] is False
-
-
-def test_torsion_factor_preflight_rejects_missing_or_non_positive_override():
-    missing = _member_input(
-        torsion_on=True,
-        torsion_factor_mode=codes.FACTOR_MODE_OVERRIDE,
-        torsion_factor_approval="DB-TOR-06 / checker E",
-    )
-    non_positive = dict(missing, torsion_gamma_ct=0.0)
-    valid = dict(missing, torsion_gamma_ct=1.62)
-
-    assert (
-        capacity.torsion_factor_validation_error(missing)
-        == "an approved final concrete tensile factor is required"
-    )
-    assert (
-        capacity.torsion_factor_validation_error(non_positive)
-        == "the final concrete tensile factor must be a finite positive real number"
-    )
-    assert capacity.torsion_factor_validation_error(valid) is None
-
-
-@pytest.mark.parametrize(
-    ("mode", "field", "boolean_value"),
-    [
-        (codes.FACTOR_MODE_OVERRIDE, "torsion_gamma_ct", True),
-        (codes.FACTOR_MODE_PRESET, "torsion_gamma0", np.bool_(True)),
-        (codes.FACTOR_MODE_PRESET, "torsion_gamma3", True),
-    ],
-)
-def test_torsion_factor_preflight_rejects_boolean_values(
-    mode,
-    field,
-    boolean_value,
-):
-    inp = _member_input(
-        torsion_on=True,
-        torsion_factor_mode=mode,
-        torsion_factor_approval="DB-TOR-07 / checker F",
-    )
-    inp[field] = boolean_value
-
-    error = capacity.torsion_factor_validation_error(inp)
-
-    assert "Boolean values are not accepted" in error
-    with pytest.raises(ValueError, match="Boolean values are not accepted"):
-        capacity.build_torsion_context(inp, 0.0)
-
-
 def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_corner():
     concave = [
         (0.1, 0.1),
@@ -342,7 +359,6 @@ def test_finalize_combined_builds_valid_payload():
         "torsion": {
             "valid": True,
             "util": 0.40,
-            "code_applicable": True,
             "interaction": None,
             "asl_req": 125.0,
             "asw_over_s": 0.0,
@@ -393,7 +409,6 @@ def test_finalize_combined_preserves_every_longitudinal_candidate():
                         "cot": 1.5},
                 "util": 0.30,
                 "delta_ftd": 15.0,
-                "code_applicable": True,
                 "chord": exact,
                 "chord_candidates": [fallback, exact],
             },
@@ -402,7 +417,6 @@ def test_finalize_combined_preserves_every_longitudinal_candidate():
         "torsion": {
             "valid": True,
             "util": 0.40,
-            "code_applicable": True,
             "interaction": None,
             "asl_req": 125.0,
             "asw_over_s": 0.0,

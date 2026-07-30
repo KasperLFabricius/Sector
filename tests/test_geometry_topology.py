@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fractions import Fraction
+import hashlib
 import itertools
 import json
 import math
@@ -673,27 +674,40 @@ def test_empty_mutated_ring_container_keeps_canonical_solver_and_ui_diagnostic()
     assert any("Invalid section geometry" in error for error in errors)
 
 
-def _project_payload(outer, holes, *, version=14):
+def _project_payload(outer, holes):
+    import project_io
+
     hole_rows = []
     for index, hole in enumerate(holes):
         if index:
             hole_rows.append([None, None])
         hole_rows.extend([[1000.0 * x, 1000.0 * y] for x, y in hole])
-    return {
-        "format": "sector-project",
-        "version": version,
-        "tables": {
-            "corners_base": {
-                "columns": ["x (mm)", "y (mm)"],
-                "rows": [[1000.0 * x, 1000.0 * y] for x, y in outer],
-            },
-            "hole_base": {
-                "columns": ["x (mm)", "y (mm)"],
-                "rows": hole_rows,
-            },
-        },
-        "scalars": {},
+    payload = json.loads(
+        project_io.dump_project({}, {}, app_version="0.91", revision="test")
+    )
+    payload["tables"]["corners_base"] = {
+        "columns": ["x (mm)", "y (mm)"],
+        "rows": [[1000.0 * x, 1000.0 * y] for x, y in outer],
     }
+    payload["tables"]["hole_base"] = {
+        "columns": ["x (mm)", "y (mm)"],
+        "rows": hole_rows,
+    }
+    content = {
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    }
+    canonical = json.dumps(
+        content,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    payload["provenance"]["input_sha256"] = hashlib.sha256(
+        canonical.encode("utf-8")
+    ).hexdigest()
+    return payload
 
 
 @pytest.mark.parametrize(
@@ -708,13 +722,13 @@ def test_project_load_blocks_all_frozen_invalid_topologies(case):
         project_io.parse_project(json.dumps(_project_payload(case["outer"], case["holes"])))
 
 
-def test_v14_mixed_winding_project_remains_round_trip_compatible():
+def test_current_schema_mixed_winding_project_remains_round_trip_compatible():
     import project_io
 
     outer_cw = [(0, 0), (0, 4), (5, 4), (5, 0)]
     hole_ccw = [(1, 1), (2, 1), (2, 2), (1, 2)]
     tables, scalars = project_io.parse_project(
-        json.dumps(_project_payload(outer_cw, [hole_ccw], version=14))
+        json.dumps(_project_payload(outer_cw, [hole_ccw]))
     )
     round_trip = project_io.dump_project(tables, scalars)
     restored, _ = project_io.parse_project(round_trip)
@@ -748,16 +762,12 @@ def test_project_save_and_load_reject_orphan_holes_without_an_outer_ring():
     with pytest.raises(ValueError, match="requires a non-empty outer ring"):
         project_io.dump_project({"hole_base": pd.DataFrame(hole)}, {})
 
-    payload = {
-        "format": "sector-project",
-        "version": 14,
-        "tables": {
-            "hole_base": {
-                "columns": ["x (mm)", "y (mm)"],
-                "rows": list(map(list, zip(hole["x (mm)"], hole["y (mm)"]))),
-            },
-        },
-        "scalars": {},
-    }
+    payload = _project_payload(
+        [],
+        [[
+            (x / 1000.0, y / 1000.0)
+            for x, y in zip(hole["x (mm)"], hole["y (mm)"])
+        ]],
+    )
     with pytest.raises(ValueError, match="requires a non-empty outer ring"):
         project_io.parse_project(json.dumps(payload))

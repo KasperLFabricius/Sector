@@ -161,7 +161,7 @@ def _versioned_rows(value, data_version):
     that stale payload keeps the new base authoritative. Unversioned list payloads
     from the previous frontend are deliberately rejected because they cannot prove
     which seed they belong to. Saved projects contain base tables, not component
-    payloads, so this does not affect project compatibility.
+    payloads, so this does not affect persisted project data.
     """
     if not isinstance(value, dict):
         return None
@@ -184,7 +184,7 @@ def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
                on_change=None) -> pd.DataFrame:
     """Render the editable grid for ``df`` and return the edited rows.
 
-    Numeric-only geometry tables use the legacy auto-numbered display ID. Rich
+    Numeric-only geometry tables use an auto-numbered display ID. Rich
     reinforcement tables pass ``column_specs`` plus persistent-ID/derived-size
     ``component_options``. Bump ``data_version`` to re-seed from ``df``.
     """

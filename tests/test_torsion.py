@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 
 from sector import codes, shear, torsion
@@ -264,26 +265,14 @@ def test_trd_max_accepts_final_user_fcd():
     assert custom == pytest.approx(0.8 * preset)
 
 
-def test_trd_c_hand_calculation_separates_base_en_and_dk_tension_factors():
+def test_trd_c_cracking_moment():
+    code = codes.EC2_2005_DKNA
     t = _tube()
     fctm = codes.fctm(35.0)
-    results = {}
-    for code in (codes.EC2_2005, codes.EC2_2005_DKNA):
-        gamma_ct, _basis = code.resolve_concrete_tension_factor()
-        fctd = 0.7 * fctm / gamma_ct
-        result = torsion.trd_c(fctd, t["Ak"], t["tef"])
-        expected = (
-            2.0 * t["Ak"] * (t["tef"] / 1000.0) * fctd * 1000.0
-        )
-        assert result == pytest.approx(expected)
-        results[code.key] = result
-
-    assert results[codes.EC2_2005.key] == pytest.approx(29.96, abs=0.05)
-    assert results[codes.EC2_2005_DKNA.key] == pytest.approx(26.44, abs=0.05)
-    assert (
-        results[codes.EC2_2005.key] / results[codes.EC2_2005_DKNA.key]
-        == pytest.approx(1.70 / 1.50)
-    )
+    fctd = 0.7 * fctm / code.gamma_ct                # fctk,0.05 / gamma_ct
+    tc = torsion.trd_c(fctd, t["Ak"], t["tef"])
+    assert tc == pytest.approx(2.0 * t["Ak"] * (t["tef"] / 1000.0) * fctd * 1000.0)
+    assert tc == pytest.approx(26.434984813960778)
 
 
 def test_asl_required_longitudinal_steel():
@@ -394,6 +383,44 @@ def test_app_torsion_produces_a_resistance():
     assert t["asl_req"] > 0.0                       # torsion needs longitudinal steel
 
 
+def test_app_torsion_gamma_ct_defaults_follow_method_until_user_edit():
+    at = _fresh()
+    at.run()
+    assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.70)
+
+    _set(at, ("selectbox", "torsion_method", codes.EC2_2005.label))
+    assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.50)
+
+    _set(at, ("number_input", "torsion_gamma_ct", 2.0))
+    _set(at, ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label))
+    assert at.session_state["torsion_gamma_ct"] == pytest.approx(2.0)
+
+
+def test_app_torsion_rejects_injected_numpy_boolean_gamma_ct():
+    at = _fresh()
+    at.session_state["torsion_on"] = True
+    at.session_state["_torsion_gamma_ct_default_method"] = (
+        codes.EC2_2005_DKNA.label
+    )
+    at.session_state["_torsion_gamma_ct_uses_method_default"] = True
+    at.session_state["torsion_method"] = codes.EC2_2005.label
+    at.session_state["torsion_gamma_ct"] = np.bool_(True)
+
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["torsion_gamma_ct"] is None
+    assert (
+        at.session_state["_torsion_gamma_ct_default_method"]
+        == codes.EC2_2005.label
+    )
+    assert at.session_state["_torsion_gamma_ct_uses_method_default"] is False
+    assert any(
+        "gamma_ct must be a positive finite real number" in item.value
+        for item in at.error
+    )
+
+
 def test_app_torsion_uses_final_material_factors():
     at = _fresh()
     at.run()
@@ -402,6 +429,7 @@ def test_app_torsion_uses_final_material_factors():
         ("number_input", "conc_gamma_c", 1.80),
         ("number_input", "mild_gamma_y", 1.35),
         ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_gamma_ct", 2.0),
         ("number_input", "torsion_T", 40.0),
     )
     _calculate(at)
@@ -412,224 +440,40 @@ def test_app_torsion_uses_final_material_factors():
         at.session_state["conc_alpha_cc"]
         * at.session_state["conc_fck"] / 1.80
     )
-    assert t["gamma_ct"] == pytest.approx(1.70)
-    assert t["fctd"] == pytest.approx(
-        0.7 * codes.fctm(at.session_state["conc_fck"]) / 1.70
-    )
     assert t["gamma_s"] == pytest.approx(1.35)
     assert t["fywd"] == pytest.approx(at.session_state["shear_fywk"] / 1.35)
+    assert t["gamma_ct"] == pytest.approx(2.0)
+    assert t["fctd"] == pytest.approx(t["fctk_005"] / 2.0)
 
 
-def test_app_torsion_factor_preset_switch_and_override_persistence():
+def test_torsion_gamma_ct_change_marks_results_stale_and_recalculates():
     at = _fresh()
     at.run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-
-    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.70)
-    at.selectbox(key="torsion_method").set_value(codes.EC2_2005.label).run()
-    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.50)
-
-    at.selectbox(key="torsion_method").set_value(
-        codes.EC2_2005_DKNA.label
-    ).run()
-    at.number_input(key="torsion_gamma0").set_value(0.95).run()
-    at.number_input(key="torsion_gamma3").set_value(1.10).run()
-    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(
-        1.70 * 0.95 * 1.10
+    _set(
+        at,
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 28.0),
     )
-
-    at.selectbox(key="torsion_factor_mode").set_value(
-        codes.FACTOR_MODE_OVERRIDE
-    ).run()
-    assert at.number_input(key="torsion_gamma_ct").value is None
-    assert at.text_input(key="torsion_factor_approval").value == ""
-    at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
-    at.text_input(key="torsion_factor_approval").set_value(
-        "DB-TOR-04 / checker C"
-    ).run()
-    at.selectbox(key="torsion_method").set_value(codes.EC2_2005.label).run()
-
-    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.62)
-    assert at.session_state["torsion_factor_approval"] == (
-        "DB-TOR-04 / checker C"
-    )
-
-    at.selectbox(key="torsion_factor_mode").set_value(
-        codes.FACTOR_MODE_PRESET
-    ).run()
-    assert at.number_input(key="torsion_gamma_ct").value != pytest.approx(1.62)
-    at.selectbox(key="torsion_factor_mode").set_value(
-        codes.FACTOR_MODE_OVERRIDE
-    ).run()
-
-    assert at.number_input(key="torsion_gamma_ct").value == pytest.approx(1.62)
-    assert at.session_state["torsion_factor_approval"] == (
-        "DB-TOR-04 / checker C"
-    )
-
-
-def test_loaded_approved_torsion_override_keeps_missing_factor_empty():
-    import project_io
-
-    at = _fresh()
-    at.run()
-    assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.70)
-    tables = {
-        key: at.session_state[key]
-        for key in project_io.PROJECT_TABLE_KEYS
-        if key in at.session_state
-    }
-
-    # Load into a session whose live and durable mirrors already contain a preset.
-    # The current v15 project deliberately omits gamma_ct despite carrying an
-    # approval, so no preset/stale number may be promoted to the approved value.
-    at.session_state["_pending_project"] = project_io.dump_project(
-        tables,
-        {
-            "torsion_on": True,
-            "torsion_method": codes.EC2_2005_DKNA.label,
-            "torsion_factor_mode": codes.FACTOR_MODE_OVERRIDE,
-            "torsion_gamma0": 1.0,
-            "torsion_gamma3": 1.0,
-            "torsion_factor_approval": "DB-TOR-06 / checker E",
-        },
-    )
-    at.run()
-
-    assert not at.exception
-    assert at.number_input(key="torsion_gamma_ct").value is None
-    assert at.session_state["torsion_gamma_ct"] is None
-    assert at.session_state["_latest_inputs"]["torsion_gamma_ct"] is None
-    assert any(
-        "approved final concrete tensile factor is required" in message.value
-        for message in at.error
-    )
-
-    _set(at, ("number_input", "torsion_T", 40.0))
     _calculate(at)
-
-    assert not at.exception
-    blocked = at.session_state["results"]["torsion"]
-    assert blocked["factor_input_valid"] is False
-    assert blocked["factor_approval_valid"] is True
-    assert blocked["valid"] is False
-    assert blocked["util"] is None
-    assert blocked["interaction"]["valid"] is False
-    assert "value" not in blocked["interaction"]
-    assert blocked["min_reinf"]["applicable"] is False
-    _select_view(at, "Torsion")
-    assert any(
-        "approved final concrete tensile factor is missing or not positive"
-        in message.value
-        for message in at.error
-    )
-    assert not any(
-        metric.label == r"Utilisation $T_{Ed}/T_{Rd}$"
-        for metric in at.metric
+    old_signature = at.session_state["result_sig"]
+    initial = at.session_state["results"]["torsion"]
+    assert initial["gamma_ct"] == pytest.approx(1.70)
+    assert initial["trd_c"] == pytest.approx(
+        2.0 * initial["tube"]["Ak"] * (initial["tube"]["tef"] / 1000.0)
+        * initial["fctd"] * 1000.0
     )
 
     _goto_page(at, "Inputs")
-    at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
+    _set(at, ("number_input", "torsion_gamma_ct", 2.0))
+    assert at.session_state["_latest_inputs"]["signature"] != old_signature
+    assert at.session_state["result_sig"] == old_signature
+
     _calculate(at)
-
-    repaired = at.session_state["results"]["torsion"]
-    assert repaired["factor_input_valid"] is True
-    assert repaired["factor_approval_valid"] is True
-    assert repaired["valid"] is True
-    assert repaired["gamma_ct"] == pytest.approx(1.62)
-
-
-def test_app_torsion_override_withholds_verdict_until_approved():
-    at = _fresh()
-    at.run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.selectbox(key="torsion_factor_mode").set_value(
-        codes.FACTOR_MODE_OVERRIDE
-    ).run()
-    at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
-    assert any(
-        "required before a torsion verdict" in message.value
-        for message in at.error
-    )
-    _set(at, ("number_input", "torsion_T", 40.0))
-    _calculate(at)
-
-    assert not at.exception
-    blocked = at.session_state["results"]["torsion"]
-    assert blocked["factor_approval_required"] is True
-    assert blocked["factor_approval_valid"] is False
-    assert blocked["valid"] is False
-    assert "requires a stated approval/source" in blocked["reason"]
-    _select_view(at, "Torsion")
-    assert any(
-        "approved final concrete tensile-factor override has no approval/source"
-        in message.value
-        for message in at.error
-    )
-    assert not any(
-        "tube could not be formed" in message.value
-        for message in at.warning
-    )
-    assert not any(
-        metric.label == r"Utilisation $T_{Ed}/T_{Rd}$"
-        for metric in at.metric
-    )
-
-    _set(
-        at,
-        ("text_input", "torsion_factor_approval", "DB-TOR-05 / checker D"),
-    )
-    _calculate(at)
-
-    approved = at.session_state["results"]["torsion"]
-    assert approved["factor_approval_valid"] is True
-    assert approved["valid"] is True
-    assert approved["material_factor_basis"]["approval_reference"] == (
-        "DB-TOR-05 / checker D"
-    )
-
-
-def test_biaxial_unapproved_torsion_override_withholds_dependent_screens():
-    at = _fresh()
-    at.run()
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    at.checkbox(key="shear_links").set_value(True).run()
-    at.selectbox(key="torsion_factor_mode").set_value(
-        codes.FACTOR_MODE_OVERRIDE
-    ).run()
-    at.number_input(key="torsion_gamma_ct").set_value(1.62).run()
-    _set_and_click(
-        at,
-        "calculate",
-        ("number_input", "shear_Vx", 20.0),
-        ("number_input", "shear_Vy", 30.0),
-        ("number_input", "torsion_T", 15.0),
-    )
-
-    assert not at.exception
-    results = at.session_state["results"]
-    torsion_result = results["torsion"]
-    assert torsion_result["valid"] is False
-    for direction in results["shear"]["directions"].values():
-        for candidate in direction["face_candidates"]:
-            assert candidate["torsion_status"] == "NOT ASSESSED"
-            assert candidate["min_reinf_status"] == "NOT ASSESSED"
-    for item in torsion_result["directional_interactions"].values():
-        assert item["directional_interaction_status"] == "NOT ASSESSED"
-        assert item["interaction"]["valid"] is False
-        assert "value" not in item["interaction"]
-        assert item["min_reinf"]["applicable"] is False
-        assert item["directional_min_reinf_status"] == "NOT ASSESSED"
-        assert "approval/source" in item["interaction"]["reason"]
-        assert "approval/source" in item["min_reinf"]["reason"]
-
-    _select_view(at, "Torsion")
-    assert any("No torsion, V+T (6.29)" in message.value for message in at.error)
-    assert not any(
-        "Directional screen" in frame.value.columns
-        or "Directional 6.31 screen" in frame.value.columns
-        for frame in at.dataframe
+    result = at.session_state["results"]["torsion"]
+    assert result["gamma_ct"] == pytest.approx(2.0)
+    assert result["trd_c"] == pytest.approx(
+        2.0 * result["tube"]["Ak"] * (result["tube"]["tef"] / 1000.0)
+        * result["fctd"] * 1000.0
     )
 
 
@@ -643,6 +487,9 @@ def test_app_torsion_view_renders():
     labels = [m.label for m in at.metric]
     assert any("Utilisation" in lbl for lbl in labels)
     assert any("T_{Rd" in lbl for lbl in labels)
+    captions = " ".join(item.value for item in at.caption)
+    assert "actual direct gamma_ct input is used" in captions
+    assert "1.700" in captions
 
 
 def _subdivided(at, b0=300.0, h0=600.0, b1=1000.0, h1=200.0, T=40.0):
@@ -1042,56 +889,6 @@ def test_app_min_reinf_screen_over_limit():
     assert mr["ok"] is False
 
 
-def test_app_dk_tensile_factor_changes_the_eq_631_governing_state():
-    at = _fresh()
-    at.run()
-    _set(
-        at,
-        ("checkbox", "shear_on", True),
-        ("checkbox", "torsion_on", True),
-        ("selectbox", "shear_method", codes.EC2_2005.label),
-        ("selectbox", "torsion_method", codes.EC2_2005.label),
-    )
-    _set_and_click(
-        at,
-        "calculate",
-        ("number_input", "shear_V", 1.0),
-        ("number_input", "torsion_T", 1.0),
-    )
-    base = at.session_state["results"]["torsion"]["min_reinf"]
-
-    _set(
-        at,
-        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
-        ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label),
-    )
-    _calculate(at)
-    dk = at.session_state["results"]["torsion"]["min_reinf"]
-
-    base_limit = base["trd_c"] * (1.0 - base["v_ed"] / base["vrd_c"])
-    dk_limit = dk["trd_c"] * (1.0 - dk["v_ed"] / dk["vrd_c"])
-    assert base_limit > dk_limit
-    transition_demand = 0.5 * (base_limit + dk_limit)
-
-    _set(
-        at,
-        ("selectbox", "shear_method", codes.EC2_2005.label),
-        ("selectbox", "torsion_method", codes.EC2_2005.label),
-    )
-    _set_and_click(
-        at, "calculate", ("number_input", "torsion_T", transition_demand)
-    )
-    assert at.session_state["results"]["torsion"]["min_reinf"]["ok"] is True
-
-    _set(
-        at,
-        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
-        ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label),
-    )
-    _calculate(at)
-    assert at.session_state["results"]["torsion"]["min_reinf"]["ok"] is False
-
-
 def test_biaxial_torsion_retains_and_presents_directional_631_screens():
     at = _fresh()
     at.run()
@@ -1141,7 +938,11 @@ def test_app_torsion_is_saved_and_restored():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    _set(at, ("number_input", "torsion_T", 55.0))
+    _set(
+        at,
+        ("number_input", "torsion_T", 55.0),
+        ("number_input", "torsion_gamma_ct", 2.0),
+    )
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     tables = {k: at.session_state[k] for k in project_io.PROJECT_TABLE_KEYS
@@ -1154,6 +955,7 @@ def test_app_torsion_is_saved_and_restored():
     at2.run()
     assert not at2.exception
     assert at2.session_state["torsion_on"] is True
+    assert at2.session_state["torsion_gamma_ct"] == pytest.approx(2.0)
     assert first_case_value(at2, "torsion_T") == pytest.approx(55.0)
 
 
@@ -1188,7 +990,7 @@ def test_app_torsion_nu_v_toggle_raises_trd_max():
     assert t["trd_max"] > base
 
 
-def test_app_torsion_out_of_range_withholds_verdict():
+def test_app_torsion_out_of_default_range_warns_and_retains_verdict():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
@@ -1201,11 +1003,11 @@ def test_app_torsion_out_of_range_withholds_verdict():
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["out_of_limits"] is True
-    assert t["code_applicable"] is False
+    assert "code_applicable" not in t
     _select_view(at, "Torsion")
-    assert any("NO CODE VERDICT" in w.value for w in at.warning)
+    assert any("actual values are retained" in w.value.lower() for w in at.warning)
     util_metric = next(
         m for m in at.metric
         if m.label == r"Utilisation $T_{Ed}/T_{Rd}$"
     )
-    assert not util_metric.delta
+    assert util_metric.delta in {"PASS", "FAIL"}

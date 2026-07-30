@@ -25,6 +25,39 @@ from sector.serviceability import (
 )
 
 
+def test_ordinary_crack_width_uses_combined_n_mx_my_longitudinal_bar_stress():
+    """PR-07 regression: no separate multidirectional crack overlay is involved."""
+    section = Section.from_polygon(
+        corners=[
+            (-0.3, -0.5),
+            (0.3, -0.5),
+            (0.3, 0.5),
+            (-0.3, 0.5),
+        ],
+        bars_xy_area_mm2=[
+            (-0.24, -0.44, 804.0),
+            (0.24, -0.44, 804.0),
+            (-0.24, 0.44, 804.0),
+            (0.24, 0.44, 804.0),
+        ],
+    )
+    uniaxial = analyse_cracking(
+        section, 0.0, 500.0, 0.0, 6.0, fctm=3.2
+    )
+    combined = analyse_cracking(
+        section, 250.0, 500.0, 180.0, 6.0, fctm=3.2
+    )
+
+    assert uniaxial.crack is not None
+    assert combined.crack is not None
+    governing = combined.crack.gov_bar
+    assert combined.crack.sigma_s == pytest.approx(
+        combined.cracked_state.bar_stress[governing] / 1000.0
+    )
+    assert combined.crack.sigma_s != pytest.approx(uniaxial.crack.sigma_s)
+    assert combined.crack.wk != pytest.approx(uniaxial.crack.wk)
+
+
 def beam_section() -> Section:
     """0.3 x 0.6 m beam, 3 bars (491 mm^2 each) at y = 0.05 m (d = 0.55 m)."""
     b, h, a = 0.3, 0.6, 491.0

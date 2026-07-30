@@ -1,177 +1,9 @@
 import math
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from app import fatigue_inputs as fi
-from sector import conformance
-
-
-@pytest.mark.parametrize(
-    ("edition", "gamma_s", "gamma_c"),
-    [
-        (fi.EC2_2005, 1.15, 1.50),
-        (fi.EC2_2005_DKNA, 1.32, 1.595),
-        (fi.EC2_2_2005_AC, 1.15, 1.50),
-        (fi.EC2_2023, 1.15, 1.50),
-    ],
-)
-def test_edition_factor_presets_resolve_expected_unity_category_values(
-    edition, gamma_s, gamma_c
-):
-    basis = fi.fatigue_factor_preset(edition)
-
-    assert basis["gamma_s"] == pytest.approx(gamma_s)
-    assert basis["gamma_c"] == pytest.approx(gamma_c)
-    assert basis["reference"]
-
-
-def test_dk_fatigue_factor_derivation_exposes_every_multiplier():
-    basis = fi.fatigue_factor_preset(
-        fi.EC2_2005_DKNA,
-        gamma0=0.95,
-        gamma3=1.10,
-    )
-
-    expected_s = 1.20 * 1.10 * 0.95 * 1.10
-    expected_c = 1.45 * 1.10 * 0.95 * 1.10
-    assert basis["gamma_s"] == pytest.approx(expected_s)
-    assert basis["gamma_c"] == pytest.approx(expected_c)
-    assert basis["gamma_s_derivation"] == (
-        f"1.20 x 1.10 x 0.950 x 1.100 = {expected_s:.3f}"
-    )
-    assert basis["gamma_c_derivation"] == (
-        f"1.45 x 1.10 x 0.950 x 1.100 = {expected_c:.3f}"
-    )
-
-
-def test_approved_fatigue_override_survives_edition_switches_unchanged():
-    finals = []
-    for edition in fi.EDITIONS:
-        gamma_s, gamma_c, basis = fi.resolve_fatigue_factors(
-            edition,
-            mode=fi.FACTOR_MODE_OVERRIDE,
-            gamma_s=1.27,
-            gamma_c=1.61,
-            gamma0=0.95,
-            gamma3=1.10,
-            approval_reference="DB-FACT-01 / checker A",
-        )
-        finals.append((gamma_s, gamma_c))
-        assert basis["gamma_s_derivation"] == (
-            "approved custom final override = 1.270"
-        )
-        assert basis["gamma_c_derivation"] == (
-            "approved custom final override = 1.610"
-        )
-
-    assert all(
-        gamma_s == pytest.approx(1.27)
-        and gamma_c == pytest.approx(1.61)
-        for gamma_s, gamma_c in finals
-    )
-
-
-@pytest.mark.parametrize("value", [0.5, 2.0])
-def test_positive_custom_material_factors_are_preserved_without_clamping(value):
-    gamma_s, gamma_c, review_basis = fi.resolve_fatigue_factors(
-        fi.EC2_2_2005_AC,
-        mode=fi.FACTOR_MODE_PRESET,
-        gamma_s=value,
-        gamma_c=value,
-    )
-    approved_s, approved_c, approved_basis = fi.resolve_fatigue_factors(
-        fi.EC2_2_2005_AC,
-        mode=fi.FACTOR_MODE_OVERRIDE,
-        gamma_s=value,
-        gamma_c=value,
-        approval_reference="DB-FACT-02 / checker B",
-    )
-
-    assert (gamma_s, gamma_c) == pytest.approx((value, value))
-    assert (
-        review_basis["conformance"]["state"]
-        == conformance.STATE_REVIEW
-    )
-    assert (approved_s, approved_c) == pytest.approx((value, value))
-    assert (
-        approved_basis["conformance"]["state"]
-        == conformance.STATE_APPROVED_CUSTOM
-    )
-    assert (
-        approved_basis["parameter_conformance"]["gamma_s"]["actual_value"]
-        == value
-    )
-
-
-def test_custom_factor_without_approval_calculates_but_requires_review():
-    gamma_s, gamma_c, basis = fi.resolve_fatigue_factors(
-        fi.EC2_2_2005_AC,
-        mode=fi.FACTOR_MODE_OVERRIDE,
-        gamma_s=0.5,
-        gamma_c=2.0,
-        approval_reference="",
-    )
-
-    assert (gamma_s, gamma_c) == pytest.approx((0.5, 2.0))
-    assert basis["conformance"]["state"] == conformance.STATE_REVIEW
-    assert all(
-        record["state"] == conformance.STATE_REVIEW
-        for record in basis["parameter_conformance"].values()
-    )
-
-
-def test_factor_approval_metadata_must_be_typed_text():
-    with pytest.raises(ValueError, match="must be typed text"):
-        fi.resolve_fatigue_factors(
-            fi.EC2_2_2005_AC,
-            mode=fi.FACTOR_MODE_OVERRIDE,
-            gamma_s=0.5,
-            gamma_c=2.0,
-            approval_reference=True,
-        )
-
-
-def test_legacy_fatigue_values_are_retained_but_identified_for_review():
-    gamma_s, gamma_c, basis = fi.resolve_fatigue_factors(
-        fi.EC2_2005_DKNA,
-        mode=fi.FACTOR_MODE_LEGACY,
-        gamma_s=1.15,
-        gamma_c=1.50,
-    )
-
-    assert (gamma_s, gamma_c) == pytest.approx((1.15, 1.50))
-    assert basis["legacy_review_required"] is True
-    assert "review required" in basis["gamma_s_derivation"]
-
-
-@pytest.mark.parametrize("boolean_value", [True, np.bool_(True)])
-def test_fatigue_factor_resolvers_reject_boolean_numbers(boolean_value):
-    with pytest.raises(ValueError, match="Boolean values are not accepted"):
-        fi.fatigue_factor_preset(
-            fi.EC2_2005_DKNA,
-            gamma0=boolean_value,
-        )
-    with pytest.raises(ValueError, match="Boolean values are not accepted"):
-        fi.fatigue_factor_preset(
-            fi.EC2_2005_DKNA,
-            gamma3=boolean_value,
-        )
-    with pytest.raises(ValueError, match="Boolean values are not accepted"):
-        fi.resolve_fatigue_factors(
-            fi.EC2_2005_DKNA,
-            mode=fi.FACTOR_MODE_OVERRIDE,
-            gamma_s=boolean_value,
-            gamma_c=1.595,
-        )
-    with pytest.raises(ValueError, match="Boolean values are not accepted"):
-        fi.resolve_fatigue_factors(
-            fi.EC2_2005_DKNA,
-            mode=fi.FACTOR_MODE_OVERRIDE,
-            gamma_s=1.32,
-            gamma_c=boolean_value,
-        )
 
 
 def test_builtin_detail_presets_match_the_two_eurocode_editions():
@@ -341,65 +173,23 @@ def test_replace_entry_applies_the_same_strict_field_validation():
         fi.replace_entry(fi.default_catalog(), entry)
 
 
-def test_authority_basis_is_metadata_with_method_specific_qa_warnings():
+def test_grouped_spectrum_basis_is_direct_and_has_no_policy_warnings():
     basis = fi.normalise_basis({
-        "authority": fi.AUTHORITY_BN_NEW,
-        "method": fi.METHOD_BN_NEW_2,
-        "spectrum_source": "Prescribed traffic set",
-        "cycle_count_source": "BN traffic composition",
-        "dynamic_effects": fi.DYNAMIC_INCLUDED,
-        "cycle_counting": fi.COUNTING_OTHER,
-        "concurrence_basis": "",
-        "atypical_traffic": fi.ATYPICAL_NOT_APPLICABLE,
-        "authority_adjustments": "",
+        "method": fi.METHOD_GROUPED,
+        "notes": "Engineer-defined bins",
     })
 
-    warnings = fi.basis_warnings(basis)
-
-    assert "Selected BN1-59-5 method requires rainflow counting" in warnings
-    assert "Lane/track concurrence basis is not stated" in warnings
-    assert (
-        "BN prescribed-traffic source/approval reference is not stated"
-        in warnings
-    )
-    assert "Authority load/cycle adjustments are not stated" in warnings
-    assert fi.method_requires_single_bin(fi.METHOD_BN_NEW_1) is True
-    assert fi.method_requires_single_bin(fi.METHOD_BN_NEW_2) is False
+    assert basis == {
+        "method": fi.METHOD_GROUPED,
+        "notes": "Engineer-defined bins",
+    }
+    assert fi.basis_warnings(basis) == []
+    assert fi.method_requires_single_bin(fi.METHOD_GROUPED) is False
 
 
-def test_authority_basis_rejects_cross_authority_method_and_unknown_status():
-    with pytest.raises(ValueError, match="is not available"):
-        fi.normalise_basis({
-            "authority": fi.AUTHORITY_VD,
-            "method": fi.METHOD_BN_EXISTING_4,
-        })
-    with pytest.raises(ValueError, match="unknown dynamic-effects status"):
-        fi.normalise_basis({"dynamic_effects": "Maybe"})
-
-
-def test_current_fatigue_basis_requires_exact_typed_canonical_fields():
-    basis = fi.default_basis()
-
-    assert fi.canonical_basis(basis) == basis
-
-    incomplete = dict(basis)
-    del incomplete["notes"]
-    with pytest.raises(ValueError, match="missing notes"):
-        fi.canonical_basis(incomplete)
-    with pytest.raises(ValueError, match="missing notes"):
-        fi.basis_signature(incomplete)
-
-    unknown = {**basis, "synthetic": ""}
-    with pytest.raises(ValueError, match="unknown synthetic"):
-        fi.canonical_basis(unknown)
-
-    boolean = {**basis, "notes": True}
-    with pytest.raises(ValueError, match="notes must be typed text"):
-        fi.canonical_basis(boolean)
-
-    padded = {**basis, "notes": " stale "}
-    with pytest.raises(ValueError, match="canonical trimmed text"):
-        fi.canonical_basis(padded)
+def test_grouped_spectrum_basis_rejects_unknown_method():
+    with pytest.raises(ValueError, match="unknown fatigue calculation method"):
+        fi.normalise_basis({"method": "Authority route"})
 
 
 def _spectrum_rows():

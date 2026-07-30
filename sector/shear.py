@@ -61,7 +61,7 @@ def tension_reinforcement_selection(bars: Sequence, axis: str, tension_low: bool
 
 def tension_reinforcement(bars: Sequence, axis: str, tension_low: bool,
                           centroid_coord: float):
-    """Backward-compatible ``(area, centroid)`` tension-bar selection."""
+    """Return the ``(area, centroid)`` tension-bar selection."""
     area, cg, _ = tension_reinforcement_selection(
         bars, axis, tension_low, centroid_coord
     )

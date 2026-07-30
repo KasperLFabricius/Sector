@@ -65,6 +65,40 @@ def test_concrete_design_scales_by_gamma_c():
     assert c.stress(-EPS_C_PEAK, design=True) == pytest.approx(-20.0)
 
 
+def test_positive_custom_partial_factors_are_actual_constitutive_inputs():
+    concrete = Concrete(fck=30.0, gamma_c=0.5, curve=2)
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=500.0,
+        futk=550.0,
+        eut=0.05,
+        gamma_y=2.0,
+        curve=2,
+    )
+
+    assert concrete.gamma_c == pytest.approx(0.5)
+    assert concrete.fcd == pytest.approx(60.0)
+    assert concrete.stress(-EPS_C_PEAK, design=True) == pytest.approx(-60.0)
+    assert steel.gamma_y == pytest.approx(2.0)
+    assert steel.stress(0.02, design=True) == pytest.approx(250.0)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
+def test_material_partial_factors_reject_only_mathematically_invalid_values(bad):
+    with pytest.raises(ValueError, match="positive finite"):
+        Concrete(fck=30.0, gamma_c=bad)
+    with pytest.raises(ValueError, match="positive finite"):
+        MildSteel(
+            fytk=500.0,
+            fyck=500.0,
+            eut=0.05,
+            gamma_y=bad,
+            curve=2,
+        )
+    with pytest.raises(ValueError, match="positive finite"):
+        Prestress(curve=1, gamma_y=bad)
+
+
 def test_concrete_alpha_cc_scales_design_strength_only():
     base = Concrete(fck=30.0, gamma_c=1.5)                  # alpha_cc defaults to 1.0
     red = Concrete(fck=30.0, gamma_c=1.5, alpha_cc=0.85)

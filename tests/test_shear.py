@@ -684,9 +684,10 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     assert set(sh["directions"]) == {"vx", "vy"}
-    assert sh["status"] == "REVIEW"
-    assert sh["interaction_assessed"] is False
-    assert sh["interaction_status"] == "NOT ASSESSED"
+    assert "generic_cross_direction_interaction_calculated" not in sh
+    assert "status" not in sh
+    assert "interaction_assessed" not in sh
+    assert "interaction_status" not in sh
     assert sh["directions"]["vx"]["axis"] == "y"
     assert sh["directions"]["vy"]["axis"] == "x"
 
@@ -703,7 +704,9 @@ def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     )
 
     assert not at.exception
-    vy = at.session_state["results"]["shear"]["directions"]["vy"]
+    vy = at.session_state["results"]["shear"]
+    assert vy["component"] == "vy"
+    assert "directions" not in vy
     assert vy["both_faces_evaluated"] is True
     assert len(vy["face_candidates"]) == 2
     assert vy["governing_face"] in {"negative", "positive"}
@@ -722,7 +725,7 @@ def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     )
 
 
-def test_app_linked_shear_governing_uses_the_applicable_link_utilisation():
+def test_app_linked_shear_governing_uses_the_selected_link_utilisation():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
@@ -735,7 +738,9 @@ def test_app_linked_shear_governing_uses_the_applicable_link_utilisation():
     )
 
     assert not at.exception
-    vy = at.session_state["results"]["shear"]["directions"]["vy"]
+    vy = at.session_state["results"]["shear"]
+    assert vy["component"] == "vy"
+    assert "directions" not in vy
     candidates = vy["face_candidates"]
     assert len(candidates) == 2
     for candidate in candidates:
@@ -861,8 +866,8 @@ def test_shear_lever_arm_falls_back_without_a_section():
     assert "fallback" in src
 
 
-def test_app_shear_links_flag_out_of_code_bounds():
-    # Widening cot(theta) past the code limit is allowed but flagged (warning, not
+def test_app_shear_links_warn_outside_default_bounds_and_retain_verdict():
+    # Widening cot(theta) past the method default is allowed but flagged (warning, not
     # a blocking error) and honoured by the optimiser.
     at = _fresh()
     at.run()
@@ -877,15 +882,15 @@ def test_app_shear_links_flag_out_of_code_bounds():
     assert not at.exception
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["out_of_limits"] is True
-    assert lk["code_applicable"] is False
+    assert "code_applicable" not in lk
     _select_view(at, "Shear")
     assert not at.exception
-    assert any("NO CODE VERDICT" in w.value for w in at.warning)
+    assert any("actual values are retained" in w.value.lower() for w in at.warning)
     util_metric = next(
         m for m in at.metric
         if m.label == r"Utilisation $V_{Ed}/V_{Rd}$"
     )
-    assert not util_metric.delta
+    assert util_metric.delta in {"PASS", "FAIL"}
 
 
 def test_app_shear_uses_final_material_factors():
@@ -978,7 +983,7 @@ def test_app_shear_2023_links_produce_compression_field_result():
     assert not any("not yet implemented" in m.value for m in at.info)
 
 
-def test_app_shear_2023_class_a_angle_limit_withholds_out_of_range_verdict():
+def test_app_shear_2023_class_a_default_range_deviation_is_recorded():
     at = _fresh()
     at.run()
     _set(
@@ -997,7 +1002,7 @@ def test_app_shear_2023_class_a_angle_limit_withholds_out_of_range_verdict():
     links = at.session_state["results"]["shear"]["links"]
     assert links["cot_limit_hi"] == pytest.approx(2.0)
     assert links["out_of_limits"]
-    assert not links["code_applicable"]
+    assert "code_applicable" not in links
 
 
 def test_app_shear_is_saved_and_restored():

@@ -1,18 +1,9 @@
-"""Canonical load-case tables shared by the UI and project-file migration.
+"""Canonical user-defined Plastic and Elastic action tables.
 
-The current application historically stores one Plastic and one Elastic action
-set as individual Streamlit scalar keys. The multi-case workflow uses two
-typed tables instead.  This module owns that boundary so project I/O, the UI and
-the calculation orchestration do not each invent subtly different column names,
-defaults or validation rules.
-
-The table model keeps solver duration and acceptance combination distinct. A case
-name and description are project-defined. Section forces use a consistent
-``*_Ed`` vocabulary; the Elastic table retains the sustained and instantaneous
-decomposition needed by the combined creep solver, and separately records which
-SLS combination each resulting response represents. Stress and crack-width
-acceptance are selected per Elastic case; structured criteria route only to an
-explicitly matching combination.
+A case name and description are user-controlled. The Elastic table retains the
+sustained and instantaneous decomposition required by the combined creep solver.
+Stresses are always calculation outputs; crack width is an optional numerical
+calculation per Elastic action. No required combinations are inferred.
 """
 
 from __future__ import annotations
@@ -22,22 +13,10 @@ from collections.abc import Mapping
 
 import pandas as pd
 
-from sector import sls as sls_core
-
 
 PLASTIC_TABLE_KEY = "plastic_cases_base"
 ELASTIC_TABLE_KEY = "elastic_cases_base"
 CASE_TABLE_KEYS = (PLASTIC_TABLE_KEY, ELASTIC_TABLE_KEY)
-
-# Historical scalar fields used by project versions 1-3. They remain here only
-# for lossless migration into the canonical load-case tables.
-LEGACY_SCALAR_KEYS = (
-    "pl_case_id", "pl_case_type", "pl_case_source",
-    "el_case_id", "el_case_type", "el_case_source",
-    "pl_P", "pl_Mx", "pl_My", "shear_V", "torsion_T",
-    "el_long_P", "el_long_Mx", "el_long_My",
-    "el_short_P", "el_short_Mx", "el_short_My", "sls_cw",
-)
 
 NAME = "name"
 DESCRIPTION = "description"
@@ -74,20 +53,16 @@ PLASTIC_NUMERIC = (
 ELASTIC_COLUMNS = (
     NAME,
     DESCRIPTION,
-    "long_combination",
-    "total_combination",
     "n_long_ed_kn",
     "mx_long_ed_knm",
     "my_long_ed_knm",
     "n_short_ed_kn",
     "mx_short_ed_knm",
     "my_short_ed_knm",
-    "check_stress",
-    "check_crack_width",
+    "calculate_crack_width",
 )
-ELASTIC_COMBINATION_COLUMNS = ("long_combination", "total_combination")
-ELASTIC_NUMERIC = ELASTIC_COLUMNS[4:10]
-ELASTIC_FLAGS = ELASTIC_COLUMNS[10:]
+ELASTIC_NUMERIC = ELASTIC_COLUMNS[2:8]
+ELASTIC_FLAGS = ELASTIC_COLUMNS[8:]
 
 TABLE_COLUMNS = {
     PLASTIC_TABLE_KEY: PLASTIC_COLUMNS,
@@ -103,7 +78,7 @@ FLAG_COLUMNS = {
 }
 TEXT_COLUMNS = {
     PLASTIC_TABLE_KEY: (NAME, DESCRIPTION, *PLASTIC_FACE_COLUMNS),
-    ELASTIC_TABLE_KEY: (NAME, DESCRIPTION, *ELASTIC_COMBINATION_COLUMNS),
+    ELASTIC_TABLE_KEY: (NAME, DESCRIPTION),
 }
 
 
@@ -168,45 +143,6 @@ def _face(value) -> str:
     return _text(value)
 
 
-def _combination(value) -> str:
-    """Canonicalise known SLS classes while retaining invalid text for review."""
-    return sls_core.canonical_combination(_text(value))
-
-
-def legacy_shear_component(axis) -> str:
-    """Map the former shear-axis selection to ``vx`` or ``vy``.
-
-    The historical internal axis named the bending axis: ``x`` meant vertical
-    shear and therefore maps to Vy; ``y`` meant horizontal shear and maps to Vx.
-    UI-label variants are accepted because project files persist widget values.
-    """
-    text = _text(axis).casefold()
-    if text == "y" or "horizontal" in text or "about y" in text:
-        return "vx"
-    return "vy"
-
-
-def migrate_legacy_plastic_records(records, *, axis=None, tension=None) -> list[dict]:
-    """Convert v4-v6 one-direction plastic rows to the directional schema."""
-    component = legacy_shear_component(axis)
-    face = _face(FACE_NEGATIVE if tension is None else tension)
-    migrated = []
-    for source in records or []:
-        row = dict(source)
-        if "vx_ed_kn" not in row and "vy_ed_kn" not in row:
-            v_ed = row.pop("v_ed_kn", 0.0)
-            row["vx_ed_kn"] = v_ed if component == "vx" else 0.0
-            row["vy_ed_kn"] = v_ed if component == "vy" else 0.0
-        row.setdefault(
-            "vx_face", face if component == "vx" else FACE_AUTO
-        )
-        row.setdefault(
-            "vy_face", face if component == "vy" else FACE_AUTO
-        )
-        migrated.append(row)
-    return migrated
-
-
 def empty_table(key: str) -> pd.DataFrame:
     """Return an empty table with stable text, numeric and boolean dtypes."""
     key = _kind(key)
@@ -245,42 +181,15 @@ def normalise_table(value, key: str) -> pd.DataFrame:
         frame = value.copy(deep=True) if isinstance(value, pd.DataFrame) else pd.DataFrame(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} is not tabular") from exc
-    # Programmatic callers may still supply the former one-direction column. A
-    # project file uses the axis-aware v7 migration; without that metadata the
-    # historical/default vertical direction is the only deterministic mapping.
-    if (
-        key == PLASTIC_TABLE_KEY
-        and "v_ed_kn" in frame
-        and "vx_ed_kn" not in frame
-        and "vy_ed_kn" not in frame
-    ):
-        frame["vy_ed_kn"] = frame["v_ed_kn"]
-
     result = pd.DataFrame(index=frame.index)
     for column in TEXT_COLUMNS[key]:
-        default = (
-            FACE_AUTO
-            if column in PLASTIC_FACE_COLUMNS
-            else (
-                sls_core.COMBINATION_UNSPECIFIED
-                if column in ELASTIC_COMBINATION_COLUMNS
-                else ""
-            )
-        )
+        default = FACE_AUTO if column in PLASTIC_FACE_COLUMNS else ""
         source = (
             frame[column]
             if column in frame
             else pd.Series(default, index=frame.index)
         )
-        mapper = (
-            _face
-            if column in PLASTIC_FACE_COLUMNS
-            else (
-                _combination
-                if column in ELASTIC_COMBINATION_COLUMNS
-                else _text
-            )
-        )
+        mapper = _face if column in PLASTIC_FACE_COLUMNS else _text
         result[column] = source.map(mapper).astype("string")
     for column in NUMERIC_COLUMNS[key]:
         source = frame[column] if column in frame else pd.Series(0.0, index=frame.index)
@@ -308,12 +217,6 @@ def _row_is_blank(row: Mapping, key: str) -> bool:
                 for column in NUMERIC_COLUMNS[key])
         and all(_face(row.get(column)) == FACE_AUTO
                 for column in PLASTIC_FACE_COLUMNS if column in TABLE_COLUMNS[key])
-        and all(
-            _combination(row.get(column))
-            == sls_core.COMBINATION_UNSPECIFIED
-            for column in ELASTIC_COMBINATION_COLUMNS
-            if column in TABLE_COLUMNS[key]
-        )
         and not any(_flag(row.get(column)) for column in FLAG_COLUMNS[key])
     )
 
@@ -338,12 +241,7 @@ def table_records(value, key: str) -> list[dict]:
         record = {
             column: (
                 _face(row[column])
-                if column in PLASTIC_FACE_COLUMNS
-                else (
-                    _combination(row[column])
-                    if column in ELASTIC_COMBINATION_COLUMNS
-                    else _text(row[column])
-                )
+                if column in PLASTIC_FACE_COLUMNS else _text(row[column])
             )
             for column in TEXT_COLUMNS[key]
         }
@@ -352,12 +250,6 @@ def table_records(value, key: str) -> list[dict]:
                 raise ValueError(
                     f"{key} row {row_number}: {column} must be auto, "
                     "negative or positive"
-                )
-        for column in ELASTIC_COMBINATION_COLUMNS:
-            if column in record and record[column] not in sls_core.SLS_COMBINATIONS:
-                raise ValueError(
-                    f"{key} row {row_number}: {column} must be one of "
-                    + ", ".join(sls_core.SLS_COMBINATIONS)
                 )
         for column in NUMERIC_COLUMNS[key]:
             try:
@@ -385,90 +277,38 @@ def table_from_records(records, key: str) -> pd.DataFrame:
     return normalise_table(records, key)
 
 
-def _description(classification, source) -> str:
-    classification = _text(classification)
-    source = _text(source)
-    if classification and source:
-        return f"{classification} | Source: {source}"
-    if source:
-        return f"Source: {source}"
-    return classification
-
-
-def tables_from_legacy_scalars(scalars: Mapping | None) -> dict[str, pd.DataFrame]:
-    """Migrate the former single-action scalar fields to one row per solver."""
-    scalars = scalars or {}
-    stress_keys = (
-        "sls_conc_limit_pct",
-        "sls_steel_limit_pct",
-        "sls_pre_limit_pct",
-    )
-    supplied_limits = [scalars[key] for key in stress_keys if key in scalars]
-    # Before per-case flags, stress acceptance was always active whenever the
-    # applicable global limit was nonzero. Preserve that behaviour for default and
-    # historical rows; an explicit set of all-zero legacy limits remains off.
-    stress_enabled = (
-        True
-        if not supplied_limits
-        else any(_number(value) > 0.0 for value in supplied_limits)
-    )
-    shear_component = legacy_shear_component(scalars.get("shear_axis"))
-    legacy_v = _number(scalars.get("shear_V", 0.0))
-    # A new table defaults to automatic face selection. Project I/O supplies the
-    # historical negative-face default explicitly when migrating pre-v7 scalars.
-    default_face = FACE_NEGATIVE if "shear_V" in scalars else FACE_AUTO
-    legacy_face = _face(scalars.get("shear_tension", default_face))
+def default_tables() -> dict[str, pd.DataFrame]:
+    """Build the app's initial one-row Plastic and Elastic tables."""
     plastic = normalise_table([{
-        NAME: _text(scalars.get("pl_case_id")) or "PL-01",
-        DESCRIPTION: _description(
-            scalars.get("pl_case_type"), scalars.get("pl_case_source")
-        ),
-        "n_ed_kn": _number(scalars.get("pl_P", 0.0)),
-        "mx_ed_knm": _number(scalars.get("pl_Mx", 0.0)),
-        "my_ed_knm": _number(scalars.get("pl_My", 0.0)),
-        "vx_ed_kn": legacy_v if shear_component == "vx" else 0.0,
-        "vy_ed_kn": legacy_v if shear_component == "vy" else 0.0,
-        "vx_face": legacy_face if shear_component == "vx" else FACE_AUTO,
-        "vy_face": legacy_face if shear_component == "vy" else FACE_AUTO,
-        "t_ed_knm": _number(scalars.get("torsion_T", 0.0)),
+        NAME: "PL-01",
+        DESCRIPTION: "",
+        "n_ed_kn": 0.0,
+        "mx_ed_knm": 0.0,
+        "my_ed_knm": 0.0,
+        "vx_ed_kn": 0.0,
+        "vy_ed_kn": 0.0,
+        "vx_face": FACE_AUTO,
+        "vy_face": FACE_AUTO,
+        "t_ed_knm": 0.0,
     }], PLASTIC_TABLE_KEY)
     elastic = normalise_table([{
-        NAME: _text(scalars.get("el_case_id")) or "EL-01",
-        DESCRIPTION: _description(
-            scalars.get("el_case_type"), scalars.get("el_case_source")
-        ),
-        "long_combination": _combination(
-            scalars.get(
-                "sls_long_combination",
-                sls_core.COMBINATION_UNSPECIFIED,
-            )
-        ),
-        "total_combination": _combination(
-            scalars.get(
-                "sls_total_combination",
-                sls_core.COMBINATION_UNSPECIFIED,
-            )
-        ),
-        "n_long_ed_kn": _number(scalars.get("el_long_P", 0.0)),
-        "mx_long_ed_knm": _number(scalars.get("el_long_Mx", 0.0)),
-        "my_long_ed_knm": _number(scalars.get("el_long_My", 0.0)),
-        "n_short_ed_kn": _number(scalars.get("el_short_P", 0.0)),
-        "mx_short_ed_knm": _number(scalars.get("el_short_Mx", 0.0)),
-        "my_short_ed_knm": _number(scalars.get("el_short_My", 0.0)),
-        "check_stress": stress_enabled,
-        "check_crack_width": _flag(scalars.get("sls_cw", False)),
+        NAME: "EL-01",
+        DESCRIPTION: "",
+        "n_long_ed_kn": 0.0,
+        "mx_long_ed_knm": 0.0,
+        "my_long_ed_knm": 0.0,
+        "n_short_ed_kn": 0.0,
+        "mx_short_ed_knm": 0.0,
+        "my_short_ed_knm": 0.0,
+        "calculate_crack_width": False,
     }], ELASTIC_TABLE_KEY)
     return {PLASTIC_TABLE_KEY: plastic, ELASTIC_TABLE_KEY: elastic}
 
 
-def legacy_scalars_from_tables(tables: Mapping | None) -> dict:
-    """Expose the first row through the verified single-case compatibility API.
-
-    The table UI remains authoritative. A few older callers still consume the
-    first row through scalar names; ``description`` is retained losslessly.
-    """
+def head_inputs(tables: Mapping | None) -> dict:
+    """Map the first row of each table to the single-case calculation adapter."""
     tables = tables or {}
-    defaults = tables_from_legacy_scalars({})
+    defaults = default_tables()
     plastic = active_table(
         tables.get(PLASTIC_TABLE_KEY, defaults[PLASTIC_TABLE_KEY]),
         PLASTIC_TABLE_KEY,
@@ -486,8 +326,7 @@ def legacy_scalars_from_tables(tables: Mapping | None) -> dict:
         "pl_P": float(p["n_ed_kn"]),
         "pl_Mx": float(p["mx_ed_knm"]),
         "pl_My": float(p["my_ed_knm"]),
-        # Compatibility only: new calculations consume both directional fields.
-        # Prefer the historical default Vy when both happen to be populated.
+        # Primary-direction projection for retained single-direction kernels.
         "shear_V": float(
             p["vy_ed_kn"] if float(p["vy_ed_kn"]) != 0.0 else p["vx_ed_kn"]
         ),
@@ -497,36 +336,14 @@ def legacy_scalars_from_tables(tables: Mapping | None) -> dict:
         "el_case_id": _text(e[NAME]),
         "el_case_type": _text(e[DESCRIPTION]),
         "el_case_source": "",
-        "sls_long_combination": _combination(e["long_combination"]),
-        "sls_total_combination": _combination(e["total_combination"]),
         "el_long_P": float(e["n_long_ed_kn"]),
         "el_long_Mx": float(e["mx_long_ed_knm"]),
         "el_long_My": float(e["my_long_ed_knm"]),
         "el_short_P": float(e["n_short_ed_kn"]),
         "el_short_Mx": float(e["mx_short_ed_knm"]),
         "el_short_My": float(e["my_short_ed_knm"]),
-        "sls_cw": bool(e["check_crack_width"]),
+        "sls_cw": bool(e["calculate_crack_width"]),
     }
-
-
-def overlay_legacy_head(value, key: str, scalars: Mapping | None) -> pd.DataFrame:
-    """Update only the first migrated row while preserving any later rows."""
-    key = _kind(key)
-    scalars = scalars or {}
-    frame = normalise_table(value, key)
-    legacy = tables_from_legacy_scalars(scalars)[key].iloc[0].copy()
-    # Migration defaults a genuinely absent historical identifier to PL/EL-01.
-    # A mounted text widget is different: if its key is present and the engineer
-    # deliberately clears it, preserve the blank so required-name validation can
-    # block calculation instead of silently restoring a default.
-    name_key = "pl_case_id" if key == PLASTIC_TABLE_KEY else "el_case_id"
-    if name_key in scalars:
-        legacy[NAME] = _text(scalars.get(name_key))
-    if frame.empty:
-        return normalise_table([legacy.to_dict()], key)
-    for column in TABLE_COLUMNS[key]:
-        frame.at[0, column] = legacy[column]
-    return normalise_table(frame, key)
 
 
 def validation_errors(plastic, elastic, *, require_plastic=False,
@@ -572,12 +389,5 @@ def validation_errors(plastic, elastic, *, require_plastic=False,
                         errors.append(
                             f"{label} row {number}: {column} must be auto, "
                             "negative or positive"
-                        )
-            else:
-                for column in ELASTIC_COMBINATION_COLUMNS:
-                    if _combination(row[column]) not in sls_core.SLS_COMBINATIONS:
-                        errors.append(
-                            f"{label} row {number}: {column} must be one of "
-                            + ", ".join(sls_core.SLS_COMBINATIONS)
                         )
     return errors

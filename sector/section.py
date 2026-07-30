@@ -116,7 +116,7 @@ class Section:
         """Raise before analysis if the stored rings no longer form valid concrete.
 
         Validation also runs at construction. Solver entry points call this method
-        defensively because ``concrete`` remains a public list for compatibility
+        defensively because ``concrete`` is a public mutable list
         and a caller can replace a ring after creating the section.
         """
         self.validate_geometry().require_valid()

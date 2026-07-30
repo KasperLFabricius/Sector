@@ -21,9 +21,16 @@ prestressing steel (types 1-7) -- the full set of laws from the manual.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 # Characteristic modulus of elasticity of reinforcement, MPa (Ek in the manual).
 ES = 2.0e5
+
+
+def _require_positive_finite(value: float, label: str) -> None:
+    if not math.isfinite(float(value)) or float(value) <= 0.0:
+        raise ValueError(f"{label} must be a positive finite value")
+
 
 def _trilinear_tension(eps, slope, f1, f2, fu, ey0t, eut):
     """Two-yield-point (trilinear) tensile stress at strain ``eps`` (>= 0).
@@ -85,14 +92,17 @@ class Concrete:
     def __post_init__(self) -> None:
         if self.curve not in (1, 2):
             raise ValueError("concrete curve must be 1 or 2")
-        if self.fck <= 0:
-            raise ValueError("fck must be positive")
-        if self.alpha_cc <= 0:
-            raise ValueError("alpha_cc must be positive")
-        if self.eps_c2 <= 0.0 or self.eps_cu2 < self.eps_c2:
+        _require_positive_finite(self.fck, "fck")
+        _require_positive_finite(self.gamma_c, "gamma_c")
+        _require_positive_finite(self.alpha_cc, "alpha_cc")
+        if (
+            not math.isfinite(float(self.eps_c2))
+            or not math.isfinite(float(self.eps_cu2))
+            or self.eps_c2 <= 0.0
+            or self.eps_cu2 < self.eps_c2
+        ):
             raise ValueError("need 0 < eps_c2 <= eps_cu2")
-        if self.n <= 0.0:
-            raise ValueError("parabola exponent n must be positive")
+        _require_positive_finite(self.n, "parabola exponent n")
 
     def _char_compressive(self, e_pct: float) -> float:
         """Characteristic compressive stress (MPa, >=0) at strain ``e_pct`` (%).
@@ -215,6 +225,8 @@ class MildSteel:
     def __post_init__(self) -> None:
         if self.curve not in (1, 2, 3):
             raise ValueError("mild steel curve must be 1, 2 or 3")
+        for label in ("gamma_y", "gamma_u", "gamma_E", "Es"):
+            _require_positive_finite(getattr(self, label), label)
         if self.curve in (1, 3) and self.futk <= 0:
             raise ValueError("types 1 and 3 need a rupture stress futk > 0")
 
@@ -414,6 +426,8 @@ class Prestress:
     def __post_init__(self) -> None:
         if self.curve not in (1, 2, 3, 4, 5, 6, 7):
             raise ValueError("prestress curve must be 1-7")
+        for label in ("gamma_y", "gamma_u", "gamma_E", "Es"):
+            _require_positive_finite(getattr(self, label), label)
         if self.curve in (6, 7) and (self.fytk <= 0 or self.futk <= 0):
             raise ValueError("types 6 and 7 need fytk and futk > 0")
 
