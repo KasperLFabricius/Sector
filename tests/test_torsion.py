@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 
 from sector import codes, shear, torsion
@@ -393,6 +394,21 @@ def test_app_torsion_gamma_ct_defaults_follow_method_until_user_edit():
     _set(at, ("number_input", "torsion_gamma_ct", 2.0))
     _set(at, ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label))
     assert at.session_state["torsion_gamma_ct"] == pytest.approx(2.0)
+
+
+def test_app_torsion_rejects_injected_numpy_boolean_gamma_ct():
+    at = _fresh()
+    at.session_state["torsion_on"] = True
+    at.session_state["torsion_gamma_ct"] = np.bool_(True)
+
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["torsion_gamma_ct"] is None
+    assert any(
+        "gamma_ct must be a positive finite real number" in item.value
+        for item in at.error
+    )
 
 
 def test_app_torsion_uses_final_material_factors():

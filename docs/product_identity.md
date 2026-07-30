@@ -19,7 +19,9 @@ selected mathematics undefined.
 That rule includes the direct concrete tensile factor `gamma_ct` used by the
 retained torsional-cracking calculation. Its selected-method default is 1.50
 for EN and 1.70 for DK/NA; any positive finite user value remains the actual
-solver, project and report input.
+solver, project and report input. Boolean scalars, including library Boolean
+types that numerically coerce to zero or one, are malformed numerical inputs
+and are rejected rather than treated as coefficients.
 
 PASS/FAIL is reserved for an implemented demand-versus-resistance equation.
 Stresses, crack widths and other output-only quantities carry no acceptance

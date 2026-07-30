@@ -18,9 +18,20 @@ SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
 
 
+def _is_boolean_scalar(value):
+    """Recognise built-in and common library Boolean scalar types."""
+    scalar_type = type(value)
+    module_root = scalar_type.__module__.partition(".")[0]
+    type_name = scalar_type.__name__.lower().rstrip("_")
+    return isinstance(value, bool) or (
+        module_root in {"numpy", "pandas"}
+        and type_name in {"bool", "boolean"}
+    )
+
+
 def _positive_finite_real(value, label):
     """Return one calculation coefficient, rejecting only malformed values."""
-    if isinstance(value, (bool, str, bytes)):
+    if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
         raise ValueError(f"{label} must be a positive finite real number")
     try:
         number = float(value)

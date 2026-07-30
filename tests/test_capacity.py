@@ -7,6 +7,7 @@ import math
 import pathlib
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from sector import capacity, codes, torsion
@@ -136,6 +137,12 @@ def test_torsion_uses_positive_custom_tensile_factor_unchanged(gamma_ct):
     "value", [True, False, 0.0, -1.0, math.inf, -math.inf, math.nan, "1.70"]
 )
 def test_torsion_rejects_only_malformed_or_nonpositive_tensile_factors(value):
+    with pytest.raises(ValueError, match="positive finite real"):
+        _torsion_cracking_result(codes.EC2_2005_DKNA.label, value)
+
+
+@pytest.mark.parametrize("value", [np.bool_(True), np.bool_(False)])
+def test_torsion_rejects_numpy_boolean_at_raw_solver_boundary(value):
     with pytest.raises(ValueError, match="positive finite real"):
         _torsion_cracking_result(codes.EC2_2005_DKNA.label, value)
 

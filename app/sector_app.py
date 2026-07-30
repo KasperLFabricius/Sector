@@ -3908,6 +3908,15 @@ def build_inputs(host=st):
         sts.caption(f"Torsion method set by Combined: {combined_method}")
     effective_torsion_method = combined_method if combined_on else torsion_method
     torsion_gamma_default = _seed_torsion_gamma_ct(effective_torsion_method)
+    torsion_gamma_ct_boolean_state = isinstance(
+        st.session_state.get("torsion_gamma_ct"), (bool, np.bool_)
+    )
+    if torsion_gamma_ct_boolean_state:
+        # Streamlit number_input normalises injected Boolean scalars to 0.0/1.0.
+        # Clear the malformed state before widget construction so it cannot become
+        # a valid-looking calculation coefficient.
+        st.session_state["torsion_gamma_ct"] = None
+        _mark_torsion_gamma_ct_custom()
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
     sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
@@ -3937,10 +3946,16 @@ def build_inputs(host=st):
         ),
     )
     torsion_gamma_ct_error = None
+    try:
+        torsion_gamma_ct_number = float(torsion_gamma_ct)
+    except (TypeError, ValueError):
+        torsion_gamma_ct_number = None
     if (
-        isinstance(torsion_gamma_ct, bool)
-        or not math.isfinite(float(torsion_gamma_ct))
-        or float(torsion_gamma_ct) <= 0.0
+        torsion_gamma_ct_boolean_state
+        or isinstance(torsion_gamma_ct, (bool, np.bool_))
+        or torsion_gamma_ct_number is None
+        or not math.isfinite(torsion_gamma_ct_number)
+        or torsion_gamma_ct_number <= 0.0
     ):
         torsion_gamma_ct_error = (
             "Concrete tensile factor gamma_ct must be a positive finite real "
@@ -3948,10 +3963,13 @@ def build_inputs(host=st):
         )
         sts.error(torsion_gamma_ct_error)
     elif not math.isclose(
-        float(torsion_gamma_ct), torsion_gamma_default, rel_tol=0.0, abs_tol=1e-12
+        torsion_gamma_ct_number,
+        torsion_gamma_default,
+        rel_tol=0.0,
+        abs_tol=1e-12,
     ):
         sts.caption(
-            f"Custom gamma_ct = {float(torsion_gamma_ct):g}; the selected "
+            f"Custom gamma_ct = {torsion_gamma_ct_number:g}; the selected "
             f"method default is {torsion_gamma_default:g}. The custom value is "
             "used unchanged."
         )
