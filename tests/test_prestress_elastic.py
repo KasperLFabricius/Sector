@@ -109,6 +109,54 @@ def test_lambda_cr_factors_only_the_external_load():
     r = analyse_cracking(sec, 0.0, mx, 0.0, n, n_mult=n_mult, prestress_stress=ps, **common)
     assert r.sigma_ct == pytest.approx(0.0, abs=1e-6)   # net compression at this load
     assert math.isfinite(r.lambda_cr) and r.lambda_cr > 1.0   # finite, not inf
+    threshold = r.threshold
+    assert threshold is not None
+    assert threshold.method == "fixed-prestress-decompression"
+    assert threshold.available_tension_mpa == pytest.approx(
+        threshold.fctm_mpa - threshold.fixed_prestress_mpa
+    )
+    assert threshold.raw_factor == pytest.approx(
+        threshold.available_tension_mpa / threshold.external_tension_mpa
+    )
+    assert threshold.factor == pytest.approx(r.lambda_cr)
     at_crack = analyse_cracking(sec, 0.0, mx * r.lambda_cr, 0.0, n, n_mult=n_mult,
                                 prestress_stress=ps, **common)
     assert at_crack.sigma_ct == pytest.approx(3.2, rel=1e-3)   # exactly at fctm
+
+
+def test_infinite_prestress_cracking_state_retains_finite_governing_leaves():
+    sec = Section.from_polygon(
+        corners=[(-0.15, -0.3), (-0.15, 0.3), (0.15, 0.3), (0.15, -0.3)],
+        bars_xy_area_mm2=[
+            (-0.1, 0.25, 500.0),
+            (0.1, 0.25, 500.0),
+            (0.0, 0.0, 1000.0),
+        ],
+    )
+    n_mult = np.array([1.0, 1.0, 1.0])
+    prestress = np.array([0.0, 0.0, 8.0e5])
+    result = analyse_cracking(
+        sec,
+        0.0,
+        0.0,
+        0.0,
+        6.0,
+        n_mult=n_mult,
+        prestress_stress=prestress,
+        fctm=3.2,
+        Es=200000.0,
+        beta=0.5,
+        kt=0.4,
+    )
+
+    assert math.isinf(result.lambda_cr)
+    threshold = result.threshold
+    assert threshold is not None
+    assert threshold.method == "fixed-prestress-decompression"
+    assert threshold.governing_fibre_index is not None
+    assert math.isfinite(threshold.fixed_prestress_mpa)
+    assert math.isfinite(threshold.external_tension_mpa)
+    assert threshold.external_tension_mpa <= 1.0e-9
+    assert threshold.available_tension_mpa == pytest.approx(
+        threshold.fctm_mpa - threshold.fixed_prestress_mpa
+    )

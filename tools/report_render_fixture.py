@@ -15,6 +15,7 @@ import functools
 import io
 import math
 import pathlib
+import re
 import sys
 
 from PIL import Image
@@ -81,6 +82,32 @@ def validate_outline_destinations(reader: pypdf.PdfReader) -> list[tuple[str, in
     if not entries:
         raise AssertionError("the PDF contains no outline destinations")
     return entries
+
+
+def validate_trace_pagination(pdf: bytes) -> int:
+    """Require each trace heading to share a page with its first full step."""
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    heading_count = 0
+    for page_number, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        headings = list(re.finditer(r"(?m)^CT-\d{3} - .+$", text))
+        heading_count += len(headings)
+        for index, heading in enumerate(headings):
+            end = (
+                headings[index + 1].start()
+                if index + 1 < len(headings)
+                else len(text)
+            )
+            calculation_text = text[heading.end():end]
+            if re.search(r"(?m)^1\. ", calculation_text) is None:
+                raise AssertionError(
+                    "trace heading is orphaned from its first step on "
+                    f"page {page_number}: {heading.group(0)!r}"
+                )
+    if heading_count == 0:
+        raise AssertionError("the PDF contains no calculation-trace headings")
+    return heading_count
 
 
 def _inputs() -> dict:

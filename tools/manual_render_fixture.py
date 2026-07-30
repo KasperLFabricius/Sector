@@ -23,6 +23,7 @@ from tools.report_render_fixture import (  # noqa: E402
     render_pdf,
     validate_outline_destinations,
     validate_rendered_pages,
+    validate_trace_pagination,
 )
 
 _EXPECTED_FIGURE_COUNT = 16
@@ -35,6 +36,7 @@ def build_fixture_pdf() -> bytes:
 
 def validate_pdf_content(pdf: bytes) -> str:
     reader = pypdf.PdfReader(io.BytesIO(pdf))
+    validate_trace_pagination(pdf)
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")

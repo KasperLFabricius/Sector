@@ -29,6 +29,8 @@ import streamlit as st  # noqa: E402
 
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
+import analysis_trace  # noqa: E402
+import calculation_trace_presentation as trace_presentation  # noqa: E402
 import case_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
@@ -4957,6 +4959,17 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
             hc_ef=c.hc_ef, phi=c.phi, cover=c.cover, coarse=c.coarse,
             edition=c.edition, kw=c.kw, k1_r=c.k1_r, kfl=c.kfl,
             sr_max_geometric=c.sr_max_geometric,
+            as_eff=c.as_eff, ap_eff=c.ap_eff,
+            ap_eff_weighted=c.ap_eff_weighted, xi1=c.xi1,
+            reinforcement_type=c.reinforcement_type,
+            bc_ef=c.bc_ef, direct_tension=c.direct_tension,
+            scope=c.scope, direction_deg=c.direction_deg,
+            es_mpa=c.es_mpa, kt=c.kt, alpha_e=c.alpha_e,
+            bond_k1=c.bond_k1,
+            strain_floor_factor=c.strain_floor_factor,
+            spacing_k2=c.spacing_k2, spacing_k3=c.spacing_k3,
+            spacing_k4=c.spacing_k4, spacing_kb=c.spacing_kb,
+            h_minus_x_mm=c.h_minus_x_mm, wk_factor=c.wk_factor,
         )
 
     kind, number, element_id = element(cw.gov_bar)
@@ -4968,6 +4981,17 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
         element_id=element_id, coarse=cw.coarse,
         edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
         sr_max_geometric=cw.sr_max_geometric,
+        as_eff=cw.as_eff, ap_eff=cw.ap_eff,
+        ap_eff_weighted=cw.ap_eff_weighted,
+        xi1_min=cw.xi1_min, xi1_max=cw.xi1_max,
+        bc_ef=cw.bc_ef, direct_tension=cw.direct_tension,
+        scope=cw.scope, direction_deg=cw.direction_deg,
+        es_mpa=cw.es_mpa, kt=cw.kt, alpha_e=cw.alpha_e,
+        bond_k1=cw.bond_k1,
+        strain_floor_factor=cw.strain_floor_factor,
+        spacing_k2=cw.spacing_k2, spacing_k3=cw.spacing_k3,
+        spacing_k4=cw.spacing_k4, spacing_kb=cw.spacing_kb,
+        h_minus_x_mm=cw.h_minus_x_mm, wk_factor=cw.wk_factor,
         candidates=[candidate(c) for c in cw.candidates],
     )
 
@@ -5048,8 +5072,9 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                          na_y=p.na_y_intercept, eps_c=-p.eps_concrete,
                          eps_s=-p.eps_steel, eps_s_comp=-p.eps_steel_comp,
                          eps_cable=-p.eps_cable, kappa=p.curvature,
+                         axial=-p.axial,
                          comp_force=p.compression_force, lever=p.lever_arm,
-                         dx=p.dx, dy=p.dy) for p in pts],
+                         dx=p.dx, dy=p.dy, converged=p.converged) for p in pts],
         )
         # Opt-in N-M interaction diagrams, one about each bending axis. For each axis
         # trace the +M branch (NA angle stored as V) and the -M branch (V+180) from
@@ -5236,10 +5261,11 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         if not sls_converged:
             for output in out["elastic"]["stress_outputs"].values():
                 output.update(value=None, calculation_state="INVALID")
-        crk_t, lam_t, sig_t = combined_cracking(
+        crk_t, lam_t, sig_t, threshold_t = combined_cracking(
             sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             p_el_s, inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
-            fctm=inp["sls_fctm"], n_mult=n_mult, prestress_stress=prestress_stress)
+            fctm=inp["sls_fctm"], n_mult=n_mult,
+            prestress_stress=prestress_stress, return_threshold=True)
         # Governing case. Its cracked state (for the reported cracked properties) is
         # the combined creep total state (r.short_term) when the peak strictly
         # governs, or the long-term cracked state when the sustained action governs.
@@ -5248,10 +5274,12 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # cracked properties rather than the instantaneous combined state.
         if lam_t < cr_l.lambda_cr:
             cracked, lambda_cr, sigma_ct, gov_state = crk_t, lam_t, sig_t, r.short_term
+            cracking_threshold = threshold_t
         else:
             cracked, lambda_cr, sigma_ct = (cr_l.cracked, cr_l.lambda_cr,
                                             cr_l.sigma_ct)
             gov_state = cr_l.cracked_state
+            cracking_threshold = cr_l.threshold
         # Reinforcement enters the transformed properties at n*A, or n*(Ep/Es)*A per
         # tendon via n_mult -- the same per-bar modular ratio the elastic and cracking
         # solves use, so the reported section properties are consistent with them.
@@ -5262,6 +5290,11 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         out["elastic"].update(
             cracked=cracked, lambda_cr=lambda_cr, sigma_ct=sigma_ct,
             fctm=inp["sls_fctm"], show_cw=inp["sls_cw"],
+            cracking_threshold=(
+                cracking_threshold.to_dict()
+                if cracking_threshold is not None
+                else None
+            ),
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
@@ -5420,7 +5453,8 @@ def run_analysis(
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
-        return {"bridge": bridge_result} if bridge_active else {}
+        result = {"bridge": bridge_result} if bridge_active else {}
+        return analysis_trace.attach_trace(inp, result)
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
         result = _run_single_analysis(
             inp,
@@ -5443,7 +5477,7 @@ def run_analysis(
             )
         if bridge_active:
             result["bridge"] = bridge_result
-        return result
+        return analysis_trace.attach_trace(inp, result)
 
     def _runner(case_inp, *, reuse_plastic=None):
         return _run_single_analysis(case_inp, reuse_plastic=reuse_plastic)
@@ -5471,7 +5505,7 @@ def run_analysis(
         )
     if bridge_active:
         result["bridge"] = bridge_result
-    return result
+    return analysis_trace.attach_trace(inp, result)
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -6488,6 +6522,7 @@ def _transverse_detailing_result(inp, out):
 # plastic, elastic, shear, torsion and combined details.
 VIEWS = [
     "Results Overview",
+    "Calculation Trace",
     "Plastic Results",
     "N-M Interaction",
     "Elastic Results",
@@ -9717,6 +9752,27 @@ _VIEW_ALIASES = {
 }
 
 
+def calculation_trace_view(inp, results, *, stale=False):
+    """Render only current, sealed solver trace records."""
+
+    st.header("Calculation trace")
+    if not results:
+        st.caption("Press Calculate to create an ordered calculation trace.")
+        return
+    if stale:
+        st.error(
+            "Calculation trace publication is blocked because the inputs have "
+            "changed. Press Calculate to create current trace evidence."
+        )
+        return
+    try:
+        bundle = analysis_trace.validated_bundle(inp, results)
+    except ValueError as exc:
+        st.error(f"Calculation trace rejected: {exc}")
+        return
+    trace_presentation.render_streamlit(bundle)
+
+
 def _case_entries_for_view(inp, results, family):
     """Return calculated entries, or current input rows before calculation."""
     entries = (results or {}).get(f"{family}_cases")
@@ -10025,6 +10081,8 @@ def _analysis_workspace(inp):
 
     if view == "Results Overview":
         results_overview_view(result_inp, results, stale=stale)
+    elif view == "Calculation Trace":
+        calculation_trace_view(inp, results, stale=stale)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":

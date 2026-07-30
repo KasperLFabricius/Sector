@@ -45,6 +45,11 @@ def test_ci_runs_full_tests_artifact_renders_and_windows_build():
     )
     assert "runs-on: windows-latest" in workflow
     assert "python -m pytest tests" in workflow
+    assert "--ignore=tests/test_manual_rendered.py" in workflow
+    assert "--ignore=tests/test_report_rendered.py" in workflow
+    assert "tests/test_report_rendered.py" in workflow
+    assert "tests/test_manual_rendered.py" in workflow
+    assert "rendered-test-results.xml" in workflow
     assert "tools/report_render_fixture.py" in workflow
     assert "tools/manual_render_fixture.py" in workflow
     assert "python -m PyInstaller" in workflow

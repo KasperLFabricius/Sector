@@ -163,6 +163,47 @@ def test_calculation_record_is_correlated_but_results_are_not_persisted():
     assert provenance["calculation"]["matches_saved_inputs"] is True
 
 
+def test_current_schema_drops_trace_and_result_payloads_on_save_and_resave():
+    tables, scalars = _current_project()
+    digest = project_io.input_sha256(tables, scalars)
+    first = project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-30T08:00:00+00:00",
+            "sector_version": "0.91",
+            "source_revision": "pr08-test",
+            "input_sha256": digest,
+            "calculation_trace": {"hostile": "must not persist"},
+            "results": {"hostile": "must not persist"},
+        },
+    )
+    first_data = json.loads(first)
+    assert set(first_data["calculation"]) == {
+        "performed_at_utc",
+        "sector_version",
+        "source_revision",
+        "input_sha256",
+        "matches_saved_inputs",
+    }
+    assert "calculation_trace" not in first
+    assert '"results"' not in first
+
+    loaded_tables, loaded_scalars = project_io.parse_project(first)
+    second = project_io.dump_project(
+        loaded_tables,
+        loaded_scalars,
+        calculation=first_data["calculation"],
+    )
+    second_data = json.loads(second)
+    assert second_data["version"] == project_io.VERSION
+    assert second_data["calculation"]["input_sha256"] == digest
+    assert second_data["calculation"]["matches_saved_inputs"] is True
+    assert project_io.project_provenance(second)["input_hash_valid"] is True
+    assert "calculation_trace" not in second
+    assert '"results"' not in second
+
+
 def test_nonpositive_factor_is_rejected_but_positive_custom_values_are_not():
     tables, scalars = _current_project()
     for value in (0.5, 2.0):

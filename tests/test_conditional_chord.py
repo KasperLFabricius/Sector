@@ -534,6 +534,22 @@ def test_app_zero_capacity_chord_does_not_poison_the_scan():
     lk = res["shear"]["links"]["res"]
     assert lk["valid"] and math.isfinite(lk["cot"])
     assert lk["cot"] > 1.5                            # NOT pinned to the band low edge
+    trace = next(
+        calculation
+        for calculation in res["calculation_trace"]["calculations"]
+        if calculation["coverage_id"] == "CT-015"
+        and calculation["context"].count(["chord", "1"]) == 1
+    )
+    final = next(
+        step
+        for step in trace["steps"]
+        if step["step_id"] == trace["final_step_id"]
+    )
+    assert final["step_id"] == "eta-chord-resistance-margin"
+    assert final["unit"] == "kNm"
+    assert math.isfinite(final["evaluated_value"])
+    assert final["evaluated_value"] < 0.0
+    assert any("infinite" in warning for warning in final["warnings"])
 
 
 def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially():

@@ -39,7 +39,9 @@ from sector.materials import Concrete, MildSteel, Prestress
 from sector.plastic import solve_plastic
 from sector.section import Section
 from sector.serviceability import analyse_cracking
+from sector.trace_examples import reference_bundle
 
+import calculation_trace_presentation as trace_presentation
 import viz
 
 # Display scale for the section drawings: the geometry is in metres, drawn in mm.
@@ -401,6 +403,7 @@ def fig_strain_plane():
 #   ('callout', kind, text)      kind in concept|theory|standard|tip|limit
 #   ('figure', fig_callable, caption)
 #   ('table', headers, rows)
+#   ('trace',)                   sealed solver-owned worked derivations
 
 _CALLOUT = {
     "concept":  (":large_blue_diamond:", "In plain terms"),
@@ -1366,7 +1369,7 @@ def manual_blocks() -> list:
 
     h2("Concrete compression fatigue")
     md("The fatigue strength is edition-specific. For the 2005 family Sector uses "
-       "the corrected DS/EN 1992-2 expression\n\n"
+       "DS/EN 1992-1-1 Formula (6.76)\n\n"
        "$$f_{cd,fat}=k_1\\,\\beta_{cc}(t_0)\\,\\alpha_{cc}"
        "\\frac{f_{ck}}{\\gamma_{c,fat}}\\left(1-\\frac{f_{ck}}{250}\\right).$$\n\n"
        "For 2023:\n\n"
@@ -1398,8 +1401,8 @@ def manual_blocks() -> list:
     h2("Edition and scope summary")
     table(["Edition", "Reinforcement", "Concrete", "Mixed bond"],
           [["DS/EN 1992-1-1:2005",
-            "6.8.4; Tables 6.3N/6.4N",
-            "6.72 equivalent or corrected DS/EN 1992-2:2005/AC:2008 6.106 Miner",
+           "6.8.4; Tables 6.3N/6.4N",
+            "6.76 strength; 6.72 equivalent or DS/EN 1992-2:2005/AC:2008 6.105-6.109 Miner",
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2005 + DK NA:2024",
             "Same method; explicit Danish project factors",
@@ -1624,6 +1627,19 @@ def manual_blocks() -> list:
        "and action-factored Elastic state in every bin converge; a non-converged "
        "state cannot pass.")
 
+    h1("Ordered standards calculation examples")
+    md("The following worked examples are complete, dependency-ordered "
+       "calculation traces emitted by the same solver-owned trace builders used "
+       "by the app and calculation report. Each step identifies its quantity "
+       "role, symbolic equation, actual numerical substitution, evaluated value "
+       "and unit, dependencies, and source clause/equation where the selected "
+       "method is standards-based. The manual renderer displays the sealed "
+       "records and does not evaluate an engineering formula.")
+    call("limit", "The examples explain the implemented numerical methods; they "
+         "do not certify a project, establish project-specific applicability or "
+         "replace the engineer's design basis and independent review.")
+    blocks.append(("trace",))
+
     # =====================================================================
     # PART D - REFERENCE
     # =====================================================================
@@ -1642,9 +1658,9 @@ def manual_blocks() -> list:
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
            ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
            ["Reinforcement fatigue (2005)", "DS/EN 1992-1-1:2005+A1:2014 6.8.2, 6.8.4 and Tables 6.3N/6.4N"],
-           ["Concrete fatigue (2005)", "DS/EN 1992-1-1:2005 6.8.7 / Formula (6.72); DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
+           ["Concrete fatigue (2005)", "DS/EN 1992-1-1:2005 6.8.7 / Formulae (6.72), (6.76); DS/EN 1992-2:2005 6.105-6.109 with AC:2008 corrected Formula (6.106)"],
            ["Reinforcement fatigue (2023)", "DS/EN 1992-1-1:2023 Annex E.5 and Tables E.1/E.2"],
-           ["Concrete fatigue (2023)", "DS/EN 1992-1-1:2023 E.4.3 / Formula (E.2); E.5.3 / Formulae (E.7)-(E.8)"],
+           ["Concrete fatigue (2023)", "DS/EN 1992-1-1:2023 10.5 / Formula (10.5); E.4.3 / Formula (E.2); E.5.1 / Formula (E.3); E.5.3 / Formulae (E.7)-(E.8)"],
            ["Minimum reinforcement (2005 / DK NA)", "DS/EN 1992-1-1 9.2.1.1(1), Formula (9.1N); DK NA:2024"],
            ["Minimum reinforcement (2023)", "DS/EN 1992-1-1:2023 12.2(2), Formulae (12.1)-(12.2)"],
            ["Clear spacing (2005 / 2023)", "DS/EN 1992-1-1 8.2(2); DS/EN 1992-1-1:2023 11.2(2)"],
@@ -1961,6 +1977,8 @@ def build_manual_pdf(buffer, figures=True):
     _add("MBody", fontSize=9.5, leading=13, spaceAfter=4, fontName=font)
     _add("MMath", fontSize=11, leading=15, alignment=TA_CENTER, spaceBefore=6,
          spaceAfter=6, fontName=font)
+    _add("MTraceFormula", fontSize=8.5, leading=11, leftIndent=10,
+         spaceAfter=2, fontName=font)
     _add("MSmall", fontSize=8, leading=10, textColor=colors.grey, fontName=font)
     toc_style = ParagraphStyle(
         "MTOCPart", parent=styles["MBody"], fontSize=9.5, leading=12,
@@ -2115,6 +2133,91 @@ def build_manual_pdf(buffer, figures=True):
                 ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
             flow.append(t)
             flow.append(Spacer(1, 0.2 * cm))
+        elif kind == "trace":
+            bundle = reference_bundle()
+
+            def _trace_text(value):
+                return report._greek(report._html_escape(value))
+
+            for calculation in trace_presentation.calculation_presentations(bundle):
+                preamble = [
+                    Paragraph(
+                        f"{_trace_text(calculation.coverage_id)} - "
+                        f"{_trace_text(calculation.title)}",
+                        styles["MH3"],
+                    ),
+                    Paragraph(
+                        "<b>Method:</b> "
+                        + _trace_text(calculation.method_label)
+                        + " | "
+                        + _trace_text(calculation.standard_label),
+                        styles["MSmall"],
+                    ),
+                ]
+                if calculation.context_text:
+                    preamble.append(Paragraph(
+                        "<b>Context:</b> "
+                        + _trace_text(calculation.context_text),
+                        styles["MSmall"],
+                    ))
+                for warning in calculation.warnings:
+                    preamble.append(Paragraph(
+                        "<b>Warning:</b> " + _trace_text(warning),
+                        styles["MBody"],
+                    ))
+                for assumption in calculation.assumptions:
+                    preamble.append(Paragraph(
+                        "<b>Assumption:</b> " + _trace_text(assumption),
+                        styles["MSmall"],
+                    ))
+                for step_index, step in enumerate(calculation.steps):
+                    step_flow = [
+                        Paragraph(
+                            f"<b>{step.number}. {_trace_text(step.title)}</b> "
+                            f"({_trace_text(step.step_id)}; "
+                            f"{_trace_text(step.role)})",
+                            styles["MBody"],
+                        ),
+                        Paragraph(
+                            "<b>Symbolic:</b> "
+                            + _trace_text(step.symbolic_expression),
+                            styles["MTraceFormula"],
+                        ),
+                        Paragraph(
+                            "<b>Substitution:</b> "
+                            + _trace_text(step.substituted_expression),
+                            styles["MTraceFormula"],
+                        ),
+                        Paragraph(
+                            "<b>Result:</b> "
+                            + _trace_text(step.symbol)
+                            + " = "
+                            + _trace_text(step.value_text)
+                            + " | <b>Dependencies:</b> "
+                            + _trace_text(step.dependency_text),
+                            styles["MSmall"],
+                        ),
+                    ]
+                    if step.source_text:
+                        step_flow.append(Paragraph(
+                            "<b>Source:</b> " + _trace_text(step.source_text),
+                            styles["MSmall"],
+                        ))
+                    for warning in step.warnings:
+                        step_flow.append(Paragraph(
+                            "<b>Warning:</b> " + _trace_text(warning),
+                            styles["MSmall"],
+                        ))
+                    for assumption in step.assumptions:
+                        step_flow.append(Paragraph(
+                            "<b>Assumption:</b> " + _trace_text(assumption),
+                            styles["MSmall"],
+                        ))
+                    if step_index == 0:
+                        step_flow = [*preamble, *step_flow]
+                    flow.append(KeepTogether(step_flow))
+                    flow.append(Spacer(1, 0.06 * cm))
+                flow.append(Spacer(1, 0.2 * cm))
 
     footer = f"Sector v{APP_VERSION} - user manual"
     doc = _ManualDocTemplate(buffer, pagesize=A4, leftMargin=2.2 * cm,
@@ -2207,6 +2310,8 @@ def render_manual_streamlit():
             body = "\n".join("| " + " | ".join(str(c) for c in row) + " |"
                              for row in block[2])
             st.markdown(f"{header}\n{sep}\n{body}")
+        elif kind == "trace":
+            trace_presentation.render_streamlit(reference_bundle())
 
 
 def _dismiss_manual_dialog() -> None:

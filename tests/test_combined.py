@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from sector import codes, combined
+from sector.calculation_trace import TraceBundle, validate_bundle
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
@@ -752,6 +753,39 @@ def test_app_infinite_bending_util_does_not_poison_the_member_angle():
     cot_off = r_off["shear"]["links"]["res"]["cot"]
     assert cot_on == pytest.approx(cot_off)                      # inf did not move the angle
     assert cot_on > 1.05                                          # NOT pinned to the band edge
+    trace = TraceBundle.from_dict(r_on["calculation_trace"])
+    validate_bundle(trace)
+    zero_resistance = next(
+        calculation
+        for calculation in trace.calculations
+        if calculation.calculation_id
+        == "shear-plastic-pl-01-u504c2d3031-vy-negative-without-links"
+    )
+    final = next(
+        step
+        for step in zero_resistance.steps
+        if step.step_id == zero_resistance.final_step_id
+    )
+    assert final.step_id == "eta-v-resistance-margin"
+    assert final.quantity_role == "final_result"
+    assert final.provenance == "project"
+    assert math.isfinite(final.evaluated_value)
+    assert final.evaluated_value < 0.0
+    assert any("infinite" in warning for warning in final.warnings)
+    unbounded_combined = next(
+        calculation
+        for calculation in trace.calculations
+        if calculation.calculation_id
+        == "combined-plastic-pl-01-u504c2d3031-dkna-sum"
+    )
+    combined_final = next(
+        step
+        for step in unbounded_combined.steps
+        if step.step_id == unbounded_combined.final_step_id
+    )
+    assert combined_final.step_id == "finite-combined-result-available"
+    assert combined_final.evaluated_value == 0.0
+    assert any("unbounded" in warning for warning in combined_final.warnings)
 
 
 def test_app_combined_angle_minimises_the_dkna_governing_sum():

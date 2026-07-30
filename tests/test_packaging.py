@@ -67,6 +67,17 @@ def test_packaged_runtime_embeds_exact_source_provenance():
     assert "sector/sector_build_info.json" in workflow
 
 
+def test_package_gate_requires_the_sealed_manual_trace_resource():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    spec = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "qa.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert '(os.path.join(ROOT, "sector"), "sector")' in spec
+    assert "sector/manual_trace_examples.b64" in workflow
+
+
 def test_bundle_base_resolves_to_the_app_tree_in_dev():
     base = run_sector._bundle_base()
     assert (base / "app" / "sector_app.py").is_file()

@@ -2914,6 +2914,31 @@ def test_elastic_applies_tendon_prestress_from_initial_strain():
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["prestress"] is not None and e["prestress"][0] != 0.0   # applied + reported
+    threshold = e["cracking_threshold"]
+    assert threshold["method"] == "fixed-prestress-decompression"
+    assert threshold["available_tension_mpa"] == pytest.approx(
+        threshold["fctm_mpa"] - threshold["fixed_prestress_mpa"]
+    )
+    trace_calculation = next(
+        calculation
+        for calculation in at.session_state["results"]["calculation_trace"][
+            "calculations"
+        ]
+        if calculation["method_id"]
+        == "sector-fixed-prestress-decompression"
+    )
+    assert trace_calculation["method_id"] == (
+        "sector-fixed-prestress-decompression"
+    )
+    trace_steps = {
+        step["step_id"]: step for step in trace_calculation["steps"]
+    }
+    assert trace_steps["available-tension"]["evaluated_value"] == pytest.approx(
+        threshold["available_tension_mpa"]
+    )
+    assert trace_steps["lambda-cr"]["evaluated_value"] == pytest.approx(
+        e["lambda_cr"]
+    )
     base_conc = e["max_conc"]
     _set_and_click(
         at, "calculate", ("number_input", "pre_IS", 9.0)
@@ -3699,8 +3724,22 @@ def test_plastic_results_table_and_state_selector():
     p = at.session_state["results"]["plastic"]
     assert len(p["points"]) > 0
     pt = p["points"][0]
-    for k in ("V", "Mx", "My", "na_x", "na_y", "eps_c", "eps_s", "kappa",
-              "comp_force", "lever", "dx", "dy"):
+    for k in (
+        "V",
+        "Mx",
+        "My",
+        "na_x",
+        "na_y",
+        "eps_c",
+        "eps_s",
+        "kappa",
+        "axial",
+        "comp_force",
+        "lever",
+        "dx",
+        "dy",
+        "converged",
+    ):
         assert k in pt
     # selecting a different neutral-axis state recomputes the diagnostic cleanly
     at.selectbox(key="pl_state").set_value(3).run()

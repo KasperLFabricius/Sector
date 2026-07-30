@@ -38,6 +38,8 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import case_analysis
+import analysis_trace
+import calculation_trace_presentation as trace_presentation
 import fatigue_inputs
 import fatigue_presentation
 import viz
@@ -793,12 +795,19 @@ class ReportBuilder:
         self._theory()
         self._tick(0.2, "Section and materials...")
         self._inputs()
-        if self._base_out.get("clear_spacing") is not None:
+        trace_payload = self._base_out.get(analysis_trace.TRACE_KEY)
+        if trace_payload is not None:
+            self._tick(0.42, "Ordered calculation trace...")
+            self.flow.append(PageBreak())
+            self._calculation_trace()
+        elif self._base_out.get("clear_spacing") is not None:
             self.flow.append(PageBreak())
             self.inp, self.out = self._base_inp, self._base_out
             self._clear_spacing()
         jobs = []
-        for case_inp, case_out in self._case_contexts("plastic"):
+        for case_inp, case_out in (
+            () if trace_payload is not None else self._case_contexts("plastic")
+        ):
             case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
             for key, label, method in (
                 ("plastic", "Plastic capacity", "_plastic"),
@@ -821,7 +830,9 @@ class ReportBuilder:
                 jobs.append((
                     case_inp, case_out, f"{label} - {case_id}...", method, True
                 ))
-        for case_inp, case_out in self._case_contexts("elastic"):
+        for case_inp, case_out in (
+            () if trace_payload is not None else self._case_contexts("elastic")
+        ):
             case_id = presentation.action_set(case_inp, "elastic")["id"] or "-"
             if "elastic" in case_out:
                 jobs.extend([
@@ -841,11 +852,11 @@ class ReportBuilder:
                 getattr(self, method)()
         finally:
             self.inp, self.out = self._base_inp, self._base_out
-        if self._base_out.get("fatigue") is not None:
+        if trace_payload is None and self._base_out.get("fatigue") is not None:
             self._tick(0.88, "Grouped fatigue...")
             self.flow.append(PageBreak())
             self._fatigue()
-        if self._base_out.get("bridge") is not None:
+        if trace_payload is None and self._base_out.get("bridge") is not None:
             self._tick(0.9, "Independent bridge calculations...")
             self.flow.append(PageBreak())
             self._bridge()
@@ -897,6 +908,133 @@ class ReportBuilder:
         self._tick(1.0, "Done")
 
     # -- sections ----------------------------------------------------------
+    def _calculation_trace(self):
+        """Render the sealed solver trace without evaluating its expressions."""
+
+        bundle = analysis_trace.validated_bundle(
+            self._base_inp,
+            self._base_out,
+        )
+        self._h1("Ordered calculation trace")
+        self._p(
+            "Each calculation below is a dependency-ordered derivation emitted "
+            "by the numerical solver layer. User inputs, selected method values, "
+            "computed intermediates and final results are distinguished. The "
+            "report renderer displays the sealed records and performs no "
+            "engineering recomputation."
+        )
+        for calculation in trace_presentation.calculation_presentations(bundle):
+            preamble = [
+                Paragraph(
+                    _greek(
+                        f"{_html_escape(calculation.coverage_id)} - "
+                        f"{_html_escape(calculation.title)}"
+                    ),
+                    self.s["h2"],
+                ),
+                Paragraph(
+                    _greek(
+                        "<b>Method:</b> "
+                        + _html_escape(calculation.method_label)
+                        + " | "
+                        + _html_escape(calculation.standard_label)
+                    ),
+                    self.s["small"],
+                ),
+            ]
+            if calculation.context_text:
+                preamble.append(
+                    Paragraph(
+                        _greek(
+                            "<b>Context:</b> "
+                            + _html_escape(calculation.context_text)
+                        ),
+                        self.s["small"],
+                    )
+                )
+            for warning in calculation.warnings:
+                preamble.append(
+                    Paragraph(
+                        _greek(
+                            "<b>Warning:</b> " + _html_escape(warning)
+                        ),
+                        self.s["body"],
+                    )
+                )
+            for assumption in calculation.assumptions:
+                preamble.append(
+                    Paragraph(
+                        _greek(
+                            "<b>Assumption:</b> "
+                            + _html_escape(assumption)
+                        ),
+                        self.s["small"],
+                    )
+                )
+            for step_index, step in enumerate(calculation.steps):
+                block = [
+                    Paragraph(
+                        _greek(
+                            f"<b>{step.number}. "
+                            f"{_html_escape(step.title)}</b> "
+                            f"({_html_escape(step.step_id)}; "
+                            f"{_html_escape(step.role)})"
+                        ),
+                        self.s["body"],
+                    ),
+                    Paragraph(
+                        _greek(
+                            "<b>Symbolic:</b> "
+                            + _html_escape(step.symbolic_expression)
+                        ),
+                        self.s["formula"],
+                    ),
+                    Paragraph(
+                        _greek(
+                            "<b>Substitution:</b> "
+                            + _html_escape(step.substituted_expression)
+                        ),
+                        self.s["formula"],
+                    ),
+                    Paragraph(
+                        _greek(
+                            "<b>Result:</b> "
+                            + _html_escape(step.symbol)
+                            + " = "
+                            + _html_escape(step.value_text)
+                            + " | <b>Dependencies:</b> "
+                            + _html_escape(step.dependency_text)
+                        ),
+                        self.s["small"],
+                    ),
+                ]
+                if step.source_text:
+                    block.append(
+                        Paragraph(
+                            "<b>Source:</b> "
+                            + _html_escape(step.source_text),
+                            self.s["ref"],
+                        )
+                    )
+                for warning in step.warnings:
+                    block.append(
+                        Paragraph(
+                            "<b>Warning:</b> " + _html_escape(warning),
+                            self.s["small"],
+                        )
+                    )
+                for assumption in step.assumptions:
+                    block.append(
+                        Paragraph(
+                            "<b>Assumption:</b> " + _html_escape(assumption),
+                            self.s["small"],
+                        )
+                    )
+                if step_index == 0:
+                    block = [*preamble, *block]
+                self.flow.append(KeepTogether(block))
+                self._gap(3)
+
     def _cover(self):
         m = self.meta
         self.flow.append(Paragraph("Cross-section analysis report", self.s["title"]))
