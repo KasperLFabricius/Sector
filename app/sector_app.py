@@ -3907,16 +3907,16 @@ def build_inputs(host=st):
     if combined_on:
         sts.caption(f"Torsion method set by Combined: {combined_method}")
     effective_torsion_method = combined_method if combined_on else torsion_method
-    torsion_gamma_default = _seed_torsion_gamma_ct(effective_torsion_method)
     torsion_gamma_ct_boolean_state = isinstance(
         st.session_state.get("torsion_gamma_ct"), (bool, np.bool_)
     )
     if torsion_gamma_ct_boolean_state:
         # Streamlit number_input normalises injected Boolean scalars to 0.0/1.0.
-        # Clear the malformed state before widget construction so it cannot become
-        # a valid-looking calculation coefficient.
+        # Clear the malformed state before method-default reseeding and widget
+        # construction so neither can turn it into a valid-looking coefficient.
         st.session_state["torsion_gamma_ct"] = None
         _mark_torsion_gamma_ct_custom()
+    torsion_gamma_default = _seed_torsion_gamma_ct(effective_torsion_method)
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
     sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "

@@ -399,12 +399,22 @@ def test_app_torsion_gamma_ct_defaults_follow_method_until_user_edit():
 def test_app_torsion_rejects_injected_numpy_boolean_gamma_ct():
     at = _fresh()
     at.session_state["torsion_on"] = True
+    at.session_state["_torsion_gamma_ct_default_method"] = (
+        codes.EC2_2005_DKNA.label
+    )
+    at.session_state["_torsion_gamma_ct_uses_method_default"] = True
+    at.session_state["torsion_method"] = codes.EC2_2005.label
     at.session_state["torsion_gamma_ct"] = np.bool_(True)
 
     at.run()
 
     assert not at.exception
     assert at.session_state["torsion_gamma_ct"] is None
+    assert (
+        at.session_state["_torsion_gamma_ct_default_method"]
+        == codes.EC2_2005.label
+    )
+    assert at.session_state["_torsion_gamma_ct_uses_method_default"] is False
     assert any(
         "gamma_ct must be a positive finite real number" in item.value
         for item in at.error
