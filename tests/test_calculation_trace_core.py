@@ -84,9 +84,7 @@ def _calculation(
     calculation_id: str = "synthetic.capacity",
 ) -> TraceCalculation:
     input_step = _step("demand", ROLE_USER_INPUT, INPUT, FORCE, 2.0)
-    factor_step = _step(
-        "factor", ROLE_METHOD_VALUE, STANDARD, SCALAR, 3.0
-    )
+    factor_step = _step("factor", ROLE_METHOD_VALUE, STANDARD, SCALAR, 3.0)
     final_step = _step(
         "resistance",
         ROLE_FINAL,
@@ -152,7 +150,19 @@ def test_schema_rejects_top_level_and_nested_subclasses_before_sealing():
         def __iter__(self):
             raise AssertionError("tuple subclass was iterated")
 
+    class PoisonText(str):
+        def __hash__(self):
+            raise AssertionError("string subclass was hashed")
+
+        def __ne__(self, other):
+            return False
+
     bundle = _bundle()
+    hostile_id = dataclasses.replace(bundle.calculations[0], calculation_id=PoisonText("poison"))
+    with pytest.raises(TraceValidationError, match="calculation_id"):
+        seal_bundle(_raw(hostile_id))
+    with pytest.raises(TraceValidationError, match="expected_input_sha256"):
+        validate_bundle(bundle, expected_input_sha256=PoisonText("3" * 64))
     with pytest.raises(TraceValidationError, match="TraceBundle"):
         seal_bundle(HostileBundle(INPUT_SHA, RESULT_SHA, bundle.calculations))
     with pytest.raises(TraceValidationError, match="calculation tuple"):

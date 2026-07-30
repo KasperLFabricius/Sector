@@ -8,7 +8,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 
 TRACE_SCHEMA = "sector.calculation-trace.v1"
@@ -405,6 +405,11 @@ def _require_id(value: Any, label: str) -> None:
         )
 
 
+def _require_sha256(value: Any, label: str) -> None:
+    if type(value) is not str or not _SHA256_RE.fullmatch(value):
+        raise TraceValidationError(f"{label} must be a lowercase SHA-256")
+
+
 def _require_text_tuple(value: Any, label: str) -> None:
     if type(value) is not tuple:
         raise TraceValidationError(f"{label} must be an immutable tuple")
@@ -620,17 +625,10 @@ def _validate_structure(bundle: Any, *, require_seal: bool) -> TraceBundle:
         raise TraceValidationError("trace bundle must be a TraceBundle")
     if type(bundle.schema) is not str or bundle.schema != TRACE_SCHEMA:
         raise TraceValidationError(f"unsupported trace schema {bundle.schema!r}")
-    for label, digest in (
-        ("input_sha256", bundle.input_sha256),
-        ("result_sha256", bundle.result_sha256),
-    ):
-        if type(digest) is not str or not _SHA256_RE.fullmatch(digest):
-            raise TraceValidationError(f"{label} must be a lowercase SHA-256")
-    if require_seal and (
-        type(bundle.content_sha256) is not str
-        or not _SHA256_RE.fullmatch(bundle.content_sha256)
-    ):
-        raise TraceValidationError("content_sha256 must be a lowercase SHA-256")
+    _require_sha256(bundle.input_sha256, "input_sha256")
+    _require_sha256(bundle.result_sha256, "result_sha256")
+    if require_seal:
+        _require_sha256(bundle.content_sha256, "content_sha256")
     _require_text_tuple(bundle.warnings, "trace bundle warnings")
     if type(bundle.calculations) is not tuple or not bundle.calculations:
         raise TraceValidationError(
@@ -638,14 +636,11 @@ def _validate_structure(bundle: Any, *, require_seal: bool) -> TraceBundle:
         )
     calculation_ids: set[str] = set()
     for calculation in bundle.calculations:
-        if (
-            type(calculation) is TraceCalculation
-            and calculation.calculation_id in calculation_ids
-        ):
+        _validate_calculation(calculation)
+        if calculation.calculation_id in calculation_ids:
             raise TraceValidationError(
                 f"duplicate calculation ID {calculation.calculation_id}"
             )
-        _validate_calculation(calculation)
         calculation_ids.add(calculation.calculation_id)
     return bundle
 
@@ -662,16 +657,16 @@ def create_bundle(
     *,
     input_sha256: str,
     result_sha256: str,
-    calculations: Sequence[TraceCalculation],
-    warnings: Sequence[str] = (),
+    calculations: tuple[TraceCalculation, ...],
+    warnings: tuple[str, ...] = (),
 ) -> TraceBundle:
     """Construct, validate, and seal one trace bundle."""
 
     bundle = TraceBundle(
         input_sha256=input_sha256,
         result_sha256=result_sha256,
-        calculations=tuple(calculations),
-        warnings=tuple(warnings),
+        calculations=calculations,
+        warnings=warnings,
     )
     return validate_bundle(seal_bundle(bundle))
 
@@ -693,20 +688,16 @@ def validate_bundle(
     _validate_structure(model, require_seal=True)
     if model.content_sha256 != _content_sha256(model):
         raise TraceValidationError("calculation trace content seal is invalid")
-    if (
-        expected_input_sha256 is not None
-        and model.input_sha256 != expected_input_sha256
+    for label, expected, actual in (
+        ("input", expected_input_sha256, model.input_sha256),
+        ("result", expected_result_sha256, model.result_sha256),
     ):
-        raise TraceValidationError(
-            "calculation trace does not match the current input fingerprint"
-        )
-    if (
-        expected_result_sha256 is not None
-        and model.result_sha256 != expected_result_sha256
-    ):
-        raise TraceValidationError(
-            "calculation trace does not match the current result fingerprint"
-        )
+        if expected is not None:
+            _require_sha256(expected, f"expected_{label}_sha256")
+            if actual != expected:
+                raise TraceValidationError(
+                    f"calculation trace does not match the current {label} fingerprint"
+                )
     return model
 
 
