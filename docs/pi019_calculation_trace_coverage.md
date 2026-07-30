@@ -29,11 +29,16 @@ Governing contract: `docs/product_identity.md` and Product Identity row PI-019 i
    clamp, reject, approve or certify it.
 5. An enabled calculation with no valid trace is not silently published as
    traced. Before sealing, a family-by-family audit matches every completed
-   case, check, pair, spectrum record and bridge row to its trace; an unrelated
-   material or result trace cannot hide an omitted family. Trace validation
-   also fails closed for missing or duplicate dependencies, stale input
-   identity, invalid units, non-finite or Boolean values, an altered content
-   seal, or a standards citation attached to a user-defined method.
+   case, plastic capacity, radial utilisation, N-M interaction axis, elastic
+   equilibrium, first-cracking calculation, check, pair, spectrum record and
+   bridge row to its trace. The audit matches the exact selected edition,
+   National Annex and method identity rather than accepting an aggregate of
+   interchangeable coverage IDs. An unrelated material/result trace or another
+   subcalculation in the same family cannot hide an omission or
+   misclassification. Trace validation also fails closed for missing or
+   duplicate dependencies, stale input identity, invalid units, non-finite or
+   Boolean values, an altered content seal, or a standards citation attached
+   to a user-defined method.
 6. Traceability is calculation evidence, not a code-completeness, authority,
    project-basis, cover, combination-completeness or global-compliance verdict.
 7. Every section-solver trace carries the exact ordered outer and hole vertices,

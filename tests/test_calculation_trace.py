@@ -440,14 +440,22 @@ def test_completed_family_coverage_cannot_be_masked_by_unrelated_trace():
 
     with pytest.raises(
         TraceValidationError,
-        match="expected checks 1, 2, found none",
+        match="unregistered trace coverage|trace registry is incomplete",
     ):
-        analysis_trace._require_case_trace_coverage(result, [unrelated])
+        analysis_trace._require_case_trace_coverage(
+            {},
+            result,
+            [unrelated],
+        )
     with pytest.raises(
         TraceValidationError,
-        match="expected checks 1, 2, found 1",
+        match="trace registry is incomplete",
     ):
-        analysis_trace._require_case_trace_coverage(result, [one_check])
+        analysis_trace._require_case_trace_coverage(
+            {},
+            result,
+            [one_check],
+        )
 
 
 def test_exact_label_identity_token_is_injective_and_id_safe():

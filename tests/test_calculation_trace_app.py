@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import math
 import pathlib
 import sys
@@ -16,7 +17,21 @@ sys.path.insert(0, str(ROOT / "tests"))
 import analysis_trace
 import sector_report
 import test_app_smoke as smoke
-from sector.calculation_trace import TraceValidationError
+from sector.calculation_trace import (
+    PROVENANCE_PROJECT,
+    PROVENANCE_STANDARD,
+    ROLE_FINAL,
+    SourceCitation,
+    TraceCalculation,
+    TraceEvaluation,
+    TraceStep,
+    TraceValidationError,
+)
+from sector.trace_registry import (
+    EXPLICIT_STATE,
+    TraceFamilyExpectation,
+    audit_trace_registry,
+)
 from tools.report_render_fixture import (
     render_pdf,
     validate_rendered_pages,
@@ -34,6 +49,69 @@ def _calculated_both():
     )
     assert not at.exception
     return at
+
+
+def _calculation_for(member, *, warning=None):
+    document = next(iter(member.required_documents), None)
+    source = (
+        SourceCitation(document=document, clause="test", locator="test")
+        if document is not None
+        else None
+    )
+    step = TraceStep(
+        step_id="result",
+        title="Registry fixture result",
+        dependency_ids=(),
+        quantity_role=ROLE_FINAL,
+        provenance=(
+            PROVENANCE_STANDARD if source is not None else PROVENANCE_PROJECT
+        ),
+        symbol="R",
+        unit="1",
+        source_citation=source,
+        symbolic_expression="R = solver result",
+        substituted_expression="R = 1",
+        evaluated_value=1.0,
+        evaluation=TraceEvaluation(
+            operator="solver",
+            operand_ids=(),
+            result_unit="1",
+        ),
+        warnings=((warning,) if warning else ()),
+    )
+    return TraceCalculation(
+        calculation_id=member.calculation_id,
+        coverage_id=member.coverage_id,
+        title=member.member_id,
+        method_id=member.method_id,
+        method_label=member.method_id,
+        standard_based=member.standard_based,
+        user_defined_method=member.user_defined_method,
+        final_step_id="result",
+        steps=(step,),
+        context=member.context,
+        warnings=((warning,) if warning else ()),
+    )
+
+
+def _case_family(family_id, inp, result, context):
+    families = analysis_trace.trace_coverage_registry.registered_families(
+        analysis_trace.trace_coverage_registry.CASE_CALCULATION_FAMILY_REGISTRY,
+        inp=inp,
+        result=result,
+        context=context,
+    )
+    return next(family for family in families if family.family_id == family_id)
+
+
+def _global_family(family_id, inp, result):
+    families = analysis_trace.trace_coverage_registry.registered_families(
+        analysis_trace.trace_coverage_registry.GLOBAL_CALCULATION_FAMILY_REGISTRY,
+        inp=inp,
+        result=result,
+        context=analysis_trace._context("global", "global"),
+    )
+    return next(family for family in families if family.family_id == family_id)
 
 
 def test_run_analysis_attaches_one_current_sealed_bundle():
@@ -76,11 +154,376 @@ def test_unrelated_material_trace_cannot_mask_dropped_completed_family(
     with pytest.raises(
         TraceValidationError,
         match=(
-            "minimum longitudinal reinforcement trace coverage is "
-            "incomplete"
+            "minimum longitudinal reinforcement calculation family "
+            "trace registry is incomplete"
         ),
     ):
         analysis_trace.build_bundle(inp, result)
+
+
+def test_named_case_audit_rejects_dropped_radial_and_first_cracking_traces(
+    monkeypatch,
+):
+    at = _calculated_both()
+    inp = at.session_state["_latest_inputs"]
+    result = copy.deepcopy(at.session_state["results"])
+    result.pop(analysis_trace.TRACE_KEY)
+
+    plastic_builder = analysis_trace.trace_builders.plastic_calculations
+
+    def without_radial(*args, **kwargs):
+        return [
+            calculation
+            for calculation in plastic_builder(*args, **kwargs)
+            if calculation.coverage_id != "CT-003"
+        ]
+
+    monkeypatch.setattr(
+        analysis_trace.trace_builders,
+        "plastic_calculations",
+        without_radial,
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match="plastic calculation family trace registry is incomplete",
+    ):
+        analysis_trace.build_bundle(inp, result)
+
+    monkeypatch.setattr(
+        analysis_trace.trace_builders,
+        "plastic_calculations",
+        plastic_builder,
+    )
+    elastic_builder = analysis_trace.trace_builders.elastic_calculations
+
+    def without_cracking_factor(*args, **kwargs):
+        return [
+            calculation
+            for calculation in elastic_builder(*args, **kwargs)
+            if not calculation.calculation_id.endswith("-cracking-factor")
+        ]
+
+    monkeypatch.setattr(
+        analysis_trace.trace_builders,
+        "elastic_calculations",
+        without_cracking_factor,
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match=(
+            "elastic and crack-width calculation family trace registry "
+            "is incomplete"
+        ),
+    ):
+        analysis_trace.build_bundle(inp, result)
+
+
+def test_case_audit_requires_every_plastic_interaction_axis():
+    context = analysis_trace._context("direct", "direct")
+    payload = {
+        "plastic": {
+            "util": 0.5,
+            "interaction": {
+                "x": {"N": [0.0], "M": [1.0]},
+                "y": {"N": [0.0], "M": [1.0]},
+            },
+        },
+    }
+    family = _case_family("plastic", {}, payload, context)
+    calculations = [
+        _calculation_for(member)
+        for member in family.members
+        if member.member_id != "plastic.interaction.y"
+    ]
+
+    with pytest.raises(
+        TraceValidationError,
+        match="plastic calculation family trace registry is incomplete",
+    ):
+        analysis_trace._require_case_trace_coverage(
+            {},
+            payload,
+            calculations,
+            context=context,
+        )
+
+    calculations.append(
+        _calculation_for(
+            next(
+                member
+                for member in family.members
+                if member.member_id == "plastic.interaction.y"
+            )
+        )
+    )
+    analysis_trace._require_case_trace_coverage(
+        {},
+        payload,
+        calculations,
+        context=context,
+    )
+
+
+def test_case_audit_matches_exact_crack_and_shear_method_families():
+    context = analysis_trace._context("direct", "direct")
+    elastic = {
+        "elastic": {
+            "crack": {
+                "edition": "2023",
+                "coarse": False,
+                "direct_tension": False,
+            },
+        },
+    }
+    elastic_family = _case_family(
+        "elastic",
+        {"sls_dk_na": False},
+        elastic,
+        context,
+    )
+    wrong_crack = [_calculation_for(member) for member in elastic_family.members]
+    crack_index = next(
+        index
+        for index, member in enumerate(elastic_family.members)
+        if member.member_id == "crack.crack"
+    )
+    wrong_crack[crack_index] = dataclasses.replace(
+        wrong_crack[crack_index],
+        coverage_id="CT-006",
+        method_id="ec2-2005",
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match="crack.crack trace identity mismatch",
+    ):
+        analysis_trace._require_case_trace_coverage(
+            {"sls_dk_na": False},
+            elastic,
+            wrong_crack,
+            context=context,
+        )
+
+    shear = {
+        "shear": {
+            "res": {"valid": True, "model": "2023"},
+            "model_2023": True,
+            "util": 0.5,
+        },
+    }
+    shear_family = _case_family("shear", {}, shear, context)
+    wrong_shear = [_calculation_for(shear_family.members[0])]
+    wrong_shear[0] = dataclasses.replace(
+        wrong_shear[0],
+        coverage_id="CT-009",
+        method_id="ec2-2005",
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match="shear.without-links.*trace identity mismatch",
+    ):
+        analysis_trace._require_case_trace_coverage(
+            {},
+            shear,
+            wrong_shear,
+            context=context,
+        )
+
+
+def test_case_audit_matches_exact_minimum_and_transverse_editions():
+    context = analysis_trace._context("direct", "direct")
+    minimum = {
+        "minimum_reinforcement": {
+            "edition": "EN 1992-1-1:2023",
+            "checks": [{"status": "PASS", "utilisation": 0.5}],
+        },
+    }
+    minimum_family = _case_family(
+        "minimum-reinforcement",
+        {},
+        minimum,
+        context,
+    )
+    wrong_minimum = _calculation_for(minimum_family.members[0])
+    wrong_minimum = dataclasses.replace(
+        wrong_minimum,
+        coverage_id="CT-017",
+        method_id="ec2-2005-formula-9-1n",
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match="minimum-reinforcement.check.1 trace identity mismatch",
+    ):
+        analysis_trace._require_case_trace_coverage(
+            {},
+            minimum,
+            [wrong_minimum],
+            context=context,
+        )
+
+    transverse = {
+        "transverse_reinforcement": {
+            "edition": "EN 1992-1-1:2023",
+            "checks": [
+                {
+                    "status": "FAIL",
+                    "kind": "spacing",
+                    "utilisation": 1.2,
+                }
+            ],
+        },
+    }
+    transverse_family = _case_family(
+        "transverse-reinforcement",
+        {},
+        transverse,
+        context,
+    )
+    wrong_transverse = _calculation_for(transverse_family.members[0])
+    wrong_transverse = dataclasses.replace(
+        wrong_transverse,
+        method_id="ec2-2005-transverse",
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match="transverse-reinforcement.check.1 trace identity mismatch",
+    ):
+        analysis_trace._require_case_trace_coverage(
+            {},
+            transverse,
+            [wrong_transverse],
+            context=context,
+        )
+
+
+def test_global_audit_matches_exact_concrete_fatigue_family():
+    result = {
+        "fatigue": {
+            "edition": "EN 1992-1-1:2023",
+            "spectra": [
+                {
+                    "spectrum_name": "Traffic",
+                    "concrete": [
+                        {
+                            "bins": [{}],
+                            "method": "equivalent",
+                            "fibre_index": 0,
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    fatigue_family = _global_family("fatigue", {}, result)
+    correct = [_calculation_for(fatigue_family.members[0])]
+    wrong = [
+        dataclasses.replace(
+            correct[0],
+            coverage_id="CT-022",
+            method_id="ec2-2005-equivalent",
+        )
+    ]
+    with pytest.raises(
+        TraceValidationError,
+        match="fatigue.concrete.*trace identity mismatch",
+    ):
+        analysis_trace._require_global_trace_coverage({}, result, wrong)
+
+    analysis_trace._require_global_trace_coverage({}, result, correct)
+
+
+def test_registry_owns_every_retained_coverage_id_once():
+    registrations = (
+        *analysis_trace.trace_coverage_registry.CASE_CALCULATION_FAMILY_REGISTRY,
+        *analysis_trace.trace_coverage_registry.GLOBAL_CALCULATION_FAMILY_REGISTRY,
+    )
+    coverage = [
+        coverage_id
+        for registration in registrations
+        for coverage_id in registration.coverage_ids
+    ]
+    assert len(coverage) == len(set(coverage))
+    assert set(coverage) == {
+        f"CT-{index:03d}" for index in range(1, 28)
+    }
+
+
+def test_registry_rejects_noninjective_expected_calculation_ids():
+    context = analysis_trace._context("direct", "direct")
+    family = _case_family(
+        "plastic",
+        {},
+        {"plastic": {}},
+        context,
+    )
+    member = family.members[0]
+    duplicate = dataclasses.replace(
+        member,
+        member_id="plastic.capacity.alias",
+    )
+    malformed = dataclasses.replace(
+        family,
+        members=(member, duplicate),
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match="non-injective expected calculation ID",
+    ):
+        audit_trace_registry([], scope_id="test", families=[malformed])
+
+
+def test_registry_enforces_dependency_closure_and_explicit_state_warning():
+    context = analysis_trace._context("direct", "direct")
+    family = _case_family(
+        "plastic",
+        {},
+        {"plastic": {}},
+        context,
+    )
+    member = family.members[0]
+    calculation = _calculation_for(member)
+    broken_step = dataclasses.replace(
+        calculation.steps[0],
+        dependency_ids=("missing",),
+        evaluation=dataclasses.replace(
+            calculation.steps[0].evaluation,
+            operand_ids=("missing",),
+        ),
+    )
+    broken = dataclasses.replace(calculation, steps=(broken_step,))
+    with pytest.raises(
+        TraceValidationError,
+        match="missing or forward dependency",
+    ):
+        audit_trace_registry(
+            [broken],
+            scope_id="test",
+            families=[family],
+        )
+
+    explicit_member = dataclasses.replace(
+        member,
+        result_state=EXPLICIT_STATE,
+    )
+    explicit_family = TraceFamilyExpectation(
+        family_id=family.family_id,
+        label=family.label,
+        coverage_ids=family.coverage_ids,
+        members=(explicit_member,),
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match="requires a published warning",
+    ):
+        audit_trace_registry(
+            [calculation],
+            scope_id="test",
+            families=[explicit_family],
+        )
+    audit_trace_registry(
+        [_calculation_for(explicit_member, warning="explicit solver state")],
+        scope_id="test",
+        families=[explicit_family],
+    )
 
 
 def test_named_case_trace_ids_are_collision_free_and_context_stays_public():
