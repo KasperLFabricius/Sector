@@ -3207,7 +3207,7 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
-    "sls_phi", "sls_bond", "sls_code", "sls_member",
+    "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
 )
 # Shear inputs. Folded into the overall signature (not the plastic/elastic split)
 # so a shear-only change marks the results stale without forcing the bending

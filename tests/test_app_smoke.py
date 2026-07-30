@@ -3990,6 +3990,43 @@ def test_ec2_2023_crack_edition_calculates():
     assert e["crack"]["wk"] > 0.0 and e["crack"]["k1_r"] >= 1.0
 
 
+def test_bonded_tendon_ratio_invalidates_elastic_results_and_report():
+    # xi enters the 2023 mixed-reinforcement crack equation. Editing it must make
+    # both the elastic result and its generated report stale, and Calculate must
+    # recompute rather than reuse the old elastic result object.
+    at = _fresh_qs(mode="Elastic")
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        ("number_input", "sls_tendon_xi", 0.5),
+    )
+    assert not at.exception
+    elastic_before = at.session_state["results"]["elastic"]
+    wk_before = elastic_before["crack"]["wk"]
+
+    _goto_input_tab(at, "Project & report")
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+    assert "report_buffer" in at.session_state
+    assert not any("Report out of date" in w.value for w in at.warning)
+
+    _goto_input_tab(at, "Analysis settings")
+    _set(at, ("number_input", "sls_tendon_xi", 0.75))
+    _select_view(at, "Elastic Results")
+    assert any("press Calculate" in w.value for w in at.warning)
+    _goto_input_tab(at, "Project & report")
+    assert any("Report out of date" in w.value for w in at.warning)
+
+    _calculate(at)
+    elastic_after = at.session_state["results"]["elastic"]
+    assert elastic_after is not elastic_before
+    assert elastic_after["crack"]["wk"] != pytest.approx(wk_before)
+
+
 def test_old_crack_code_alias_targets_a_current_option():
     # A session saved with a since-removed crack-code label (the split fine/coarse
     # DK NA options) is migrated (in build_inputs, before the selectbox reads it) to
