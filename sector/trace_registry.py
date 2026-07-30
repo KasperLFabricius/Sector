@@ -65,7 +65,7 @@ def _require_text(value: object, label: str) -> None:
 
 
 def _validate_source_contract(source: object, label: str) -> None:
-    if not isinstance(source, TraceSourceContract):
+    if type(source) is not TraceSourceContract:
         raise TraceValidationError(
             f"{label} sources must contain TraceSourceContract values"
         )
@@ -91,7 +91,7 @@ def _source_contract(source: TraceSource) -> TraceSourceContract:
 def _validate_registry(
     registry: object,
 ) -> dict[str, tuple[TraceFamilyContract, TraceMemberContract]]:
-    if not isinstance(registry, TraceRegistryContract):
+    if type(registry) is not TraceRegistryContract:
         raise TraceValidationError("registry must be a TraceRegistryContract")
     _require_id(registry.registry_id, "registry_id")
     if not isinstance(registry.families, tuple) or not registry.families:
@@ -101,7 +101,7 @@ def _validate_registry(
     member_ids: set[str] = set()
     expected: dict[str, tuple[TraceFamilyContract, TraceMemberContract]] = {}
     for family in registry.families:
-        if not isinstance(family, TraceFamilyContract):
+        if type(family) is not TraceFamilyContract:
             raise TraceValidationError(
                 "registry families must contain TraceFamilyContract values"
             )
@@ -116,7 +116,7 @@ def _validate_registry(
                 f"{family.family_id} needs an immutable non-empty member tuple"
             )
         for member in family.members:
-            if not isinstance(member, TraceMemberContract):
+            if type(member) is not TraceMemberContract:
                 raise TraceValidationError(
                     f"{family.family_id} members must be TraceMemberContract values"
                 )
@@ -141,7 +141,7 @@ def _validate_registry(
                 raise TraceValidationError(f"{member.member_id} axes must be a tuple")
             axis_names: set[str] = set()
             for axis in member.axes:
-                if not isinstance(axis, TraceAxis):
+                if type(axis) is not TraceAxis:
                     raise TraceValidationError(
                         f"{member.member_id} axes must contain TraceAxis values"
                     )

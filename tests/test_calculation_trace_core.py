@@ -140,6 +140,27 @@ def test_schema_is_immutable_complete_data_without_evaluation_api():
         final.title = "changed"
 
 
+def test_schema_rejects_top_level_and_nested_subclasses_before_sealing():
+    class HostileBundle(TraceBundle):
+        def to_dict(self):
+            return {**super().to_dict(), "invented": True}
+
+    class HostileStep(TraceStep):
+        pass
+
+    bundle = _bundle()
+    with pytest.raises(TraceValidationError, match="TraceBundle"):
+        seal_bundle(HostileBundle(INPUT_SHA, RESULT_SHA, bundle.calculations))
+    step = bundle.calculations[0].steps[0]
+    values = {field.name: getattr(step, field.name) for field in dataclasses.fields(step)}
+    calculation = dataclasses.replace(
+        bundle.calculations[0],
+        steps=(HostileStep(**values), *bundle.calculations[0].steps[1:]),
+    )
+    with pytest.raises(TraceValidationError, match="TraceStep"):
+        seal_bundle(_raw(calculation))
+
+
 def test_canonical_round_trip_is_stable_and_preserves_exact_shapes():
     encoded = bundle_to_json(_bundle())
     decoded = bundle_from_json(encoded)

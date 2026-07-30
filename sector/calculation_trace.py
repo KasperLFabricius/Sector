@@ -103,10 +103,7 @@ class SourceCitation:
 
     @classmethod
     def from_dict(cls, value: Any) -> SourceCitation:
-        value = _exact_mapping(
-            value, label="source citation",
-            fields=frozenset({"document", "clause", "locator"})
-        )
+        value = _exact_mapping(value, label="source citation", fields=frozenset({"document", "clause", "locator"}))
         return cls(value["document"], value["clause"], value["locator"])
 
 
@@ -129,10 +126,7 @@ class TraceSource:
 
     @classmethod
     def from_dict(cls, value: Any) -> TraceSource:
-        value = _exact_mapping(
-            value, label="trace source",
-            fields=frozenset({"kind", "method_id", "edition", "citation"})
-        )
+        value = _exact_mapping(value, label="trace source", fields=frozenset({"kind", "method_id", "edition", "citation"}))
         citation = value["citation"]
         return cls(
             kind=value["kind"],
@@ -154,9 +148,7 @@ class TraceUnit:
 
     @classmethod
     def from_dict(cls, value: Any) -> TraceUnit:
-        value = _exact_mapping(
-            value, label="trace unit", fields=frozenset({"symbol", "dimension"})
-        )
+        value = _exact_mapping(value, label="trace unit", fields=frozenset({"symbol", "dimension"}))
         return cls(symbol=value["symbol"], dimension=value["dimension"])
 
 
@@ -172,9 +164,7 @@ class TraceDependency:
 
     @classmethod
     def from_dict(cls, value: Any) -> TraceDependency:
-        value = _exact_mapping(
-            value, label="trace dependency", fields=frozenset({"step_id", "unit"})
-        )
+        value = _exact_mapping(value, label="trace dependency", fields=frozenset({"step_id", "unit"}))
         return cls(value["step_id"], TraceUnit.from_dict(value["unit"]))
 
 
@@ -191,9 +181,7 @@ class TraceResult:
 
     @classmethod
     def from_dict(cls, value: Any) -> TraceResult:
-        value = _exact_mapping(
-            value, label="trace result", fields=frozenset({"state", "value", "reason"})
-        )
+        value = _exact_mapping(value, label="trace result", fields=frozenset({"state", "value", "reason"}))
         return cls(value["state"], value["value"], value["reason"])
 
 
@@ -281,9 +269,7 @@ class TraceAxis:
 
     @classmethod
     def from_dict(cls, value: Any) -> TraceAxis:
-        value = _exact_mapping(
-            value, label="trace axis", fields=frozenset({"name", "value"})
-        )
+        value = _exact_mapping(value, label="trace axis", fields=frozenset({"name", "value"}))
         return cls(name=value["name"], value=value["value"])
 
 
@@ -425,21 +411,21 @@ def _require_text_tuple(value: Any, label: str) -> None:
 
 
 def _validate_unit(unit: Any, label: str) -> None:
-    if not isinstance(unit, TraceUnit):
+    if type(unit) is not TraceUnit:
         raise TraceValidationError(f"{label} must be a TraceUnit")
     _require_text(unit.symbol, f"{label} symbol")
     _require_id(unit.dimension, f"{label} dimension")
 
 
 def _validate_source(source: Any, label: str) -> None:
-    if not isinstance(source, TraceSource):
+    if type(source) is not TraceSource:
         raise TraceValidationError(f"{label} must be a TraceSource")
     if source.kind not in SOURCE_KINDS:
         raise TraceValidationError(f"{label} has unknown kind {source.kind!r}")
     _require_id(source.method_id, f"{label} method_id")
     if source.kind == SOURCE_STANDARD:
         _require_text(source.edition, f"{label} edition")
-        if not isinstance(source.citation, SourceCitation):
+        if type(source.citation) is not SourceCitation:
             raise TraceValidationError(f"{label} needs an exact standards citation")
         _require_text(source.citation.document, f"{label} citation document")
         _require_text(source.citation.clause, f"{label} citation clause")
@@ -453,7 +439,7 @@ def _validate_source(source: Any, label: str) -> None:
 
 
 def _validate_result(result: Any, label: str) -> None:
-    if not isinstance(result, TraceResult):
+    if type(result) is not TraceResult:
         raise TraceValidationError(f"{label} must be a TraceResult")
     if result.state not in RESULT_STATES:
         raise TraceValidationError(f"{label} has unknown state {result.state!r}")
@@ -475,7 +461,7 @@ def _validate_result(result: Any, label: str) -> None:
 
 
 def _validate_calculation(calculation: Any) -> None:
-    if not isinstance(calculation, TraceCalculation):
+    if type(calculation) is not TraceCalculation:
         raise TraceValidationError("calculations must be TraceCalculation values")
     _require_id(calculation.calculation_id, "calculation_id")
     _require_id(calculation.coverage_id, f"{calculation.calculation_id} coverage_id")
@@ -485,7 +471,7 @@ def _validate_calculation(calculation: Any) -> None:
         raise TraceValidationError(f"{calculation.calculation_id} axes must be a tuple")
     axis_names: set[str] = set()
     for axis in calculation.axes:
-        if not isinstance(axis, TraceAxis):
+        if type(axis) is not TraceAxis:
             raise TraceValidationError(
                 f"{calculation.calculation_id} axes must contain TraceAxis values"
             )
@@ -507,7 +493,7 @@ def _validate_calculation(calculation: Any) -> None:
     seen: dict[str, TraceStep] = {}
     for position, step in enumerate(calculation.steps, start=1):
         label = f"{calculation.calculation_id} step {position}"
-        if not isinstance(step, TraceStep):
+        if type(step) is not TraceStep:
             raise TraceValidationError(f"{label} must be a TraceStep")
         _require_id(step.step_id, f"{label} step_id")
         if step.step_id in seen:
@@ -534,7 +520,7 @@ def _validate_calculation(calculation: Any) -> None:
 
         dependency_ids: set[str] = set()
         for dependency in step.dependencies:
-            if not isinstance(dependency, TraceDependency):
+            if type(dependency) is not TraceDependency:
                 raise TraceValidationError(
                     f"{label} dependencies must contain TraceDependency values"
                 )
@@ -625,7 +611,7 @@ def _content_sha256(bundle: TraceBundle) -> str:
 
 
 def _validate_structure(bundle: Any, *, require_seal: bool) -> TraceBundle:
-    if not isinstance(bundle, TraceBundle):
+    if type(bundle) is not TraceBundle:
         raise TraceValidationError("trace bundle must be a TraceBundle")
     if bundle.schema != TRACE_SCHEMA:
         raise TraceValidationError(f"unsupported trace schema {bundle.schema!r}")
@@ -648,7 +634,7 @@ def _validate_structure(bundle: Any, *, require_seal: bool) -> TraceBundle:
     calculation_ids: set[str] = set()
     for calculation in bundle.calculations:
         if (
-            isinstance(calculation, TraceCalculation)
+            type(calculation) is TraceCalculation
             and calculation.calculation_id in calculation_ids
         ):
             raise TraceValidationError(
@@ -662,8 +648,8 @@ def _validate_structure(bundle: Any, *, require_seal: bool) -> TraceBundle:
 def seal_bundle(bundle: TraceBundle) -> TraceBundle:
     """Validate and return a bundle with a deterministic content seal."""
 
+    _validate_structure(bundle, require_seal=False)
     unsealed = dataclasses.replace(bundle, content_sha256="")
-    _validate_structure(unsealed, require_seal=False)
     return dataclasses.replace(unsealed, content_sha256=_content_sha256(unsealed))
 
 
@@ -694,7 +680,7 @@ def validate_bundle(
     """Return immutable trace data after strict shape, seal, and freshness checks."""
 
     try:
-        model = bundle if isinstance(bundle, TraceBundle) else TraceBundle.from_dict(bundle)
+        model = bundle if type(bundle) is TraceBundle else TraceBundle.from_dict(bundle)
     except TraceValidationError:
         raise
     except (AttributeError, KeyError, TypeError, ValueError) as exc:

@@ -128,9 +128,7 @@ def _registry(*states: str) -> TraceRegistryContract:
     )
 
 
-def _with_member(
-    registry: TraceRegistryContract, member: TraceMemberContract
-) -> TraceRegistryContract:
+def _with_member(registry: TraceRegistryContract, member: TraceMemberContract) -> TraceRegistryContract:
     family = dataclasses.replace(registry.families[0], members=(member,))
     return dataclasses.replace(registry, families=(family,))
 
@@ -142,9 +140,7 @@ def test_mixed_standard_editions_and_project_method_are_local_and_exact():
     assert audit_trace_registry(bundle, registry) is bundle
     member = registry.families[0].members[0]
     concrete_only = frozenset(
-        source
-        for source in member.sources
-        if source.edition != "EN 1992-1-1:2023"
+        source for source in member.sources if source.edition != "EN 1992-1-1:2023"
     )
     hostile_registry = _with_member(
         registry, dataclasses.replace(member, sources=concrete_only)
@@ -163,9 +159,7 @@ def test_mixed_standard_editions_and_project_method_are_local_and_exact():
 )
 def test_registry_requires_exact_family_method_and_axes(field, value, message):
     registry = _registry(RESULT_FINITE)
-    member = dataclasses.replace(
-        registry.families[0].members[0], **{field: value}
-    )
+    member = dataclasses.replace(registry.families[0].members[0], **{field: value})
     registry = _with_member(registry, member)
 
     with pytest.raises(TraceValidationError, match=message):
@@ -174,16 +168,12 @@ def test_registry_requires_exact_family_method_and_axes(field, value, message):
 
 def test_registry_requires_exact_members_and_explicit_result_state():
     infinite = _bundle(RESULT_POSITIVE_INFINITY)
-    assert audit_trace_registry(
-        infinite, _registry(RESULT_POSITIVE_INFINITY)
-    ) is infinite
+    assert audit_trace_registry(infinite, _registry(RESULT_POSITIVE_INFINITY)) is infinite
     with pytest.raises(TraceValidationError, match="result state"):
         audit_trace_registry(infinite, _registry(RESULT_FINITE))
 
     registry = _registry(RESULT_FINITE)
-    member = dataclasses.replace(
-        registry.families[0].members[0], calculation_id="missing.member"
-    )
+    member = dataclasses.replace(registry.families[0].members[0], calculation_id="missing.member")
     registry = _with_member(registry, member)
     with pytest.raises(TraceValidationError, match="missing missing.member"):
         audit_trace_registry(_bundle(), registry)
